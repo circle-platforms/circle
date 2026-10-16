@@ -23,6 +23,8 @@ export const COMPONENT_SUITES = Object.freeze([
   'native-terminal-fit-ui.mjs',
   'runtime-failure-ui.mjs',
   'session-navigation-ui.mjs',
+  'response-readability-ui.mjs',
+  'inspector-width-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
@@ -77,6 +79,8 @@ export async function runComponentSuites({
       CIRCLE_TERMINAL_FIT_EVIDENCE: join(directory, 'terminal-fit'),
       CIRCLE_FAILURE_UI_EVIDENCE: join(directory, 'runtime-failure'),
       CIRCLE_SESSION_NAV_EVIDENCE: join(directory, 'session-navigation'),
+      CIRCLE_RESPONSE_UI_EVIDENCE: join(directory, 'response-readability'),
+      CIRCLE_INSPECTOR_WIDTH_EVIDENCE: join(directory, 'inspector-width'),
     };
     const child = spawn(process.execPath, [...nodeArguments, file], {
       cwd: root,

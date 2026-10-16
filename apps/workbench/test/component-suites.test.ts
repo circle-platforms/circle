@@ -68,6 +68,8 @@ test('the component gate preserves prior journeys and includes each native regre
           'native-terminal-fit-ui.mjs',
           'runtime-failure-ui.mjs',
           'session-navigation-ui.mjs',
+          'response-readability-ui.mjs',
+          'inspector-width-ui.mjs',
         ].includes(name),
     ),
     original,
@@ -92,7 +94,9 @@ test('the component gate preserves prior journeys and includes each native regre
     'native-terminal-fit-ui.mjs',
     'runtime-failure-ui.mjs',
     'session-navigation-ui.mjs',
+    'response-readability-ui.mjs',
+    'inspector-width-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 17);
+  assert.equal(new Set(COMPONENT_SUITES).size, 19);
 });
