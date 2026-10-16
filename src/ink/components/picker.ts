@@ -1,6 +1,7 @@
 import { palette, sgrJoin } from '../theme.js';
 import { pad, stringWidth, truncate } from '../string_width.js';
 import { printable } from './dialog_card.js';
+import { uiText } from '../../locale.js';
 export interface PickerItem {
   key: string;
   label: string;
@@ -235,7 +236,7 @@ export class Picker {
     const top = Math.max(0, this.focus - maximum + 1);
     const info = (text: string, tone: string): string =>
       sgrJoin(p.panel_bg, tone) + pad(truncate(text, width), width) + p.reset;
-    const rows = [info(`   ${this.title}`, p.faint)];
+    const rows = [info(`   ${uiText(this.title)}`, p.faint)];
     if (this.asked) {
       const typed = this.asked.mask
         ? '•'.repeat(Array.from(this.asked.text).length)
@@ -251,19 +252,21 @@ export class Picker {
         ),
       );
     else {
-      if (top > 0) rows.push(info(`   ↑ ${top} more above`, p.faint));
       if (this.options.hint)
-        rows.push(info(`   ${this.options.hint}`, p.faint));
+        rows.push(info(`   ${uiText(this.options.hint)}`, p.faint));
       if (this.options.search !== false)
         rows.push(
           info(
-            `   ${this.query ? 'search: ' + this.query : 'type to search'}`,
+            `   ${uiText(this.query ? 'search: ' + this.query : 'type to search')}`,
             p.faint,
           ),
         );
+      // Directly above the rows, after the hint and the search line.
+      if (top > 0)
+        rows.push(info(`   ${uiText(`↑ ${top} more above`)}`, p.faint));
     }
     const headOf = (item: PickerItem): string =>
-      `${item.current ? '● ' : ''}${item.label}${item.current ? ' · current' : ''}`;
+      `${item.current ? '● ' : ''}${item.label}${item.current ? ` · ${uiText('current')}` : ''}`;
     // The time (or any meta) starts in one column. CJK titles are wider than
     // their character count, so the pad uses display width.
     const metas = shown.some((item) => item.meta);
@@ -291,7 +294,7 @@ export class Picker {
         typeof this.options.empty === 'function'
           ? this.options.empty(this.query, this.items.length)
           : (this.options.empty ?? 'Nothing to show');
-      rows.push(p.faint + '   ' + empty + p.reset);
+      rows.push(p.faint + '   ' + uiText(empty) + p.reset);
     }
     return rows;
   }

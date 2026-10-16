@@ -1,4 +1,5 @@
 import { palette, sgrJoin, statusLight } from '../ink/theme.js';
+import { uiText } from '../locale.js';
 import type { LampState } from '../ink/theme.js';
 import { wrap, pad, truncate, truncateStyled } from '../ink/string_width.js';
 import type { Message, Usage } from '../types.js';
@@ -289,10 +290,11 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     else placed.set(anchor, [...(placed.get(anchor) ?? []), note]);
   });
   const noticeBlock = (note: string): void => {
-    const failed = note.startsWith('✖') && !note.startsWith('✖ Interrupted');
+    const shown = uiText(note);
+    const failed = shown.startsWith('✖') && !note.startsWith('✖ Interrupted');
     block(
-      note.startsWith('✖') ? '✖' : ' ',
-      note.replace(/^✖\s*/, ''),
+      shown.startsWith('✖') ? '✖' : ' ',
+      shown.replace(/^✖\s*/, ''),
       '',
       failed ? p.red : p.dim,
     );
@@ -604,7 +606,7 @@ export function renderScreen(
       );
   }
   const mode = state.viewOnly
-    ? 'view only'
+    ? uiText('view only')
     : state.planMode
       ? 'read-only'
       : state.autoMode

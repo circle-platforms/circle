@@ -467,6 +467,7 @@ export class SessionApp {
         else this.scrollBy(rows);
       },
       send: (kind) => this.send(kind),
+      watchLease: () => this.watchLease(),
       command: (name) =>
         void this.command(name, '').catch((error) => this.fail(error)),
       flash: (text) => this.flash(text),
@@ -489,6 +490,7 @@ export class SessionApp {
     this.started = true;
     this.theme.start();
     this.animation = setInterval(() => {
+      this.watchLease();
       if (this.jobsList) this.refreshJobsList();
       if (
         [...this.views.values()].some(
@@ -880,7 +882,8 @@ export class SessionApp {
     while (anchors.length < this.state.notices.length) anchors.push(undefined);
     this.state.notices.push(text);
     const trail =
-      /^(?:Resumed|Continued|Forked|Open in another terminal) /.test(text);
+      /^(?:Resumed|Continued|Forked|Open in another terminal) /.test(text) ||
+      text === 'this session is writable again';
     anchors.push(
       trail
         ? undefined
@@ -1291,6 +1294,19 @@ export class SessionApp {
       }),
     );
     return runtime;
+  }
+  /**
+   * A view-only session stays that way until something asks again. The screen
+   * asks on its timer, and enter and picking the session ask at once.
+   */
+  private watchLease(): void {
+    const runtime = this.runtime;
+    if (this.ended || !runtime?.viewOnly || runtime.isClosing) return;
+    if (sessionOccupied(this.home, runtime.session.id)) return;
+    if (!runtime.resumeLease()) return;
+    const text = 'this session is writable again';
+    if (this.state.notices.at(-1) !== text) this.notice(text);
+    else this.repaint();
   }
   private async selectRuntime(runtime: AgentRuntime): Promise<void> {
     await runtime.initialize();
@@ -2658,11 +2674,15 @@ export class SessionApp {
     )
       return;
     if (runtime.viewOnly) {
-      // The box already gave the text up. Put it back and say why it was not sent.
-      this.composer.restore(raw, pastes);
-      const text = `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`;
-      if (this.state.notices.at(-1) !== text) this.notice(text);
-      return;
+      // The other terminal may have left since this one opened the session.
+      this.watchLease();
+      if (runtime.viewOnly) {
+        // The box already gave the text up. Put it back and say why it was not sent.
+        this.composer.restore(raw, pastes);
+        const text = `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`;
+        if (this.state.notices.at(-1) !== text) this.notice(text);
+        return;
+      }
     }
     if (!plain && message.startsWith('!')) {
       try {
@@ -2777,6 +2797,7 @@ export class SessionApp {
       },
       selected: () => owner === this.selectedView,
       refreshConnection: () => this.refreshConnections(),
+      watchLease: () => this.watchLease(),
       sessionStatus: (id) => {
         if (this.sessions?.lifecycle(id) === 'deleting') return 'deleting';
         const runtime = this.sessions?.get(id);

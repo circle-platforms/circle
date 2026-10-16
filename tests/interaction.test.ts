@@ -1038,3 +1038,87 @@ test('a view-only session keeps the typed message and says why it was not sent',
     false,
   );
 });
+
+async function occupiedPair(
+  t: Parameters<typeof scratch>[0],
+  replies: Reply[] = [],
+) {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'stored', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const opened = await session(t, replies, {
+    home,
+    workspace,
+    session: owner.session.id,
+    inspect: true,
+  });
+  return { owner, ...opened };
+}
+
+test('enter sends once the other terminal has released a view-only session', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t, [
+    answer('continued'),
+  ]);
+  ui.composer.set('keep this draft');
+  await ui.send('steer');
+  assert.equal(runtime.viewOnly, true);
+  assert.equal(app.state.draft, 'keep this draft');
+  owner.yieldLease();
+  await app.submit('now it sends');
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(
+    app.state.notices.includes('this session is writable again'),
+    app.state.notices.join('\n'),
+  );
+  assert.ok(
+    runtime.harness.messages.some((message) =>
+      (message.content ?? '').includes('now it sends'),
+    ),
+  );
+});
+
+test('an empty enter and the session list take a released view-only session', async (t) => {
+  const { app, owner, runtime, ui, key } = await occupiedPair(t);
+  ui.composer.set('');
+  key('enter');
+  assert.equal(runtime.viewOnly, true);
+  owner.yieldLease();
+  key('enter');
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(app.state.notices.includes('this session is writable again'));
+
+  const again = await occupiedPair(t);
+  again.owner.yieldLease();
+  await again.app.submit('/resume');
+  assert.equal(again.app.state.picker?.title, 'Sessions · this folder');
+  again.key('enter');
+  await until(() => !again.runtime.viewOnly);
+  assert.equal(again.app.state.picker, undefined);
+  assert.ok(again.app.state.notices.includes('this session is writable again'));
+  assert.equal(
+    again.runtime.harness.messages.some((message) =>
+      (message.content ?? '').includes('now it sends'),
+    ),
+    false,
+  );
+});
+
+test('the view-only screen takes the lock back without a key', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  owner.yieldLease();
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(app.state.notices.includes('this session is writable again'));
+});

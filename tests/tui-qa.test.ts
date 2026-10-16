@@ -519,7 +519,15 @@ test('a focused list row is marked and a rename starts with the old name selecte
   assert.equal(nearTop.includes('more above'), false);
   sessions.focus = 11;
   const further = stripAnsi(sessions.rows(40, 6).join('\n'));
-  assert.match(further, /↑ 6 more above/);
+  const lines = further.split('\n').map((line) => line.trim());
+  const above = lines.findIndex((line) => line.includes('↑ 6 more above'));
+  const search = lines.findIndex((line) => line.includes('type to search'));
+  assert.ok(above > search);
+  assert.match(lines[above + 1] ?? '', /session /);
+  assert.equal(
+    lines.slice(search + 1, above).some((line) => line.includes('session ')),
+    false,
+  );
   assert.match(further, /> session 11/);
   assert.equal(further.includes('session 0'), false);
 });

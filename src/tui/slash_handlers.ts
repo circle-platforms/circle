@@ -79,6 +79,8 @@ export interface CommandHost {
   flash(text: string, ttl?: number): void;
   fail(error: unknown): void;
   repaint(): void;
+  /** Look again at a view-only session's lock and take it when it is free. */
+  watchLease?(): void;
   picker(
     title: string,
     items: PickerItem[],
@@ -1526,7 +1528,12 @@ function sessionList(
       };
     }),
     async (item) => {
-      if (item.key !== runtime.session.id) await openSession(host, item.key);
+      if (item.key !== host.runtime.session.id) {
+        await openSession(host, item.key);
+        return;
+      }
+      // Picking the session already on screen checks the lock again.
+      host.watchLease?.();
     },
     {
       hint: everywhere
