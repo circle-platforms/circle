@@ -319,10 +319,75 @@ try {
     .waitFor();
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   clipboardBefore = await preserveNativeClipboard(app);
-  if (process.env.CIRCLE_NATIVE_PERF_PROBE_ONLY === '1')
-    throw Error(
-      'native performance probe requested stop after clipboard checkpoint',
+  if (process.env.CIRCLE_NATIVE_PERF_PROBE_ONLY === '1') {
+    await page.evaluate(() => {
+      window.__circleNativePerfTerminalTiming = [];
+      window.__circleNativeTerminalTiming = (record) =>
+        window.__circleNativePerfTerminalTiming.push(record);
+    });
+    await page
+      .getByRole('button', { name: 'terminal panel', exact: true })
+      .click();
+    await page
+      .locator('#inspector-terminal-terminal')
+      .waitFor({ state: 'visible' });
+    await page
+      .getByRole('button', { name: 'new terminal', exact: true })
+      .click();
+    await page
+      .locator('#inspector-terminal-terminal .xterm-screen')
+      .first()
+      .waitFor({ state: 'visible' });
+    terminalId = (await service('terminal', 'list'))[0].id;
+    const identity = await app.evaluate(({ app }) => ({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+    }));
+    const probeNode = journeyBundledNodeFromApp(identity);
+    await assertBundledJourneyNode(probeNode);
+    const probeSource = join(workspace, 'terminal-observation-probe.cjs');
+    await writeFile(
+      probeSource,
+      'console.log("NATIVE_PERF "+Date.now()+" 999");',
     );
+    await service('terminal', 'write', {
+      id: terminalId,
+      data: journeyNodeCommand(probeNode, probeSource),
+    });
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.xterm-accessibility-tree')].some((node) =>
+        node.textContent.includes('NATIVE_PERF'),
+      ),
+    );
+    await page.waitForFunction(() =>
+      window.__circleNativePerfTerminalTiming.some(
+        (row) => row.phase === 'write-frame',
+      ),
+    );
+    report.originalEntryProbe = await page.evaluate(async () => {
+      await document.fonts.ready;
+      const screen = document.querySelector(
+        '#inspector-terminal-terminal .xterm-screen',
+      );
+      const rows = window.__circleNativePerfTerminalTiming;
+      return {
+        inspectorVisible: screen.getBoundingClientRect().width > 0,
+        screenWidth: screen.getBoundingClientRect().width,
+        screenHeight: screen.getBoundingClientRect().height,
+        fontStatus: document.fonts.status,
+        fontFamily: getComputedStyle(document.querySelector('.xterm'))
+          .fontFamily,
+        phases: [...new Set(rows.map((row) => row.phase))],
+      };
+    });
+    assert.ok(report.originalEntryProbe.inspectorVisible);
+    assert.ok(report.originalEntryProbe.phases.includes('write-parsed'));
+    await page.screenshot({ path: join(output, 'original-entry-probe.png') });
+    throw Error(
+      'native performance probe requested stop after original inspector and parser verification',
+    );
+  }
   taskIds = Array.from(
     { length: 8 },
     (_, index) => `performance-agent-${index}`,
