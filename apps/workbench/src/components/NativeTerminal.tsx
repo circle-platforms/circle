@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -34,7 +35,17 @@ import {
   readTerminalOutput,
   terminalInputChunks,
 } from '../model/terminal-stream';
-import { subscribeWorkspace, workspaceCall } from '../model/workspace-client';
+import {
+  subscribeWorkspace,
+  workspaceCall,
+  connectWorkspaceStreams,
+} from '../model/workspace-client';
+import type { CommandTerminalCapabilities } from '../command-terminal-target';
+import {
+  commandTerminalRequest,
+  type CommandTerminalView,
+  type TerminalRequest,
+} from '../model/command-terminal-client';
 import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal, Status } from './common';
 import '@xterm/xterm/css/xterm.css';
@@ -130,17 +141,56 @@ function status(snapshot: TerminalSnapshot): string {
 
 /** Keep mounted while the Inspector is hidden. Its PTYs and reading position persist. */
 export function NativeTerminal({
-  sessionId,
+  sessionId: parentSessionId,
+  commandTerminal,
+  onExitCommandTerminal,
   active = true,
   embedded = false,
   onAddToDraft,
 }: {
   sessionId: string;
+  commandTerminal?: CommandTerminalView;
+  onExitCommandTerminal?: () => void;
   active?: boolean;
   embedded?: boolean;
   onAddToDraft?: (capture: TerminalSelectionCapture) => Promise<void>;
 }) {
   useLocale();
+  const sessionId =
+    commandTerminal?.resolved.target.executionSessionId ?? parentSessionId;
+  const commandKey = commandTerminal
+    ? JSON.stringify([
+        commandTerminal.viewSessionId,
+        commandTerminal.resolved.target,
+      ])
+    : '';
+  const [commandCapabilities, setCommandCapabilities] = useState<{
+    key: string;
+    value: CommandTerminalCapabilities;
+  }>();
+  const capabilities =
+    commandCapabilities?.key === commandKey
+      ? commandCapabilities.value
+      : commandTerminal?.resolved.capabilities;
+  const terminalRequest: TerminalRequest = useMemo(
+    () =>
+      commandTerminal
+        ? commandTerminalRequest(
+            commandTerminal.viewSessionId,
+            commandTerminal.resolved.target,
+            (value) => setCommandCapabilities({ key: commandKey, value }),
+          )
+        : <T,>(method: string, params: Record<string, unknown> = {}) =>
+            workspaceCall<T>(sessionId, 'terminal', method, params),
+    [commandKey, sessionId],
+  );
+  useEffect(() => {
+    if (!commandTerminal) return;
+    return connectWorkspaceStreams(
+      commandTerminal.resolved.workspaceId,
+      sessionId,
+    );
+  }, [commandKey, sessionId]);
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([]);
   const [selectedBySession, setSelected] = useState<Record<string, string>>({});
   const [operations, setOperations] = useState<
@@ -168,7 +218,13 @@ export function NativeTerminal({
   const searchInput = useRef<HTMLInputElement>(null);
   const tabStrip = useRef<HTMLDivElement>(null);
   const selectedId = selectedBySession[sessionId];
-  const visible = terminals.filter((item) => item.sessionId === sessionId);
+  const visible = terminals.filter(
+    (item) =>
+      item.sessionId === sessionId &&
+      (!commandTerminal ||
+        (item.id === commandTerminal.resolved.target.terminal.id &&
+          item.epoch === commandTerminal.resolved.target.terminal.epoch)),
+  );
   const selected =
     visible.find((item) => item.id === selectedId) ?? visible.at(-1);
   currentSearch.current = { sessionId, query, selectedId: selected?.id ?? '' };
@@ -237,7 +293,7 @@ export function NativeTerminal({
       [sessionId]: { ...previous[sessionId], error: '' },
     }));
     if (!sessionId) return;
-    void workspaceCall<TerminalSnapshot[]>(sessionId, 'terminal', 'list')
+    void terminalRequest<TerminalSnapshot[]>('list')
       .then((items) => {
         if (cancelled) return;
         setTerminals((previous) => [
@@ -265,16 +321,22 @@ export function NativeTerminal({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, reload]);
+  }, [sessionId, reload, terminalRequest]);
 
   useEffect(
     () =>
       subscribeWorkspace((event) => {
         if (event.service !== 'terminal') return;
+        if (
+          commandTerminal &&
+          (event.sessionId !== sessionId ||
+            event.resourceId !== commandTerminal.resolved.target.terminal.id)
+        )
+          return;
         const update = event.data as unknown as TerminalEvent;
         if (update.snapshot) adopt(update.snapshot);
       }),
-    [adopt],
+    [adopt, commandKey, sessionId],
   );
 
   const run = async (action: () => Promise<void>) => {
@@ -350,12 +412,9 @@ export function NativeTerminal({
   const restart = () =>
     run(async () => {
       if (!selected) return;
-      const snapshot = await workspaceCall<TerminalSnapshot>(
-        selected.sessionId,
-        'terminal',
-        'restart',
-        { id: selected.id },
-      );
+      const snapshot = await terminalRequest<TerminalSnapshot>('restart', {
+        id: selected.id,
+      });
       focusTarget.current = snapshot.id;
       adopt(snapshot);
       setSelected((previous) => ({
@@ -369,12 +428,11 @@ export function NativeTerminal({
       if (!selected) return;
       const captured = selected;
       const output = await readTerminalOutput(captured.id, (afterSequence) =>
-        workspaceCall<TerminalReplay>(
-          captured.sessionId,
-          'terminal',
-          'replay',
-          { id: captured.id, afterSequence, limit: 512 },
-        ),
+        terminalRequest<TerminalReplay>('replay', {
+          id: captured.id,
+          afterSequence,
+          limit: 512,
+        }),
       );
       await copyText(stripAnsi(output));
       setOperations((previous) => ({
@@ -448,6 +506,11 @@ export function NativeTerminal({
       }}
     >
       <div className="native-terminal-toolbar">
+        {commandTerminal && onExitCommandTerminal && (
+          <Button onClick={onExitCommandTerminal}>
+            {t('session terminals')}
+          </Button>
+        )}
         <div
           className="native-terminal-tabs segmented"
           ref={tabStrip}
@@ -511,14 +574,14 @@ export function NativeTerminal({
         </div>
         <IconButton
           label={t('new terminal')}
-          disabled={busy || !sessionId}
+          disabled={busy || !sessionId || !!commandTerminal}
           onClick={create}
         >
           <Plus size={15} />
         </IconButton>
         <IconButton
           label={t('start service')}
-          disabled={busy || !sessionId}
+          disabled={busy || !sessionId || !!commandTerminal}
           onClick={() => setServiceOpen(true)}
         >
           <Play size={14} />
@@ -529,24 +592,32 @@ export function NativeTerminal({
               ? t('restart service')
               : t('restart terminal')
           }
-          disabled={busy || !selected || selected.status === 'stopping'}
+          disabled={
+            busy ||
+            !selected ||
+            !!commandTerminal ||
+            ('managedCommand' in selected && !!selected.managedCommand) ||
+            selected.status === 'stopping'
+          }
           onClick={restart}
         >
           <RotateCcw size={14} />
         </IconButton>
         <IconButton
           label={t('interrupt command')}
-          disabled={busy || selected?.status !== 'running'}
+          disabled={
+            busy ||
+            selected?.status !== 'running' ||
+            (!!commandTerminal && !capabilities?.input)
+          }
           onClick={() =>
             run(async () => {
               if (selected)
                 adopt(
-                  await workspaceCall<TerminalSnapshot>(
-                    selected.sessionId,
-                    'terminal',
-                    'signal',
-                    { id: selected.id, signal: 'SIGINT' },
-                  ),
+                  await terminalRequest<TerminalSnapshot>('signal', {
+                    id: selected.id,
+                    signal: 'SIGINT',
+                  }),
                 );
             })
           }
@@ -562,18 +633,16 @@ export function NativeTerminal({
           disabled={
             busy ||
             !selected ||
-            !['running', 'stopping'].includes(selected.status)
+            !['running', 'stopping'].includes(selected.status) ||
+            (!!commandTerminal && !capabilities?.stop)
           }
           onClick={() =>
             run(async () => {
               if (selected)
                 adopt(
-                  await workspaceCall<TerminalSnapshot>(
-                    selected.sessionId,
-                    'terminal',
-                    'close',
-                    { id: selected.id },
-                  ),
+                  await terminalRequest<TerminalSnapshot>('close', {
+                    id: selected.id,
+                  }),
                 );
             })
           }
@@ -591,7 +660,11 @@ export function NativeTerminal({
           <IconButton
             label={t('add selection to chat')}
             disabled={
-              busy || !active || !selected || !hasSelection[selected.id]
+              busy ||
+              !active ||
+              !selected ||
+              !hasSelection[selected.id] ||
+              (!!commandTerminal && !capabilities?.addToDraft)
             }
             onClick={addToDraft}
           >
@@ -690,7 +763,10 @@ export function NativeTerminal({
       {!selected && !error && (
         <div className="native-terminal-empty">
           <p>{t('run commands here while agents keep working')}</p>
-          <Button disabled={busy || !sessionId} onClick={create}>
+          <Button
+            disabled={busy || !sessionId || !!commandTerminal}
+            onClick={create}
+          >
             {t('new terminal')}
           </Button>
         </div>
@@ -702,6 +778,13 @@ export function NativeTerminal({
             <TerminalSurface
               key={item.id}
               snapshot={item}
+              request={
+                commandTerminal &&
+                item.id === commandTerminal.resolved.target.terminal.id
+                  ? terminalRequest
+                  : undefined
+              }
+              inputAllowed={!commandTerminal || !!capabilities?.input}
               active={
                 active &&
                 item.id === selected?.id &&
@@ -871,6 +954,8 @@ export function NativeTerminal({
 
 function TerminalSurface({
   snapshot,
+  request,
+  inputAllowed = true,
   active,
   visible,
   adopt,
@@ -878,6 +963,8 @@ function TerminalSurface({
   onSelectionChange,
 }: {
   snapshot: TerminalSnapshot;
+  request?: TerminalRequest;
+  inputAllowed?: boolean;
   active: boolean;
   visible: boolean;
   adopt: (snapshot: TerminalSnapshot) => void;
@@ -890,6 +977,10 @@ function TerminalSurface({
   const synchronizeRef = useRef<(() => void) | null>(null);
   const notifySearchesRef = useRef<(() => void) | null>(null);
   const activeRef = useRef(active);
+  const requestRef = useRef(request);
+  requestRef.current = request;
+  const inputAllowedRef = useRef(inputAllowed);
+  inputAllowedRef.current = inputAllowed;
   const statusRef = useRef(snapshot.status);
   const selectionChange = useRef(onSelectionChange);
   selectionChange.current = onSelectionChange;
@@ -942,7 +1033,7 @@ function TerminalSurface({
           ),
         ) || 13,
       theme: terminalTheme(),
-      disableStdin: snapshot.status !== 'running',
+      disableStdin: snapshot.status !== 'running' || !inputAllowed,
       allowProposedApi: false,
     });
     const fit = new FitAddon();
@@ -970,6 +1061,11 @@ function TerminalSurface({
     };
     notifySearchesRef.current = notifySearches;
     let sendInput = Promise.resolve();
+    const call = <T,>(method: string, params: Record<string, unknown>) =>
+      requestRef.current
+        ? requestRef.current<T>(method, params)
+        : workspaceCall<T>(snapshot.sessionId, 'terminal', method, params);
+
     const showError = (reason: unknown) => {
       if (!cancelled)
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -991,12 +1087,11 @@ function TerminalSurface({
               undefined,
               afterSequence,
             );
-            const page = await workspaceCall<TerminalReplay>(
-              snapshot.sessionId,
-              'terminal',
-              'replay',
-              { id: snapshot.id, afterSequence: cursor, limit: 128 },
-            );
+            const page = await call<TerminalReplay>('replay', {
+              id: snapshot.id,
+              afterSequence: cursor,
+              limit: 128,
+            });
             recordTerminalTiming(
               snapshot.id,
               'replay-response',
@@ -1068,12 +1163,11 @@ function TerminalSurface({
       search: async (text, previous, isCurrent) => {
         // Pin the log end for this request. Waiting for the entire live pump
         // could never finish while a service continuously produces output.
-        const boundary = await workspaceCall<TerminalReplay>(
-          snapshot.sessionId,
-          'terminal',
-          'replay',
-          { id: snapshot.id, afterSequence: cursor, limit: 1 },
-        );
+        const boundary = await call<TerminalReplay>('replay', {
+          id: snapshot.id,
+          afterSequence: cursor,
+          limit: 1,
+        });
         if (cancelled || !activeRef.current || !isCurrent()) return undefined;
         await new Promise<void>((resolve, reject) => {
           const check = () => {
@@ -1140,11 +1234,11 @@ function TerminalSurface({
     };
     void synchronize().catch(showError);
     const input = terminal.onData((data) => {
-      if (statusRef.current !== 'running') return;
+      if (statusRef.current !== 'running' || !inputAllowedRef.current) return;
       sendInput = sendInput
         .then(async () => {
           for (const part of terminalInputChunks(data))
-            await workspaceCall(snapshot.sessionId, 'terminal', 'write', {
+            await call('write', {
               id: snapshot.id,
               data: part,
             });
@@ -1153,7 +1247,7 @@ function TerminalSurface({
     });
     const dimensions = terminal.onResize(({ cols, rows }) => {
       if (statusRef.current !== 'running') return;
-      void workspaceCall(snapshot.sessionId, 'terminal', 'resize', {
+      void call('resize', {
         id: snapshot.id,
         cols,
         rows,
@@ -1237,8 +1331,8 @@ function TerminalSurface({
   useEffect(() => {
     if (instance.current)
       instance.current.terminal.options.disableStdin =
-        snapshot.status !== 'running';
-  }, [snapshot.status]);
+        snapshot.status !== 'running' || !inputAllowed;
+  }, [snapshot.status, inputAllowed]);
   useEffect(() => {
     localizeTerminal();
     container.current

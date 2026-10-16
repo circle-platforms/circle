@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { useCommandTerminal } from './CommandTerminalNavigation';
 import { copyText } from '../host';
 import {
   useSessionDisclosure,
@@ -103,6 +105,9 @@ export function ToolMessage({
   onAgent: (id: string) => void;
 }) {
   const sources = useSources();
+  const openCommandTerminal = useCommandTerminal();
+  const [terminalBusy, setTerminalBusy] = useState(false);
+  const [terminalError, setTerminalError] = useState('');
   const attachments =
     (tool as ToolCall & { attachments?: Attachment[] }).attachments ?? [];
   const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
@@ -200,6 +205,33 @@ export function ToolMessage({
                 </button>
               )}
             </div>
+            {tool.name === 'execute' && openCommandTerminal && (
+              <button
+                className="text-button"
+                disabled={terminalBusy}
+                onClick={async () => {
+                  setTerminalBusy(true);
+                  setTerminalError('');
+                  try {
+                    await openCommandTerminal(
+                      ownerSessionId ?? currentSession(snapshot).id,
+                      tool.id,
+                    );
+                  } catch (error) {
+                    setTerminalError(
+                      error instanceof Error
+                        ? error.message
+                        : t('command terminal could not be opened; try again'),
+                    );
+                  } finally {
+                    setTerminalBusy(false);
+                  }
+                }}
+              >
+                {terminalBusy ? t('opening terminal…') : t('open in terminal')}
+                <ArrowUpRight size={12} />
+              </button>
+            )}
             {tool.filePath && (
               <button
                 className="text-button"
@@ -225,6 +257,7 @@ export function ToolMessage({
               <Copy size={13} />
             </IconButton>
           </div>
+          {terminalError && <p role="alert">{terminalError}</p>}
           {(tab === 'output' || hasToolInput(tool.input)) && (
             <DataBlock
               title={tab === 'input' ? t('raw input') : t('raw output')}

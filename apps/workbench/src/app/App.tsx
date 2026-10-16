@@ -1,3 +1,9 @@
+import { CommandTerminalNavigation } from '../components/CommandTerminalNavigation';
+import type { CommandTerminalResolution } from '../command-terminal-target';
+import {
+  commandTerminalUnavailable,
+  type CommandTerminalView,
+} from '../model/command-terminal-client';
 import {
   desktopHost,
   copyText,
@@ -158,6 +164,51 @@ export function App() {
   const [sourceColumn, setSourceColumn] = useState<number | undefined>();
   const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
+  const [commandTerminal, setCommandTerminal] = useState<CommandTerminalView>();
+  const commandRequest = useRef(0);
+  const commandOrigin = useRef('');
+  commandOrigin.current = JSON.stringify([session.id, agent]);
+  useEffect(() => {
+    commandRequest.current++;
+    setCommandTerminal(undefined);
+  }, [session.id, agent]);
+  const openCommandTerminal = async (
+    sourceSessionId: string,
+    toolCallId: string,
+  ) => {
+    const request = ++commandRequest.current;
+    const origin = commandOrigin.current;
+    const viewSessionId = session.id;
+    let reply: CommandTerminalResolution;
+    try {
+      reply = await workspaceCall<CommandTerminalResolution>(
+        viewSessionId,
+        'terminal',
+        'resolveCommand',
+        { sourceSessionId, toolCallId },
+      );
+    } catch {
+      if (
+        request !== commandRequest.current ||
+        origin !== commandOrigin.current
+      )
+        return;
+      throw Error(t('command terminal could not be opened; try again'));
+    }
+    if (request !== commandRequest.current || origin !== commandOrigin.current)
+      return;
+    if (!reply.available) throw Error(commandTerminalUnavailable(reply.reason));
+    if (
+      reply.target.executionSessionId !== sourceSessionId ||
+      reply.target.toolCallId !== toolCallId
+    )
+      throw Error(t('command terminal source changed; open it again'));
+    setCommandTerminal({ viewSessionId, resolved: reply });
+    setPanel('terminal');
+    setSelection('');
+    setInspectorOpen(true);
+  };
+
   const selectAgent = (id: string | null) => {
     sourceOpener.current.cancel();
     setFile(null);
@@ -832,6 +883,8 @@ export function App() {
       <Inspector
         panel={panel}
         visible={inspectorVisible}
+        commandTerminal={commandTerminal}
+        onExitCommandTerminal={() => setCommandTerminal(undefined)}
         onSession={(id) => {
           perform(() => selectSessionAndNavigate(id));
         }}
@@ -925,7 +978,7 @@ export function App() {
             .includes(search.toLowerCase()),
       )
     : [];
-  return (
+  const surface = (
     <SourceNavigation onFile={onFile}>
       <Tooltip.Provider delayDuration={300}>
         <div className="workbench">
@@ -1217,5 +1270,12 @@ export function App() {
         </div>
       </Tooltip.Provider>
     </SourceNavigation>
+  );
+  return (
+    <CommandTerminalNavigation
+      onOpen={runtime.mode === 'live' ? openCommandTerminal : undefined}
+    >
+      {surface}
+    </CommandTerminalNavigation>
   );
 }

@@ -1,4 +1,16 @@
 export const terminal: Record<string, string> = {
+  'session terminals': '会话终端',
+
+  'this command has no interactive terminal': '此命令没有交互终端',
+  'command terminal source changed; open it again':
+    '命令终端来源已改变，请重新打开',
+  'command terminal is no longer available': '此命令终端暂不可用',
+  'managed commands cannot be restarted': '受管理的命令不能从终端重新启动',
+
+  'open in terminal': '在终端打开',
+  'opening terminal…': '正在打开终端…',
+  'command terminal could not be opened; try again': '无法打开命令终端，请重试',
+
   'copy selected text': '复制选中文字',
   'original attachment and source details': '原附件与来源详情',
   'copy original attachment': '复制原附件',

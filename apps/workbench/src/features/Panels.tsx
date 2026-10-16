@@ -1,3 +1,4 @@
+import type { CommandTerminalView } from '../model/command-terminal-client';
 import { TerminalSelectionPreview } from '../components/TerminalSelectionPreview';
 import { WorkspacePanelContents } from './WorkspacePanelContents';
 import { useSources } from '../components/SourceNavigation';
@@ -66,6 +67,8 @@ const REQUEST_KIND: Record<string, () => string> = {
   'plan-exit': () => t('plan exit'),
 };
 interface Props {
+  commandTerminal?: CommandTerminalView;
+  onExitCommandTerminal?: () => void;
   panel: PanelId;
   selection: string;
   onPanel: (panel: PanelId, selection?: string) => void;
@@ -202,6 +205,10 @@ function InspectorResources(
             {id === 'terminal' || id === 'changes' || id === 'activity' ? (
               <WorkspacePanelContents
                 kind={id}
+                commandTerminal={
+                  id === 'terminal' ? props.commandTerminal : undefined
+                }
+                onExitCommandTerminal={props.onExitCommandTerminal}
                 sessionId={props.sessionId}
                 visible={!!props.visible && id === props.panel}
                 selection={props.selection}

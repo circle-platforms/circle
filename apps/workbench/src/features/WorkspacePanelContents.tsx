@@ -1,3 +1,7 @@
+import {
+  commandTerminalRequest,
+  type CommandTerminalView,
+} from '../model/command-terminal-client';
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
@@ -23,6 +27,8 @@ const DebugPanel = lazy(() =>
 /** Native resources use the existing inspector's tabs and lifetime, without another workbench. */
 export function WorkspacePanelContents({
   kind,
+  commandTerminal,
+  onExitCommandTerminal,
   sessionId,
   visible,
   selection,
@@ -32,6 +38,8 @@ export function WorkspacePanelContents({
   onTask,
 }: {
   kind: 'terminal' | 'changes' | 'activity';
+  commandTerminal?: CommandTerminalView;
+  onExitCommandTerminal?: () => void;
   sessionId: string;
   visible: boolean;
   selection: string;
@@ -153,19 +161,31 @@ export function WorkspacePanelContents({
                   <NativeTerminal
                     embedded
                     sessionId={sessionId}
+                    commandTerminal={commandTerminal}
+                    onExitCommandTerminal={onExitCommandTerminal}
                     active={visible && tab === 'terminal'}
                     onAddToDraft={(capture) =>
                       appendTerminalSelection(runtime, capture, () =>
-                        workspaceCall<TerminalReplay>(
-                          capture.sourceSessionId,
-                          'terminal',
-                          'replay',
-                          {
-                            id: capture.terminalId,
-                            afterSequence: capture.outputSequence,
-                            limit: 1,
-                          },
-                        ),
+                        commandTerminal
+                          ? commandTerminalRequest(
+                              commandTerminal.viewSessionId,
+                              commandTerminal.resolved.target,
+                              () => {},
+                            )<TerminalReplay>('replay', {
+                              id: capture.terminalId,
+                              afterSequence: capture.outputSequence,
+                              limit: 1,
+                            })
+                          : workspaceCall<TerminalReplay>(
+                              capture.sourceSessionId,
+                              'terminal',
+                              'replay',
+                              {
+                                id: capture.terminalId,
+                                afterSequence: capture.outputSequence,
+                                limit: 1,
+                              },
+                            ),
                       )
                     }
                   />
