@@ -35,8 +35,15 @@ async function once(iteration) {
       exportPath: join(temp, 'export.md'),
     }),
     ELECTRON_ENABLE_LOGGING: '1',
+    ELECTRON_LOG_FILE: join(temp, 'chromium.log'),
   };
   delete env.ELECTRON_RUN_AS_NODE;
+  if (process.env.PROBE_DROP_CACHES) {
+    const { execFileSync } = await import('node:child_process');
+    execFileSync('bash', ['-c', process.env.PROBE_DROP_CACHES], {
+      stdio: 'inherit',
+    });
+  }
   const t0 = Date.now();
   const at = () => Date.now() - t0;
   const record = { label, iteration, showMode, timeline: [], stderr: [] };
@@ -92,6 +99,19 @@ async function once(iteration) {
           log('render-process-gone', details),
         );
         app.on('gpu-info-update', () => log('gpu-info-update'));
+        const seen = new Set();
+        const poll = setInterval(() => {
+          for (const metric of app.getAppMetrics())
+            if (!seen.has(metric.pid)) {
+              seen.add(metric.pid);
+              log('process', {
+                type: metric.type,
+                pid: metric.pid,
+                created: metric.creationTime - t0,
+              });
+            }
+        }, 50);
+        setTimeout(() => clearInterval(poll), 60000);
       },
       t0,
     );
@@ -215,14 +235,17 @@ async function once(iteration) {
       gpuFeatureStatus: app.getGPUFeatureStatus(),
       processes: app.getAppMetrics().map((m) => m.type),
       gpuInfo: await Promise.race([
-        app.getGPUInfo('basic').then((info) => ({
-          gpuDevice: info.gpuDevice,
-          auxAttributes: info.auxAttributes && {
-            glRenderer: info.auxAttributes.glRenderer,
-            glImplementationParts: info.auxAttributes.glImplementationParts,
-            softwareRendering: info.auxAttributes.softwareRendering,
-          },
-        })),
+        app.getGPUInfo('basic').then(
+          (info) => ({
+            gpuDevice: info.gpuDevice,
+            auxAttributes: info.auxAttributes && {
+              glRenderer: info.auxAttributes.glRenderer,
+              glImplementationParts: info.auxAttributes.glImplementationParts,
+              softwareRendering: info.auxAttributes.softwareRendering,
+            },
+          }),
+          (error) => 'gpu info unavailable: ' + String(error),
+        ),
         new Promise((r) => setTimeout(() => r('gpu info timed out'), 3000)),
       ]),
     }));
@@ -236,7 +259,17 @@ async function once(iteration) {
     record.error = String(error).slice(0, 1000);
   } finally {
     record.total = at();
+    record.launchedAtEpoch = t0;
     if (app) await app.close().catch(() => {});
+    try {
+      const { readFile } = await import('node:fs/promises');
+      record.chromiumLog = (await readFile(join(temp, 'chromium.log'), 'utf8'))
+        .split('\n')
+        .filter((line) => line.trim())
+        .slice(0, 300);
+    } catch (error) {
+      record.chromiumLog = String(error);
+    }
     await rm(temp, { recursive: true, force: true });
   }
   const summary = {
@@ -250,6 +283,10 @@ async function once(iteration) {
     firstFrameAfterHeadingMs: record.firstFrameAfterHeadingMs,
     readyToShow: record.main?.events.find((e) => e.name === 'ready-to-show'),
     show: record.main?.events.find((e) => e.name === 'show'),
+    gpuProcesses: record.main?.events.filter(
+      (e) => e.name === 'process' && e.type === 'GPU',
+    ),
+    gone: record.main?.events.filter((e) => e.name === 'child-process-gone'),
     error: record.error,
   };
   console.log('FRAMES ' + JSON.stringify(summary));

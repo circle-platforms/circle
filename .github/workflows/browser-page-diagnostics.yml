@@ -11,14 +11,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { config: release, replica: 1, show: harness, display: xvfb-run }
-          - { config: release, replica: 2, show: harness, display: xvfb-run }
-          - { config: release, replica: 3, show: harness, display: xvfb-run }
-          - { config: release-wide, replica: 1, show: harness, display: xvfb-run-wide }
-          - { config: release-wide, replica: 2, show: harness, display: xvfb-run-wide }
-          - { config: release-production, replica: 1, show: production, display: xvfb-run }
-          - { config: release-production, replica: 2, show: production, display: xvfb-run }
-          - { config: workbench, replica: 1, show: harness, display: persistent }
+          - { config: cold-none, replica: 1, iterations: '12', drop: 'none' }
+          - { config: cold-none, replica: 2, iterations: '12', drop: 'none' }
+          - { config: cold-app, replica: 1, iterations: '10', drop: 'app' }
+          - { config: cold-system, replica: 1, iterations: '10', drop: 'system' }
+          - { config: warm, replica: 1, iterations: '6', drop: '' }
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -34,20 +31,13 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
-      - name: Workbench display
-        if: matrix.display == 'persistent'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
-          Xvfb :99 -screen 0 1920x1080x24 > "$RUNNER_TEMP/circle-xvfb.log" 2>&1 &
-          echo 'DISPLAY=:99' >> "$GITHUB_ENV"
       - run: npm --prefix apps/desktop run package
       - name: Probe the packaged application's first frames
         shell: bash
         env:
           PROBE_LABEL: ${{ matrix.config }}-${{ matrix.replica }}
-          PROBE_SHOW: ${{ matrix.show }}
-          PROBE_ITERATIONS: '8'
+          PROBE_SHOW: harness
+          PROBE_ITERATIONS: ${{ matrix.iterations }}
         run: |
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-linux-x64"
           export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Circle"
@@ -57,12 +47,17 @@ jobs:
           helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
           sudo chown root:root "$helper"
           sudo chmod 4755 "$helper"
-          case "${{ matrix.display }}" in
-            xvfb-run) run=(xvfb-run -a) ;;
-            xvfb-run-wide) run=(xvfb-run -a -s '-screen 0 1920x1080x24') ;;
-            persistent) run=() ;;
+          drop='sync; echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null'
+          app_files="find '$CIRCLE_DESKTOP_APP_PATH' -type f -exec cat {} + > /dev/null"
+          system_files="find /usr/lib/x86_64-linux-gnu -maxdepth 2 -type f \\( -name 'libLLVM*' -o -name 'libgallium*' -o -name 'libGL*' -o -name 'libEGL*' -o -name 'libgbm*' -o -name 'libva*' -o -name 'libvulkan*' -o -name 'libdrm*' -o -path '*/dri/*' \\) -exec cat {} + > /dev/null"
+          case "${{ matrix.drop }}" in
+            none) export PROBE_DROP_CACHES="$drop" ;;
+            app) export PROBE_DROP_CACHES="$drop; $app_files" ;;
+            system) export PROBE_DROP_CACHES="$drop; $system_files" ;;
+            *) unset PROBE_DROP_CACHES ;;
           esac
-          "${run[@]}" node apps/desktop/test/diagnose-frames.mjs
+          echo "PROBE_DROP_CACHES=${PROBE_DROP_CACHES:-}"
+          xvfb-run -a node apps/desktop/test/diagnose-frames.mjs
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
         with:
