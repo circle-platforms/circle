@@ -1,6 +1,9 @@
 export const browserDiagnostics: Record<string, string> = {
   'live diagnostic updates unavailable': '实时诊断更新不可用',
   'viewport and developer tools': '视口与开发者工具',
+  'loading diagnostics': '正在加载诊断',
+  'page status unavailable': '页面状态未知',
+  'no console messages': '暂无控制台消息',
   'page paused': '页面已暂停',
   'page running': '页面运行中',
   'open source location': '打开源码位置',

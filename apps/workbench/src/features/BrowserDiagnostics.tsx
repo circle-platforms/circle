@@ -397,9 +397,16 @@ export function BrowserDiagnostics({
           <div role="status">
             <Status
               value={
-                result?.state.debugger.paused
-                  ? t('page paused')
-                  : t('page running')
+                !result
+                  ? error
+                    ? t('page status unavailable')
+                    : t('loading diagnostics')
+                  : result.state.reconnectError ||
+                      result.state.owner === 'devtools'
+                    ? t('page status unavailable')
+                    : result.state.debugger.paused
+                      ? t('page paused')
+                      : t('page running')
               }
             />
           </div>
@@ -432,6 +439,9 @@ export function BrowserDiagnostics({
                 >
                   {t('clear console')}
                 </Button>
+                {result && !error && result.state.console.length === 0 && (
+                  <p className="panel-note">{t('no console messages')}</p>
+                )}
                 {result?.state.console.map((entry) => (
                   <details
                     className="context-source"

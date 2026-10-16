@@ -103,6 +103,87 @@ try {
         });
     }
   }
+  for (const language of ['en', 'zh-CN'])
+    for (const theme of ['dark', 'light'])
+      for (const width of [500, 375]) {
+        await page.setViewportSize({ width, height: 800 });
+        const words =
+          language === 'en'
+            ? {
+                open: 'page diagnostics',
+                loading: 'loading diagnostics',
+                unknown: 'page status unavailable',
+                running: 'page running',
+                empty: 'no console messages',
+              }
+            : {
+                open: '页面诊断',
+                loading: '正在加载诊断',
+                unknown: '页面状态未知',
+                running: '页面运行中',
+                empty: '暂无控制台消息',
+              };
+        for (const mode of ['pending', 'error', 'empty']) {
+          const scenario = `${language} ${theme} ${width} ${mode} diagnostic state`;
+          try {
+            await page.goto(
+              server.resolvedUrls.local[0] +
+                'test/browser-diagnostics-ui.html?status=' +
+                mode,
+            );
+            await page.locator('.browser-diagnostics').waitFor();
+            await page.evaluate(
+              async ({ language, theme, width }) => {
+                (await import('/src/i18n/index.ts')).setLanguage(language);
+                (await import('/src/theme.ts')).applyTheme(theme);
+                document.querySelector('.native-browser').style.width =
+                  width + 'px';
+              },
+              { language, theme, width },
+            );
+            await page
+              .getByRole('button', { name: words.open, exact: true })
+              .click();
+            if (mode === 'pending') {
+              await page.getByText(words.loading, { exact: true }).waitFor();
+              assert.equal(
+                await page.getByText(words.running, { exact: true }).count(),
+                0,
+              );
+              assert.equal(
+                await page.getByText(words.empty, { exact: true }).count(),
+                0,
+              );
+            } else if (mode === 'error') {
+              await page.getByText(words.unknown, { exact: true }).waitFor();
+              await page
+                .getByRole('alert')
+                .getByText('synthetic diagnostics unavailable', { exact: true })
+                .waitFor();
+              assert.equal(
+                await page.getByText(words.running, { exact: true }).count(),
+                0,
+              );
+              assert.equal(
+                await page.getByText(words.empty, { exact: true }).count(),
+                0,
+              );
+            } else await page.getByText(words.empty, { exact: true }).waitFor();
+            if (output)
+              await page.screenshot({
+                path: join(output, `${language}-${theme}-${width}-${mode}.png`),
+              });
+            checks.push({ scenario, status: 'passed' });
+          } catch (error) {
+            checks.push({ scenario, status: 'failed', error: String(error) });
+            if (output)
+              await page.screenshot({
+                path: join(output, `state-failure-${checks.length}.png`),
+              });
+          }
+        }
+      }
+  await page.setViewportSize({ width: 1200, height: 800 });
   await page.goto(
     server.resolvedUrls.local[0] + 'test/browser-diagnostics-ui.html?layout',
   );

@@ -1,3 +1,4 @@
+import { useLocale } from '../src/i18n';
 import { createRoot } from 'react-dom/client';
 import { BrowserDiagnostics } from '../src/features/BrowserDiagnostics';
 import '../src/styles/app.css';
@@ -58,6 +59,13 @@ const notify = () => {
     return () => listeners.delete(listener);
   },
   browserDiagnostics: async (_id: string, request: any) => {
+    const status = new URLSearchParams(location.search).get('status');
+    if (request.action === 'read' && status === 'pending')
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    if (request.action === 'read' && status === 'error')
+      throw new Error('synthetic diagnostics unavailable');
     if (request.action === 'debug' && request.command === 'variables') {
       variableRequests++;
       const captured = response(),
@@ -89,13 +97,17 @@ const notify = () => {
   },
   release: () => release?.(),
 };
-const diagnostics = (
-  <BrowserDiagnostics
-    sessionId="fixture"
-    tab="t1"
-    url="http://localhost/fixture"
-  />
-);
+function DiagnosticFixture() {
+  useLocale();
+  return (
+    <BrowserDiagnostics
+      sessionId="fixture"
+      tab="t1"
+      url="http://localhost/fixture"
+    />
+  );
+}
+const diagnostics = <DiagnosticFixture />;
 createRoot(document.getElementById('root')!).render(
   location.search.includes('layout') ? (
     <div
