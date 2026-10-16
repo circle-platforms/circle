@@ -909,7 +909,7 @@ test('the connector reads work, execution, knowledge and methods from the server
   await command.handler('reconcile task_one', context);
   assert.match(
     lines.at(-1)!,
-    /task_one · reconcile · .*No independently observed receipt/,
+    /^reconcile task_one\n {2}.*No independently observed receipt/,
   );
   assert.equal(lines.at(-1)!.includes('{'), false);
   // Naming the operation makes it a real reconciliation request.
@@ -923,7 +923,7 @@ test('the connector reads work, execution, knowledge and methods from the server
     ),
     { operationId: 'op_9' },
   );
-  assert.match(lines.at(-1)!, /task_one · reconcile · .*accepted/);
+  assert.match(lines.at(-1)!, /^✓ reconcile task_one · .*accepted/);
   assert.ok(!JSON.stringify(host.view('hub')).includes(TOKEN));
 });
 
