@@ -195,7 +195,10 @@ export const HUB_ZH: Record<string, string> = {
   'Password for {user} on {url}': '{url} 上 {user} 的密码',
   'Sign-in cancelled': '已取消登录',
   ' · scope {id}': ' · 范围 {id}',
-  ' · api {version}': ' · api {version}',
+  ' · api {version}': ' · 接口 {version}',
+  'change-set': '变更集',
+  governance: '治理',
+  'waiting-review': '待审核',
   '● signed in to {url} as {user}{scope}{api}':
     '● 已登录 {url}，用户 {user}{scope}{api}',
   'Circle runs with a token from hub here; there is no sign-out':

@@ -209,6 +209,26 @@ test('transcript find targets visible rows and wraps forward/backward without ch
   assert.match(highlighted, /\x1b\[7m/);
   assert.equal(rows[1], '\x1b[31mMATCH\x1b[0m first');
 });
+test('an autolink stops at fullwidth punctuation', () => {
+  const raw = markdownRows('已登录 http://127.0.0.1:7410，用户 ada').join('\n');
+  const underlined = /\x1b\[[0-9;]*4m([^\x1b]*)/.exec(raw);
+  assert.ok(underlined, raw);
+  assert.match(underlined[1]!, /http:\/\/127\.0\.0\.1:7410$/);
+  assert.equal(underlined[1]!.includes('，'), false);
+  assert.equal(underlined[1]!.includes('用户'), false);
+  assert.match(
+    plain('已登录 http://127.0.0.1:7410，用户 ada'),
+    /7410，用户 ada/,
+  );
+  assert.match(
+    plain('see https://example.com/a, then'),
+    /example\.com\/a, then/,
+  );
+  const ascii = markdownRows('see https://example.com/a, then').join('\n');
+  const asciiLink = /\x1b\[[0-9;]*4m([^\x1b]*)/.exec(ascii);
+  assert.ok(asciiLink, ascii);
+  assert.equal(asciiLink[1]!.includes(','), false);
+});
 test('find highlighting matches normalized whitespace and literal regex punctuation and survives live redraws', () => {
   const rows = ['first', 'foo   bar (literal)', 'last foo bar'];
   const find = new TranscriptFind();

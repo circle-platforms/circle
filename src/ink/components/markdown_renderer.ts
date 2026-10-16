@@ -1,5 +1,6 @@
 import { Lexer, type Token, type Tokens } from 'marked';
 import { decodeHTML } from 'entities';
+import { splitAutolink } from '../../autolink.js';
 import { palette, sgrJoin } from '../theme.js';
 import { stringWidth, stripAnsi, wrap } from '../string_width.js';
 import { highlightLine } from '../highlight.js';
@@ -53,6 +54,43 @@ function protectTableCodePipes(source: string): string {
       );
     })
     .join('\n');
+}
+function trimAutolinks(tokens: Token[]): void {
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.type === 'link') {
+      const link = token as Tokens.Link;
+      const shown = link.text || String(link.href ?? '');
+      const href = String(link.href ?? '');
+      if (
+        shown &&
+        (link.autolink ||
+          shown === href ||
+          href === `http://${shown}` ||
+          href === `https://${shown}`)
+      ) {
+        const { url, rest } = splitAutolink(shown);
+        if (rest) {
+          const address = shown.startsWith('www.') ? `http://${url}` : url;
+          link.raw = url;
+          link.href = address;
+          link.text = url;
+          link.tokens = [{ type: 'text', raw: url, text: url }];
+          const next = tokens[index + 1];
+          if (next?.type === 'text') {
+            next.raw = rest + String(next.raw ?? '');
+            next.text = rest + String(('text' in next ? next.text : '') ?? '');
+          } else
+            tokens.splice(index + 1, 0, {
+              type: 'text',
+              raw: rest,
+              text: rest,
+            });
+        }
+      }
+    }
+    if ('tokens' in token && token.tokens) trimAutolinks(token.tokens);
+  }
 }
 function inline(tokens: Token[], style = ''): Span[] {
   const p = palette();
@@ -417,9 +455,9 @@ export function markdownRows(
   options: MarkdownStyle = {},
 ): string[] {
   const room = Math.max(1, width);
-  return blocks(
-    Lexer.lex(protectTableCodePipes(terminalText(text)), { gfm: true }),
-    room,
-    options,
-  );
+  const tokens = Lexer.lex(protectTableCodePipes(terminalText(text)), {
+    gfm: true,
+  });
+  trimAutolinks(tokens);
+  return blocks(tokens, room, options);
 }

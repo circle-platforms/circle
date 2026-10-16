@@ -4466,6 +4466,26 @@ export async function register(api: ExtensionAPI): Promise<void> {
     taskId: string;
     approvalId: string;
     title: string;
+    messageZh: string;
+    status: string;
+  }
+  // The server's Chinese sentence when it sent one. Kind and phase stay raw
+  // on the view; the desktop translates them. Lines printed here use the
+  // process language.
+  function preferredTitle(item: Record<string, unknown>): string {
+    const chinese =
+      hubLocaleChinese() && typeof item.messageZh === 'string'
+        ? item.messageZh.trim()
+        : '';
+    return chinese || String(item.title ?? item.name ?? item.summary ?? '');
+  }
+  function preferredKind(kind: string): string {
+    return kind === 'change-set' || kind === 'governance'
+      ? hubText(kind)
+      : kind;
+  }
+  function preferredStatus(status: string): string {
+    return status === 'waiting-review' ? hubText(status) : status;
   }
   let inboxItems: InboxItem[] = [];
   function noteInbox(): void {
@@ -4499,12 +4519,16 @@ export async function register(api: ExtensionAPI): Promise<void> {
           .join(', ');
         const kind = String(item.kind ?? 'change-set');
         const title = String(item.title ?? item.name ?? item.summary ?? '');
+        const messageZh =
+          typeof item.messageZh === 'string' ? item.messageZh.trim() : '';
         return {
           kind,
           requestId: String(item.requestId ?? ''),
           taskId: String(item.taskId ?? ''),
           approvalId: String(item.approvalId ?? item.requestId ?? ''),
           title: [title, assetLabel].filter(Boolean).join(' · '),
+          messageZh,
+          status: String(item.status ?? item.phase ?? ''),
         };
       });
       if (!inboxItems.length) {
@@ -4521,13 +4545,14 @@ export async function register(api: ExtensionAPI): Promise<void> {
         inboxItems
           .map((item, index) => {
             const n = index + 1;
+            const title = (hubLocaleChinese() && item.messageZh) || item.title;
             if (item.kind === 'governance' || (!item.taskId && item.requestId))
               return hubText(
                 '  {n}. governance {id} · {title}\n    /hub show {id}\n    /hub approve {id}\n    /hub reject {id} <reason>',
                 {
                   n,
                   id: item.requestId,
-                  title: item.title,
+                  title,
                 },
               );
             const approval = item.approvalId || item.requestId;
@@ -4535,10 +4560,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
               '  {n}. {kind} {task} · {approval} · {title}\n    /hub show {task}\n    /hub approve {task} {approval}\n    /hub reject {task} {approval} <reason>',
               {
                 n,
-                kind: item.kind,
+                kind: preferredKind(item.kind),
                 task: item.taskId || item.requestId,
                 approval,
-                title: item.title,
+                title,
               },
             );
           })
@@ -4566,8 +4591,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
     for (const task of tasks) {
       const taskId = String(task.taskId ?? '');
       if (!taskId) continue;
+      const phase = String(task.phase ?? task.status ?? '');
       lines.push(
-        `  ${taskId} · ${String(task.phase ?? '')} · ${String(task.title ?? '')}`,
+        `  ${taskId} · ${preferredStatus(phase)} · ${preferredTitle(task)}`,
       );
       lines.push(await approvalNotice(taskId));
       inboxItems.push({
@@ -4575,7 +4601,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
         requestId: '',
         taskId,
         approvalId: '',
-        title: String(task.title ?? ''),
+        title: String(task.title ?? task.name ?? task.summary ?? ''),
+        messageZh:
+          typeof task.messageZh === 'string' ? task.messageZh.trim() : '',
+        status: phase,
       });
     }
     noteInbox();
@@ -4601,8 +4630,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
       context.append(
         hubText('  governance {id} · {status} · {title}', {
           id: requestId,
-          status: String(record.status ?? ''),
-          title: String(record.title ?? record.summary ?? ''),
+          status: preferredStatus(String(record.status ?? '')),
+          title: preferredTitle(record),
         }),
       );
       if (typeof record.declineReason === 'string' && record.declineReason)

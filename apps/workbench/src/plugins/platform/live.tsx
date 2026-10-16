@@ -100,10 +100,10 @@ function useObjects() {
   const { snapshot, runtime, perform } = useRuntime();
   const view = hubView(snapshot.extensions);
   const objects = (view as { objects?: Objects } | undefined)?.objects;
-  // Every action is the extension's own /hub command; its lines go to the conversation.
+  // Every action is the extension's own /hub command. Its lines stay on the hub page.
   const run = (args: string) =>
     perform(async () => {
-      await runtime.command('hub', args);
+      await runtime.request('extension-command', { name: 'hub', args });
     });
   return { view, objects, run };
 }

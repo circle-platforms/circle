@@ -11,7 +11,7 @@ import {
 } from '../components/common';
 import type { RuntimeExtension } from '../model/types';
 import type { PluginViewProps, WorkbenchPlugin } from './types';
-import { t } from '../i18n';
+import { locale, t } from '../i18n';
 
 interface HubProjection {
   byteLimit: number;
@@ -71,6 +71,8 @@ interface HubInboxItem {
   taskId: string;
   approvalId: string;
   title: string;
+  messageZh?: string;
+  status?: string;
 }
 interface HubKnowledgeHit {
   recordId: string;
@@ -138,6 +140,38 @@ function approveArgs(item: HubInboxItem): string {
     ? `approve ${item.taskId} ${approval}`
     : `approve ${item.taskId}`;
 }
+/** A refused password on this page. The terminal still names the command. */
+export function hubSignInError(message: string): string {
+  if (
+    message.includes('UNAUTHENTICATED') ||
+    message.includes('sign-in was refused') ||
+    message.includes('登录被拒绝')
+  )
+    return t('username or password is wrong');
+  return message;
+}
+function hubKind(kind: string): string {
+  switch (kind) {
+    case 'change-set':
+      return t('change set');
+    case 'governance':
+      return t('governance');
+    default:
+      return kind;
+  }
+}
+function hubStatus(status: string): string {
+  switch (status) {
+    case 'waiting-review':
+      return t('waiting for review');
+    default:
+      return status;
+  }
+}
+function inboxTitle(item: HubInboxItem): string {
+  if (locale() === 'zh-CN' && item.messageZh) return item.messageZh;
+  return item.title;
+}
 function rejectArgs(item: HubInboxItem, reason: string): string {
   if (item.kind === 'governance' || (!item.taskId && item.requestId))
     return `reject ${item.requestId} ${reason}`;
@@ -160,6 +194,23 @@ export function HubPage({
   const [query, setQuery] = useState('');
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const touched = useRef({ address: false, user: false });
+  const asked = useRef<string | null>(null);
+  // The open session may only have catalogued hub. Ask that session to load
+  // it; the saved sign-in is in the home, and the page reads the view it publishes.
+  useEffect(() => {
+    if (view || runtime.mode !== 'live') return;
+    const listed = snapshot.extensions.some(
+      (item) => item.name === 'hub' && item.enabled && !item.error,
+    );
+    if (!listed) return;
+    if (asked.current === snapshot.activeSessionId) return;
+    asked.current = snapshot.activeSessionId;
+    void Promise.resolve(
+      runtime.request('extension-command', { name: 'hub', args: '' }),
+    ).catch(() => {
+      asked.current = null;
+    });
+  }, [view, runtime, snapshot.activeSessionId, snapshot.extensions]);
   useEffect(() => {
     if (!view) return;
     const offered = offeredLogin(view, box);
@@ -171,10 +222,10 @@ export function HubPage({
         username: view.username || offered.username,
       });
   }, [view, box]);
-  // Every action is the extension's own /hub command; its lines go to the conversation.
+  // Every action is the extension's own /hub command. Its lines stay on this page.
   const run = (args: string) =>
     perform(async () => {
-      await runtime.command('hub', args);
+      await runtime.request('extension-command', { name: 'hub', args });
     });
   return (
     <Page
@@ -199,12 +250,10 @@ export function HubPage({
           }}
         />
       ) : (
-        <EmptyState title={t('not connected')}>
-          {t('The hub extension has published nothing yet.')}
-        </EmptyState>
+        <EmptyState title={t('not signed in yet')} />
       )}
       {view?.signedIn ? (
-        <div className="inline-actions">
+        <div className="inline-actions hub-actions">
           <Button onClick={() => run('logout')}>{t('sign out')}</Button>
         </div>
       ) : (
@@ -236,7 +285,7 @@ export function HubPage({
               } catch (caught) {
                 setError(
                   caught instanceof Error
-                    ? caught.message
+                    ? hubSignInError(caught.message)
                     : t('sign-in failed'),
                 );
               }
@@ -306,9 +355,12 @@ export function HubPage({
                   <article className="extension-card" key={id}>
                     <div className="detail-title">
                       <div>
-                        <h2>{item.title || id}</h2>
+                        <h2>{inboxTitle(item) || id}</h2>
                         <p>
-                          {item.kind} · {item.taskId || item.requestId}
+                          {hubKind(item.kind)}
+                          {item.status ? ' · ' + hubStatus(item.status) : ''}
+                          {' · '}
+                          {item.taskId || item.requestId}
                           {item.approvalId ? ' · ' + item.approvalId : ''}
                         </p>
                       </div>

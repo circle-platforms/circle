@@ -15,6 +15,23 @@ const savedLocale = {
   LANG: process.env.LANG,
 };
 
+test('the signed-in api note is not the English word api', () => {
+  process.env.LANGUAGE = 'zh_CN.UTF-8';
+  delete process.env.LC_ALL;
+  delete process.env.LC_MESSAGES;
+  delete process.env.LANG;
+  try {
+    assert.equal(
+      hubText(' · api {version}', { version: '1.0.0' }),
+      ' · 接口 1.0.0',
+    );
+    assert.equal(hubText('change-set'), '变更集');
+    assert.equal(hubText('waiting-review'), '待审核');
+  } finally {
+    restoreLocale();
+  }
+});
+
 function restoreLocale(): void {
   for (const [key, value] of Object.entries(savedLocale)) {
     if (value === undefined) delete process.env[key];

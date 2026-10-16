@@ -6,7 +6,8 @@ import { RuntimeProvider } from '../src/app/context.tsx';
 import { setLanguage } from '../src/i18n/index.ts';
 import { PreviewRuntime } from '../src/model/state.ts';
 import type { RuntimeExtension } from '../src/model/types.ts';
-import { HubPage } from '../src/plugins/hub.tsx';
+import { Markdown } from '../src/components/Markdown.tsx';
+import { HubPage, hubSignInError } from '../src/plugins/hub.tsx';
 import { shellPageTitle } from '../src/plugins/labels.ts';
 
 const memoryStorage = (initial: Record<string, string> = {}) => {
@@ -139,7 +140,62 @@ test('the hub page title is the translated name', () => {
     assert.match(html, /收件箱/);
     assert.match(html, /没有等你处理的/);
     assert.match(html, /搜索知识/);
+    assert.match(html, /hub-actions/);
+    const inbox = draw(
+      hub({
+        url: 'http://hub.example:9',
+        username: 'ada',
+        scopeId: '',
+        signedIn: true,
+        following: [],
+        tasks: [],
+        recent: [],
+        inbox: [
+          {
+            kind: 'change-set',
+            requestId: 'apr_9',
+            taskId: 'task_ask',
+            approvalId: 'apr_9',
+            title: 'Review asset change set',
+            messageZh: '审核资产变更集',
+            status: 'waiting-review',
+          },
+        ],
+      }),
+      box,
+    );
+    assert.match(inbox, /审核资产变更集/);
+    assert.equal(inbox.includes('Review asset change set'), false);
+    assert.match(inbox, /变更集/);
+    assert.match(inbox, /待审核/);
+    assert.equal(inbox.includes('change-set'), false);
+    assert.equal(inbox.includes('waiting-review'), false);
+    const fresh = memoryStorage();
+    setLanguage('zh-CN', fresh as unknown as Storage);
+    const empty = draw(hub(undefined), fresh);
+    assert.match(empty, /尚未登录/);
+    assert.equal(empty.includes('枢纽扩展还没有发布任何内容'), false);
+    assert.equal(
+      hubSignInError(
+        '登录被拒绝（UNAUTHENTICATED）。请核对用户和密码，然后重新 /hub login。',
+      ),
+      '用户名或密码不对',
+    );
+    assert.equal(
+      hubSignInError('无法连接服务器 http://127.0.0.1:9'),
+      '无法连接服务器 http://127.0.0.1:9',
+    );
   } finally {
     setLanguage('en', box as unknown as Storage);
   }
+});
+test('a desktop autolink stops before a fullwidth comma', () => {
+  const html = renderToStaticMarkup(
+    createElement(Markdown, {
+      text: '已登录 http://127.0.0.1:7410，用户 ada',
+    }),
+  );
+  assert.match(html, /href="http:\/\/127\.0\.0\.1:7410"/);
+  assert.equal(/href="[^"]*[，用户]/.test(html), false);
+  assert.match(html, /，用户 ada/);
 });

@@ -41,8 +41,11 @@ export const plugins: Record<string, string> = {
   refresh: '刷新',
   'Work handed to a hub from here. The server keeps each task; closing Circle does not stop it.':
     '从这里交给枢纽的工作。服务器保存每个任务；关闭 Circle 不会停止它。',
-  'The hub extension has published nothing yet.':
-    '枢纽扩展还没有发布任何内容。',
+  'not signed in yet': '尚未登录',
+  'username or password is wrong': '用户名或密码不对',
+  'change set': '变更集',
+  governance: '治理',
+  'waiting for review': '待审核',
   'not signed in': '未登录',
   'Sign in on the hub page; the server decides what you may see.':
     '在枢纽页面登录；服务器决定你能看到什么。',

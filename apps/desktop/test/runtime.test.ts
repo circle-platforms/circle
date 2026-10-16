@@ -5507,6 +5507,95 @@ test('trusted scratch cold start loads the enabled hub before any prompt trust o
   assert.equal(f.model.requests.length, 0);
 });
 
+test('hub sign-in stays on the page after another session is selected', async (t) => {
+  const f = await coldStartFixture(t, 'scratch', async (home) => {
+    const data = join(home, 'extension_data', 'hub');
+    const secrets = join(home, 'extension_secrets');
+    await mkdir(data, { recursive: true });
+    await mkdir(secrets, { recursive: true });
+    await writeFile(
+      join(data, 'config.json'),
+      JSON.stringify({
+        url: 'http://127.0.0.1:7410',
+        username: 'ada',
+        scopeId: 'scp_lab',
+      }),
+    );
+    await writeFile(
+      join(secrets, 'hub.secrets.json'),
+      JSON.stringify({ token: 'desktop-hub-token' }),
+    );
+  });
+  await f.controller.initialize();
+  const hub = () =>
+    f.controller.snapshot().extensions.find((item) => item.name === 'hub');
+  await wait(
+    () =>
+      (hub()?.view as { signedIn?: boolean } | undefined)?.signedIn === true &&
+      Boolean(hub()?.status?.text.includes('ada')),
+    'saved hub sign-in',
+  );
+  const call = (
+    name: RuntimeCommandName,
+    payload: Record<string, unknown> = {},
+    sessionId = f.controller.snapshot().activeSessionId,
+  ) =>
+    f.controller.dispatch({
+      id: randomUUID(),
+      name,
+      payload,
+      sessionId,
+    });
+  const first = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await call('rename-session', { id: first, title: 'kept' })).ok,
+    true,
+  );
+  const created = await call('new-session');
+  assert.equal(created.ok, true, created.error);
+  const second = (created.data as { sessionId: string }).sessionId;
+  assert.notEqual(second, first);
+  assert.equal((hub()?.view as { signedIn?: boolean }).signedIn, true);
+  assert.match(hub()?.status?.text ?? '', /ada/);
+  assert.ok(hub()?.commands.includes('hub'));
+  assert.ok(
+    f.controller.snapshot().commands.some((command) => command.name === 'hub'),
+  );
+  assert.equal(
+    (await call('rename-session', { id: second, title: 'other' }, second)).ok,
+    true,
+  );
+  assert.equal(
+    (await call('rename-session', { id: first, title: '' }, first)).ok,
+    true,
+  );
+  assert.equal((await call('select-session', { id: first })).ok, true);
+  assert.equal((hub()?.view as { signedIn?: boolean }).signedIn, true);
+  const back = await call('select-session', { id: second });
+  assert.equal(back.ok, true, back.error);
+  await wait(
+    () =>
+      (hub()?.view as { signedIn?: boolean } | undefined)?.signedIn === true,
+    'sign-in after the loaded session was left',
+  );
+  assert.match(hub()?.status?.text ?? '', /ada/);
+  const status = await call(
+    'custom-command',
+    { name: 'hub', args: '' },
+    second,
+  );
+  assert.equal(status.ok, true, status.error);
+  const session = f.controller
+    .snapshot()
+    .sessions.find((item) => item.id === second);
+  assert.equal(
+    session?.messages.some((message) =>
+      /signed in|已登录|api 1\.0\.0/.test(message.text),
+    ),
+    false,
+  );
+});
+
 test('cold start leaves an untrusted workspace and its extension code untouched', async (t) => {
   const f = await coldStartFixture(t, 'untrusted', async (_home, workspace) => {
     const folder = join(workspace, '.circle/extensions/untrusted');
