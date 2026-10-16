@@ -542,6 +542,20 @@ export class RuntimeController {
     if (settings.extensions.github?.enabled !== true) {
       this.githubLeases.clear();
       this.githubProviderLifetime.abort();
+      for (const owner of this.runtimes.values()) {
+        owner.options.settings.extensions.github = {
+          ...owner.options.settings.extensions.github,
+          enabled: false,
+        };
+        void owner.extensions.disableBundled('github').catch(() => {});
+      }
+      for (const owner of this.taskRuntimes.values()) {
+        owner.options.settings.extensions.github = {
+          ...owner.options.settings.extensions.github,
+          enabled: false,
+        };
+        void owner.extensions.disableBundled('github').catch(() => {});
+      }
     }
     for (const owner of this.runtimes.values()) {
       if (
@@ -712,6 +726,20 @@ export class RuntimeController {
     }
     return (this.githubLeases.get(id) ?? 0) > 0;
   }
+  private githubInvocation(id: string) {
+    const lifetime = this.githubProviderLifetime;
+    return {
+      signal: lifetime.signal,
+      assertActive: () => {
+        lifetime.signal.throwIfAborted();
+        if (
+          lifetime !== this.githubProviderLifetime ||
+          !this.githubAvailable(id)
+        )
+          throw Error('GitHub extension is disabled');
+      },
+    };
+  }
   private githubConnection(): NativeGitHubConnection | undefined {
     if (!this.options.workspaceTools?.ghPath) return undefined;
     return (this.githubProfile ??= new NativeGitHubConnection({
@@ -807,6 +835,7 @@ export class RuntimeController {
         githubConnection: this.githubConnection(),
         enforceGitHubConnection: true,
         githubEnabled: (id) => this.githubAvailable(id),
+        githubInvocation: (id) => this.githubInvocation(id),
         credentialStore: this.options.credentialStore
           ? {
               get: () => this.options.credentialStore!.get('github.com'),
@@ -816,6 +845,9 @@ export class RuntimeController {
             }
           : undefined,
         cyclePorts: async (sessionId) => {
+          const githubInvocation = this.githubInvocation(sessionId);
+          const githubConnection = this.githubConnection();
+          const githubEpoch = githubConnection?.snapshot().epoch;
           const git = new GitWorkspaceService(root);
           const [name, email] = await Promise.all([
             git.git(['config', '--get', 'user.name']),
@@ -824,6 +856,7 @@ export class RuntimeController {
           return createWorkspaceCyclePorts({
             workspace: root,
             sessionId,
+            ...githubInvocation,
             dataDir: join(
               this.options.dataFolder ?? this.home,
               'cycle-adapters',
@@ -838,12 +871,9 @@ export class RuntimeController {
             createDelivery: (ownedPath) =>
               new DeliveryService(ownedPath, tools.ghPath, {
                 spawn: (file, args, options) => spawnPty(file, args, options),
-                connection: this.githubConnection(),
-                epoch: this.githubConnection()?.snapshot().epoch,
-                assertActive: () => {
-                  if (!this.githubAvailable(sessionId))
-                    throw Error('GitHub extension is disabled');
-                },
+                connection: githubConnection,
+                epoch: githubEpoch,
+                ...githubInvocation,
                 credentialStore: this.options.credentialStore
                   ? {
                       get: () =>

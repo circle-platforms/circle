@@ -529,6 +529,14 @@ export class ExtensionHost {
   // handlers, and what they gave api.background.
   private readonly pending = new Set<Promise<unknown>>();
   private closing?: Promise<void>;
+  private readonly scopes = new Map<
+    Extension,
+    {
+      controller: AbortController;
+      pending: Set<Promise<unknown>>;
+      trustedBundled: boolean;
+    }
+  >();
   constructor(readonly options: ExtensionHostOptions) {}
   discover(): Pick<
     Extension,
@@ -597,7 +605,20 @@ export class ExtensionHost {
       };
       loaded.push(ext);
       if (!ext.enabled) continue;
+      const scope = {
+        controller: new AbortController(),
+        pending: new Set<Promise<unknown>>(),
+        trustedBundled: false,
+      };
+      this.scopes.set(ext, scope);
       try {
+        const bundledRoot = this.options.bundledRoot ?? bundledExtensionsRoot();
+        scope.trustedBundled =
+          discovered.source === 'bundled' &&
+          !!bundledRoot &&
+          !lstatSync(ext.path).isSymbolicLink() &&
+          realpathSync.native(ext.path) ===
+            join(realpathSync.native(bundledRoot), ext.name, 'extension.ts');
         const module: unknown = await import(
           pathToFileURL(ext.path).href + '?reload=' + randomUUID()
         );
@@ -633,8 +654,11 @@ export class ExtensionHost {
             onStatus: this.options.onStatus,
             openUrl: this.options.openUrl,
             onTools: this.options.onTools,
-            signal: this.controller.signal,
-            track: (work) => this.track(work),
+            signal: AbortSignal.any([
+              this.controller.signal,
+              scope.controller.signal,
+            ]),
+            track: (work) => this.track(work, ext),
           },
         );
         await module.register(api);
@@ -642,6 +666,7 @@ export class ExtensionHost {
         live.add(api);
         for (const command of ext.commands) commands.add(command.name);
       } catch (error) {
+        scope.controller.abort(error);
         ext.error =
           error instanceof Error
             ? `${error.name}: ${error.message}`
@@ -656,6 +681,27 @@ export class ExtensionHost {
     }
     this.extensions = loaded;
     return this;
+  }
+  /** Stop only the actual bundled provider; unrelated extensions and MCP stay alive. */
+  async disableBundled(name: string): Promise<void> {
+    const ext = this.extensions.find(
+      (ext) => ext.name === name && this.scopes.get(ext)?.trustedBundled,
+    );
+    if (!ext) return;
+    ext.enabled = false;
+    const scope = this.scopes.get(ext);
+    scope?.controller.abort(new ExtensionError('the extension was disabled'));
+    ext.tools = [];
+    ext.commands = [];
+    ext.handlers.clear();
+    ext.middleware = [];
+    ext.subagents = [];
+    ext.renderers.clear();
+    ext.view = undefined;
+    ext.status = undefined;
+    this.options.onTools?.();
+    this.options.onStatus?.();
+    while (scope?.pending.size) await Promise.allSettled([...scope.pending]);
   }
   private loaded(): Extension[] {
     return this.extensions.filter((ext) => ext.enabled && !ext.error);
@@ -760,18 +806,27 @@ export class ExtensionHost {
             Promise.resolve(handler({ ...payload })).catch((error) =>
               this.warn(ext, event, error),
             ),
+            ext,
           );
         } catch (error) {
           this.warn(ext, event, error);
         }
       }
   }
-  private track(work: Promise<unknown>): void {
+  private track(work: Promise<unknown>, ext?: Extension): void {
+    const scoped = ext && this.scopes.get(ext)?.pending;
     const tracked: Promise<void> = work.then(
-      () => void this.pending.delete(tracked),
-      () => void this.pending.delete(tracked),
+      () => {
+        this.pending.delete(tracked);
+        scoped?.delete(tracked);
+      },
+      () => {
+        this.pending.delete(tracked);
+        scoped?.delete(tracked);
+      },
     );
     this.pending.add(tracked);
+    scoped?.add(tracked);
   }
   /**
    * End the extensions: their api.signal fires, then nothing of them runs any more, once the

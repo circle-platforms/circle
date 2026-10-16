@@ -515,7 +515,11 @@ export class DeliveryService {
       if (pushedHead === undefined) {
         if (this.connection) await this.repository();
         this.guard();
-        await this.git.call('push', { revision: state.revision });
+        await this.git.call(
+          'push',
+          { revision: state.revision },
+          { signal: this.operationSignal, assertActive: () => this.guard() },
+        );
         return;
       }
       const reference = `refs/heads/${state.branch}`;

@@ -42,6 +42,10 @@ export interface GitHubConnectionMethods {
     params: { storage: 'encrypted' | 'session'; repositories: string[] };
     result: GitHubConnectionState;
   };
+  configure: {
+    params: { epoch: number; repositories: string[] };
+    result: GitHubConnectionState;
+  };
   cancel: { params: { epoch: number }; result: GitHubConnectionState };
   disconnect: { params: { epoch: number }; result: GitHubConnectionState };
   publish: { params: GitHubPublishInput; result: GitHubPR };

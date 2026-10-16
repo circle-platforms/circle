@@ -42,6 +42,10 @@ export type GitSnapshot = {
   }[];
   merging: boolean;
 };
+export interface GitInvocation {
+  signal?: AbortSignal;
+  assertActive?: () => void;
+}
 export interface GitWorkspaceOptions {
   identity?: { name: string; email: string };
   signoff?: boolean;
@@ -66,7 +70,7 @@ export class GitWorkspaceService {
       );
     this.options = structuredClone(options);
   }
-  async git(args: string[], input?: string) {
+  async git(args: string[], input?: string, invocation?: GitInvocation) {
     const readonly =
       input === undefined &&
       (['rev-parse', 'status'].includes(args[0] ?? '') ||
@@ -80,7 +84,7 @@ export class GitWorkspaceService {
         (args[0] === 'remote' && args[1] === 'get-url'));
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.executeGit(args, input);
+        return await this.executeGit(args, input, invocation);
       } catch (error) {
         const detail = `${error instanceof Error ? error.message : String(error)}\n${(error as { stderr?: string }).stderr ?? ''}`;
         if (
@@ -94,7 +98,15 @@ export class GitWorkspaceService {
       }
     }
   }
-  private async executeGit(args: string[], input?: string) {
+  private async executeGit(
+    args: string[],
+    input?: string,
+    invocation?: GitInvocation,
+  ) {
+    if (args[0] === 'push') {
+      invocation?.signal?.throwIfAborted();
+      invocation?.assertActive?.();
+    }
     const env = {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
@@ -129,6 +141,7 @@ export class GitWorkspaceService {
           encoding: 'utf8',
           maxBuffer: 32 * 1024 * 1024,
           env,
+          signal: args[0] === 'push' ? invocation?.signal : undefined,
         },
       )
     ).stdout;
@@ -418,6 +431,7 @@ export class GitWorkspaceService {
   async call(
     method: string,
     params: Record<string, unknown> = {},
+    invocation?: GitInvocation,
   ): Promise<unknown> {
     method =
       (
@@ -549,12 +563,16 @@ export class GitWorkspaceService {
       } else if (method === 'push') {
         if (state.branch === 'detached')
           throw Error('select a branch before pushing');
-        await this.git([
-          'push',
-          ...(this.options.setUpstream === false ? [] : ['--set-upstream']),
-          'origin',
-          state.branch,
-        ]);
+        await this.git(
+          [
+            'push',
+            ...(this.options.setUpstream === false ? [] : ['--set-upstream']),
+            'origin',
+            state.branch,
+          ],
+          undefined,
+          invocation,
+        );
       } else if (method === 'conflictContinue') {
         if (!state.merging) throw Error('no merge is active');
         if ((await this.git(['ls-files', '-u'])).trim())

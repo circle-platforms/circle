@@ -76,6 +76,11 @@ export function githubWorkspaceBackend(options: {
           storage: p.storage as 'encrypted' | 'session',
           repositories: p.repositories as string[],
         });
+      else if (method === 'configure')
+        result = await connection.configure(
+          p.epoch as number,
+          p.repositories as string[],
+        );
       else if (method === 'cancel' || method === 'disconnect') {
         if (!Number.isSafeInteger(p.epoch))
           throw Error('invalid GitHub connection epoch');
@@ -246,8 +251,13 @@ export function githubWorkspaceBackend(options: {
       };
     enabled();
     context?.signal.throwIfAborted();
-    if (method !== 'publish' && method !== 'retry')
-      return execute(method, params, context);
+    const checked = async () => {
+      const result = await execute(method, params, context);
+      context?.signal.throwIfAborted();
+      enabled();
+      return result;
+    };
+    if (method !== 'publish' && method !== 'retry') return checked();
     connection.assertGrant(
       (params as { epoch: number }).epoch,
       (params as { repository: string }).repository,
@@ -255,7 +265,7 @@ export function githubWorkspaceBackend(options: {
     if (!context?.callId || !options.runWrite)
       throw Error('GitHub writes require a trusted operation identity');
     return (await options.runWrite(method, params, context.callId, () =>
-      execute(method, params, context),
+      checked(),
     )) as never;
   };
   return backend;

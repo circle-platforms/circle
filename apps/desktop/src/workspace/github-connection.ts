@@ -313,7 +313,6 @@ export class NativeGitHubConnection {
     if (!['encrypted', 'session'].includes(input.storage))
       throw Error('choose encrypted or session-only GitHub storage');
     const repositories = this.repositories(input.repositories);
-    if (!repositories.length) throw Error('choose a GitHub repository first');
     if (this.state.state === 'connected')
       throw Error('disconnect the current GitHub connection first');
     const epoch = ++this.state.epoch;
@@ -404,6 +403,30 @@ export class NativeGitHubConnection {
       this.attempt = undefined;
       await this.login.cancel(id);
     }
+  }
+  async configure(epoch: number, repositories: string[]) {
+    await this.ready;
+    this.assertEpoch(epoch);
+    const next = this.repositories(repositories);
+    const previous = this.state.repositories;
+    this.state.epoch++;
+    const attempt = this.state.epoch;
+    this.state.repositories = next;
+    try {
+      await this.persist(this.state.storage === 'encrypted');
+    } catch {
+      if (this.state.epoch === attempt) {
+        this.state.epoch++;
+        this.state.repositories = previous;
+        this.state.error = 'GitHub repository settings could not be saved';
+        this.emit();
+      }
+      throw Error('GitHub repository settings could not be saved');
+    }
+    this.assertEpoch(attempt);
+    delete this.state.error;
+    this.emit();
+    return this.snapshot();
   }
   async disconnect(epoch: number) {
     await this.ready;

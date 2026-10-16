@@ -46,6 +46,7 @@ export interface WorkspaceCyclePortsOptions {
   createDelivery?: (ownedWorkspace: string) => DeliveryService;
   identity: { name: string; email: string };
   signal?: AbortSignal;
+  assertActive?: () => void;
   redact?: (text: string) => string;
 }
 interface Round {
@@ -592,7 +593,11 @@ export function createWorkspaceCyclePorts(
           const { service, snapshot } = await state(cycle, input);
           if (snapshot.entries.length)
             throw Error('cycle push requires a clean accepted candidate');
-          await service.call('push', { revision: input.revision });
+          await service.call(
+            'push',
+            { revision: input.revision },
+            { signal, assertActive: options.assertActive },
+          );
         }),
     },
     delivery: {

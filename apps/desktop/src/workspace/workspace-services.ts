@@ -38,6 +38,10 @@ export interface WorkspaceServicesOptions {
   githubConnection?: NativeGitHubConnection;
   enforceGitHubConnection?: boolean;
   githubEnabled?: (sessionId: string) => boolean;
+  githubInvocation?: (sessionId: string) => {
+    signal: AbortSignal;
+    assertActive: () => void;
+  };
   credentialStore?: CredentialStore;
   credentialFiles?: string[];
   terminalEnv?: NodeJS.ProcessEnv;
@@ -470,6 +474,10 @@ export class WorkspaceServices {
       throw Error('session identity is required');
     if (this.releasing.has(sessionId))
       throw Error('session resources are closing');
+    const githubInvocation =
+      service === 'delivery'
+        ? this.options.githubInvocation?.(sessionId)
+        : undefined;
     await this.ready;
     const emergency =
       (service === 'terminal' && ['signal', 'close'].includes(method)) ||
@@ -760,10 +768,13 @@ export class WorkspaceServices {
       let target = service === 'git' ? await this.git : await this.delivery;
       if (service === 'delivery' && this.options.githubConnection) {
         const source = await this.delivery;
+        const invocation = githubInvocation;
         target = new DeliveryService(source.root, source.ghPath, {
           connection: this.options.githubConnection,
           epoch: this.options.githubConnection.snapshot().epoch,
+          ...invocation,
           assertActive: () => {
+            invocation?.assertActive();
             if (!this.options.githubEnabled?.(sessionId))
               throw Error(
                 'enable GitHub in extensions and connect in settings',

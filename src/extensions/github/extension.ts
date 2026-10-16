@@ -50,7 +50,12 @@ export async function register(api: ExtensionAPI) {
       { readOnly: true },
     );
     registered.add('github_connection');
-    if (state.state !== 'connected' || !state.account) return;
+    if (
+      state.state !== 'connected' ||
+      !state.account ||
+      !state.repositories.length
+    )
+      return;
     for (const [method, description, properties, required, readOnly] of [
       [
         'checks',
@@ -132,15 +137,15 @@ export async function register(api: ExtensionAPI) {
   );
   api.registerCommand(
     'github',
-    'GitHub connection: status, connect, cancel or disconnect',
+    'GitHub connection: status, connect, configure, cancel or disconnect',
     async (args, context) => {
       const match =
-        /^(status|connect|cancel|disconnect)(?:\s+([\s\S]+))?$/.exec(
+        /^(status|connect|configure|cancel|disconnect)(?:\s+([\s\S]+))?$/.exec(
           args.trim() || 'status',
         );
       if (!match)
         throw new api.ToolError(
-          'use github status, connect, cancel or disconnect',
+          'use github status, connect, configure, cancel or disconnect',
         );
       let params = {};
       try {
