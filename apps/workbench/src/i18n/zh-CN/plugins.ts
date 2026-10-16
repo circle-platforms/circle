@@ -99,6 +99,8 @@ export const plugins: Record<string, string> = {
   ' (asks first)': ' （先询问）',
   'This server offers the model no tools.': '这台服务器没有向模型提供工具。',
   'skill pack {name}': '技能包 {name}',
+  'server records this as {status}': '服务器记为 {status}',
+  'waiting for {command}': '等待 {command}',
   'bot {name}': '机器人 {name}',
   runs: '运行记录',
   start: '启动',

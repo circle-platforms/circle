@@ -151,15 +151,25 @@ export function cardRows(
   const tint = dialog.tint ? p[dialog.tint] : '';
   const lamp = statusLight(dialog.lamp ?? 'wait');
   const lampCode = lamp.slice(0, lamp.indexOf('●'));
-  const head = compose(
-    width,
-    [
-      [' ', ''],
-      ['●', lampCode],
-      [' ', ''],
-      [terminalText(dialog.title).replace(/\n/g, ' '), p.em],
-    ],
-    tint,
+  // The title wraps. A single cut would hide the end of a long tool name.
+  const title = terminalText(dialog.title).replace(/\n/g, ' ');
+  const titleRoom = Math.max(4, width - 4);
+  const head = wrapWords(title, titleRoom).map((part, index) =>
+    compose(
+      width,
+      index === 0
+        ? [
+            [' ', ''],
+            ['●', lampCode],
+            [' ', ''],
+            [part, p.em],
+          ]
+        : [
+            ['    ', ''],
+            [part, p.em],
+          ],
+      tint,
+    ),
   );
   const lines: CardLine[] =
     dialog.lines ??
@@ -304,7 +314,7 @@ export function cardRows(
       ];
     }
   }
-  return [head, ...body, ...menu, ...notes, ...input];
+  return [...head, ...body, ...menu, ...notes, ...input];
 }
 /**
  * The options as a list inside the card (setup's models): the label at the text column, the

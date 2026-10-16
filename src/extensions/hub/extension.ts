@@ -153,6 +153,18 @@ const USAGE = usage([
     'approve an action a task waits on (reject: /hub reject …)',
   ],
   [
+    '/hub review',
+    'open approvals you may decide, each with its /hub approve line',
+  ],
+  [
+    '/hub audit',
+    'recent audit rows (needs admin.manage; there is no browser page)',
+  ],
+  [
+    '/hub modules',
+    'skill packs and module assets the server lists (no browser page)',
+  ],
+  [
     '/hub reconcile <id> [op]',
     'check an unknown operation; without op the server only explains',
   ],
@@ -206,6 +218,13 @@ const short = (hash: unknown): string =>
   typeof hash === 'string' ? hash.slice(0, 12) + '…' : '';
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+// A list route answers with an array, or with { items } when asked for a page.
+function rowsOf(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data.filter(isRecord);
+  if (isRecord(data) && Array.isArray(data.items))
+    return data.items.filter(isRecord);
+  return [];
+}
 const reason = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 // A refusal the server named, said so a person can act on it. A usage line has no code
@@ -243,6 +262,28 @@ function explainFailure(error: unknown): string {
       return `the file changed while it was sent (${error.code}). Send it again.`;
     case 'BODY_TOO_LARGE':
       return `that is larger than the server accepts (${error.code}). Send a smaller file.`;
+    case 'DECISION_CONFLICT': {
+      // The code alone does not say which request collided. The server's outcome does:
+      // a text answer sent where an approval is open, or a decision already recorded.
+      const outcome = String(error.details.outcome ?? '');
+      const said = error.message
+        .replace(/^[A-Z0-9_]+:\s*/, '')
+        .replace(/\s·\s\{[\s\S]*$/, '');
+      const named = outcome || said || 'the request no longer matches';
+      if (
+        outcome === 'missing-request' ||
+        /missing-request|not waiting/i.test(said)
+      )
+        return `nothing is waiting for that answer (${error.code}: ${named}). ${said}. An open approval is decided with /hub approve <task> <approval>, and /hub review lists those. /hub task <id> shows the phase.`;
+      if (
+        outcome === 'already-answered' ||
+        outcome === 'already-decided' ||
+        /already-/.test(outcome) ||
+        /already-|frozen/i.test(said)
+      )
+        return `that request already has a decision (${error.code}: ${named}). ${said}. /hub task <id> shows the phase. Wait for a new question before /hub respond, or /hub review for what is still open.`;
+      return `the server refused this decision (${error.code}: ${named}). ${said}. /hub task <id> shows the phase; /hub review lists open approvals.`;
+    }
     default:
       return error.message;
   }
@@ -731,17 +772,50 @@ export async function register(api: ExtensionAPI): Promise<void> {
         remote: held.remote,
         write: held.write,
       })),
-      skillPacks: (Array.isArray(pushed) ? pushed : [])
-        .filter(isRecord)
-        .map((item) => {
-          const manifest = isRecord(item.manifest) ? item.manifest : {};
-          return {
-            skillPackId: item.skillPackId,
-            id: item.id ?? manifest.id,
-            version: item.version ?? manifest.version,
-            status: item.status,
-          };
-        }),
+      skillPacks: await Promise.all(
+        (Array.isArray(pushed) ? pushed : [])
+          .filter(isRecord)
+          .slice(0, 20)
+          .map(async (item) => {
+            const manifest = isRecord(item.manifest) ? item.manifest : {};
+            const assetId =
+              typeof item.assetId === 'string' ? item.assetId : '';
+            const approvalTaskId =
+              typeof item.approvalTaskId === 'string'
+                ? item.approvalTaskId
+                : '';
+            const asset = assetId
+              ? await optional<unknown>(
+                  `/v1/assets/${encodeURIComponent(assetId)}`,
+                  undefined,
+                )
+              : undefined;
+            const lifecycle =
+              isRecord(asset) && typeof asset.lifecycle === 'string'
+                ? asset.lifecycle
+                : '';
+            const open =
+              approvalTaskId && item.status !== 'registered'
+                ? rowsOf(
+                    await optional<unknown>(
+                      `/v1/tasks/${encodeURIComponent(approvalTaskId)}/approvals`,
+                      [],
+                    ),
+                  ).find((row) => row.status === 'open')
+                : undefined;
+            return {
+              skillPackId: item.skillPackId,
+              id: item.id ?? manifest.id,
+              version: item.version ?? manifest.version,
+              status: item.status,
+              ...(lifecycle ? { lifecycle } : {}),
+              ...(approvalTaskId ? { approvalTaskId } : {}),
+              ...(open?.approvalId
+                ? { approvalId: String(open.approvalId) }
+                : {}),
+            };
+          }),
+      ),
       bots: botViews,
       background,
     };
@@ -1881,31 +1955,20 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const names = Array.isArray(check[key]) ? check[key].map(String) : [];
       if (names.length) context.append(`  ✖ ${label}: ${names.join(', ')}`);
     }
-    // Submitted is not approved: the approval bound to this digest waits in its own task.
+    // Submitted is not approved: the approval id lives on that task, not in this reply.
     const approvalTask =
       typeof reply.approvalTaskId === 'string' ? reply.approvalTaskId : '';
-    if (!approvalTask) return;
+    if (!approvalTask) {
+      context.append(
+        '  submitted, but the server named no approval task. /hub review lists open approvals',
+      );
+      return;
+    }
     remember(approvalTask, {
       title: `approve skill pack ${String(manifest.id)}`,
       seq: 0,
     });
-    const approvals = await optional<unknown>(
-      `/v1/tasks/${encodeURIComponent(approvalTask)}/approvals`,
-      [],
-    );
-    const open = (Array.isArray(approvals) ? approvals : [])
-      .filter(isRecord)
-      .filter((item) => item.status === 'open');
-    context.append(
-      open.length
-        ? open
-            .map(
-              (item) =>
-                `  waiting for approval ${String(item.approvalId)} in ${approvalTask} · someone else approves: /hub approve ${approvalTask} ${String(item.approvalId)}`,
-            )
-            .join('\n')
-        : `  approval task ${approvalTask} · no open approval yet`,
-    );
+    context.append(await approvalNotice(approvalTask));
   }
 
   // Files of the workspace as a skill pack run takes them: inputs.files.
@@ -2329,6 +2392,67 @@ export async function register(api: ExtensionAPI): Promise<void> {
     await showStatus();
   }
 
+  // The approval id is not on the submission. It is the open approval on that task,
+  // and the same id is the pending input's request id when the task is waiting.
+  async function approvalNotice(taskId: string): Promise<string> {
+    const current = await status(taskId).catch(() => undefined);
+    const pending = (
+      Array.isArray(current?.pendingInputs) ? current.pendingInputs : []
+    )
+      .filter(
+        (item) =>
+          isRecord(item) && item.status === 'open' && item.kind === 'approval',
+      )
+      .map((item) => String(item.requestId ?? ''))
+      .filter(Boolean);
+    const listed = rowsOf(
+      await optional<unknown>(
+        `/v1/tasks/${encodeURIComponent(taskId)}/approvals`,
+        [],
+      ),
+    )
+      .filter((item) => item.status === 'open')
+      .map((item) => String(item.approvalId ?? ''))
+      .filter(Boolean);
+    const ids = [...new Set([...listed, ...pending])];
+    if (!ids.length)
+      return `  approval task ${taskId} · no open approval id yet. /hub review lists them; /hub task ${taskId} shows this task`;
+    return ids
+      .map(
+        (id) =>
+          `  waiting for approval ${id} in ${taskId} · someone else approves: /hub approve ${taskId} ${id}`,
+      )
+      .join('\n');
+  }
+  // `registered` is the server's word after a skill approval lands. The asset
+  // lifecycle is what moved (draft → approved); show that, and say so.
+  async function packLine(pack: Record<string, unknown>): Promise<string> {
+    const manifest = isRecord(pack.manifest) ? pack.manifest : {};
+    const name = String(pack.id ?? manifest.id ?? '');
+    const version = String(pack.version ?? manifest.version ?? '');
+    const assetId = typeof pack.assetId === 'string' ? pack.assetId : '';
+    const asset = assetId
+      ? await optional<unknown>(
+          `/v1/assets/${encodeURIComponent(assetId)}`,
+          undefined,
+        )
+      : undefined;
+    const lifecycle =
+      isRecord(asset) && typeof asset.lifecycle === 'string'
+        ? asset.lifecycle
+        : '';
+    const status = String(pack.status ?? '');
+    const shown =
+      status === 'registered' && lifecycle
+        ? `${lifecycle} (server status registered)`
+        : lifecycle
+          ? `${status} · asset ${lifecycle}`
+          : status;
+    return `  ${String(pack.skillPackId ?? '')} · ${name} ${version} · ${shown}`
+      .replace(/ +/g, ' ')
+      .trimEnd();
+  }
+
   const commands: Record<
     string,
     (rest: string[], context: CommandContext) => Promise<void>
@@ -2483,7 +2607,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
           item.inputRevisionId === current.inputRevisionId,
       );
       if (!isRecord(open))
-        throw new ServerError(`${taskId} is not waiting for an answer`);
+        throw new ServerError(
+          `${taskId} is not waiting for an answer. /hub task ${taskId} shows its phase; an approval is /hub approve, and /hub review lists those.`,
+        );
+      if (open.kind === 'approval')
+        throw new ServerError(
+          `${taskId} is waiting for a decision, not a text answer (${String(open.requestId)}). Someone else runs /hub approve ${taskId} ${String(open.requestId)}. /hub review lists open approvals.`,
+        );
       // A repair input is a replacement of the bound input; anything else is a response.
       const repair = open.kind === 'repair';
       await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
@@ -2529,12 +2659,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const packs = (Array.isArray(data) ? data : []).filter(isRecord);
         context.append(
           packs.length
-            ? packs
-                .map(
-                  (pack) =>
-                    `  ${String(pack.skillPackId ?? '')} · ${String(pack.id ?? (isRecord(pack.manifest) ? pack.manifest.id : ''))} ${String(pack.version ?? (isRecord(pack.manifest) ? pack.manifest.version : ''))} · ${String(pack.status ?? '')}`,
-                )
-                .join('\n')
+            ? (await Promise.all(packs.map((pack) => packLine(pack)))).join(
+                '\n',
+              )
             : 'No skill packs on this server',
         );
         return;
@@ -2602,6 +2729,93 @@ export async function register(api: ExtensionAPI): Promise<void> {
       context.append(`  ${taskId} · reconcile · ${explained}`);
       await collectObjects().catch(() => {});
     },
+    async review(_rest, context) {
+      // circle-hub 0.2.0 has no browser page. The queue is the paged task list.
+      const { data } = await request(
+        'GET',
+        '/v1/tasks?view=page&queue=awaitingMyApproval&limit=20',
+      );
+      const tasks = rowsOf(data);
+      if (!tasks.length) {
+        context.append(
+          'Nothing is waiting for your approval. /hub task <id> shows one task. Knowledge claims are reviewed one id at a time (GET /v1/knowledge/reviews/<id>); this server has no page that lists them.',
+        );
+        return;
+      }
+      const lines: string[] = [];
+      for (const task of tasks) {
+        const taskId = String(task.taskId ?? '');
+        if (!taskId) continue;
+        lines.push(
+          `  ${taskId} · ${String(task.phase ?? '')} · ${String(task.title ?? '')}`,
+        );
+        lines.push(await approvalNotice(taskId));
+      }
+      context.append(lines.join('\n'));
+    },
+    async audit(_rest, context) {
+      let data: unknown;
+      try {
+        ({ data } = await request('GET', '/v1/admin/audit'));
+      } catch (error) {
+        if (
+          error instanceof ServerError &&
+          (error.code === 'FORBIDDEN_ACTION' || error.status === 403)
+        )
+          throw new ServerError(
+            'audit needs admin.manage on this server. There is no browser page; GET /v1/admin/audit is the list.',
+          );
+        throw error;
+      }
+      const rows = rowsOf(data).slice(0, 20);
+      context.append(
+        rows.length
+          ? rows
+              .map((row) => {
+                const detail = isRecord(row.detail)
+                  ? Object.keys(row.detail).slice(0, 4).join(', ')
+                  : '';
+                return `  ${String(row.id ?? '')} · ${String(row.action ?? '')} · ${String(row.principalId ?? '')}${row.scopeId ? ' · ' + String(row.scopeId) : ''}${detail ? ' · ' + detail : ''}`;
+              })
+              .join('\n')
+          : 'No audit rows. GET /v1/admin/audit is the list; this server has no browser page for it.',
+      );
+    },
+    async modules(_rest, context) {
+      // No GET /v1/modules and no browser page. Skill packs and the assets a
+      // module install creates are what the server will list.
+      const packs = rowsOf(await optional<unknown>('/v1/skillpacks', []));
+      const skills = rowsOf(
+        await optional<unknown>('/v1/assets?kind=skill-package&limit=100', []),
+      );
+      const sources = rowsOf(
+        await optional<unknown>(
+          '/v1/assets?kind=knowledge-source&limit=100',
+          [],
+        ),
+      );
+      const lines: string[] = [];
+      for (const pack of packs.slice(0, 20)) lines.push(await packLine(pack));
+      for (const asset of [...skills, ...sources].slice(0, 40)) {
+        const configuration = isRecord(asset.configuration)
+          ? asset.configuration
+          : {};
+        const module = isRecord(configuration.module)
+          ? configuration.module
+          : undefined;
+        const label = module
+          ? `${String(module.id ?? '')} ${String(module.version ?? '')}`.trim()
+          : String(asset.name ?? '');
+        lines.push(
+          `  ${String(asset.assetId ?? '')} · ${String(asset.kind ?? '')} · ${label} · ${String(asset.lifecycle ?? asset.version ?? '')}`,
+        );
+      }
+      context.append(
+        lines.length
+          ? lines.join('\n')
+          : 'No modules listed. circle-hub has no browser page for them. Install is POST /v1/modules/install (server CLI: node apps/server/src/cli.ts modules install). This command reads GET /v1/skillpacks and GET /v1/assets.',
+      );
+    },
   };
   // A decision on an action a task waits on, bound to what the server says it is: the
   // input revision, the target's identity and the action's digest.
@@ -2632,6 +2846,27 @@ export async function register(api: ExtensionAPI): Promise<void> {
     context.append(
       `✓ ${approve ? 'approved' : 'rejected'} ${approvalId} for ${taskId} (input ${String(found.inputRevisionId)})`,
     );
+    // The pack status word stays `registered` after approval. Re-read the asset
+    // lifecycle so the line shows what actually changed.
+    const packs = rowsOf(await optional<unknown>('/v1/skillpacks', []));
+    const touched = packs.filter(
+      (pack) => pack.approvalTaskId === taskId || pack.assetId === found.target,
+    );
+    if (touched.length)
+      context.append(
+        (await Promise.all(touched.map((pack) => packLine(pack)))).join('\n'),
+      );
+    else {
+      const target = typeof found.target === 'string' ? found.target : '';
+      const asset = target
+        ? await optional<unknown>(
+            `/v1/assets/${encodeURIComponent(target)}`,
+            undefined,
+          )
+        : undefined;
+      if (isRecord(asset) && typeof asset.lifecycle === 'string')
+        context.append(`  ${target} · ${asset.lifecycle}`);
+    }
     await collectObjects().catch(() => {});
   }
 
@@ -2900,10 +3135,21 @@ export async function register(api: ExtensionAPI): Promise<void> {
             ...(readers.length ? { readers } : {}),
           },
         });
+        const approvalTaskId =
+          isRecord(data) && typeof data.approvalTaskId === 'string'
+            ? data.approvalTaskId
+            : '';
+        const notice = approvalTaskId
+          ? await approvalNotice(approvalTaskId)
+          : '';
         return {
           registered: data,
           files: listed,
-          next: 'someone else approves the asset; then hub_source_artifact_status gives the sourceArtifactId',
+          ...(approvalTaskId ? { approvalTaskId } : {}),
+          ...(notice ? { approve: notice.trim() } : {}),
+          next: notice
+            ? notice.trim()
+            : 'someone else approves the asset; the reply names approvalTaskId when the server sends one, and /hub review lists open approvals. Then hub_source_artifact_status gives the sourceArtifactId',
         };
       } catch (error) {
         throw new api.ToolError(reason(error));
@@ -3019,7 +3265,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   api.background(lookForBots());
   api.registerCommand(
     'hub',
-    'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | tools | skill | bot]',
+    'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | review | audit | modules | tools | skill | bot]',
     async (args, context) => {
       const [verb, ...rest] = words(args);
       if (!verb || verb === 'help') {

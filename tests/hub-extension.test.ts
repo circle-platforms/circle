@@ -1369,3 +1369,180 @@ test('a refused payload names the fields instead of a raw code dump', async (t) 
     /INVALID_PAYLOAD[\s\S]*manifest\.outputs[\s\S]*skillpack\.json needs outputs/,
   );
 });
+
+test('a decision conflict says what collided, and review, audit and modules list the ids', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: { token: TOKEN, tokenType: 'Bearer', scopes: ['scp_lab'] },
+      });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/tasks/task_ask/status')
+      return send(200, {
+        data: {
+          taskId: 'task_ask',
+          phase: 'waiting-review',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [
+            {
+              requestId: 'apr_9',
+              inputRevisionId: 'inrev_1',
+              status: 'open',
+              kind: 'approval',
+              question: 'Approve changesets.apply',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_ask/input')
+      return send(409, {
+        status: 'failed',
+        error: {
+          code: 'DECISION_CONFLICT',
+          message: 'Response rejected: missing-request',
+          details: { outcome: 'missing-request' },
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_done/status')
+      return send(200, {
+        data: {
+          taskId: 'task_done',
+          phase: 'running',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [
+            {
+              requestId: 'pin_1',
+              inputRevisionId: 'inrev_1',
+              status: 'open',
+              kind: 'clarification',
+              question: 'which build?',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_done/input')
+      return send(409, {
+        status: 'failed',
+        error: {
+          code: 'DECISION_CONFLICT',
+          message: 'Response rejected: already-answered',
+          details: { outcome: 'already-answered' },
+        },
+      });
+    if (url.pathname === '/v1/tasks' && url.searchParams.get('view') === 'page')
+      return send(200, {
+        data: {
+          total: 1,
+          items: [
+            {
+              taskId: 'task_ask',
+              phase: 'waiting-review',
+              title: 'approve skill pack',
+            },
+          ],
+          cursor: null,
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_ask/approvals')
+      return send(200, {
+        data: [{ approvalId: 'apr_9', status: 'open' }],
+      });
+    if (url.pathname === '/v1/admin/audit')
+      return send(200, {
+        data: [
+          {
+            id: 4,
+            principalId: 'prn_approver',
+            scopeId: 'scp_lab',
+            action: 'approval.decision',
+            detail: { approvalId: 'apr_9', outcome: 'approved' },
+            createdAt: '2026-10-16T00:00:00.000Z',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/skillpacks')
+      return send(200, {
+        data: [
+          {
+            skillPackId: 'skp_1',
+            manifest: { id: 'mindmap-compile', version: '0.1.0' },
+            status: 'registered',
+            assetId: 'ast_pack',
+            approvalTaskId: 'task_ask',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/assets/ast_pack')
+      return send(200, {
+        data: { assetId: 'ast_pack', lifecycle: 'approved' },
+      });
+    if (url.pathname === '/v1/assets' && url.searchParams.get('kind'))
+      return send(200, { data: { items: [], total: 0 } });
+    send(404, {
+      status: 'failed',
+      error: { code: 'TARGET_NOT_FOUND', message: 'missing' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port} tester`, context);
+  await assert.rejects(
+    async () => command.handler('respond task_ask yes', context),
+    /waiting for a decision[\s\S]*\/hub approve task_ask apr_9/,
+  );
+  await assert.rejects(
+    async () => command.handler('respond task_done 1.0', context),
+    /already has a decision[\s\S]*already-answered[\s\S]*\/hub task/,
+  );
+  await command.handler('review', context);
+  assert.match(
+    lines.at(-1)!,
+    /task_ask · waiting-review[\s\S]*\/hub approve task_ask apr_9/,
+  );
+  await command.handler('audit', context);
+  assert.match(lines.at(-1)!, /approval\.decision · prn_approver · scp_lab/);
+  await command.handler('modules', context);
+  assert.match(
+    lines.at(-1)!,
+    /skp_1 · mindmap-compile 0\.1\.0 · approved \(server status registered\)/,
+  );
+});

@@ -76,6 +76,9 @@ interface Objects {
     id?: string;
     version?: string;
     status?: string;
+    lifecycle?: string;
+    approvalTaskId?: string;
+    approvalId?: string;
   }[];
   background?: { toolReads: number; indexing: number; indexingOpen: number };
   bots?: {
@@ -536,8 +539,24 @@ function ServerTools({
                     })}
                   </h2>
                   <p>{pack.skillPackId}</p>
+                  {pack.lifecycle &&
+                    pack.status &&
+                    pack.lifecycle !== pack.status && (
+                      <p>
+                        {t('server records this as {status}', {
+                          status: pack.status,
+                        })}
+                      </p>
+                    )}
+                  {pack.approvalTaskId && pack.approvalId && (
+                    <p>
+                      {t('waiting for {command}', {
+                        command: `/hub approve ${pack.approvalTaskId} ${pack.approvalId}`,
+                      })}
+                    </p>
+                  )}
                 </div>
-                <Status value={pack.status ?? 'unknown'} />
+                <Status value={pack.lifecycle || pack.status || 'unknown'} />
               </div>
             </article>
           ))}
