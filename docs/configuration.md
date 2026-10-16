@@ -46,7 +46,7 @@ Instruction files tell Circle how to work: build commands, conventions, things t
 
 Project instruction files come from the workspace folder only. A parent checkout's `AGENTS.md` is not applied to a session opened in a subdirectory. Your personal files, in the data folder and under your home directory, still apply in every folder. Each file goes into the prompt once: a file reached under two names (as `AGENTS.md` and `agents.md` are on macOS) is read once.
 
-Circle reads them again when you start a new session, open another one, or switch models.
+Circle reads them again when you start a new session, open another one, or switch models. The prompt then tells the model that any of those files that exist are already included, and not to call `read_file` to look for one that is not.
 
 To have Circle write a starting `AGENTS.md` for a project, run `/init`. It reads the repository and drafts one. Add a focus after it, for example `/init testing conventions`.
 

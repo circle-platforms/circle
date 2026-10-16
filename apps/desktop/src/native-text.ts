@@ -40,7 +40,6 @@ const ZH_CN: Record<string, string> = {
   'choose files': '选择文件',
   'session or text': '会话或文本',
   'supported files': '支持的文件',
-  'open a workspace': '打开工作区',
   'Circle could not stop its runtime': 'Circle 无法停止运行时',
   'Circle needs your approval': 'Circle 需要你的批准',
   'Circle needs a secret': 'Circle 需要一个密钥',

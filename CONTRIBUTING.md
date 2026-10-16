@@ -70,6 +70,7 @@ One short imperative sentence in English, capitalised, with no prefix and no ful
 - Run the tests and say so in the description.
 - Sign off every commit (`git commit -s`); see [Contributor terms](#contributor-terms).
 - Fill in the checklist in the template.
+- A pull request merges through the merge queue once `check (ubuntu-24.04)`, `check (macos-15)` and `check (windows-latest)` pass. `gh pr merge` or **Merge when ready** adds it; the queue checks it again on top of the pull requests ahead of it before `main` moves.
 
 ## Security
 
