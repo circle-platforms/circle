@@ -28,7 +28,7 @@ import {
   palette,
   setPalette,
 } from '../src/ink/theme.js';
-import { dialogRows } from '../src/ink/components/dialog_card.js';
+import { cardRows, dialogRows } from '../src/ink/components/dialog_card.js';
 import { ApprovalCard } from '../src/ink/components/approval_card.js';
 import { QuestionCard } from '../src/ink/components/question_card.js';
 import {
@@ -700,6 +700,35 @@ test('approval previews: a patch names its files, an edit the file cannot confir
     approvalBody('webfetch', { url: 'https://example.com', limit: 3 }),
     'url="https://example.com"\nlimit=3',
   );
+  const cut = approvalBody('hub_tool_docs_get', { file: 'x'.repeat(900) });
+  assert.match(cut, /^file="x+… \(\d+ more characters\)$/);
+  assert.ok(cut.length < 900);
+  const title =
+    'hub_source_artifact needs your permission and the rest of this long title stays visible';
+  const wrapped = cardRows(
+    { title, body: '', options: ['Allow once'], focus: 0 },
+    36,
+  )
+    .map(stripAnsi)
+    .join('\n');
+  assert.match(wrapped.replace(/\s+/g, ' '), new RegExp(title));
+  assert.equal(wrapped.includes('…'), false);
+  const command = 'BEGIN ' + 'x'.repeat(800) + ' ENDMARK';
+  const crowded = dialogRows(
+    new ApprovalCard(
+      approvalRequest(
+        { id: 'long', name: 'execute', args: { command } },
+        defaultPolicy(root, root).review('execute', { command }),
+      ),
+    ).state(),
+    40,
+    12,
+  )
+    .map(stripAnsi)
+    .join('\n');
+  assert.match(crowded, /BEGIN/);
+  assert.match(crowded, /ENDMARK/);
+  assert.match(crowded, /… \+\d+ lines/);
 });
 
 test('a background agent asks while the turn that started it is still running', async (t) => {

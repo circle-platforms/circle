@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  afterSidebarChromeMove,
   afterSidebarPointerLeave,
+  pointerOnSidebarChrome,
+  runControlAction,
   selectRenameText,
   sessionCardVisible,
   sessionMenuTipOpen,
@@ -41,6 +44,26 @@ test('a session card closes when the page suppresses it', () => {
     }),
     true,
   );
+});
+
+test('a control runs on the press and skips the click that follows it', () => {
+  assert.equal(
+    runControlAction({ kind: 'press', button: 0, actedOnPress: false }),
+    true,
+  );
+  assert.equal(
+    runControlAction({ kind: 'press', button: 2, actedOnPress: false }),
+    false,
+  );
+  assert.equal(
+    runControlAction({ kind: 'click', button: 0, actedOnPress: true }),
+    false,
+  );
+  assert.equal(
+    runControlAction({ kind: 'click', button: 0, actedOnPress: false }),
+    true,
+  );
+  assert.equal(pointerOnSidebarChrome(null), false);
 });
 
 test('leaving the sidebar hides the session card and keeps a focused menu tip', () => {
@@ -83,6 +106,40 @@ test('leaving the sidebar hides the session card and keeps a focused menu tip', 
     }),
     false,
   );
+});
+
+test('moving onto sidebar chrome hides the session card and keeps a focused menu tip', () => {
+  const moved = afterSidebarChromeMove(false);
+  assert.equal(moved.suppressCard, true);
+  assert.equal(moved.scrollClosed, false);
+  assert.equal(moved.blurRow, false);
+  assert.equal(
+    sessionCardVisible({
+      renaming: false,
+      editing: false,
+      menuOpen: false,
+      keyboardOwns: false,
+      suppressed: moved.suppressCard,
+      hovered: false,
+      focused: true,
+      pointerIdle: true,
+    }),
+    false,
+  );
+  assert.equal(
+    sessionMenuTipOpen({
+      keyboardOwns: true,
+      menuFocused: true,
+      editing: false,
+      menuOpen: false,
+      scrollClosed: moved.scrollClosed,
+      inView: true,
+    }),
+    true,
+  );
+  const scrolled = afterSidebarChromeMove(true);
+  assert.equal(scrolled.scrollClosed, true);
+  assert.equal(scrolled.blurRow, false);
 });
 
 test('a press opens a session only when it lands on that row', () => {

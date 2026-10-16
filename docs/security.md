@@ -122,7 +122,7 @@ The certificate warning is the browser's own page. When the model clicks its pro
 
 ## Accept-edits mode
 
-`/mode accept-edits` turns on `accept edits`. Changes to files inside the workspace (`write_file`, `edit_file`, and patches that add or change files) then run without a card. Everything else still asks: commands, deleting files (`delete`, or a patch that deletes one), changes outside the workspace, MCP and extension tools. It is decided call by call: a patch that touches one file outside the workspace asks. The model can also leave `read-only` into this mode, when you answer its `plan_exit` question with "implement plan, accept edits". Like `auto`, it applies to the current conversation only.
+`/mode accept-edits` turns on `accept edits`. Changes to files inside the workspace (`write_file`, `edit_file`, and patches that add or change files) then run without a card. An existing skill-run output still asks: a file named in a workspace `skillpack.json` `outputs` list, and any existing file in that file's directory. A declared output at the workspace root protects only that file. Creating a new file beside it does not ask. Everything else still asks: commands, deleting files (`delete`, or a patch that deletes one), changes outside the workspace, MCP and extension tools. It is decided call by call: a patch that touches one file outside the workspace asks. The model can also leave `read-only` into this mode, when you answer its `plan_exit` question with "implement plan, accept edits". Like `auto`, it applies to the current conversation only.
 
 ## Auto mode
 
@@ -152,7 +152,7 @@ Circle writes nothing of its own into your workspace. Older messages after a sum
 
 ## Workspace trust
 
-Circle works only in folders you have trusted: the first time, it asks, and it does not start until you say yes. Trusting a folder lets Circle use what the folder supplies: its instruction files, skills, custom commands, `.circle/settings.json` and extensions, which run their own code. It is an exact match: trusting `/a` does not trust `/a/b`. Trust does not limit what the model does in the folder.
+Circle works only in folders you have trusted: the first time, it asks, and it does not start until you say yes. Trusting a folder lets Circle use what the folder supplies: its instruction files, skills, custom commands, `.circle/settings.json` and extensions, which run their own code. A trusted folder covers itself and everything inside it, on a path boundary: trusting `/a` trusts `/a/b` and does not trust `/ab`. Trusting a child does not trust the parent. Trust does not limit what the model does in the folder.
 
 Instruction files and skills are read from the workspace folder you trusted, not from the folders above it. Your personal instruction files still apply. Do not trust a folder you have not read.
 

@@ -27,6 +27,11 @@ export interface DialogState {
   placeholder?: string;
   /** Body rows in their own tones; drawn instead of `body` when given. */
   lines?: CardLine[];
+  /**
+   * How many leading body lines are the thing being allowed (a command, a path).
+   * A short card keeps those, start and end, and folds the preview before them.
+   */
+  anchor?: number;
   /** Per option: the key column ('' = its number). */
   optionKeys?: string[];
   /** Per option: dim text after the label. */
@@ -151,23 +156,40 @@ export function cardRows(
   const tint = dialog.tint ? p[dialog.tint] : '';
   const lamp = statusLight(dialog.lamp ?? 'wait');
   const lampCode = lamp.slice(0, lamp.indexOf('●'));
-  const head = compose(
-    width,
-    [
-      [' ', ''],
-      ['●', lampCode],
-      [' ', ''],
-      [terminalText(dialog.title).replace(/\n/g, ' '), p.em],
-    ],
-    tint,
+  // The title wraps. A single cut would hide the end of a long tool name.
+  const title = terminalText(dialog.title).replace(/\n/g, ' ');
+  const titleRoom = Math.max(4, width - 4);
+  const head = wrapWords(title, titleRoom).map((part, index) =>
+    compose(
+      width,
+      index === 0
+        ? [
+            [' ', ''],
+            ['●', lampCode],
+            [' ', ''],
+            [part, p.em],
+          ]
+        : [
+            ['    ', ''],
+            [part, p.em],
+          ],
+      tint,
+    ),
   );
   const lines: CardLine[] =
     dialog.lines ??
     dialog.body.split('\n').map((text) => ({ text, tone: 'text' as const }));
   let body: string[] = [];
-  for (const line of lines) {
+  const anchoredRow: boolean[] = [];
+  const pushBody = (row: string, anchored: boolean) => {
+    body.push(row);
+    anchoredRow.push(anchored);
+  };
+  const anchorCount = Math.max(0, dialog.anchor ?? 0);
+  lines.forEach((line, source) => {
+    const anchored = source < anchorCount;
     if (line.segments) {
-      body.push(
+      pushBody(
         compose(
           width,
           [
@@ -179,11 +201,12 @@ export function cardRows(
           ],
           tint,
         ),
+        anchored,
       );
-      continue;
+      return;
     }
     for (const part of wrapWords(terminalText(line.text), width - 4))
-      body.push(
+      pushBody(
         compose(
           width,
           [
@@ -192,8 +215,9 @@ export function cardRows(
           ],
           tint,
         ),
+        anchored,
       );
-  }
+  });
   const menu: string[] = [];
   if (dialog.options.length) menu.push(compose(width, []));
   if (dialog.keyless) menu.push(...keylessRows(dialog, width));
@@ -290,21 +314,42 @@ export function cardRows(
   if (maxRows !== undefined) {
     const room = maxRows - 1 - menu.length - notes.length - input.length; // what is left for the body
     if (body.length > Math.max(1, room)) {
-      const keep = Math.max(1, room - 1);
-      body = [
-        ...body.slice(0, keep),
+      const slots = Math.max(1, room - 1);
+      const fold = (hidden: number) =>
         compose(
           width,
           [
             ['   ', ''],
-            [`… +${body.length - keep} lines`, p.dim],
+            [`… +${hidden} lines`, p.dim],
           ],
           tint,
-        ),
-      ];
+        );
+      const kept = body.filter((_, index) => anchoredRow[index]);
+      const preview = body.filter((_, index) => !anchoredRow[index]);
+      // No command to protect: keep the start, as before.
+      if (!anchorCount || !kept.length) {
+        body = [...body.slice(0, slots), fold(body.length - slots)];
+      } else if (kept.length <= slots) {
+        const shown = preview.slice(0, slots - kept.length);
+        const hidden = body.length - kept.length - shown.length;
+        body = hidden ? [...kept, ...shown, fold(hidden)] : [...kept, ...shown];
+      } else if (slots === 1) {
+        // One row left: the end of a command is the part a cut used to hide.
+        body = [fold(body.length - 1), kept.at(-1)!];
+      } else {
+        const tailCount = Math.max(1, Math.floor(slots / 2));
+        const headCount = slots - tailCount;
+        const head = kept.slice(0, headCount);
+        const tail = kept.slice(kept.length - tailCount);
+        body = [
+          ...head,
+          fold(body.length - head.length - tail.length),
+          ...tail,
+        ];
+      }
     }
   }
-  return [head, ...body, ...menu, ...notes, ...input];
+  return [...head, ...body, ...menu, ...notes, ...input];
 }
 /**
  * The options as a list inside the card (setup's models): the label at the text column, the

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Resvg } from '@resvg/resvg-js';
 import { execFileSync } from 'node:child_process';
+import { buildBundledExtensions, shareExtensionError } from './extensions.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dist = join(root, 'dist');
 await rm(dist, { recursive: true, force: true });
@@ -18,17 +19,14 @@ await build({
   banner: {
     js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
   },
+  plugins: [shareExtensionError()],
   sourcemap: true,
 });
 await cp(join(root, '../../src/prompts'), join(dist, 'prompts'), {
   recursive: true,
 });
 await cp(join(root, '../../src/data'), join(dist, 'data'), { recursive: true });
-await cp(join(root, '../../src/extensions'), join(dist, 'extensions'), {
-  recursive: true,
-}).catch((error) => {
-  if (error?.code !== 'ENOENT') throw error;
-});
+await buildBundledExtensions(dist);
 await build({
   entryPoints: [join(root, 'src/main.ts')],
   outfile: join(dist, 'main.cjs'),

@@ -113,6 +113,21 @@ export const pages: Record<string, string> = {
     '运行时工具和界面组件的生命周期彼此独立。',
   'extension reload recorded; no code was loaded':
     '已记录扩展重新加载请求；没有加载任何代码',
+  'reloading extensions': '正在重新加载扩展',
+  bundled: '内置',
+  'Turn an extension on here. Open its pages under interface components.':
+    '在这里打开扩展。它的页面在界面组件里打开。',
+  'runtime extension {name} is not installed': '运行时扩展 {name} 未安装',
+  'runtime extension {name} failed to load': '运行时扩展 {name} 加载失败',
+  'runtime extension {name} is {version}, this interface is {interface}':
+    '运行时扩展 {name} 的版本是 {version}，这个界面是 {interface}',
+  'runtime extension {name} is unversioned, this interface is {interface}':
+    '运行时扩展 {name} 没有版本，这个界面是 {interface}',
+  'runtime extension {name} is off': '运行时扩展 {name} 已关闭',
+  'cannot find module {module}': '找不到模块 {module}',
+  'could not load the extension: {error}': '扩展无法加载：{error}',
+  'this interface needs the Circle runtime': '这个界面需要 Circle 运行时',
+  'open extensions': '打开扩展',
   'runtime extensions': '运行时扩展',
   'interface components': '界面组件',
   '{n} command': '{n} 个命令',

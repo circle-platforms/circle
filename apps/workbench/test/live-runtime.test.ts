@@ -539,6 +539,43 @@ test('a stopped reply shows one interrupt mark under its stats, and the estimate
   setLanguage('en', storage);
 });
 
+test('a page can drop a session error it is already showing', async () => {
+  const snapshot = createFixtures();
+  snapshot.runtime = { connected: true, configured: true };
+  const update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
+  const host = {
+    async runtimeCommand() {
+      return {
+        id: '1',
+        ok: false,
+        error:
+          '登录被拒绝（UNAUTHENTICATED）。请核对用户和密码，然后重新 /hub login。',
+      };
+    },
+    async runtimeState() {
+      return update;
+    },
+    onRuntime: () => () => {},
+  } as unknown as DesktopBridge;
+  const runtime = new LiveRuntime(host, update);
+  const refused =
+    '登录被拒绝（UNAUTHENTICATED）。请核对用户和密码，然后重新 /hub login。';
+  await assert.rejects(
+    runtime.request('extension-command', {
+      name: 'hub',
+      args: 'login http://127.0.0.1:7410 ada',
+    }),
+    { message: refused },
+  );
+  const session = () =>
+    runtime
+      .getSnapshot()
+      .sessions.find((item) => item.id === snapshot.activeSessionId);
+  assert.equal(session()?.actionError, refused);
+  runtime.dismissActionError();
+  assert.equal(session()?.actionError, undefined);
+});
+
 test('an untrusted project is not given a session from home', async () => {
   const { runtime, host } = live();
   assert.deepEqual(

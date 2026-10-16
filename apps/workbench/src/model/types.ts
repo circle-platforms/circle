@@ -292,6 +292,8 @@ export interface RuntimeExtension {
   view?: unknown;
   tools: string[];
   commands: string[];
+  /** Slash commands named in extension.json, including while the extension is off. */
+  declaredCommands?: string[];
   events: string[];
   error?: string;
 }
@@ -421,6 +423,8 @@ export interface RuntimePort {
     payload?: Record<string, unknown>,
     sessionId?: string,
   ) => string | Promise<unknown>;
+  /** Drop a session error the page is already showing, so it is not also a toast. */
+  dismissActionError?: (sessionId?: string) => void;
   newSession: (workspaceId?: string) => string | Promise<string>;
   beginConversation: (
     input: BeginConversation,

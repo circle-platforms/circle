@@ -43,9 +43,13 @@ import {
 import { selectedHomeProject } from '../features/home-selection';
 import type { DialogId, Session } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
+import { platformTitle } from '../plugins/labels';
 import { armComposerFocus } from '../model/composer-focus';
 import {
+  afterSidebarChromeMove,
   afterSidebarPointerLeave,
+  pointerOnSidebarChrome,
+  runControlAction,
   selectRenameText,
   sessionCardVisible,
   sessionMenuTipOpen,
@@ -175,8 +179,10 @@ export function Sidebar({
   const routeHold = useRef(false);
   const pressOutside = useRef(false);
   const pointerOpening = useRef(false);
-  // Pointer leave hides the hover card without counting as a scroll, so a
-  // focused session ⋯ button can still show its tip.
+  const openedOnPress = useRef(false);
+  // Pointer leave, and moving onto the controls above the list, hide the
+  // hover card without counting as a scroll, so a focused session ⋯ button
+  // can still show its tip.
   const [cardSuppressed, setCardSuppressed] = useState(false);
   const path = `${location.pathname}${location.search}`;
   const pathRef = useRef(path);
@@ -536,6 +542,21 @@ export function Sidebar({
     <aside
       ref={asideRef}
       className="sidebar"
+      onPointerMove={(event) => {
+        // Moving onto 新会话 while a session card is open used to spend the
+        // first click closing that card. Fold the card before the press.
+        // This is not a scroll, and it does not blur the row: a focused ⋯
+        // tip stays open.
+        if (!pointerOnSidebarChrome(event.target)) return;
+        const next = afterSidebarChromeMove(scrollClosedRef.current);
+        if (next.scrollClosed !== scrollClosedRef.current) {
+          scrollClosedRef.current = next.scrollClosed;
+          setScrollClosed(next.scrollClosed);
+        }
+        if (hoveredKey === null && cardSuppressed) return;
+        setHoveredKey(null);
+        setCardSuppressed(next.suppressCard);
+      }}
       onPointerLeave={() => {
         // The card is drawn over the page. Leaving the sidebar drops it,
         // including when the row stays focused. This is not a scroll: a
@@ -560,7 +581,30 @@ export function Sidebar({
         <span>{t('search')}</span>
       </button>
       <nav className="sidebar-primary">
-        <button className="sidebar-item" onClick={() => newSession()}>
+        <button
+          className="sidebar-item"
+          onPointerDown={(event) => {
+            if (
+              !runControlAction({
+                kind: 'press',
+                button: event.button,
+                actedOnPress: false,
+              })
+            )
+              return;
+            openedOnPress.current = true;
+            newSession();
+          }}
+          onClick={() => {
+            const again = runControlAction({
+              kind: 'click',
+              button: 0,
+              actedOnPress: openedOnPress.current,
+            });
+            openedOnPress.current = false;
+            if (again) newSession();
+          }}
+        >
           <Plus size={15} />
           <span>{t('new session')}</span>
         </button>
@@ -598,7 +642,7 @@ export function Sidebar({
               onClick={onNavigate}
             >
               <page.icon size={15} />
-              <span>{page.title}</span>
+              <span>{platformTitle(page.id, page.title)}</span>
             </NavLink>
           ))}
         </nav>
@@ -1096,14 +1140,6 @@ function RecentHover({
           align="start"
           sideOffset={8}
           avoidCollisions={false}
-          onPointerDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
         >
           {details.project ? <span>{details.project}</span> : null}
           <span>{activityLabel(details.age)}</span>

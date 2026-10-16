@@ -29,6 +29,58 @@ function extension(
     writeFileSync(join(path, 'extension.json'), JSON.stringify(manifest));
 }
 
+test('bundled extensions are listed before they load, still off and with nothing registered', (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  const bundled = join(root, 'bundled');
+  mkdirSync(workspace);
+  extension(bundled, 'connector', 'connect', {
+    version: '0.3.0',
+    description: 'Connect to a team server',
+  });
+  const host = new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundled,
+  });
+  const connector = host.extensions.find((ext) => ext.name === 'connector');
+  assert.ok(connector);
+  assert.equal(connector.source, 'bundled');
+  assert.equal(connector.enabled, false);
+  assert.equal(connector.version, '0.3.0');
+  assert.deepEqual(connector.tools, []);
+  assert.equal(host.tools().length, 0);
+  assert.equal(host.commands().size, 0);
+});
+
+test('an untrusted folder is not catalogued, and a file where extensions belong waits for load', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  const bundled = join(root, 'bundled');
+  mkdirSync(workspace);
+  mkdirSync(home);
+  extension(bundled, 'connector', 'connect', { version: '0.3.0' });
+  const untrusted = new ExtensionHost({
+    home,
+    workspace,
+    trusted: false,
+    bundledRoot: bundled,
+  });
+  assert.deepEqual(untrusted.extensions, []);
+  writeFileSync(join(home, 'extensions'), 'not a directory');
+  const broken = new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundled,
+  });
+  assert.deepEqual(broken.extensions, []);
+  await assert.rejects(broken.load(), /ENOTDIR/);
+});
+
 test('bundled extensions are found in their own folder, stay off until enabled, and yield to yours', async (t) => {
   const root = scratch(t);
   const home = join(root, 'home');

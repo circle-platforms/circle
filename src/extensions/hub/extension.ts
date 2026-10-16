@@ -3,9 +3,14 @@
 // while it runs and saves what the server delivers. The task lives on the server: closing
 // Circle does not stop it, and `/hub task <id>` picks it up where this window left off.
 //
-// This file is loaded as written (Node strips the types), so it uses only syntax that
-// type stripping accepts and imports nothing from Circle at run time.
+// The terminal loads this file as written (Node strips the types), so it uses only
+// syntax that type stripping accepts. The desktop build compiles it to extension.js.
+// Interface words live in hub_text.js, and ExtensionError in extension_error.js, both
+// beside the program: the extension and the host then share one error class.
 import { createHash, randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import { ExtensionError } from '../../extension_error.js';
+import { hubLocaleChinese, hubText } from '../../hub_text.js';
 import {
   existsSync,
   mkdirSync,
@@ -89,6 +94,10 @@ class ServerError extends Error {
   status = 0;
   code = '';
   details: Record<string, unknown> = {};
+  /** The server's Chinese sentence, when it sent one. */
+  messageZh = '';
+  /** The English sentence, when Accept-Language already made `message` Chinese. */
+  messageEn = '';
 }
 // What a refusal names besides its message (the rows, tools or limits it is about), kept
 // short so a model reads it beside the code instead of a whole response.
@@ -116,31 +125,193 @@ const EXTENSIONS: Record<string, string> = {
   'text/xml': 'xml',
   'application/xml': 'xml',
 };
-const USAGE = [
-  '/hub                          where you are signed in',
-  '/hub login <url> <user>       sign in; the password is asked on a masked card',
-  '/hub logout                   forget the token',
-  '/hub packs                    what the server can do',
-  '/hub submit <pack> <file>     hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
-  '/hub tasks                    the tasks you handed over from here',
-  '/hub task <id>                show a task and follow it until it ends',
-  '/hub respond <id> <answer>    answer what a task is waiting on (text, key=value or JSON)',
-  '/hub get <id>                 save a delivered task’s results again',
-  '/hub refresh                  read work, execution, knowledge and methods from the server',
-  '/hub approve <id> <approval>  approve an action a task waits on (reject: /hub reject …)',
-  '/hub reconcile <id> [op]     check an unknown operation; without op the server only explains',
-  '/hub tools                    the server’s tools the model can use, read again',
-  '/hub trial start              record the server tool calls of a trial run from now',
-  '/hub skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
-  '/hub skill list               the skill packs on the server',
-  '/hub skill run <id> [json]    run a skill pack on the server and follow it (--file <path> attaches)',
-  '/hub bot list                 the bots you can see; yours with their runs and new results',
-  '/hub bot every <pack> <1h>    a bot that runs a skill pack on a schedule (--from, --inputs, --file, --name)',
-  '/hub bot on <pack> <source> <event>  a bot that runs a skill pack when a connector reports the event',
-  '/hub bot approve <bot>        approve someone else’s bot and its trigger',
-  '/hub bot start|stop <bot>     turn your approved bot on or off',
-  '/hub bot runs <bot>           its runs and what each delivered to Circle',
-].join('\n');
+const DEFAULT_HUB_URL = 'http://127.0.0.1:7410';
+const APPROVAL_ROLES = new Set([
+  'manager',
+  'security',
+  'dpo',
+  'legal',
+  'finance',
+  'hr',
+  'it',
+]);
+// Commands share one description column, including the shorter reconcile line.
+function usage(rows: [string, string][]): string {
+  const width = Math.max(...rows.map(([command]) => command.length)) + 2;
+  return rows
+    .map(([command, description]) => command.padEnd(width) + description)
+    .join('\n');
+}
+// Built when the line is shown, so a Chinese locale translates the descriptions
+// and an English one keeps the words the tests match.
+function usageText(): string {
+  return usage([
+    ['/hub', hubText('where you are signed in')],
+    ['/hub help', hubText('every command')],
+    [
+      '/hub login [url] [user]',
+      hubText(
+        'sign in. With no user, the saved one is used or you are asked. The password is a masked card',
+      ),
+    ],
+    [
+      '/hub login --sso [url]',
+      hubText(
+        'sign in through the server single sign-on. Paste the address the browser opened when this window cannot catch it',
+      ),
+    ],
+    ['/hub logout', hubText('revoke the token at the server, then forget it')],
+    ['/hub packs', hubText('what the server can do')],
+    [
+      '/hub submit <pack> <file>',
+      hubText(
+        'hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
+      ),
+    ],
+    [
+      '/hub tasks',
+      hubText(
+        'tasks this window handed over, each with its phase. "seen to N" is the last event number shown for that task, not how many tasks /hub refresh counted',
+      ),
+    ],
+    ['/hub task <id>', hubText('show a task and follow it until it ends')],
+    [
+      '/hub respond <id> <answer>',
+      hubText(
+        'answer a clarification or a repair. An approval is /hub approve, not this',
+      ),
+    ],
+    ['/hub get <id>', hubText('save a delivered task’s results again')],
+    [
+      '/hub refresh',
+      hubText(
+        'how many work tasks the pages just read (at most 20; tool and index tasks are not in that number) and how many capability packs. Not the /hub tasks list',
+      ),
+    ],
+    [
+      '/hub request <title>',
+      hubText(
+        'submit a file or text for role approval (--file or --text, --summary, --role name[:count])',
+      ),
+    ],
+    [
+      '/hub inbox',
+      hubText('approvals waiting for you, and the command that decides each'),
+    ],
+    [
+      '/hub show <id>',
+      hubText('one approval and its content, before you approve it'),
+    ],
+    [
+      '/hub approve <id> <approval>',
+      hubText(
+        'approve one. With no ids, list them. A governance request is /hub approve <id>',
+      ),
+    ],
+    [
+      '/hub reject <id> <approval> <reason>',
+      hubText(
+        'decline one and say why. A governance request is /hub reject <id> <reason>',
+      ),
+    ],
+    ['/hub review', hubText('the same list as /hub inbox')],
+    [
+      '/hub search <text>',
+      hubText('find approved knowledge and the snapshot id of each hit'),
+    ],
+    [
+      '/hub knowledge search <text>',
+      hubText(
+        'the same search, with --mode exact|prefix|directory|fulltext and --candidates',
+      ),
+    ],
+    [
+      '/hub knowledge share <source>',
+      hubText(
+        'share a file under a new ACL (--file, --readers). acl is the same command',
+      ),
+    ],
+    [
+      '/hub knowledge review <id>',
+      hubText('read a review, request one, or approve|reject it with --reason'),
+    ],
+    [
+      '/hub knowledge publish',
+      hubText(
+        'publish the stable snapshot (--expect <id>|none, --category product|consolidated)',
+      ),
+    ],
+    [
+      '/hub roles <principal> <role>',
+      hubText(
+        'propose an approval role: manager, security, dpo, legal, finance, hr or it',
+      ),
+    ],
+    [
+      '/hub audit',
+      hubText(
+        'recent audit rows (needs admin.manage). --format json|csv exports when the server can',
+      ),
+    ],
+    [
+      '/hub modules',
+      hubText(
+        'skill packs and module assets the server lists (no browser page)',
+      ),
+    ],
+    [
+      '/hub reconcile <id> [op]',
+      hubText(
+        'check an unknown operation; without op the server only explains',
+      ),
+    ],
+    ['/hub tools', hubText('the server’s tools the model can use, read again')],
+    [
+      '/hub trial start',
+      hubText(
+        'record server tool calls from now. A non-empty record that was not pushed stays until /hub trial start --force',
+      ),
+    ],
+    [
+      '/hub skill push <folder>',
+      hubText(
+        'submit a skill pack. skillpack.json outputs are required; the trial call record may be empty. --outputs a,b names trial files and defaults to that list',
+      ),
+    ],
+    ['/hub skill list', hubText('the skill packs on the server')],
+    [
+      '/hub skill run <id> [json]',
+      hubText(
+        'run a skill pack on the server and follow it (--file <path> attaches)',
+      ),
+    ],
+    [
+      '/hub bot list',
+      hubText('the bots you can see; yours with their runs and new results'),
+    ],
+    [
+      '/hub bot every <pack> <1h>',
+      hubText(
+        'a bot that runs a skill pack on a schedule (--from, --inputs, --file, --name)',
+      ),
+    ],
+    [
+      '/hub bot on <pack> <source> <event>',
+      hubText(
+        'a bot that runs a skill pack when a connector reports the event',
+      ),
+    ],
+    [
+      '/hub bot approve <bot>',
+      hubText('approve someone else’s bot and its trigger'),
+    ],
+    ['/hub bot start|stop <bot>', hubText('turn your approved bot on or off')],
+    [
+      '/hub bot runs <bot>',
+      hubText('its runs and what each delivered to Circle'),
+    ],
+  ]);
+}
 
 const sha256 = (bytes: Buffer): string =>
   createHash('sha256').update(bytes).digest('hex');
@@ -164,8 +335,195 @@ const short = (hash: unknown): string =>
   typeof hash === 'string' ? hash.slice(0, 12) + '…' : '';
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+// A list route answers with an array, or with { items } when asked for a page.
+function rowsOf(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data.filter(isRecord);
+  if (isRecord(data) && Array.isArray(data.items))
+    return data.items.filter(isRecord);
+  return [];
+}
 const reason = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+// Node's fetch reports a refused or missing server as "fetch failed". That
+// English is not a reason; the address is the whole of what a person can use.
+function unreachable(url: string, error: unknown): string {
+  const message = reason(error);
+  if (
+    message === 'fetch failed' ||
+    message === 'connection error' ||
+    message === ''
+  )
+    return hubText('cannot reach the server {url}', { url });
+  return hubText('cannot reach {url}: {message}', { url, message });
+}
+// The server's sentence, without the code or the JSON detail blob. Chinese uses
+// messageZh when the server sent it; with Accept-Language the message itself is Chinese.
+function serverSentence(error: ServerError): string {
+  const english = error.message
+    .replace(/^[A-Z0-9_]+:\s*/, '')
+    .replace(/\s·\s\{[\s\S]*$/, '');
+  if (!hubLocaleChinese()) return english;
+  if (error.messageZh) return error.messageZh;
+  if (error.messageEn) return english;
+  return english;
+}
+// A refusal the server named, said so a person can act on it. A usage line has no code
+// and is already the whole explanation.
+function explainFailure(error: unknown): string {
+  if (!(error instanceof ServerError) || !error.code) return reason(error);
+  const manifest = Array.isArray(error.details.manifestErrors)
+    ? error.details.manifestErrors.filter(isRecord)
+    : [];
+  if (manifest.length) {
+    const lines = manifest
+      .map((item) => {
+        const code = String(item.code ?? '');
+        const message = String(item.message ?? '');
+        return code ? `${code}: ${message}` : message;
+      })
+      .join('\n');
+    const head =
+      hubLocaleChinese() && error.messageZh ? `${error.messageZh}\n` : '';
+    return (
+      head +
+      hubText('the manifest has {n} error(s) ({code}):\n{lines}', {
+        n: manifest.length,
+        code: error.code,
+        lines,
+      })
+    );
+  }
+  const issues = Array.isArray(error.details.issues)
+    ? error.details.issues.filter(isRecord).slice(0, 6)
+    : [];
+  const detail = issues
+    .map((issue) => {
+      const path = Array.isArray(issue.path)
+        ? issue.path.map(String).join('.')
+        : '';
+      const message = String(issue.message ?? issue.code ?? hubText('invalid'));
+      return path ? `${path}: ${message}` : message;
+    })
+    .join('; ');
+  switch (error.code) {
+    case 'UNAUTHENTICATED':
+      return hubText(
+        'sign-in was refused ({code}). Check the user and password, then /hub login again.',
+        { code: error.code },
+      );
+    case 'FORBIDDEN_SCOPE':
+    case 'FORBIDDEN_ACTION':
+    case 'SOURCE_FORBIDDEN':
+      return hubText(
+        'the server refused this ({code}): {detail}. Sign in to a scope that may do it, or ask someone who can.',
+        {
+          code: error.code,
+          detail: hubLocaleChinese()
+            ? serverSentence(error)
+            : error.message.replace(/^[^:]+:\s*/, ''),
+        },
+      );
+    case 'TARGET_NOT_FOUND':
+      return hubText('not found ({code}). Check the id and try again.', {
+        code: error.code,
+      });
+    case 'INVALID_PAYLOAD':
+      return /outputs/i.test(detail)
+        ? hubText(
+            'the hub refused the payload ({code}). {detail}. skillpack.json needs outputs (at least one file). --outputs only names the trial files and defaults to that list.',
+            { code: error.code, detail },
+          )
+        : hubText('the hub refused the payload ({code}). {detail}', {
+            code: error.code,
+            detail: detail || hubText('Check the fields the command sent.'),
+          });
+    case 'SKILLPACK_CHECK_FAILED': {
+      const check = isRecord(error.details.check) ? error.details.check : {};
+      const names = (value: unknown): string[] =>
+        Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+      const said = hubLocaleChinese() ? serverSentence(error) : error.message;
+      const extra = [
+        ...names(check.undeclaredTools)
+          .filter((name) => !said.includes(name))
+          .map((name) => hubText('undeclared tool {name}', { name })),
+        ...names(check.missingTools)
+          .filter((name) => !said.includes(name))
+          .map((name) => hubText('missing tool {name}', { name })),
+      ];
+      return hubText(
+        '{message}. Fix skillpack.json so it declares every tool the trial used, then /hub trial start --force and push again.',
+        { message: extra.length ? `${said} (${extra.join('; ')})` : said },
+      );
+    }
+    case 'INPUT_REVISION_STALE':
+      return hubText(
+        'the snapshot changed ({code}). /hub knowledge publish --expect <id> uses the current one, or --expect none when there is no snapshot yet.',
+        { code: error.code },
+      );
+    case 'SHARING_REQUIRED':
+      return hubText(
+        'sharing was not allowed ({code}). /hub knowledge share sends consent; promoting a review needs the source to allow team promotion.',
+        { code: error.code },
+      );
+    case 'SELF_APPROVAL':
+      return hubText(
+        'you cannot approve your own request ({code}). Someone holding the role decides it.',
+        { code: error.code },
+      );
+    case 'DEPENDENCY_NOT_APPROVED':
+      return hubText('a dependency is not approved yet ({code}). {detail}', {
+        code: error.code,
+        detail:
+          serverSentence(error) || hubText('Approve that dependency first.'),
+      });
+    case 'SOURCE_HASH_MISMATCH':
+      return hubText(
+        'the file changed while it was sent ({code}). Send it again.',
+        { code: error.code },
+      );
+    case 'BODY_TOO_LARGE':
+      return hubText(
+        'that is larger than the server accepts ({code}). Send a smaller file.',
+        { code: error.code },
+      );
+    case 'DECISION_CONFLICT': {
+      // The code alone does not say which request collided. The server's outcome does:
+      // a text answer sent where an approval is open, or a decision already recorded.
+      const outcome = String(error.details.outcome ?? '');
+      const said = serverSentence(error);
+      const named = outcome || said || hubText('the request no longer matches');
+      if (
+        outcome === 'missing-request' ||
+        /missing-request|not waiting/i.test(said)
+      )
+        return hubText(
+          'nothing is waiting for that answer ({code}: {named}). {said}. An open approval is decided with /hub approve <task> <approval>, and /hub review lists those. /hub task <id> shows the phase.',
+          { code: error.code, named, said },
+        );
+      if (
+        outcome === 'already-answered' ||
+        outcome === 'already-decided' ||
+        /already-/.test(outcome) ||
+        /already-|frozen/i.test(said)
+      )
+        return hubText(
+          'that request already has a decision ({code}: {named}). {said}. /hub task <id> shows the phase. Wait for a new question before /hub respond, or /hub review for what is still open.',
+          { code: error.code, named, said },
+        );
+      return hubText(
+        'the server refused this decision ({code}: {named}). {said}. /hub task <id> shows the phase; /hub review lists open approvals.',
+        { code: error.code, named, said },
+      );
+    }
+    default:
+      if (hubLocaleChinese() && error.messageZh)
+        return hubText('{code}: {said}', {
+          code: error.code || error.status,
+          said: error.messageZh,
+        });
+      return error.message;
+  }
+}
 
 // Words split on spaces, with "…" or '…' kept together. Only a word that is all one quoted
 // part loses its quotes, so {"a": "b c"} keeps the quotes JSON needs.
@@ -189,6 +547,94 @@ function answerOf(text: string): Record<string, unknown> {
   if (pairs.length && pairs.every(Boolean))
     return Object.fromEntries(pairs.map((pair) => [pair![1], pair![2]]));
   return { answer: text };
+}
+function callbackParts(text: string): { code: string; state: string } {
+  const trimmed = text.trim();
+  let params: URLSearchParams;
+  try {
+    params = new URL(trimmed).searchParams;
+  } catch {
+    params = new URLSearchParams(trimmed.replace(/^[?#]/, ''));
+  }
+  return { code: params.get('code') ?? '', state: params.get('state') ?? '' };
+}
+function oidcRedirect(authorizationUrl: string): URL | undefined {
+  try {
+    const redirect = new URL(authorizationUrl).searchParams.get('redirect_uri');
+    if (!redirect) return;
+    const url = new URL(redirect);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+    if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return;
+    return url;
+  } catch {
+    return;
+  }
+}
+// The browser returns to the server's loopback redirect. Listen there when the
+// port is free; otherwise the person pastes the address the browser opened.
+function bindOidc(
+  redirect: URL,
+  expectState: string,
+): Promise<
+  | {
+      wait: () => Promise<{ code: string; state: string } | undefined>;
+      close: () => void;
+    }
+  | undefined
+> {
+  const port = Number(redirect.port);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535)
+    return Promise.resolve(undefined);
+  const host = '127.0.0.1';
+  return new Promise((resolve) => {
+    let resolveHit: (value: { code: string; state: string }) => void = () => {};
+    const hit = new Promise<{ code: string; state: string }>(
+      (resolveHitInner) => {
+        resolveHit = resolveHitInner;
+      },
+    );
+    let sent = false;
+    const server = createServer((request, response) => {
+      const url = new URL(request.url ?? '/', redirect.origin);
+      if (url.pathname !== (redirect.pathname || '/')) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const code = url.searchParams.get('code') ?? '';
+      const state = url.searchParams.get('state') ?? '';
+      if (!code || state !== expectState) {
+        response.writeHead(400, {
+          'content-type': 'text/plain; charset=utf-8',
+        });
+        response.end(hubText('This sign-in is missing its code or state.'));
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(
+        `<!doctype html><meta charset="utf-8"><p>${hubText('Signed in. You can close this page.')}</p>`,
+      );
+      if (!sent) {
+        sent = true;
+        resolveHit({ code, state });
+      }
+    });
+    server.once('error', () => resolve(undefined));
+    server.listen(port, host, () => {
+      resolve({
+        wait: () =>
+          new Promise((resolveWait) => {
+            const timer = setTimeout(() => resolveWait(undefined), 120_000);
+            timer.unref?.();
+            void hit.then((value) => {
+              clearTimeout(timer);
+              resolveWait(value);
+            });
+          }),
+        close: () => server.close(),
+      });
+    });
+  });
 }
 
 // The host's limit covers the complete JSON view, not just its object lists.
@@ -392,7 +838,28 @@ export async function register(api: ExtensionAPI): Promise<void> {
       };
     // An address given in settings.json under extensions.hub.url.
     const url = api.settings.url;
-    return typeof url === 'string' && url ? { url, username: '' } : undefined;
+    return typeof url === 'string' && url.trim()
+      ? { url: url.trim(), username: '' }
+      : undefined;
+  }
+  // The address to offer before anyone has signed in. Not written until they do.
+  function knownUrl(): string {
+    return readConfig()?.url || DEFAULT_HUB_URL;
+  }
+  // Remember the address for the next sign-in, in this extension's files and in
+  // settings.json. A run token never writes either.
+  function rememberAddress(url: string, username: string): void {
+    if (fromRun) return;
+    const current = readConfig();
+    writeJson('config.json', {
+      ...current,
+      url,
+      username: username || current?.username || '',
+    });
+    api.saveSettings({ url });
+    // A sign-in that never reaches the server still leaves the address here,
+    // so the desktop page can offer it again.
+    api.background(showStatus());
   }
   function followed(): Record<string, Followed> {
     const value = readJson('tasks.json');
@@ -407,6 +874,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // What a paired page of the desktop application shows (api.setView): where you are
   // signed in, the tasks handed over from here and the last lines this extension wrote.
   const recent: string[] = [];
+  // The last inbox and knowledge search, so the desktop page can show them.
+  // Absent until that command has run; an empty list is a real answer.
+  let inboxPublished: InboxItem[] | undefined;
+  let knowledgePublished:
+    | {
+        query: string;
+        items: { recordId: string; snapshotId: string; title: string }[];
+      }
+    | undefined;
   // Runs of your bots the server has published to Circle, or could not start, that this
   // window has not shown yet; and whether the last look found the token expired.
   let botNews: { bot: Asset; run: BotRun }[] = [];
@@ -420,7 +896,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   function publishView(signedIn: boolean): void {
     const config = readConfig();
     const view = {
-      url: config?.url ?? '',
+      url: config?.url || (fromRun ? '' : DEFAULT_HUB_URL),
       username: config?.username ?? '',
       scopeId: config?.scopeId ?? '',
       signedIn,
@@ -429,6 +905,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
         .slice(-20)
         .map(([taskId, item]) => ({ taskId, ...item })),
       recent: recent.slice(-30),
+      ...(inboxPublished !== undefined ? { inbox: inboxPublished } : {}),
+      ...(knowledgePublished ? { knowledge: knowledgePublished } : {}),
       objects,
       botResults: botNews.map(({ bot, run }) => ({
         botAssetId: bot.assetId,
@@ -631,18 +1109,59 @@ export async function register(api: ExtensionAPI): Promise<void> {
         name,
         remote: held.remote,
         write: held.write,
+        ask: held.ask,
       })),
-      skillPacks: (Array.isArray(pushed) ? pushed : [])
-        .filter(isRecord)
-        .map((item) => {
-          const manifest = isRecord(item.manifest) ? item.manifest : {};
-          return {
-            skillPackId: item.skillPackId,
-            id: item.id ?? manifest.id,
-            version: item.version ?? manifest.version,
-            status: item.status,
-          };
-        }),
+      skillPacks: await Promise.all(
+        (Array.isArray(pushed) ? pushed : [])
+          .filter(isRecord)
+          .slice(0, 20)
+          .map(async (item) => {
+            const manifest = isRecord(item.manifest) ? item.manifest : {};
+            const assetId =
+              typeof item.assetId === 'string' ? item.assetId : '';
+            const approvalTaskId =
+              typeof item.approvalTaskId === 'string'
+                ? item.approvalTaskId
+                : '';
+            const named =
+              typeof item.lifecycle === 'string' ? item.lifecycle : '';
+            const asset =
+              !named && assetId
+                ? await optional<unknown>(
+                    `/v1/assets/${encodeURIComponent(assetId)}`,
+                    undefined,
+                  )
+                : undefined;
+            const lifecycle =
+              named ||
+              (isRecord(asset) && typeof asset.lifecycle === 'string'
+                ? asset.lifecycle
+                : '');
+            const statusLabel =
+              typeof item.statusLabel === 'string' ? item.statusLabel : '';
+            const open =
+              approvalTaskId && item.status !== 'registered'
+                ? rowsOf(
+                    await optional<unknown>(
+                      `/v1/tasks/${encodeURIComponent(approvalTaskId)}/approvals`,
+                      [],
+                    ),
+                  ).find((row) => row.status === 'open')
+                : undefined;
+            return {
+              skillPackId: item.skillPackId,
+              id: item.id ?? manifest.id,
+              version: item.version ?? manifest.version,
+              status: item.status,
+              ...(statusLabel ? { statusLabel } : {}),
+              ...(lifecycle ? { lifecycle } : {}),
+              ...(approvalTaskId ? { approvalTaskId } : {}),
+              ...(open?.approvalId
+                ? { approvalId: String(open.approvalId) }
+                : {}),
+            };
+          }),
+      ),
       bots: botViews,
       background,
     };
@@ -673,6 +1192,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         context.append(line);
       },
       sendUserMessage: (line) => context.sendUserMessage(line),
+      secret: context.secret,
     };
   }
 
@@ -702,16 +1222,40 @@ export async function register(api: ExtensionAPI): Promise<void> {
     if (run !== statusRun) return latestStatus;
     publishView(signedIn);
     if (!config || !signedIn) {
-      api.setStatus(config ? 'hub · signed out' : null);
+      api.setStatus(config ? hubText('hub · signed out') : null);
       return;
     }
-    const where = `hub · ${config.username ? config.username + '@' : ''}${new URL(config.url).host}`;
-    if (failure) api.setStatus(`${where} · ${failure}`, 'error');
+    const where = hubText('hub · {who}', {
+      who: `${config.username ? config.username + '@' : ''}${new URL(config.url).host}`,
+    });
+    const stopped = failure.endsWith(' stopped following')
+      ? failure.slice(0, -' stopped following'.length)
+      : '';
+    if (failure)
+      api.setStatus(
+        stopped
+          ? hubText('{where} · {task} stopped following', {
+              where,
+              task: stopped,
+            })
+          : `${where} · ${failure}`,
+        'error',
+      );
     else if (following.size)
-      api.setStatus(`${where} · ${following.size} running`, 'running');
-    else if (expired) api.setStatus(`${where} · sign-in expired`, 'wait');
+      api.setStatus(
+        hubText('{where} · {n} running', { where, n: following.size }),
+        'running',
+      );
+    else if (expired)
+      api.setStatus(hubText('{where} · sign-in expired', { where }), 'wait');
     else if (botNews.length)
-      api.setStatus(`${where} · ${botNews.length} bot result(s)`, 'wait');
+      api.setStatus(
+        hubText('{where} · {n} bot result(s)', {
+          where,
+          n: botNews.length,
+        }),
+        'wait',
+      );
     else api.setStatus(where, 'ok');
   }
 
@@ -720,12 +1264,16 @@ export async function register(api: ExtensionAPI): Promise<void> {
     try {
       url = new URL(raw);
     } catch {
-      throw new ServerError(`not a URL: ${raw}`);
+      throw new ServerError(hubText('not a URL: {raw}', { raw }));
     }
     if (!['http:', 'https:'].includes(url.protocol))
-      throw new ServerError('the address must start with http:// or https://');
+      throw new ServerError(
+        hubText('the address must start with http:// or https://'),
+      );
     if (url.username || url.password)
-      throw new ServerError('put no user name or password in the address');
+      throw new ServerError(
+        hubText('put no user name or password in the address'),
+      );
     return url.origin;
   }
 
@@ -743,12 +1291,21 @@ export async function register(api: ExtensionAPI): Promise<void> {
   ): Promise<{ data: unknown; bytes: Buffer; headers: Headers }> {
     const config = readConfig();
     if (!config)
-      throw new ServerError('not signed in: /hub login <url> <user>');
+      throw new ServerError(hubText('not signed in: /hub login <url> <user>'));
     const headers: Record<string, string> = { ...options.headers };
+    // Chinese errors come back as message, with messageEn beside them.
+    if (
+      hubLocaleChinese() &&
+      !headers['accept-language'] &&
+      !headers['Accept-Language']
+    )
+      headers['accept-language'] = 'zh';
     if (!options.anonymous) {
       const token = await currentToken();
       if (!token)
-        throw new ServerError('not signed in: /hub login <url> <user>');
+        throw new ServerError(
+          hubText('not signed in: /hub login <url> <user>'),
+        );
       headers.authorization = `Bearer ${token}`;
     }
     let body: string | Uint8Array<ArrayBuffer> | undefined;
@@ -772,7 +1329,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ]),
       });
     } catch (error) {
-      throw new ServerError(`cannot reach ${config.url}: ${reason(error)}`);
+      throw new ServerError(unreachable(config.url, error));
     }
     const bytes = Buffer.from(await response.arrayBuffer());
     // Asked with If-None-Match: nothing changed since the last answer.
@@ -784,7 +1341,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
     try {
       parsed = JSON.parse(bytes.toString('utf8'));
     } catch {
-      throw new ServerError(`${method} ${path} → ${response.status}, not JSON`);
+      throw new ServerError(
+        hubText('{method} {path} → {status}, not JSON', {
+          method,
+          path,
+          status: response.status,
+        }),
+      );
     }
     // A refusal carries its error at the top. A task that ended failed is answered with HTTP
     // 200, status "failed" and the task's own result (its error inside) as data: that is
@@ -806,11 +1369,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
           ? JSON.stringify(error.details)
           : '';
       const failed = new ServerError(
-        `${String(error.code ?? response.status)}: ${String(error.message ?? 'request failed')}${details ? ` · ${details.length > MAX_DETAIL_CHARS ? `${details.slice(0, MAX_DETAIL_CHARS)}…` : details}` : ''}`,
+        `${String(error.code ?? response.status)}: ${String(error.message ?? hubText('request failed'))}${details ? ` · ${details.length > MAX_DETAIL_CHARS ? `${details.slice(0, MAX_DETAIL_CHARS)}…` : details}` : ''}`,
       );
       failed.status = response.status;
       failed.code = typeof error.code === 'string' ? error.code : '';
       failed.details = isRecord(error.details) ? error.details : {};
+      failed.messageZh =
+        typeof error.messageZh === 'string' ? error.messageZh : '';
+      failed.messageEn =
+        typeof error.messageEn === 'string' ? error.messageEn : '';
       throw failed;
     }
     return {
@@ -820,19 +1387,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
     };
   }
 
-  async function signIn(
+  async function storeSession(
     url: string,
     username: string,
-    password: string,
+    issued: Record<string, unknown>,
   ): Promise<string[]> {
-    writeJson('config.json', { ...readConfig(), url, username });
-    const { data } = await send('POST', '/v1/auth/dev-login', {
-      json: { username, password },
-      anonymous: true,
-    });
-    const issued = isRecord(data) ? data : {};
     if (typeof issued.token !== 'string' || !issued.token)
-      throw new ServerError('the server issued no token');
+      throw new ServerError(hubText('the server issued no token'));
     await api.secrets.set('token', issued.token);
     const scopes = Array.isArray(issued.scopes)
       ? issued.scopes.map(String)
@@ -851,6 +1412,121 @@ export async function register(api: ExtensionAPI): Promise<void> {
     scheduleRefresh();
     api.background(showStatus());
     return scopes;
+  }
+  async function finishLogin(
+    url: string,
+    username: string,
+    scopes: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    await collectObjects().catch(() => {});
+    const { data: about } = await request('GET', '/v1/status');
+    context.append(
+      hubText('● signed in to {url} as {user}{scope}{api}', {
+        url,
+        user: username,
+        scope: scopes.length
+          ? hubText(' · scope {id}', { id: String(scopes[0]) })
+          : '',
+        api:
+          isRecord(about) && about.apiVersion
+            ? hubText(' · api {version}', {
+                version: String(about.apiVersion),
+              })
+            : '',
+      }),
+    );
+    await announceTools(context);
+    api.background(lookForBots());
+  }
+  async function signIn(
+    url: string,
+    username: string,
+    password: string,
+  ): Promise<string[]> {
+    writeJson('config.json', { ...readConfig(), url, username });
+    const { data } = await send('POST', '/v1/auth/dev-login', {
+      json: { username, password },
+      anonymous: true,
+    });
+    return storeSession(url, username, isRecord(data) ? data : {});
+  }
+  async function loginSso(
+    address: string,
+    context: CommandContext,
+  ): Promise<void> {
+    const url = serverUrl(address);
+    rememberAddress(url, readConfig()?.username ?? '');
+    let data: unknown;
+    try {
+      ({ data } = await send('GET', '/v1/auth/oidc/start', {
+        anonymous: true,
+      }));
+    } catch (error) {
+      if (isMissing(error))
+        throw new ServerError(
+          hubText(
+            'this server has no single sign-on. /hub login [url] [user] asks for a password.',
+          ),
+        );
+      throw error;
+    }
+    const started = isRecord(data) ? data : {};
+    const authorizationUrl = String(started.authorizationUrl ?? '');
+    const state = String(started.state ?? '');
+    if (!authorizationUrl || !state)
+      throw new ServerError(hubText('the server did not start single sign-on'));
+    const redirect = oidcRedirect(authorizationUrl);
+    const door = redirect ? await bindOidc(redirect, state) : undefined;
+    context.append(
+      hubText('Open this address to sign in:\n{url}', {
+        url: authorizationUrl,
+      }),
+    );
+    let caught = door ? await door.wait() : undefined;
+    door?.close();
+    if (!caught) {
+      let pasted: string | null;
+      try {
+        pasted = await api.askSecret(
+          hubText('Paste the address the browser opened'),
+          { mask: false, conceal: false },
+        );
+      } catch (error) {
+        if (error instanceof ExtensionError)
+          throw new ServerError(
+            hubText(
+              'this window cannot ask; open the address from /hub login --sso again',
+            ),
+          );
+        throw error;
+      }
+      if (pasted === null) {
+        context.append(hubText('Sign-in cancelled'));
+        return;
+      }
+      const parts = callbackParts(pasted);
+      if (!parts.code || !parts.state)
+        throw new ServerError(
+          hubText('the sign-in address needs code and state'),
+        );
+      if (parts.state !== state)
+        throw new ServerError(
+          hubText('the sign-in state does not match. /hub login --sso again.'),
+        );
+      caught = parts;
+    }
+    const { data: session } = await send('POST', '/v1/auth/oidc/callback', {
+      anonymous: true,
+      json: { code: caught.code, state: caught.state },
+    });
+    const issued = isRecord(session) ? session : {};
+    const username =
+      typeof issued.principalId === 'string' && issued.principalId
+        ? issued.principalId
+        : 'sso';
+    const scopes = await storeSession(url, username, issued);
+    await finishLogin(url, username, scopes, context);
   }
 
   // A session stays alive without asking anyone: shortly before the token runs out it is
@@ -938,7 +1614,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
         error.status !== 401
       )
         throw error;
-      if (fromRun) throw new ServerError('hub turned down the run token');
+      if (fromRun)
+        throw new ServerError(hubText('hub turned down the run token'));
       const current = await currentToken();
       if (used && current && current !== used)
         try {
@@ -952,7 +1629,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
       api.background(showStatus());
       const config = readConfig();
       throw new ServerError(
-        `signed out: the sign-in has expired · /hub login ${config?.url ?? '<url>'} ${config?.username || '<user>'}`,
+        hubText(
+          'signed out: the sign-in has expired · /hub login {url} {user}',
+          {
+            url: config?.url ?? '<url>',
+            user: config?.username || '<user>',
+          },
+        ),
       );
     }
   }
@@ -962,7 +1645,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
       'GET',
       `/v1/tasks/${encodeURIComponent(taskId)}/status`,
     );
-    if (!isRecord(data)) throw new ServerError('the server sent no task');
+    if (!isRecord(data))
+      throw new ServerError(hubText('the server sent no task'));
     return data;
   }
 
@@ -1033,9 +1717,18 @@ export async function register(api: ExtensionAPI): Promise<void> {
     context.append(
       `  ${taskId} · ${String(result.phase)} · ${String(result.status)}${
         check.reader
-          ? ` · read back with ${String(check.reader)}, ${String(check.rowCount)} rows`
+          ? hubText(' · read back with {reader}, {rows} rows', {
+              reader: String(check.reader),
+              rows: String(check.rowCount),
+            })
           : ''
-      }${unmapped.length ? ` · ${unmapped.length} unmapped (listed in the workbook)` : ''}`,
+      }${
+        unmapped.length
+          ? hubText(' · {n} unmapped (listed in the workbook)', {
+              n: unmapped.length,
+            })
+          : ''
+      }`,
     );
     // A flow result summarizes its cases and the terminal execution observations.
     const outcome = isRecord(result.result) ? result.result : {};
@@ -1043,7 +1736,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
     for (const item of cases)
       if (isRecord(item))
         context.append(
-          `    case ${String(item.autoid)} · ${String(item.verdict)}`,
+          hubText('    case {id} · {verdict}', {
+            id: String(item.autoid),
+            verdict: String(item.verdict),
+          }),
         );
     const executionObservations = Array.isArray(result.executionObservations)
       ? result.executionObservations
@@ -1051,18 +1747,32 @@ export async function register(api: ExtensionAPI): Promise<void> {
     for (const item of executionObservations)
       if (isRecord(item))
         context.append(
-          `    execution ${String(item.operationId)} · terminal ${String(item.terminal)} · remote lease released ${String(item.remoteLeaseReleased)}`,
+          hubText(
+            '    execution {operation} · terminal {terminal} · remote lease released {released}',
+            {
+              operation: String(item.operationId),
+              terminal: String(item.terminal),
+              released: String(item.remoteLeaseReleased),
+            },
+          ),
         );
     for (const item of unmapped.slice(0, 5))
       if (isRecord(item))
         context.append(
-          `    unmapped ${String(item.path)}: ${String(item.reason)}`,
+          hubText('    unmapped {path}: {reason}', {
+            path: String(item.path),
+            reason: String(item.reason),
+          }),
         );
     const evidence = Array.isArray(result.evidence) ? result.evidence : [];
     for (const item of evidence)
       if (isRecord(item))
         context.append(
-          `    evidence ${String(item.evidenceId)} · ${String(item.kind)} · sha256 ${short(item.sha256)}`,
+          hubText('    evidence {id} · {kind} · sha256 {hash}', {
+            id: String(item.evidenceId),
+            kind: String(item.kind),
+            hash: short(item.sha256),
+          }),
         );
     const artifacts = (
       Array.isArray(result.artifacts) ? result.artifacts : []
@@ -1073,7 +1783,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         typeof item.sha256 === 'string',
     );
     if (!artifacts.length) {
-      context.append(`  ${taskId} delivered no files`);
+      context.append(hubText('  {task} delivered no files', { task: taskId }));
       return;
     }
     const folder = join(context.workspace, 'tasks', taskId);
@@ -1090,7 +1800,14 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const name = artifact.fileName || artifact.artifactId;
       if (actual !== artifact.sha256 || (declared && declared !== actual)) {
         context.append(
-          `✖ ${name}: the bytes (${short(actual)}) do not match the server's SHA-256 (${short(artifact.sha256)}); not saved`,
+          hubText(
+            "✖ {name}: the bytes ({actual}) do not match the server's SHA-256 ({expected}); not saved",
+            {
+              name,
+              actual: short(actual),
+              expected: short(artifact.sha256),
+            },
+          ),
         );
         continue;
       }
@@ -1098,7 +1815,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
       writeFileSync(path, bytes, { flag: 'wx' });
       remember(taskId, { saved: true });
       context.append(
-        `✓ saved ${path} · ${bytes.byteLength} bytes · sha256 ${short(actual)} matches the server (${artifact.artifactId})`,
+        hubText(
+          '✓ saved {path} · {bytes} bytes · sha256 {hash} matches the server ({id})',
+          {
+            path,
+            bytes: bytes.byteLength,
+            hash: short(actual),
+            id: artifact.artifactId,
+          },
+        ),
       );
     }
   }
@@ -1121,7 +1846,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const cause = isRecord(details.cause) ? details.cause : undefined;
     const where =
       typeof details.stepId === 'string'
-        ? ` · step ${details.stepId}${typeof details.kind === 'string' ? ` (${details.kind})` : ''}`
+        ? hubText(' · step {step}{kind}', {
+            step: details.stepId,
+            kind: typeof details.kind === 'string' ? ` (${details.kind})` : '',
+          })
         : '';
     const why = cause
       ? ` · ${String(cause.code ?? '')}: ${String(cause.message ?? '')}`
@@ -1181,12 +1909,18 @@ export async function register(api: ExtensionAPI): Promise<void> {
           if (phase === 'delivered') {
             if (followed()[taskId]?.saved)
               context.append(
-                `  ${taskId} was delivered and its results are saved here · /hub get ${taskId} saves them again`,
+                hubText(
+                  '  {task} was delivered and its results are saved here · /hub get {task} saves them again',
+                  { task: taskId },
+                ),
               );
             else await deliver(taskId, context);
           } else if (phase === 'unknown')
             context.append(
-              `✖ ${taskId}: the outcome is unknown and the server does not guess it · /hub task ${taskId} later`,
+              hubText(
+                '✖ {task}: the outcome is unknown and the server does not guess it · /hub task {task} later',
+                { task: taskId },
+              ),
             );
           else context.append(await failureNote(taskId, phase));
           ended = true;
@@ -1203,7 +1937,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
         for (const item of open)
           if (isRecord(item))
             context.append(
-              `  ${taskId} asks: ${String(item.question)} · /hub respond ${taskId} <answer>`,
+              hubText(
+                '  {task} asks: {question} · /hub respond {task} <answer>',
+                {
+                  task: taskId,
+                  question: String(item.question),
+                },
+              ),
             );
         if (open.length) return;
       }
@@ -1212,7 +1952,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (api.signal.aborted) return;
       failure = `${taskId} stopped following`;
       context.append(
-        `✖ ${taskId}: ${reason(error)} · /hub task ${taskId} picks it up again`,
+        hubText('✖ {task}: {message} · /hub task {task} picks it up again', {
+          task: taskId,
+          message: reason(error),
+        }),
       );
     } finally {
       following.delete(taskId);
@@ -1225,24 +1968,34 @@ export async function register(api: ExtensionAPI): Promise<void> {
   async function upload(
     path: string,
     scopeId: string,
+    capabilityPackId?: string,
   ): Promise<{ id: string; sha256: string; name: string }> {
     if (statSync(path).size > MAX_UPLOAD_BYTES)
-      throw new ServerError(`${basename(path)} is larger than 16 MB`);
+      throw new ServerError(
+        hubText('{name} is larger than 16 MB', { name: basename(path) }),
+      );
     const bytes = readFileSync(path);
     const { data } = await request('POST', '/v1/sources', {
       bytes,
       headers: {
         'x-scope-id': scopeId,
         'x-file-name': encodeURIComponent(basename(path)),
+        // The hub checks this before it stores the bytes, so an unknown pack
+        // does not leave a source behind. Absent, the upload happens first.
+        ...(capabilityPackId
+          ? { 'x-capability-pack-id': capabilityPackId }
+          : {}),
       },
       timeoutMs: 120_000,
     });
     const source = isRecord(data) ? data : {};
     const id = String(source.sourceRevisionId ?? '');
-    if (!id) throw new ServerError('the server returned no source id');
+    if (!id) throw new ServerError(hubText('the server returned no source id'));
     if (source.sha256 !== sha256(bytes))
       throw new ServerError(
-        `${basename(path)} arrived with a different SHA-256`,
+        hubText('{name} arrived with a different SHA-256', {
+          name: basename(path),
+        }),
       );
     return { id, sha256: sha256(bytes), name: basename(path) };
   }
@@ -1265,16 +2018,20 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const config = readConfig();
     if (!config?.scopeId)
       throw new ServerError(
-        'no project: sign in again with /hub login <url> <user>',
+        hubText('no scope: sign in again with /hub login <url> <user>'),
       );
     // module-execute is the hub's generic execution flow: its input is the frozen
     // FlowSubmission itself (flowId, methodPin, resources, sources, value,
     // controlledBytes), validated strictly by the hub. No file upload, and no
     // sourceRevisionId/sourceSha256 — the hub refuses those with INVALID_PAYLOAD.
     const moduleExecute = pack === 'module-execute';
+    // hub-task is the governed task pack: its input is the JSON object, not an upload.
+    const bare = moduleExecute || pack === 'hub-task';
     if (moduleExecute && file)
       throw new ServerError(
-        'module-execute takes the flow input, not a file: /hub submit module-execute <input-json>',
+        hubText(
+          'module-execute takes the flow input, not a file: /hub submit module-execute <input-json>',
+        ),
       );
     if (
       moduleExecute &&
@@ -1284,20 +2041,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
         !isRecord(extra.resources))
     )
       throw new ServerError(
-        'module-execute input is the flow: {flowId, methodPin, resources, sources?, value?, controlledBytes?}',
+        hubText(
+          'module-execute input is the flow: {flowId, methodPin, resources, sources?, value?, controlledBytes?}',
+        ),
       );
     let source: Awaited<ReturnType<typeof upload>> | undefined;
-    if (!moduleExecute) {
+    if (!bare) {
       const path = resolve(context.workspace, file);
-      if (!existsSync(path)) throw new ServerError(`no such file: ${path}`);
-      source = await upload(path, config.scopeId);
+      if (!existsSync(path))
+        throw new ServerError(hubText('no such file: {path}', { path }));
+      source = await upload(path, config.scopeId, pack);
       context.append(
-        `  uploaded ${source.name} · sha256 ${short(source.sha256)} → ${source.id}`,
+        hubText('  uploaded {name} · sha256 {hash} → {id}', {
+          name: source.name,
+          hash: short(source.sha256),
+          id: source.id,
+        }),
       );
     }
-    const title = moduleExecute
-      ? `${pack}: ${String(extra.flowId)}`
-      : `${pack}: ${source!.name}`;
+    const title =
+      pack === 'hub-task'
+        ? `hub-task: ${String(extra.title ?? extra.kind ?? 'task')}`
+        : moduleExecute
+          ? `${pack}: ${String(extra.flowId)}`
+          : `${pack}: ${source!.name}`;
     const idempotencyKey =
       'circle-' +
       sha256(
@@ -1323,7 +2090,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         title,
         capabilityPackId: pack,
         idempotencyKey,
-        input: moduleExecute
+        input: bare
           ? extra
           : {
               ...extra,
@@ -1334,7 +2101,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     });
     const task = isRecord(data) ? data : {};
     const taskId = String(task.taskId ?? '');
-    if (!taskId) throw new ServerError('the server accepted no task');
+    if (!taskId) throw new ServerError(hubText('the server accepted no task'));
     if (!followed()[taskId]) remember(taskId, { title, seq: 0 });
     return {
       taskId,
@@ -1363,7 +2130,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // Signing out removes them. Read tools run at once; the others ask first.
   const serverTools = new Map<
     string,
-    { remote: string; fingerprint: string; write: boolean }
+    { remote: string; fingerprint: string; write: boolean; ask: boolean }
   >();
   let catalogTag = '';
   let syncing: Promise<boolean> | undefined;
@@ -1422,6 +2189,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
   ): boolean {
     const remote = String(tool.name);
     const write = tool.effect !== 'read';
+    // The catalog's own approval flag is the human gate. A write the server
+    // marks approval:false still runs as the signed-in person, without a card
+    // for every call. A catalog that omits the flag keeps the old ask.
+    const ask = tool.approval === true || (write && tool.approval !== false);
     const schema =
       isRecord(tool.inputSchema) && tool.inputSchema.type === 'object'
         ? tool.inputSchema
@@ -1429,9 +2200,26 @@ export async function register(api: ExtensionAPI): Promise<void> {
     try {
       api.registerTool(
         name,
-        `hub tool ${remote}${tool.title ? ` (${String(tool.title)})` : ''}: ${String(tool.description ?? '')}${
-          write ? ' It changes something, so it asks first.' : ''
-        }${tool.mode === 'task' ? ' It runs as a hub task and is waited for in the background.' : ' Its response is also saved as it came under .circle/hub-returns/ in the workspace (savedAs), to cite or check against instead of retyping it.'}`,
+        hubText('hub tool {remote}{title}: {description}{write}{tail}', {
+          remote,
+          title: tool.title
+            ? hubText(' ({title})', { title: String(tool.title) })
+            : '',
+          description: String(tool.description ?? ''),
+          write: ask
+            ? hubText(' It changes something, so it asks first.')
+            : write
+              ? hubText(' It changes something on the server.')
+              : '',
+          tail:
+            tool.mode === 'task'
+              ? hubText(
+                  ' It runs as a hub task and is waited for in the background.',
+                )
+              : hubText(
+                  ' Its response is also saved as it came under .circle/hub-returns/ in the workspace (savedAs), to cite or check against instead of retyping it.',
+                ),
+        }),
         schema,
         async (args) => {
           let data: unknown;
@@ -1458,7 +2246,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
           }
           const taskId = reply.taskId;
           return new api.Watch(
-            `hub ${remote} ${taskId}`,
+            hubText('hub {remote} {task}', { remote, task: taskId }),
             async () => {
               const current = await status(taskId);
               const phase = String(current.phase ?? '');
@@ -1476,7 +2264,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
             },
           );
         },
-        { readOnly: !write, approval: write },
+        { readOnly: !write, approval: ask },
       );
       return true;
     } catch {
@@ -1529,6 +2317,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
             remote: String(tool.name),
             fingerprint: JSON.stringify(tool),
             write: tool.effect !== 'read',
+            ask:
+              tool.approval === true ||
+              (tool.effect !== 'read' && tool.approval !== false),
           });
       return true;
     })().finally(() => {
@@ -1540,24 +2331,47 @@ export async function register(api: ExtensionAPI): Promise<void> {
     context: CommandContext,
     list = false,
   ): Promise<void> {
+    if (list && !fromRun && !(await currentToken())) {
+      const where = readConfig();
+      context.append(
+        hubText('not signed in: /hub login {url} <user>', {
+          url: where?.url ?? DEFAULT_HUB_URL,
+        }),
+      );
+      return;
+    }
     let catalog: boolean;
     try {
       catalog = await syncTools(list);
     } catch (error) {
-      context.append(`  could not read the server's tools: ${reason(error)}`);
+      context.append(
+        hubText("  could not read the server's tools: {message}", {
+          message: explainFailure(error),
+        }),
+      );
       return;
     }
     if (!catalog) {
-      if (list) context.append('  this server offers no tools');
+      if (list) context.append(hubText('  this server offers no tools'));
       return;
     }
     context.append(
-      `  ${serverTools.size} server tools available to the model from its next turn`,
+      hubText('  {n} server tools available to the model from its next turn', {
+        n: serverTools.size,
+      }),
     );
     if (list)
       for (const [name, held] of serverTools)
         context.append(
-          `    ${name} ← ${held.remote} · ${held.write ? 'asks first' : 'read-only'}`,
+          hubText('    {name} ← {remote} · {mode}', {
+            name,
+            remote: held.remote,
+            mode: held.ask
+              ? hubText('asks first')
+              : held.write
+                ? hubText('writes on the server')
+                : hubText('read-only'),
+          }),
         );
   }
   // Read again whenever a session starts (load, reload, a new session); an unchanged
@@ -1589,6 +2403,38 @@ export async function register(api: ExtensionAPI): Promise<void> {
   const keepTrial = (): void => {
     if (!fromRun) writeJson('trial.json', trial);
   };
+  // Starting again drops calls that were never pushed. Leave them, and say so,
+  // unless the caller asked to drop them.
+  function beginTrial(force: boolean): {
+    recording: boolean;
+    dropped: number;
+    line: string;
+  } {
+    const pending = trial.calls.length;
+    const noun = hubText(
+      pending === 1 ? '{n} unpushed trial call' : '{n} unpushed trial calls',
+      { n: pending },
+    );
+    if (pending && !force)
+      return {
+        recording: false,
+        dropped: 0,
+        line: hubText(
+          '  {noun} would be dropped. /hub skill push <folder> sends them with the pack. /hub trial start --force drops them and records from now.',
+          { noun },
+        ),
+      };
+    trial.calls = [];
+    trial.startedAt = new Date().toISOString();
+    keepTrial();
+    return {
+      recording: true,
+      dropped: pending,
+      line: `${
+        pending ? hubText('  dropped {noun}.\n', { noun }) : ''
+      }${hubText('  recording the server tool calls of this trial; /hub skill push <folder> sends them with the pack')}`,
+    };
+  }
   const recordTrial: ToolMiddleware = async (invocation, next) => {
     const held = serverTools.get(invocation.tool.name);
     if (!held) return next(invocation);
@@ -1625,40 +2471,126 @@ export async function register(api: ExtensionAPI): Promise<void> {
           const bytes = readFileSync(path);
           if (bytes.length > MAX_PACK_FILE_BYTES)
             throw new ServerError(
-              `${relative(root, path)} is larger than 2 MB`,
+              hubText('{path} is larger than 2 MB', {
+                path: relative(root, path),
+              }),
             );
           total += bytes.length;
           if (total > MAX_PACK_BYTES)
-            throw new ServerError('the skill pack is larger than 10 MB');
+            throw new ServerError(
+              hubText('the skill pack is larger than 10 MB'),
+            );
           files.push({
             path: relative(root, path).split(sep).join('/'),
             base64: bytes.toString('base64'),
             sha256: sha256(bytes),
           });
           if (files.length > MAX_PACK_FILES)
-            throw new ServerError(`more than ${MAX_PACK_FILES} files`);
+            throw new ServerError(
+              hubText('more than {n} files', { n: MAX_PACK_FILES }),
+            );
         }
       }
     };
     walk(root);
     return files;
   }
+  function skillManifestError(
+    manifest: Record<string, unknown>,
+  ): string | undefined {
+    const problems: string[] = [];
+    if (
+      typeof manifest.id !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{1,63}$/.test(manifest.id)
+    )
+      problems.push('id (lowercase letters, digits and -)');
+    if (typeof manifest.version !== 'string' || !manifest.version.trim())
+      problems.push('version');
+    if (typeof manifest.title !== 'string' || !manifest.title.trim())
+      problems.push('title');
+    if (typeof manifest.owner !== 'string' || !manifest.owner.trim())
+      problems.push('owner');
+    if (!Array.isArray(manifest.tools)) problems.push('tools[]');
+    const triggers = Array.isArray(manifest.triggers)
+      ? manifest.triggers.map(String)
+      : [];
+    if (
+      !triggers.length ||
+      triggers.some((item) => !['manual', 'schedule', 'event'].includes(item))
+    )
+      problems.push('triggers (manual, schedule or event)');
+    if (!isRecord(manifest.inputs)) problems.push('inputs (an object)');
+    const outputs = Array.isArray(manifest.outputs)
+      ? manifest.outputs.filter((item) => typeof item === 'string')
+      : [];
+    if (!outputs.length)
+      problems.push('outputs (at least one file the pack produces)');
+    if (!('model' in manifest)) problems.push('model');
+    if (!problems.length) return;
+    return hubText(
+      'skillpack.json needs {problems} before the hub will accept it (client API 1.0.0). outputs is required there (at least one file the pack produces). The trial call record may be empty. --outputs names the trial files and defaults to that list.',
+      { problems: problems.join(', ') },
+    );
+  }
+  const skillPushUsage = (): string =>
+    hubText(
+      'usage: /hub skill push <folder> [--outputs a,b]. skillpack.json outputs are required; the trial call record may be empty.',
+    );
+  // `--outputs` with no list must not take the folder (or the next flag) as that list.
+  function skillPushArgs(rest: string[]): {
+    folder: string;
+    explicit: boolean;
+    outputs: string[];
+  } {
+    const flag = rest.indexOf('--outputs');
+    const positional = (skipValue: boolean) =>
+      rest.filter(
+        (word, index) =>
+          !word.startsWith('-') &&
+          index !== flag &&
+          !(skipValue && index === flag + 1),
+      );
+    if (flag < 0) {
+      const folder = positional(false)[0];
+      if (!folder || rest.some((word) => word.startsWith('-')))
+        throw new ServerError(skillPushUsage());
+      return { folder, explicit: false, outputs: [] };
+    }
+    const value = rest[flag + 1];
+    const others = positional(true);
+    const fileList =
+      typeof value === 'string' &&
+      !value.startsWith('-') &&
+      (value.includes(',') || value.includes('.') || others.length > 0);
+    if (!fileList)
+      throw new ServerError(
+        hubText(
+          '--outputs needs a comma-separated file list (a,b). Without that list it does not take the next word. skillpack.json outputs are required (at least one file the pack produces). The trial call record may be empty.',
+        ),
+      );
+    const outputs = value!
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!outputs.length)
+      throw new ServerError(
+        hubText(
+          '--outputs needs a comma-separated file list (a,b). skillpack.json outputs are required. The trial call record may be empty.',
+        ),
+      );
+    const folder = others[0];
+    if (!folder) throw new ServerError(skillPushUsage());
+    return { folder, explicit: true, outputs };
+  }
   async function pushSkill(
     rest: string[],
     context: CommandContext,
   ): Promise<void> {
-    const flag = rest.indexOf('--outputs');
-    const outputs =
-      flag >= 0 ? (rest[flag + 1] ?? '').split(',').filter(Boolean) : [];
-    const folder = rest.filter(
-      (_, index) => index !== flag && index !== flag + 1,
-    )[0];
-    if (!folder)
-      throw new ServerError('usage: /hub skill push <folder> [--outputs a,b]');
+    const { folder, explicit, outputs } = skillPushArgs(rest);
     const workspace = api.workspace ?? context.workspace;
     const root = resolve(workspace, folder);
     if (!existsSync(root) || !statSync(root).isDirectory())
-      throw new ServerError(`${folder} is not a folder`);
+      throw new ServerError(hubText('{folder} is not a folder', { folder }));
     let manifest: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(
@@ -1667,20 +2599,20 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (!isRecord(parsed)) throw new Error('not an object');
       manifest = parsed;
     } catch (error) {
-      throw new ServerError(`${folder}/skillpack.json: ${reason(error)}`);
-    }
-    if (
-      typeof manifest.id !== 'string' ||
-      !/^[a-z0-9][a-z0-9-]{1,63}$/.test(manifest.id) ||
-      typeof manifest.version !== 'string' ||
-      !Array.isArray(manifest.tools)
-    )
       throw new ServerError(
-        'skillpack.json needs id (lowercase letters, digits, -), version and tools[]',
+        hubText('{folder}/skillpack.json: {message}', {
+          folder,
+          message: reason(error),
+        }),
       );
+    }
+    const manifestError = skillManifestError(manifest);
+    if (manifestError) throw new ServerError(manifestError);
     if (!existsSync(join(root, 'SKILL.md')))
-      throw new ServerError(`${folder} has no SKILL.md`);
-    const declared = new Set(manifest.tools.map(String));
+      throw new ServerError(hubText('{folder} has no SKILL.md', { folder }));
+    const declared = new Set(
+      (Array.isArray(manifest.tools) ? manifest.tools : []).map(String),
+    );
     const undeclared = [
       ...new Set(
         trial.calls
@@ -1690,21 +2622,44 @@ export async function register(api: ExtensionAPI): Promise<void> {
     ];
     if (undeclared.length)
       context.append(
-        `  ! the trial used tools skillpack.json does not declare: ${undeclared.join(', ')}`,
+        hubText(
+          '  ! the trial used tools skillpack.json does not declare: {names}',
+          { names: undeclared.join(', ') },
+        ),
       );
+    const declaredOutputs = Array.isArray(manifest.outputs)
+      ? manifest.outputs.map(String)
+      : [];
+    const chosen = explicit ? outputs : declaredOutputs;
+    if (!explicit) {
+      const missing = chosen.filter(
+        (output) => !existsSync(resolve(workspace, output)),
+      );
+      if (missing.length)
+        throw new ServerError(
+          hubText(
+            missing.length === 1
+              ? '{files} is not in the workspace. /hub skill push uses the files skillpack.json lists as outputs; pass --outputs a,b for this trial, or put those files in place.'
+              : '{files} are not in the workspace. /hub skill push uses the files skillpack.json lists as outputs; pass --outputs a,b for this trial, or put those files in place.',
+            { files: missing.join(', ') },
+          ),
+        );
+    }
     const produced: { path: string; sha256: string }[] = [];
-    for (const output of outputs) {
+    for (const output of chosen) {
       const path = resolve(workspace, output);
       if (!existsSync(path)) {
         context.append(
-          `  ! ${output} does not exist; left out of the trial record`,
+          hubText('  ! {output} does not exist; left out of the trial record', {
+            output,
+          }),
         );
         continue;
       }
       produced.push({ path: output, sha256: sha256(readFileSync(path)) });
     }
     const files = packFiles(root);
-    // With more than one project the server needs to know which one the pack is for.
+    // With more than one scope the server needs to know which one the pack is for.
     const scopeId = readConfig()?.scopeId;
     const { data } = await request('POST', '/v1/skillpacks', {
       headers: scopeId ? { 'x-scope-id': scopeId } : {},
@@ -1718,7 +2673,18 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const reply = isRecord(data) ? data : {};
     const check = isRecord(reply.check) ? reply.check : {};
     context.append(
-      `✓ submitted ${String(manifest.id)} ${String(manifest.version)} · ${files.length} files · ${trial.calls.length} trial calls · ${String(reply.skillPackId ?? '?')} · digest ${short(reply.digest)} · ${String(reply.status ?? 'submitted')}`,
+      hubText(
+        '✓ submitted {id} {version} · {files} files · {calls} trial calls · {pack} · digest {digest} · {status}',
+        {
+          id: String(manifest.id),
+          version: String(manifest.version),
+          files: files.length,
+          calls: trial.calls.length,
+          pack: String(reply.skillPackId ?? '?'),
+          digest: short(reply.digest),
+          status: String(reply.status ?? 'submitted'),
+        },
+      ),
     );
     for (const [key, label] of [
       [
@@ -1728,33 +2694,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
       ['missingTools', 'the server offers none of'],
     ] as const) {
       const names = Array.isArray(check[key]) ? check[key].map(String) : [];
-      if (names.length) context.append(`  ✖ ${label}: ${names.join(', ')}`);
+      if (names.length)
+        context.append(
+          hubText('  ✖ {label}: {names}', {
+            label: hubText(label),
+            names: names.join(', '),
+          }),
+        );
     }
-    // Submitted is not approved: the approval bound to this digest waits in its own task.
+    // Submitted is not approved: the approval id lives on that task, not in this reply.
     const approvalTask =
       typeof reply.approvalTaskId === 'string' ? reply.approvalTaskId : '';
-    if (!approvalTask) return;
+    if (!approvalTask) {
+      context.append(
+        hubText(
+          '  submitted, but the server named no approval task. /hub review lists open approvals',
+        ),
+      );
+      return;
+    }
     remember(approvalTask, {
       title: `approve skill pack ${String(manifest.id)}`,
       seq: 0,
     });
-    const approvals = await optional<unknown>(
-      `/v1/tasks/${encodeURIComponent(approvalTask)}/approvals`,
-      [],
-    );
-    const open = (Array.isArray(approvals) ? approvals : [])
-      .filter(isRecord)
-      .filter((item) => item.status === 'open');
-    context.append(
-      open.length
-        ? open
-            .map(
-              (item) =>
-                `  waiting for approval ${String(item.approvalId)} in ${approvalTask} · someone else approves: /hub approve ${approvalTask} ${String(item.approvalId)}`,
-            )
-            .join('\n')
-        : `  approval task ${approvalTask} · no open approval yet`,
-    );
+    context.append(await approvalNotice(approvalTask));
   }
 
   // Files of the workspace as a skill pack run takes them: inputs.files.
@@ -1766,9 +2729,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
     return names.map((name) => {
       const path = resolve(workspace, name);
       if (!existsSync(path) || !statSync(path).isFile())
-        throw new ServerError(`${name} is not a file in the workspace`);
+        throw new ServerError(
+          hubText('{name} is not a file in the workspace', { name }),
+        );
       if (statSync(path).size > MAX_UPLOAD_BYTES)
-        throw new ServerError(`${name} is larger than 16 MB`);
+        throw new ServerError(hubText('{name} is larger than 16 MB', { name }));
       const bytes = readFileSync(path);
       return {
         path: relative(workspace, path).split(sep).join('/'),
@@ -1783,7 +2748,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (!isRecord(parsed)) throw new Error('not an object');
       return parsed;
     } catch (error) {
-      throw new ServerError(`${what} are not a JSON object: ${reason(error)}`);
+      throw new ServerError(
+        hubText('{what} are not a JSON object: {message}', {
+          what,
+          message: reason(error),
+        }),
+      );
     }
   }
   // Words, then --options: an option takes the words up to the next option, and may repeat.
@@ -1816,13 +2786,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const match = /^(\d+)([smhd])$/.exec(text ?? '');
     if (!match)
       throw new ServerError(
-        `not an interval: ${text ?? ''} (for example 30m, 1h or 1d)`,
+        hubText('not an interval: {text} (for example 30m, 1h or 1d)', {
+          text: text ?? '',
+        }),
       );
     return Number(match[1]) * UNITS[match[2]!]!;
   }
   const asAsset = (value: unknown): Asset => {
     if (!isRecord(value) || typeof value.assetId !== 'string')
-      throw new ServerError('the server sent no asset');
+      throw new ServerError(hubText('the server sent no asset'));
     return {
       ...(value as unknown as Asset),
       configuration: isRecord(value.configuration) ? value.configuration : {},
@@ -1882,19 +2854,36 @@ export async function register(api: ExtensionAPI): Promise<void> {
       ).data,
     );
   }
+  function scheduleEvery(ms: number): string {
+    const unit =
+      Object.entries(UNITS)
+        .reverse()
+        .find(([, size]) => ms % size === 0) ?? (['ms', 1] as const);
+    return `${ms / unit[1]}${unit[0]}`;
+  }
+  // English for the desktop view. The terminal uses triggerText, which follows
+  // the process language and says the same thing when that language is English.
   function triggerLabel(trigger: Asset | undefined): string {
     const configuration = trigger?.configuration ?? {};
-    if (configuration.kind === 'schedule') {
-      const ms = Number(configuration.intervalMs);
-      const unit =
-        Object.entries(UNITS)
-          .reverse()
-          .find(([, size]) => ms % size === 0) ?? (['ms', 1] as const);
-      return `every ${ms / unit[1]}${unit[0]} from ${String(configuration.startsAt)}`;
-    }
+    if (configuration.kind === 'schedule')
+      return `every ${scheduleEvery(Number(configuration.intervalMs))} from ${String(configuration.startsAt)}`;
     if (configuration.kind === 'event')
       return `on ${String(configuration.eventName)} of ${String(configuration.sourceAssetId)}`;
     return 'no trigger';
+  }
+  function triggerText(trigger: Asset | undefined): string {
+    const configuration = trigger?.configuration ?? {};
+    if (configuration.kind === 'schedule')
+      return hubText('every {every} from {from}', {
+        every: scheduleEvery(Number(configuration.intervalMs)),
+        from: String(configuration.startsAt),
+      });
+    if (configuration.kind === 'event')
+      return hubText('on {event} of {source}', {
+        event: String(configuration.eventName),
+        source: String(configuration.sourceAssetId),
+      });
+    return hubText('no trigger');
   }
   // The output the server published for a run: the bot.output event of its task.
   async function botOutput(
@@ -1981,26 +2970,34 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const { args, values } = options(rest);
       if (!config?.scopeId)
         throw new ServerError(
-          'no project: sign in again with /hub login <url> <user>',
+          hubText('no scope: sign in again with /hub login <url> <user>'),
         );
       if (!config.principalId)
         throw new ServerError(
-          'the server has not said who you are here; sign in again with /hub login <url> <user>',
+          hubText(
+            'the server has not said who you are here; sign in again with /hub login <url> <user>',
+          ),
         );
       const [pack] = args;
       const schedule = verb === 'every';
       if (!pack || args.length !== (schedule ? 2 : 3))
         throw new ServerError(
           schedule
-            ? 'usage: /hub bot every <skill pack> <interval> [--from <time>] [--inputs <json>] [--file <path>] [--name <name>]'
-            : 'usage: /hub bot on <skill pack> <connector asset> <event> [--inputs <json>] [--file <path>] [--name <name>]',
+            ? hubText(
+                'usage: /hub bot every <skill pack> <interval> [--from <time>] [--inputs <json>] [--file <path>] [--name <name>]',
+              )
+            : hubText(
+                'usage: /hub bot on <skill pack> <connector asset> <event> [--inputs <json>] [--file <path>] [--name <name>]',
+              ),
         );
       const trigger = schedule
         ? (() => {
             const from = values.from?.at(-1);
             const startsAt = from ? new Date(from) : new Date();
             if (Number.isNaN(startsAt.getTime()))
-              throw new ServerError(`not a time: ${from}`);
+              throw new ServerError(
+                hubText('not a time: {from}', { from: from ?? '' }),
+              );
             return {
               kind: 'schedule',
               intervalMs: every(args[1]),
@@ -2044,10 +3041,22 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ).data,
       );
       context.append(
-        `✓ bot ${created.assetId} · ${name} · runs ${pack} ${triggerLabel(made)} as you · output to Circle · ${created.lifecycle}`,
+        hubText(
+          '✓ bot {id} · {name} · runs {pack} {trigger} as you · output to Circle · {lifecycle}',
+          {
+            id: created.assetId,
+            name,
+            pack,
+            trigger: triggerText(made),
+            lifecycle: created.lifecycle,
+          },
+        ),
       );
       context.append(
-        `  someone else approves it: /hub bot approve ${created.assetId} · then you turn it on: /hub bot start ${created.assetId}`,
+        hubText(
+          '  someone else approves it: /hub bot approve {id} · then you turn it on: /hub bot start {id}',
+          { id: created.assetId },
+        ),
       );
       return;
     }
@@ -2055,7 +3064,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const me = config?.principalId;
       const all = await bots();
       if (!all.length) {
-        context.append('No bots you can see on this server');
+        context.append(hubText('No bots you can see on this server'));
         return;
       }
       const seen = seenRuns();
@@ -2073,10 +3082,32 @@ export async function register(api: ExtensionAPI): Promise<void> {
           const fresh = list.filter(
             (run) => news(run) && !seen.has(runKey(item.assetId, run)),
           ).length;
-          runs = ` · ${list.length} run(s)${fresh ? `, ${fresh} new: /hub bot runs ${item.assetId}` : ''}`;
-        } else runs = ` · owner ${item.ownerPrincipalId}`;
+          runs = hubText(' · {n} run(s){fresh}', {
+            n: list.length,
+            fresh: fresh
+              ? hubText(', {n} new: /hub bot runs {id}', {
+                  n: fresh,
+                  id: item.assetId,
+                })
+              : '',
+          });
+        } else runs = hubText(' · owner {id}', { id: item.ownerPrincipalId });
         rows.push(
-          `  ${item.assetId} · ${item.name} · ${item.lifecycle} · ${triggerLabel(trigger)}${trigger ? ` (trigger ${trigger.lifecycle})` : ''}${runs}`,
+          hubText(
+            '  {id} · {name} · {lifecycle} · {trigger}{triggerState}{runs}',
+            {
+              id: item.assetId,
+              name: item.name,
+              lifecycle: item.lifecycle,
+              trigger: triggerText(trigger),
+              triggerState: trigger
+                ? hubText(' (trigger {lifecycle})', {
+                    lifecycle: trigger.lifecycle,
+                  })
+                : '',
+              runs,
+            },
+          ),
         );
       }
       context.append(rows.join('\n'));
@@ -2085,50 +3116,80 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const [id] = rest;
     if (!id || !['approve', 'start', 'stop', 'runs'].includes(verb ?? ''))
       throw new ServerError(
-        'usage: /hub bot list | every <pack> <interval> | on <pack> <source> <event> | approve <bot> | start <bot> | stop <bot> | runs <bot>',
+        hubText(
+          'usage: /hub bot list | every <pack> <interval> | on <pack> <source> <event> | approve <bot> | start <bot> | stop <bot> | runs <bot>',
+        ),
       );
     const item = await asset(id);
-    if (item.kind !== 'bot') throw new ServerError(`${id} is not a bot`);
+    if (item.kind !== 'bot')
+      throw new ServerError(hubText('{id} is not a bot', { id }));
     const triggerId = String(item.configuration.triggerAssetId ?? '');
     if (verb === 'approve' || verb === 'start') {
       // The trigger first: a running bot needs a running trigger before it fires.
       const target = verb === 'approve' ? 'approved' : 'running';
       for (const part of [await asset(triggerId), item]) {
-        const what = part.kind === 'bot' ? 'bot' : 'trigger';
+        const what = hubText(part.kind === 'bot' ? 'bot' : 'trigger');
         if (
           (verb === 'approve' && part.lifecycle !== 'draft') ||
           (verb === 'start' && part.lifecycle === 'running')
         ) {
           context.append(
-            `  ${what} ${part.assetId} is already ${part.lifecycle}`,
+            hubText('  {what} {id} is already {lifecycle}', {
+              what,
+              id: part.assetId,
+              lifecycle: part.lifecycle,
+            }),
           );
           continue;
         }
         if (verb === 'start' && part.lifecycle !== 'approved')
           throw new ServerError(
-            `${what} ${part.assetId} is ${part.lifecycle}; someone else approves it first: /hub bot approve ${id}`,
+            hubText(
+              '{what} {id} is {lifecycle}; someone else approves it first: /hub bot approve {bot}',
+              {
+                what,
+                id: part.assetId,
+                lifecycle: part.lifecycle,
+                bot: id,
+              },
+            ),
           );
         const moved = await move(part, target);
         context.append(
-          `✓ ${what} ${moved.assetId} ${moved.lifecycle} · version ${moved.version} · digest ${short(moved.sha256)}`,
+          hubText(
+            '✓ {what} {id} {lifecycle} · version {version} · digest {digest}',
+            {
+              what,
+              id: moved.assetId,
+              lifecycle: moved.lifecycle,
+              version: moved.version,
+              digest: short(moved.sha256),
+            },
+          ),
         );
       }
       if (verb === 'start')
         context.append(
-          `  ${id} runs ${triggerLabel(await asset(triggerId))}; its results come to Circle: /hub bot runs ${id}`,
+          hubText(
+            '  {id} runs {trigger}; its results come to Circle: /hub bot runs {id}',
+            { id, trigger: triggerText(await asset(triggerId)) },
+          ),
         );
       return;
     }
     if (verb === 'stop') {
       const moved = await move(item, 'disabled');
       context.append(
-        `✓ bot ${moved.assetId} ${moved.lifecycle}; it starts no more runs`,
+        hubText('✓ bot {id} {lifecycle}; it starts no more runs', {
+          id: moved.assetId,
+          lifecycle: moved.lifecycle,
+        }),
       );
       return;
     }
     const runs = await botRuns(id);
     if (!runs.length) {
-      context.append(`  ${id} has not run yet`);
+      context.append(hubText('  {id} has not run yet', { id }));
       return;
     }
     const shown: string[] = [];
@@ -2137,18 +3198,28 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const skipped = Number(run.trigger.skippedOccurrences ?? 0);
       const folded =
         skipped > 0
-          ? ` · ${skipped} missed occurrence(s) since ${String(run.trigger.firstDueAt)} folded into this run`
+          ? hubText(
+              ' · {n} missed occurrence(s) since {time} folded into this run',
+              {
+                n: skipped,
+                time: String(run.trigger.firstDueAt),
+              },
+            )
           : '';
       if (!run.taskId) {
         context.append(
-          `  — · ${run.occurrenceKey} · not started: ${run.error || run.status}${folded}`,
+          hubText('  — · {key} · not started: {error}{folded}', {
+            key: run.occurrenceKey,
+            error: run.error || run.status,
+            folded,
+          }),
         );
         shown.push(runKey(id, run));
         continue;
       }
       const output = run.published ? await botOutput(run.taskId) : undefined;
       if (!output) {
-        let phase = 'not published yet';
+        let phase = hubText('not published yet');
         try {
           phase = String((await status(run.taskId)).phase);
         } catch {
@@ -2164,56 +3235,547 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ? output.unknowns.map(String)
         : [];
       context.append(
-        `  ${run.taskId} · ${run.occurrenceKey} · ${String(output.status)} · ${artifacts.length} file(s)${unknowns.length ? ` · unknown: ${unknowns.join('; ')}` : ''}${folded} · /hub get ${run.taskId} saves them`,
+        hubText(
+          '  {task} · {key} · {status} · {n} file(s){unknown}{folded} · /hub get {task} saves them',
+          {
+            task: run.taskId,
+            key: run.occurrenceKey,
+            status: String(output.status),
+            n: artifacts.length,
+            unknown: unknowns.length
+              ? hubText(' · unknown: {list}', { list: unknowns.join('; ') })
+              : '',
+            folded,
+          },
+        ),
       );
       for (const artifact of artifacts.filter(isRecord).slice(0, 5))
         context.append(
-          `    ${String(artifact.fileName ?? artifact.artifactId)} · sha256 ${short(artifact.sha256)}`,
+          hubText('    {name} · sha256 {hash}', {
+            name: String(artifact.fileName ?? artifact.artifactId),
+            hash: short(artifact.sha256),
+          }),
         );
       shown.push(run.taskId);
     }
     if (runs.length > 10)
-      context.append(`  (${runs.length - 10} earlier run(s) not shown)`);
+      context.append(
+        hubText('  ({n} earlier run(s) not shown)', { n: runs.length - 10 }),
+      );
     markSeen(shown);
     await showStatus();
   }
 
+  // The approval id is not on the submission. It is the open approval on that task,
+  // and the same id is the pending input's request id when the task is waiting.
+  async function approvalNotice(taskId: string): Promise<string> {
+    const current = await status(taskId).catch(() => undefined);
+    const pending = (
+      Array.isArray(current?.pendingInputs) ? current.pendingInputs : []
+    )
+      .filter(
+        (item) =>
+          isRecord(item) && item.status === 'open' && item.kind === 'approval',
+      )
+      .map((item) => String(item.requestId ?? ''))
+      .filter(Boolean);
+    const listed = rowsOf(
+      await optional<unknown>(
+        `/v1/tasks/${encodeURIComponent(taskId)}/approvals`,
+        [],
+      ),
+    )
+      .filter((item) => item.status === 'open')
+      .map((item) => String(item.approvalId ?? ''))
+      .filter(Boolean);
+    const ids = [...new Set([...listed, ...pending])];
+    if (!ids.length)
+      return hubText(
+        '  approval task {task} · no open approval id yet. /hub review lists them; /hub task {task} shows this task',
+        { task: taskId },
+      );
+    return ids
+      .map((id) =>
+        hubText(
+          '  waiting for approval {id} in {task} · someone else approves: /hub approve {task} {id}',
+          { id, task: taskId },
+        ),
+      )
+      .join('\n');
+  }
+  // circle-hub sends statusLabel and lifecycle on the pack (candidate is
+  // "waiting for approval", registered is "approved" or "running"). An older
+  // server sends only status, so the asset lifecycle is read then.
+  async function packLine(pack: Record<string, unknown>): Promise<string> {
+    const manifest = isRecord(pack.manifest) ? pack.manifest : {};
+    const name = String(pack.id ?? manifest.id ?? '');
+    const version = String(pack.version ?? manifest.version ?? '');
+    const label = typeof pack.statusLabel === 'string' ? pack.statusLabel : '';
+    let lifecycle = typeof pack.lifecycle === 'string' ? pack.lifecycle : '';
+    const assetId = typeof pack.assetId === 'string' ? pack.assetId : '';
+    if (!label && !lifecycle && assetId) {
+      const asset = await optional<unknown>(
+        `/v1/assets/${encodeURIComponent(assetId)}`,
+        undefined,
+      );
+      if (isRecord(asset) && typeof asset.lifecycle === 'string')
+        lifecycle = asset.lifecycle;
+    }
+    const status = String(pack.status ?? '');
+    const shown = label
+      ? lifecycle
+        ? hubText('{label} · lifecycle {lifecycle}', { label, lifecycle })
+        : label
+      : status === 'registered' && lifecycle
+        ? hubText('{lifecycle} (server status registered)', { lifecycle })
+        : lifecycle
+          ? hubText('{status} · asset {lifecycle}', { status, lifecycle })
+          : status;
+    return `  ${String(pack.skillPackId ?? '')} · ${name} ${version} · ${shown}`
+      .replace(/ +/g, ' ')
+      .trimEnd();
+  }
+
+  function shownTitle(title: string): string {
+    const approve = /^approve skill pack (.*)$/.exec(title);
+    if (approve) return hubText('approve skill pack {id}', { id: approve[1]! });
+    const skill = /^skill pack (.*)$/.exec(title);
+    if (skill) return hubText('skill pack {id}', { id: skill[1]! });
+    return title;
+  }
+  function acceptedLine(task: {
+    taskId: string;
+    phase: string;
+    inputRevisionId: string;
+    deduplicated: boolean;
+  }): string {
+    return hubText(
+      '✓ accepted {task} · {phase} · input {input}{same} · following it; closing Circle does not stop it',
+      {
+        task: task.taskId,
+        phase: task.phase,
+        input: task.inputRevisionId,
+        same: task.deduplicated
+          ? hubText(' · the same request as before, no new task')
+          : '',
+      },
+    );
+  }
+
+  const SOURCE_TYPES = new Set([
+    'document',
+    'command-tree',
+    'external-artifact',
+    'query-mirror',
+    'build-record',
+    'environment-view',
+    'shared-session',
+    'skill-run',
+    'bot-run',
+    'review-correction',
+    'footprint',
+  ]);
+  function workspaceFile(
+    file: string,
+    context: CommandContext,
+  ): { path: string; relative: string; bytes: Buffer } {
+    const workspace = api.workspace ?? context.workspace;
+    const path = resolve(workspace, file);
+    const rel = relative(workspace, path);
+    if (!file || rel === '' || rel.split(sep).includes('..') || isAbsolute(rel))
+      throw new ServerError(
+        hubText('the file must stay inside the workspace: {path}', {
+          path: file,
+        }),
+      );
+    if (!existsSync(path) || !statSync(path).isFile())
+      throw new ServerError(hubText('no such file: {path}', { path: file }));
+    const bytes = readFileSync(path);
+    if (!bytes.byteLength) throw new ServerError(hubText('the file is empty'));
+    return { path, relative: rel.split(sep).join('/'), bytes };
+  }
+  function readersOf(raw: string | undefined, label: string): string[] {
+    const readers = (raw ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!readers.length)
+      throw new ServerError(
+        hubText('name who may read: --readers prn_… or * ({label})', {
+          label,
+        }),
+      );
+    return readers;
+  }
+  async function searchKnowledge(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const { args, values } = options(rest);
+    const q = args.join(' ').trim();
+    if (!q)
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge search <text> [--mode exact|prefix|directory|fulltext] [--candidates]',
+        ),
+      );
+    const mode = values.mode?.at(-1) || 'fulltext';
+    if (!['exact', 'prefix', 'directory', 'fulltext'].includes(mode))
+      throw new ServerError(
+        hubText('search mode is exact, prefix, directory or fulltext'),
+      );
+    const params = new URLSearchParams({ q, mode, limit: '20' });
+    if (values.candidates) params.set('includeCandidates', 'true');
+    let data: unknown;
+    try {
+      ({ data } = await request(
+        'GET',
+        `/v1/knowledge/search?${params.toString()}`,
+      ));
+    } catch (error) {
+      if (isMissing(error))
+        throw new ServerError(hubText('this server has no knowledge search'));
+      throw error;
+    }
+    const payload = isRecord(data) ? data : {};
+    const items = rowsOf(payload.items ?? data);
+    knowledgePublished = {
+      query: q,
+      items: items.map((item) => {
+        const body = isRecord(item.payload) ? item.payload : {};
+        const snapshot =
+          typeof item.snapshotId === 'string' ? item.snapshotId : '';
+        return {
+          recordId: String(item.recordId ?? ''),
+          snapshotId: snapshot,
+          title: String(item.title ?? body.subject ?? body.text ?? ''),
+        };
+      }),
+    };
+    api.background(showStatus());
+    if (!items.length) {
+      context.append(
+        hubText(
+          'No knowledge matched. A miss does not mean it is absent. Approved text is found by its snapshot id.',
+        ),
+      );
+      return;
+    }
+    context.append(
+      items
+        .map((item) => {
+          const body = isRecord(item.payload) ? item.payload : {};
+          const label = String(item.title ?? body.subject ?? body.text ?? '');
+          const snapshot =
+            typeof item.snapshotId === 'string' && item.snapshotId
+              ? item.snapshotId
+              : hubText('no snapshot');
+          return hubText('  {id} · snapshot {snapshot} · {label}', {
+            id: String(item.recordId ?? ''),
+            snapshot,
+            label,
+          });
+        })
+        .join('\n'),
+    );
+  }
+  async function shareKnowledge(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const { args, values } = options(rest);
+    const sourceId = args.join(' ').trim();
+    const file = values.file?.at(-1)?.trim() ?? '';
+    if (!sourceId || !file)
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge share <source> --file <path> --readers a,b [--platform a,b] [--type document] [--category consolidated|product] [--promote] [--revision <rev>] [--path <path>]',
+        ),
+      );
+    const scopeId = readConfig()?.scopeId;
+    if (!scopeId)
+      throw new ServerError(
+        hubText('no scope: sign in again with /hub login <url> <user>'),
+      );
+    const category = values.category?.at(-1) || 'consolidated';
+    if (category !== 'product' && category !== 'consolidated')
+      throw new ServerError(
+        hubText('knowledge category is product or consolidated'),
+      );
+    const sourceType = values.type?.at(-1) || 'document';
+    if (!SOURCE_TYPES.has(sourceType))
+      throw new ServerError(
+        hubText(
+          'source type is document, command-tree, external-artifact, query-mirror, build-record, environment-view, shared-session, skill-run, bot-run, review-correction or footprint',
+        ),
+      );
+    const sourceReaders = readersOf(values.readers?.at(-1), 'source');
+    const platform = values.platform?.at(-1);
+    const platformReaders = platform
+      ? readersOf(platform, 'platform')
+      : sourceReaders;
+    const held = workspaceFile(file, context);
+    const promote = Boolean(values.promote?.length);
+    const sharing = { allowed: true, teamPromotion: promote };
+    const revision =
+      values.revision?.at(-1)?.trim() ||
+      sha256(
+        Buffer.from(
+          JSON.stringify([
+            sha256(held.bytes),
+            sourceReaders,
+            platformReaders,
+            category,
+            sharing,
+          ]),
+        ),
+      ).slice(0, 32);
+    const knowledgePath = values.path?.at(-1)?.trim() || '/' + held.relative;
+    let data: unknown;
+    try {
+      ({ data } = await request('POST', '/v1/knowledge/sources', {
+        json: {
+          scopeId,
+          sourceId,
+          revision,
+          path: knowledgePath,
+          knowledgeCategory: category,
+          sourceType,
+          parserVersion: 'circle/1',
+          contentBase64: held.bytes.toString('base64'),
+          sha256: sha256(held.bytes),
+          acl: { sourceReaders, platformReaders },
+          sharing,
+        },
+      }));
+    } catch (error) {
+      if (isMissing(error))
+        throw new ServerError(hubText('this server has no knowledge sharing'));
+      throw error;
+    }
+    const record = isRecord(data) ? data : {};
+    context.append(
+      hubText(
+        '✓ shared {source} · {record} · revision {revision} · readers {readers}',
+        {
+          source: sourceId,
+          record: String(record.recordId ?? ''),
+          revision,
+          readers: sourceReaders.join(','),
+        },
+      ),
+    );
+  }
+  function claimLabel(record: Record<string, unknown>): string {
+    const body = isRecord(record.payload) ? record.payload : {};
+    return String(body.subject ?? body.text ?? record.kind ?? '');
+  }
+  async function reviewKnowledge(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    if (rest[0] === 'request') {
+      const id = rest[1];
+      const reviewerId = rest[2];
+      if (!id || !reviewerId || rest.length !== 3)
+        throw new ServerError(
+          hubText('usage: /hub knowledge review request <id> <principal>'),
+        );
+      if (!/^prn_/.test(reviewerId))
+        throw new ServerError(hubText('a principal id starts with prn_'));
+      const { data } = await request(
+        'POST',
+        `/v1/knowledge/claims/${encodeURIComponent(id)}/request-review`,
+        { json: { reviewerId } },
+      );
+      const record = isRecord(data) ? data : {};
+      context.append(
+        hubText('✓ review requested for {id} · reviewer {reviewer}', {
+          id: String(record.recordId ?? id),
+          reviewer: String(record.reviewerId ?? reviewerId),
+        }),
+      );
+      return;
+    }
+    const { args, values } = options(rest);
+    const id = args[0];
+    const decision = args[1];
+    if (!id)
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge review <id> [approve|reject --reason <text>] [--promote] [--rule <version>] [--product <id>]',
+        ),
+      );
+    if (!decision) {
+      const { data } = await request(
+        'GET',
+        `/v1/knowledge/reviews/${encodeURIComponent(id)}`,
+      );
+      const bundle = isRecord(data) ? data : {};
+      const claim = isRecord(bundle.claim) ? bundle.claim : {};
+      const records = Array.isArray(bundle.records) ? bundle.records : [];
+      context.append(
+        hubText(
+          '  {id} · {state} · {visibility} · {label}\n  {n} record(s) in the review',
+          {
+            id: String(claim.recordId ?? id),
+            state: String(claim.state ?? ''),
+            visibility: String(claim.visibility ?? ''),
+            label: claimLabel(claim),
+            n: records.length,
+          },
+        ),
+      );
+      return;
+    }
+    if (decision !== 'approve' && decision !== 'reject')
+      throw new ServerError(hubText('a review decision is approve or reject'));
+    const reason = values.reason?.at(-1)?.trim() ?? '';
+    if (!reason)
+      throw new ServerError(
+        hubText(
+          'a review needs a reason: /hub knowledge review {id} {decision} --reason <text>',
+          { id, decision },
+        ),
+      );
+    const product = values.product?.at(-1)?.trim();
+    const { data } = await request(
+      'POST',
+      `/v1/knowledge/claims/${encodeURIComponent(id)}/review`,
+      {
+        json: {
+          decision,
+          promote: Boolean(values.promote?.length),
+          reason,
+          ruleVersion: values.rule?.at(-1)?.trim() || 'circle/1',
+          ...(product ? { productClaimId: product } : {}),
+        },
+      },
+    );
+    const payload = isRecord(data) ? data : {};
+    const claim = isRecord(payload.claim) ? payload.claim : {};
+    const snapshot = isRecord(payload.snapshot) ? payload.snapshot : {};
+    context.append(
+      hubText('✓ reviewed {id} · {state}{snapshot}', {
+        id: String(claim.recordId ?? id),
+        state: String(claim.state ?? decision),
+        snapshot: snapshot.recordId
+          ? hubText(' · snapshot {id}', { id: String(snapshot.recordId) })
+          : '',
+      }),
+    );
+  }
+  async function publishKnowledge(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const { values } = options(rest);
+    const expect = values.expect?.at(-1)?.trim() ?? '';
+    if (!expect)
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge publish --expect <id>|none [--category product|consolidated]',
+        ),
+      );
+    const scopeId = readConfig()?.scopeId;
+    if (!scopeId)
+      throw new ServerError(
+        hubText('no scope: sign in again with /hub login <url> <user>'),
+      );
+    const category = values.category?.at(-1) || 'consolidated';
+    if (category !== 'product' && category !== 'consolidated')
+      throw new ServerError(
+        hubText('knowledge category is product or consolidated'),
+      );
+    const { data } = await request('POST', '/v1/knowledge/snapshots', {
+      json: {
+        scopeId,
+        knowledgeCategory: category,
+        expectedSnapshotId: expect === 'none' ? null : expect,
+      },
+    });
+    const record = isRecord(data) ? data : {};
+    context.append(
+      hubText('✓ published snapshot {id} · {category}', {
+        id: String(record.recordId ?? ''),
+        category,
+      }),
+    );
+  }
+  const callHub = request;
   const commands: Record<
     string,
     (rest: string[], context: CommandContext) => Promise<void>
   > = {
-    async login([address, username], context) {
+    async login(args, context) {
       if (fromRun)
         throw new ServerError(
-          'Circle runs with a token from hub here; there is no sign-in',
+          hubText(
+            'Circle runs with a token from hub here; there is no sign-in',
+          ),
         );
-      if (!address || !username)
-        throw new ServerError('usage: /hub login <url> <user>');
-      const url = serverUrl(address);
-      const password = await api.askSecret(
-        `Password for ${username} on ${url}`,
-      );
-      if (password === null) {
-        context.append('Sign-in cancelled');
+      if (args.includes('--sso')) {
+        const rest = args.filter((word) => word !== '--sso');
+        if (rest.length > 1)
+          throw new ServerError(hubText('usage: /hub login --sso [url]'));
+        await loginSso(rest[0] || knownUrl(), context);
         return;
       }
+      if (args.length > 2)
+        throw new ServerError(hubText('usage: /hub login [url] [user]'));
+      let address = args[0];
+      let username = args[1];
+      if (args.length === 1 && !/^https?:\/\//i.test(args[0] ?? '')) {
+        username = args[0];
+        address = knownUrl();
+      }
+      if (!address) address = knownUrl();
+      if (!username && args.length === 0) username = readConfig()?.username;
+      if (!username) {
+        let asked: string | null;
+        try {
+          asked = await api.askSecret(
+            hubText('User on {url}', { url: address }),
+            { mask: false, conceal: false },
+          );
+        } catch (error) {
+          if (error instanceof ExtensionError)
+            throw new ServerError(
+              hubText('this window cannot ask; /hub login [url] <user>'),
+            );
+          throw error;
+        }
+        if (asked === null) {
+          context.append(hubText('Sign-in cancelled'));
+          return;
+        }
+        username = asked.trim();
+      }
+      if (!username)
+        throw new ServerError(hubText('usage: /hub login [url] [user]'));
+      const url = serverUrl(address);
+      rememberAddress(url, username);
+      const given = context.secret;
+      const password =
+        typeof given === 'string' && given.length > 0
+          ? given
+          : await api.askSecret(
+              hubText('Password for {user} on {url}', { user: username, url }),
+            );
+      if (password === null) {
+        context.append(hubText('Sign-in cancelled'));
+        return;
+      }
+      api.conceal(password);
       const scopes = await signIn(url, username, password);
-      await collectObjects().catch(() => {});
-      const { data: about } = await request('GET', '/v1/status');
-      context.append(
-        `● signed in to ${url} as ${username}${scopes.length ? ` · scope ${scopes[0]}` : ''}${
-          isRecord(about) && about.apiVersion
-            ? ` · api ${String(about.apiVersion)}`
-            : ''
-        }`,
-      );
-      await announceTools(context);
-      api.background(lookForBots());
+      await finishLogin(url, username, scopes, context);
     },
     async logout(_rest, context) {
       if (fromRun)
         throw new ServerError(
-          'Circle runs with a token from hub here; there is no sign-out',
+          hubText(
+            'Circle runs with a token from hub here; there is no sign-out',
+          ),
         );
       // Revoke the whole token family at the server first; a server without the
       // route, or one that already forgot the token, does not trap the local sign-out.
@@ -2227,8 +3789,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (config) writeJson('config.json', { ...config, expiresAt: undefined });
       if (refreshTimer) clearTimeout(refreshTimer);
       dropServerTools();
+      inboxPublished = undefined;
       api.background(showStatus());
-      context.append(removed ? 'Signed out' : 'Not signed in');
+      context.append(
+        removed ? hubText('Signed out') : hubText('Not signed in'),
+      );
     },
     async packs(_rest, context) {
       const { data } = await request('GET', '/v1/packs');
@@ -2236,12 +3801,17 @@ export async function register(api: ExtensionAPI): Promise<void> {
       context.append(
         packs.length
           ? packs
-              .map(
-                (pack) =>
-                  `  ${String(pack.capabilityPackId)} ${String(pack.version ?? pack.packVersion ?? '')}${pack.title || pack.description ? ' · ' + String(pack.title ?? pack.description) : ''}${Array.isArray(pack.inputFormats) ? ' · ' + pack.inputFormats.join(', ') : ''}`,
-              )
+              .map((pack) => {
+                const title =
+                  hubLocaleChinese() &&
+                  typeof pack.titleZh === 'string' &&
+                  pack.titleZh
+                    ? String(pack.titleZh)
+                    : String(pack.title || pack.description || '');
+                return `  ${String(pack.capabilityPackId)} ${String(pack.version ?? pack.packVersion ?? '')}${title ? ' · ' + title : ''}${Array.isArray(pack.inputFormats) ? ' · ' + pack.inputFormats.join(', ') : ''}`;
+              })
               .join('\n')
-          : 'The server lists no capability packs',
+          : hubText('The server lists no capability packs'),
       );
     },
     async submit(rest, context) {
@@ -2250,39 +3820,59 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (pack === 'module-execute') {
         if (files.length !== 1)
           throw new ServerError(
-            'usage: /hub submit module-execute <input-json> [--again]',
+            hubText('usage: /hub submit module-execute <input-json> [--again]'),
           );
         let flow: unknown;
         try {
           flow = JSON.parse(files[0]!);
         } catch {
           throw new ServerError(
-            'module-execute takes the flow input as a JSON object',
+            hubText('module-execute takes the flow input as a JSON object'),
           );
         }
         if (!isRecord(flow))
           throw new ServerError(
-            'module-execute takes the flow input as a JSON object',
+            hubText('module-execute takes the flow input as a JSON object'),
           );
         const task = await handOver(pack, '', again, context, flow);
-        context.append(
-          `✓ accepted ${task.taskId} · ${task.phase} · input ${task.inputRevisionId}${task.deduplicated ? ' · the same request as before, no new task' : ''} · following it; closing Circle does not stop it`,
-        );
+        context.append(acceptedLine(task));
         void follow(task.taskId, context);
         return;
       }
+      if (pack === 'hub-task') {
+        if (files.length > 1)
+          throw new ServerError(
+            hubText('usage: /hub submit hub-task [input-json] [--again]'),
+          );
+        let input: Record<string, unknown> = { kind: 'governance-request' };
+        if (files.length === 1) {
+          try {
+            const parsed: unknown = JSON.parse(files[0]!);
+            if (!isRecord(parsed)) throw new Error('not an object');
+            input = parsed;
+          } catch {
+            throw new ServerError(
+              hubText('hub-task takes its input as a JSON object'),
+            );
+          }
+        }
+        const task = await handOver(pack, '', again, context, input);
+        context.append(acceptedLine(task));
+        api.background(follow(task.taskId, context));
+        return;
+      }
       if (!pack || files.length !== 1)
-        throw new ServerError('usage: /hub submit <pack> <file> [--again]');
+        throw new ServerError(
+          hubText('usage: /hub submit <pack> <file> [--again]'),
+        );
       const task = await handOver(pack, files[0]!, again, context);
-      context.append(
-        `✓ accepted ${task.taskId} · ${task.phase} · input ${task.inputRevisionId}${task.deduplicated ? ' · the same request as before, no new task' : ''} · following it; closing Circle does not stop it`,
-      );
+      context.append(acceptedLine(task));
       api.background(follow(task.taskId, context));
     },
     async tasks(_rest, context) {
       const known = Object.entries(followed());
       if (!known.length) {
-        context.append('No tasks handed over from here');
+        context.append(hubText('No tasks handed over from here'));
         return;
       }
       const rows: string[] = [];
@@ -2294,72 +3884,128 @@ export async function register(api: ExtensionAPI): Promise<void> {
           phase = reason(error);
         }
         rows.push(
-          `  ${taskId} · ${phase} · ${item.title} · seen to ${item.seq}`,
+          hubText('  {task} · {phase} · {title} · seen to {seq}', {
+            task: taskId,
+            phase,
+            title: shownTitle(item.title),
+            seq: item.seq,
+          }),
         );
       }
       context.append(rows.join('\n'));
     },
     async task([taskId], context) {
-      if (!taskId) throw new ServerError('usage: /hub task <id>');
+      if (!taskId) throw new ServerError(hubText('usage: /hub task <id>'));
       const current = await status(taskId);
       if (!followed()[taskId])
         remember(taskId, { title: String(current.title ?? ''), seq: 0 });
       context.append(
-        `  ${taskId} · ${String(current.phase)} · ${String(current.title ?? '')} · input ${String(current.inputRevisionId)}`,
+        hubText('  {task} · {phase} · {title} · input {input}', {
+          task: taskId,
+          phase: String(current.phase),
+          title: String(current.title ?? ''),
+          input: String(current.inputRevisionId),
+        }),
       );
       api.background(follow(taskId, context));
     },
     async respond([taskId, ...answer], context) {
       if (!taskId || !answer.length)
-        throw new ServerError('usage: /hub respond <id> <answer>');
+        throw new ServerError(hubText('usage: /hub respond <id> <answer>'));
       const current = await status(taskId);
-      const open = (
+      const pending = (
         Array.isArray(current.pendingInputs) ? current.pendingInputs : []
-      ).find(
+      ).filter(isRecord);
+      const open = pending.find(
         (item) =>
-          isRecord(item) &&
           item.status === 'open' &&
           item.inputRevisionId === current.inputRevisionId,
       );
-      if (!isRecord(open))
-        throw new ServerError(`${taskId} is not waiting for an answer`);
-      // A repair input is a replacement of the bound input; anything else is a response.
-      const repair = open.kind === 'repair';
-      await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
-        json: {
-          inputRevisionId: current.inputRevisionId,
-          requestId: open.requestId,
-          ...(repair
-            ? { replacement: answerOf(answer.join(' ')) }
-            : { response: answerOf(answer.join(' ')) }),
-        },
-      });
-      context.append(
-        repair
-          ? `✓ replaced the input of ${taskId} (${String(open.requestId)})`
-          : `✓ answered ${taskId} (${String(open.requestId)})`,
+      const approval = pending.find(
+        (item) => item.status === 'open' && item.kind === 'approval',
       );
-      api.background(follow(taskId, context));
+      // The server accepts a text answer only for a clarification, and a
+      // replacement only for a repair. Anything else, including an approval,
+      // is a decision: posting it comes back DECISION_CONFLICT.
+      if (isRecord(open) && open.kind === 'clarification') {
+        await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
+          json: {
+            inputRevisionId: current.inputRevisionId,
+            requestId: open.requestId,
+            response: answerOf(answer.join(' ')),
+          },
+        });
+        context.append(
+          hubText('✓ answered {task} ({request})', {
+            task: taskId,
+            request: String(open.requestId),
+          }),
+        );
+        api.background(follow(taskId, context));
+        return;
+      }
+      if (isRecord(open) && open.kind === 'repair') {
+        await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
+          json: {
+            inputRevisionId: current.inputRevisionId,
+            requestId: open.requestId,
+            replacement: answerOf(answer.join(' ')),
+          },
+        });
+        context.append(
+          hubText('✓ replaced the input of {task} ({request})', {
+            task: taskId,
+            request: String(open.requestId),
+          }),
+        );
+        api.background(follow(taskId, context));
+        return;
+      }
+      const requestId = isRecord(approval)
+        ? String(approval.requestId ?? '')
+        : isRecord(open) && open.kind === 'approval'
+          ? String(open.requestId ?? '')
+          : '';
+      if (requestId)
+        throw new ServerError(
+          hubText(
+            '{task} is waiting for a decision, not a text answer ({request}). Someone else runs /hub approve {task} {request}. /hub inbox lists what is waiting for you.',
+            { task: taskId, request: requestId },
+          ),
+        );
+      if (isRecord(open))
+        throw new ServerError(
+          hubText(
+            '{task} is not waiting for a text answer ({kind}). /hub inbox lists approvals; /hub approve records one. Only a clarification or a repair takes /hub respond.',
+            { task: taskId, kind: String(open.kind ?? '') },
+          ),
+        );
+      throw new ServerError(
+        hubText(
+          '{task} is not waiting for an answer. /hub task {task} shows its phase; an approval is /hub approve, and /hub inbox lists those.',
+          { task: taskId },
+        ),
+      );
     },
     async get([taskId], context) {
-      if (!taskId) throw new ServerError('usage: /hub get <id>');
+      if (!taskId) throw new ServerError(hubText('usage: /hub get <id>'));
       await deliver(taskId, context);
     },
     async refresh(_rest, context) {
       const counts = await collectObjects();
       context.append(
-        `  read ${counts.tasks} tasks and ${counts.packs} capability packs from the server`,
+        hubText(
+          '  read {tasks} tasks and {packs} capability packs from the server (work tasks for the pages, at most 20, not tool or index tasks). /hub tasks lists only what this window handed over; "seen to N" there is the last event number shown for that task',
+          { tasks: counts.tasks, packs: counts.packs },
+        ),
       );
       await announceTools(context);
     },
-    async trial([verb], context) {
-      if (verb !== 'start') throw new ServerError('usage: /hub trial start');
-      trial.calls = [];
-      trial.startedAt = new Date().toISOString();
-      keepTrial();
-      context.append(
-        '  recording the server tool calls of this trial; /hub skill push <folder> sends them with the pack',
-      );
+    async trial(rest, context) {
+      const [verb, flag] = rest;
+      if (verb !== 'start' || (flag && flag !== '--force') || rest.length > 2)
+        throw new ServerError(hubText('usage: /hub trial start [--force]'));
+      context.append(beginTrial(flag === '--force').line);
     },
     async skill([verb, ...rest], context) {
       if (verb === 'push') return pushSkill(rest, context);
@@ -2368,13 +4014,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const packs = (Array.isArray(data) ? data : []).filter(isRecord);
         context.append(
           packs.length
-            ? packs
-                .map(
-                  (pack) =>
-                    `  ${String(pack.skillPackId ?? '')} · ${String(pack.id ?? (isRecord(pack.manifest) ? pack.manifest.id : ''))} ${String(pack.version ?? (isRecord(pack.manifest) ? pack.manifest.version : ''))} · ${String(pack.status ?? '')}`,
-                )
-                .join('\n')
-            : 'No skill packs on this server',
+            ? (await Promise.all(packs.map((pack) => packLine(pack)))).join(
+                '\n',
+              )
+            : hubText('No skill packs on this server'),
         );
         return;
       }
@@ -2388,7 +4031,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const [id, ...json] = words;
         if (!id)
           throw new ServerError(
-            'usage: /hub skill run <id> [json inputs] [--file <path>]…',
+            hubText(
+              'usage: /hub skill run <id> [json inputs] [--file <path>]…',
+            ),
           );
         const inputs = json.length ? jsonObject(json.join(' '), 'inputs') : {};
         if (attached.length) inputs.files = attach(attached, context);
@@ -2398,16 +4043,20 @@ export async function register(api: ExtensionAPI): Promise<void> {
           { json: { inputs, idempotencyKey: randomUUID() } },
         );
         const taskId = isRecord(data) ? String(data.taskId ?? '') : '';
-        if (!taskId) throw new ServerError('the server started no task');
+        if (!taskId)
+          throw new ServerError(hubText('the server started no task'));
         remember(taskId, { title: `skill pack ${id}`, seq: 0 });
         context.append(
-          `✓ running ${id} on the server as ${taskId} · following it`,
+          hubText('✓ running {id} on the server as {task} · following it', {
+            id,
+            task: taskId,
+          }),
         );
         api.background(follow(taskId, context));
         return;
       }
       throw new ServerError(
-        'usage: /hub skill push <folder> | list | run <id> [json]',
+        hubText('usage: /hub skill push <folder> | list | run <id> [json]'),
       );
     },
     async tools(_rest, context) {
@@ -2416,14 +4065,26 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
     bot,
     async approve(rest, context) {
+      if (!rest.length) {
+        await listInbox(context);
+        return;
+      }
       await decide(rest, true, context);
     },
     async reject(rest, context) {
       await decide(rest, false, context);
     },
+    async inbox(rest, context) {
+      await listInbox(context, rest.includes('--quiet'));
+    },
+    async show(rest, context) {
+      await showApproval(rest, context);
+    },
     async reconcile([taskId, operationId], context) {
       if (!taskId)
-        throw new ServerError('usage: /hub reconcile <id> [operationId]');
+        throw new ServerError(
+          hubText('usage: /hub reconcile <id> [operationId]'),
+        );
       // Only a request naming the operation is a real reconciliation; without one
       // the server answers with an explanation of what is missing.
       const { data } = await request(
@@ -2431,41 +4092,838 @@ export async function register(api: ExtensionAPI): Promise<void> {
         `/v1/tasks/${encodeURIComponent(taskId)}/reconcile`,
         { json: operationId ? { operationId } : {} },
       );
+      const payload = isRecord(data) ? data : {};
+      const explained =
+        !operationId && typeof payload.reconciliation === 'string'
+          ? payload.reconciliation
+          : !operationId
+            ? hubText('name the operation: /hub reconcile <id> <operationId>')
+            : String(payload.status ?? 'accepted');
+      // The first line is the heading. A long explanation used to sit on the
+      // same line as the task id, so a wrap had nothing to show as the title.
       context.append(
-        `  ${taskId} · reconcile · ${JSON.stringify(data).slice(0, 200)}`,
+        operationId
+          ? hubText('✓ reconcile {task} · {status}', {
+              task: taskId,
+              status: explained,
+            })
+          : hubText('reconcile {task}\n  {detail}', {
+              task: taskId,
+              detail: explained,
+            }),
       );
       await collectObjects().catch(() => {});
     },
+    async review(_rest, context) {
+      await listInbox(context);
+    },
+    async request(rest, context) {
+      const { args, values } = options(rest);
+      const title = args.join(' ').trim();
+      const file = values.file?.at(-1)?.trim() ?? '';
+      const text = values.text?.at(-1) ?? '';
+      if (!title || Boolean(file) === Boolean(text))
+        throw new ServerError(
+          hubText(
+            'usage: /hub request <title> (--file <path> | --text <text>) [--summary <text>] [--role <role>[:count]]…',
+          ),
+        );
+      const config = readConfig();
+      if (!config?.scopeId)
+        throw new ServerError(
+          hubText('no scope: sign in again with /hub login <url> <user>'),
+        );
+      const roles = (values.role?.length ? values.role : ['manager']).map(
+        (raw) => {
+          const [name, countText] = raw.split(':');
+          if (!name || !APPROVAL_ROLES.has(name))
+            throw new ServerError(
+              hubText(
+                'an approval role is manager, security, dpo, legal, finance, hr or it',
+              ),
+            );
+          const count = countText === undefined ? 1 : Number(countText);
+          if (!Number.isInteger(count) || count < 1 || count > 20)
+            throw new ServerError(
+              hubText('a role count is a whole number from 1 to 20'),
+            );
+          return { role: name, count };
+        },
+      );
+      if (new Set(roles.map((role) => role.role)).size !== roles.length)
+        throw new ServerError(hubText('each approval role is named once'));
+      const summary = values.summary?.at(-1)?.trim() || title;
+      let content: Record<string, unknown>;
+      if (text) {
+        if (!text.trim())
+          throw new ServerError(hubText('the approval text is empty'));
+        content = { fileName: 'request.txt', mediaType: 'text/plain', text };
+      } else {
+        const path = resolve(context.workspace, file);
+        const rel = relative(context.workspace, path);
+        if (
+          !file ||
+          rel === '' ||
+          rel.split(sep).includes('..') ||
+          isAbsolute(rel)
+        )
+          throw new ServerError(
+            hubText('the file must stay inside the workspace: {path}', {
+              path: file,
+            }),
+          );
+        if (!existsSync(path) || !statSync(path).isFile())
+          throw new ServerError(
+            hubText('no such file: {path}', { path: file }),
+          );
+        const bytes = readFileSync(path);
+        if (!bytes.byteLength)
+          throw new ServerError(hubText('the approval file is empty'));
+        const fileName = basename(path);
+        if (/[\u0000-\u001f/\\]/.test(fileName))
+          throw new ServerError(
+            hubText('use a file name without slashes or control characters'),
+          );
+        const media =
+          (
+            {
+              '.txt': 'text/plain',
+              '.md': 'text/markdown',
+              '.json': 'application/json',
+              '.csv': 'text/csv',
+              '.html': 'text/html',
+              '.xml': 'application/xml',
+              '.png': 'image/png',
+              '.pdf': 'application/pdf',
+            } as Record<string, string>
+          )[extname(fileName).toLowerCase()] ?? 'application/octet-stream';
+        const utf8 = bytes.toString('utf8');
+        const textOk =
+          !bytes.includes(0) && Buffer.from(utf8, 'utf8').equals(bytes);
+        content = textOk
+          ? {
+              fileName,
+              mediaType:
+                media === 'application/octet-stream' ? 'text/plain' : media,
+              text: utf8,
+            }
+          : {
+              fileName,
+              mediaType: media,
+              contentBase64: bytes.toString('base64'),
+            };
+      }
+      let data: unknown;
+      try {
+        ({ data } = await callHub('POST', '/v1/approval-requests', {
+          json: {
+            scopeId: config.scopeId,
+            title,
+            summary,
+            content,
+            policy: { roles },
+            idempotencyKey: randomUUID(),
+          },
+        }));
+      } catch (error) {
+        if (isMissing(error))
+          throw new ServerError(
+            hubText(
+              'this server has no general approval. /hub submit <pack> <file> still hands over a task.',
+            ),
+          );
+        throw error;
+      }
+      const record = isRecord(data) ? data : {};
+      const requestId = String(record.requestId ?? '');
+      context.append(
+        hubText('✓ submitted {id} · {status} · task {task}\n  /hub show {id}', {
+          id: requestId,
+          status: String(record.status ?? 'open'),
+          task: String(record.taskId ?? ''),
+        }),
+      );
+    },
+    async search(rest, context) {
+      await searchKnowledge(rest, context);
+    },
+    async knowledge(rest, context) {
+      const [verb, ...args] = rest;
+      if (verb === 'search') return searchKnowledge(args, context);
+      if (verb === 'share' || verb === 'acl')
+        return shareKnowledge(args, context);
+      if (verb === 'review') return reviewKnowledge(args, context);
+      if (verb === 'publish') return publishKnowledge(args, context);
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge search <text> | share <source> --file <path> --readers a,b | review <id> | publish --expect <id>|none',
+        ),
+      );
+    },
+    async roles(rest, context) {
+      const [principalId, role] = rest;
+      if (!principalId || !role || rest.length !== 2)
+        throw new ServerError(
+          hubText(
+            'usage: /hub roles <principal> <role> — manager, security, dpo, legal, finance, hr, it',
+          ),
+        );
+      if (!/^prn_/.test(principalId))
+        throw new ServerError(hubText('a principal id starts with prn_'));
+      if (!APPROVAL_ROLES.has(role))
+        throw new ServerError(
+          hubText(
+            'an approval role is manager, security, dpo, legal, finance, hr or it',
+          ),
+        );
+      const scopeId = readConfig()?.scopeId;
+      if (!scopeId)
+        throw new ServerError(
+          hubText('no scope: sign in again with /hub login <url> <user>'),
+        );
+      let data: unknown;
+      try {
+        ({ data } = await request(
+          'POST',
+          `/v1/scopes/${encodeURIComponent(scopeId)}/approval-roles`,
+          {
+            json: { principalId, role, idempotencyKey: randomUUID() },
+          },
+        ));
+      } catch (error) {
+        if (isMissing(error))
+          throw new ServerError(hubText('this server has no approval roles'));
+        throw error;
+      }
+      const record = isRecord(data) ? data : {};
+      context.append(
+        hubText('✓ proposed {role} for {principal} · {id} · {status}', {
+          role,
+          principal: principalId,
+          id: String(
+            record.changeSetId ?? record.assetId ?? record.requestId ?? '',
+          ),
+          status: String(record.status ?? 'submitted'),
+        }),
+      );
+    },
+    async audit(rest, context) {
+      const { values } = options(rest);
+      const format = values.format?.at(-1) ?? '';
+      const exporting =
+        Boolean(format) ||
+        Boolean(
+          values.timezone ||
+          values.action ||
+          values.principal ||
+          values.since ||
+          values.until,
+        );
+      if (exporting) {
+        if (format && format !== 'json' && format !== 'csv')
+          throw new ServerError(
+            hubText(
+              'usage: /hub audit [--format json|csv] [--timezone <tz>] [--action <action>] [--principal <id>] [--since <time>] [--until <time>]',
+            ),
+          );
+        const params = new URLSearchParams();
+        if (format) params.set('format', format);
+        const copy = (flag: string, name: string) => {
+          const value = values[flag]?.at(-1);
+          if (value) params.set(name, value);
+        };
+        copy('timezone', 'timezone');
+        copy('action', 'action');
+        copy('principal', 'principalId');
+        copy('since', 'since');
+        copy('until', 'until');
+        const path = `/v1/admin/audit/export?${params.toString()}`;
+        try {
+          if (format === 'csv') {
+            const { bytes } = await request('GET', path, { raw: true });
+            const text = bytes.toString('utf8');
+            context.append(
+              text.trimEnd() || hubText('No audit rows in that export.'),
+            );
+            return;
+          }
+          const { data } = await request('GET', path);
+          const payload = isRecord(data) ? data : {};
+          const rows = rowsOf(payload.items ?? data);
+          context.append(
+            rows.length
+              ? hubText('audit export {format} · {n} row(s){cut}', {
+                  format: String((payload.format ?? format) || 'json'),
+                  n: rows.length,
+                  cut:
+                    payload.truncated === true ? hubText(' · truncated') : '',
+                }) +
+                  '\n' +
+                  auditLines(rows)
+              : hubText('No audit rows in that export.'),
+          );
+          return;
+        } catch (error) {
+          if (error instanceof ServerError && error.status === 404)
+            throw new ServerError(
+              hubText(
+                'this server has no audit export. /hub audit lists the recent rows.',
+              ),
+            );
+          if (
+            error instanceof ServerError &&
+            (error.code === 'FORBIDDEN_ACTION' || error.status === 403)
+          )
+            throw new ServerError(
+              hubText(
+                'audit needs admin.manage on this server. There is no browser page; GET /v1/admin/audit is the list.',
+              ),
+            );
+          throw error;
+        }
+      }
+      let data: unknown;
+      try {
+        ({ data } = await request('GET', '/v1/admin/audit'));
+      } catch (error) {
+        if (
+          error instanceof ServerError &&
+          (error.code === 'FORBIDDEN_ACTION' || error.status === 403)
+        )
+          throw new ServerError(
+            hubText(
+              'audit needs admin.manage on this server. There is no browser page; GET /v1/admin/audit is the list.',
+            ),
+          );
+        throw error;
+      }
+      const rows = rowsOf(data).slice(0, 20);
+      context.append(
+        rows.length
+          ? auditLines(rows)
+          : hubText(
+              'No audit rows. GET /v1/admin/audit is the list; this server has no browser page for it.',
+            ),
+      );
+    },
+    async modules(_rest, context) {
+      // No GET /v1/modules and no browser page. Skill packs and the assets a
+      // module install creates are what the server will list.
+      const packs = rowsOf(await optional<unknown>('/v1/skillpacks', []));
+      const skills = rowsOf(
+        await optional<unknown>('/v1/assets?kind=skill-package&limit=100', []),
+      );
+      const sources = rowsOf(
+        await optional<unknown>(
+          '/v1/assets?kind=knowledge-source&limit=100',
+          [],
+        ),
+      );
+      const lines: string[] = [];
+      for (const pack of packs.slice(0, 20)) lines.push(await packLine(pack));
+      for (const asset of [...skills, ...sources].slice(0, 40)) {
+        const configuration = isRecord(asset.configuration)
+          ? asset.configuration
+          : {};
+        const module = isRecord(configuration.module)
+          ? configuration.module
+          : undefined;
+        const label = module
+          ? `${String(module.id ?? '')} ${String(module.version ?? '')}`.trim()
+          : String(asset.name ?? '');
+        lines.push(
+          `  ${String(asset.assetId ?? '')} · ${String(asset.kind ?? '')} · ${label} · ${String(asset.lifecycle ?? asset.version ?? '')}`,
+        );
+      }
+      context.append(
+        lines.length
+          ? lines.join('\n')
+          : hubText(
+              'No modules listed. circle-hub has no browser page for them. Install is POST /v1/modules/install (server CLI: node apps/server/src/cli.ts modules install). This command reads GET /v1/skillpacks and GET /v1/assets.',
+            ),
+      );
+    },
   };
+  function auditLines(rows: Record<string, unknown>[]): string {
+    return rows
+      .map((row) => {
+        const detail = isRecord(row.detail)
+          ? Object.keys(row.detail).slice(0, 4).join(', ')
+          : '';
+        return `  ${String(row.id ?? '')} · ${String(row.action ?? '')} · ${String(row.principalId ?? '')}${row.scopeId ? ' · ' + String(row.scopeId) : ''}${detail ? ' · ' + detail : ''}`;
+      })
+      .join('\n');
+  }
+  function isMissing(error: unknown): boolean {
+    return (
+      error instanceof ServerError &&
+      (error.status === 404 || error.code === 'TARGET_NOT_FOUND')
+    );
+  }
+  // What /hub inbox last printed, so /hub show 1 opens that row.
+  interface InboxItem {
+    kind: string;
+    requestId: string;
+    taskId: string;
+    approvalId: string;
+    title: string;
+    messageZh: string;
+    titleZh: string;
+    status: string;
+  }
+  // The server's Chinese sentence when it sent one. Kind and phase stay raw
+  // on the view; the desktop translates them. Lines printed here use the
+  // process language.
+  function fieldText(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+  function relatedRecords(
+    item: Record<string, unknown>,
+  ): Record<string, unknown>[] {
+    const assets = Array.isArray(item.assets)
+      ? item.assets.filter(isRecord)
+      : [];
+    return isRecord(item.asset) ? [...assets, item.asset] : assets;
+  }
+  function fieldFrom(
+    item: Record<string, unknown>,
+    key: 'messageZh' | 'titleZh',
+  ): string {
+    const own = fieldText(item[key]);
+    if (own) return own;
+    for (const related of relatedRecords(item)) {
+      const text = fieldText(related[key]);
+      if (text) return text;
+    }
+    return '';
+  }
+  function preferredTitle(item: Record<string, unknown>): string {
+    if (hubLocaleChinese()) {
+      const chinese =
+        fieldFrom(item, 'messageZh') || fieldFrom(item, 'titleZh');
+      if (chinese) return chinese;
+    }
+    return String(item.title ?? item.name ?? item.summary ?? '');
+  }
+  function preferredKind(kind: string): string {
+    return kind === 'change-set' || kind === 'governance'
+      ? hubText(kind)
+      : kind;
+  }
+  function preferredStatus(status: string): string {
+    return status === 'waiting-review' ? hubText(status) : status;
+  }
+  let inboxItems: InboxItem[] = [];
+  function noteInbox(): void {
+    inboxPublished = inboxItems;
+    api.background(showStatus());
+  }
+  async function listInbox(
+    context: CommandContext,
+    quiet = false,
+  ): Promise<void> {
+    // The desktop page reads the view. Printing the list would copy the
+    // terminal lines, including raw task ids, into the recent log.
+    const say = (line: string) => {
+      if (!quiet) context.append(line);
+    };
+    let pending: Record<string, unknown>[] | undefined;
+    try {
+      const { data } = await request('GET', '/v1/approvals/pending');
+      pending = rowsOf(data);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    if (pending) {
+      inboxItems = pending.slice(0, 20).map((item) => {
+        const assets = (
+          Array.isArray(item.assets)
+            ? item.assets
+            : isRecord(item.asset)
+              ? [item.asset]
+              : []
+        ).filter(isRecord);
+        const assetLabel = assets
+          .map((asset) =>
+            [asset.name, asset.kind]
+              .filter((part) => typeof part === 'string' && part)
+              .join(' '),
+          )
+          .filter(Boolean)
+          .join(', ');
+        const kind = String(item.kind ?? 'change-set');
+        const title = String(item.title ?? item.name ?? item.summary ?? '');
+        return {
+          kind,
+          requestId: String(item.requestId ?? ''),
+          taskId: String(item.taskId ?? ''),
+          approvalId: String(item.approvalId ?? item.requestId ?? ''),
+          title: [title, assetLabel].filter(Boolean).join(' · '),
+          messageZh: fieldFrom(item, 'messageZh'),
+          titleZh: fieldFrom(item, 'titleZh'),
+          status: String(item.status ?? item.phase ?? ''),
+        };
+      });
+      if (!inboxItems.length) {
+        noteInbox();
+        say(
+          hubText(
+            'Nothing is waiting for you. /hub inbox lists what you can approve.',
+          ),
+        );
+        return;
+      }
+      noteInbox();
+      say(
+        inboxItems
+          .map((item, index) => {
+            const n = index + 1;
+            const title =
+              (hubLocaleChinese() && (item.messageZh || item.titleZh)) ||
+              item.title;
+            if (item.kind === 'governance' || (!item.taskId && item.requestId))
+              return hubText(
+                '  {n}. governance {id} · {title}\n    /hub show {id}\n    /hub approve {id}\n    /hub reject {id} <reason>',
+                {
+                  n,
+                  id: item.requestId,
+                  title,
+                },
+              );
+            const approval = item.approvalId || item.requestId;
+            return hubText(
+              '  {n}. {kind} {task} · {approval} · {title}\n    /hub show {task}\n    /hub approve {task} {approval}\n    /hub reject {task} {approval} <reason>',
+              {
+                n,
+                kind: preferredKind(item.kind),
+                task: item.taskId || item.requestId,
+                approval,
+                title,
+              },
+            );
+          })
+          .join('\n'),
+      );
+      return;
+    }
+    // circle-hub 0.2.0 has no general queue. The task queue is the list.
+    const { data } = await request(
+      'GET',
+      '/v1/tasks?view=page&queue=awaitingMyApproval&limit=20',
+    );
+    const tasks = rowsOf(data);
+    inboxItems = [];
+    if (!tasks.length) {
+      noteInbox();
+      say(
+        hubText(
+          'Nothing is waiting for your approval. /hub task <id> shows one task. Knowledge claims are reviewed one id at a time (GET /v1/knowledge/reviews/<id>); this server has no page that lists them.',
+        ),
+      );
+      return;
+    }
+    const lines: string[] = [];
+    for (const task of tasks) {
+      const taskId = String(task.taskId ?? '');
+      if (!taskId) continue;
+      const phase = String(task.phase ?? task.status ?? '');
+      lines.push(
+        `  ${taskId} · ${preferredStatus(phase)} · ${preferredTitle(task)}`,
+      );
+      lines.push(await approvalNotice(taskId));
+      inboxItems.push({
+        kind: 'change-set',
+        requestId: '',
+        taskId,
+        approvalId: '',
+        title: String(task.title ?? task.name ?? task.summary ?? ''),
+        messageZh: fieldFrom(task, 'messageZh'),
+        titleZh: fieldFrom(task, 'titleZh'),
+        status: phase,
+      });
+    }
+    noteInbox();
+    say(lines.join('\n'));
+  }
+  async function showApproval(
+    words: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const token = words[0];
+    if (!token) throw new ServerError(hubText('usage: /hub show <id>'));
+    const picked = /^\d+$/.test(token)
+      ? inboxItems[Number(token) - 1]
+      : undefined;
+    const id = picked?.requestId || picked?.taskId || token;
+    try {
+      const { data } = await request(
+        'GET',
+        `/v1/approval-requests/${encodeURIComponent(picked?.requestId || id)}`,
+      );
+      const record = isRecord(data) ? data : {};
+      const requestId = String(record.requestId ?? picked?.requestId ?? id);
+      context.append(
+        hubText('  governance {id} · {status} · {title}', {
+          id: requestId,
+          status: preferredStatus(String(record.status ?? '')),
+          title: preferredTitle(record),
+        }),
+      );
+      if (typeof record.declineReason === 'string' && record.declineReason)
+        context.append(
+          hubText('  declined: {reason}', { reason: record.declineReason }),
+        );
+      if (record.recordId || record.snapshotId)
+        context.append(
+          hubText('  record {record} · snapshot {snapshot}', {
+            record: String(record.recordId ?? ''),
+            snapshot: String(record.snapshotId ?? ''),
+          }),
+        );
+      await printContent(
+        `/v1/approval-requests/${encodeURIComponent(requestId)}/content`,
+        requestId,
+        context,
+      );
+      context.append(
+        hubText('  /hub approve {id}\n  /hub reject {id} <reason>', {
+          id: requestId,
+        }),
+      );
+      return;
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    const taskId = picked?.taskId || id;
+    const current = await status(taskId);
+    context.append(
+      hubText('  {task} · {phase} · {title} · input {input}', {
+        task: taskId,
+        phase: String(current.phase),
+        title: String(current.title ?? ''),
+        input: String(current.inputRevisionId),
+      }),
+    );
+    context.append(await approvalNotice(taskId));
+    const approvals = rowsOf(
+      await optional<unknown>(
+        `/v1/tasks/${encodeURIComponent(taskId)}/approvals`,
+        [],
+      ),
+    );
+    for (const item of approvals
+      .filter((item) => item.status === 'open')
+      .slice(0, 5)) {
+      const action = isRecord(item.action) ? item.action : {};
+      const name = String(action.name ?? item.approvalId ?? '');
+      const target = String(action.target ?? item.target ?? '');
+      context.append(
+        hubText('  {approval} · {name} · {target}', {
+          approval: String(item.approvalId ?? ''),
+          name,
+          target,
+        }),
+      );
+    }
+    if (TERMINAL.has(String(current.phase))) {
+      const result = await optional<unknown>(
+        `/v1/tasks/${encodeURIComponent(taskId)}/result`,
+        undefined,
+      );
+      if (isRecord(result))
+        context.append(
+          hubText('  result {status}', { status: String(result.status ?? '') }),
+        );
+    }
+  }
+  async function printContent(
+    path: string,
+    label: string,
+    context: CommandContext,
+  ): Promise<void> {
+    let bytes: Buffer;
+    let headers: Headers;
+    try {
+      ({ bytes, headers } = await request('GET', path, { raw: true }));
+    } catch (error) {
+      if (isMissing(error)) return;
+      throw error;
+    }
+    const type = (headers.get('content-type') ?? '')
+      .split(';')[0]!
+      .trim()
+      .toLowerCase();
+    const textLike =
+      !type ||
+      type.startsWith('text/') ||
+      type === 'application/json' ||
+      type === 'application/xml' ||
+      type.endsWith('+json');
+    if (textLike && !bytes.includes(0)) {
+      const text = bytes.toString('utf8');
+      const limit = 4000;
+      context.append(
+        text.length <= limit
+          ? text
+          : hubText('{head}… ({n} more characters)', {
+              head: text.slice(0, limit),
+              n: text.length - limit,
+            }),
+      );
+      return;
+    }
+    if (!api.workspace) {
+      context.append(
+        hubText('{n} bytes ({type}); no workspace to save them', {
+          n: bytes.byteLength,
+          type: type || 'application/octet-stream',
+        }),
+      );
+      return;
+    }
+    const folder = join(api.workspace, '.circle', 'hub-approvals');
+    mkdirSync(folder, { recursive: true });
+    const file = join(folder, `${label.replace(/[^\w.-]+/g, '_')}.bin`);
+    writeFileSync(file, bytes);
+    context.append(
+      hubText('saved {n} bytes ({type}) as {path}', {
+        n: bytes.byteLength,
+        type: type || 'application/octet-stream',
+        path: relative(api.workspace, file).split(sep).join('/'),
+      }),
+    );
+  }
   // A decision on an action a task waits on, bound to what the server says it is: the
-  // input revision, the target's identity and the action's digest.
+  // input revision, the target's identity and the action's digest. A governance
+  // request id is decided on the general route when the server has one.
   async function decide(
-    [taskId, approvalId]: string[],
+    words: string[],
     approve: boolean,
     context: CommandContext,
   ): Promise<void> {
-    if (!taskId || !approvalId)
+    const [taskId, approvalId, ...rest] = words;
+    if (!taskId)
       throw new ServerError(
-        `usage: /hub ${approve ? 'approve' : 'reject'} <id> <approval>`,
+        approve
+          ? hubText('usage: /hub approve <id> [approval]')
+          : hubText('usage: /hub reject <id> <approval> <reason>'),
       );
-    const path = `/v1/tasks/${encodeURIComponent(taskId)}/approvals`;
-    const { data } = await request('GET', path);
-    const found = (Array.isArray(data) ? data : []).find(
-      (item) => isRecord(item) && item.approvalId === approvalId,
+    if (approvalId) {
+      const path = `/v1/tasks/${encodeURIComponent(taskId)}/approvals`;
+      let data: unknown = [];
+      try {
+        ({ data } = await request('GET', path));
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+      const found = (Array.isArray(data) ? data : []).find(
+        (item) => isRecord(item) && item.approvalId === approvalId,
+      );
+      if (isRecord(found)) {
+        const because = rest.join(' ').trim();
+        if (!approve && !because)
+          throw new ServerError(
+            hubText(
+              'a rejection needs a reason: /hub reject {task} {approval} <reason>',
+              { task: taskId, approval: approvalId },
+            ),
+          );
+        await request('POST', `${path}/${encodeURIComponent(approvalId)}`, {
+          json: {
+            inputRevisionId: found.inputRevisionId,
+            targetIdentity: found.targetIdentity,
+            actionDigest: found.actionDigest,
+            approve,
+            ...(because ? { reason: because } : {}),
+          },
+        });
+        context.append(
+          hubText(
+            approve
+              ? '✓ approved {approval} for {task} (input {input})'
+              : '✓ rejected {approval} for {task} (input {input}){because}',
+            {
+              approval: approvalId,
+              task: taskId,
+              input: String(found.inputRevisionId),
+              because: because
+                ? hubText(' · {reason}', { reason: because })
+                : '',
+            },
+          ),
+        );
+        await decidedAsset(taskId, found, context);
+        return;
+      }
+    }
+    const because = [approvalId, ...rest]
+      .filter((word): word is string => Boolean(word))
+      .join(' ')
+      .trim();
+    if (!approve && !because)
+      throw new ServerError(
+        hubText('a rejection needs a reason: /hub reject {id} <reason>', {
+          id: taskId,
+        }),
+      );
+    try {
+      const { data } = await request(
+        'POST',
+        `/v1/approval-requests/${encodeURIComponent(taskId)}/decisions`,
+        { json: { approve, ...(because ? { reason: because } : {}) } },
+      );
+      const record = isRecord(data) ? data : {};
+      context.append(
+        hubText(
+          approve
+            ? '✓ approved {id} · {status}'
+            : '✓ rejected {id} · {status}{because}',
+          {
+            id: taskId,
+            status: String(
+              record.status ?? (approve ? 'approved' : 'declined'),
+            ),
+            because: because ? hubText(' · {reason}', { reason: because }) : '',
+          },
+        ),
+      );
+      return;
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    throw new ServerError(
+      hubText('{task} has no approval {approval}', {
+        task: taskId,
+        approval: approvalId ?? '',
+      }),
     );
-    if (!isRecord(found))
-      throw new ServerError(`${taskId} has no approval ${approvalId}`);
-    await request('POST', `${path}/${encodeURIComponent(approvalId)}`, {
-      json: {
-        inputRevisionId: found.inputRevisionId,
-        targetIdentity: found.targetIdentity,
-        actionDigest: found.actionDigest,
-        approve,
-      },
-    });
-    context.append(
-      `✓ ${approve ? 'approved' : 'rejected'} ${approvalId} for ${taskId} (input ${String(found.inputRevisionId)})`,
+  }
+  async function decidedAsset(
+    taskId: string,
+    found: Record<string, unknown>,
+    context: CommandContext,
+  ): Promise<void> {
+    // The pack status word stays `registered` after approval. Re-read the asset
+    // lifecycle so the line shows what actually changed.
+    const packs = rowsOf(await optional<unknown>('/v1/skillpacks', []));
+    const touched = packs.filter(
+      (pack) => pack.approvalTaskId === taskId || pack.assetId === found.target,
     );
+    if (touched.length)
+      context.append(
+        (await Promise.all(touched.map((pack) => packLine(pack)))).join('\n'),
+      );
+    else {
+      const target = typeof found.target === 'string' ? found.target : '';
+      const asset = target
+        ? await optional<unknown>(
+            `/v1/assets/${encodeURIComponent(target)}`,
+            undefined,
+          )
+        : undefined;
+      if (isRecord(asset) && typeof asset.lifecycle === 'string')
+        context.append(`  ${target} · ${asset.lifecycle}`);
+    }
     await collectObjects().catch(() => {});
   }
 
@@ -2487,7 +4945,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
     async (args) => {
       const taskId = String(args.task_id ?? '');
-      if (!taskId) throw new api.ToolError('task_id is required');
+      if (!taskId) throw new api.ToolError(hubText('task_id is required'));
       const task = await status(taskId);
       const ended = TERMINAL.has(String(task.phase));
       return {
@@ -2526,13 +4984,17 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async (args) => {
       const pack = String(args.pack ?? '');
       const file = String(args.file ?? '');
-      if (!pack) throw new api.ToolError('pack is required');
+      if (!pack) throw new api.ToolError(hubText('pack is required'));
       if (args.input !== undefined && !isRecord(args.input))
-        throw new api.ToolError('input is an object of task input fields');
+        throw new api.ToolError(
+          hubText('input is an object of task input fields'),
+        );
       if (pack === 'module-execute' && !isRecord(args.input))
-        throw new api.ToolError('module-execute needs the flow input object');
+        throw new api.ToolError(
+          hubText('module-execute needs the flow input object'),
+        );
       if (pack !== 'module-execute' && !file)
-        throw new api.ToolError('file is required');
+        throw new api.ToolError(hubText('file is required'));
       const accepted = collecting();
       let task;
       try {
@@ -2548,7 +5010,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       }
       const taskId = task.taskId;
       return new api.Watch(
-        `hub ${taskId}`,
+        hubText('hub {task}', { task: taskId }),
         async () => {
           const current = await status(taskId);
           const phase = String(current.phase ?? '');
@@ -2569,18 +5031,35 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // Sending is not registering: someone else still approves the new digest on the server.
   api.registerTool(
     'hub_trial_start',
-    'Start recording which hub tools the model calls: the trial record a skill pack is pushed with, as /hub trial start does. Clears the previous record. Start it before the trial run of a new or changed skill pack.',
-    { type: 'object', properties: {} },
-    async () => {
-      trial.calls = [];
-      trial.startedAt = new Date().toISOString();
-      keepTrial();
-      return { recording: true, startedAt: trial.startedAt };
+    'Start recording which hub tools the model calls: the trial record a skill pack is pushed with, as /hub trial start does. If that record already has calls that were not pushed, it stays and the result says so; pass force true to drop them. Start it before the trial run of a new or changed skill pack. skillpack.json outputs are required; the call record may be empty.',
+    {
+      type: 'object',
+      properties: {
+        force: {
+          type: 'boolean',
+          description:
+            'drop unpushed trial calls and record from now. Without it, a non-empty record is left as it is',
+        },
+      },
+    },
+    async (args) => {
+      const started = beginTrial(args.force === true);
+      return started.recording
+        ? {
+            recording: true,
+            startedAt: trial.startedAt,
+            dropped: started.dropped,
+          }
+        : {
+            recording: false,
+            calls: trial.calls.length,
+            warning: started.line.trim(),
+          };
     },
   );
   api.registerTool(
     'hub_skill_push',
-    'Submit a skill pack folder of the workspace (skillpack.json, SKILL.md and its files) to hub with the current trial record and the SHA-256 of the files the trial produced, as /hub skill push does. The server checks the tools the trial used against the pack; someone else must approve the new digest before it runs there. It sends the folder, so it asks first.',
+    'Submit a skill pack folder of the workspace (skillpack.json, SKILL.md and its files) to hub with the current trial record and the SHA-256 of the files the trial produced, as /hub skill push does. Do not run the skill again to refresh outputs, and do not overwrite an existing output file; the push sends the files already on disk. The server checks the tools the trial used against the pack; someone else must approve the new digest before it runs there. It sends the folder, so it asks first.',
     {
       type: 'object',
       properties: {
@@ -2598,7 +5077,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
     async (args) => {
       const folder = String(args.folder ?? '');
-      if (!folder) throw new api.ToolError('folder is required');
+      if (!folder) throw new api.ToolError(hubText('folder is required'));
       const outputs = Array.isArray(args.outputs)
         ? args.outputs.map(String).filter(Boolean)
         : [];
@@ -2667,30 +5146,38 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const config = readConfig();
       if (!config?.scopeId)
         throw new api.ToolError(
-          'no project: sign in again with /hub login <url> <user>',
+          hubText('no scope: sign in again with /hub login <url> <user>'),
         );
       const name = String(args.name ?? '');
       const version = String(args.version ?? '');
       const files = Array.isArray(args.files) ? args.files : [];
       if (!name || !version || !files.length)
         throw new api.ToolError(
-          'name, version and at least one file are required',
+          hubText('name, version and at least one file are required'),
         );
       if (args.metadata !== undefined && !isRecord(args.metadata))
-        throw new api.ToolError('metadata is an object');
+        throw new api.ToolError(hubText('metadata is an object'));
       const listed: Record<string, unknown>[] = [];
       try {
         for (const file of files) {
           if (!isRecord(file) || typeof file.path !== 'string' || !file.path)
-            throw new ServerError('each file needs a path in the workspace');
+            throw new ServerError(
+              hubText('each file needs a path in the workspace'),
+            );
           if (typeof file.role !== 'string' || !file.role)
-            throw new ServerError(`${file.path}: role is required`);
+            throw new ServerError(
+              hubText('{path}: role is required', { path: file.path }),
+            );
           const path = resolve(api.workspace, file.path);
           const inside = relative(api.workspace, path);
           if (!inside || inside.startsWith('..') || isAbsolute(inside))
-            throw new ServerError(`${file.path} is outside the workspace`);
+            throw new ServerError(
+              hubText('{path} is outside the workspace', { path: file.path }),
+            );
           if (!existsSync(path))
-            throw new ServerError(`no such file: ${file.path}`);
+            throw new ServerError(
+              hubText('no such file: {path}', { path: file.path }),
+            );
           const source = await upload(path, config.scopeId);
           listed.push({
             path: inside.split(sep).join('/'),
@@ -2734,10 +5221,23 @@ export async function register(api: ExtensionAPI): Promise<void> {
             ...(readers.length ? { readers } : {}),
           },
         });
+        const approvalTaskId =
+          isRecord(data) && typeof data.approvalTaskId === 'string'
+            ? data.approvalTaskId
+            : '';
+        const notice = approvalTaskId
+          ? await approvalNotice(approvalTaskId)
+          : '';
         return {
           registered: data,
           files: listed,
-          next: 'someone else approves the asset; then hub_source_artifact_status gives the sourceArtifactId',
+          ...(approvalTaskId ? { approvalTaskId } : {}),
+          ...(notice ? { approve: notice.trim() } : {}),
+          next: notice
+            ? notice.trim()
+            : hubText(
+                'someone else approves the asset; the reply names approvalTaskId when the server sends one, and /hub review lists open approvals. Then hub_source_artifact_status gives the sourceArtifactId',
+              ),
         };
       } catch (error) {
         throw new api.ToolError(reason(error));
@@ -2754,7 +5254,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
     async (args) => {
       const id = String(args.asset_id ?? '');
-      if (!id) throw new api.ToolError('asset_id is required');
+      if (!id) throw new api.ToolError(hubText('asset_id is required'));
       try {
         return (await request('GET', `/v1/assets/${encodeURIComponent(id)}`))
           .data;
@@ -2797,18 +5297,27 @@ export async function register(api: ExtensionAPI): Promise<void> {
             : '';
       if (!route)
         throw new api.ToolError(
-          `id must start with knr_ (knowledge record), evd_ (evidence) or art_ (artifact): ${id || '(empty)'}`,
+          hubText(
+            'id must start with knr_ (knowledge record), evd_ (evidence) or art_ (artifact): {id}',
+            { id: id || '(empty)' },
+          ),
         );
       const workspace = api.workspace;
       if (!workspace)
-        throw new api.ToolError('no workspace to save the content into');
+        throw new api.ToolError(
+          hubText('no workspace to save the content into'),
+        );
       const saveAs =
         typeof args.save_as === 'string' && args.save_as ? args.save_as : '';
       const wanted = saveAs ? resolve(workspace, saveAs) : '';
       if (saveAs) {
         const inside = relative(workspace, wanted);
         if (!inside || inside.startsWith('..') || isAbsolute(inside))
-          throw new api.ToolError(`save_as ${saveAs} is outside the workspace`);
+          throw new api.ToolError(
+            hubText('save_as {path} is outside the workspace', {
+              path: saveAs,
+            }),
+          );
       }
       let bytes: Buffer;
       let headers: Headers;
@@ -2824,7 +5333,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const declared = headers.get('x-content-sha256');
       if (declared && declared !== actual)
         throw new api.ToolError(
-          `the bytes (sha256 ${short(actual)}) do not match the server's SHA-256 (${short(declared)}); not saved`,
+          hubText(
+            "the bytes (sha256 {actual}) do not match the server's SHA-256 ({expected}); not saved",
+            { actual: short(actual), expected: short(declared) },
+          ),
         );
       const mediaType =
         (headers.get('content-type') ?? '')
@@ -2853,22 +5365,47 @@ export async function register(api: ExtensionAPI): Promise<void> {
   api.background(lookForBots());
   api.registerCommand(
     'hub',
-    'Work with a hub: /hub [login | logout | packs | submit | tasks | task | respond | get | refresh | tools | skill | bot]',
+    hubText(
+      'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | knowledge | roles | audit | modules | tools | skill | bot]',
+    ),
     async (args, context) => {
       const [verb, ...rest] = words(args);
-      if (!verb) {
+      const place = (
+        signedIn: boolean,
+        url: string,
+        config: Config | undefined,
+      ): string =>
+        `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${
+          config?.scopeId
+            ? hubText(' · scope {id}', { id: config.scopeId })
+            : ''
+        }${signedIn ? '' : hubText(' · not signed in')}`;
+      if (!verb || verb === 'help') {
         const config = readConfig();
         const signedIn = Boolean(await currentToken());
+        const url = config?.url || DEFAULT_HUB_URL;
+        if (verb === 'help') {
+          context.append(`${place(signedIn, url, config)}\n${usageText()}`);
+          return;
+        }
         context.append(
-          config
-            ? `${signedIn ? '●' : '○'} ${config.url}${config.username ? ' · ' + config.username : ''}${config.scopeId ? ' · project ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n${USAGE}`
-            : `Not connected.\n${USAGE}`,
+          `${place(signedIn, url, config)}\n${hubText('/hub help lists the commands')}`,
         );
         return;
       }
       const command = commands[verb];
-      if (!command) throw new ServerError(`unknown: /hub ${verb}\n${USAGE}`);
-      await command(rest, recording(context));
+      if (!command)
+        throw new ServerError(
+          hubText('unknown: /hub {verb}\n{usage}', {
+            verb,
+            usage: usageText(),
+          }),
+        );
+      try {
+        await command(rest, recording(context));
+      } catch (error) {
+        throw new ServerError(explainFailure(error));
+      }
     },
   );
 }

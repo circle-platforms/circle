@@ -13,8 +13,10 @@ import {
   writeFileSync,
   unlinkSync,
 } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
+import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
 import {
   sessionOccupied,
@@ -828,6 +830,101 @@ export class RuntimeController {
       });
     return result;
   }
+  // A session opened later only catalogues extensions until initialize(). Hub
+  // sign-in lives in the home (config and token), so a page still reads the
+  // view and status a session that already loaded the extension published.
+  private presentExtension(
+    runtime: AgentRuntime,
+    extension: Extension,
+  ): Extension {
+    if (!extension.enabled || extension.error) return extension;
+    const needsView = extension.view === undefined;
+    const needsCommand = extension.commands.length === 0 && !extension.status;
+    if (!needsView && !needsCommand) return extension;
+    for (const owner of this.runtimes.values()) {
+      if (owner === runtime || owner.isClosing) continue;
+      if (
+        extension.source === 'project' &&
+        owner.options.workspace !== runtime.options.workspace
+      )
+        continue;
+      const peer = owner.extensions.extensions.find(
+        (item) => item.name === extension.name && item.enabled && !item.error,
+      );
+      if (!peer) continue;
+      const peerHas =
+        peer.view !== undefined || peer.commands.length > 0 || !!peer.status;
+      if (!peerHas) continue;
+      return {
+        ...extension,
+        view: extension.view ?? peer.view,
+        status: extension.status ?? peer.status,
+        commands: extension.commands.length
+          ? extension.commands
+          : peer.commands,
+        tools: extension.tools.length ? extension.tools : peer.tools,
+      };
+    }
+    return extension;
+  }
+  private extensionCommand(
+    runtime: AgentRuntime,
+    name: string,
+  ): { owner: AgentRuntime; command: ExtensionCommand } | undefined {
+    const local = runtime.extensions.commands().get(name);
+    if (local) return { owner: runtime, command: local };
+    for (const owner of this.runtimes.values()) {
+      if (owner === runtime || owner.isClosing) continue;
+      const command = owner.extensions.commands().get(name);
+      if (!command) continue;
+      const ext = owner.extensions.extensions.find((item) =>
+        item.commands.some((row) => row.name === name),
+      );
+      if (
+        ext?.source === 'project' &&
+        owner.options.workspace !== runtime.options.workspace
+      )
+        continue;
+      return { owner, command };
+    }
+    return undefined;
+  }
+  private extensionReady(runtime: AgentRuntime): boolean {
+    return runtime.extensions.extensions.some(
+      (ext) =>
+        ext.enabled &&
+        !ext.error &&
+        (ext.view !== undefined || ext.commands.length > 0 || !!ext.status),
+    );
+  }
+  // Leaving an empty session drops the only host that loaded extensions.
+  // Load them on the session that remains, from the same home, before that.
+  private async carryExtensions(
+    next: AgentRuntime,
+    previousId: string,
+  ): Promise<void> {
+    if (!previousId || previousId === next.session.id || next.isClosing) return;
+    const previous = this.runtimes.get(previousId);
+    if (!previous || previous.isClosing || !this.extensionReady(previous))
+      return;
+    if (this.extensionReady(next) || !this.unusedSession(previousId)) return;
+    if (!isFolderTrusted(loadSettings(this.home), next.options.workspace))
+      return;
+    await next.initialize();
+    const names = previous.extensions.extensions
+      .filter((ext) => ext.view !== undefined)
+      .map((ext) => ext.name);
+    const end = Date.now() + 2000;
+    while (
+      Date.now() < end &&
+      names.some(
+        (name) =>
+          next.extensions.extensions.find((ext) => ext.name === name)?.view ===
+          undefined,
+      )
+    )
+      await delay(10);
+  }
   snapshot(): WorkbenchSnapshot {
     this.metadata.refresh();
     if (this.viewedSessionId && !this.store.get(this.viewedSessionId))
@@ -1070,13 +1167,17 @@ export class RuntimeController {
                   : ('user' as const),
                 template: command.template,
               })),
-              ...[...runtime.extensions.commands().values()].map((command) => ({
-                name: command.name,
-                description: command.description,
-                arguments: '',
-                scope: 'extension' as const,
-                template: '',
-              })),
+              ...runtime.extensions.extensions.flatMap((extension) =>
+                this.presentExtension(runtime, extension).commands.map(
+                  (command) => ({
+                    name: command.name,
+                    description: command.description,
+                    arguments: '',
+                    scope: 'extension' as const,
+                    template: '',
+                  }),
+                ),
+              ),
             ]
           : [],
       mcp: savedSettings.mcp_servers.map((spec, i) => {
@@ -1116,25 +1217,27 @@ export class RuntimeController {
       }),
       extensions: inspecting
         ? []
-        : runtime.extensions.extensions.map((extension) => ({
-            id: extension.name,
-            name: extension.name,
-            version: extension.version,
-            scope: extension.source,
-            enabled: extension.enabled,
-            status:
-              extension.enabled && !extension.error
-                ? extension.status
-                : undefined,
-            view:
-              extension.enabled && !extension.error
-                ? extension.view
-                : undefined,
-            tools: extension.tools.map((tool) => tool.name),
-            commands: extension.commands.map((command) => command.name),
-            events: [...extension.handlers.keys()],
-            error: extension.error || undefined,
-          })),
+        : runtime.extensions.extensions.map((extension) => {
+            const shown = this.presentExtension(runtime, extension);
+            return {
+              id: extension.name,
+              name: extension.name,
+              version: extension.version,
+              scope: extension.source,
+              enabled: extension.enabled,
+              status:
+                extension.enabled && !extension.error
+                  ? shown.status
+                  : undefined,
+              view:
+                extension.enabled && !extension.error ? shown.view : undefined,
+              tools: shown.tools.map((tool) => tool.name),
+              commands: shown.commands.map((command) => command.name),
+              declaredCommands: extension.declaredCommands,
+              events: [...extension.handlers.keys()],
+              error: extension.error || undefined,
+            };
+          }),
       requests: [],
       tools: inspecting
         ? []
@@ -1907,6 +2010,7 @@ export class RuntimeController {
       'background',
       'stop-job',
       'delete-session',
+      'select-session',
     ].includes(command.name);
     const result = immediate ? operation() : this.mutation.then(operation);
     if (!immediate) this.mutation = result.then(() => {});
@@ -2235,6 +2339,7 @@ export class RuntimeController {
         if (this.unusedSession(previous) && !this.viewedSessionId)
           return { sessionId: previous };
         const owner = this.runtimes.create(this.selectedWorkspace);
+        await this.carryExtensions(owner, previous);
         this.selectRuntime(owner);
         if (previous !== owner.session.id) await this.dropUnused(previous);
         return { sessionId: owner.session.id };
@@ -2249,6 +2354,7 @@ export class RuntimeController {
         try {
           const owner = this.runtimes.open(row.workspace, id);
           await this.reloadTrustedRuntime(owner);
+          await this.carryExtensions(owner, previous);
           if (owner.isClosing || this.closing)
             throw Error('session is closing');
           this.selectRuntime(owner);
@@ -2916,10 +3022,23 @@ export class RuntimeController {
         if (runtime.busy) throw Error('a turn is running');
         const name = text(p.name, 'command name', 100);
         const args = text(p.args ?? '', 'command args', 16000);
-        const extension = runtime.extensions.commands().get(name);
-        if (extension) {
+        const secret =
+          typeof p.secret === 'string' && p.secret.length > 0
+            ? p.secret
+            : undefined;
+        let found = this.extensionCommand(runtime, name);
+        if (
+          !found &&
+          isFolderTrusted(runtime.options.settings, runtime.options.workspace)
+        ) {
+          await runtime.initialize();
+          found = this.extensionCommand(runtime, name);
+        }
+        if (found) {
+          const extension = found.command;
           await extension.handler(args, {
-            workspace: runtime.options.workspace,
+            workspace: found.owner.options.workspace,
+            ...(secret ? { secret } : {}),
             toast: (message) => {
               const id = runtime.session.id;
               if (this.runtimes.lifecycle(id) !== 'open') return;
@@ -2933,10 +3052,14 @@ export class RuntimeController {
               this.notices.set(id, rows);
               this.publish();
             },
-            append: (content) =>
+            // Hub sign-in and sign-out are status. The page shows them. They
+            // are not messages in the conversation.
+            append: (content) => {
+              if (name === 'hub') return;
               runtime.store.append(runtime.session.id, [
                 { id: randomUUID(), role: 'assistant', content },
-              ]),
+              ]);
+            },
             sendUserMessage: (prompt) => {
               this.track(runtime.harness.run(prompt), runtime);
             },

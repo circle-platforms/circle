@@ -2627,15 +2627,24 @@ export class SessionApp {
           await this.command(slash.name, slash.args);
         } else {
           const word = commandWord(raw);
-          const close = word
-            ? closeMatch(word, [...knownSlashNames(), ...extra])
-            : '';
-          this.composer.set(raw);
-          this.flash(
-            `Unknown command /${word}` +
-              (close ? ` · did you mean /${close}?` : ' · /help lists them'),
-            4000,
-          );
+          const off = word ? this.runtime?.extensions.offCommand(word) : '';
+          if (word && off) {
+            this.composer.set('');
+            this.flash(
+              `Unknown command /${word} · turn it on with /extensions enable ${off}`,
+              4000,
+            );
+          } else {
+            const close = word
+              ? closeMatch(word, [...knownSlashNames(), ...extra])
+              : '';
+            this.composer.set(raw);
+            this.flash(
+              `Unknown command /${word}` +
+                (close ? ` · did you mean /${close}?` : ' · /help lists them'),
+              4000,
+            );
+          }
         }
       }
     } catch (error) {
@@ -2719,6 +2728,15 @@ export class SessionApp {
       }
       const word = commandWord(raw);
       if (word) {
+        const off = this.runtime?.extensions.offCommand(word);
+        if (off) {
+          // The draft was already taken. A turned-off bundled command is not a typo.
+          this.flash(
+            `Unknown command /${word} · turn it on with /extensions enable ${off}`,
+            4000,
+          );
+          return;
+        }
         // Not sent: the text comes back to the box to fix.
         const close = closeMatch(word, [...knownSlashNames(), ...extra]);
         this.composer.restore(raw, pastes);

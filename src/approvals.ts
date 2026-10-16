@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
-import { circleHome, normalizeWorkspace } from './paths.js';
+import { canonicalPath, circleHome, normalizeWorkspace } from './paths.js';
+import { commandTouchesRunOutput, isExistingRunOutput } from './run_outputs.js';
 import { isRecord, readJson, writePrivateJson } from './settings.js';
 
 export type Verdict = 'DENY' | 'ASK' | 'ASK_FORCED';
@@ -697,12 +698,42 @@ export class ApprovalPolicy {
   yoloEnabled(thread: string): boolean {
     return this.mode(thread) === 'auto';
   }
+  private absolute(path: string): string {
+    return this.resolvePath
+      ? this.resolvePath(path)
+      : normalizeWorkspace(resolve(this.workspace, path));
+  }
+  // Existing skill-run outputs are not covered by accept-edits or a saved
+  // workspace rule. Auto mode still proceeds; every other mode asks again.
+  private overwritesRunOutput(
+    tool: string,
+    args: Record<string, unknown>,
+  ): boolean {
+    const paths =
+      tool === 'apply_patch'
+        ? [
+            ...String(args.patchText || '').matchAll(
+              /^\*\*\* (?:Add File|Update File|Delete File|Move to):\s*(.+)$/gm,
+            ),
+          ].map((match) => match[1]!)
+        : [String(args.file_path || args.path || '')];
+    return paths.some(
+      (path) =>
+        path && isExistingRunOutput(this.workspace, this.absolute(path)),
+    );
+  }
   review(tool: string, args: Record<string, unknown>): Review {
     if (tool === 'execute') {
       let command = String(args.command || '');
       const found = classifyCommand(command, this.credentialFiles);
       if (found.verdict !== 'ASK' || found.pattern === 'read-only')
         return found;
+      if (commandTouchesRunOutput(this.workspace, command))
+        return review(
+          'ASK_FORCED',
+          'may overwrite an existing skill-run output',
+          { warn_delete: true },
+        );
       command = stripLeadingCd(command, this.workspace);
       const prefix = commandPrefix(command);
       const words = prefix.length ? (commandTokens(command) ?? []) : [];
@@ -716,6 +747,13 @@ export class ApprovalPolicy {
         ),
       };
     }
+    if (
+      ['write_file', 'edit_file', 'apply_patch', 'delete'].includes(tool) &&
+      this.overwritesRunOutput(tool, args)
+    )
+      return review('ASK_FORCED', 'overwrites an existing skill-run output', {
+        warn_delete: true,
+      });
     if (
       tool === 'delete' ||
       (tool === 'apply_patch' &&
@@ -731,14 +769,17 @@ export class ApprovalPolicy {
               ),
             ].map((match) => match[1]!)
           : [String(args.file_path || args.path || '')];
+      const root = canonicalPath(this.workspace);
       const inside =
         paths.length > 0 &&
         paths.every((path) => {
           const rel = relative(
-            this.workspace,
-            this.resolvePath
-              ? this.resolvePath(path)
-              : normalizeWorkspace(resolve(this.workspace, path)),
+            root,
+            canonicalPath(
+              this.resolvePath
+                ? this.resolvePath(path)
+                : resolve(this.workspace, path),
+            ),
           );
           return Boolean(path) && rel !== '..' && !rel.startsWith('..' + sep);
         });
