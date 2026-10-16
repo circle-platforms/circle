@@ -1,4 +1,18 @@
 export const githubConnection: Record<string, string> = {
+  'GitHub account': 'GitHub 账户',
+  'GitHub tools are loading or unavailable. Review the integration status above.':
+    'GitHub 工具正在加载或暂不可用，请查看上方集成状态。',
+  'GitHub authorization has expired.': 'GitHub 授权已失效。',
+  'GitHub denied access to this repository.': 'GitHub 拒绝访问此仓库。',
+  'GitHub could not be reached or the request failed.':
+    '无法连接 GitHub 或请求失败。',
+  'Reconnect this GitHub account here. Your edits are kept.':
+    '请在此重新连接 GitHub 账户，已保留你的编辑内容。',
+  'Review the account permissions and allowed repositories before retrying. Your edits are kept.':
+    '请检查账户权限与允许仓库后再重试，已保留你的编辑内容。',
+  'Check your network and retry the read when ready. Your edits are kept.':
+    '请检查网络，准备好后再重试读取，已保留你的编辑内容。',
+
   'authorization permissions': '授权权限',
   'additional requested permissions': '额外申请的权限',
   'not reported': '尚未回报',

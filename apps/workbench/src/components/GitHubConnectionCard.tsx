@@ -56,6 +56,15 @@ export function GitHubConnectionCard({
     /secure (?:credential )?storage.*unavailable|encrypt.*(?:unavailable|not available)/i.test(
       failure,
     );
+  const expired =
+    !!failure &&
+    /authorization expired|HTTP 401|Bad credentials/i.test(failure);
+  const denied = !!failure && /permission denied|HTTP 403/i.test(failure);
+  const requestFailed =
+    !!failure &&
+    /GitHub request failed|network|ECONN|ENOTFOUND|fetch failed|timed? ?out/i.test(
+      failure,
+    );
   async function command(verb: string, params?: Record<string, unknown>) {
     setBusy(true);
     setError('');
@@ -86,7 +95,11 @@ export function GitHubConnectionCard({
       aria-labelledby="github-connection-title"
     >
       <h2 id="github-connection-title">
-        {embedded ? t('connected account') : 'GitHub'}
+        {embedded
+          ? available && view?.state === 'connected' && view.account
+            ? t('connected account')
+            : t('GitHub account')
+          : 'GitHub'}
       </h2>
       {!available ? (
         <>
@@ -321,16 +334,32 @@ export function GitHubConnectionCard({
               ? t('GitHub integration could not be loaded.')
               : storageUnavailable
                 ? t('Secure credential storage is unavailable.')
-                : t('GitHub action could not be completed.')}
+                : expired
+                  ? t('GitHub authorization has expired.')
+                  : denied
+                    ? t('GitHub denied access to this repository.')
+                    : requestFailed
+                      ? t('GitHub could not be reached or the request failed.')
+                      : t('GitHub action could not be completed.')}
           </p>
           <p className="panel-note">
             {storageUnavailable
               ? t(
                   'Choose this session only if you want to continue without saving credentials, then start authorization again.',
                 )
-              : t(
-                  'Review the connection and try the action again. Your edits are kept.',
-                )}
+              : expired
+                ? t('Reconnect this GitHub account here. Your edits are kept.')
+                : denied
+                  ? t(
+                      'Review the account permissions and allowed repositories before retrying. Your edits are kept.',
+                    )
+                  : requestFailed
+                    ? t(
+                        'Check your network and retry the read when ready. Your edits are kept.',
+                      )
+                    : t(
+                        'Review the connection and try the action again. Your edits are kept.',
+                      )}
           </p>
           <details className="context-source">
             <summary>{t('technical details')}</summary>

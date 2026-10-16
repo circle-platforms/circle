@@ -63,6 +63,7 @@ import {
   type SessionScroll,
 } from '../model/presentation';
 interface Props {
+  focusComposer?: number;
   onDialog: (dialog: DialogId, selection?: string) => void;
   onPanel: (panel: PanelId, selection?: string) => void;
   onAgent: (id: string) => void;
@@ -144,6 +145,7 @@ const QUEUE_KIND: Record<string, () => string> = {
   'follow-up': () => t('follow-up'),
 };
 export function Conversation({
+  focusComposer,
   onDialog,
   onPanel,
   onAgent,
@@ -169,6 +171,10 @@ export function Conversation({
     session.lifecycle !== 'deleting' &&
     !session.occupied;
   const input = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    if (focusComposer !== undefined)
+      input.current?.focus({ preventScroll: true });
+  }, [focusComposer, session.id]);
   const scroller = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
   const [editingQueue, setEditingQueue] = useState<{

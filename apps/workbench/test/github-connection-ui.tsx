@@ -144,6 +144,10 @@ Object.assign(window, {
         extension.error = 'synthetic GitHub module initialization failure';
       }),
     integrationReady: publish,
+    viewError: (error?: string) => {
+      state = { ...state, error };
+      publish();
+    },
     scopeMetadata: (metadata: Partial<GitHubConnectionState>) => {
       delete state.requestedAdditionalScopes;
       delete state.grantedScopes;

@@ -78,9 +78,51 @@ try {
             { exact: true },
           )
           .waitFor();
+        assert.equal(
+          await detail
+            .getByText(
+              label(
+                'Enable the plugin to see its available tools.',
+                '启用插件后可查看可用工具。',
+              ),
+              { exact: true },
+            )
+            .count(),
+          0,
+          'enabled loading must not ask to enable again',
+        );
+        await page.evaluate(() => window.githubPluginFixture.load(true));
+        await detail
+          .getByText(
+            label(
+              'GitHub integration could not be loaded.',
+              '无法加载 GitHub 集成。',
+            ),
+            { exact: true },
+          )
+          .first()
+          .waitFor();
+        assert.equal(
+          await detail
+            .getByText(
+              label(
+                'Enable the plugin to see its available tools.',
+                '启用插件后可查看可用工具。',
+              ),
+              { exact: true },
+            )
+            .count(),
+          0,
+        );
         await page.evaluate(() => window.githubPluginFixture.load());
         await detail
           .getByText(label('GitHub login required', '需要登录 GitHub'), {
+            exact: true,
+          })
+          .waitFor();
+        await detail
+          .getByRole('heading', {
+            name: label('GitHub account', 'GitHub 账户'),
             exact: true,
           })
           .waitFor();
@@ -126,6 +168,11 @@ try {
           exact: true,
         });
         await composer.waitFor();
+        assert.equal(
+          await composer.evaluate((e) => document.activeElement === e),
+          true,
+          'Try returns focus to the original composer',
+        );
         assert.match(await composer.inputValue(), /^original draft\n\n/);
         const state = await page.evaluate(() =>
           window.githubPluginFixture.snapshot(),

@@ -413,6 +413,7 @@ export interface WorkbenchSnapshot {
 }
 export interface CommandResult {
   openSession?: boolean;
+  focusComposer?: boolean;
   notice?: string;
   page?: PageId;
   dialog?: DialogId;

@@ -64,6 +64,7 @@ export function GitHubPluginDetails({
           );
         return {
           openSession: true,
+          focusComposer: true,
           notice: t('example added to your unsent draft; send it when ready'),
         };
       });
@@ -117,7 +118,13 @@ export function GitHubPluginDetails({
           </ul>
         ) : (
           <p className="panel-note">
-            {t('Enable the plugin to see its available tools.')}
+            {!enabled
+              ? t('Enable the plugin to see its available tools.')
+              : extension?.error
+                ? t('GitHub integration could not be loaded.')
+                : t(
+                    'GitHub tools are loading or unavailable. Review the integration status above.',
+                  )}
           </p>
         )}
         <p className="panel-note">

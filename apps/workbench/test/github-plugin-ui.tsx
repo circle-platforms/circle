@@ -105,6 +105,7 @@ Object.assign(window, {
     load: (failure = false) => {
       const extension = snapshot.extensions[0];
       if (!extension.enabled) return;
+      delete extension.error;
       if (failure) extension.error = 'synthetic module initialization failure';
       else {
         extension.view = {

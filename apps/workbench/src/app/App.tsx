@@ -276,12 +276,17 @@ export function App() {
     sessionSelection.current.pending = pending;
     return pending;
   };
-  const onSession = () => {
+  const onSession = (focusComposer = false) => {
     sourceOpener.current.cancel();
     setFile(null);
     setFileOwner(undefined);
     setAgent(null);
-    navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
+    navigate(
+      `/session/${runtime.getSnapshot().activeSessionId}`,
+      focusComposer
+        ? { state: { focusComposer: performance.now() } }
+        : undefined,
+    );
   };
   // The first time, before anything is set up, the connection form opens by itself.
   useEffect(() => {
@@ -670,7 +675,7 @@ export function App() {
     input.click();
   };
   setRouter((result) => {
-    if (result.openSession) onSession();
+    if (result.openSession) onSession(result.focusComposer);
     if (result.page) navigate('/page/' + result.page);
     if (result.dialog) onDialog(result.dialog, result.selection);
     if (result.panel) onPanel(result.panel, result.selection);
@@ -837,6 +842,12 @@ export function App() {
             resetKey={session.id}
           >
             <Conversation
+              focusComposer={
+                location.pathname === `/session/${session.id}`
+                  ? (location.state as { focusComposer?: number } | null)
+                      ?.focusComposer
+                  : undefined
+              }
               onDialog={onDialog}
               onPanel={onPanel}
               onAgent={selectAgent}
