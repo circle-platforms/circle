@@ -582,7 +582,9 @@ try {
     await page
       .getByText('browser navigation completed', { exact: true })
       .waitFor();
-    assert.equal(await page.locator('.inspector-overlay').count(), 0);
+    // The inspector stays mounted, hidden, so its resources survive: the panel
+    // must not be shown, which a DOM count cannot tell.
+    assert.equal(await page.locator('.inspector-overlay:visible').count(), 0);
     assert.match(
       await textOf('proceed'),
       /Circle proceeded, approved by the user/,
