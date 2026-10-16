@@ -18,7 +18,9 @@ async function bundleMain(appDir: string) {
     platform: 'node',
     target: 'node24',
     format: 'cjs',
-    external: ['electron', 'original-fs'],
+    // mirror scripts/build.mjs: main pulls in ssh2 (device terminals), whose optional
+    // cpu-features native addon esbuild cannot bundle; ssh2 falls back to pure JS
+    external: ['electron', 'original-fs', 'cpu-features'],
   });
   await writeFile(
     join(appDir, 'package.json'),

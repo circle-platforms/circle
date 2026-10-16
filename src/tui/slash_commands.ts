@@ -43,6 +43,10 @@ export const BUILTIN_SLASH: SlashCommand[] = [
     description: 'Background jobs: open one, or stop it',
     aliases: ['tasks'],
   },
+  {
+    name: 'terminals',
+    description: 'Device terminals: open a console, connect a profile, cut one',
+  },
   { name: 'new', description: 'Start a new session', aliases: ['clear'] },
   {
     name: 'resume',

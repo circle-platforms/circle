@@ -71,6 +71,12 @@ import type {
 } from '../../../src/browser/protocol.js';
 import { sizeText } from '../../../src/browser/files.js';
 import {
+  terminalTools,
+  runtimeTerminalOptions,
+  type TerminalPort,
+} from '../../../src/terminal/tools.js';
+import type { TerminalHostKeyApproval } from '../../../src/terminal/protocol.js';
+import {
   loadSecrets,
   removeSecret,
   saveSecret,
@@ -216,6 +222,8 @@ export interface ControllerOptions {
   openUrl?: (url: string) => void;
   /** The conversation browsers in the main process; without it there are no browser tools. */
   browser?: BrowserPort;
+  /** The conversation device terminals in the main process. */
+  terminal?: TerminalPort;
   beforeDelete?: (sessionId: string) => Promise<void>;
 }
 
@@ -500,31 +508,40 @@ export class RuntimeController {
           (isReady(settings) ? undefined : new DisconnectedModel()),
         catalog: this.options.catalog?.(this.home),
         session,
-        extraTools: this.options.browser
-          ? browserTools(this.options.browser, {
-              confirm: (_sessionId, approval, signal, callId) =>
-                approval.kind === 'upload'
-                  ? this.confirmUpload(runtime, approval, signal, callId)
-                  : approval.kind === 'download'
-                    ? this.confirmDownload(runtime, approval, signal, callId)
-                    : approval.kind === 'coordinate'
-                      ? this.confirmCoordinate(
-                          runtime,
-                          approval,
-                          signal,
-                          callId,
-                        )
-                      : this.confirmCertificate(
-                          runtime,
-                          approval,
-                          signal,
-                          callId,
-                        ),
-              // Paths as the file tools take them (a credential file never goes), the
-              // conversation to record and the values a replayed script takes
-              ...runtimeBrowserOptions(() => runtime),
-            })
-          : undefined,
+        extraTools: [
+          ...(this.options.browser
+            ? browserTools(this.options.browser, {
+                confirm: (_sessionId, approval, signal, callId) =>
+                  approval.kind === 'upload'
+                    ? this.confirmUpload(runtime, approval, signal, callId)
+                    : approval.kind === 'download'
+                      ? this.confirmDownload(runtime, approval, signal, callId)
+                      : approval.kind === 'coordinate'
+                        ? this.confirmCoordinate(
+                            runtime,
+                            approval,
+                            signal,
+                            callId,
+                          )
+                        : this.confirmCertificate(
+                            runtime,
+                            approval,
+                            signal,
+                            callId,
+                          ),
+                // Paths as the file tools take them (a credential file never goes), the
+                // conversation to record and the values a replayed script takes
+                ...runtimeBrowserOptions(() => runtime),
+              })
+            : []),
+          ...(this.options.terminal
+            ? terminalTools(this.options.terminal, {
+                confirm: (_sessionId, approval, signal, callId) =>
+                  this.confirmHostKey(runtime, approval, signal, callId),
+                ...runtimeTerminalOptions(() => runtime),
+              })
+            : []),
+        ],
         approve: (call, signal, origin) =>
           this.approve(runtime, call, signal, origin),
         question: (args, signal, origin) =>
@@ -1013,7 +1030,7 @@ export class RuntimeController {
                 : 'Approval is enforced by the Circle core.',
             schema: tool.parameters,
           })),
-      uiPlugins: ['files', 'activity', 'browser'],
+      uiPlugins: ['files', 'activity', 'browser', 'terminal'],
       openUrl: this.openRequest,
       settings: {
         theme: savedSettings.theme,
@@ -1437,6 +1454,43 @@ export class RuntimeController {
           sha256: approval.fingerprint,
         },
         // Only a host on this network can be trusted for good.
+        choices: [
+          'approve',
+          ...(approval.privateHost ? ['always'] : []),
+          'reject',
+        ],
+      },
+      signal,
+    );
+    return answer === 'approve'
+      ? 'once'
+      : answer === 'always'
+        ? 'always'
+        : 'reject';
+  }
+  /** A device whose SSH host key nobody has trusted: the person decides, auto mode trusts once. */
+  private async confirmHostKey(
+    runtime: AgentRuntime,
+    approval: TerminalHostKeyApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'always' | 'reject' | 'auto'> {
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'auto';
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'terminal_connect',
+        title: 'terminal_connect · trusts an unknown device key',
+        reason: 'trusts an unknown device host key',
+        target: approval.host,
+        input: {
+          host: approval.host,
+          key_type: approval.keyType || 'unknown',
+          sha256: approval.fingerprint,
+        },
+        // Only a device on this network can be trusted for good.
         choices: [
           'approve',
           ...(approval.privateHost ? ['always'] : []),

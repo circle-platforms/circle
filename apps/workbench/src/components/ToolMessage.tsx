@@ -14,6 +14,7 @@ import {
   Users,
   FileText,
   Globe,
+  SquareTerminal,
 } from 'lucide-react';
 import type { ToolCall } from '../model/types';
 import { useRuntime } from '../app/context';
@@ -52,9 +53,11 @@ export function ToolMessage({
         ? Terminal
         : tool.name.startsWith('browser_')
           ? Globe
-          : tool.diff || tool.before !== undefined
-            ? FileDiff
-            : FileText;
+          : tool.name.startsWith('terminal_')
+            ? SquareTerminal
+            : tool.diff || tool.before !== undefined
+              ? FileDiff
+              : FileText;
   // A file change that happened shows its diff under the call; a waiting one shows it in
   // the request below, and one that failed changed nothing.
   const diff = tool.diff && tool.status === 'success' ? tool.diff : undefined;

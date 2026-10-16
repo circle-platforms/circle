@@ -89,6 +89,7 @@ export const COMMAND_UI: Record<string, string> = {
   extensions: 'extensions',
   approvals: 'approvals',
   jobs: 'activity',
+  terminals: 'terminal',
   new: 'sessions',
   resume: 'sessions',
   continue: 'sessions',
@@ -735,6 +736,7 @@ export class PreviewRuntime implements RuntimePort {
       };
     }
     if (name === 'jobs') return { panel: 'activity', selection: args };
+    if (name === 'terminals') return { panel: 'terminal', selection: args };
     if (
       ['reload', 'init'].includes(name) ||
       (['mcp', 'extensions'].includes(name) && args === 'reload')

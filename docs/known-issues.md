@@ -55,6 +55,16 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **A background subagent keeps the agent it started with.** After `/reload`, `/models` or a change of extensions it still uses the old tools and model until it ends; `/plan` reaches it.
 - **The output a dev server prints may not show on its row**: many programs keep their output in a buffer when it does not go to a terminal (`python3 -u` and `PYTHONUNBUFFERED=1` help for Python).
 
+## Device terminals
+
+- **No serial port, no file transfer.** Only SSH and Telnet over the network are in this version; a physical serial console has to be reached through a console server's network port. There is no SFTP, scp or Zmodem: what the device does is typed at its prompt, never pushed as a file.
+- **SSH signs in with a password or one private key.** There is no keyboard-interactive challenge beyond answering a prompt that asks plainly for a password, no SSH agent and no certificate authority. A device that needs those gets "refused the connection"; reach it through a jump host you can log into.
+- **Telnet is a plain console.** Circle offers only its window size (NAWS): it does no terminal-type, environment or authentication negotiation, and never encrypts. A console that insists on an option Circle does not answer may wait; the device sees the refusals.
+- **Text is sent as UTF-8.** A device on another codepage shows mojibake both ways; there is no way to choose an encoding.
+- **A resize reflows the emulated screen, not the device's memory.** When a full-screen program (a `vi`, a menu) is on the device it repaints itself; a line-mode device that wrapped a long line at the old width keeps its old breaks until it prints again, so a `terminal_read` right after attaching may show some lines broken where they were.
+- **`terminal_wait` matches a screen, not a byte stream.** The `pattern` is tested against the last 400 lines joined with newlines, so it sees what is on the screen now: a device that printed the answer and cleared it, or scrolls it past the buffer, is gone before it can be matched. Read or wait soon after the device rests.
+- **A device that prints with a bare line feed can look staggered.** Circle normalises `\r\n`, but a device that emits lone `\n` or lone `\r` at wrap can leave a phantom blank or a short line; `terminal_read` trims trailing blanks to keep the tail clean.
+
 ## Read-only mode
 
 Any file whose name is `plan.md` or `plan` can be written, edited or deleted in any folder, with the usual approval. Everything else that changes something is refused.

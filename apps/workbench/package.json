@@ -14,6 +14,8 @@
     "test:ui": "npm --prefix ../desktop run test:interface"
   },
   "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "lucide-react": "1.55.0",
     "radix-ui": "1.7.0",
     "react": "19.3.0",

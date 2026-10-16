@@ -85,6 +85,7 @@ handled as signature errors, and signature errors do not disable thinking.
 | `redact.ts` | Hides passwords and tokens in command and job output. |
 | `secrets.ts` | Variables and saved secrets written `%NAME%`: `secrets.json`, putting values into a call's arguments after its approval, and turning a secret's value back into `%NAME%` in what the model reads. |
 | `browser/` | The conversation browser. `tools.ts` has the `browser_*` tools, each action's site for its approval and the handshake with the person. `page.ts` is the script that reads a page and moves the pointer. `protocol.ts`, `format.ts`, `hosts.ts`, `certificates.ts` and `files.ts` are what both browsers share. `chrome.ts` and `cdp.ts` drive Chrome, Edge or Chromium for the terminal; the desktop's browser is `apps/desktop/src/browser.ts`. |
+| `terminal/` | The device terminals: SSH and Telnet consoles the model drives and the person can take over. `tools.ts` has the `terminal_*` tools and the bridge that carries them to the desktop's main process; `sessions.ts` owns each conversation's consoles (holder, serial queue, wait, the `@xterm/headless` screen). `transport.ts` is the connector seam, with `ssh.ts` and `telnet.ts` behind it; `protocol.ts` fixes the wire shape, `profiles.ts` reads the person's `terminal-sessions.json` and `hostkeys.ts` the trusted host keys. `tui_screen.ts` draws a device screen into the TUI's rows (colours only from `ink/theme.ts`); `keys.ts` turns an attached keystroke into device bytes. The desktop hosts the same `TerminalSessions` in `apps/desktop/src/terminal.ts`. |
 | `user_shell.ts` | Your own `!command` and `!!command`. |
 
 ## Sessions and data
@@ -140,7 +141,7 @@ handled as signature errors, and signature errors do not disable thinking.
 | `tui/approval_preview.ts` | What an approval card shows: the command, the file and its diff. |
 | `tui/tool_rows.ts`, `tui/agent_rows.ts`, `tui/display_lexicon.ts` | Rows for tool calls, results, thinking and subagents, and the short names and phrases they use. |
 | `tui/status_rows.ts` | The header, the busy label, the footer, the line under each turn, the compaction row and the window title. |
-| `tui/strip_rows.ts` | The strip of subagents and jobs under the footer. |
+| `tui/strip_rows.ts` | The strip of subagents, jobs and live device terminals under the footer, and the band each of their pages wears. |
 | `tui/turn_status.ts` | Per-turn time, tokens and thinking time, from the event bus. |
 | `tui/welcome_state.ts`, `tui/folder_inventory.ts` | What the welcome shows: the folder's own instruction files, skills, commands, extensions and settings, and its recent sessions. |
 | `tui/subagents.ts` | Selecting a subagent in the strip and paging through records. |

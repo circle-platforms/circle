@@ -88,6 +88,14 @@ Password values never appear in snapshots; a password field shows only whether i
 
 The warning page and the pointer follow the application's theme.
 
+## The terminal panel
+
+The panel with the terminal icon in the top bar holds this conversation's [device terminals](tools.md#device-terminals): SSH and Telnet consoles Circle reaches on your network, the way you would with SecureCRT. It opens on its own when Circle connects a device, unless you are on another page or the window is narrow. Each console is a real terminal emulator: what the device paints, you see, colours and cursor included, and it fits itself to the panel. A row of chips across the top lists the live consoles — lamp, `t1` and the device, and whether the device is answering, resting or waiting for you; under the screen the saved profiles from `terminal-sessions.json` are one click from a new console.
+
+You and Circle take turns on the same console, as with the browser. While Circle works, **take the terminal** under the screen hands the keys to you: what you type goes straight to the device, Circle's next action on it waits, and the model learns only that you typed, never what. **give back** returns it. When the model wants you to log in or answer a prompt it cannot, it hands the console over itself and the panel says so; give it back when you are done. A card that needs you elsewhere takes the keys back until it is answered.
+
+Before Circle types on a device, an approval card names it; **allow on this device for this session** covers connecting, sending, pressing keys and disconnecting there, and another device asks again. A line with a word that can wipe the device asks every time, rule aside. The first SSH login to a device shows a card with the key's type and SHA-256 fingerprint: **connect once**, or **trust for good** for a device on this network (kept in `terminal-host-keys.json`, in the application's data folder); a device answering later with a different key is asked about again. A device password is never typed plain: it comes from a saved secret by `%NAME%`, and the model never sees its value. See [Device terminals](security.md#device-terminals).
+
 ## Under the input box
 
 As in Claude: on the left, + to attach files and the mode; on the right, the model and the thinking depth, each a menu, and a ring for the context. The ring fills as the context of the last answer fills the model's window, orange from 70% and red from 90%. Click it for the terminal footer's numbers — tokens sent and received over the whole session, the estimated cost from the model's published prices, the share read from the cache — and to compact the conversation or open the session's details. While jobs run, the ring carries their count. Unknown values read `N/A`.

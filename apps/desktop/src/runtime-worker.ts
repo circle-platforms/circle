@@ -5,6 +5,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from './runtime-controller';
 import { BrowserBridge } from '../../../src/browser/tools.js';
 import type { BrowserReply } from '../../../src/browser/protocol.js';
+import { TerminalBridge } from '../../../src/terminal/tools.js';
+import type { TerminalReply } from '../../../src/terminal/protocol.js';
 import { ScriptedModel } from '../../../src/testing.js';
 import { emptyUsage, type ModelResponse } from '../../../src/types.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
@@ -73,13 +75,18 @@ if (fixturePath) {
   );
 }
 const browser = new BrowserBridge((message) => port.postMessage(message));
+const terminal = new TerminalBridge((message) => port.postMessage(message));
 const controller = new RuntimeController({
   home,
   // The supervisor keeps home as runtime-home inside the application's data folder
   dataFolder: dirname(home),
   model,
   browser,
-  beforeDelete: (sessionId) => browser.releaseSession(sessionId),
+  terminal,
+  beforeDelete: async (sessionId) => {
+    await browser.releaseSession(sessionId);
+    await terminal.releaseSession(sessionId);
+  },
   userHome: home,
   catalog: process.env.CIRCLE_WORKBENCH_TEST_PROFILE
     ? (path) =>
@@ -89,9 +96,16 @@ const controller = new RuntimeController({
   openUrl: (url) => port.postMessage({ type: 'open-url', url }),
 });
 port.on('message', ({ data }) => {
-  const message = data as { type?: unknown; reply?: BrowserReply };
+  const message = data as {
+    type?: unknown;
+    reply?: BrowserReply | TerminalReply;
+  };
   if (message?.type === 'browser-reply' && message.reply) {
-    browser.receive(message.reply);
+    browser.receive(message.reply as BrowserReply);
+    return;
+  }
+  if (message?.type === 'terminal-reply' && message.reply) {
+    terminal.receive(message.reply as TerminalReply);
     return;
   }
   void controller

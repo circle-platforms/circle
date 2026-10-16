@@ -82,9 +82,11 @@ While Circle works you can keep typing: `enter` steers the running turn. `esc` t
 
 The terminal interface uses conversation cards, status lamps and an `auto` theme that follows terminal colours. Use `/themes dark` or `/themes light` when your terminal cannot report its colours. See [The interface](https://circle-platforms.github.io/circle/interface/) for the signals and limits.
 
-## The browser, variables and secrets
+## The browser, device terminals, variables and secrets
 
 Ask Circle to open a page, such as a device's web interface on your network, and it uses the browser as you would. It reads the page, moves a pointer to click and type, and answers the page's dialogs. It passes a certificate warning only after you approve, and it tells you about downloads, files a page asks for and sign-ins. In the terminal the browser is a Chrome, Edge or Chromium window with a new, empty profile; in the desktop application it is a browser panel you share with Circle and can take over. Control is approved site by site, and some things are always yours to decide: giving a page files, camera or location permissions, and which client certificate identifies you.
+
+Ask Circle to reach a device you administer — a switch, a router, a server's console — and it opens an SSH or Telnet terminal and works it the way you would in SecureCRT: it reads what the device answers and types what you approve, approved device by device, with host keys you trust and passwords kept only as `%NAME%` secrets. In the terminal interface the device screen is a page you can attach to and type on yourself; in the desktop application it is a terminal panel you share. `/terminals` lists the open consoles and your saved sessions. See [Device terminals](https://circle-platforms.github.io/circle/tools/#device-terminals).
 
 Save a password with `/secrets NAME`, or under settings → variables in the desktop application. The model writes `%NAME%` wherever the password is needed, in a browser field or in any other tool, and never sees the value: Circle puts it in when the tool runs and hides it again in what comes back. `/variables NAME=value` keeps plain values the same way. See [The browser](https://circle-platforms.github.io/circle/tools/#the-browser) and [Secrets by name](https://circle-platforms.github.io/circle/security/#secrets-by-name).
 
@@ -97,6 +99,7 @@ Save a password with `/secrets NAME`, or under settings → variables in the des
 | [Run Circle safely](https://circle-platforms.github.io/circle/security/) | What is asked, what is refused, what is not protected. |
 | [Choose a model](https://circle-platforms.github.io/circle/models/) | Endpoints, switching, thinking depth. |
 | [The browser](https://circle-platforms.github.io/circle/tools/#the-browser) | Web pages Circle and you use together. |
+| [Device terminals](https://circle-platforms.github.io/circle/tools/#device-terminals) | SSH and Telnet consoles Circle and you work together. |
 | [Skills](https://circle-platforms.github.io/circle/skills/), [Commands](https://circle-platforms.github.io/circle/custom-commands/), [MCP](https://circle-platforms.github.io/circle/mcp/), [Extensions](https://circle-platforms.github.io/circle/extensions/) | Make Circle yours. |
 | [The desktop application](https://circle-platforms.github.io/circle/desktop/) | The same agent in its own window. |
 | [All documentation](https://circle-platforms.github.io/circle/) | Guides and reference. |

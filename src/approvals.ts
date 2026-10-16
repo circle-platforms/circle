@@ -657,9 +657,22 @@ const BROWSER_ACTIONS: Record<string, string> = {
   // Every step of the script, on the site it starts on: it acts on no other
   browser_replay: 'runs a recorded browser script',
 };
+// The terminal tools that act on a device. "Allow for this session" covers them on one
+// device, the `host` the action acts on (the `host:port` the tools add): another device
+// asks again. A rule for every terminal covers them all.
+const TERMINAL_ACTIONS: Record<string, string> = {
+  terminal_connect: 'opens a terminal session on a device',
+  terminal_send: 'types to the device',
+  terminal_press: 'sends a key to the device',
+  terminal_disconnect: 'closes a device session',
+};
 /** The tool name an approval rule is kept under: `browser` for every browser action. */
 export const ruleTool = (tool: string): string =>
-  Object.hasOwn(BROWSER_ACTIONS, tool) ? 'browser' : tool;
+  Object.hasOwn(BROWSER_ACTIONS, tool)
+    ? 'browser'
+    : Object.hasOwn(TERMINAL_ACTIONS, tool)
+      ? 'terminal'
+      : tool;
 export class ApprovalPolicy {
   private modes = new Map<string, ApprovalMode>();
   constructor(
@@ -774,6 +787,23 @@ export class ApprovalPolicy {
         pattern: site ? 'site:' + site : '*',
         scope: site ? `browser control on ${site}` : 'browser control',
         covered_by: site ? ['*'] : [],
+      });
+    }
+    if (Object.hasOwn(TERMINAL_ACTIONS, tool)) {
+      const host = typeof args.host === 'string' ? args.host : '';
+      // A sent line carrying a word that can wipe what a device holds asks every time,
+      // as a deleting command does: a rule for the device does not cover it, and only
+      // auto mode stops asking (the tools add `deletes`, one word, never the line)
+      if (typeof args.deletes === 'string' && args.deletes)
+        return review(
+          'ASK_FORCED',
+          `${TERMINAL_ACTIONS[tool]}, which can destroy what the device holds: ${JSON.stringify(args.deletes)}`,
+          { warn_delete: true },
+        );
+      return review('ASK', TERMINAL_ACTIONS[tool]!, {
+        pattern: host ? 'host:' + host : '*',
+        scope: host ? `terminal control on ${host}` : 'terminal control',
+        covered_by: host ? ['*'] : [],
       });
     }
     return review('ASK', `${tool} can change state`, {

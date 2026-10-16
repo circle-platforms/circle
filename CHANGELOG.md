@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- Device terminals: Circle drives SSH and Telnet consoles the way you would in SecureCRT, for switches, routers and servers on your network. Eight `terminal_*` tools connect by a saved profile, type commands, read and wait on the screen, press keys and hand a console over; approvals go device by device, a line that can wipe a device asks every time, and the first SSH login to an unknown host key stops for your answer. Passwords come only from saved secrets. The terminal interface shows each device's screen on a page you can attach to and type on (`/terminals`); the desktop application has a terminal panel you share with Circle. Serial ports and file transfer are not in this version. See [Device terminals](https://circle-platforms.github.io/circle/tools/#device-terminals).
+
 ## 1.7.0 - 2026-10-15
 
 ### Changed

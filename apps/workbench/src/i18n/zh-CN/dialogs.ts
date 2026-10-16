@@ -194,4 +194,5 @@ export const dialogs: Record<string, string> = {
     '没有选中内容时，复制上一条回答',
   tool: '工具',
   notice: '提示',
+  'trust this device key for good': '永久信任这台设备的这个密钥',
 };

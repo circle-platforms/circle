@@ -36,7 +36,13 @@ await build({
   platform: 'node',
   target: 'node24',
   format: 'cjs',
-  external: ['electron', 'original-fs'],
+  external: [
+    'electron',
+    'original-fs',
+    // ssh2's optional native accelerator: a .node binary esbuild cannot bundle.
+    // ssh2 requires it inside a try/catch and falls back to pure-JS crypto without it.
+    'cpu-features',
+  ],
   sourcemap: true,
 });
 await build({

@@ -241,14 +241,16 @@ export function InlineRequest({
           >
             {item.reason === 'trusts an untrusted certificate'
               ? t('always trust this certificate on this host')
-              : typeof item.input?.site === 'string' && item.input.site
-                ? t(
-                    download
-                      ? 'allow downloads from {site} for this session'
-                      : 'allow on {site} for this session',
-                    { site: item.input.site },
-                  )
-                : t('allow for this session')}
+              : item.reason === 'trusts an unknown device host key'
+                ? t('trust this device key for good')
+                : typeof item.input?.site === 'string' && item.input.site
+                  ? t(
+                      download
+                        ? 'allow downloads from {site} for this session'
+                        : 'allow on {site} for this session',
+                      { site: item.input.site },
+                    )
+                  : t('allow for this session')}
           </Button>
         )}
         {runtime.mode === 'live' && item.choices?.includes('prefix') && (

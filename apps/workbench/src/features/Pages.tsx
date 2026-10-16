@@ -1056,6 +1056,7 @@ const TOOL_KIND: Record<string, () => string> = {
   write: () => t('changes files'),
   execute: () => t('runs commands'),
   unknown: () => t('may change things'),
+  terminal: () => t('device terminal'),
 };
 function ToolsPage() {
   const [query, setQuery] = useState('');

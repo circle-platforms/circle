@@ -19,4 +19,8 @@ export const plugins: Record<string, string> = {
   'The conversation and other components remain available.':
     '对话和其他组件仍然可用。',
   retry: '重试',
+  // the device terminal pane and its plugin
+  'device terminal pane': '设备终端面板',
+  'SSH and Telnet consoles shared with Circle.':
+    '与 Circle 共享的 SSH 和 Telnet 控制台。',
 };

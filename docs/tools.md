@@ -4,7 +4,7 @@ nav_order: 20
 
 # Built-in tools
 
-The main agent has these twenty-one core tools. The desktop application adds the thirteen [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
+The main agent has these twenty-one core tools. The desktop application adds the thirteen [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. The eight [device terminal](#device-terminals) tools come with both. MCP servers and [extensions](extensions.md) add more.
 
 "Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except changes to a plan file (see [Read-only mode](security.md#read-only-mode)).
 
@@ -142,6 +142,49 @@ An element is `{ "role", "name", "nth" }`: its role and name exactly as a snapsh
 **Recording.** `browser_record` reads the conversation's stored messages: each browser call as the model wrote it, with its refs and `%NAME%`, never a secret's value, and its result. A ref becomes the element the browser result before the call showed under it, with `nth` when that snapshot had several of the same role and name; when it did not show that element there, the element the call's own result names. A click on a certificate warning's link to proceed becomes a `proceed` step; when you passed a warning yourself, or a page was reached past a certificate accepted earlier in the conversation or trusted for good, a `proceed` step is added too, which does nothing in a run without the warning. Snapshots, screenshots, hand-overs, uploads, tab lists, calls that failed or did nothing, other clicks on a warning, choosing a tab and closing a tab that is not shown are left out, and the result says how many of each. Tab ids (`t1`, `t2`) differ between runs, so a script has no step that chooses a tab. Values the model typed as plain text stay plain text. The file has one step a line; the result lists them, and the model then cleans the file up with `read_file` and `edit_file`: it drops detours, adds `expect` steps and writes values that change between runs as `%NAME%`. The path is taken and approved as `write_file` takes it.
 
 **Replaying.** `browser_replay` reads the file as `read_file` does and checks it; an error names the step and what is wrong. `%NAME%` anywhere in a step but its `note` takes the replay's `variables`, then Circle's [variables](security.md#secrets-by-name), then its secrets; a name none of them sets stops the replay before any step, naming it. Text made only of secrets' names is typed as a secret, so a password field takes it, and a variable given to the replay as a secret's `%NAME%` counts as that secret. Wherever a secret's value appears in the result, the model reads `%NAME%`. Each step looks for its element in a new snapshot until it shows or the step's time is up, and tries a click, typing or choice again while the element is covered, hidden, disabled or out of view, or its ref went stale. The approval is the browser's, for the site the replay starts on: where its first navigation goes when no step acts on the page before it, else the page shown; **allow on *site* for this session** covers it as any browser action there. Every step acts on that site only: a navigation elsewhere, or a page that went to another site, stops the replay, and calling it again from that step asks about the new site. A certificate warning asks you as an action's would (every time, except in `auto` mode), and a download from a site not yet allowed asks as usual. In manual and accept-edits mode a script with a step that clicks a control that deletes, clears or resets something asks every time before it runs, and the card names those steps. In the desktop application, taking the browser while a replay runs stops it: its next request to the browser waits until you hand the browser back, does nothing, and the replay ends there, showing the page as you left it. The first step that cannot be done stops the replay; the error gives its number, the step as written, why, the steps done before it, and the page as it is with its snapshot, and the model fixes the file and calls again with `from` at that step. A finished replay says what each step did, what happened meanwhile (downloads, dialogs answered) and the page it ended on. `esc` stops it between steps and during one.
+
+## Device terminals
+
+These tools drive device consoles over SSH and Telnet, the way you would in SecureCRT: switches, routers, servers, a console server's serial port reached over the network. They are available to the main agent only, in the desktop application and in the full-screen terminal interface alike. Each conversation owns its terminals, up to six; a person can watch every screen and take one over.
+
+A conversation's terminals are numbered `t1`, `t2`…; the saved profiles are the person's, named like SecureCRT's session list. Every result starts with the state line of the terminal it acted on (`t1 · LAB-DEVICE-01 · ssh sw1.lan:22 · quiet 4s`), and what the person did with the devices since the model last looked comes once as **Events**.
+
+| Tool | What it does | Asks | Limits |
+|---|---|---|---|
+| `terminal_sessions` | List this conversation's terminals with their state, and the saved profiles. | no | |
+| `terminal_connect` | Open a console, by a saved `profile` — the way to reach an SSH device, since a profile carries how to sign in — or by a plain `host` with `transport` (`ssh` or `telnet`), `port` and `user`. | yes, per device | SSH sign-in comes only from a profile: a password from a saved [secret](security.md#secrets-by-name), a key from a path taken as the file tools take it. A Telnet console answers its own login, so the device prompts are typed with `terminal_send`. The first login to a device whose host key is new stops and asks you; see below. |
+| `terminal_send` | Type `text` to the device; `enter` presses Enter after it. `%NAME%` puts in a variable or a secret, whose value you never see back. | yes; a line carrying a word that can destroy device state is asked every time | The result shows the end of the screen once it rests; a device that keeps printing says so. |
+| `terminal_read` | Read the screen's last lines (`lines`, 50 by default, up to 2000 of the scrollback) and the line the cursor sits on — the prompt. | no | Colours and cursor moves are read as the plain text they left. |
+| `terminal_wait` | Wait for the screen: quiet for `idle_ms` (600 by default), or a `pattern` (a regular expression over the screen's last lines); bounded by `timeout_ms` (30000, up to 300000). | no | A timeout answers, it does not fail: the result says which it was. Prefer it over sleeping between sends. |
+| `terminal_press` | Press one key: `Enter`, `Tab`, `Escape`, `Backspace`, `Delete`, `Ctrl_C`, `Ctrl_D`, `Ctrl_Z`, the arrows, `Home`, `End`, `PageUp`, `PageDown`. | yes | |
+| `terminal_disconnect` | Close the device's console. | yes | `terminal_read` can still show its last screen until the conversation ends. |
+| `terminal_handoff` | Hand the console to the user with a `reason` and wait: the page opens so they can type on the device; your next action on it waits for them and shows where they left it. | no | Refused in plan mode. The events say that they typed, never what. |
+
+Approval is per device: the card names the `host:port`, and **allow on this device for this session** covers connect, send, press and disconnect on it; another device asks again. A sent line carrying a whole word that can wipe what a device holds (`reboot`, `erase`, `format`, `shutdown`, `reset`, `delete`, `destroy`, `wipe`, `reload`) asks every time, rule aside, and the card names only the matched word, never the line — which also keeps a secret that expands to such a word off the card. `terminal_sessions`, `terminal_read` and `terminal_wait` ask nothing and work in plan and `read-only` modes; `terminal_handoff` asks nothing but plan and `read-only` refuse it, as the browser's does.
+
+### Trusting a device
+
+The first SSH login to a device whose host key nobody has trusted stops before anything is sent and asks you: the card shows the key's type and its SHA-256 fingerprint. **connect once** lets this login and asks again next time; **trust for good** appears only for devices on this network (a private, loopback or link-local address, or a name like `sw1.lan`) and keeps that exact key in `terminal-host-keys.json` in Circle's data folder. A public device is asked about every time, as its browser's certificate warning would be. A device that answers with a different key than the one you trusted is asked about again. `auto` mode answers once by itself and never trusts for good.
+
+### Saved sessions
+
+Profiles are like SecureCRT's session list, and a person's to edit — in the terminal panel of the desktop application or in the file itself; the model only names them. `terminal-sessions.json`, in the same folder as `settings.json`:
+
+```json
+{ "sessions": [
+  { "name": "LAB-DEVICE-01", "transport": "ssh", "host": "sw1.lan",
+    "user": "operator", "auth": { "password": "LAB_PASSWORD" } },
+  { "name": "rack console", "transport": "telnet", "host": "10.0.0.5", "port": 3001 }
+] }
+```
+
+`auth.password` and `auth.passphrase` name saved [secrets](security.md#secrets-by-name) — never values; a worded like a value is dropped, not trusted. `auth.key` is a private key's path, taken as the file tools take it, and a credential file is refused. Ports default to 22 for SSH and 23 for Telnet; `cols` and `rows` to 80×24. A device's password never stays in the transcript: values saved as secrets come back as `%NAME%` wherever they appear, including in what the device showed.
+
+Serial ports and file transfer (SFTP, Zmodem) are not in this version; see [Known issues](known-issues.md).
+
+### Taking turns
+
+`/terminals` lists the conversation's terminals, running first, then the profiles not open: `enter` opens a console's page or connects a profile, `ctrl+d` cuts a console after asking. The page shows the device's screen as the device drew it, colours and all, with its band above: lamp, name, state, quiet time. `pageup`, `pagedown`, `home` and `end` scroll back; `esc` leaves the page. `enter` attaches: from then on every key goes to the device — its Ctrl-C, its Esc, its arrows — and only **ctrl+]** gives the keys back to Circle, the page staying open. While you hold a console the model's actions on it wait, and its next result tells it that you typed, never what. `terminal_handoff` opens the page attached and waits for the card's **continue**, which gives the console back to the model; any other card that needs you takes the frame and drops the page until it is answered. In the desktop application the same sharing lives in the [terminal panel](desktop.md#the-terminal-panel).
 
 ## Working with you
 

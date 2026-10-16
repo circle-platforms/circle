@@ -314,6 +314,102 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'browser',
   },
   {
+    name: 'terminal_sessions',
+    get description() {
+      return t('List the terminals and saved device profiles');
+    },
+    get detail() {
+      return t(
+        "List this conversation's device terminals with their state, and the person's saved profiles.",
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'terminal_connect',
+    get description() {
+      return t('Open an SSH or Telnet console');
+    },
+    get detail() {
+      return t(
+        'Open a device console by a saved profile or a bare host. SSH sign-in comes only from a profile, whose password is a saved secret; an unknown device host key stops the login and asks you.',
+      );
+    },
+    kind: 'terminal',
+  },
+  {
+    name: 'terminal_send',
+    get description() {
+      return t('Type text to a device console');
+    },
+    get detail() {
+      return t(
+        'Type text to a device, Enter when asked; a word that can destroy device state in the line asks you every time. %NAME% puts in a secret whose value you never see back.',
+      );
+    },
+    kind: 'terminal',
+  },
+  {
+    name: 'terminal_read',
+    get description() {
+      return t('Read a device screen and its prompt');
+    },
+    get detail() {
+      return t(
+        "Read a device terminal's last lines and the line the cursor sits on, as plain text.",
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'terminal_wait',
+    get description() {
+      return t('Wait for a device screen to rest');
+    },
+    get detail() {
+      return t(
+        'Wait until a device screen rests or shows a pattern, bounded by a timeout; a timeout is an answer, not a failure.',
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'terminal_press',
+    get description() {
+      return t('Press one key on a device console');
+    },
+    get detail() {
+      return t(
+        'Press Enter, Tab, Escape, an arrow, Ctrl-C or another known key on a device terminal.',
+      );
+    },
+    kind: 'terminal',
+  },
+  {
+    name: 'terminal_disconnect',
+    get description() {
+      return t('Close a device console');
+    },
+    get detail() {
+      return t(
+        "Close one of the conversation's device consoles; its last screen stays readable.",
+      );
+    },
+    kind: 'terminal',
+  },
+  {
+    name: 'terminal_handoff',
+    get description() {
+      return t('Hand a device console to the user');
+    },
+    get detail() {
+      return t(
+        'Give the person a console to type on; the model waits until they give it back and then sees the screen as they left it, never what they typed.',
+      );
+    },
+    kind: 'read',
+  },
+  {
     name: 'execute',
     get description() {
       return t('Run a shell command in the workspace');
