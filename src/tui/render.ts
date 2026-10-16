@@ -640,7 +640,7 @@ export function renderScreen(
     const seconds = (Date.now() - state.started) / 1000;
     const waiting = state.storeWait ? uiText(DATABASE_WAIT_STATUS) : '';
     const label = waiting
-      ? waiting
+      ? ''
       : state.busy
         ? busyLabel(
             state.busyRetry ? 'Retrying' : (state.busyVerb ?? 'Brewing'),
@@ -654,7 +654,7 @@ export function renderScreen(
     if (state.completion && !state.picker)
       bottom.push(...completionRows(state.completion, width));
     const frame = loopFrame(width, {
-      elapsed: waiting ? undefined : state.busy ? seconds : undefined,
+      elapsed: waiting || !state.busy ? undefined : seconds,
       label,
       mode,
       modeSgr,

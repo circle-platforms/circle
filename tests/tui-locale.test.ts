@@ -158,7 +158,11 @@ test('a Chinese locale translates the session list, resume line, view only and s
     assert.equal(transcript.includes('Resumed'), false);
     const frame = stripAnsi(renderScreen(screen, 80, 24).join('\n'));
     assert.match(frame, /只读/);
-    assert.match(frame, /正在等待数据库…/);
+    assert.equal(
+      frame.split('\n').filter((line) => line.includes('正在等待数据库…'))
+        .length,
+      1,
+    );
     assert.equal(frame.includes('view only'), false);
     assert.equal(frame.includes('waiting for the database'), false);
   } finally {
@@ -210,7 +214,12 @@ test('an English screen says it is waiting for the database', () => {
         24,
       ).join('\n'),
     );
-    assert.match(frame, /waiting for the database…/);
+    assert.equal(
+      frame
+        .split('\n')
+        .filter((line) => line.includes('waiting for the database…')).length,
+      1,
+    );
     assert.equal(frame.includes('正在等待数据库'), false);
   } finally {
     process.env.LANG = saved.LANG;
