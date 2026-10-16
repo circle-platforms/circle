@@ -1,26 +1,22 @@
 name: Browser page diagnostics
-# Diagnostic branch only (issue #124): when does the packaged Linux window produce its
-# first animation frames under the release job's display, compared with the workbench's?
+# Diagnostic branch only (issue #124): the release job's packaged Linux step, from the
+# fix branch, on fresh runners where the packaged check is the first Electron launch.
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  frames:
+  release-step:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { config: stacks, replica: 1, iterations: '3', prepare: 'stacks' }
-          - { config: stacks, replica: 2, iterations: '3', prepare: 'stacks' }
-          - { config: stacks, replica: 3, iterations: '3', prepare: 'stacks' }
-          - { config: fontconfig, replica: 1, iterations: '3', prepare: 'fontconfig' }
-          - { config: fontconfig, replica: 2, iterations: '3', prepare: 'fontconfig' }
-          - { config: fontconfig, replica: 3, iterations: '3', prepare: 'fontconfig' }
+        replica: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: fix/triage-124
       - uses: actions/setup-node@v7
         with:
           node-version: '24.21.0'
@@ -29,41 +25,36 @@ jobs:
             package-lock.json
             apps/workbench/package-lock.json
             apps/desktop/package-lock.json
+      - run: git log -1 --format='%H %s'
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
       - run: npm --prefix apps/desktop run package
-      - name: Probe the packaged application's first frames
+      # As release.yml's "Run the packaged application" step, test:desktop only
+      - name: Run the packaged application
         shell: bash
-        env:
-          PROBE_LABEL: ${{ matrix.config }}-${{ matrix.replica }}
-          PROBE_SHOW: harness
-          PROBE_ITERATIONS: ${{ matrix.iterations }}
         run: |
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-linux-x64"
-          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Circle"
-          dpkg -l | grep -E ' (xvfb|libgtk-3-0t64|libgbm1|libegl-mesa0|mesa-libgallium|libgl1-mesa-dri) ' || true
-          grep -n 'XVFBARGS=' "$(command -v xvfb-run)" || true
-          timeout 20 xvfb-run -a "$CIRCLE_DESKTOP_EXECUTABLE" 2>&1 | head -5 || true
-          helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
-          sudo chown root:root "$helper"
-          sudo chmod 4755 "$helper"
-          ls -la ~/.cache ~/.cache/fontconfig 2>&1 | head -30 || true
-          case "${{ matrix.prepare }}" in
-            stacks)
-              command -v gdb || { sudo apt-get update -q && sudo apt-get install -y -q gdb > /dev/null; }
-              export PROBE_STACKS=1 ;;
-            fontconfig)
-              time fc-list > /dev/null
-              time fc-list > /dev/null ;;
-          esac
-          ls -la ~/.cache ~/.cache/fontconfig 2>&1 | head -30 || true
-          xvfb-run -a node apps/desktop/test/diagnose-frames.mjs
-          ls -la ~/.cache ~/.cache/fontconfig 2>&1 | head -30 || true
+          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/Circle-linux-x64/Circle"
+          run=()
+          if [ "$RUNNER_OS" = Linux ]; then
+            sysctl kernel.apparmor_restrict_unprivileged_userns || true
+            timeout 20 xvfb-run -a "$CIRCLE_DESKTOP_EXECUTABLE" 2>&1 | head -20 || true
+            helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
+            sudo chown root:root "$helper"
+            sudo chmod 4755 "$helper"
+            run=(xvfb-run -a)
+          fi
+          "${run[@]}" npm --prefix apps/desktop run test:desktop
+      - name: Report the first frames
+        if: always()
+        run: |
+          node -e "const r=require('./apps/desktop/artifacts/desktop/receipt.json'); console.log(JSON.stringify({harnessShow:r.startupReadiness.harnessShow, frames:r.startupReadiness.frames}))" || true
+          cat apps/desktop/artifacts/frame-readiness/receipt.json || true
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
         with:
-          name: frames-124-${{ matrix.config }}-${{ matrix.replica }}
-          path: outputs/frames-124/
+          name: release-step-${{ matrix.replica }}
+          path: apps/desktop/artifacts/
           if-no-files-found: ignore
           retention-days: 7
