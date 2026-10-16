@@ -34,6 +34,10 @@ import { createInterface } from 'node:readline';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
+import {
+  commandExecutionReceipt,
+  type CommandPtyCompletion,
+} from '../../../../src/command_process.js';
 
 const exec = promisify(execFile);
 const INPUT_LIMIT = 256 * 1024;
@@ -88,6 +92,15 @@ export interface TerminalSnapshot {
   restartOf?: string;
   kind: 'shell' | 'service';
   command?: TerminalCommand;
+  /** Host-owned command identity. Expanded launch arguments are never retained. */
+  managedCommand?: {
+    executionId: string;
+    toolCallId?: string;
+    displayCommand?: string;
+    ownership: 'pty-group';
+    commandPid?: number;
+    completion: CommandPtyCompletion;
+  };
   serviceId?: string;
   serviceState?: ServiceState;
   exitReason?: string;
@@ -116,7 +129,8 @@ export interface TerminalEvent {
     | 'error'
     | 'interrupted'
     | 'readiness'
-    | 'ready';
+    | 'ready'
+    | 'commandState';
   data?: string;
   snapshot?: TerminalSnapshot;
 }
@@ -149,6 +163,47 @@ export interface TerminalManagerOptions {
   stopGraceMs?: number;
 }
 
+/** Trusted host API only; the workspace RPC must never forward this structure. */
+export interface ManagedTerminalCommandOptions {
+  owner: string;
+  sessionId: string;
+  executionId: string;
+  toolCallId?: string;
+  displayCommand?: string;
+  completion: CommandPtyCompletion;
+  /** Trusted supervisor executable; expanded commands travel over its private control pipe. */
+  launch: TerminalCommand;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  outputPath: string;
+  signal: AbortSignal;
+  /** Delegate a human Stop to the owning JobRegistry, without restarting it. */
+  stop: (reason: string) => Promise<unknown>;
+}
+
+export interface ManagedTerminalCommandHandle {
+  snapshot: TerminalSnapshot;
+  exited: Promise<{ exitCode: number; signal?: number }>;
+  flushed: Promise<void>;
+  /** Trusted adapter facts only; this is never exposed as a workspace RPC. */
+  recordState: (state: {
+    commandPid?: number;
+    completion: CommandPtyCompletion;
+  }) => Promise<void>;
+  /** Only the Registry's transport adapter may call this, to avoid delegation recursion. */
+  stopTransport: () => Promise<void>;
+}
+
+interface ManagedCommand {
+  source: NonNullable<TerminalSnapshot['managedCommand']>;
+  outputPath: string;
+  stop: ManagedTerminalCommandOptions['stop'];
+  signal: AbortSignal;
+  exit: (value: { exitCode: number; signal?: number }) => void;
+  failure: Promise<never>;
+  fail: (error: Error) => void;
+}
+
 export interface TerminalReplay {
   events: TerminalEvent[];
   nextSequence: number;
@@ -157,6 +212,8 @@ export interface TerminalReplay {
 }
 
 interface Entry {
+  managed?: ManagedCommand;
+  mirror?: WriteStream;
   snapshot: TerminalSnapshot;
   environment?: Record<string, string | null>;
   pty?: IPty;
@@ -208,9 +265,114 @@ export class TerminalManager {
     return this.#create(options);
   }
 
+  async createManagedCommand(
+    options: ManagedTerminalCommandOptions,
+  ): Promise<ManagedTerminalCommandHandle> {
+    options.signal.throwIfAborted();
+    identity(options.executionId, 'execution');
+    if (options.toolCallId !== undefined)
+      identity(options.toolCallId, 'tool call');
+    if (
+      options.displayCommand !== undefined &&
+      typeof options.displayCommand !== 'string'
+    )
+      throw Error('invalid command display');
+    const safeCompletion = (completion: CommandPtyCompletion) => {
+      const receipt = commandExecutionReceipt({
+        executionId: options.executionId,
+        epoch: '',
+        ownerSessionId: options.owner,
+        executionSessionId: options.sessionId,
+        status: 'starting',
+        started: 0,
+        outputPath: '',
+        completion,
+      });
+      if (!receipt) throw Error('invalid managed command completion scope');
+      return receipt.completion;
+    };
+    let exit!: ManagedCommand['exit'];
+    const exited = new Promise<{ exitCode: number; signal?: number }>(
+      (resolve) => {
+        exit = resolve;
+      },
+    );
+    let fail!: ManagedCommand['fail'];
+    const failure = new Promise<never>((_resolve, reject) => {
+      fail = reject;
+    });
+    void failure.catch(() => {});
+    const source: ManagedCommand['source'] = {
+      executionId: options.executionId,
+      toolCallId: options.toolCallId,
+      displayCommand: options.displayCommand,
+      ownership: 'pty-group',
+      completion: safeCompletion(options.completion),
+    };
+    const managed: ManagedCommand = {
+      source,
+      outputPath: options.outputPath,
+      stop: options.stop,
+      signal: options.signal,
+      exit,
+      failure,
+      fail,
+    };
+    const snapshot = await this.#create(
+      {
+        owner: options.owner,
+        sessionId: options.sessionId,
+        cwd: options.cwd,
+        env: Object.fromEntries(
+          Object.entries(options.env).filter(
+            (entry): entry is [string, string] => entry[1] !== undefined,
+          ),
+        ),
+        label: 'command',
+      },
+      undefined,
+      { managed, launch: options.launch },
+    );
+    const owner = options.owner;
+    const entry = this.#get(owner, snapshot.id);
+    const id = snapshot.id;
+    return {
+      snapshot,
+      exited,
+      flushed: Promise.race([
+        failure,
+        entry.done.then(async () => {
+          await drainObserver(entry);
+          if (entry.snapshot.error) throw Error(entry.snapshot.error);
+        }),
+      ]),
+      stopTransport: async () => {
+        await this.#closeTransport(owner, id);
+      },
+      recordState: async (state) => {
+        if (state.commandPid !== undefined) {
+          if (!Number.isSafeInteger(state.commandPid) || state.commandPid <= 0)
+            throw Error('invalid managed command process identity');
+          entry.snapshot.managedCommand!.commandPid = state.commandPid;
+        }
+        entry.snapshot.managedCommand!.completion = safeCompletion(
+          state.completion,
+        );
+        if (
+          entry.events &&
+          !entry.events.writableEnded &&
+          !entry.events.destroyed
+        )
+          this.#append(entry, 'commandState', undefined, true);
+        await this.#persist(entry);
+      },
+    };
+  }
+
   async #create(
     options: TerminalCreateOptions,
     restart?: { serviceId?: string },
+    managedLaunch?: { managed: ManagedCommand; launch: TerminalCommand },
   ): Promise<TerminalSnapshot> {
     await this.#ready;
     if (this.#disposed) throw Error('terminal manager is closed');
@@ -254,12 +416,18 @@ export class TerminalManager {
       effectiveEnvironment.TERM = 'xterm-256color';
       if (readiness?.port && (await portOpen(readiness.port)))
         throw Error(`port ${readiness.port} is already in use`);
-      const command = options.command
-        ? await executable(options.command, cwd, effectiveEnvironment)
-        : undefined;
+      const command =
+        options.command || managedLaunch
+          ? await executable(
+              managedLaunch?.launch ?? options.command!,
+              cwd,
+              effectiveEnvironment,
+            )
+          : undefined;
       const shell = command?.file ?? configuredShell;
-      const args =
+      const actualArgs =
         command?.args ?? validateShellArgs(shell, options.args ?? []);
+      const args = managedLaunch ? [] : actualArgs;
       const cols = dimension(options.cols ?? 80);
       const rows = dimension(options.rows ?? 24);
       const label = options.label ?? basename(shell);
@@ -289,8 +457,11 @@ export class TerminalManager {
         lastSequence: 0,
         logPath: join(folder, 'output.log'),
         kind: command ? 'service' : 'shell',
+        ...(managedLaunch
+          ? { managedCommand: clone(managedLaunch.managed.source) }
+          : {}),
         ...(environment ? { transientEnvironment: true } : {}),
-        ...(command
+        ...(command && !managedLaunch
           ? ({
               command,
               serviceId: restart?.serviceId ?? randomUUID(),
@@ -303,6 +474,7 @@ export class TerminalManager {
           : {}),
       };
       const entry = makeEntry(snapshot);
+      entry.managed = managedLaunch?.managed;
       entry.environment = environment;
       entry.events = createWriteStream(join(folder, 'events.jsonl'), {
         flags: 'wx',
@@ -312,8 +484,15 @@ export class TerminalManager {
         flags: 'wx',
         mode: 0o600,
       });
+      if (entry.managed)
+        entry.mirror = createWriteStream(entry.managed.outputPath, {
+          flags: 'a',
+          mode: 0o600,
+        });
       this.#entries.set(id, entry);
-      for (const stream of [entry.events, entry.output]) {
+      for (const stream of [entry.events, entry.output, entry.mirror].filter(
+        (stream): stream is WriteStream => !!stream,
+      )) {
         stream.on('drain', () => {
           entry.diskPaused.delete(stream);
           this.#flow(entry);
@@ -321,9 +500,14 @@ export class TerminalManager {
         stream.on('error', (error) => this.#logFailure(entry, error));
       }
       try {
+        if (entry.managed)
+          await Promise.all(
+            [entry.events, entry.output, entry.mirror].map(opened),
+          );
+        entry.managed?.signal.throwIfAborted();
         entry.pty = spawnPty(
           shell,
-          args,
+          actualArgs,
           {
             cwd,
             cols,
@@ -339,6 +523,7 @@ export class TerminalManager {
         entry.pty.onData((data) => {
           for (const part of chunks(data)) {
             this.#write(entry, entry.output, part);
+            this.#write(entry, entry.mirror, part);
             this.#append(entry, 'data', part);
             if (
               snapshot.readiness?.pattern &&
@@ -361,6 +546,7 @@ export class TerminalManager {
           snapshot.exitReason = exit.signal
             ? `signal ${exit.signal}`
             : `exit ${exit.exitCode}`;
+          entry.managed?.exit(exit);
           if (snapshot.kind === 'service') {
             snapshot.serviceState =
               snapshot.requestedSignal === 'SIGTERM' ||
@@ -389,11 +575,21 @@ export class TerminalManager {
         return clone(snapshot);
       } catch (error) {
         snapshot.status = 'failed';
-        snapshot.error = error instanceof Error ? error.message : String(error);
+        snapshot.error = entry.managed
+          ? 'managed command transport could not be initialized'
+          : error instanceof Error
+            ? error.message
+            : String(error);
         snapshot.exitedAt = new Date().toISOString();
         snapshot.exitReason = snapshot.error;
         if (snapshot.kind === 'service') snapshot.serviceState = 'failed';
         this.#append(entry, 'error', snapshot.error, true);
+        // An allocated transport must be returned to its Registry so startup
+        // persistence failure cannot strand a process outside its stop owner.
+        if (entry.managed && entry.pty) {
+          entry.managed.fail(Error(snapshot.error));
+          return clone(snapshot);
+        }
         await this.#finish(entry);
         throw error;
       }
@@ -443,6 +639,10 @@ export class TerminalManager {
     await this.#ready;
     const entry = this.#get(owner, id, true);
     if (!SIGNALS.has(signal)) throw Error('invalid terminal signal');
+    if (entry.managed && signal !== 'SIGINT') {
+      await entry.managed.stop('user');
+      return clone(entry.snapshot);
+    }
     entry.snapshot.requestedSignal = signal;
     if (signal !== 'SIGINT') {
       entry.snapshot.status = 'stopping';
@@ -465,6 +665,16 @@ export class TerminalManager {
   async close(owner: string, id: string): Promise<TerminalSnapshot> {
     await this.#ready;
     const entry = this.#get(owner, id);
+    if (entry.managed) {
+      await entry.managed.stop('user');
+      return clone(entry.snapshot);
+    }
+    return this.#closeTransport(owner, id);
+  }
+
+  async #closeTransport(owner: string, id: string): Promise<TerminalSnapshot> {
+    await this.#ready;
+    const entry = this.#get(owner, id);
     if (!entry.pty) {
       await entry.done;
       if (entry.ownedProcesses.size && !(await untilStopped(entry, 50))) {
@@ -477,9 +687,15 @@ export class TerminalManager {
     }
     if (entry.closing) return entry.closing;
     entry.closing = (async () => {
-      await this.signal(owner, id, 'SIGTERM');
+      if (entry.managed) {
+        entry.snapshot.requestedSignal = 'SIGTERM';
+        entry.snapshot.status = 'stopping';
+        this.#append(entry, 'signalRequested', 'SIGTERM', true);
+        await terminateOwnedTree(entry, 'SIGTERM');
+      } else await this.signal(owner, id, 'SIGTERM');
       if (!(await untilStopped(entry, this.#options.stopGraceMs ?? 1000))) {
-        if (entry.pty) await this.signal(owner, id, 'SIGKILL');
+        if (entry.pty && !entry.managed)
+          await this.signal(owner, id, 'SIGKILL');
         else await terminateOwnedTree(entry, 'SIGKILL');
         if (!(await untilStopped(entry, 3000)))
           throw Error('terminal stop has not been confirmed');
@@ -495,6 +711,10 @@ export class TerminalManager {
     await this.#ready;
     const previous = this.#get(owner, id);
     const old = previous.snapshot;
+    if (old.managedCommand)
+      throw Error(
+        'managed commands must be started by their original task; restart would execute a new command',
+      );
     if (old.transientEnvironment && !previous.environment)
       throw Error(
         'per-launch environment is unavailable after restart; relaunch from its debugger or task',
@@ -835,19 +1055,24 @@ export class TerminalManager {
 
   #logFailure(entry: Entry, error: Error): void {
     if (entry.snapshot.error) return;
-    entry.snapshot.error = `terminal log could not be written: ${error.message}`;
+    entry.snapshot.error = entry.managed
+      ? 'managed command output could not be written'
+      : `terminal log could not be written: ${error.message}`;
     entry.snapshot.status = 'failed';
     entry.snapshot.exitReason = entry.snapshot.error;
     if (entry.snapshot.kind === 'service')
       entry.snapshot.serviceState = 'failed';
     // Disk failure must be visible and must not leave an unobservable process running.
     this.#append(entry, 'error', entry.snapshot.error, true);
-    void terminateOwnedTree(entry, 'SIGKILL').catch(() => undefined);
+    if (entry.managed) entry.managed.fail(Error(entry.snapshot.error));
+    else void terminateOwnedTree(entry, 'SIGKILL').catch(() => undefined);
   }
 
   #transportFailure(entry: Entry, error: Error): void {
     const code = (error as NodeJS.ErrnoException).code;
-    const reason = `terminal transport failed${code ? ` (${code})` : ''}: ${error.message}`;
+    const reason = entry.managed
+      ? `managed command transport failed${code ? ` (${code})` : ''}`
+      : `terminal transport failed${code ? ` (${code})` : ''}: ${error.message}`;
     if (entry.snapshot.error) return;
     entry.snapshot.error = reason;
     entry.snapshot.status = 'failed';
@@ -860,7 +1085,8 @@ export class TerminalManager {
     void this.#persist(entry).catch((failure) =>
       this.#logFailure(entry, failure),
     );
-    if (entry.pty)
+    if (entry.managed) entry.managed.fail(Error(reason));
+    else if (entry.pty)
       void terminateOwnedTree(entry, 'SIGKILL').catch((failure) => {
         this.#append(
           entry,
@@ -892,12 +1118,20 @@ export class TerminalManager {
   async #finish(entry: Entry): Promise<void> {
     clearTimeout(entry.readinessTimer);
     try {
-      await Promise.all([end(entry.events), end(entry.output)]);
+      await Promise.all([
+        end(entry.events),
+        end(entry.output),
+        end(entry.mirror),
+      ]);
       await this.#persist(entry);
     } catch (error) {
-      entry.snapshot.error =
-        error instanceof Error ? error.message : String(error);
+      entry.snapshot.error = entry.managed
+        ? 'managed command output flush failed'
+        : error instanceof Error
+          ? error.message
+          : String(error);
       entry.snapshot.status = 'failed';
+      entry.managed?.fail(Error('managed command output flush failed'));
     } finally {
       entry.resolveDone();
     }
@@ -925,6 +1159,22 @@ async function drainObserver(entry: Entry): Promise<void> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function opened(stream?: WriteStream): Promise<void> {
+  if (!stream || !stream.pending) return;
+  await new Promise<void>((resolve, reject) => {
+    const open = () => {
+      stream.off('error', error);
+      resolve();
+    };
+    const error = (failure: Error) => {
+      stream.off('open', open);
+      reject(failure);
+    };
+    stream.once('open', open);
+    stream.once('error', error);
+  });
 }
 
 function makeEntry(snapshot: TerminalSnapshot): Entry {
