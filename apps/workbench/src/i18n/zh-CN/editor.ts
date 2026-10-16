@@ -1,4 +1,6 @@
 export const editor: Record<string, string> = {
+  'agent workspace: {name}': 'Agent 工作区：{name}',
+  'agent workspace': 'Agent 工作区',
   'agent source: {name}': 'Agent 来源：{name}',
   'agent source': 'Agent 来源',
   'workspace source: {name}': '工作区来源：{name}',

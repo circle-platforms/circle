@@ -1,0 +1,56 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { workspaceLabel } from '../src/model/workspace-label';
+import { PreviewRuntime } from '../src/model/state';
+import { setLanguage } from '../src/i18n';
+const generated = 'a0b1c2d3e4f5678901234567-2';
+function fixture() {
+  const snapshot = new PreviewRuntime().getSnapshot();
+  const owner = {
+    ...snapshot.agents[0],
+    id: 'actual-child',
+    resourceSessionId: 'actual-child',
+    workspaceId: 'actual-worktree',
+    name: 'Implement login',
+    task: {
+      id: 'login',
+      attempt: 2,
+      state: 'running' as const,
+      access: 'write' as const,
+      baseline: 'abc',
+    },
+  };
+  return { workspace: { id: 'actual-worktree', name: generated }, owner };
+}
+test('verified generated task workspaces use the actual agent name in both languages', () => {
+  const { workspace, owner } = fixture();
+  for (const [lang, expected] of [
+    ['en', 'agent workspace: Implement login'],
+    ['zh-CN', 'Agent 工作区：Implement login'],
+  ] as const) {
+    setLanguage(lang);
+    assert.equal(workspaceLabel(workspace, [owner]), expected);
+  }
+  setLanguage('en');
+  assert.equal(
+    workspaceLabel({ ...workspace, name: 'customer-project' }, [owner]),
+    'customer-project',
+  );
+  assert.equal(
+    workspaceLabel(workspace, [{ ...owner, name: generated }]),
+    'agent workspace',
+  );
+});
+test('a folder-shaped name never invents ownership, roles or navigation changes', () => {
+  const { workspace, owner } = fixture();
+  for (const agents of [
+    [],
+    [{ ...owner, workspaceId: 'parent' }],
+    [{ ...owner, resourceSessionId: 'parent' }],
+    [{ ...owner, task: undefined }],
+  ]) {
+    assert.equal(workspaceLabel(workspace, agents), generated);
+  }
+  assert.equal(owner.resourceSessionId, 'actual-child');
+  assert.equal(owner.workspaceId, 'actual-worktree');
+});
