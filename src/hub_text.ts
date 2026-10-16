@@ -406,8 +406,54 @@ export const HUB_ZH: Record<string, string> = {
   ' · {reason}': ' · {reason}',
   'a rejection needs a reason: /hub reject {id} <reason>':
     '拒绝需要原因：/hub reject {id} <reason>',
-  'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | roles | audit | modules | tools | skill | bot]':
-    '使用枢纽：/hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | roles | audit | modules | tools | skill | bot]',
+  'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | knowledge | roles | audit | modules | tools | skill | bot]':
+    '使用枢纽：/hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | knowledge | roles | audit | modules | tools | skill | bot]',
+  'the same search, with --mode exact|prefix|directory|fulltext and --candidates':
+    '同一检索，可加 --mode exact|prefix|directory|fulltext 和 --candidates',
+  'share a file under a new ACL (--file, --readers). acl is the same command':
+    '按新的访问控制共享一个文件（--file、--readers）。acl 是同一命令',
+  'read a review, request one, or approve|reject it with --reason':
+    '查看审核、请求审核，或用 --reason 批准或拒绝',
+  'publish the stable snapshot (--expect <id>|none, --category product|consolidated)':
+    '发布稳定快照（--expect <id>|none，--category product|consolidated）',
+  'the snapshot changed ({code}). /hub knowledge publish --expect <id> uses the current one, or --expect none when there is no snapshot yet.':
+    '快照已变化（{code}）。/hub knowledge publish --expect <id> 使用当前快照；还没有快照时用 --expect none。',
+  'sharing was not allowed ({code}). /hub knowledge share sends consent; promoting a review needs the source to allow team promotion.':
+    '没有允许共享（{code}）。/hub knowledge share 会带上同意；把审核提升到团队需要来源允许团队推广。',
+  'the file is empty': '文件是空的',
+  'name who may read: --readers prn_… or * ({label})':
+    '写明谁可以读：--readers prn_… 或 *（{label}）',
+  'usage: /hub knowledge search <text> [--mode exact|prefix|directory|fulltext] [--candidates]':
+    '用法：/hub knowledge search <text> [--mode exact|prefix|directory|fulltext] [--candidates]',
+  'search mode is exact, prefix, directory or fulltext':
+    '检索模式是 exact、prefix、directory 或 fulltext',
+  'usage: /hub knowledge share <source> --file <path> --readers a,b [--platform a,b] [--type document] [--category consolidated|product] [--promote] [--revision <rev>] [--path <path>]':
+    '用法：/hub knowledge share <source> --file <path> --readers a,b [--platform a,b] [--type document] [--category consolidated|product] [--promote] [--revision <rev>] [--path <path>]',
+  'knowledge category is product or consolidated':
+    '知识类别是 product 或 consolidated',
+  'source type is document, command-tree, external-artifact, query-mirror, build-record, environment-view, shared-session, skill-run, bot-run, review-correction or footprint':
+    '来源类型是 document、command-tree、external-artifact、query-mirror、build-record、environment-view、shared-session、skill-run、bot-run、review-correction 或 footprint',
+  'this server has no knowledge sharing': '这台服务器没有知识共享',
+  '✓ shared {source} · {record} · revision {revision} · readers {readers}':
+    '✓ 已共享 {source} · {record} · 修订 {revision} · 读者 {readers}',
+  'usage: /hub knowledge review request <id> <principal>':
+    '用法：/hub knowledge review request <id> <principal>',
+  '✓ review requested for {id} · reviewer {reviewer}':
+    '✓ 已请求审核 {id} · 审核人 {reviewer}',
+  'usage: /hub knowledge review <id> [approve|reject --reason <text>] [--promote] [--rule <version>] [--product <id>]':
+    '用法：/hub knowledge review <id> [approve|reject --reason <text>] [--promote] [--rule <version>] [--product <id>]',
+  '  {id} · {state} · {visibility} · {label}\n  {n} record(s) in the review':
+    '  {id} · {state} · {visibility} · {label}\n  审核中有 {n} 条记录',
+  'a review decision is approve or reject': '审核决定是 approve 或 reject',
+  'a review needs a reason: /hub knowledge review {id} {decision} --reason <text>':
+    '审核需要原因：/hub knowledge review {id} {decision} --reason <text>',
+  '✓ reviewed {id} · {state}{snapshot}': '✓ 已审核 {id} · {state}{snapshot}',
+  ' · snapshot {id}': ' · 快照 {id}',
+  'usage: /hub knowledge publish --expect <id>|none [--category product|consolidated]':
+    '用法：/hub knowledge publish --expect <id>|none [--category product|consolidated]',
+  '✓ published snapshot {id} · {category}': '✓ 已发布快照 {id} · {category}',
+  'usage: /hub knowledge search <text> | share <source> --file <path> --readers a,b | review <id> | publish --expect <id>|none':
+    '用法：/hub knowledge search <text> | share <source> --file <path> --readers a,b | review <id> | publish --expect <id>|none',
   'sign in through the server single sign-on. Paste the address the browser opened when this window cannot catch it':
     '通过服务器的单点登录。这个窗口接不到浏览器时，粘贴浏览器打开的地址',
   'submit a file or text for role approval (--file or --text, --summary, --role name[:count])':

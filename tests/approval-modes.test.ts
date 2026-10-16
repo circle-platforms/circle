@@ -115,6 +115,70 @@ test('accept-edits answers for edits inside the workspace and asks for the rest'
   assert.equal(rules.needsApproval('write_file', inside, 'other'), true);
 });
 
+test('accept-edits still asks before overwriting a skill-run output', (t) => {
+  const root = scratch(t);
+  mkdirSync(join(root, 'out'));
+  mkdirSync(join(root, 'pack'));
+  writeFileSync(join(root, 'out', 'report.md'), 'old\n');
+  writeFileSync(join(root, 'notes.txt'), 'keep\n');
+  writeFileSync(
+    join(root, 'pack', 'skillpack.json'),
+    JSON.stringify({ outputs: ['out/report.md'] }),
+  );
+  const rules = policy(root);
+  rules.setMode('s', 'accept-edits');
+  assert.equal(
+    rules.review('write_file', { file_path: 'out/report.md', content: 'new' })
+      .verdict,
+    'ASK_FORCED',
+  );
+  assert.equal(
+    rules.needsApproval(
+      'write_file',
+      { file_path: 'out/report.md', content: 'new' },
+      's',
+    ),
+    true,
+  );
+  assert.equal(
+    rules.needsApproval(
+      'edit_file',
+      { file_path: 'out/report.md', old_string: 'old', new_string: 'new' },
+      's',
+    ),
+    true,
+  );
+  assert.equal(
+    rules.needsApproval(
+      'write_file',
+      { file_path: 'out/fresh.md', content: 'n' },
+      's',
+    ),
+    false,
+  );
+  assert.equal(
+    rules.needsApproval(
+      'write_file',
+      { file_path: 'notes.txt', content: 'n' },
+      's',
+    ),
+    false,
+  );
+  assert.equal(
+    rules.review('execute', { command: 'printf n > out/report.md' }).verdict,
+    'ASK_FORCED',
+  );
+  rules.setMode('s', 'auto');
+  assert.equal(
+    rules.needsApproval(
+      'write_file',
+      { file_path: 'out/report.md', content: 'new' },
+      's',
+    ),
+    false,
+  );
+});
+
 test('auto is the old yolo switch and manual clears it', (t) => {
   const root = scratch(t);
   const rules = policy(root);

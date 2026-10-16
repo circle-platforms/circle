@@ -2053,3 +2053,181 @@ test('a governance request, single sign-on, manifest errors and a knowledge snap
     /signed in to http:\/\/127\.0\.0\.1:\d+ as prn_ada/,
   );
 });
+
+test('knowledge search, sharing, review and publish use the hub routes', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, 'note.txt'), 'shared text');
+  const posts: { path: string; body: string; query: string }[] = [];
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const body = await read(request);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (request.method === 'POST')
+      posts.push({
+        path: url.pathname,
+        body: body.toString(),
+        query: url.search,
+      });
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: {
+          token: TOKEN,
+          scopes: ['scp_lab'],
+          principalId: 'prn_ada',
+        },
+      });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/knowledge/search') {
+      posts.push({ path: url.pathname, body: '', query: url.search });
+      return send(200, {
+        data: {
+          items: [
+            {
+              recordId: 'knr_claim',
+              snapshotId: 'knr_snap',
+              payload: { subject: 'the register' },
+            },
+          ],
+        },
+      });
+    }
+    if (url.pathname === '/v1/knowledge/sources')
+      return send(201, { data: { recordId: 'knr_src' } });
+    if (url.pathname.endsWith('/request-review'))
+      return send(200, {
+        data: { recordId: 'knr_claim', reviewerId: 'prn_bob' },
+      });
+    if (url.pathname === '/v1/knowledge/reviews/knr_claim')
+      return send(200, {
+        data: {
+          claim: {
+            recordId: 'knr_claim',
+            state: 'candidate',
+            visibility: 'personal',
+            payload: { subject: 'the register' },
+          },
+          records: [{ recordId: 'knr_claim' }],
+        },
+      });
+    if (url.pathname.endsWith('/review'))
+      return send(200, {
+        data: {
+          claim: { recordId: 'knr_claim', state: 'reviewed' },
+          snapshot: { recordId: 'knr_snap' },
+        },
+      });
+    if (url.pathname === '/v1/knowledge/snapshots')
+      return send(201, { data: { recordId: 'knr_snap' } });
+    send(404, {
+      status: 'failed',
+      error: { code: 'TARGET_NOT_FOUND', message: 'missing' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (ask) => {
+      await submitAnswer(home, ask.id, PASSWORD);
+    },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+    secret: PASSWORD,
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port} developer`, context);
+  await command.handler('knowledge search the register --mode exact', context);
+  assert.match(lines.at(-1)!, /knr_claim · snapshot knr_snap · the register/);
+  assert.match(
+    posts.find((post) => post.path === '/v1/knowledge/search')!.query,
+    /mode=exact/,
+  );
+  await command.handler(
+    'knowledge share lab-notes --file note.txt --readers prn_bob,* --promote',
+    context,
+  );
+  const shared = JSON.parse(
+    posts.find((post) => post.path === '/v1/knowledge/sources')!.body,
+  );
+  assert.equal(shared.scopeId, 'scp_lab');
+  assert.equal(shared.sourceId, 'lab-notes');
+  assert.equal(shared.knowledgeCategory, 'consolidated');
+  assert.equal(shared.sourceType, 'document');
+  assert.deepEqual(shared.acl, {
+    sourceReaders: ['prn_bob', '*'],
+    platformReaders: ['prn_bob', '*'],
+  });
+  assert.deepEqual(shared.sharing, { allowed: true, teamPromotion: true });
+  assert.equal(
+    Buffer.from(shared.contentBase64, 'base64').toString(),
+    'shared text',
+  );
+  assert.equal(shared.sha256, sha256(Buffer.from('shared text')));
+  assert.equal(shared.revision.length, 32);
+  assert.match(lines.at(-1)!, /shared lab-notes · knr_src/);
+  await assert.rejects(
+    async () =>
+      command.handler('knowledge acl lab-notes --file note.txt', context),
+    /name who may read/,
+  );
+  await command.handler('knowledge review knr_claim', context);
+  assert.match(
+    lines.at(-1)!,
+    /knr_claim · candidate · personal · the register/,
+  );
+  await command.handler('knowledge review request knr_claim prn_bob', context);
+  assert.equal(
+    JSON.parse(
+      posts.find((post) => post.path.endsWith('/request-review'))!.body,
+    ).reviewerId,
+    'prn_bob',
+  );
+  await command.handler(
+    'knowledge review knr_claim approve --reason checked --promote',
+    context,
+  );
+  const decision = JSON.parse(
+    posts.find((post) => post.path.endsWith('/claims/knr_claim/review'))!.body,
+  );
+  assert.equal(decision.decision, 'approve');
+  assert.equal(decision.promote, true);
+  assert.equal(decision.reason, 'checked');
+  assert.match(
+    lines.at(-1)!,
+    /reviewed knr_claim · reviewed · snapshot knr_snap/,
+  );
+  await command.handler('knowledge publish --expect none', context);
+  const published = JSON.parse(
+    posts.find((post) => post.path === '/v1/knowledge/snapshots')!.body,
+  );
+  assert.equal(published.expectedSnapshotId, null);
+  assert.equal(published.knowledgeCategory, 'consolidated');
+  assert.match(lines.at(-1)!, /published snapshot knr_snap · consolidated/);
+});

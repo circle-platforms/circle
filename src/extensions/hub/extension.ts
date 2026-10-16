@@ -219,6 +219,28 @@ function usageText(): string {
       hubText('find approved knowledge and the snapshot id of each hit'),
     ],
     [
+      '/hub knowledge search <text>',
+      hubText(
+        'the same search, with --mode exact|prefix|directory|fulltext and --candidates',
+      ),
+    ],
+    [
+      '/hub knowledge share <source>',
+      hubText(
+        'share a file under a new ACL (--file, --readers). acl is the same command',
+      ),
+    ],
+    [
+      '/hub knowledge review <id>',
+      hubText('read a review, request one, or approve|reject it with --reason'),
+    ],
+    [
+      '/hub knowledge publish',
+      hubText(
+        'publish the stable snapshot (--expect <id>|none, --category product|consolidated)',
+      ),
+    ],
+    [
       '/hub roles <principal> <role>',
       hubText(
         'propose an approval role: manager, security, dpo, legal, finance, hr or it',
@@ -420,6 +442,16 @@ function explainFailure(error: unknown): string {
         { message: extra.length ? `${said} (${extra.join('; ')})` : said },
       );
     }
+    case 'INPUT_REVISION_STALE':
+      return hubText(
+        'the snapshot changed ({code}). /hub knowledge publish --expect <id> uses the current one, or --expect none when there is no snapshot yet.',
+        { code: error.code },
+      );
+    case 'SHARING_REQUIRED':
+      return hubText(
+        'sharing was not allowed ({code}). /hub knowledge share sends consent; promoting a review needs the source to allow team promotion.',
+        { code: error.code },
+      );
     case 'SELF_APPROVAL':
       return hubText(
         'you cannot approve your own request ({code}). Someone holding the role decides it.',
@@ -3308,6 +3340,332 @@ export async function register(api: ExtensionAPI): Promise<void> {
     );
   }
 
+  const SOURCE_TYPES = new Set([
+    'document',
+    'command-tree',
+    'external-artifact',
+    'query-mirror',
+    'build-record',
+    'environment-view',
+    'shared-session',
+    'skill-run',
+    'bot-run',
+    'review-correction',
+    'footprint',
+  ]);
+  function workspaceFile(
+    file: string,
+    context: CommandContext,
+  ): { path: string; relative: string; bytes: Buffer } {
+    const workspace = api.workspace ?? context.workspace;
+    const path = resolve(workspace, file);
+    const rel = relative(workspace, path);
+    if (!file || rel === '' || rel.split(sep).includes('..') || isAbsolute(rel))
+      throw new ServerError(
+        hubText('the file must stay inside the workspace: {path}', {
+          path: file,
+        }),
+      );
+    if (!existsSync(path) || !statSync(path).isFile())
+      throw new ServerError(hubText('no such file: {path}', { path: file }));
+    const bytes = readFileSync(path);
+    if (!bytes.byteLength) throw new ServerError(hubText('the file is empty'));
+    return { path, relative: rel.split(sep).join('/'), bytes };
+  }
+  function readersOf(raw: string | undefined, label: string): string[] {
+    const readers = (raw ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!readers.length)
+      throw new ServerError(
+        hubText('name who may read: --readers prn_… or * ({label})', {
+          label,
+        }),
+      );
+    return readers;
+  }
+  async function searchKnowledge(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const { args, values } = options(rest);
+    const q = args.join(' ').trim();
+    if (!q)
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge search <text> [--mode exact|prefix|directory|fulltext] [--candidates]',
+        ),
+      );
+    const mode = values.mode?.at(-1) || 'fulltext';
+    if (!['exact', 'prefix', 'directory', 'fulltext'].includes(mode))
+      throw new ServerError(
+        hubText('search mode is exact, prefix, directory or fulltext'),
+      );
+    const params = new URLSearchParams({ q, mode, limit: '20' });
+    if (values.candidates) params.set('includeCandidates', 'true');
+    let data: unknown;
+    try {
+      ({ data } = await request(
+        'GET',
+        `/v1/knowledge/search?${params.toString()}`,
+      ));
+    } catch (error) {
+      if (isMissing(error))
+        throw new ServerError(hubText('this server has no knowledge search'));
+      throw error;
+    }
+    const payload = isRecord(data) ? data : {};
+    const items = rowsOf(payload.items ?? data);
+    if (!items.length) {
+      context.append(
+        hubText(
+          'No knowledge matched. A miss does not mean it is absent. Approved text is found by its snapshot id.',
+        ),
+      );
+      return;
+    }
+    context.append(
+      items
+        .map((item) => {
+          const body = isRecord(item.payload) ? item.payload : {};
+          const label = String(item.title ?? body.subject ?? body.text ?? '');
+          const snapshot =
+            typeof item.snapshotId === 'string' && item.snapshotId
+              ? item.snapshotId
+              : hubText('no snapshot');
+          return hubText('  {id} · snapshot {snapshot} · {label}', {
+            id: String(item.recordId ?? ''),
+            snapshot,
+            label,
+          });
+        })
+        .join('\n'),
+    );
+  }
+  async function shareKnowledge(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const { args, values } = options(rest);
+    const sourceId = args.join(' ').trim();
+    const file = values.file?.at(-1)?.trim() ?? '';
+    if (!sourceId || !file)
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge share <source> --file <path> --readers a,b [--platform a,b] [--type document] [--category consolidated|product] [--promote] [--revision <rev>] [--path <path>]',
+        ),
+      );
+    const scopeId = readConfig()?.scopeId;
+    if (!scopeId)
+      throw new ServerError(
+        hubText('no scope: sign in again with /hub login <url> <user>'),
+      );
+    const category = values.category?.at(-1) || 'consolidated';
+    if (category !== 'product' && category !== 'consolidated')
+      throw new ServerError(
+        hubText('knowledge category is product or consolidated'),
+      );
+    const sourceType = values.type?.at(-1) || 'document';
+    if (!SOURCE_TYPES.has(sourceType))
+      throw new ServerError(
+        hubText(
+          'source type is document, command-tree, external-artifact, query-mirror, build-record, environment-view, shared-session, skill-run, bot-run, review-correction or footprint',
+        ),
+      );
+    const sourceReaders = readersOf(values.readers?.at(-1), 'source');
+    const platform = values.platform?.at(-1);
+    const platformReaders = platform
+      ? readersOf(platform, 'platform')
+      : sourceReaders;
+    const held = workspaceFile(file, context);
+    const promote = Boolean(values.promote?.length);
+    const sharing = { allowed: true, teamPromotion: promote };
+    const revision =
+      values.revision?.at(-1)?.trim() ||
+      sha256(
+        Buffer.from(
+          JSON.stringify([
+            sha256(held.bytes),
+            sourceReaders,
+            platformReaders,
+            category,
+            sharing,
+          ]),
+        ),
+      ).slice(0, 32);
+    const knowledgePath = values.path?.at(-1)?.trim() || '/' + held.relative;
+    let data: unknown;
+    try {
+      ({ data } = await request('POST', '/v1/knowledge/sources', {
+        json: {
+          scopeId,
+          sourceId,
+          revision,
+          path: knowledgePath,
+          knowledgeCategory: category,
+          sourceType,
+          parserVersion: 'circle/1',
+          contentBase64: held.bytes.toString('base64'),
+          sha256: sha256(held.bytes),
+          acl: { sourceReaders, platformReaders },
+          sharing,
+        },
+      }));
+    } catch (error) {
+      if (isMissing(error))
+        throw new ServerError(hubText('this server has no knowledge sharing'));
+      throw error;
+    }
+    const record = isRecord(data) ? data : {};
+    context.append(
+      hubText(
+        '✓ shared {source} · {record} · revision {revision} · readers {readers}',
+        {
+          source: sourceId,
+          record: String(record.recordId ?? ''),
+          revision,
+          readers: sourceReaders.join(','),
+        },
+      ),
+    );
+  }
+  function claimLabel(record: Record<string, unknown>): string {
+    const body = isRecord(record.payload) ? record.payload : {};
+    return String(body.subject ?? body.text ?? record.kind ?? '');
+  }
+  async function reviewKnowledge(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    if (rest[0] === 'request') {
+      const id = rest[1];
+      const reviewerId = rest[2];
+      if (!id || !reviewerId || rest.length !== 3)
+        throw new ServerError(
+          hubText('usage: /hub knowledge review request <id> <principal>'),
+        );
+      if (!/^prn_/.test(reviewerId))
+        throw new ServerError(hubText('a principal id starts with prn_'));
+      const { data } = await request(
+        'POST',
+        `/v1/knowledge/claims/${encodeURIComponent(id)}/request-review`,
+        { json: { reviewerId } },
+      );
+      const record = isRecord(data) ? data : {};
+      context.append(
+        hubText('✓ review requested for {id} · reviewer {reviewer}', {
+          id: String(record.recordId ?? id),
+          reviewer: String(record.reviewerId ?? reviewerId),
+        }),
+      );
+      return;
+    }
+    const { args, values } = options(rest);
+    const id = args[0];
+    const decision = args[1];
+    if (!id)
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge review <id> [approve|reject --reason <text>] [--promote] [--rule <version>] [--product <id>]',
+        ),
+      );
+    if (!decision) {
+      const { data } = await request(
+        'GET',
+        `/v1/knowledge/reviews/${encodeURIComponent(id)}`,
+      );
+      const bundle = isRecord(data) ? data : {};
+      const claim = isRecord(bundle.claim) ? bundle.claim : {};
+      const records = Array.isArray(bundle.records) ? bundle.records : [];
+      context.append(
+        hubText(
+          '  {id} · {state} · {visibility} · {label}\n  {n} record(s) in the review',
+          {
+            id: String(claim.recordId ?? id),
+            state: String(claim.state ?? ''),
+            visibility: String(claim.visibility ?? ''),
+            label: claimLabel(claim),
+            n: records.length,
+          },
+        ),
+      );
+      return;
+    }
+    if (decision !== 'approve' && decision !== 'reject')
+      throw new ServerError(hubText('a review decision is approve or reject'));
+    const reason = values.reason?.at(-1)?.trim() ?? '';
+    if (!reason)
+      throw new ServerError(
+        hubText(
+          'a review needs a reason: /hub knowledge review {id} {decision} --reason <text>',
+          { id, decision },
+        ),
+      );
+    const product = values.product?.at(-1)?.trim();
+    const { data } = await request(
+      'POST',
+      `/v1/knowledge/claims/${encodeURIComponent(id)}/review`,
+      {
+        json: {
+          decision,
+          promote: Boolean(values.promote?.length),
+          reason,
+          ruleVersion: values.rule?.at(-1)?.trim() || 'circle/1',
+          ...(product ? { productClaimId: product } : {}),
+        },
+      },
+    );
+    const payload = isRecord(data) ? data : {};
+    const claim = isRecord(payload.claim) ? payload.claim : {};
+    const snapshot = isRecord(payload.snapshot) ? payload.snapshot : {};
+    context.append(
+      hubText('✓ reviewed {id} · {state}{snapshot}', {
+        id: String(claim.recordId ?? id),
+        state: String(claim.state ?? decision),
+        snapshot: snapshot.recordId
+          ? hubText(' · snapshot {id}', { id: String(snapshot.recordId) })
+          : '',
+      }),
+    );
+  }
+  async function publishKnowledge(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const { values } = options(rest);
+    const expect = values.expect?.at(-1)?.trim() ?? '';
+    if (!expect)
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge publish --expect <id>|none [--category product|consolidated]',
+        ),
+      );
+    const scopeId = readConfig()?.scopeId;
+    if (!scopeId)
+      throw new ServerError(
+        hubText('no scope: sign in again with /hub login <url> <user>'),
+      );
+    const category = values.category?.at(-1) || 'consolidated';
+    if (category !== 'product' && category !== 'consolidated')
+      throw new ServerError(
+        hubText('knowledge category is product or consolidated'),
+      );
+    const { data } = await request('POST', '/v1/knowledge/snapshots', {
+      json: {
+        scopeId,
+        knowledgeCategory: category,
+        expectedSnapshotId: expect === 'none' ? null : expect,
+      },
+    });
+    const record = isRecord(data) ? data : {};
+    context.append(
+      hubText('✓ published snapshot {id} · {category}', {
+        id: String(record.recordId ?? ''),
+        category,
+      }),
+    );
+  }
   const callHub = request;
   const commands: Record<
     string,
@@ -3850,45 +4208,19 @@ export async function register(api: ExtensionAPI): Promise<void> {
       );
     },
     async search(rest, context) {
-      const q = rest.join(' ').trim();
-      if (!q) throw new ServerError(hubText('usage: /hub search <text>'));
-      let data: unknown;
-      try {
-        ({ data } = await request(
-          'GET',
-          `/v1/knowledge/search?q=${encodeURIComponent(q)}&limit=20`,
-        ));
-      } catch (error) {
-        if (isMissing(error))
-          throw new ServerError(hubText('this server has no knowledge search'));
-        throw error;
-      }
-      const payload = isRecord(data) ? data : {};
-      const items = rowsOf(payload.items ?? data);
-      if (!items.length) {
-        context.append(
-          hubText(
-            'No knowledge matched. A miss does not mean it is absent. Approved text is found by its snapshot id.',
-          ),
-        );
-        return;
-      }
-      context.append(
-        items
-          .map((item) => {
-            const body = isRecord(item.payload) ? item.payload : {};
-            const label = String(item.title ?? body.subject ?? body.text ?? '');
-            const snapshot =
-              typeof item.snapshotId === 'string' && item.snapshotId
-                ? item.snapshotId
-                : hubText('no snapshot');
-            return hubText('  {id} · snapshot {snapshot} · {label}', {
-              id: String(item.recordId ?? ''),
-              snapshot,
-              label,
-            });
-          })
-          .join('\n'),
+      await searchKnowledge(rest, context);
+    },
+    async knowledge(rest, context) {
+      const [verb, ...args] = rest;
+      if (verb === 'search') return searchKnowledge(args, context);
+      if (verb === 'share' || verb === 'acl')
+        return shareKnowledge(args, context);
+      if (verb === 'review') return reviewKnowledge(args, context);
+      if (verb === 'publish') return publishKnowledge(args, context);
+      throw new ServerError(
+        hubText(
+          'usage: /hub knowledge search <text> | share <source> --file <path> --readers a,b | review <id> | publish --expect <id>|none',
+        ),
       );
     },
     async roles(rest, context) {
@@ -4619,7 +4951,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   );
   api.registerTool(
     'hub_skill_push',
-    'Submit a skill pack folder of the workspace (skillpack.json, SKILL.md and its files) to hub with the current trial record and the SHA-256 of the files the trial produced, as /hub skill push does. The server checks the tools the trial used against the pack; someone else must approve the new digest before it runs there. It sends the folder, so it asks first.',
+    'Submit a skill pack folder of the workspace (skillpack.json, SKILL.md and its files) to hub with the current trial record and the SHA-256 of the files the trial produced, as /hub skill push does. Do not run the skill again to refresh outputs, and do not overwrite an existing output file; the push sends the files already on disk. The server checks the tools the trial used against the pack; someone else must approve the new digest before it runs there. It sends the folder, so it asks first.',
     {
       type: 'object',
       properties: {
@@ -4926,7 +5258,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   api.registerCommand(
     'hub',
     hubText(
-      'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | roles | audit | modules | tools | skill | bot]',
+      'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | knowledge | roles | audit | modules | tools | skill | bot]',
     ),
     async (args, context) => {
       const [verb, ...rest] = words(args);
