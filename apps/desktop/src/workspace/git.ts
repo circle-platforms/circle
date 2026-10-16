@@ -813,10 +813,39 @@ export class GitWorkspaceService {
             'push',
             ...(this.options.setUpstream === false ? [] : ['--set-upstream']),
             'origin',
-            state.branch,
+            invocation?.pushAuthentication
+              ? `${state.head}:refs/heads/${state.branch}`
+              : state.branch,
           ],
           undefined,
-          invocation,
+          invocation?.pushAuthentication
+            ? {
+                ...invocation,
+                pushAuthentication: {
+                  repository: invocation.pushAuthentication.repository,
+                  withCredentials: (run) =>
+                    invocation.pushAuthentication!.withCredentials(
+                      async (env, config) => {
+                        const current = await this.snapshot();
+                        invocation.signal?.throwIfAborted();
+                        invocation.assertActive?.();
+                        if (
+                          current.revision !== state.revision ||
+                          current.head !== state.head ||
+                          current.branch !== state.branch
+                        )
+                          throw Object.assign(
+                            Error(
+                              'repository changed while authorizing the push; refresh before retrying',
+                            ),
+                            { code: 'CIRCLE_GIT_PUSH_CANDIDATE_CHANGED' },
+                          );
+                        return run(env, config);
+                      },
+                    ),
+                },
+              }
+            : invocation,
         );
       } else if (method === 'conflictContinue') {
         if (!state.merging) throw Error('no merge is active');

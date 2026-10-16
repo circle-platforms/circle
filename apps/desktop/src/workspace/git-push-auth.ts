@@ -92,7 +92,14 @@ export async function withGitHubPushCredentials(
       options.signal?.throwIfAborted();
       options.assertActive();
       return result.split(options.token).join('[redacted]');
-    } catch {
+    } catch (error) {
+      if (
+        (error as { code?: string }).code ===
+        'CIRCLE_GIT_PUSH_CANDIDATE_CHANGED'
+      )
+        throw Error(
+          'repository changed while authorizing the push; refresh before retrying',
+        );
       throw Error(
         'GitHub push failed or was cancelled; reconcile the remote branch before retrying',
       );

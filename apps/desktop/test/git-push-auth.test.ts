@@ -423,3 +423,154 @@ test('private push configuration suppresses repository push signing programs whi
     await rm(root, { recursive: true, force: true });
   }
 });
+test('credential waits recheck the accepted candidate and authenticated pushes cannot overwrite a diverged remote', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-push-candidate-'));
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+  const remote = path.join(root, 'remote.git');
+  const url = 'https://github.com/fixture/repo.git';
+  try {
+    await git(['init'], env, root);
+    await git(['checkout', '-b', 'codex/accepted'], env, root);
+    await git(
+      [
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.invalid',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'Accepted',
+      ],
+      env,
+      root,
+    );
+    await git(['init', '--bare', remote], env, root);
+    await git(['remote', 'add', 'origin', url], env, root);
+    const service = new GitWorkspaceService(root, { setUpstream: false });
+    const accepted = await service.snapshot();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const preparing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    // Trusted fixture transport only: actual Git still pushes to the owned bare
+    // repository, with no token and without relaxing production URL guards.
+    const authentication = {
+      repository: 'fixture/repo',
+      withCredentials: async (
+        run: (env: NodeJS.ProcessEnv, config: string[]) => Promise<string>,
+      ) => {
+        entered();
+        await held;
+        return run(env, [
+          '-c',
+          `url.${remote.replaceAll('\\', '/')}.insteadOf=${url}`,
+        ]);
+      },
+    };
+    const pushing = service.call(
+      'push',
+      { revision: accepted.revision },
+      { pushAuthentication: authentication },
+    );
+    const rejected = assert.rejects(
+      pushing,
+      /repository changed while authorizing/,
+    );
+    await preparing;
+    await git(
+      [
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.invalid',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'Unreviewed',
+      ],
+      env,
+      root,
+    );
+    release();
+    await rejected;
+    await assert.rejects(
+      git(
+        ['--git-dir', remote, 'rev-parse', 'refs/heads/codex/accepted'],
+        env,
+        root,
+      ),
+    );
+    const fresh = await service.snapshot();
+    await service.call(
+      'push',
+      { revision: fresh.revision },
+      { pushAuthentication: authentication },
+    );
+    assert.equal(
+      (
+        await git(
+          ['--git-dir', remote, 'rev-parse', 'refs/heads/codex/accepted'],
+          env,
+          root,
+        )
+      ).trim(),
+      fresh.head,
+    );
+    // Advance only the remote to a distinct commit with the same parent, then
+    // prove a fresh explicit candidate push remains non-force.
+    const tree = (await git(['rev-parse', 'HEAD^{tree}'], env, root)).trim();
+    const competing = (
+      await git(
+        [
+          '-c',
+          'user.name=Fixture',
+          '-c',
+          'user.email=fixture@example.invalid',
+          'commit-tree',
+          tree,
+          '-p',
+          fresh.head,
+          '-m',
+          'Remote work',
+        ],
+        env,
+        root,
+      )
+    ).trim();
+    await git(
+      ['push', remote, `${competing}:refs/heads/codex/accepted`],
+      env,
+      root,
+    );
+    await assert.rejects(
+      service.call(
+        'push',
+        { revision: (await service.snapshot()).revision },
+        { pushAuthentication: authentication },
+      ),
+      /rejected|non-fast-forward|fetch first/i,
+    );
+    assert.equal(
+      (
+        await git(
+          ['--git-dir', remote, 'rev-parse', 'refs/heads/codex/accepted'],
+          env,
+          root,
+        )
+      ).trim(),
+      competing,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
