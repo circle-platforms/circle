@@ -143,6 +143,11 @@ export function App() {
   const [sourceColumn, setSourceColumn] = useState<number | undefined>();
   const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
+  const selectAgent = (id: string | null) => {
+    sourceOpener.current.cancel();
+    setFile(null);
+    setAgent(id);
+  };
   const [dialog, setDialog] = useState<DialogId | null>(null);
   const [dialogSelection, setDialogSelection] = useState('');
   const [interaction, setInteraction] = useState<Interaction | null>(null);
@@ -228,6 +233,21 @@ export function App() {
   }, [session.id, onPage, narrow]);
   const onFile = async (path: string, line?: number, column?: number) => {
     const sourceSessionId = session.id;
+    const originAgent = snapshot.agents.find(
+      (item) => item.id === agent && item.sessionId === sourceSessionId,
+    );
+    if (originAgent) {
+      const sourceWorkspace =
+        'workspaceId' in originAgent ? originAgent.workspaceId : undefined;
+      if (typeof sourceWorkspace !== 'string') {
+        notify(t('source workspace is not available'));
+        return;
+      }
+      if (sourceWorkspace !== session.workspaceId) {
+        notify(t('source is outside the workspace'));
+        return;
+      }
+    }
     const result = await sourceOpener.current.open(
       sourceSessionId,
       async () => {
@@ -273,7 +293,6 @@ export function App() {
     setFile(result.source.path);
     setSourceLine(result.source.line);
     setSourceColumn(result.source.column);
-    setAgent(null);
     if (narrow) setInspectorOpen(false);
     navigate(`/session/${sourceSessionId}`);
   };
@@ -588,7 +607,9 @@ export function App() {
     addEventListener('keydown', handle);
     return () => removeEventListener('keydown', handle);
   }, []);
-  const activeAgent = snapshot.agents.find((item) => item.id === agent);
+  const activeAgent = snapshot.agents.find(
+    (item) => item.id === agent && item.sessionId === session.id,
+  );
   const pluginPage = pluginPages.find((item) => item.page.id === page);
   const installedPage = registry.plugins.find((plugin) =>
     plugin.pages?.some((item) => item.id === page),
@@ -612,60 +633,65 @@ export function App() {
       onDialog={onDialog}
       onPanel={onPanel}
     />
-  ) : activeAgent ? (
-    <section className="agent-record">
-      <header>
-        <Button onClick={() => setAgent(null)}>
-          <ChevronLeft size={13} />
-          {t('main')}
-        </Button>
-        <strong>{activeAgent.name}</strong>
-        <Status value={activeAgent.status} />
-      </header>
-      <div className="agent-record-body">
-        <h2>{activeAgent.description}</h2>
-        <Facts
-          values={{
-            [t('model')]: activeAgent.model,
-            [t('tokens')]: activeAgent.tokens,
-            [t('record')]: activeAgent.id,
-          }}
-        />
-        {activeAgent.messages.map((message) =>
-          message.tool ? (
-            <ToolMessage
-              key={message.id}
-              tool={message.tool}
-              expanded
-              onAgent={setAgent}
-              onFile={onFile}
-            />
-          ) : (
-            <div className="message" key={message.id}>
-              <Markdown text={message.text} />
-            </div>
-          ),
-        )}
-      </div>
-    </section>
   ) : (
     <div className="session-resource-stack">
       <div className="session-resource-view" hidden={!!file}>
-        <NativeResourceBoundary name={t('conversation')} resetKey={session.id}>
-          <Conversation
-            onDialog={onDialog}
-            onPanel={onPanel}
-            onAgent={setAgent}
-            onFile={onFile}
-            onAttach={() => pickFiles()}
-            onCommand={() => {
-              setSearch('');
-              setSearchOpen(true);
-            }}
-            finding={finding}
-            setFinding={setFinding}
-          />
-        </NativeResourceBoundary>
+        {activeAgent ? (
+          <section className="agent-record">
+            <header>
+              <Button onClick={() => selectAgent(null)}>
+                <ChevronLeft size={13} />
+                {t('main')}
+              </Button>
+              <strong>{activeAgent.name}</strong>
+              <Status value={activeAgent.status} />
+            </header>
+            <div className="agent-record-body">
+              <h2>{activeAgent.description}</h2>
+              <Facts
+                values={{
+                  [t('model')]: activeAgent.model,
+                  [t('tokens')]: activeAgent.tokens,
+                  [t('record')]: activeAgent.id,
+                }}
+              />
+              {activeAgent.messages.map((message) =>
+                message.tool ? (
+                  <ToolMessage
+                    key={message.id}
+                    tool={message.tool}
+                    expanded
+                    onAgent={selectAgent}
+                    onFile={onFile}
+                  />
+                ) : (
+                  <div className="message" key={message.id}>
+                    <Markdown text={message.text} />
+                  </div>
+                ),
+              )}
+            </div>
+          </section>
+        ) : (
+          <NativeResourceBoundary
+            name={t('conversation')}
+            resetKey={session.id}
+          >
+            <Conversation
+              onDialog={onDialog}
+              onPanel={onPanel}
+              onAgent={selectAgent}
+              onFile={onFile}
+              onAttach={() => pickFiles()}
+              onCommand={() => {
+                setSearch('');
+                setSearchOpen(true);
+              }}
+              finding={finding}
+              setFinding={setFinding}
+            />
+          </NativeResourceBoundary>
+        )}
       </div>
       <div className="session-resource-view" hidden={!file}>
         {file && (
@@ -713,7 +739,7 @@ export function App() {
         onPanel={onPanel}
         onClose={() => setInspectorOpen(false)}
         onFile={onFile}
-        onAgent={setAgent}
+        onAgent={selectAgent}
         onDialog={onDialog}
         onInteraction={(item) => {
           if (item.kind === 'secret') {

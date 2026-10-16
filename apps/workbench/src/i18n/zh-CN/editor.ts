@@ -1,4 +1,5 @@
 export const editor: Record<string, string> = {
+  'source workspace is not available': '暂时无法确认来源工作区',
   'save queued': '保存已排队',
   'language service needs attention': '语言服务需要处理',
   'project configuration needs attention': '项目配置需要处理',
