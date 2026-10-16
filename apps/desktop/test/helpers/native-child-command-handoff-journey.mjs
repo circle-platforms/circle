@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
+import { assertRenderedTerminalMatch } from './native-terminal-rendered-match.mjs';
 
 export const childCommandParentPrompt =
   'NATIVE_CHILD_COMMAND_HANDOFF: delegate one owned interactive command';
@@ -383,13 +384,18 @@ export async function runNativeChildCommandHandoffJourney({
         childCommandInput,
       'the original child process receives exact native keyboard bytes',
     );
-    await until(
-      async () =>
-        (await surface.innerText()).includes(
-          'CHILD_HANDOFF_ECHO:' + childCommandInput.trimEnd(),
-        ),
-      'the original PTY displays the child echo',
-    );
+    receipt.inputEvidence = {
+      childInput: await optionalRead(worker.worktree, fixture.paths.input),
+      childStarts: await optionalRead(worker.worktree, fixture.paths.starts),
+      originalCommandPid: pid,
+      terminalCols: listing.value[0].cols,
+    };
+    receipt.displayEvidence = await assertRenderedTerminalMatch({
+      panel: terminal,
+      surface,
+      text: 'CHILD_HANDOFF_ECHO:' + childCommandInput.trimEnd(),
+      until,
+    });
     assert.equal(await optionalRead(workspace, fixture.paths.input), '');
     assert.equal((await sessionView(page, ownerId)).draft, parentDraft);
     await page.screenshot({
