@@ -1204,11 +1204,23 @@ try {
       };
     });
   const wholeButton = (name) => page.getByRole('button', { name, exact: true });
-  await page.getByRole('button', { name: 'terminal panel', exact: true }).click();
-  assert.equal(await wholeButton('full view').count(), 1, 'the terminal offers the full view');
+  await page
+    .getByRole('button', { name: 'terminal panel', exact: true })
+    .click();
+  assert.equal(
+    await wholeButton('full view').count(),
+    1,
+    'the terminal offers the full view',
+  );
   await page.getByRole('button', { name: 'files panel', exact: true }).click();
-  assert.equal(await wholeButton('full view').count(), 0, 'a file list does not');
-  await page.getByRole('button', { name: 'terminal panel', exact: true }).click();
+  assert.equal(
+    await wholeButton('full view').count(),
+    0,
+    'a file list does not',
+  );
+  await page
+    .getByRole('button', { name: 'terminal panel', exact: true })
+    .click();
   const draft = 'kept while the panel is whole';
   await page.getByRole('textbox', { name: 'message', exact: true }).fill(draft);
   const split = await boxes();
@@ -1227,10 +1239,12 @@ try {
   // width it was asking for: most of the workspace is still page.
   assert.ok(
     whole.panel.height > whole.content.height * 0.5,
-    'the panel keeps the height it can: ' + JSON.stringify([whole.panel, whole.content]),
+    'the panel keeps the height it can: ' +
+      JSON.stringify([whole.panel, whole.content]),
   );
   assert.ok(
-    whole.composer.height > 40 && whole.composer.height < whole.content.height / 2,
+    whole.composer.height > 40 &&
+      whole.composer.height < whole.content.height / 2,
     'the chat is a bar below, not a wall: ' + JSON.stringify(whole.composer),
   );
   assert.ok(
@@ -1251,9 +1265,13 @@ try {
     'another session can still be chosen from the full view',
   );
   assert.equal(whole.draft, draft, 'the full view keeps the draft');
-  await page.getByRole('textbox', { name: 'message', exact: true }).fill('typed in the full view');
+  await page
+    .getByRole('textbox', { name: 'message', exact: true })
+    .fill('typed in the full view');
   assert.equal(
-    await page.getByRole('textbox', { name: 'message', exact: true }).inputValue(),
+    await page
+      .getByRole('textbox', { name: 'message', exact: true })
+      .inputValue(),
     'typed in the full view',
     'the input still takes what the person types',
   );
