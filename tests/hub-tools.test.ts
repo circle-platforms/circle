@@ -593,6 +593,30 @@ test('a trial records which server tools the model used, and /hub skill push sen
         .digest('hex'),
     },
   ]);
+  // --outputs is optional: the files skillpack.json declares are the default.
+  await command.handler('skill push skills/mindmap-compile', context);
+  assert.deepEqual(server.packs.at(-1)!.trial.outputs, sent.trial.outputs);
+  const missing = join(workspace, 'skills', 'missing-output');
+  mkdirSync(missing);
+  writeFileSync(join(missing, 'SKILL.md'), '# Missing\n');
+  writeFileSync(
+    join(missing, 'skillpack.json'),
+    JSON.stringify({
+      id: 'missing-output',
+      version: '0.1.0',
+      title: 'Missing',
+      owner: 'tester',
+      tools: ['docs.list'],
+      triggers: ['manual'],
+      inputs: {},
+      outputs: ['gone.xlsx'],
+      model: 'any',
+    }),
+  );
+  await assert.rejects(
+    async () => command.handler('skill push skills/missing-output', context),
+    /gone\.xlsx is not in the workspace/,
+  );
   assert.ok(
     lines.some((line) =>
       /✓ submitted mindmap-compile 0\.1\.0 · 3 files · 1 trial calls · skp_1/.test(
@@ -631,7 +655,7 @@ test('a trial records which server tools the model used, and /hub skill push sen
     ),
   );
   const runs = server.packs.length;
-  assert.equal(runs, 1);
+  assert.equal(runs, 2, 'a second push without --outputs still submits');
   await delay(300);
 });
 

@@ -10,7 +10,7 @@ import type {
   Tool,
   ToolContext,
 } from './types.js';
-import { isRecord } from './settings.js';
+import { isRecord, saveSettingsChange } from './settings.js';
 import { Watch, waitWatch, abortable } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
@@ -30,6 +30,12 @@ export interface CommandContext {
   toast(message: string): void;
   append(message: string): void;
   sendUserMessage(message: string): void;
+  /**
+   * A secret the caller already collected, such as a password typed on the hub
+   * page. It is not a slash argument: the transcript, the view and events must
+   * not contain it. Empty means the command asks itself.
+   */
+  secret?: string;
 }
 export interface ExtensionCommand {
   name: string;
@@ -86,6 +92,8 @@ export interface Extension {
   /** From an optional extension.json beside the entry file. */
   version: string;
   description: string;
+  /** Slash commands named in extension.json, even while the extension is off. */
+  declaredCommands: string[];
   enabled: boolean;
   error: string;
   warnings: string[];
@@ -246,6 +254,33 @@ export class ExtensionAPI {
   /** Its entry under `extensions` in settings.json, read when it loaded. Changing it saves nothing. */
   get settings(): Record<string, unknown> {
     return structuredClone(this.services?.settings ?? {});
+  }
+  /**
+   * Merge keys into this extension's entry in settings.json. `enabled` stays as
+   * it is unless the patch sets it. The running copy is updated too.
+   */
+  saveSettings(patch: Record<string, unknown>): void {
+    if (!this.services?.home)
+      throw new ExtensionError('this interface has no settings file');
+    if (!isRecord(patch)) throw new ExtensionError('settings are an object');
+    const name = this.ext.name;
+    const running = { ...(this.services.settings ?? {}) };
+    saveSettingsChange(this.services.home, (settings) => {
+      // The file wins where it already has a value. The running copy fills a
+      // key the file does not have yet, so remembering a URL does not turn the
+      // extension off.
+      settings.extensions[name] = {
+        ...running,
+        ...(settings.extensions[name] ?? {}),
+        ...patch,
+      };
+    });
+    if (!this.services.settings) this.services.settings = {};
+    Object.assign(this.services.settings, structuredClone(patch));
+  }
+  /** Hide a value in status and views, the way a secret from askSecret is hidden. */
+  conceal(value: string): void {
+    if (typeof value === 'string' && value) this.ext.mask.remember(value);
   }
   /**
    * Ask the user for a value on a masked card. It goes back to the extension only: not into
@@ -412,12 +447,14 @@ export class ExtensionAPI {
         this.tracked(
           (async () => {
             try {
+              if (context.secret) mask.remember(context.secret);
               await handler(args, {
                 workspace: context.workspace,
                 toast: (message) => context.toast(mask.text(String(message))),
                 append: (message) => context.append(mask.text(String(message))),
                 sendUserMessage: (message) =>
                   context.sendUserMessage(mask.text(String(message))),
+                secret: context.secret,
               });
             } catch (error) {
               throw this.masked(error);
@@ -521,11 +558,19 @@ export class ExtensionHost {
   constructor(readonly options: ExtensionHostOptions) {}
   discover(): Pick<
     Extension,
-    'name' | 'source' | 'path' | 'version' | 'description'
+    'name' | 'source' | 'path' | 'version' | 'description' | 'declaredCommands'
   >[] {
     const found = new Map<
       string,
-      Pick<Extension, 'name' | 'source' | 'path' | 'version' | 'description'>
+      Pick<
+        Extension,
+        | 'name'
+        | 'source'
+        | 'path'
+        | 'version'
+        | 'description'
+        | 'declaredCommands'
+      >
     >();
     // Later roots replace earlier ones of the same name: yours over Circle's, the project's
     // over yours.
@@ -661,6 +706,18 @@ export class ExtensionHost {
         .flatMap((ext) => ext.commands)
         .map((command) => [command.name, command]),
     );
+  }
+  /**
+   * A bundled extension that names this slash command in extension.json and is
+   * turned off. The command itself is not registered until `/extensions enable`.
+   */
+  offCommand(name: string): string | undefined {
+    return this.extensions.find(
+      (ext) =>
+        ext.source === 'bundled' &&
+        !ext.enabled &&
+        ext.declaredCommands.includes(name),
+    )?.name;
   }
   subagents(available: Tool[]): { spec: SubagentSpec; tools: Tool[] }[] {
     const byName = new Map(available.map((tool) => [tool.name, tool]));
@@ -820,8 +877,12 @@ export class ExtensionHost {
       .join('\n');
   }
 }
-// extension.json is optional: { "version": "1.2.0", "description": "..." }, shown in /extensions.
-function manifest(path: string): { version: string; description: string } {
+// extension.json is optional: { "version": "1.2.0", "description": "...", "commands": ["hub"] }.
+function manifest(path: string): {
+  version: string;
+  description: string;
+  declaredCommands: string[];
+} {
   try {
     const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
     if (isRecord(value))
@@ -832,9 +893,18 @@ function manifest(path: string): { version: string; description: string } {
           typeof value.description === 'string'
             ? value.description.slice(0, 200)
             : '',
+        declaredCommands: Array.isArray(value.commands)
+          ? value.commands
+              .filter(
+                (name): name is string =>
+                  typeof name === 'string' &&
+                  /^[a-z][a-z0-9_-]{0,63}$/.test(name),
+              )
+              .slice(0, 32)
+          : [],
       };
   } catch {
     /* No manifest, or one that cannot be read: the extension still loads. */
   }
-  return { version: '', description: '' };
+  return { version: '', description: '', declaredCommands: [] };
 }

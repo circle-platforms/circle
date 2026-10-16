@@ -1091,6 +1091,7 @@ export class RuntimeController {
                 : undefined,
             tools: extension.tools.map((tool) => tool.name),
             commands: extension.commands.map((command) => command.name),
+            declaredCommands: extension.declaredCommands,
             events: [...extension.handlers.keys()],
             error: extension.error || undefined,
           })),
@@ -1843,6 +1844,7 @@ export class RuntimeController {
       'background',
       'stop-job',
       'delete-session',
+      'select-session',
     ].includes(command.name);
     const result = immediate ? operation() : this.mutation.then(operation);
     if (!immediate) this.mutation = result.then(() => {});
@@ -2844,10 +2846,15 @@ export class RuntimeController {
         if (runtime.busy) throw Error('a turn is running');
         const name = text(p.name, 'command name', 100);
         const args = text(p.args ?? '', 'command args', 16000);
+        const secret =
+          typeof p.secret === 'string' && p.secret.length > 0
+            ? p.secret
+            : undefined;
         const extension = runtime.extensions.commands().get(name);
         if (extension) {
           await extension.handler(args, {
             workspace: runtime.options.workspace,
+            ...(secret ? { secret } : {}),
             toast: (message) => {
               const id = runtime.session.id;
               if (this.runtimes.lifecycle(id) !== 'open') return;

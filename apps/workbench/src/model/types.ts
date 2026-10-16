@@ -281,6 +281,8 @@ export interface RuntimeExtension {
   view?: unknown;
   tools: string[];
   commands: string[];
+  /** Slash commands named in extension.json, including while the extension is off. */
+  declaredCommands?: string[];
   events: string[];
   error?: string;
 }

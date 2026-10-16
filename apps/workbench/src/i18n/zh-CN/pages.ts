@@ -113,6 +113,11 @@ export const pages: Record<string, string> = {
     '运行时工具和界面组件的生命周期彼此独立。',
   'extension reload recorded; no code was loaded':
     '已记录扩展重新加载请求；没有加载任何代码',
+  'reloading extensions': '正在重新加载扩展',
+  bundled: '内置',
+  'Turn an extension on here. Hub pages appear once it has loaded.':
+    '在这里打开扩展。加载完成后会出现枢纽页面。',
+  'open extensions': '打开扩展',
   'runtime extensions': '运行时扩展',
   'interface components': '界面组件',
   '{n} command': '{n} 个命令',

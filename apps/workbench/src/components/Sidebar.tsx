@@ -38,6 +38,7 @@ import {
 } from '../model/session-management';
 import type { DialogId, Session } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
+import { platformTitle } from '../plugins/labels';
 import { armComposerFocus } from '../model/composer-focus';
 import { IconButton } from './common';
 import { t, tn } from '../i18n';
@@ -461,7 +462,7 @@ export function Sidebar({
               onClick={onNavigate}
             >
               <page.icon size={15} />
-              <span>{page.title}</span>
+              <span>{platformTitle(page.id, page.title)}</span>
             </NavLink>
           ))}
         </nav>

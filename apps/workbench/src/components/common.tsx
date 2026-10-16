@@ -153,6 +153,8 @@ const STATES: Record<string, () => string> = {
   modified: () => t('modified'),
   'native browser': () => t('native browser'),
   'not opened': () => t('not opened'),
+  'signed in': () => t('signed in'),
+  'signed out': () => t('signed out'),
 };
 export function Status({ value }: { value: string }) {
   return (

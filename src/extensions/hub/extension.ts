@@ -116,31 +116,73 @@ const EXTENSIONS: Record<string, string> = {
   'text/xml': 'xml',
   'application/xml': 'xml',
 };
-const USAGE = [
-  '/hub                          where you are signed in',
-  '/hub login <url> <user>       sign in; the password is asked on a masked card',
-  '/hub logout                   forget the token',
-  '/hub packs                    what the server can do',
-  '/hub submit <pack> <file>     hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
-  '/hub tasks                    the tasks you handed over from here',
-  '/hub task <id>                show a task and follow it until it ends',
-  '/hub respond <id> <answer>    answer what a task is waiting on (text, key=value or JSON)',
-  '/hub get <id>                 save a delivered task’s results again',
-  '/hub refresh                  read work, execution, knowledge and methods from the server',
-  '/hub approve <id> <approval>  approve an action a task waits on (reject: /hub reject …)',
-  '/hub reconcile <id> [op]     check an unknown operation; without op the server only explains',
-  '/hub tools                    the server’s tools the model can use, read again',
-  '/hub trial start              record the server tool calls of a trial run from now',
-  '/hub skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
-  '/hub skill list               the skill packs on the server',
-  '/hub skill run <id> [json]    run a skill pack on the server and follow it (--file <path> attaches)',
-  '/hub bot list                 the bots you can see; yours with their runs and new results',
-  '/hub bot every <pack> <1h>    a bot that runs a skill pack on a schedule (--from, --inputs, --file, --name)',
-  '/hub bot on <pack> <source> <event>  a bot that runs a skill pack when a connector reports the event',
-  '/hub bot approve <bot>        approve someone else’s bot and its trigger',
-  '/hub bot start|stop <bot>     turn your approved bot on or off',
-  '/hub bot runs <bot>           its runs and what each delivered to Circle',
-].join('\n');
+const DEFAULT_HUB_URL = 'http://127.0.0.1:7410';
+// Commands share one description column, including the shorter reconcile line.
+function usage(rows: [string, string][]): string {
+  const width = Math.max(...rows.map(([command]) => command.length)) + 2;
+  return rows
+    .map(([command, description]) => command.padEnd(width) + description)
+    .join('\n');
+}
+const USAGE = usage([
+  ['/hub', 'where you are signed in'],
+  ['/hub help', 'every command'],
+  [
+    '/hub login [url] <user>',
+    'sign in; the password is asked on a masked card unless this window already has it',
+  ],
+  ['/hub logout', 'revoke the token at the server, then forget it'],
+  ['/hub packs', 'what the server can do'],
+  [
+    '/hub submit <pack> <file>',
+    'hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
+  ],
+  ['/hub tasks', 'the tasks you handed over from here'],
+  ['/hub task <id>', 'show a task and follow it until it ends'],
+  [
+    '/hub respond <id> <answer>',
+    'answer what a task is waiting on (text, key=value or JSON)',
+  ],
+  ['/hub get <id>', 'save a delivered task’s results again'],
+  [
+    '/hub refresh',
+    'read work, execution, knowledge and methods from the server',
+  ],
+  [
+    '/hub approve <id> <approval>',
+    'approve an action a task waits on (reject: /hub reject …)',
+  ],
+  [
+    '/hub reconcile <id> [op]',
+    'check an unknown operation; without op the server only explains',
+  ],
+  ['/hub tools', 'the server’s tools the model can use, read again'],
+  ['/hub trial start', 'record the server tool calls of a trial run from now'],
+  [
+    '/hub skill push <folder>',
+    'submit a skill pack with the trial record (--outputs a,b defaults to the files the pack declares)',
+  ],
+  ['/hub skill list', 'the skill packs on the server'],
+  [
+    '/hub skill run <id> [json]',
+    'run a skill pack on the server and follow it (--file <path> attaches)',
+  ],
+  [
+    '/hub bot list',
+    'the bots you can see; yours with their runs and new results',
+  ],
+  [
+    '/hub bot every <pack> <1h>',
+    'a bot that runs a skill pack on a schedule (--from, --inputs, --file, --name)',
+  ],
+  [
+    '/hub bot on <pack> <source> <event>',
+    'a bot that runs a skill pack when a connector reports the event',
+  ],
+  ['/hub bot approve <bot>', 'approve someone else’s bot and its trigger'],
+  ['/hub bot start|stop <bot>', 'turn your approved bot on or off'],
+  ['/hub bot runs <bot>', 'its runs and what each delivered to Circle'],
+]);
 
 const sha256 = (bytes: Buffer): string =>
   createHash('sha256').update(bytes).digest('hex');
@@ -166,6 +208,45 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const reason = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+// A refusal the server named, said so a person can act on it. A usage line has no code
+// and is already the whole explanation.
+function explainFailure(error: unknown): string {
+  if (!(error instanceof ServerError) || !error.code) return reason(error);
+  const issues = Array.isArray(error.details.issues)
+    ? error.details.issues.filter(isRecord).slice(0, 6)
+    : [];
+  const detail = issues
+    .map((issue) => {
+      const path = Array.isArray(issue.path)
+        ? issue.path.map(String).join('.')
+        : '';
+      const message = String(issue.message ?? issue.code ?? 'invalid');
+      return path ? `${path}: ${message}` : message;
+    })
+    .join('; ');
+  switch (error.code) {
+    case 'UNAUTHENTICATED':
+      return `sign-in was refused (${error.code}). Check the user and password, then /hub login again.`;
+    case 'FORBIDDEN_SCOPE':
+    case 'FORBIDDEN_ACTION':
+    case 'SOURCE_FORBIDDEN':
+      return `the server refused this (${error.code}): ${error.message.replace(/^[^:]+:\s*/, '')}. Sign in to a project that may do it, or ask someone who can.`;
+    case 'TARGET_NOT_FOUND':
+      return `not found (${error.code}). Check the id and try again.`;
+    case 'INVALID_PAYLOAD':
+      return /outputs/i.test(detail)
+        ? `the hub refused the payload (${error.code}). ${detail}. skillpack.json needs outputs (at least one file). --outputs only names the trial files and defaults to that list.`
+        : `the hub refused the payload (${error.code}). ${detail || 'Check the fields the command sent.'}`;
+    case 'SKILLPACK_CHECK_FAILED':
+      return `${error.message}. Fix skillpack.json so it declares every tool the trial used, then /hub trial start and push again.`;
+    case 'SOURCE_HASH_MISMATCH':
+      return `the file changed while it was sent (${error.code}). Send it again.`;
+    case 'BODY_TOO_LARGE':
+      return `that is larger than the server accepts (${error.code}). Send a smaller file.`;
+    default:
+      return error.message;
+  }
+}
 
 // Words split on spaces, with "…" or '…' kept together. Only a word that is all one quoted
 // part loses its quotes, so {"a": "b c"} keeps the quotes JSON needs.
@@ -392,7 +473,25 @@ export async function register(api: ExtensionAPI): Promise<void> {
       };
     // An address given in settings.json under extensions.hub.url.
     const url = api.settings.url;
-    return typeof url === 'string' && url ? { url, username: '' } : undefined;
+    return typeof url === 'string' && url.trim()
+      ? { url: url.trim(), username: '' }
+      : undefined;
+  }
+  // The address to offer before anyone has signed in. Not written until they do.
+  function knownUrl(): string {
+    return readConfig()?.url || DEFAULT_HUB_URL;
+  }
+  // Remember the address for the next sign-in, in this extension's files and in
+  // settings.json. A run token never writes either.
+  function rememberAddress(url: string, username: string): void {
+    if (fromRun) return;
+    const current = readConfig();
+    writeJson('config.json', {
+      ...current,
+      url,
+      username: username || current?.username || '',
+    });
+    api.saveSettings({ url });
   }
   function followed(): Record<string, Followed> {
     const value = readJson('tasks.json');
@@ -420,7 +519,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   function publishView(signedIn: boolean): void {
     const config = readConfig();
     const view = {
-      url: config?.url ?? '',
+      url: config?.url || (fromRun ? '' : DEFAULT_HUB_URL),
       username: config?.username ?? '',
       scopeId: config?.scopeId ?? '',
       signedIn,
@@ -673,6 +772,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         context.append(line);
       },
       sendUserMessage: (line) => context.sendUserMessage(line),
+      secret: context.secret,
     };
   }
 
@@ -1540,11 +1640,20 @@ export async function register(api: ExtensionAPI): Promise<void> {
     context: CommandContext,
     list = false,
   ): Promise<void> {
+    if (list && !fromRun && !(await currentToken())) {
+      const where = readConfig();
+      context.append(
+        `not signed in: /hub login ${where?.url ?? DEFAULT_HUB_URL} <user>`,
+      );
+      return;
+    }
     let catalog: boolean;
     try {
       catalog = await syncTools(list);
     } catch (error) {
-      context.append(`  could not read the server's tools: ${reason(error)}`);
+      context.append(
+        `  could not read the server's tools: ${explainFailure(error)}`,
+      );
       return;
     }
     if (!catalog) {
@@ -1643,6 +1752,40 @@ export async function register(api: ExtensionAPI): Promise<void> {
     walk(root);
     return files;
   }
+  function skillManifestError(
+    manifest: Record<string, unknown>,
+  ): string | undefined {
+    const problems: string[] = [];
+    if (
+      typeof manifest.id !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{1,63}$/.test(manifest.id)
+    )
+      problems.push('id (lowercase letters, digits and -)');
+    if (typeof manifest.version !== 'string' || !manifest.version.trim())
+      problems.push('version');
+    if (typeof manifest.title !== 'string' || !manifest.title.trim())
+      problems.push('title');
+    if (typeof manifest.owner !== 'string' || !manifest.owner.trim())
+      problems.push('owner');
+    if (!Array.isArray(manifest.tools)) problems.push('tools[]');
+    const triggers = Array.isArray(manifest.triggers)
+      ? manifest.triggers.map(String)
+      : [];
+    if (
+      !triggers.length ||
+      triggers.some((item) => !['manual', 'schedule', 'event'].includes(item))
+    )
+      problems.push('triggers (manual, schedule or event)');
+    if (!isRecord(manifest.inputs)) problems.push('inputs (an object)');
+    const outputs = Array.isArray(manifest.outputs)
+      ? manifest.outputs.filter((item) => typeof item === 'string')
+      : [];
+    if (!outputs.length)
+      problems.push('outputs (at least one file the pack produces)');
+    if (!('model' in manifest)) problems.push('model');
+    if (!problems.length) return;
+    return `skillpack.json needs ${problems.join(', ')} before the hub will accept it (client API 1.0.0). --outputs names the trial files; the pack still declares its own outputs.`;
+  }
   async function pushSkill(
     rest: string[],
     context: CommandContext,
@@ -1651,7 +1794,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const outputs =
       flag >= 0 ? (rest[flag + 1] ?? '').split(',').filter(Boolean) : [];
     const folder = rest.filter(
-      (_, index) => index !== flag && index !== flag + 1,
+      (_, index) => flag < 0 || (index !== flag && index !== flag + 1),
     )[0];
     if (!folder)
       throw new ServerError('usage: /hub skill push <folder> [--outputs a,b]');
@@ -1669,18 +1812,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
     } catch (error) {
       throw new ServerError(`${folder}/skillpack.json: ${reason(error)}`);
     }
-    if (
-      typeof manifest.id !== 'string' ||
-      !/^[a-z0-9][a-z0-9-]{1,63}$/.test(manifest.id) ||
-      typeof manifest.version !== 'string' ||
-      !Array.isArray(manifest.tools)
-    )
-      throw new ServerError(
-        'skillpack.json needs id (lowercase letters, digits, -), version and tools[]',
-      );
+    const manifestError = skillManifestError(manifest);
+    if (manifestError) throw new ServerError(manifestError);
     if (!existsSync(join(root, 'SKILL.md')))
       throw new ServerError(`${folder} has no SKILL.md`);
-    const declared = new Set(manifest.tools.map(String));
+    const declared = new Set(
+      (Array.isArray(manifest.tools) ? manifest.tools : []).map(String),
+    );
     const undeclared = [
       ...new Set(
         trial.calls
@@ -1692,8 +1830,21 @@ export async function register(api: ExtensionAPI): Promise<void> {
       context.append(
         `  ! the trial used tools skillpack.json does not declare: ${undeclared.join(', ')}`,
       );
+    const declaredOutputs = Array.isArray(manifest.outputs)
+      ? manifest.outputs.map(String)
+      : [];
+    const chosen = flag >= 0 ? outputs : declaredOutputs;
+    if (flag < 0) {
+      const missing = chosen.filter(
+        (output) => !existsSync(resolve(workspace, output)),
+      );
+      if (missing.length)
+        throw new ServerError(
+          `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not in the workspace. /hub skill push uses the files skillpack.json lists as outputs; pass --outputs a,b for this trial, or put those files in place.`,
+        );
+    }
     const produced: { path: string; sha256: string }[] = [];
-    for (const output of outputs) {
+    for (const output of chosen) {
       const path = resolve(workspace, output);
       if (!existsSync(path)) {
         context.append(
@@ -2182,26 +2333,36 @@ export async function register(api: ExtensionAPI): Promise<void> {
     string,
     (rest: string[], context: CommandContext) => Promise<void>
   > = {
-    async login([address, username], context) {
+    async login(args, context) {
       if (fromRun)
         throw new ServerError(
           'Circle runs with a token from hub here; there is no sign-in',
         );
-      if (!address || !username)
-        throw new ServerError('usage: /hub login <url> <user>');
+      let address = args[0];
+      let username = args[1];
+      if (args.length === 1 && !/^https?:\/\//i.test(args[0] ?? '')) {
+        username = args[0];
+        address = knownUrl();
+      }
+      if (!address || !username || args.length > 2)
+        throw new ServerError('usage: /hub login [url] <user>');
       const url = serverUrl(address);
-      const password = await api.askSecret(
-        `Password for ${username} on ${url}`,
-      );
+      rememberAddress(url, username);
+      const given = context.secret;
+      const password =
+        typeof given === 'string' && given.length > 0
+          ? given
+          : await api.askSecret(`Password for ${username} on ${url}`);
       if (password === null) {
         context.append('Sign-in cancelled');
         return;
       }
+      api.conceal(password);
       const scopes = await signIn(url, username, password);
       await collectObjects().catch(() => {});
       const { data: about } = await request('GET', '/v1/status');
       context.append(
-        `● signed in to ${url} as ${username}${scopes.length ? ` · scope ${scopes[0]}` : ''}${
+        `● signed in to ${url} as ${username}${scopes.length ? ` · project ${scopes[0]}` : ''}${
           isRecord(about) && about.apiVersion
             ? ` · api ${String(about.apiVersion)}`
             : ''
@@ -2431,9 +2592,14 @@ export async function register(api: ExtensionAPI): Promise<void> {
         `/v1/tasks/${encodeURIComponent(taskId)}/reconcile`,
         { json: operationId ? { operationId } : {} },
       );
-      context.append(
-        `  ${taskId} · reconcile · ${JSON.stringify(data).slice(0, 200)}`,
-      );
+      const payload = isRecord(data) ? data : {};
+      const explained =
+        !operationId && typeof payload.reconciliation === 'string'
+          ? payload.reconciliation
+          : !operationId
+            ? 'name the operation: /hub reconcile <id> <operationId>'
+            : String(payload.status ?? 'accepted');
+      context.append(`  ${taskId} · reconcile · ${explained}`);
       await collectObjects().catch(() => {});
     },
   };
@@ -2853,22 +3019,31 @@ export async function register(api: ExtensionAPI): Promise<void> {
   api.background(lookForBots());
   api.registerCommand(
     'hub',
-    'Work with a hub: /hub [login | logout | packs | submit | tasks | task | respond | get | refresh | tools | skill | bot]',
+    'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | tools | skill | bot]',
     async (args, context) => {
       const [verb, ...rest] = words(args);
-      if (!verb) {
+      if (!verb || verb === 'help') {
         const config = readConfig();
         const signedIn = Boolean(await currentToken());
+        const url = config?.url || DEFAULT_HUB_URL;
+        if (verb === 'help') {
+          context.append(
+            `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${config?.scopeId ? ' · project ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n${USAGE}`,
+          );
+          return;
+        }
         context.append(
-          config
-            ? `${signedIn ? '●' : '○'} ${config.url}${config.username ? ' · ' + config.username : ''}${config.scopeId ? ' · project ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n${USAGE}`
-            : `Not connected.\n${USAGE}`,
+          `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${config?.scopeId ? ' · project ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n/hub help lists the commands`,
         );
         return;
       }
       const command = commands[verb];
       if (!command) throw new ServerError(`unknown: /hub ${verb}\n${USAGE}`);
-      await command(rest, recording(context));
+      try {
+        await command(rest, recording(context));
+      } catch (error) {
+        throw new ServerError(explainFailure(error));
+      }
     },
   );
 }

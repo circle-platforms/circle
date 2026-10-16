@@ -65,6 +65,7 @@ import { ManagementPage } from '../features/Pages';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
+import { platformTitle } from '../plugins/labels';
 import { isSessionBrowser } from '../model/browser';
 import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
 import {
@@ -182,6 +183,12 @@ export function App() {
     setDialogSelection(choice);
     setDialog(kind);
   };
+  const pendingSecret = snapshot.interactions.find(
+    (item) => item.kind === 'secret' && item.status === 'pending',
+  );
+  useEffect(() => {
+    if (pendingSecret) onDialog('secret');
+  }, [pendingSecret?.id]);
   const onPanel = (kind: PanelId, choice = '') => {
     setPanel(kind);
     setSelection(choice);
@@ -679,7 +686,7 @@ export function App() {
   const searchItems = [
     ...pluginPages.map(({ page }) => ({
       id: 'plugin-' + page.id,
-      label: page.title,
+      label: platformTitle(page.id, page.title),
       detail: t('platform plugin'),
       run: () => navigate('/page/' + page.id),
     })),

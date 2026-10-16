@@ -470,9 +470,14 @@ test('the bundled hub connector signs in, uploads, submits, follows and saves a 
   await command.handler(`login ${server.url} tester`, context);
   assert.match(
     lines.at(-1)!,
-    /● signed in to .* as tester · scope scp_lab · api 1\.0\.0/,
+    /● signed in to .* as tester · project scp_lab · api 1\.0\.0/,
   );
   assert.equal(await new ExtensionSecrets(home, 'hub').get('token'), TOKEN);
+  assert.equal(
+    JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8')).extensions.hub
+      .url,
+    server.url,
+  );
 
   await command.handler('submit mindmap-compile LBX-HA.xmind', context);
   await until(() => lines.some((line) => line.startsWith('✓ saved')));
@@ -570,6 +575,8 @@ test('the bundled hub connector signs in, uploads, submits, follows and saves a 
   await command.handler('logout', context);
   await until(() => ours()?.text === 'hub · signed out');
   assert.equal(await new ExtensionSecrets(home, 'hub').get('token'), undefined);
+  await command.handler('tools', context);
+  assert.match(lines.at(-1)!, /not signed in: \/hub login/);
   await assert.rejects(
     async () => command.handler('packs', context),
     /not signed in/,
@@ -891,6 +898,7 @@ test('the connector reads work, execution, knowledge and methods from the server
     lines.at(-1)!,
     /task_one · reconcile · .*No independently observed receipt/,
   );
+  assert.equal(lines.at(-1)!.includes('{'), false);
   // Naming the operation makes it a real reconciliation request.
   await command.handler('reconcile task_one op_9', context);
   assert.deepEqual(
@@ -1228,4 +1236,136 @@ test('a failed flow shows the rejected step and the bounded cause', async (t) =>
     ),
   );
   await delay(100);
+});
+
+test('/hub alone is a short status, and /hub help lines the descriptions up', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler('', context);
+  assert.match(lines.at(-1)!, /http:\/\/127\.0\.0\.1:7410/);
+  assert.match(lines.at(-1)!, /not signed in/);
+  assert.match(lines.at(-1)!, /\/hub help lists the commands/);
+  assert.equal(lines.at(-1)!.includes('/hub bot list'), false);
+  await command.handler('help', context);
+  const help = lines.at(-1)!;
+  const column = (prefix: string) => {
+    const line = help.split('\n').find((row) => row.startsWith(prefix + ' '))!;
+    return prefix.length + line.slice(prefix.length).search(/\S/);
+  };
+  assert.equal(
+    column('/hub approve <id> <approval>'),
+    column('/hub reconcile <id> [op]'),
+  );
+  assert.match(help, /revoke the token at the server, then forget it/);
+  assert.match(help, /\/hub bot list/);
+});
+
+test('a password given with the command is not asked for and does not appear in the reply', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const prompts: string[] = [];
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => {
+      prompts.push(request.question);
+      await submitAnswer(home, request.id, PASSWORD);
+    },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  await host
+    .commands()
+    .get('hub')!
+    .handler(`login ${server.url} tester`, {
+      workspace,
+      toast: (text) => lines.push(text),
+      append: (text) => lines.push(text),
+      sendUserMessage: () => {},
+      secret: PASSWORD,
+    });
+  assert.equal(prompts.length, 0);
+  assert.match(lines.at(-1)!, /project scp_lab/);
+  assert.equal(lines.join('\n').includes(PASSWORD), false);
+  assert.equal(JSON.stringify(host.view('hub')).includes(PASSWORD), false);
+});
+
+test('a refused payload names the fields instead of a raw code dump', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = createServer((_request, response) => {
+    response.writeHead(400, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        status: 'failed',
+        error: {
+          code: 'INVALID_PAYLOAD',
+          message: 'invalid',
+          details: {
+            issues: [
+              {
+                path: ['manifest', 'outputs'],
+                code: 'too_small',
+                message: 'too small',
+              },
+            ],
+          },
+        },
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true, url: `http://127.0.0.1:${port}` } },
+    secret: async (request) => submitAnswer(home, request.id, 'nope'),
+  }).load();
+  cleanup(t, () => host.close());
+  await assert.rejects(
+    async () =>
+      host
+        .commands()
+        .get('hub')!
+        .handler('login tester', {
+          workspace,
+          toast: () => {},
+          append: () => {},
+          sendUserMessage: () => {},
+        }),
+    /INVALID_PAYLOAD[\s\S]*manifest\.outputs[\s\S]*skillpack\.json needs outputs/,
+  );
 });

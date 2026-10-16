@@ -3,7 +3,8 @@ import { recordedDecision, recordedTitle } from '../model/decisions';
 import { KeybindingsEditor } from './KeybindingsEditor';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
-import { useState } from 'react';
+import { platformDescription, platformTitle } from '../plugins/labels';
+import { useEffect, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
 import {
@@ -1018,10 +1019,61 @@ function McpPage() {
     </Page>
   );
 }
+function scopeLabel(scope: string): string {
+  switch (scope) {
+    case 'bundled':
+      return t('bundled');
+    case 'project':
+      return t('project');
+    case 'user':
+      return t('user');
+    default:
+      return scope;
+  }
+}
+function useExtensionEnabled() {
+  const { snapshot, runtime, perform } = useRuntime();
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    setPending((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const [name, value] of Object.entries(current)) {
+        const row = snapshot.extensions.find((item) => item.name === name);
+        if (row && row.enabled === value) {
+          delete next[name];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [snapshot.extensions]);
+  const checked = (name: string, actual: boolean) => pending[name] ?? actual;
+  const setEnabled = (name: string, enabled: boolean) => {
+    setPending((current) => ({ ...current, [name]: enabled }));
+    perform(async () => {
+      try {
+        runtime.change((state) => {
+          const row = state.extensions.find((item) => item.name === name);
+          if (row) row.enabled = enabled;
+        });
+        if (runtime.mode === 'live') await runtime.request('reload');
+      } catch {
+        setPending((current) => {
+          const next = { ...current };
+          delete next[name];
+          return next;
+        });
+      }
+    });
+  };
+  return { checked, setEnabled };
+}
 function ExtensionsPage() {
-  const { snapshot, runtime, perform, notify } = useRuntime();
+  const { snapshot, runtime, notify } = useRuntime();
   const [tab, setTab] = useState<'runtime' | 'interface'>('runtime');
   const { registry, enabled, toggle } = usePlugins();
+  const extensionSwitch = useExtensionEnabled();
   return (
     <Page
       title={t('extensions')}
@@ -1032,7 +1084,11 @@ function ExtensionsPage() {
         <Button
           onClick={() => {
             runtime.request('extensions.reload');
-            notify(t('extension reload recorded; no code was loaded'));
+            notify(
+              runtime.mode === 'live'
+                ? t('reloading extensions')
+                : t('extension reload recorded; no code was loaded'),
+            );
           }}
         >
           <RotateCcw size={14} />
@@ -1075,20 +1131,17 @@ function ExtensionsPage() {
                 <div>
                   <h2>{extension.name}</h2>
                   <p>
-                    {extension.scope} · {extension.version}
+                    {scopeLabel(extension.scope)} · {extension.version}
                   </p>
                 </div>
                 <Switch
                   label={t('enable {name}', { name: extension.name })}
-                  checked={extension.enabled}
+                  checked={extensionSwitch.checked(
+                    extension.name,
+                    extension.enabled,
+                  )}
                   onChange={(enabled) =>
-                    perform(() =>
-                      runtime.change((state) => {
-                        state.extensions.find(
-                          (item) => item.id === extension.id,
-                        )!.enabled = enabled;
-                      }),
-                    )
+                    extensionSwitch.setEnabled(extension.name, enabled)
                   }
                 />
               </div>
@@ -1131,13 +1184,29 @@ function ExtensionsPage() {
               <div className="detail-title">
                 <Blocks size={20} />
                 <div>
-                  <h2>{plugin.title}</h2>
-                  <p>{plugin.description}</p>
+                  <h2>{platformTitle(plugin.id, plugin.title)}</h2>
+                  <p>{platformDescription(plugin.id) ?? plugin.description}</p>
                 </div>
                 <Switch
                   label={t('enable {name} interface', { name: plugin.id })}
-                  checked={enabled.includes(plugin.id)}
-                  onChange={(value) => toggle(plugin.id, value)}
+                  checked={
+                    plugin.runtimeExtension
+                      ? extensionSwitch.checked(
+                          plugin.runtimeExtension,
+                          enabled.includes(plugin.id),
+                        )
+                      : enabled.includes(plugin.id)
+                  }
+                  onChange={(value) => {
+                    if (plugin.runtimeExtension) {
+                      extensionSwitch.setEnabled(
+                        plugin.runtimeExtension,
+                        value,
+                      );
+                      return;
+                    }
+                    toggle(plugin.id, value);
+                  }}
                 />
               </div>
               <p className="panel-note">
@@ -1324,6 +1393,8 @@ const THEME_LABELS: Record<'auto' | 'light' | 'dark', () => string> = {
 function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   const settings = snapshot.settings;
+  const navigate = useNavigate();
+  const extensionSwitch = useExtensionEnabled();
   const [launch, setLaunch] = useState('--mode rpc --no-tools');
   const save = (update: (draft: WorkbenchSnapshotSettings) => void) =>
     perform(() => runtime.change((state) => update(state.settings)));
@@ -1568,6 +1639,37 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           </Button>
         </section>
       )}
+      <section className="settings-block">
+        <h2>{t('extensions')}</h2>
+        <p className="panel-note">
+          {t('Turn an extension on here. Hub pages appear once it has loaded.')}
+        </p>
+        {snapshot.extensions.length ? (
+          snapshot.extensions.map((extension) => (
+            <div className="setting-row" key={extension.id}>
+              <span>
+                {extension.name} · {scopeLabel(extension.scope)} ·{' '}
+                {extension.version}
+              </span>
+              <Switch
+                label={t('enable {name}', { name: extension.name })}
+                checked={extensionSwitch.checked(
+                  extension.name,
+                  extension.enabled,
+                )}
+                onChange={(enabled) =>
+                  extensionSwitch.setEnabled(extension.name, enabled)
+                }
+              />
+            </div>
+          ))
+        ) : (
+          <p className="panel-note">{t('no extensions yet')}</p>
+        )}
+        <Button onClick={() => navigate('/page/extensions')}>
+          {t('open extensions')}
+        </Button>
+      </section>
       <section className="settings-block">
         <h2>{t('about')}</h2>
         <Facts

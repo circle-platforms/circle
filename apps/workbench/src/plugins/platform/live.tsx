@@ -11,6 +11,7 @@ import {
 } from '../../components/common';
 import { hubView, HubProjectionNotice } from '../hub';
 import type { WorkbenchPlugin } from '../types';
+import { t } from '../../i18n';
 
 // The four platform objects as the paired hub extension last read them from the
 // server (/hub refresh). The server decides what you may see; nothing here is local.
@@ -116,21 +117,24 @@ function Frame({
     <Page
       title={title}
       description={description}
-      action={<Button onClick={() => run('refresh')}>refresh</Button>}
+      action={<Button onClick={() => run('refresh')}>{t('refresh')}</Button>}
     >
       {!view?.signedIn ? (
-        <EmptyState title="not signed in">
-          Sign in on the hub page; the server decides what you may see.
+        <EmptyState title={t('not signed in')}>
+          {t('Sign in on the hub page; the server decides what you may see.')}
         </EmptyState>
       ) : !objects ? (
-        <EmptyState title="nothing read yet">
-          refresh reads it from {view.url}.
+        <EmptyState title={t('nothing read yet')}>
+          {t('refresh reads it from {url}.', { url: view.url })}
         </EmptyState>
       ) : (
         <>
           <p className="panel-note">
-            read from {view.url} as {view.username} at{' '}
-            {new Date(objects.refreshedAt).toLocaleTimeString()}
+            {t('read from {url} as {user} at {time}', {
+              url: view.url,
+              user: view.username,
+              time: new Date(objects.refreshedAt).toLocaleTimeString(),
+            })}
           </p>
           <HubProjectionNotice projection={view?.projection} />
           {children(objects, run)}
@@ -144,8 +148,10 @@ export function WorkLivePage() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   return (
     <Frame
-      title="work"
-      description="C · tasks as the server holds them: their phase, what they wait on, and approvals bound to an input revision."
+      title={t('work')}
+      description={t(
+        'tasks as the server holds them: their phase, what they wait on, and approvals bound to an input revision.',
+      )}
     >
       {(objects, run) => (
         <>
@@ -165,10 +171,10 @@ export function WorkLivePage() {
                     </div>
                     <Status value={task.phase} />
                     <Button
-                      aria-label={`follow ${task.taskId}`}
+                      aria-label={t('follow {id}', { id: task.taskId })}
                       onClick={() => run(`task ${task.taskId}`)}
                     >
-                      follow
+                      {t('follow')}
                     </Button>
                   </div>
                   {task.pendingInputs.map((item) => (
@@ -194,16 +200,18 @@ export function WorkLivePage() {
                       />
                       <Button
                         type="submit"
-                        aria-label={`send answer ${item.requestId}`}
+                        aria-label={t('answer {id}', { id: item.requestId })}
                       >
-                        answer
+                        {t('answer')}
                       </Button>
                     </form>
                   ))}
                   {task.approvals.map((approval) => (
                     <div className="detail-title" key={approval.approvalId}>
                       <div>
-                        <h2>approval {approval.approvalId}</h2>
+                        <h2>
+                          {t('approval {id}', { id: approval.approvalId })}
+                        </h2>
                         <p>
                           {approval.status} · asked by {approval.applicantId}
                           {approval.approvedBy
@@ -216,24 +224,28 @@ export function WorkLivePage() {
                       {approval.status === 'open' && (
                         <>
                           <Button
-                            aria-label={`approve ${approval.approvalId}`}
+                            aria-label={t('approve {id}', {
+                              id: approval.approvalId,
+                            })}
                             onClick={() =>
                               run(
                                 `approve ${task.taskId} ${approval.approvalId}`,
                               )
                             }
                           >
-                            approve
+                            {t('approve')}
                           </Button>
                           <Button
-                            aria-label={`reject ${approval.approvalId}`}
+                            aria-label={t('reject {id}', {
+                              id: approval.approvalId,
+                            })}
                             onClick={() =>
                               run(
                                 `reject ${task.taskId} ${approval.approvalId}`,
                               )
                             }
                           >
-                            reject
+                            {t('reject')}
                           </Button>
                         </>
                       )}
@@ -243,8 +255,8 @@ export function WorkLivePage() {
               ))}
             </div>
           ) : (
-            <EmptyState title="no work">
-              Nothing you may read on this server yet.
+            <EmptyState title={t('no work')}>
+              {t('Nothing you may read on this server yet.')}
             </EmptyState>
           )}
           <Background objects={objects} />
@@ -257,8 +269,10 @@ export function WorkLivePage() {
 export function ExecutionLivePage() {
   return (
     <Frame
-      title="execution"
-      description="D · operations the server's workers ran for these tasks, with the worker and fencing token that held the lease."
+      title={t('execution')}
+      description={t(
+        "operations the server's workers ran for these tasks, with the worker and fencing token that held the lease.",
+      )}
     >
       {(objects, run) =>
         objects.execution.some((task) => task.operations.length) ? (
@@ -289,10 +303,10 @@ export function ExecutionLivePage() {
                       <Status value={operation.status} />
                       {operation.status === 'unknown' && (
                         <Button
-                          aria-label={`reconcile ${task.taskId}`}
+                          aria-label={t('reconcile {id}', { id: task.taskId })}
                           onClick={() => run(`reconcile ${task.taskId}`)}
                         >
-                          reconcile
+                          {t('reconcile')}
                         </Button>
                       )}
                     </div>
@@ -301,8 +315,8 @@ export function ExecutionLivePage() {
               ))}
           </div>
         ) : (
-          <EmptyState title="no operations">
-            No worker has run anything for these tasks.
+          <EmptyState title={t('no operations')}>
+            {t('No worker has run anything for these tasks.')}
           </EmptyState>
         )
       }
@@ -313,8 +327,10 @@ export function ExecutionLivePage() {
 export function KnowledgeLivePage() {
   return (
     <Frame
-      title="knowledge"
-      description="B · each task's source, artifacts and evidence, by revision and SHA-256, and the server's own check."
+      title={t('knowledge')}
+      description={t(
+        "each task's source, artifacts and evidence, by revision and SHA-256, and the server's own check.",
+      )}
     >
       {(objects, run) =>
         objects.knowledge.length ? (
@@ -332,10 +348,12 @@ export function KnowledgeLivePage() {
                   <Status value={task.status} />
                   {task.artifacts.length > 0 && (
                     <Button
-                      aria-label={`save results of ${task.taskId}`}
+                      aria-label={t('save results of {id}', {
+                        id: task.taskId,
+                      })}
                       onClick={() => run(`get ${task.taskId}`)}
                     >
-                      save results
+                      {t('save results')}
                     </Button>
                   )}
                 </div>
@@ -359,14 +377,14 @@ export function KnowledgeLivePage() {
                   </p>
                 )}
                 {task.unmapped.length > 0 && (
-                  <DataBlock title="unmapped" value={task.unmapped} />
+                  <DataBlock title={t('unmapped')} value={task.unmapped} />
                 )}
               </article>
             ))}
           </div>
         ) : (
-          <EmptyState title="no knowledge">
-            No task you may read has sources or results yet.
+          <EmptyState title={t('no knowledge')}>
+            {t('No task you may read has sources or results yet.')}
           </EmptyState>
         )
       }
@@ -378,8 +396,10 @@ export function MethodsLivePage() {
   const [files, setFiles] = useState<Record<string, string>>({});
   return (
     <Frame
-      title="methods"
-      description="E · the server's capability packs, at the versions it runs. Hand one a file of this workspace."
+      title={t('methods')}
+      description={t(
+        "the server's capability packs, at the versions it runs. Hand one a file of this workspace.",
+      )}
     >
       {(objects, run) => (
         <>
@@ -413,7 +433,7 @@ export function MethodsLivePage() {
                   >
                     <input
                       aria-label={`file for ${pack.capabilityPackId}`}
-                      placeholder="file in the workspace"
+                      placeholder={t('file in the workspace')}
                       value={files[pack.capabilityPackId] ?? ''}
                       onChange={(event) =>
                         setFiles({
@@ -426,15 +446,15 @@ export function MethodsLivePage() {
                       type="submit"
                       aria-label={`hand over to ${pack.capabilityPackId}`}
                     >
-                      hand over
+                      {t('hand over')}
                     </Button>
                   </form>
                 </article>
               ))}
             </div>
           ) : (
-            <EmptyState title="no capability packs">
-              The server lists none you may use.
+            <EmptyState title={t('no capability packs')}>
+              {t('The server lists none you may use.')}
             </EmptyState>
           )}
           <ServerTools objects={objects} run={run} />
@@ -457,12 +477,19 @@ function Background({ objects }: { objects: Objects }) {
   const count = (n: number) => (n >= 100 ? '100+' : String(n));
   return (
     <p className="panel-note">
-      Not listed: {count(toolReads)} server tool read(s) and {count(indexing)}{' '}
-      knowledge indexing job(s)
       {indexingOpen
-        ? `, ${indexingOpen} still indexing; search may not show their knowledge yet`
-        : ''}
-      .
+        ? t(
+            'Not listed: {reads} server tool reads and {indexing} knowledge indexing jobs, {open} still indexing.',
+            {
+              reads: count(toolReads),
+              indexing: count(indexing),
+              open: indexingOpen,
+            },
+          )
+        : t(
+            'Not listed: {reads} server tool reads and {indexing} knowledge indexing jobs.',
+            { reads: count(toolReads), indexing: count(indexing) },
+          )}
     </p>
   );
 }
@@ -483,13 +510,16 @@ function ServerTools({
     <>
       <p className="panel-note">
         {tools.length
-          ? `${tools.length} server tools the model can use: ` +
-            tools
-              .map(
-                (tool) => `${tool.remote}${tool.write ? ' (asks first)' : ''}`,
-              )
-              .join(', ')
-          : 'This server offers the model no tools.'}
+          ? t('{count} server tools the model can use: {list}', {
+              count: tools.length,
+              list: tools
+                .map(
+                  (tool) =>
+                    `${tool.remote}${tool.write ? t(' (asks first)') : ''}`,
+                )
+                .join(', '),
+            })
+          : t('This server offers the model no tools.')}
       </p>
       {packs.length > 0 && (
         <div className="extension-list">
@@ -501,8 +531,9 @@ function ServerTools({
               <div className="detail-title">
                 <div>
                   <h2>
-                    skill pack {pack.id ?? pack.skillPackId}{' '}
-                    {pack.version ?? ''}
+                    {t('skill pack {name}', {
+                      name: `${pack.id ?? pack.skillPackId} ${pack.version ?? ''}`.trim(),
+                    })}
                   </h2>
                   <p>{pack.skillPackId}</p>
                 </div>
@@ -518,7 +549,7 @@ function ServerTools({
             <article className="extension-card" key={bot.assetId}>
               <div className="detail-title">
                 <div>
-                  <h2>bot {bot.name}</h2>
+                  <h2>{t('bot {name}', { name: bot.name })}</h2>
                   <p>
                     {bot.assetId} · {bot.trigger}
                     {bot.mine
@@ -532,7 +563,7 @@ function ServerTools({
                     aria-label={`runs of ${bot.assetId}`}
                     onClick={() => run(`bot runs ${bot.assetId}`)}
                   >
-                    runs
+                    {t('runs')}
                   </Button>
                 )}
                 {bot.mine && bot.lifecycle === 'approved' && (
@@ -540,7 +571,7 @@ function ServerTools({
                     aria-label={`start ${bot.assetId}`}
                     onClick={() => run(`bot start ${bot.assetId}`)}
                   >
-                    start
+                    {t('start')}
                   </Button>
                 )}
                 {bot.mine && bot.lifecycle === 'running' && (
@@ -548,7 +579,7 @@ function ServerTools({
                     aria-label={`stop ${bot.assetId}`}
                     onClick={() => run(`bot stop ${bot.assetId}`)}
                   >
-                    stop
+                    {t('stop')}
                   </Button>
                 )}
                 {!bot.mine && bot.lifecycle === 'draft' && (
@@ -556,7 +587,7 @@ function ServerTools({
                     aria-label={`approve ${bot.assetId}`}
                     onClick={() => run(`bot approve ${bot.assetId}`)}
                   >
-                    approve
+                    {t('approve')}
                   </Button>
                 )}
               </div>
@@ -580,7 +611,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'knowledge',
     title: 'knowledge',
     description:
-      'B · sources, artifacts and evidence of your tasks on hub, by revision and SHA-256.',
+      "each task's source, artifacts and evidence, by revision and SHA-256, and the server's own check.",
     icon: BookOpen,
     pages: [
       {
@@ -596,7 +627,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'work',
     title: 'work',
     description:
-      'C · tasks on hub: phases, questions they wait on and approvals bound to a revision.',
+      'tasks as the server holds them: their phase, what they wait on, and approvals bound to an input revision.',
     icon: Workflow,
     pages: [
       { id: 'work', title: 'work', icon: Workflow, component: WorkLivePage },
@@ -607,7 +638,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'execution',
     title: 'execution',
     description:
-      'D · operations hub workers ran, with their leases and outcomes.',
+      "operations the server's workers ran for these tasks, with the worker and fencing token that held the lease.",
     icon: Server,
     pages: [
       {
@@ -623,7 +654,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'methods',
     title: 'methods',
     description:
-      'E · capability packs hub runs, at their versions; hand one a file.',
+      "the server's capability packs, at the versions it runs. Hand one a file of this workspace.",
     icon: Blocks,
     pages: [
       {

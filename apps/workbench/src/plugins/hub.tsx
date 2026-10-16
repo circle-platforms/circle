@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Server } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import {
@@ -69,12 +69,21 @@ export function hubView(
   const view = extensions.find((item) => item.name === 'hub')?.view;
   return view && typeof view === 'object' ? (view as HubView) : undefined;
 }
+const DEFAULT_HUB_URL = 'http://127.0.0.1:7410';
 /** The interface half of the hub extension: its commands, as a page. */
 export function HubPage() {
   const { snapshot, runtime, perform } = useRuntime();
   const view = hubView(snapshot.extensions);
-  const [address, setAddress] = useState(view?.url || '');
-  const [user, setUser] = useState(view?.username || '');
+  const [address, setAddress] = useState(DEFAULT_HUB_URL);
+  const [user, setUser] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const touched = useRef({ address: false, user: false });
+  useEffect(() => {
+    if (!view) return;
+    if (!touched.current.address && view.url) setAddress(view.url);
+    if (!touched.current.user && view.username) setUser(view.username);
+  }, [view]);
   // Every action is the extension's own /hub command; its lines go to the conversation.
   const run = (args: string) =>
     perform(async () => {
@@ -82,49 +91,104 @@ export function HubPage() {
     });
   return (
     <Page
-      title="hub"
-      description="Work handed to a hub from here. The server keeps each task; closing Circle does not stop it."
-      action={<Button onClick={() => run('tasks')}>refresh</Button>}
+      title={t('hub')}
+      description={t(
+        'Work handed to a hub from here. The server keeps each task; closing Circle does not stop it.',
+      )}
+      action={<Button onClick={() => run('tasks')}>{t('refresh')}</Button>}
     >
       {view ? (
         <Facts
           values={{
-            server: view.url || 'none',
-            user: view.username || 'none',
-            project: view.scopeId || 'none',
-            state: (
+            [t('server')]: view.url || t('none'),
+            [t('user')]: view.username || t('none'),
+            [t('project')]: view.scopeId || t('none'),
+            [t('state')]: (
               <Status value={view.signedIn ? 'signed in' : 'signed out'} />
             ),
-            following: view.following.length
+            [t('following')]: view.following.length
               ? view.following.join(', ')
-              : 'nothing',
+              : t('nothing followed'),
           }}
         />
       ) : (
-        <EmptyState title="not connected">
-          The hub extension has published nothing yet.
+        <EmptyState title={t('not connected')}>
+          {t('The hub extension has published nothing yet.')}
         </EmptyState>
       )}
       <form
         className="form-stack"
         onSubmit={(event) => {
           event.preventDefault();
-          if (address && user) run(`login ${address} ${user}`);
+          if (!address.trim() || !user.trim() || !password) {
+            setError(t('enter the server, user and password'));
+            return;
+          }
+          if (runtime.mode !== 'live') {
+            setError(t('sign-in needs the Circle runtime'));
+            return;
+          }
+          const server = address.trim();
+          const name = user.trim();
+          const secret = password;
+          setError('');
+          perform(async () => {
+            try {
+              await runtime.request('extension-command', {
+                name: 'hub',
+                args: `login ${server} ${name}`,
+                secret,
+              });
+              setPassword('');
+            } catch (caught) {
+              setError(
+                caught instanceof Error ? caught.message : t('sign-in failed'),
+              );
+            }
+          });
         }}
       >
-        <input
-          aria-label="hub address"
-          placeholder="http://127.0.0.1:7410"
-          value={address}
-          onChange={(event) => setAddress(event.target.value)}
-        />
-        <input
-          aria-label="user"
-          placeholder="user"
-          value={user}
-          onChange={(event) => setUser(event.target.value)}
-        />
-        <Button type="submit">sign in</Button>
+        <label>
+          {t('server')}
+          <input
+            aria-label={t('server')}
+            placeholder={DEFAULT_HUB_URL}
+            value={address}
+            onChange={(event) => {
+              touched.current.address = true;
+              setAddress(event.target.value);
+            }}
+          />
+        </label>
+        <label>
+          {t('user')}
+          <input
+            aria-label={t('user')}
+            placeholder={t('user')}
+            value={user}
+            autoComplete="username"
+            onChange={(event) => {
+              touched.current.user = true;
+              setUser(event.target.value);
+            }}
+          />
+        </label>
+        <label>
+          {t('password')}
+          <input
+            aria-label={t('password')}
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        {error ? (
+          <p className="inline-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <Button type="submit">{t('sign in')}</Button>
       </form>
       {view?.tasks.length ? (
         <div className="extension-list">
@@ -134,21 +198,21 @@ export function HubPage() {
                 <div>
                   <h2>{task.title || task.taskId}</h2>
                   <p>
-                    {task.taskId} · seen to {task.seq}
-                    {task.saved ? ' · results saved' : ''}
+                    {task.taskId} · {t('seen to {seq}', { seq: task.seq })}
+                    {task.saved ? ' · ' + t('results saved') : ''}
                   </p>
                 </div>
                 <Button
-                  aria-label={`follow ${task.taskId}`}
+                  aria-label={t('follow {id}', { id: task.taskId })}
                   onClick={() => run(`task ${task.taskId}`)}
                 >
-                  follow
+                  {t('follow')}
                 </Button>
                 <Button
-                  aria-label={`save results of ${task.taskId}`}
+                  aria-label={t('save results of {id}', { id: task.taskId })}
                   onClick={() => run(`get ${task.taskId}`)}
                 >
-                  save results
+                  {t('save results')}
                 </Button>
               </div>
             </article>
@@ -157,7 +221,7 @@ export function HubPage() {
       ) : null}
       <HubProjectionNotice projection={view?.projection} />
       {view?.recent.length ? (
-        <DataBlock title="recent" value={view.recent.join('\n')} />
+        <DataBlock title={t('recent')} value={view.recent.join('\n')} />
       ) : null}
     </Page>
   );

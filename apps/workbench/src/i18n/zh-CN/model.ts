@@ -21,6 +21,8 @@ export const model: Record<string, string> = {
   '{kind} is not connected yet': '{kind} 尚未接入',
   '/{name} is not connected yet': '/{name} 尚未接入',
   'unknown command /{name}': '未知命令 /{name}',
+  'unknown command /{name} · turn it on with /extensions enable {extension}':
+    '未知命令 /{name} · 用 /extensions enable {extension} 打开它',
   'the message and its files are over 64 MB; remove some pictures or PDFs':
     '消息和附带的文件超过 64 MB，请移除一些图片或 PDF',
   'prompt is empty': '请先写一条消息',

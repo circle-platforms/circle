@@ -56,7 +56,7 @@ To turn one off, set it in `settings.json`, or run `/extensions disable sample`:
 
 An extension shipped with Circle is off until `"enabled": true`, which `/extensions enable <name>` saves for you. `/extensions` lists it with `off · /extensions enable <name>`.
 
-A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.0", "description": "..." }`. `/extensions` and the desktop application show both. It is optional, and an unreadable one is ignored.
+A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.0", "description": "...", "commands": ["hello"] }`. `/extensions` and the desktop application show the version and description. `commands` names slash commands the folder will register, so a bundled extension that is still off can say `/extensions enable <name>` instead of treating the command as a typo. It is optional, and an unreadable one is ignored.
 
 ## An interface in the desktop application
 
@@ -80,12 +80,15 @@ What these pages show is what the server last returned to `/hub refresh`, which 
 
 ### hub
 
-Connects Circle to a [hub](https://github.com/circle-platforms/hub), which keeps work for a team: it takes a task with your files, runs it on its own, and delivers results. Turn it on with `/extensions enable hub`.
+Connects Circle to a [circle-hub](https://github.com/circle-platforms/circle-hub), which keeps work for a team: it takes a task with your files, runs it on its own, and delivers results. Turn it on with `/extensions enable hub`.
+
+This extension's own version is **0.1.0**. That number is the Circle plugin version: the desktop pages pair with it and show only while it matches. It is not the hub server's version. The extension speaks circle-hub **client API 1.0.0**, which **circle-hub 0.2.0** serves. The two version lines are different series; 0.1.0 here does not mean the server is old, and a server 0.2.0 does not mean this extension is behind. The range a client should declare is described in the hub's [compatibility matrix](https://github.com/circle-platforms/circle-hub/blob/main/docs/compatibility.md).
 
 | Command | What it does |
 |---|---|
-| `/hub` | Where you are signed in, and the commands. |
-| `/hub login <url> <user>` | Sign in. The password is asked on a masked card and is not kept; the token the server issues is kept with [`api.secrets`](#secrets). |
+| `/hub` | Where you are signed in: the address, user and project, and whether a token is held. `/hub help` lists the commands. |
+| `/hub help` | Every `/hub` command, including the bot commands below. |
+| `/hub login [url] <user>` | Sign in. With no address, the saved one is used, or `http://127.0.0.1:7410` when nothing is saved. The password is asked on a masked card (or taken from the desktop hub page) and is not kept; the token the server issues is kept with [`api.secrets`](#secrets). The address is written to `extensions.hub.url` in `settings.json` and to the extension's own config, so the next sign-in can omit it. A program that runs Circle for the server does not write either. |
 | `/hub logout` | Revoke the whole token family at the server, then forget the token locally. |
 | `/hub packs` | What the server can do, as capability packs. |
 | `/hub submit <pack> <file>…` | Upload the files, hand the server the work, and follow it: each event is a line in the conversation, and what it delivers is saved under `tasks/<taskId>/` in the workspace once its SHA-256 matches the server's. Sending the same pack and files again finds the same task; add `--again` for a new one. For the hub's generic execution flow, hand over the flow itself: `/hub submit module-execute <input-json>` with the flow input (`flowId`, `methodPin`, `resources`, `sources`, `value`, `controlledBytes`) and no file. |
@@ -98,13 +101,21 @@ Connects Circle to a [hub](https://github.com/circle-platforms/hub), which keeps
 | `/hub reconcile <id> [op]` | Ask the server to check an operation whose outcome is unknown; only naming the operation reconciles, without it the server explains what is missing. It does not turn an unknown outcome into success. |
 | `/hub tools` | The server's tools the model can use, read again from the server. |
 | `/hub trial start` | Start recording which server tools the model calls, for the trial record a skill pack is sent with. Only the tool names, whether each call worked, and a SHA-256 of its arguments are kept. |
-| `/hub skill push <folder> [--outputs a,b]` | Send a skill pack: the folder's `skillpack.json` (`id`, `version`, `tools`, …), its `SKILL.md` and other files (not hidden ones, not `node_modules`), with the trial record and the SHA-256 of the named output files. The server checks the record against the tools the pack declares and keeps the pack for approval. |
+| `/hub skill push <folder> [--outputs a,b]` | Send a skill pack: the folder's `skillpack.json`, its `SKILL.md` and other files (not hidden ones, not `node_modules`), with the trial record and the SHA-256 of the output files. `--outputs` is optional: when it is left out, the files named by `skillpack.json` `outputs` are used, and a missing one is reported here instead of as a raw server error. The manifest itself must include `id`, `version`, `title`, `owner`, `tools`, `triggers` (`manual`, `schedule` or `event`), `inputs` (an object), `outputs` (at least one path) and `model`; that is what circle-hub's client API 1.0.0 accepts. The server checks the record against the tools the pack declares and keeps the pack for approval. |
 | `/hub skill list` | The skill packs on the server. |
 | `/hub skill run <id> [json] [--file <path>]…` | Run a skill pack on the server with these inputs, and follow the task. Each `--file` attaches a file of the workspace as `inputs.files`, which the run finds in its own workspace. |
+| `/hub bot list` | The bots you can see. Yours include their runs and results that have not been shown yet. |
+| `/hub bot every <pack> <1h>` | A bot that runs a skill pack on a schedule. `--from`, `--inputs`, `--file` and `--name` set the start, the inputs, an attached file and the name. |
+| `/hub bot on <pack> <source> <event>` | A bot that runs a skill pack when a connector reports that event. |
+| `/hub bot approve <bot>` | Approve someone else's bot and its trigger. |
+| `/hub bot start <bot>` / `/hub bot stop <bot>` | Turn your approved bot on or off. |
+| `/hub bot runs <bot>` | Its runs, and what each one delivered to Circle. |
 
 **When a program runs Circle for the server.** hub's own runner starts Circle without a person, as `circle --mode rpc --extensions`, and hands over the address and a short-lived token in the environment: `CIRCLE_HUB_URL` and `CIRCLE_HUB_TOKEN` (with `CIRCLE_HUB_USER` and `CIRCLE_HUB_SCOPE` if it has them). The extension then reads the server's tools before the first prompt, writes nothing to disk, and does not ask for a password when the token is turned down; `/hub login` and `/hub logout` are refused.
 
-The address can also be set in `settings.json` as `"extensions": { "hub": { "enabled": true, "url": "https://…" } }`. The lines the commands write are notices for you; the model does not see them.
+The address can also be set in `settings.json` as `"extensions": { "hub": { "enabled": true, "url": "http://127.0.0.1:7410" } }`. Signing in writes that `url` as well. The desktop hub page starts from it, or from `http://127.0.0.1:7410` when it is empty, and asks for the password on the page. The lines the commands write are notices for you; the model does not see them.
+
+A server error is named and says what to do next: a bad password says to sign in again, a missing id says to check it, and a skill pack the server will not accept names the fields (`INVALID_PAYLOAD`) or the tools the trial used (`SKILLPACK_CHECK_FAILED`). `/hub tools` after `/hub logout` says you are not signed in. A server you are signed in to that publishes no tool catalog still says it offers no tools.
 
 **The server's own tools.** A server that publishes a tool catalog (`GET /v1/tools`) has its tools offered to the model once you sign in, each as `hub_tool_<name>`, for example `hub_tool_docs_list` for the server's `docs.list`. The server decides which tools you get. A tool that only reads runs without asking; one that changes something asks first; one the server runs as a task is waited for in the background. The list is read again on `/hub refresh`, `/hub tools` and when a session starts, and the model sees changes from its next turn. Signing out removes them. A server without a catalog offers none.
 
@@ -137,6 +148,8 @@ Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, 
 | `api.setView(data)` | Publish data for the extension's own [interface in the desktop application](#an-interface-in-the-desktop-application): JSON only, up to 64 KB, with [secrets](#secrets) masked. `null` removes it. |
 | `api.workspace` | The folder Circle works in, for a tool that reads or saves the user's files there. |
 | `api.settings` | A copy of the extension's own entry under `extensions` in `settings.json`, as it was when the extension loaded, such as `{ "enabled": true, "url": "…" }`. Changing the copy saves nothing. |
+| `api.saveSettings(patch)` | Merge keys into that entry on disk and into the running copy. `enabled` is left as it is unless the patch sets it. |
+| `api.conceal(value)` | Hide a value in status and views, the way a secret from `askSecret` is hidden. |
 | `api.dataDir` | A folder of the extension's own, `~/.circle/extension_data/<name>/` (`0700`), made the first time it is read. For what the extension keeps that is not secret. |
 | `api.secrets` | Values the extension keeps between runs, such as a token. See [Secrets](#secrets). |
 | `api.askSecret(question, options)` | Ask you for a value on a masked card; it goes back to the extension only. See [Secrets](#secrets). |
