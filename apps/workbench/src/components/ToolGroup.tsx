@@ -10,6 +10,14 @@ const READS = ['read_file'];
 const SEARCHES = ['ls', 'glob', 'grep', 'lsp'];
 const EDITS = ['write_file', 'edit_file', 'apply_patch', 'delete'];
 const WEB = ['webfetch', 'websearch'];
+const AGENT_SCHEDULE = ['native_tasks_enqueue', 'native_tasks_analyze'];
+const AGENT_QUERY = [
+  'native_tasks_list',
+  'native_tasks_wait',
+  'native_tasks_events',
+  'native_tasks_artifacts',
+];
+const AGENT_CONTROL = ['native_tasks_cancel', 'native_tasks_retry'];
 const name = (path: string) =>
   path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 
@@ -69,9 +77,23 @@ export function toolSummary(rows: Message[]): {
     );
   const agents = count(['task']).length;
   if (agents) parts.push(tn(agents, 'ran a subagent', 'ran {n} subagents'));
+  const scheduled = count(AGENT_SCHEDULE).length;
+  if (scheduled) parts.push(t('scheduled agents'));
+  if (count(AGENT_QUERY).length) parts.push(t('checked agent progress'));
+  if (count(AGENT_CONTROL).length) parts.push(t('updated agent scheduling'));
   const web = count(WEB).length;
   if (web) parts.push(tn(web, 'used the web once', 'used the web {n} times'));
-  const known = ['execute', 'task', ...READS, ...SEARCHES, ...EDITS, ...WEB];
+  const known = [
+    'execute',
+    'task',
+    ...AGENT_SCHEDULE,
+    ...AGENT_QUERY,
+    ...AGENT_CONTROL,
+    ...READS,
+    ...SEARCHES,
+    ...EDITS,
+    ...WEB,
+  ];
   // Other tools by name while there are few of them: `used plan_exit`.
   const other = completed.filter((tool) => !known.includes(tool.name));
   const names = [...new Set(other.map((tool) => tool.name))];
