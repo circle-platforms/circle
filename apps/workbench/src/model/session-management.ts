@@ -71,16 +71,43 @@ export const RECENT_SHOWN = 5;
  * When the session last had a message. Opening, selecting, or renaming does
  * not count: those do not change a message time.
  */
+const parsedMessageTimes = new WeakMap<
+  Message,
+  { at: string; value: number }
+>();
+const messageActivity = new WeakMap<
+  Session['messages'],
+  { times: string[]; at: string }
+>();
+
 export function sessionActivityAt(session: Session): string {
+  const messages = session.messages;
+  const previous = messageActivity.get(messages);
+  // Runtime snapshots use replacement arrays, but preview/custom callers can mutate
+  // them. Validate every timestamp; array identity or the last message is not a version.
+  if (
+    previous &&
+    previous.times.length === messages.length &&
+    messages.every((message, index) => message.at === previous.times[index])
+  )
+    return previous.at || session.updatedAt;
   let best = Number.NEGATIVE_INFINITY;
   let at = '';
-  for (const message of session.messages) {
-    const parsed = Date.parse(message.at);
-    if (Number.isFinite(parsed) && parsed >= best) {
-      best = parsed;
-      at = message.at;
+  const times: string[] = [];
+  for (const message of messages) {
+    const stamp = message.at;
+    times.push(stamp);
+    let cached = parsedMessageTimes.get(message);
+    if (!cached || cached.at !== stamp) {
+      cached = { at: stamp, value: Date.parse(stamp) };
+      parsedMessageTimes.set(message, cached);
+    }
+    if (Number.isFinite(cached.value) && cached.value >= best) {
+      best = cached.value;
+      at = stamp;
     }
   }
+  messageActivity.set(messages, { times, at });
   return at || session.updatedAt;
 }
 
@@ -115,26 +142,38 @@ export function orderedProjects(
   workspaces: readonly Workspace[],
   sessions: readonly Session[],
 ): Workspace[] {
-  const activity = (id: string) =>
-    sessions
-      .filter((session) => session.workspaceId === id && !session.archivedAt)
-      .reduce(
-        (value, session) =>
-          Math.max(value, Date.parse(sessionActivityAt(session)) || 0),
-        0,
-      );
-  return sidebarProjects(workspaces, sessions).sort(
-    (a, b) => activity(b.id) - activity(a.id) || a.name.localeCompare(b.name),
+  const projects = sidebarProjects(workspaces, sessions);
+  const activity = new Map(projects.map((project) => [project.id, 0]));
+  for (const session of sessions) {
+    if (session.archivedAt || !activity.has(session.workspaceId)) continue;
+    activity.set(
+      session.workspaceId,
+      Math.max(
+        activity.get(session.workspaceId)!,
+        Date.parse(sessionActivityAt(session)) || 0,
+      ),
+    );
+  }
+  return projects.sort(
+    (a, b) =>
+      activity.get(b.id)! - activity.get(a.id)! || a.name.localeCompare(b.name),
   );
 }
 
 /** Newest sessions from every project and from no project. Archived and empty rows stay out. */
 export function recentSessions(sessions: readonly Session[]): Session[] {
-  const activity = (session: Session) =>
-    Date.parse(sessionActivityAt(session)) || 0;
-  return visibleSessions(sessions)
-    .filter((session) => !session.archivedAt)
-    .sort((a, b) => activity(b) - activity(a) || a.id.localeCompare(b.id));
+  const visible = visibleSessions(sessions).filter(
+    (session) => !session.archivedAt,
+  );
+  const activity = new Map(
+    visible.map((session) => [
+      session,
+      Date.parse(sessionActivityAt(session)) || 0,
+    ]),
+  );
+  return visible.sort(
+    (a, b) => activity.get(b)! - activity.get(a)! || a.id.localeCompare(b.id),
+  );
 }
 
 /** The folder name for a recent row's hover. A session that is not in a project has none. */
