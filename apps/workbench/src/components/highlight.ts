@@ -1,5 +1,5 @@
 export interface HighlightToken {
-  kind: 'plain' | 'comment' | 'string' | 'number' | 'keyword';
+  kind: 'plain' | 'comment' | 'string' | 'number' | 'keyword' | 'call';
   text: string;
 }
 
@@ -282,9 +282,11 @@ export function highlight(code: string, language = ''): HighlightToken[] {
             ? ['console', 'Math', 'JSON', 'parseInt', 'document', 'Promise']
             : [];
       push(
-        words.has(word[0]) || call || builtins.includes(word[0])
+        words.has(word[0])
           ? 'keyword'
-          : 'plain',
+          : call || builtins.includes(word[0])
+            ? 'call'
+            : 'plain',
         word[0],
       );
       i += word[0].length;

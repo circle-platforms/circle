@@ -81,6 +81,28 @@ test('only structured successful zero results are returned without fallback', as
   assert.equal(requests, 1);
 });
 
+test('a 429 search quota falls back without the raw provider error', async () => {
+  const service = new WebSearchService({
+    request: async (url) => {
+      if (String(url).includes('duckduckgo')) return html();
+      return json(
+        {
+          error: {
+            code: '1113',
+            message:
+              '余额不足或无可用资源包, 请充值。request id abc TLS failure raw',
+          },
+        },
+        429,
+      );
+    },
+  });
+  const result = await service.search(connection, '京都天气', 3, signal());
+  assert.match(result, /Provider: DuckDuckGo/);
+  assert.match(result, /Native search unavailable: search quota exceeded/);
+  assert.doesNotMatch(result, /1113|余额不足|TLS failure raw/);
+});
+
 test('ignored search parameters fall back, cool down, and never establish supported capability', async () => {
   let time = 1000;
   let native = 0;

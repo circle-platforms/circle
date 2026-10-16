@@ -1539,7 +1539,6 @@ function sessionList(
             : 'No sessions in this folder'
           : 'No matches',
       focusKey: focusKey ?? runtime.session.id,
-      pinFocus: 'top',
       keys: {
         tab: () => sessionList(host, !everywhere, host.state.picker?.query),
         // Both ask in the list; esc there leaves the session as it was.

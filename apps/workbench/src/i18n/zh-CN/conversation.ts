@@ -33,7 +33,6 @@ export const conversation: Record<string, string> = {
   you: '你',
   thinking: '思考',
   'thinking {time}': '思考 {time}',
-  '✖ Interrupted': '✖ 已中断',
   'could not reach the endpoint': '无法连接端点',
   'cache N/A': '缓存不可用',
   'cost N/A': '费用 N/A',

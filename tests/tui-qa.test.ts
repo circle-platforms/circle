@@ -446,12 +446,12 @@ test('help text wraps on spaces, code fences name their language, and a narrow f
   assert.equal(kinds.find((token) => token.text === 'const')?.kind, 'keyword');
   assert.equal(kinds.find((token) => token.text === '"hi"')?.kind, 'string');
   const calls = highlightTokens('py', 'print(len(items))');
-  assert.equal(calls.find((token) => token.text === 'print')?.kind, 'keyword');
-  assert.equal(calls.find((token) => token.text === 'len')?.kind, 'keyword');
+  assert.equal(calls.find((token) => token.text === 'print')?.kind, 'call');
+  assert.equal(calls.find((token) => token.text === 'len')?.kind, 'call');
   assert.equal(
     highlightTokens('ts', 'greet(name)').find((token) => token.text === 'greet')
       ?.kind,
-    'keyword',
+    'call',
   );
   const footer = stripAnsi(
     footerRow(
@@ -503,6 +503,25 @@ test('a focused list row is marked and a rename starts with the old name selecte
   found.query = 'moon';
   assert.match(stripAnsi(found.rows(80).join('\n')), /moon is very round/);
   assert.match(matchSnippet('the moon is very round tonight', 'moon'), /moon/);
+  const sessions = new Picker(
+    'Sessions',
+    Array.from({ length: 12 }, (_, index) => ({
+      key: String(index),
+      label: `session ${index}`,
+      current: index === 0,
+    })),
+    () => {},
+    () => {},
+    { focusKey: '4' },
+  );
+  const nearTop = stripAnsi(sessions.rows(40, 6).join('\n'));
+  assert.match(nearTop, /session 0/);
+  assert.equal(nearTop.includes('more above'), false);
+  sessions.focus = 11;
+  const further = stripAnsi(sessions.rows(40, 6).join('\n'));
+  assert.match(further, /↑ 6 more above/);
+  assert.match(further, /> session 11/);
+  assert.equal(further.includes('session 0'), false);
 });
 
 test('/variables and /secrets omit the Windows placeholder except on Windows', () => {

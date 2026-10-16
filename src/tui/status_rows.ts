@@ -162,6 +162,8 @@ export interface Meters {
   costText?: string;
   contextInput?: number;
   contextWindow?: number;
+  /** A turn is in flight and the endpoint has not reported usage yet. */
+  unreported?: boolean;
 }
 // `↑ 36.6k · ↓ 560 · $0.0145 · cache 63.7% · ctx 12.5k/1.0M (1%)`, and how full the context
 // is: past 70% yellow, past 90% red.
@@ -173,8 +175,10 @@ function meterParts(meters: Meters): {
   lines: string[];
 } {
   const usage = meters.usage;
-  const tokens = `↑ ${formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`;
-  const cache = `cache ${cacheRateLabel(usage)}`;
+  // Zero tokens before the endpoint answers is not a measured empty call.
+  const unknown = meters.unreported === true;
+  const tokens = `↑ ${unknown ? 'N/A' : formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`;
+  const cache = `cache ${unknown ? 'N/A' : cacheRateLabel(usage)}`;
   const cost = meters.costText ?? '';
   const head = [tokens, ...(cost ? [cost] : []), cache].join(' · ');
   let context = '';

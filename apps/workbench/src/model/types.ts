@@ -133,6 +133,8 @@ export interface Session {
     cacheRead: number;
     /** `N/A` when cache was not reported, otherwise a percent such as `63.7%`. */
     cache?: string;
+    /** A turn is in flight and the endpoint has not reported input yet. */
+    inputUnknown?: boolean;
     cost: string;
     contextInput: number | null;
     contextWindow: number | null;

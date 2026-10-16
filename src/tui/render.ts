@@ -90,6 +90,8 @@ export interface ScreenState {
   streaming: string;
   thinking: string;
   usage: Usage;
+  /** Streaming, and the endpoint has not reported this session's usage yet. */
+  usageUnreported?: boolean;
   flash: string;
   // Extensions' status lines, at the right of the footer.
   extensionStatus?: { text: string; lamp: LampState }[];
@@ -680,6 +682,7 @@ export function renderScreen(
           costText: state.costText,
           contextInput: state.contextInput,
           contextWindow: state.contextWindow,
+          unreported: state.usageUnreported,
         },
         state.flash,
         width,

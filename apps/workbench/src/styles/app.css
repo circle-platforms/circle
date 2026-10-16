@@ -751,6 +751,9 @@ pre {
 .token-keyword {
   color: var(--violet);
 }
+.token-call {
+  color: var(--call);
+}
 .token-number {
   color: var(--attention);
 }

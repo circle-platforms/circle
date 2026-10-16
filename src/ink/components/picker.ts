@@ -16,8 +16,6 @@ export interface PickerOptions {
   /** Shown when the filter matches nothing. A function can tell a search miss from an empty list. */
   empty?: string | ((query: string, total: number) => string);
   focusKey?: string;
-  /** `top`: the marked row is the first visible row, not the last. */
-  pinFocus?: 'top';
   /** false: typing does not search. The keys the list does not use go on to the input box,
    * and ctrl+c closes the list before the session takes it (`/approvals`, as 0.5.0's). */
   search?: boolean;
@@ -232,10 +230,9 @@ export class Picker {
     const p = palette();
     this.window = Math.max(1, maximum);
     const shown = this.matches();
-    const top =
-      this.options.pinFocus === 'top'
-        ? Math.min(this.focus, Math.max(0, shown.length - this.window))
-        : Math.max(0, this.focus - maximum + 1);
+    // Newest rows stay in the window when the marked row is among them.
+    // Further down, the marked row is the last visible one.
+    const top = Math.max(0, this.focus - maximum + 1);
     const info = (text: string, tone: string): string =>
       sgrJoin(p.panel_bg, tone) + pad(truncate(text, width), width) + p.reset;
     const rows = [info(`   ${this.title}`, p.faint)];
@@ -254,6 +251,7 @@ export class Picker {
         ),
       );
     else {
+      if (top > 0) rows.push(info(`   ↑ ${top} more above`, p.faint));
       if (this.options.hint)
         rows.push(info(`   ${this.options.hint}`, p.faint));
       if (this.options.search !== false)

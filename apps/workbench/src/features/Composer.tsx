@@ -353,7 +353,7 @@ export function ContextRing({
             <dt>{t('tokens')}</dt>
             <dd>
               {meters
-                ? `↑ ${formatTokens(meters.input)} · ↓ ${formatTokens(meters.output)}`
+                ? `↑ ${meters.inputUnknown ? 'N/A' : formatTokens(meters.input)} · ↓ ${formatTokens(meters.output)}`
                 : 'N/A'}
             </dd>
             <dt>{t('cost')}</dt>

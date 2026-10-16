@@ -34,6 +34,10 @@ export const common: Record<string, string> = {
   working: '工作中',
   'waiting for you': '等待你处理',
   interrupted: '已中断',
+  // Kept out of conversation.ts: that file's copy is added by the upgrade notice.
+  '✖ Interrupted': '✖ 已中断',
+  'Native search unavailable: search quota exceeded':
+    '原生搜索不可用：搜索额度不足',
   // why the core asks
   'changes files in the workspace': '修改工作区内的文件',
   'changes files outside the workspace': '修改工作区外的文件',

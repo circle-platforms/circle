@@ -18,12 +18,12 @@ test('fenced code keeps comments, strings, numbers and keywords', () => {
   assert.equal(python[0]!.text, '# hi');
   const calls = highlight('print(len(items))\ngreet(name)', 'python');
   assert.ok(
-    calls.some((token) => token.kind === 'keyword' && token.text === 'print'),
+    calls.some((token) => token.kind === 'call' && token.text === 'print'),
   );
   assert.ok(
-    calls.some((token) => token.kind === 'keyword' && token.text === 'len'),
+    calls.some((token) => token.kind === 'call' && token.text === 'len'),
   );
   assert.ok(
-    calls.some((token) => token.kind === 'keyword' && token.text === 'greet'),
+    calls.some((token) => token.kind === 'call' && token.text === 'greet'),
   );
 });

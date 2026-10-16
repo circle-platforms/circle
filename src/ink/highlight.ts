@@ -1,7 +1,7 @@
 import { palette, sgrJoin } from './theme.js';
 
 export type HighlightKind =
-  'plain' | 'comment' | 'string' | 'number' | 'keyword';
+  'plain' | 'comment' | 'string' | 'number' | 'keyword' | 'call';
 export interface HighlightToken {
   kind: HighlightKind;
   text: string;
@@ -250,7 +250,7 @@ export function highlightTokens(
       const call = /^\s*\(/.test(rest.slice(word[0].length));
       const builtin = (BUILTINS[family] ?? []).includes(word[0]);
       push(
-        words.has(word[0]) || call || builtin ? 'keyword' : 'plain',
+        words.has(word[0]) ? 'keyword' : call || builtin ? 'call' : 'plain',
         word[0],
       );
       index += word[0].length;
@@ -271,6 +271,7 @@ export function highlightLine(language: string, line: string): string {
     string: p.green,
     number: p.yellow,
     keyword: p.blue,
+    call: p.call,
   };
   let out = '';
   let style = '';

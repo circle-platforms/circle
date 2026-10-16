@@ -1175,11 +1175,14 @@ test('an attached session shows the busy verb while it works and the turn line a
     rendered = rows;
   };
   let label = '';
+  let streamingFooter = '';
   const model = new ScriptedModel([
     async (request) => {
       ui.repaint();
       label =
         rendered.map(stripAnsi).find((row) => row.startsWith('╭──')) ?? '';
+      streamingFooter =
+        rendered.map(stripAnsi).find((row) => row.includes('cache ')) ?? '';
       request.token('done');
       return {
         message: { id: 'final', role: 'assistant', content: 'done' },
@@ -1207,6 +1210,10 @@ test('an attached session shows the busy verb while it works and the turn line a
   await app.submit('hello');
   const verbs = BUSY_VERBS.join('|');
   assert.match(label, new RegExp(`^╭──(${verbs})… · \\d+s · ↓ 0─`));
+  assert.match(streamingFooter, /↑ N\/A/);
+  assert.match(streamingFooter, /cache N\/A/);
+  assert.equal(streamingFooter.includes('↑ 0'), false);
+  assert.equal(streamingFooter.includes('cache 0.0%'), false);
   ui.repaint();
   const plain = rendered.map(stripAnsi);
   const answer = plain.findIndex((row) => row.startsWith(' ● done'));

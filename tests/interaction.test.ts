@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { encode, ExtData } from '@msgpack/msgpack';
+import { AgentRuntime } from '../src/runtime.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScreenRenderer } from '../src/ink/screen.js';
 import { editorCommand } from '../src/tui/external_editor.js';
@@ -46,7 +47,12 @@ async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
 async function session(
   t: Parameters<typeof scratch>[0],
   replies: Reply[] = [],
-  options: { home?: string; workspace?: string; session?: string } = {},
+  options: {
+    home?: string;
+    workspace?: string;
+    session?: string;
+    inspect?: boolean;
+  } = {},
 ) {
   const home = options.home ?? scratch(t);
   const workspace = options.workspace ?? scratch(t);
@@ -69,6 +75,7 @@ async function session(
     model,
     headless: true,
     ...(options.session ? { session: options.session } : {}),
+    ...(options.inspect ? { inspect: true } : {}),
   });
   const runtime = app.runtime!;
   cleanup(t, async () => {
@@ -994,4 +1001,40 @@ test('an internal reminder cannot become the fallback position of a prior failur
     text.indexOf('model ended without an answer') < text.indexOf('continue'),
   );
   assert.doesNotMatch(text, /hidden reminder/);
+});
+
+test('a view-only session keeps the typed message and says why it was not sent', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'stored', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const { app, ui } = await session(t, [], {
+    home,
+    workspace,
+    session: owner.session.id,
+    inspect: true,
+  });
+  ui.composer.set('keep this draft');
+  await ui.send('steer');
+  assert.equal(app.state.draft, 'keep this draft');
+  assert.ok(
+    app.state.notices.some(
+      (note) => note.includes('view only') && note.includes('circle --fork'),
+    ),
+  );
+  assert.equal(
+    app.runtime!.harness.messages.some((message) =>
+      (message.content ?? '').includes('keep this draft'),
+    ),
+    false,
+  );
 });

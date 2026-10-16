@@ -6,7 +6,10 @@ import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
 import type { NativeSearchConnection } from './native_websearch.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
-import { occupiedSessionMessage } from './session_lock.js';
+import {
+  occupiedSessionMessage,
+  SessionOccupiedError,
+} from './session_lock.js';
 import {
   defaultPolicy,
   DEFAULT_CREDENTIAL_FILES,
@@ -1384,6 +1387,43 @@ export class AgentRuntime {
   /** Another terminal owns this session. History is readable; nothing may write. */
   get viewOnly(): boolean {
     return this.options.inspect === true;
+  }
+  /** A turn, a job or a queued message still belongs to this terminal. */
+  private retainsLease(): boolean {
+    if (this.busy || this.closing) return true;
+    if (this.jobs.list().some((job) => job.status === 'running')) return true;
+    const queued = this.harness.queuedMessages;
+    return queued.steering.length > 0 || queued.followUp.length > 0;
+  }
+  /**
+   * Drop the lease when the session leaves the screen and nothing is running.
+   * Visiting a session must not keep it view-only in every other terminal.
+   */
+  yieldLease(): void {
+    if (this.viewOnly || this.retainsLease()) return;
+    this.store.releaseSession(this.session.id);
+  }
+  /**
+   * Take the lease back after a switch. False when another Circle holds it:
+   * this runtime stays view-only until a later call succeeds.
+   */
+  resumeLease(): boolean {
+    if (this.closing) return false;
+    const wasInspect = this.viewOnly;
+    try {
+      this.store.claimSession(this.session.id, (error) =>
+        this.ownershipLost(error),
+      );
+    } catch (error) {
+      if (!(error instanceof SessionOccupiedError)) throw error;
+      this.options.inspect = true;
+      this.harness.options.inspect = true;
+      return false;
+    }
+    this.options.inspect = false;
+    this.harness.options.inspect = false;
+    if (wasInspect) this.store.repairInterrupted(this.session.id);
+    return true;
   }
   get busy(): boolean {
     return (

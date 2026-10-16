@@ -556,6 +556,8 @@ export class SessionApp {
       this.state.busy = this.runtime.busy;
       const stats = this.runtime.stats();
       this.state.usage = { ...stats.usage };
+      this.state.usageUnreported =
+        this.state.busy && this.state.usage.input_tokens === 0;
       if (this.state.busy && this.turns.pendingOutput)
         this.state.usage.output_tokens += this.turns.pendingOutput;
       const facts =
@@ -1294,7 +1296,10 @@ export class SessionApp {
     await runtime.initialize();
     if (this.ended || this.sessions?.lifecycle(runtime.session.id) !== 'open')
       throw new Error('session is closing');
-    const old = this.runtime?.session.id;
+    const oldRuntime = this.runtime;
+    const old = oldRuntime?.session.id;
+    if (oldRuntime && oldRuntime !== runtime) oldRuntime.yieldLease();
+    runtime.resumeLease();
     this.state.picker = undefined;
     this.jobsList = undefined;
     if (this.view.suspendedDialog) {
@@ -2653,9 +2658,10 @@ export class SessionApp {
     )
       return;
     if (runtime.viewOnly) {
-      this.notice(
-        `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`,
-      );
+      // The box already gave the text up. Put it back and say why it was not sent.
+      this.composer.restore(raw, pastes);
+      const text = `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`;
+      if (this.state.notices.at(-1) !== text) this.notice(text);
       return;
     }
     if (!plain && message.startsWith('!')) {

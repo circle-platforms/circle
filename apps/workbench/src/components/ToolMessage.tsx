@@ -23,6 +23,12 @@ import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { currentSession } from '../model/state';
 import { hasToolInput } from '../model/browser';
+
+const SEARCH_QUOTA = 'Native search unavailable: search quota exceeded';
+/** The provider's quota error, in the interface language. The stored text stays English. */
+function shownToolOutput(text: string): string {
+  return text.replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA));
+}
 export function ToolMessage({
   tool,
   expanded,
@@ -146,7 +152,7 @@ export function ToolMessage({
                 copyText(
                   tab === 'input'
                     ? JSON.stringify(tool.input, null, 2)
-                    : tool.output,
+                    : shownToolOutput(tool.output),
                 ).then(
                   () => notify(t('copied')),
                   () => notify(t('clipboard unavailable')),
@@ -159,7 +165,9 @@ export function ToolMessage({
           {(tab === 'output' || hasToolInput(tool.input)) && (
             <DataBlock
               title={tab === 'input' ? t('raw input') : t('raw output')}
-              value={tab === 'input' ? tool.input : tool.output}
+              value={
+                tab === 'input' ? tool.input : shownToolOutput(tool.output)
+              }
             />
           )}
           {runtime.mode !== 'live' && (

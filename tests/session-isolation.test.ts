@@ -699,3 +699,40 @@ test('an occupied session opens view-only and a turn names how to fork it', asyn
   await viewer.close();
   assert.equal(sessionOccupied(home, owner.session.id), true);
 });
+
+test('leaving an idle session releases it for another terminal', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'ok', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+  owner.yieldLease();
+  assert.equal(sessionOccupied(home, owner.session.id), false);
+  const next = new AgentRuntime({
+    workspace,
+    home,
+    session: owner.session.id,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'next', role: 'assistant', content: 'taken over' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => next.close());
+  assert.equal(next.viewOnly, false);
+  await next.harness.run('continue here');
+  assert.equal(owner.resumeLease(), false);
+  assert.equal(owner.viewOnly, true);
+  await next.close();
+  assert.equal(owner.resumeLease(), true);
+  assert.equal(owner.viewOnly, false);
+});

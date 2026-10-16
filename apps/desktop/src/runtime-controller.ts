@@ -469,6 +469,13 @@ export class RuntimeController {
     return runtime;
   }
   private selectRuntime(runtime: AgentRuntime): void {
+    const leaving = this.active;
+    if (leaving && leaving !== runtime) leaving.yieldLease();
+    if (!runtime.resumeLease()) {
+      this.previous = this.selectedSessionId;
+      this.viewedSessionId = runtime.session.id;
+      return;
+    }
     this.previous = this.selectedSessionId;
     this.active = runtime;
     this.viewedSessionId = undefined;
@@ -1165,11 +1172,13 @@ export class RuntimeController {
     const last = runtime.harness.messages
       .filter((message) => message.role === 'assistant' && message.usage)
       .at(-1);
+    const unreported = runtime.busy && stats.usage.input_tokens === 0;
     return {
       input: stats.usage.input_tokens,
       output: stats.usage.output_tokens,
       cacheRead: stats.usage.cache_read_tokens,
-      cache: cacheRateLabel(stats.usage),
+      cache: unreported ? 'N/A' : cacheRateLabel(stats.usage),
+      inputUnknown: unreported,
       cost: formatCosts(
         [stats.costs],
         facts.rates?.input !== undefined && facts.rates.output !== undefined,
@@ -2224,6 +2233,8 @@ export class RuntimeController {
           if (previous !== id) await this.dropUnused(previous);
         } catch (error) {
           if (!(error instanceof SessionOccupiedError)) throw error;
+          const leaving = this.runtimes.get(previous);
+          if (leaving && leaving.session.id !== id) leaving.yieldLease();
           this.previous = this.selectedSessionId;
           this.viewedSessionId = id;
         }
