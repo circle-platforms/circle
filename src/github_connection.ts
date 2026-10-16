@@ -62,7 +62,7 @@ export interface GitHubConnectionBackend {
   call<M extends keyof GitHubConnectionMethods>(
     method: M,
     params: GitHubConnectionMethods[M]['params'],
-    context?: { signal: AbortSignal },
+    context?: { signal: AbortSignal; callId?: string },
   ): Promise<GitHubConnectionMethods[M]['result']>;
   subscribe(listener: (state: GitHubConnectionState) => void): () => void;
 }

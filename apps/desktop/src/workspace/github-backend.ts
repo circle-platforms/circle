@@ -35,17 +35,26 @@ const safePR = (value: unknown): GitHubPR => {
 export function githubWorkspaceBackend(options: {
   connection: NativeGitHubConnection;
   delivery: () => Promise<DeliveryService>;
-  acquireLease?:()=>()=>void;
+  acquireLease?: () => () => void;
+  assertEnabled?: () => void;
+  providerSignal?: () => AbortSignal;
+  runWrite?: (
+    method: string,
+    params: unknown,
+    callId: string,
+    action: () => Promise<unknown>,
+  ) => Promise<unknown>;
 }): GitHubConnectionBackend {
   const { connection } = options;
   let leases = 0;
   const enabled = () => {
     if (!leases) throw Error('GitHub extension is disabled');
+    options.assertEnabled?.();
   };
-  return {
+  const backend: GitHubConnectionBackend = {
     subscribe: (listener) => {
       leases++;
-      const releaseOwner=options.acquireLease?.();
+      const releaseOwner = options.acquireLease?.();
       const unsubscribe = connection.subscribe(listener);
       let closed = false;
       return () => {
@@ -225,4 +234,29 @@ export function githubWorkspaceBackend(options: {
       return result as GitHubConnectionMethods[typeof method]['result'];
     },
   };
+  const execute = backend.call.bind(backend);
+  backend.call = async (method, params, context) => {
+    const providerSignal = options.providerSignal?.();
+    if (providerSignal)
+      context = {
+        ...context,
+        signal: context
+          ? AbortSignal.any([context.signal, providerSignal])
+          : providerSignal,
+      };
+    enabled();
+    context?.signal.throwIfAborted();
+    if (method !== 'publish' && method !== 'retry')
+      return execute(method, params, context);
+    connection.assertGrant(
+      (params as { epoch: number }).epoch,
+      (params as { repository: string }).repository,
+    );
+    if (!context?.callId || !options.runWrite)
+      throw Error('GitHub writes require a trusted operation identity');
+    return (await options.runWrite(method, params, context.callId, () =>
+      execute(method, params, context),
+    )) as never;
+  };
+  return backend;
 }

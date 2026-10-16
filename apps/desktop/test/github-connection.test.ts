@@ -7,6 +7,8 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { NativeGitHubConnection } from '../src/workspace/github-connection.ts';
 import { githubWorkspaceBackend } from '../src/workspace/github-backend.ts';
+import { OperationLedger } from '../src/workspace/operation-ledger.ts';
+import { createHash } from 'node:crypto';
 import { DeliveryService } from '../src/workspace/delivery.ts';
 import { AgentRuntime } from '../../../src/runtime.js';
 import {
@@ -46,12 +48,17 @@ async function fixture() {
   let persisted: string | undefined,
     puts = 0,
     deletes = 0,
-    head = '';
+    head = '',
+    failRerun = false;
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const call = JSON.parse(Buffer.concat(chunks).toString());
     calls.push(call);
+    if (failRerun && call.args[0] === 'run' && call.args[1] === 'rerun') {
+      res.destroy();
+      return;
+    }
     let result: unknown;
     if (call.args[0] === 'api') result = { login: 'fixture', id: 7 };
     else if (call.args[0] === 'pr' && call.args[1] === 'view')
@@ -63,6 +70,8 @@ async function fixture() {
         headRefName: 'codex/fixture',
         state: 'OPEN',
       };
+    else if (call.args[0] === 'run' && call.args[1] === 'view')
+      result = { headSha: head };
     else if (call.args[0] === 'pr' && call.args[1] === 'checks')
       result = [{ name: 'test', bucket: 'pass', state: 'SUCCESS' }];
     else result = { ok: true };
@@ -138,6 +147,9 @@ async function fixture() {
     get deletes() {
       return deletes;
     },
+    set failRerun(value: boolean) {
+      failRerun = value;
+    },
     set head(value: string) {
       head = value;
     },
@@ -151,6 +163,9 @@ async function fixture() {
 test('one explicit local connection verifies actual HTTP identity and feeds real Harness tools, state and disconnect', async () => {
   const f = await fixture();
   let runtime: AgentRuntime | undefined;
+  const ledger = await OperationLedger.open({
+    directory: path.join(f.root, 'operations'),
+  });
   try {
     const delivery = new DeliveryService(f.workspace, 'synthetic-gh', {
       connection: f.connection,
@@ -176,6 +191,19 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
     const backend = githubWorkspaceBackend({
       connection: f.connection,
       delivery: async () => delivery,
+      runWrite: (method, params, callId, action) =>
+        ledger.run(
+          {
+            id: callId,
+            sessionId: 'fixture-session',
+            service: 'github',
+            method,
+            paramsHash: createHash('sha256')
+              .update(JSON.stringify(params))
+              .digest('hex'),
+          },
+          action,
+        ),
     });
     const release = backend.subscribe(() => {});
     const state = await backend.call('connect', {
@@ -201,6 +229,18 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
           id: 'one',
           role: 'assistant',
           content: 'connected tools inspected',
+          tool_calls: [
+            {
+              id: 'actual-harness-call',
+              name: 'github_retry',
+              args: {
+                epoch: connected.epoch,
+                repository: 'fixture/repo',
+                head: (await delivery.git.snapshot()).head,
+                runId: 123,
+              },
+            },
+          ],
         },
       },
       {
@@ -225,7 +265,9 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
       githubConnection: backend,
       bundledExtensions: path.resolve('src/extensions'),
     });
+    runtime.policy.setYolo(runtime.session.id, true);
     await runtime.harness.run('inspect connected GitHub capabilities');
+    assert.equal(ledger.list()[0]?.id, 'actual-harness-call');
     const tools = model.requests[0]!.tools;
     assert(tools.some((tool) => tool.name === 'github_connection'));
     assert(
@@ -249,6 +291,49 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
       head: (await delivery.git.snapshot()).head,
     });
     assert.equal(checks.checks[0]?.state, 'SUCCESS');
+    const retry = {
+      epoch: connected.epoch,
+      repository: 'fixture/repo',
+      head: (await delivery.git.snapshot()).head,
+      runId: 123,
+    };
+    await assert.rejects(
+      backend.call('retry', retry),
+      /trusted operation identity/,
+    );
+    const context = {
+      signal: new AbortController().signal,
+      callId: 'actual-harness-call',
+    };
+    const results = await Promise.all([
+      backend.call('retry', retry, context),
+      backend.call('retry', retry, context),
+    ]);
+    assert.deepEqual(results[0], results[1]);
+    await backend.call('retry', retry, context);
+    assert.equal(
+      f.calls.filter((c) => c.args[0] === 'run' && c.args[1] === 'rerun')
+        .length,
+      1,
+    );
+    await assert.rejects(
+      backend.call('retry', { ...retry, runId: 124 }, context),
+      /reused with different input/,
+    );
+    f.failRerun = true;
+    const uncertain = { signal: context.signal, callId: 'uncertain-write' };
+    await assert.rejects(
+      backend.call('retry', { ...retry, runId: 125 }, uncertain),
+      /inspect effects/,
+    );
+    f.failRerun = false;
+    const callsAfterUnknown = f.calls.length;
+    await assert.rejects(
+      backend.call('retry', { ...retry, runId: 125 }, uncertain),
+      /review/,
+    );
+    assert.equal(f.calls.length, callsAfterUnknown);
+
     assert(
       f.calls
         .filter((call) => call.args[0] === 'pr')
@@ -277,9 +362,12 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
       }),
       /disabled/,
     );
+    modelReplies.push({
+      message: { id: 'disabled', role: 'assistant', content: 'disabled' },
+    });
     await runtime.harness.run('inspect disabled GitHub extension');
     assert(
-      !model.requests[1]!.tools.some((tool) => tool.name.startsWith('github_')),
+      !model.requests[2]!.tools.some((tool) => tool.name.startsWith('github_')),
     );
     settings.extensions.github = { enabled: true };
     saveSettings(settings, runtime.options.home);
@@ -305,15 +393,16 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
     });
     await runtime.harness.run('inspect disconnected GitHub capabilities');
     assert(
-      model.requests[2]!.tools.some(
+      model.requests[3]!.tools.some(
         (tool) => tool.name === 'github_connection',
       ),
     );
     assert(
-      !model.requests[2]!.tools.some((tool) => tool.name === 'github_publish'),
+      !model.requests[3]!.tools.some((tool) => tool.name === 'github_publish'),
     );
   } finally {
     await runtime?.close();
+    await ledger.close();
     await f.close();
   }
 });
@@ -477,6 +566,128 @@ test('known authorization expiry invalidates the epoch while permission failure 
     assert.equal(f.deletes, 1);
     assert(!JSON.stringify(expired).includes(TOKEN));
   } finally {
+    await f.close();
+  }
+});
+
+test('profile settings disable invalidates two real runtimes and old provider leases do not revive', async () => {
+  const { RuntimeController } = await import('../src/runtime-controller.ts');
+  const f = await fixture();
+  const home = path.join(f.root, 'controller-home');
+  const settings = trustFolder(defaultSettings(), f.workspace);
+  settings.extensions.github = { enabled: true };
+  saveSettings(settings, home);
+  const controller = new RuntimeController({
+    home,
+    workspace: f.workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  const internal = controller as unknown as {
+    githubProfile?: NativeGitHubConnection;
+    githubBackend(
+      workspace: string,
+      owner: () => string,
+    ): ReturnType<typeof githubWorkspaceBackend>;
+    githubAvailable(id: string): boolean;
+  };
+  internal.githubProfile = f.connection;
+  // The native factory requires the actual bundled tool capability; no credentials are injected.
+  controller.options.workspaceTools = {
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'synthetic-gh',
+  };
+  let a: AgentRuntime | undefined, b: AgentRuntime | undefined;
+  try {
+    const make = (label: string) => {
+      let runtime: AgentRuntime;
+      const backend = internal.githubBackend(
+        f.workspace,
+        () => runtime.session.id,
+      );
+      runtime = new AgentRuntime({
+        home,
+        workspace: f.workspace,
+        settings,
+        model: new ScriptedModel([]),
+        githubConnection: backend,
+        bundledExtensions: path.resolve('src/extensions'),
+      });
+      return { runtime, backend };
+    };
+    const A = make('A'),
+      B = make('B');
+    a = A.runtime;
+    b = B.runtime;
+    await a.initialize();
+    await b.initialize();
+    assert(internal.githubAvailable(a.session.id));
+    assert(internal.githubAvailable(b.session.id));
+    const signal = new AbortController().signal;
+    const before = f.calls.length;
+    const reply = await controller.dispatch({
+      id: 'disable-provider',
+      name: 'save-settings',
+      sessionId: controller.snapshot().activeSessionId,
+      payload: {
+        settings: {},
+        extensions: [{ name: 'github', enabled: false }],
+      },
+    });
+    assert.equal(reply.ok, true);
+    for (const backend of [A.backend, B.backend]) {
+      await assert.rejects(backend.call('status', {}, { signal }), /disabled/);
+      await assert.rejects(
+        backend.call(
+          'retry',
+          {
+            epoch: 0,
+            repository: 'fixture/repo',
+            head: 'a'.repeat(40),
+            runId: 1,
+          },
+          { signal, callId: 'blocked-old-tool' },
+        ),
+        /disabled/,
+      );
+    }
+    assert.equal(internal.githubAvailable(a.session.id), false);
+    assert.equal(internal.githubAvailable(b.session.id), false);
+    assert.equal(f.calls.length, before);
+    const enabled = await controller.dispatch({
+      id: 'enable-provider',
+      name: 'save-settings',
+      sessionId: controller.snapshot().activeSessionId,
+      payload: {
+        settings: {},
+        extensions: [{ name: 'github', enabled: true }],
+      },
+    });
+    assert.equal(enabled.ok, true);
+    for (const backend of [A.backend, B.backend]) {
+      await assert.rejects(backend.call('status', {}, { signal }), /disabled/);
+      await assert.rejects(
+        backend.call(
+          'retry',
+          {
+            epoch: 0,
+            repository: 'fixture/repo',
+            head: 'a'.repeat(40),
+            runId: 1,
+          },
+          { signal, callId: 'blocked-old-tool' },
+        ),
+        /disabled/,
+      );
+    }
+    assert.equal(f.calls.length, before);
+  } finally {
+    await a?.close();
+    await b?.close();
+    await controller.close();
     await f.close();
   }
 });

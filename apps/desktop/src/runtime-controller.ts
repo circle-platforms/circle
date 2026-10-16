@@ -539,6 +539,10 @@ export class RuntimeController {
     }
   }
   private synchronizeSharedSettings(settings: CircleSettings): void {
+    if (settings.extensions.github?.enabled !== true) {
+      this.githubLeases.clear();
+      this.githubProviderLifetime.abort();
+    }
     for (const owner of this.runtimes.values()) {
       if (
         !owner.options.localContext &&
@@ -699,6 +703,15 @@ export class RuntimeController {
   }
   private githubProfile?: NativeGitHubConnection;
   private githubLeases = new Map<string, number>();
+  private githubProviderLifetime = new AbortController();
+  private githubAvailable(id: string): boolean {
+    if (loadSettings(this.home).extensions.github?.enabled !== true) {
+      this.githubLeases.clear();
+      this.githubProviderLifetime.abort();
+      return false;
+    }
+    return (this.githubLeases.get(id) ?? 0) > 0;
+  }
   private githubConnection(): NativeGitHubConnection | undefined {
     if (!this.options.workspaceTools?.ghPath) return undefined;
     return (this.githubProfile ??= new NativeGitHubConnection({
@@ -723,11 +736,44 @@ export class RuntimeController {
     if (!connection) return undefined;
     return githubWorkspaceBackend({
       connection,
+      assertEnabled: () => {
+        if (!this.githubAvailable(owner()))
+          throw Error('GitHub extension is disabled');
+      },
+      providerSignal: () => this.githubProviderLifetime.signal,
       delivery: () => this.services(workspace).deliveryAdapter(),
+      runWrite: async (method, params, callId, action) => {
+        const sessionId = owner();
+        const root = this.trustedWorkspace(workspace);
+        return (await this.ledger()).run(
+          {
+            id: createHash('sha256')
+              .update(JSON.stringify(['github', sessionId, callId]))
+              .digest('hex'),
+            sessionId,
+            service: 'github',
+            method,
+            paramsHash: createHash('sha256')
+              .update(JSON.stringify({ workspace: root, params }))
+              .digest('hex'),
+          },
+          action,
+        );
+      },
       acquireLease: () => {
         const id = owner();
+        if (loadSettings(this.home).extensions.github?.enabled !== true)
+          throw Error('GitHub extension is disabled');
+        if (this.githubProviderLifetime.signal.aborted)
+          this.githubProviderLifetime = new AbortController();
+        const lifetime = this.githubProviderLifetime;
         this.githubLeases.set(id, (this.githubLeases.get(id) ?? 0) + 1);
         return () => {
+          if (
+            lifetime !== this.githubProviderLifetime ||
+            lifetime.signal.aborted
+          )
+            return;
           const next = (this.githubLeases.get(id) ?? 0) - 1;
           if (next > 0) this.githubLeases.set(id, next);
           else this.githubLeases.delete(id);
@@ -760,7 +806,7 @@ export class RuntimeController {
         ...tools,
         githubConnection: this.githubConnection(),
         enforceGitHubConnection: true,
-        githubEnabled: (id) => (this.githubLeases.get(id) ?? 0) > 0,
+        githubEnabled: (id) => this.githubAvailable(id),
         credentialStore: this.options.credentialStore
           ? {
               get: () => this.options.credentialStore!.get('github.com'),
@@ -795,7 +841,7 @@ export class RuntimeController {
                 connection: this.githubConnection(),
                 epoch: this.githubConnection()?.snapshot().epoch,
                 assertActive: () => {
-                  if (!(this.githubLeases.get(sessionId) ?? 0))
+                  if (!this.githubAvailable(sessionId))
                     throw Error('GitHub extension is disabled');
                 },
                 credentialStore: this.options.credentialStore

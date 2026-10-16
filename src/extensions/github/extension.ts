@@ -112,6 +112,7 @@ export async function register(api: ExtensionAPI) {
           // Backend independently validates the method's typed payload, epoch and repository grant.
           const result = await backend.call(method, args as never, {
             signal: AbortSignal.any([context.signal, api.signal]),
+            callId: context.callId,
           });
           return result;
         },
