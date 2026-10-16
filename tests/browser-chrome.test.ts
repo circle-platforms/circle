@@ -2174,6 +2174,150 @@ test(
 );
 
 test(
+  'a dialog the page opens while Circle reads it ends the wait, and the result shows the dialog',
+  { skip },
+  async (t) => {
+    // The browser answers a request to the page only once the page's dialog is closed. The
+    // page opens one while each of Circle's requests to it is on its way, as a busy machine
+    // ordered it in CI (#130); the action's time limits are out of reach, so only the dialog can
+    // end the wait.
+    const temp = made(t, 'circle-chrome-dialog-wait-');
+    const site = createHttp((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<!doctype html><title>Asks</title><p>ready to ask</p>');
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    cleanupServer(t, site);
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+    });
+    // Each request Circle makes to a new tab's page as it puts the result together, in order:
+    // the request and how many of its kind come before it
+    const stages: [string, number][] = [
+      ['Page.getFrameTree', 0],
+      ['Page.createIsolatedWorld', 0],
+      // The document's title, then the snapshot
+      ['Runtime.evaluate', 0],
+      ['Runtime.evaluate', 1],
+    ];
+    // An action's 15s idle + 5s page + 3s download waits; the first also starts the browser.
+    // Per stage: a new tab, the dialog's answer and the tab's close.
+    const actionBudget = 15_000 + 5000 + 3000;
+    const fixture = browserFixture(
+      chrome,
+      60_000 + actionBudget * (1 + stages.length * 3),
+    );
+    cleanup(t, () => fixture.close());
+    const signal = AbortSignal.any([t.signal, fixture.signal]);
+    const internal = chrome as unknown as {
+      cdp: CdpPipe;
+      send: (
+        method: string,
+        params?: Record<string, unknown>,
+        session?: string,
+      ) => Promise<any>;
+      limit: (
+        promise: Promise<unknown>,
+        signal?: AbortSignal,
+        ms?: number,
+        what?: string,
+      ) => Promise<unknown>;
+    };
+    const act = (
+      phase: string,
+      action: BrowserAction,
+      args = {},
+      bound = actionBudget,
+    ) =>
+      fixture.run(
+        { phase, action },
+        () => chrome.request('c', action, args, signal),
+        bound,
+      );
+    await act('first page', 'navigate', { url }, 60_000 + actionBudget);
+    const first = (
+      chrome as unknown as {
+        conversations: Map<string, { tabs: Map<string, { session: string }> }>;
+      }
+    ).conversations
+      .get('c')!
+      .tabs.get('t1')!.session;
+    const send = internal.send.bind(chrome);
+    const limit = internal.limit.bind(chrome);
+    for (const [method, before] of stages) {
+      const stage = `${method} #${before + 1}`;
+      let seen = 0;
+      let staged = false;
+      // The page opens its dialog, and then Circle's request reaches it
+      internal.send = async (name, params = {}, session) => {
+        if (
+          !staged &&
+          name === method &&
+          session &&
+          session !== first &&
+          (name !== 'Runtime.evaluate' || params.contextId !== undefined) &&
+          seen++ === before
+        ) {
+          staged = true;
+          const opened = new Promise<void>((resolve) => {
+            const stop = internal.cdp.on((event) => {
+              if (
+                event.method === 'Page.javascriptDialogOpening' &&
+                event.sessionId === session
+              ) {
+                stop();
+                resolve();
+              }
+            });
+          });
+          await send(
+            'Runtime.evaluate',
+            { expression: `setTimeout(() => confirm('Go on?'), 0)` },
+            session,
+          );
+          await opened;
+        }
+        return send(name, params, session);
+      };
+      internal.limit = (promise, abort, _ms, what) =>
+        limit(promise, abort, 2 ** 31 - 1, what);
+      let opened;
+      try {
+        opened = await act(stage, 'tabs', { action: 'new', url });
+      } finally {
+        internal.send = send;
+        internal.limit = limit;
+      }
+      assert.equal(staged, true, `${stage} was sent to the new tab`);
+      const dialog = opened.text.match(
+        /### Dialogs waiting\n- \[(d\d+)\] confirm · tab (t\d+) · from http:\/\/127\.0\.0\.1:\d+: "Go on\?"/,
+      );
+      assert(dialog, `${stage}: no dialog in\n${opened.text}`);
+      assert.match(
+        opened.text,
+        new RegExp(
+          `The page waits for dialog ${dialog[1]}; this is the dialog`,
+        ),
+      );
+      // Once the dialog is answered, the page answers Circle again
+      const answered = await act(stage, 'dialog', {
+        id: dialog[1],
+        accept: false,
+      });
+      assert.match(
+        answered.text,
+        new RegExp(`Dismissed dialog ${dialog[1]}\\.`),
+      );
+      assert.doesNotMatch(answered.text, /Dialogs waiting/);
+      assert.match(answered.text, /ready to ask/);
+      await act(stage, 'tabs', { action: 'close', tab: dialog[2] });
+    }
+  },
+);
+
+test(
   'an action names the element its ref acted on, as the snapshot does, and says when the model described another',
   { skip: executable ? false : 'no Chrome, Edge or Chromium is installed' },
   async (t) => {

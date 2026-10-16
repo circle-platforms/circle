@@ -1233,17 +1233,50 @@ export class ChromeBrowser implements BrowserPort {
       );
   }
   // ---- reaching into the page
-  private async world(tab: Tab): Promise<number> {
+  /**
+   * A request the page's own thread answers. A dialog the page opens holds that thread, and
+   * the browser answers only once the dialog is closed, which no one can do while Circle waits:
+   * the dialog opening (`opened`), or the tab closing, ends the wait at once.
+   */
+  private inPage<T>(
+    tab: Tab,
+    opened: Promise<void>,
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+    what = method,
+  ): Promise<T> {
+    return this.limit(
+      Promise.race([
+        this.send<T>(method, params, tab.session),
+        opened.then((): never => {
+          throw Error(
+            tab.closed ? 'the tab closed' : 'the page is waiting on a dialog',
+          );
+        }),
+      ]),
+      signal,
+      5000,
+      what,
+    );
+  }
+  private async world(
+    tab: Tab,
+    opened: Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<number> {
     if (tab.world !== undefined) return tab.world;
-    const { frameTree } = await this.send<{
+    const { frameTree } = await this.inPage<{
       frameTree: { frame: { id: string } };
-    }>('Page.getFrameTree', {}, tab.session);
-    const { executionContextId } = await this.send<{
+    }>(tab, opened, 'Page.getFrameTree', {}, signal);
+    const { executionContextId } = await this.inPage<{
       executionContextId: number;
     }>(
+      tab,
+      opened,
       'Page.createIsolatedWorld',
       { frameId: frameTree.frame.id, worldName: 'circle' },
-      tab.session,
+      signal,
     );
     tab.world = executionContextId;
     return executionContextId;
@@ -1254,14 +1287,18 @@ export class ChromeBrowser implements BrowserPort {
     signal?: AbortSignal,
     what = 'Runtime.evaluate',
   ): Promise<T> {
-    for (let attempt = 0; ; attempt++) {
-      const world = await this.world(tab);
-      try {
-        const { result, exceptionDetails } = await this.limit(
-          this.send<{
+    // Callers ask a page no dialog holds; one it opens from here on ends the wait
+    const dialog = this.dialogOpens(tab);
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const world = await this.world(tab, dialog.opened, signal);
+        try {
+          const { result, exceptionDetails } = await this.inPage<{
             result: { value?: unknown };
             exceptionDetails?: { text?: string };
           }>(
+            tab,
+            dialog.opened,
             'Runtime.evaluate',
             {
               expression,
@@ -1269,27 +1306,27 @@ export class ChromeBrowser implements BrowserPort {
               awaitPromise: true,
               returnByValue: true,
             },
-            tab.session,
-          ),
-          signal,
-          5000,
-          what,
-        );
-        if (exceptionDetails)
-          throw Error(exceptionDetails.text || 'browser page action failed');
-        return result.value as T;
-      } catch (error) {
-        // The document changed under the call: its world went with it
-        if (
-          attempt === 0 &&
-          error instanceof Error &&
-          /context/i.test(error.message)
-        ) {
-          tab.world = undefined;
-          continue;
+            signal,
+            what,
+          );
+          if (exceptionDetails)
+            throw Error(exceptionDetails.text || 'browser page action failed');
+          return result.value as T;
+        } catch (error) {
+          // The document changed under the call: its world went with it
+          if (
+            attempt === 0 &&
+            error instanceof Error &&
+            /context/i.test(error.message)
+          ) {
+            tab.world = undefined;
+            continue;
+          }
+          throw error;
         }
-        throw error;
       }
+    } finally {
+      dialog.stop();
     }
   }
   private async js<T = unknown>(
@@ -1772,10 +1809,19 @@ export class ChromeBrowser implements BrowserPort {
     if (blocking) return dialogSnapshot(blocking);
     if (tab.failure)
       return `This site can't be reached: ${tab.failure.error} (${tab.failure.url}).`;
+    let page: string;
+    try {
+      page = await this.js<string>(tab, 'snapshot', {}, signal);
+    } catch (error) {
+      // The page opened a dialog while Circle read it: the dialog is what it shows now
+      const opened = tab.dialogs[0];
+      if (opened && !signal.aborted) return dialogSnapshot(opened);
+      throw error;
+    }
     return (
       (tab.warning
         ? `This is the browser's certificate warning, shown in place of ${tab.warning.url} (${tab.warning.error}). It is the browser's page, not the site's. Its advanced button shows the link to proceed; proceeding asks the user's approval.\n`
-        : '') + (await this.js<string>(tab, 'snapshot', {}, signal))
+        : '') + page
     );
   }
   private overlayColors() {
