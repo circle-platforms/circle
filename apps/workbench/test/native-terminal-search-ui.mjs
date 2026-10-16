@@ -193,6 +193,8 @@ try {
                     'cursor',
                     'afterSequence',
                     'eventSequence',
+                    'viewInstanceId',
+                    'visibilityEpoch',
                   ].includes(key),
                 ),
                 'timing records must never include terminal text',
@@ -294,6 +296,115 @@ try {
       status: 'passed',
     });
   }
+  await page.goto(
+    server.resolvedUrls.local[0] +
+      'test/native-terminal-search-ui.html?embedded=true&timing=record',
+  );
+  await openNativeTerminalInspector(page);
+  await page.waitForFunction(() => window.__terminalFixture.requests() > 0);
+  await page
+    .getByRole('button', { name: 'terminal panel', exact: true })
+    .click();
+  await page.waitForFunction(
+    () => window.__terminalTimings.at(-1)?.phase === 'view-inactive',
+  );
+  await page.evaluate(() => window.__terminalFixture.release());
+  await page.waitForFunction(() =>
+    window.__terminalTimings.some((record) => record.phase === 'write-parsed'),
+  );
+  const hiddenParse = await page.evaluate(() =>
+    window.__terminalTimings.find((record) => record.phase === 'write-parsed'),
+  );
+  const inactive = await page.evaluate(() =>
+    window.__terminalTimings.findLast(
+      (record) => record.phase === 'view-inactive',
+    ),
+  );
+  assert.equal(
+    hiddenParse.visibilityEpoch,
+    inactive.visibilityEpoch,
+    'an already requested replay may finish while its actual view is hidden',
+  );
+  await openNativeTerminalInspector(page);
+  const find = page.getByRole('textbox', {
+    name: 'find in terminal',
+    exact: true,
+  });
+  await find.fill('CIRCLE_TERMINAL_LINE_0001_中文');
+  await find.press('Enter');
+  await page.waitForFunction(
+    () => document.querySelector('.xterm-selection')?.children.length > 0,
+  );
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  const revealed = await page.evaluate(() => window.__terminalTimings);
+  const active = revealed.findLast((record) => record.phase === 'view-active');
+  assert.equal(
+    active.viewInstanceId,
+    hiddenParse.viewInstanceId,
+    'hide/reveal retains the same view instance',
+  );
+  assert.ok(active.visibilityEpoch > hiddenParse.visibilityEpoch);
+  assert.equal(
+    revealed.some(
+      (record) =>
+        record.phase === 'write-frame' &&
+        record.eventSequence === hiddenParse.eventSequence,
+    ),
+    false,
+    'hidden parser completion must not masquerade as a visible frame after reveal',
+  );
+  await page
+    .getByRole('button', { name: 'copy complete output', exact: true })
+    .click();
+  await page.waitForFunction(() =>
+    window.__terminalFixture.copied().includes('0600_中文'),
+  );
+  assert.deepEqual(
+    (await page.evaluate(() => window.__terminalFixture.copied()))
+      .trim()
+      .split(/\r?\n/),
+    await page.evaluate(() => window.__terminalFixture.lines),
+    'qualifying timing metadata never drops actual hidden terminal output',
+  );
+  await page.evaluate(() => window.__terminalFixture.unmount());
+  await page
+    .getByRole('region', { name: 'interactive terminal' })
+    .waitFor({ state: 'detached' });
+  await page.evaluate(() => window.__terminalFixture.remount());
+  await page.waitForFunction(() =>
+    window.__terminalTimings.some(
+      (record) =>
+        record.phase === 'view-active' &&
+        record.viewInstanceId !==
+          window.__terminalTimings.find((item) => item.phase === 'view-active')
+            .viewInstanceId,
+    ),
+  );
+  const instances = await page.evaluate(() => [
+    ...new Set(
+      window.__terminalTimings
+        .filter((record) => record.phase === 'view-active')
+        .map((record) => record.viewInstanceId),
+    ),
+  ]);
+  assert.equal(
+    instances.length,
+    2,
+    'remounting the same terminal identity must not reuse a visibility epoch namespace',
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(await page.evaluate(() => window.__terminalErrors), []);
+  checks.push({
+    profile: 'visibility',
+    scenario:
+      'hidden parse, real reveal, complete copy and remount retain honest frame attribution',
+    status: 'passed',
+  });
 } finally {
   await browser?.close();
   await server.close();

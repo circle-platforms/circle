@@ -100,6 +100,7 @@ function Fixture() {
     lines,
     switchSession: () => setSession('B'),
     unmount: () => setMounted(false),
+    remount: () => setMounted(true),
   };
   return (
     <div style={{ height: 600, display: 'flex', flexDirection: 'column' }}>

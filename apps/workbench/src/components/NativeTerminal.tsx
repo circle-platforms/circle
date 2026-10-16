@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
@@ -49,17 +55,23 @@ type TerminalTiming = {
     | 'replay-response'
     | 'write-enqueued'
     | 'write-parsed'
-    | 'write-frame';
+    | 'write-frame'
+    | 'view-active'
+    | 'view-inactive';
   at: number;
   eventSequence?: number;
   cursor?: number;
   afterSequence?: number;
+  viewInstanceId?: string;
+  visibilityEpoch?: number;
 };
+type TimingVisibility = { active: boolean; epoch: number; instanceId?: string };
 
 /** Explicit test instrumentation: metadata only, with no work when no sink is installed. */
 function recordTerminalTiming(
   terminalId: string,
   phase: TerminalTiming['phase'],
+  visibility: TimingVisibility,
   eventSequence?: number,
   cursor?: number,
   afterSequence?: number,
@@ -71,6 +83,7 @@ function recordTerminalTiming(
   ).__circleNativeTerminalTiming;
   if (typeof sink !== 'function') return false;
   try {
+    visibility.instanceId ??= crypto.randomUUID();
     sink({
       terminalId,
       phase,
@@ -78,6 +91,8 @@ function recordTerminalTiming(
       eventSequence,
       cursor,
       afterSequence,
+      viewInstanceId: visibility.instanceId,
+      visibilityEpoch: visibility.epoch,
     });
   } catch {
     // An optional test observer must never affect terminal input or output.
@@ -795,10 +810,37 @@ function TerminalSurface({
   const notifySearchesRef = useRef<(() => void) | null>(null);
   const activeRef = useRef(active);
   const statusRef = useRef(snapshot.status);
+  const timingVisibility = useRef<TimingVisibility>({
+    active: false,
+    epoch: 0,
+  });
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   activeRef.current = active;
   statusRef.current = snapshot.status;
+
+  useLayoutEffect(() => {
+    const visibility = timingVisibility.current;
+    const shown = active && visible;
+    if (visibility.epoch && visibility.active === shown) return;
+    visibility.active = shown;
+    visibility.epoch++;
+    recordTerminalTiming(
+      snapshot.id,
+      shown ? 'view-active' : 'view-inactive',
+      visibility,
+    );
+  }, [snapshot.id, active, visible]);
+  useLayoutEffect(
+    () => () => {
+      const visibility = timingVisibility.current;
+      if (!visibility.active) return;
+      visibility.active = false;
+      visibility.epoch++;
+      recordTerminalTiming(snapshot.id, 'view-inactive', visibility);
+    },
+    [snapshot.id],
+  );
 
   useEffect(() => {
     if (!container.current) return;
@@ -862,6 +904,7 @@ function TerminalSurface({
             recordTerminalTiming(
               snapshot.id,
               'replay-request',
+              timingVisibility.current,
               undefined,
               afterSequence,
             );
@@ -874,6 +917,7 @@ function TerminalSurface({
             recordTerminalTiming(
               snapshot.id,
               'replay-response',
+              timingVisibility.current,
               undefined,
               page.nextSequence,
               afterSequence,
@@ -886,6 +930,7 @@ function TerminalSurface({
                 recordTerminalTiming(
                   snapshot.id,
                   'write-enqueued',
+                  timingVisibility.current,
                   event.sequence,
                 );
                 await new Promise<void>((resolve) =>
@@ -895,13 +940,18 @@ function TerminalSurface({
                       recordTerminalTiming(
                         snapshot.id,
                         'write-parsed',
+                        timingVisibility.current,
                         event.sequence,
-                      )
-                    )
+                      ) &&
+                      timingVisibility.current.active
+                    ) {
+                      const epoch = timingVisibility.current.epoch;
                       timingFrame(() =>
                         timingFrame(() => {
                           if (
                             activeRef.current &&
+                            timingVisibility.current.active &&
+                            timingVisibility.current.epoch === epoch &&
                             container.current?.isConnected &&
                             container.current.clientWidth &&
                             container.current.clientHeight
@@ -909,10 +959,12 @@ function TerminalSurface({
                             recordTerminalTiming(
                               snapshot.id,
                               'write-frame',
+                              timingVisibility.current,
                               event.sequence,
                             );
                         }),
                       );
+                    }
                     resolve();
                   }),
                 );
