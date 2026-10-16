@@ -1,4 +1,9 @@
 import {
+  startNativePerformanceCpuProfile,
+  stopNativePerformanceCpuProfile,
+  captureNativeReadingTrace,
+} from './helpers/native-performance-cpu-profile.mjs';
+import {
   installRendererPerformanceDiagnostics,
   installMainPerformanceDiagnostics,
   writePerformanceEvidence,
@@ -180,6 +185,7 @@ let page;
 let terminalId;
 let taskIds = [];
 let clipboardBefore;
+let cpuProfile;
 const report = {
   schema: 1,
   startedAt: new Date().toISOString(),
@@ -254,6 +260,18 @@ try {
   page.setDefaultTimeout(15000);
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.bringToFront();
+  if (process.env.CIRCLE_NATIVE_PERF_CPU_PROFILE === '1') {
+    cpuProfile = await startNativePerformanceCpuProfile(page, report);
+    await page.evaluate(() => {
+      window.__circleNativeReadingUnsubscribe = window.circleDesktop.onRuntime(
+        (update) => {
+          window.__circleNativeReadingBackend =
+            update.snapshot?.activeSessionId;
+        },
+      );
+    });
+    report.readingTrace = [];
+  }
   if (process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS === '1') {
     await app.evaluate(installMainPerformanceDiagnostics);
     await page.evaluate(installRendererPerformanceDiagnostics, {
@@ -713,12 +731,35 @@ try {
     await finish('sessionSwitch');
   };
   const sessionAnchor = await page.evaluate(captureNativeTranscriptAnchor);
+  if (report.readingTrace) {
+    report.sessionAnchor = sessionAnchor;
+    report.readingTrace.push(
+      await page.evaluate(captureNativeReadingTrace, {
+        phase: 'before-session-loop',
+        capturedAnchor: sessionAnchor,
+      }),
+    );
+  }
   for (let index = 0; index < 24; index++) {
+    if (report.readingTrace)
+      report.readingTrace.push(
+        await page.evaluate(captureNativeReadingTrace, {
+          phase: 'before-switch-' + index,
+          expected: index % 2 ? mainSession : otherSession,
+        }),
+      );
     await switchSession(
       index % 2 ? 'performance history' : 'performance alternate',
     );
     if (index % 2) {
       const restored = await page.evaluate(captureNativeTranscriptAnchor);
+      if (report.readingTrace)
+        report.readingTrace.push(
+          await page.evaluate(captureNativeReadingTrace, {
+            phase: 'after-switch-' + index,
+            capturedAnchor: restored,
+          }),
+        );
       assert.equal(
         restored.id,
         sessionAnchor.id,
@@ -728,7 +769,12 @@ try {
         Math.abs(restored.offset - sessionAnchor.offset) <= 2,
         'session return retains reading offset',
       );
-    }
+    } else if (report.readingTrace)
+      report.readingTrace.push(
+        await page.evaluate(captureNativeReadingTrace, {
+          phase: 'after-switch-' + index,
+        }),
+      );
   }
   checks.push(
     'session feedback binds backend identity, route, header and visible body; reading anchor checked separately',
@@ -912,6 +958,30 @@ try {
   } catch {}
   process.exitCode = 1;
 } finally {
+  await stopNativePerformanceCpuProfile(cpuProfile, output, report);
+  if (page && report.readingTrace) {
+    try {
+      report.readingTrace.push(
+        await page.evaluate(captureNativeReadingTrace, {
+          phase: 'finally-before-cleanup',
+        }),
+      );
+      await page.evaluate(() => {
+        window.__circleNativeReadingUnsubscribe?.();
+      });
+    } catch (error) {
+      report.readingTraceError = String(error);
+    }
+    await writePerformanceEvidence(
+      report,
+      join(output, 'reading-trace.json'),
+      JSON.stringify(
+        { sessionAnchor: report.sessionAnchor, frames: report.readingTrace },
+        null,
+        2,
+      ),
+    );
+  }
   if (process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS === '1') {
     report.diagnostics = {
       optIn: true,
