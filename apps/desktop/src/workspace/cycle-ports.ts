@@ -598,9 +598,9 @@ export function createWorkspaceCyclePorts(
     delivery: {
       publish: (cycle, input) =>
         serial(cycle, async () => {
-          const { owner, snapshot } = await state(cycle, input);
-          if (snapshot.entries.length)
-            throw Error('cycle publish requires a clean candidate');
+          const owner = await owned(cycle);
+          // publishPushed independently checks this exact revision/head, a clean
+          // feature branch and the remote SHA using fresh candidate snapshots.
           await (
             await delivery(owner)
           ).publishPushed({

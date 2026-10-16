@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { realpath } from 'node:fs/promises';
 import { GitWorkspaceService } from './git.ts';
 import {
   DeliveryLogin,
@@ -77,8 +78,18 @@ export class DeliveryService {
   }): Promise<unknown> {
     return this.serialized(() => this.publish(input, input.head));
   }
+  private async candidateSnapshot() {
+    const state = await this.git.snapshot();
+    if ((await realpath(state.root)) !== (await realpath(this.root)))
+      throw Error(
+        'delivery repository root changed; inspect before continuing',
+      );
+    return state;
+  }
   private async serialized<T>(action: () => Promise<T>): Promise<T> {
-    const key = (await this.git.snapshot()).root;
+    // Queue identity is the granted directory, not mutable candidate contents.
+    // Publication and review still take fresh full snapshots inside the queue.
+    const key = await realpath(this.root);
     const before = deliveryLocks.get(key) ?? Promise.resolve();
     const operation = before.catch(() => {}).then(action);
     deliveryLocks.set(key, operation);
@@ -156,7 +167,7 @@ export class DeliveryService {
     }
     if (method === 'publish') return this.publish(params);
     if (method === 'ready') {
-      const state = await this.git.snapshot();
+      const state = await this.candidateSnapshot();
       const pr = await this.pr();
       if (state.revision !== params.revision || state.head !== pr.headRefOid)
         throw Error('PR head changed; refresh checks');
@@ -184,7 +195,7 @@ export class DeliveryService {
           'CI needs a passing check and no pending, failed or unknown checks before requesting review',
         );
       const [current, checkedPR] = await Promise.all([
-        this.git.snapshot(),
+        this.candidateSnapshot(),
         this.pr(),
       ]);
       if (current.revision !== state.revision || !sameCandidate(checkedPR))
@@ -423,7 +434,7 @@ export class DeliveryService {
     params: Record<string, unknown>,
     pushedHead?: string,
   ): Promise<unknown> {
-    const state = await this.git.snapshot();
+    const state = await this.candidateSnapshot();
     if (
       state.revision !== params.revision ||
       (pushedHead !== undefined && state.head !== pushedHead)
@@ -446,7 +457,7 @@ export class DeliveryService {
         throw Error(
           'the remote branch no longer contains the pushed candidate',
         );
-      if ((await this.git.snapshot()).revision !== state.revision)
+      if ((await this.candidateSnapshot()).revision !== state.revision)
         throw Error('repository changed while verifying the pushed candidate');
     };
     const openForBranch = (pr: { state?: string; headRefName?: string }) =>
