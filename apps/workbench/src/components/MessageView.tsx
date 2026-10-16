@@ -53,6 +53,9 @@ export function MessageView({
           </div>
         ) : null}
       </div>
+      {message.interrupted && (
+        <div className="transcript-notice">{t('✖ Interrupted')}</div>
+      )}
       <div className="message-meta">
         {message.label && <span className="label">{message.label}</span>}
         <time

@@ -20,6 +20,7 @@ import {
   latestRelease,
   rememberLatest,
 } from '../../../src/update.js';
+import { seedWhatsNewFrom } from '../../../src/whats_new_state.js';
 import { compareVersions, validVersion } from '../../../src/version.js';
 import type { UpdateAction, UpdateState } from './contracts';
 
@@ -408,10 +409,27 @@ export class Updater {
     if (pending) {
       const wanted = String(pending.version);
       if (wanted === version) {
+        const replaced =
+          typeof pending.from === 'string' ? pending.from : undefined;
+        if (replaced) seedWhatsNewFrom(this.options.home, replaced, version);
+        const remind =
+          pending.sandbox === true &&
+          this.options.installation?.kind === 'linux' &&
+          !sandboxIsSetuid(this.options.installation.target);
+        const linux = remind
+          ? {
+              folder: this.options.installation!.target,
+              sandbox: true,
+            }
+          : undefined;
         // The installer's log stays until the next update, for when something looks wrong
         for (const name of await readdir(folder))
           if (name !== 'install.log') await this.clear(join(folder, name));
-        return this.set({ phase: 'current', updated: version });
+        return this.set({
+          phase: 'current',
+          updated: version,
+          ...(linux ? { linux } : {}),
+        });
       }
       let detail = '';
       try {
@@ -635,8 +653,11 @@ export class Updater {
     let command: [string, string[]];
     await writeFile(
       join(folder, 'pending.json'),
-      JSON.stringify({ version: ready.version, from: this.options.version }) +
-        '\n',
+      JSON.stringify({
+        version: ready.version,
+        from: this.options.version,
+        ...(this.linuxGuide()?.sandbox ? { sandbox: true } : {}),
+      }) + '\n',
     );
     if ((this.options.platform ?? process.platform) === 'win32') {
       const plan = join(folder, 'install.json');

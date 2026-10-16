@@ -42,6 +42,7 @@ import {
 } from './policy';
 import type { DesktopAction, DesktopInfo, UpdateAction } from './contracts';
 import { installation, Updater } from './updater';
+import { circleAppVersion } from './circle-version';
 import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
 import { channelOf } from './channel';
 // A release, or a beta that package:beta wrote into the packaged package.json
@@ -297,8 +298,12 @@ function redirectTarget(url: string): Promise<string> {
     request.end();
   });
 }
+// The about page shows Circle's version. app.getVersion() is 0.1.0 in a
+// checkout, which is older than every release, so a check would offer the
+// version already installed. A packaged copy uses the version it was built as.
+const circleVersion = circleAppVersion(app.isPackaged, app.getVersion());
 const updater = new Updater({
-  version: app.getVersion(),
+  version: circleVersion,
   home: join(dataPath, 'runtime-home'),
   folder: join(dataPath, 'updates'),
   // A beta does not replace itself: the release would take its place
@@ -487,7 +492,7 @@ app
     handle('circle:info', (): DesktopInfo => ({
       kind: 'desktop',
       name: app.name,
-      version: app.getVersion(),
+      version: circleVersion,
       platform: process.platform,
       packaged: app.isPackaged,
       dataPath,

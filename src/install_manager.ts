@@ -13,7 +13,11 @@ import {
 } from 'node:fs';
 import { userInfo } from 'node:os';
 import { delimiter, resolve } from 'node:path';
-import { shellStartupFile } from './shell_rc.js';
+import {
+  shellStartupFile,
+  withoutStrayZshrc,
+  zshIsInstalled,
+} from './shell_rc.js';
 import {
   DEFAULT_REPO,
   activeVersion,
@@ -128,6 +132,18 @@ if (process.platform !== 'win32') {
       say(
         `open a new terminal (or run: source ${rc}), then: cd /path/to/project && circle`,
       );
+    }
+    // The old installer wrote ~/.zshrc whenever $SHELL was not bash, including
+    // on a machine with no zsh. That line does nothing there; take it out.
+    if (!zshIsInstalled(existsSync)) {
+      const zshrc = resolve(where.home, '.zshrc');
+      if (existsSync(zshrc)) {
+        const next = withoutStrayZshrc(readFileSync(zshrc, 'utf8'));
+        if (next !== undefined) {
+          writeFileSync(zshrc, next);
+          say(`removed a circle PATH line from ${zshrc}; zsh is not installed`);
+        }
+      }
     }
   }
 }

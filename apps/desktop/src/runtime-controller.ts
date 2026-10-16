@@ -629,7 +629,21 @@ export class RuntimeController {
     let markedAt: number | undefined;
     for (const node of nodes) {
       const raw = node.message;
-      if (!raw || raw.internal || raw.role === 'system') continue;
+      if (!raw || raw.role === 'system') continue;
+      // A crash leaves this marker and no reply. A stopped reply does not:
+      // its own `interrupted` flag is the mark, below.
+      if (raw.internal === 'interrupted') {
+        result.push({
+          id: node.id,
+          parentId: node.parent,
+          role: 'notice',
+          text: '✖ Interrupted',
+          interrupted: true,
+          at: new Date(node.created).toISOString(),
+        });
+        continue;
+      }
+      if (raw.internal) continue;
       if (raw.role === 'tool') {
         const call = calls.get(raw.tool_call_id ?? '');
         if (call?.tool) {
@@ -669,6 +683,9 @@ export class RuntimeController {
           content: a.data,
           mime: a.mime_type,
         })),
+        ...(raw.role === 'assistant' && raw.interrupted
+          ? { interrupted: true }
+          : {}),
         // The last message of a finished turn shows the whole turn: its time and tokens.
         // Any other reply with usage shows the time since the prompt or the previous reply.
         usage: turns[raw.id]
@@ -2144,6 +2161,12 @@ export class RuntimeController {
         this.selectRuntime(owner);
         this.applyHomeChoices(owner, p);
         const started = await this.submitPrompt(owner, p, true);
+        // Home shows the notice. Starting the session from there marks it
+        // seen, the same as dismissing it.
+        if (this.whatsNew) {
+          dismissWhatsNew(this.home);
+          this.whatsNew = undefined;
+        }
         return { sessionId: started.sessionId ?? owner.session.id };
       }
       case 'abort': {

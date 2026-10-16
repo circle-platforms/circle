@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { updateActions } from '../src/features/Update.tsx';
+import { updateActions } from '../src/features/update-actions.ts';
 import type { UpdateState } from '../../desktop/src/contracts.ts';
 
 test('check now stays available while an update is listed', () => {

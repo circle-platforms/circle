@@ -338,6 +338,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       state.renderToolResult ? 1 : 0,
       state.thinkingSeconds?.[message.id] ?? '',
       state.turnUsage?.[message.id]?.seconds ?? '',
+      message.interrupted ? 1 : 0,
       inKind,
       lead,
     ].join('|');
@@ -441,6 +442,10 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       rows.push(turnUsageRow(usage));
       lastKind = 'usage';
     }
+    // A stopped reply keeps `interrupted` on itself. The mark is that flag,
+    // so reopening shows it without an injected "reply was not saved" line.
+    if (message.role === 'assistant' && message.interrupted)
+      noticeBlock('✖ Interrupted');
   };
   for (const message of messages) {
     const frozen = cacheable(message);

@@ -46,3 +46,32 @@ export function shellStartupFile(options: {
   }
   return undefined;
 }
+
+/** zsh's program is on the usual paths. A name in $SHELL is not enough. */
+export function zshIsInstalled(exists: (path: string) => boolean): boolean {
+  return installed('zsh', exists);
+}
+
+/**
+ * Drops blocks the old installer appended: a `# circle path` line and the
+ * `export PATH="…:$PATH"` line under it. A file someone edited stays.
+ * Returns the new text when a block went, otherwise undefined.
+ */
+export function withoutStrayZshrc(text: string): string | undefined {
+  const lines = text.split('\n');
+  const kept: string[] = [];
+  let removed = false;
+  for (let index = 0; index < lines.length; index++) {
+    if (lines[index] === '# circle path') {
+      const next = lines[index + 1] ?? '';
+      if (next.startsWith('export PATH="') && next.endsWith(':$PATH"')) {
+        removed = true;
+        index++;
+        if (kept.at(-1) === '') kept.pop();
+        continue;
+      }
+    }
+    kept.push(lines[index]!);
+  }
+  return removed ? kept.join('\n') : undefined;
+}

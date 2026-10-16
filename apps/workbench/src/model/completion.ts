@@ -24,8 +24,12 @@ export function completionFailureText(
 }
 
 export function completionNoticeText(
-  message: Pick<Message, 'text' | 'planCompleted' | 'completionFailure'>,
+  message: Pick<
+    Message,
+    'text' | 'planCompleted' | 'completionFailure' | 'interrupted'
+  >,
 ): string {
+  if (message.interrupted) return t('✖ Interrupted');
   if (message.planCompleted !== undefined)
     return t('plan completed · {n} steps', { n: message.planCompleted });
   const failure =

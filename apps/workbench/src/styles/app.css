@@ -4863,6 +4863,42 @@ pre {
 .linux-update-steps p {
   margin: 0 0 6px;
 }
+.linux-replace-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 35%, transparent);
+}
+.linux-replace-dialog {
+  width: min(440px, calc(100% - 32px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.linux-replace-dialog h3 {
+  margin: 0 0 8px;
+  font-size: var(--ui);
+}
+.linux-replace-dialog p {
+  margin: 0 0 8px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  line-height: 1.45;
+}
+.linux-replace-dialog pre {
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+.linux-replace-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .linux-update-steps pre {
   margin: 6px 0;
   padding: 8px 10px;

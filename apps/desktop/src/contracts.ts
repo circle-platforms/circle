@@ -44,7 +44,7 @@ export interface LinuxUpdate {
 export type UpdateState =
   | { phase: 'idle' }
   | { phase: 'checking' }
-  | { phase: 'current'; updated?: string }
+  | { phase: 'current'; updated?: string; linux?: LinuxUpdate }
   | { phase: 'available'; version: string; page?: string; linux?: LinuxUpdate }
   | { phase: 'downloading'; version: string; received: number; total: number }
   | { phase: 'ready'; version: string; linux?: LinuxUpdate }

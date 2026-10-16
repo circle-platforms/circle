@@ -34,6 +34,35 @@ test('a session that ends on a user prompt shows an interrupted marker', () => {
   assert.match(text, /Interrupted/);
   assert.equal(text.includes('previous turn was interrupted'), false);
 });
+
+test('a stopped reply is marked from its own flag, and a finished one is not', () => {
+  setPalette(buildPalette(...DEFAULT_DARK));
+  const stopped = screen();
+  stopped.messages = [
+    { id: 'u', role: 'user', content: 'hello' },
+    {
+      id: 'a',
+      role: 'assistant',
+      content: 'partial answer',
+      interrupted: true,
+    },
+  ];
+  const text = transcriptRows(stopped, 80).map(stripAnsi).join('\n');
+  assert.match(text, /partial answer/);
+  assert.match(text, /Interrupted/);
+  const finished = screen();
+  finished.messages = [
+    { id: 'u2', role: 'user', content: 'hello' },
+    { id: 'a2', role: 'assistant', content: 'all of it' },
+  ];
+  assert.equal(
+    transcriptRows(finished, 80)
+      .map(stripAnsi)
+      .join('\n')
+      .includes('Interrupted'),
+    false,
+  );
+});
 const PALETTES: [string, Palette][] = [
   ['dark', buildPalette(...DEFAULT_DARK)],
   ['light', buildPalette(...DEFAULT_LIGHT)],

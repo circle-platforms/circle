@@ -23,8 +23,8 @@ const appPath = process.env.CIRCLE_DESKTOP_APP_PATH;
 const executable = process.env.CIRCLE_DESKTOP_EXECUTABLE;
 if (!appPath || !executable)
   throw Error('set CIRCLE_DESKTOP_APP_PATH and CIRCLE_DESKTOP_EXECUTABLE');
-if (!['darwin', 'win32'].includes(process.platform)) {
-  console.log('the desktop update installs itself on macOS and Windows only');
+if (!['darwin', 'win32', 'linux'].includes(process.platform)) {
+  console.log(`the desktop update is not built for ${process.platform}`);
   process.exit(0);
 }
 if (process.platform === 'win32' && !process.env.CIRCLE_DESKTOP_UPDATE_MSI)
@@ -236,11 +236,22 @@ try {
     .waitFor();
   check('check now finds the newer version; settings and the sidebar offer it');
   await control.getByRole('button', { name: 'update', exact: true }).click();
+  const helper = join(dirname(program), 'chrome-sandbox');
+  const setuid =
+    process.platform === 'linux' &&
+    existsSync(helper) &&
+    ((await stat(helper)).mode & 0o4000) !== 0;
+  const installName = setuid ? 'quit and replace' : 'restart to update';
   await control
-    .getByRole('button', { name: 'restart to update' })
+    .getByRole('button', { name: installName })
     .waitFor({ timeout: 120000 });
   check('the update downloads and is checked');
-  await control.getByRole('button', { name: 'restart to update' }).click();
+  await control.getByRole('button', { name: installName }).click();
+  if (setuid) {
+    const dialog = view.getByRole('dialog');
+    await dialog.getByText('sudo chmod 4755').waitFor();
+    await dialog.getByRole('button', { name: 'quit and replace' }).click();
+  }
   stage('restarting to update');
   // An installer that does not start leaves the application open, saying why. A line every
   // 20 seconds shows that the machine is still there.
@@ -265,6 +276,24 @@ try {
   await within(browser.close(), 10000).catch(() => {});
   check('the application quits for the installer');
 
+  if (setuid) {
+    const updates = join(temp, 'data', 'updates');
+    const end = Date.now() + 120000;
+    let log = '';
+    while (Date.now() < end) {
+      if (existsSync(join(updates, 'install.log')))
+        log = await readFile(join(updates, 'install.log'), 'utf8');
+      if (/installed/.test(log)) break;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    assert.match(log, /installed/);
+    assert.match(log, /sudo chmod 4755/);
+    stage('starting the replaced copy; a setuid update does not');
+    running = spawn(program, [`--remote-debugging-port=${port}`], {
+      env,
+      stdio: ['ignore', output, output],
+    });
+  }
   stage('waiting for the new version to start');
   const beat2 = setInterval(
     () => stage('still waiting for the new version'),

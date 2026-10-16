@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { shellStartupFile } from '../src/shell_rc.js';
+import {
+  shellStartupFile,
+  withoutStrayZshrc,
+  zshIsInstalled,
+} from '../src/shell_rc.js';
 
 const exists =
   (...paths: string[]) =>
@@ -60,4 +64,18 @@ test('the installer writes the rc of an installed bash or zsh only', () => {
     })?.file,
     '/home/me/.zshrc',
   );
+});
+
+test('a stray circle PATH block is removed only when zsh is not installed', () => {
+  const text =
+    'export EDITOR=vi\n\n# circle path\nexport PATH="/usr/local/bin:$PATH"\n';
+  assert.equal(withoutStrayZshrc(text), 'export EDITOR=vi\n');
+  assert.equal(
+    withoutStrayZshrc(
+      '# circle path\nexport PATH="$HOME/bin:$PATH" # edited\n',
+    ),
+    undefined,
+  );
+  assert.equal(zshIsInstalled(exists('/bin/bash')), false);
+  assert.equal(zshIsInstalled(exists('/usr/bin/zsh')), true);
 });

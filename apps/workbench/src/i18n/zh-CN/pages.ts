@@ -231,8 +231,12 @@ export const pages: Record<string, string> = {
   'opened the release page in your browser': '已在浏览器中打开发布页',
   'open release page': '打开发布页',
   'Quit Circle before replacing it.': '替换前先退出 Circle。',
-  'Delete the old folder, then unpack the new archive. Do not unpack it over the old folder.':
-    '先删除旧文件夹，再解压新的压缩包。不要直接覆盖解压。',
+  'Delete the old Circle-linux folder, then unpack. The archive always creates that folder, so unpacking beside it collides, and unpacking onto the old files drops setuid.':
+    '先删除旧的 Circle-linux 文件夹，再解压。压缩包总会解出这个文件夹，放在旁边会撞名，盖在旧文件上会丢掉 setuid。',
+  'Circle was updated. Give chrome-sandbox to root again, or it will not start:':
+    'Circle 已更新。需要重新把 chrome-sandbox 交给 root，否则无法启动：',
+  'Circle was updated to {version}. Give chrome-sandbox to root again, or it will not start:':
+    'Circle 已更新到 {version}。需要重新把 chrome-sandbox 交给 root，否则无法启动：',
   'Give chrome-sandbox to root again, or Circle will not start:':
     '需要重新把 chrome-sandbox 交给 root，否则 Circle 无法启动：',
   'Then start Circle.': '然后再启动 Circle。',

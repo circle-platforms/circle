@@ -404,6 +404,8 @@ export class SessionApp {
   }
   /** Upgrade notes still waiting. Shown under the welcome on an empty session. */
   private whatsNew?: WhatsNewNotice;
+  /** The notice was painted on the home page. Dismiss or a real prompt marks it seen. */
+  private whatsNewShown = false;
   private transcriptIsHome(): boolean {
     const messages = this.runtime?.harness.messages ?? this.state.messages;
     return !messages.some((message) => !message.internal);
@@ -772,6 +774,7 @@ export class SessionApp {
         palette().reset,
     );
     if (this.whatsNew && this.transcriptIsHome()) {
+      this.whatsNewShown = true;
       const blank = this.state.welcome.pop() ?? '';
       this.state.welcome.push(
         ...whatsNewRows(
@@ -2648,6 +2651,10 @@ export class SessionApp {
     }
     this.jobWakeSnoozed = false;
     this.jobWakeCount = 0;
+    // The notice was on the home page and a session is starting. Hiding it
+    // because the transcript is no longer empty is not enough: /new would
+    // show it again. Dismiss or this prompt marks it seen.
+    if (this.whatsNewShown) this.dismissNotice();
     if (shown !== message)
       runtime.harness.shown.set(message, { display: shown, pastes });
     if (runtime.busy) {

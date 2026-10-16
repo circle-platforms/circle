@@ -9,37 +9,49 @@ export interface Localized {
   'zh-CN': string;
 }
 export interface WhatsNewItem {
+  id: string;
   /** First release this item belongs to. Shown once, while the last-seen version is older. */
   since: string;
+  /** Shown only when the saved settings still name the old extension. */
+  when?: 'circle-server';
   text: Localized;
 }
-/** The 1.7.4 section of the changelog. Later notes can name their own section. */
-export const RELEASE_NOTES_URL =
-  'https://github.com/circle-platforms/circle/blob/main/CHANGELOG.md#174---2026-10-16';
 
+/** Release notes for `version`, pinned to that tag. Not the moving main branch. */
+export function releaseNotesUrl(version: string): string {
+  return `https://github.com/circle-platforms/circle/releases/tag/v${version}`;
+}
+
+// Short enough to scan. The release notes carry the full key list.
+// alt+L is the alt+l model binding (`model.select`). A capital L, so the
+// letter is not read as alt+i. alt+k and alt+d both used to be ctrl+s, for
+// a secret and for saving a list default; the release notes say which.
 export const WHATS_NEW_ITEMS: WhatsNewItem[] = [
   {
+    id: 'hub',
     since: '1.7.0',
+    when: 'circle-server',
     text: {
-      en: 'The hub extension is now named hub, with /hub and hub_* tools. circle-server and /server no longer work. Enable hub and sign in again.',
+      en: 'The circle-server extension is now named hub. Enable hub and sign in again.',
       'zh-CN':
-        'hub 扩展现在叫 hub，命令是 /hub，工具是 hub_*。circle-server 和 /server 已不能用。请重新启用 hub 并再次登录。',
+        '原先的 circle-server 扩展现在叫 hub。请重新启用 hub 并再次登录。',
     },
   },
   {
+    id: 'keys',
     since: '1.7.4',
     text: {
-      en: 'alt+l chooses a model; ctrl+l only redraws. alt+c copies the last answer (was ctrl+x). alt+k enters a secret a task waits for (was ctrl+s). alt+d saves a list choice as the default (was ctrl+s). ctrl+k deletes a session in /resume and stops or removes a job (was ctrl+d).',
-      'zh-CN':
-        'alt+l 选择模型；ctrl+l 只重绘屏幕。alt+c 复制上一条回答（原为 ctrl+x）。alt+k 输入任务等待的密钥（原为 ctrl+s）。alt+d 把列表中的选择存为默认（原为 ctrl+s）。ctrl+k 在 /resume 中删除会话，并停止或移除任务（原为 ctrl+d）。',
+      en: 'Some keys moved. The model list is alt+L. Every change is in the release notes.',
+      'zh-CN': '部分快捷键已更换。模型列表是 alt+L。每一项都写在发布说明里。',
     },
   },
   {
+    id: 'thinking',
     since: '1.7.4',
     text: {
-      en: 'Anthropic models now think at medium by default, where it was xhigh. If you had not saved a depth, that xhigh default is no longer used. /effort sets one, and alt+d keeps it.',
+      en: 'Anthropic models think at medium by default. A depth you never saved no longer stays at xhigh.',
       'zh-CN':
-        'Anthropic 模型的默认思考深度现在是 medium，以前是 xhigh。如果没有保存过深度，那个 xhigh 默认值不再使用。/effort 可以设定，alt+d 可以记住。',
+        'Anthropic 模型默认以 medium 思考。没有保存过的深度不再停留在 xhigh。',
     },
   },
 ];
@@ -61,15 +73,21 @@ export function noticeLocale(
   return /^zh\b/i.test(raw) || /(^|:)zh(_|-|\b)/i.test(raw) ? 'zh-CN' : 'en';
 }
 
-/** Items introduced after `seen` and already in `current`. An empty list is not worth a notice. */
+/**
+ * Items introduced after `seen` and already in `current`. Hub is included
+ * only when `hub` is set: someone who never had circle-server has nothing
+ * to rename. An empty list is not worth a notice.
+ */
 export function notesSince(
   seen: string | undefined,
   current: string,
+  options?: { hub?: boolean },
 ): WhatsNewItem[] {
   const from = seen && validVersion(seen) ? seen : '0.0.0';
   if (!validVersion(current)) return [];
   return WHATS_NEW_ITEMS.filter(
     (item) =>
+      (item.when !== 'circle-server' || options?.hub === true) &&
       compareVersions(item.since, from) > 0 &&
       compareVersions(item.since, current) <= 0,
   );
@@ -80,15 +98,20 @@ export function noticeFor(
   items: WhatsNewItem[],
 ): WhatsNewNotice | undefined {
   if (!items.length) return undefined;
+  const versions = [...new Set(items.map((item) => item.since))].sort(
+    compareVersions,
+  );
+  const span =
+    versions.length === 1 ? versions[0]! : `${versions[0]}–${versions.at(-1)}`;
   return {
     version,
     title: {
-      en: `what's new in ${version}`,
-      'zh-CN': `${version} 的变化`,
+      en: `what's new in ${span}`,
+      'zh-CN': `${span} 的变化`,
     },
     items: items.map((item) => item.text),
     linkLabel: { en: 'full release notes', 'zh-CN': '完整的发布说明' },
-    link: RELEASE_NOTES_URL,
+    link: releaseNotesUrl(version),
     dismiss: { en: 'dismiss', 'zh-CN': '知道了' },
   };
 }

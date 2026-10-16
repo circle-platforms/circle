@@ -5,6 +5,9 @@ import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import { Button } from '../components/common';
 import { t } from '../i18n';
+import { updateActions } from './update-actions';
+
+export { updateActions };
 
 /** The application's own update, from the desktop host; null in the browser preview. */
 export function useUpdate(): {
@@ -36,36 +39,34 @@ export function useUpdate(): {
 const percent = (state: { received: number; total: number }) =>
   state.total ? Math.floor((state.received * 100) / state.total) : 0;
 
-/** Which steps the about page offers for this update. */
-export function updateActions(state: UpdateState): {
-  page: boolean;
-  download: boolean;
-  retry: boolean;
-  install: boolean;
-  check: boolean;
-} {
-  return {
-    page:
-      (state.phase === 'available' || state.phase === 'failed') &&
-      Boolean(state.page),
-    download: state.phase === 'available' && !state.page,
-    retry: state.phase === 'failed' && Boolean(state.version) && !state.page,
-    install: state.phase === 'ready',
-    check: ['idle', 'current', 'failed', 'available'].includes(state.phase),
-  };
+function sandboxCommands(folder: string): string {
+  const path = `${folder}/chrome-sandbox`;
+  return `sudo chown root:root ${path}\nsudo chmod 4755 ${path}`;
 }
 
 function LinuxGuide({
   folder,
   sandbox,
   manual,
+  after,
 }: {
   folder: string;
   sandbox: boolean;
   manual: boolean;
+  after?: boolean;
 }) {
-  const path = `${folder}/chrome-sandbox`;
-  const commands = `sudo chown root:root ${path}\nsudo chmod 4755 ${path}`;
+  const commands = sandboxCommands(folder);
+  if (after)
+    return (
+      <div className="linux-update-steps">
+        <p>
+          {t(
+            'Circle was updated. Give chrome-sandbox to root again, or it will not start:',
+          )}
+        </p>
+        <pre>{commands}</pre>
+      </div>
+    );
   if (!manual)
     return sandbox ? (
       <div className="linux-update-steps">
@@ -83,7 +84,7 @@ function LinuxGuide({
       <li>{t('Quit Circle before replacing it.')}</li>
       <li>
         {t(
-          'Delete the old folder, then unpack the new archive. Do not unpack it over the old folder.',
+          'Delete the old Circle-linux folder, then unpack. The archive always creates that folder, so unpacking beside it collides, and unpacking onto the old files drops setuid.',
         )}
       </li>
       {sandbox && (
@@ -97,10 +98,47 @@ function LinuxGuide({
   );
 }
 
+/** The two commands, in a dialog, before a setuid copy quits to replace itself. */
+function ReplaceConfirm({
+  folder,
+  onCancel,
+  onConfirm,
+}: {
+  folder: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="linux-replace-backdrop">
+      <div
+        className="linux-replace-dialog"
+        role="dialog"
+        aria-labelledby="linux-replace-title"
+      >
+        <h3 id="linux-replace-title">{t('quit and replace')}</h3>
+        <p>
+          {t(
+            'This copy will quit and replace {folder}. It will not start again until chrome-sandbox belongs to root.',
+            { folder },
+          )}
+        </p>
+        <pre>{sandboxCommands(folder)}</pre>
+        <div className="linux-replace-actions">
+          <Button onClick={onCancel}>{t('cancel')}</Button>
+          <Button className="primary" onClick={onConfirm}>
+            {t('quit and replace')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Settings → about: what the check found and the one step that comes next. */
 export function UpdateControl() {
   const { state, act } = useUpdate();
   const { notify } = useRuntime();
+  const [confirming, setConfirming] = useState(false);
   if (!state) return null;
   const actions = updateActions(state);
   const openPage = (page: string) => {
@@ -147,6 +185,7 @@ export function UpdateControl() {
             folder={state.linux.folder}
             sandbox={state.linux.sandbox}
             manual={actions.page}
+            after={state.phase === 'current'}
           />
         )}
       {actions.page && 'page' in state && state.page && (
@@ -164,7 +203,13 @@ export function UpdateControl() {
         </Button>
       )}
       {actions.install && (
-        <Button className="primary" onClick={() => act('install')}>
+        <Button
+          className="primary"
+          onClick={() => {
+            if ('linux' in state && state.linux?.sandbox) setConfirming(true);
+            else act('install');
+          }}
+        >
           {'linux' in state && state.linux?.sandbox
             ? t('quit and replace')
             : t('restart to update')}
@@ -181,6 +226,16 @@ export function UpdateControl() {
           {t('check now')}
         </Button>
       )}
+      {confirming && 'linux' in state && state.linux?.sandbox && (
+        <ReplaceConfirm
+          folder={state.linux.folder}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            act('install');
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -189,11 +244,21 @@ export function UpdateControl() {
 export function UpdateChip() {
   const { state, act } = useUpdate();
   const { notify } = useRuntime();
+  const [confirming, setConfirming] = useState(false);
   const told = useRef(false);
   useEffect(() => {
     if (state?.phase === 'current' && state.updated && !told.current) {
       told.current = true;
-      notify(t('Circle was updated to {version}', { version: state.updated }));
+      const version = state.updated;
+      if (state.linux?.sandbox) {
+        notify(
+          t(
+            'Circle was updated to {version}. Give chrome-sandbox to root again, or it will not start:',
+            { version },
+          ),
+        );
+        notify(sandboxCommands(state.linux.folder));
+      } else notify(t('Circle was updated to {version}', { version }));
     }
   }, [state, notify]);
   if (
@@ -212,24 +277,38 @@ export function UpdateChip() {
             : t('restart to update')
           : t('restarting…');
   return (
-    <button
-      className="update-chip"
-      data-phase={state.phase}
-      disabled={state.phase === 'downloading' || state.phase === 'installing'}
-      onClick={() => {
-        if (state.phase === 'available' && state.page) {
-          notify(t('opened the release page in your browser'));
-          window.open(state.page, '_blank');
-        } else if (state.phase === 'available') act('download');
-        else if (state.phase === 'ready') act('install');
-      }}
-    >
-      {state.phase === 'ready' ? (
-        <RotateCw size={14} />
-      ) : (
-        <ArrowDownToLine size={14} />
+    <>
+      <button
+        className="update-chip"
+        data-phase={state.phase}
+        disabled={state.phase === 'downloading' || state.phase === 'installing'}
+        onClick={() => {
+          if (state.phase === 'available' && state.page) {
+            notify(t('opened the release page in your browser'));
+            window.open(state.page, '_blank');
+          } else if (state.phase === 'available') act('download');
+          else if (state.phase === 'ready' && state.linux?.sandbox)
+            setConfirming(true);
+          else if (state.phase === 'ready') act('install');
+        }}
+      >
+        {state.phase === 'ready' ? (
+          <RotateCw size={14} />
+        ) : (
+          <ArrowDownToLine size={14} />
+        )}
+        <span>{label}</span>
+      </button>
+      {confirming && state?.phase === 'ready' && state.linux?.sandbox && (
+        <ReplaceConfirm
+          folder={state.linux.folder}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            act('install');
+          }}
+        />
       )}
-      <span>{label}</span>
-    </button>
+    </>
   );
 }

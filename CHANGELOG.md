@@ -4,6 +4,19 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **A one-time notice after an upgrade**, on the terminal's home screen and the desktop home page. It names what changed since the version you had — not every older release — and it stays gone after you dismiss it or start a session. The full notes are the release's own page. Someone who never had the `circle-server` extension is not told to rename it.
+
+### Changed
+
+- **Linux can replace the desktop application from settings → about → check now** when the folder can be written. Circle 1.6.0 and the published 1.7.4 need one manual update to get that updater; [Installation](docs/installation.md#the-desktop-application) is the procedure. A setuid `chrome-sandbox` is named in a confirm dialog before Circle quits, and again the next time it starts.
+
+### Fixed
+
+- **Stopping a reply shows that it was interrupted after the session is opened again**, in the terminal and the desktop application. The mark is on the saved reply. A crash still marks a turn that saved no reply. A finished session is not marked.
+- **Check now does not offer the version you already have.** A checkout's package version is not Circle's version, so a local build of 1.7.4 no longer offers an update to 1.7.4. A newer local build is not offered an older release either.
+
 ## 1.7.4 - 2026-10-16
 
 Circle 1.7.0, 1.7.1, 1.7.2 and 1.7.3 were tagged but never published, so this is the first release since 1.6.0 and it includes all of their changes. Coming from 1.6.0, one of them needs you to act: since 1.7.0 the bundled hub extension is named `hub`, with `/hub` commands and `hub_*` tools, and the former `circle-server` extension and `/server` commands no longer work. Enable `hub` and sign in again; [1.7.0](https://github.com/circle-platforms/circle/blob/main/CHANGELOG.md#170---2026-10-15) has the details.

@@ -79,6 +79,8 @@ export interface Message {
   planCompleted?: number;
   /** A core completion diagnostic; arbitrary model/provider text stays untranslated. */
   completionFailure?: ModelCompletionFailureCode;
+  /** The user stopped this reply, or a crash saved no reply. */
+  interrupted?: boolean;
   usage?: {
     input: number;
     output: number;

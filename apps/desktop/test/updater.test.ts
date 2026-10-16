@@ -25,6 +25,8 @@ import {
   WINDOWS_INSTALLER,
   type Installation,
 } from '../src/updater';
+import { circleAppVersion } from '../src/circle-version';
+import { VERSION } from '../../../src/version';
 
 const windows = process.platform === 'win32';
 const scratch = (t: { after: (fn: () => void) => void }) => {
@@ -649,6 +651,33 @@ function linuxArchive(
   return readFileSync(archive);
 }
 
+test("a checkout uses Circle's version, and an equal or newer local version is not offered", async (t) => {
+  assert.equal(circleAppVersion(false, '0.1.0'), VERSION);
+  assert.equal(circleAppVersion(true, '1.7.4'), '1.7.4');
+  assert.equal(circleAppVersion(true, 'not-a-version'), VERSION);
+  const root = scratch(t);
+  const releases = await release(t, '1.7.4', {});
+  const options = {
+    home: join(root, 'home'),
+    folder: join(root, 'updates'),
+    releases,
+    launch: () => {},
+    quit: () => {},
+  };
+  assert.deepEqual(
+    await new Updater({ ...options, version: '1.7.4' }).check(),
+    {
+      phase: 'current',
+    },
+  );
+  assert.deepEqual(
+    await new Updater({ ...options, version: '1.8.0' }).check(),
+    {
+      phase: 'current',
+    },
+  );
+});
+
 test('a writable Linux copy is checked, swapped, and does not restart while chrome-sandbox is setuid', async (t) => {
   const root = scratch(t);
   const version = '1.1.0';
@@ -721,6 +750,35 @@ test('a writable Linux copy is checked, swapped, and does not restart while chro
   assert.match(log, /installed/);
   assert.match(log, /sudo chmod 4755/);
   assert.equal(existsSync(marker), false);
+  assert.equal(
+    JSON.parse(readFileSync(join(folder, 'pending.json'), 'utf8')).sandbox,
+    true,
+  );
+  const again = new Updater({
+    version,
+    home: join(root, 'home'),
+    folder,
+    installation: {
+      kind: 'linux',
+      target,
+      executable,
+      asset: (next) => `circle-desktop-${next}-linux-x64.tar.gz`,
+    },
+    releases,
+    launch: () => {},
+    quit: () => {},
+  });
+  const started = await again.start();
+  assert.equal(started.phase, 'current');
+  assert.equal(started.phase === 'current' ? started.updated : '', version);
+  assert.deepEqual(started.phase === 'current' ? started.linux : undefined, {
+    folder: target,
+    sandbox: true,
+  });
+  assert.equal(
+    JSON.parse(readFileSync(join(root, 'home', 'whats-new.json'), 'utf8')).seen,
+    '1.0.0',
+  );
 });
 
 test('a Linux update starts again when chrome-sandbox is not setuid', async (t) => {
