@@ -144,6 +144,17 @@ Object.assign(window, {
         extension.error = 'synthetic GitHub module initialization failure';
       }),
     integrationReady: publish,
+    scopeMetadata: (metadata: Partial<GitHubConnectionState>) => {
+      delete state.requestedAdditionalScopes;
+      delete state.grantedScopes;
+      delete state.scopeVerification;
+      state = { ...state, ...metadata };
+      publish();
+    },
+    disableWithStaleView: () =>
+      runtime.change((snapshot) => {
+        snapshot.extensions[0].enabled = false;
+      }),
     unavailable: () =>
       runtime.change((s) => {
         s.extensions = [];

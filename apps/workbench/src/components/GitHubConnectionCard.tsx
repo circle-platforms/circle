@@ -5,6 +5,7 @@ import { useRuntime } from '../app/context';
 import { copyText, desktopHost } from '../host';
 import { t } from '../i18n';
 import { Button } from './common';
+import { githubPermissions } from '../model/github-permissions';
 
 export function GitHubConnectionCard({
   embedded = false,
@@ -17,6 +18,7 @@ export function GitHubConnectionCard({
   );
   const candidate = extension?.view as GitHubConnectionState | undefined;
   const view = candidate?.provider === 'github' ? candidate : undefined;
+  const permissions = view ? githubPermissions(view) : undefined;
   const available = runtime.mode === 'live' && extension?.enabled && !!view;
   const loading =
     runtime.mode === 'live' && extension?.enabled && !extension.error && !view;
@@ -113,6 +115,37 @@ export function GitHubConnectionCard({
                 ? t('waiting for GitHub authorization')
                 : t('GitHub login required')}
           </p>
+          <details className="context-source github-permissions">
+            <summary>{t('authorization permissions')}</summary>
+            <p>
+              {t('additional requested permissions')}:{' '}
+              {permissions?.requested === undefined
+                ? t('not reported')
+                : permissions.requested.length
+                  ? permissions.requested.join(', ')
+                  : t('none')}
+            </p>
+            {permissions?.requested?.includes('workflow') && (
+              <p className="panel-note">
+                {t(
+                  'workflow allows creating or updating GitHub Actions workflow files.',
+                )}
+              </p>
+            )}
+            <p>
+              {t('permissions reported by GitHub')}:{' '}
+              {permissions?.granted === undefined
+                ? t('GitHub has not reported granted permissions.')
+                : permissions.granted.length
+                  ? permissions.granted.join(', ')
+                  : t('GitHub reported no OAuth scopes.')}
+            </p>
+            <p className="panel-note">
+              {t(
+                'Circle allowed repositories limit Circle actions; they do not reduce GitHub OAuth permissions.',
+              )}
+            </p>
+          </details>
           {view.repositories.length === 0 && (
             <p className="panel-note">
               {t(

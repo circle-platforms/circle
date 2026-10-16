@@ -1,4 +1,16 @@
 export const githubConnection: Record<string, string> = {
+  'authorization permissions': '授权权限',
+  'additional requested permissions': '额外申请的权限',
+  'not reported': '尚未回报',
+  'workflow allows creating or updating GitHub Actions workflow files.':
+    'workflow 允许创建或更新 GitHub Actions 工作流文件。',
+  'permissions reported by GitHub': 'GitHub 实际回报的权限',
+  'GitHub has not reported granted permissions.':
+    'GitHub 尚未回报已授予的权限。',
+  'GitHub reported no OAuth scopes.': 'GitHub 实际回报没有 OAuth 权限范围。',
+  'Circle allowed repositories limit Circle actions; they do not reduce GitHub OAuth permissions.':
+    'Circle 允许仓库列表仅限制 Circle 操作，不会缩小 GitHub OAuth 权限。',
+
   'the draft changed; review it before trying the example again':
     '草稿已变化，请检查后再试用示例',
   'back to plugins': '返回插件',
