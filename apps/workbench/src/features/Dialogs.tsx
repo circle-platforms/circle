@@ -1,5 +1,6 @@
 import { desktopHost, saveExport } from '../host';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowUpRight,
   Check,
@@ -29,7 +30,11 @@ import {
 import { DiffBlock } from '../components/DiffBlock';
 import { BrowserApproval, requestReason } from './InlineRequest';
 import { hasToolInput } from '../model/browser';
-import { canArchiveSession } from '../model/session-management';
+import {
+  afterDeleteRoute,
+  canArchiveSession,
+} from '../model/session-management';
+import { openHome } from './home-selection';
 import { branchMessages, currentSession, sessionText } from '../model/state';
 import type { DialogId, Interaction, Session } from '../model/types';
 import {
@@ -523,6 +528,8 @@ export function DialogHost({
   onSession: () => void;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
+  const navigate = useNavigate();
+  const location = useLocation();
   const current = currentSession(snapshot);
   const target =
     snapshot.sessions.find((session) => session.id === selection) ?? current;
@@ -667,8 +674,25 @@ export function DialogHost({
               className="danger"
               onClick={() =>
                 perform(async () => {
+                  const workspaceId = target.workspaceId;
                   await runtime.deleteSession(target.id, true);
                   onClose();
+                  // Deleting a folder's last conversation returns to that folder's
+                  // home, not to the empty session the runtime kept to draft in.
+                  const after = runtime.getSnapshot();
+                  const route = afterDeleteRoute(
+                    after.sessions,
+                    after.activeSessionId,
+                    workspaceId,
+                  );
+                  if (route.kind === 'session')
+                    navigate(`/session/${route.id}`);
+                  else
+                    openHome(
+                      navigate,
+                      `${location.pathname}${location.search}`,
+                      route.workspaceId,
+                    );
                 })
               }
             >
