@@ -5,7 +5,7 @@ nav_order: 7
 
 # Desktop interface language
 
-The desktop application shows its interface in English or Simplified Chinese. The terminal interface stays English.
+The desktop application shows its interface in English or Simplified Chinese. The terminal interface stays English. The session list (`/resume` and alt+s), the `Resumed` line, `view only`, `search quota exceeded`, the database-busy exit, and the database wait status follow `LANG`, `LC_ALL` or `LANGUAGE` when that names Chinese.
 
 The first start follows the system language: any Chinese system language gives Chinese, everything else English. Settings → appearance → language changes it (follow system, English, 简体中文). The choice is kept in the window's local storage. Menus, system dialogs and notifications follow the window: the renderer tells the main process its language.
 

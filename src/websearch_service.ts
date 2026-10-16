@@ -56,11 +56,16 @@ function diagnostic(
   // Provider errors can echo their input, including a raw key or query outside a URL.
   const detail = networkErrorReason(error);
   const host = new URL(connection.baseUrl).host;
-  let message = isNetworkFailure(error)
-    ? networkError(error, connection.baseUrl).message
-    : /\bhttp \d{3}\b/i.test(detail)
-      ? `HTTP failure on ${host}: ${detail}`
-      : `native search on ${host}: ${detail}`;
+  // A 429 from the provider's search, including Zhipu code 1113, is a quota.
+  // The raw body is not something a person can act on.
+  const quota = /\bnative search http 429\b|\b1113\b/.test(detail);
+  let message = quota
+    ? 'search quota exceeded'
+    : isNetworkFailure(error)
+      ? networkError(error, connection.baseUrl).message
+      : /\bhttp \d{3}\b/i.test(detail)
+        ? `HTTP failure on ${host}: ${detail}`
+        : `native search on ${host}: ${detail}`;
   for (const value of [connection.apiKey, query].filter(Boolean))
     message = message.replaceAll(value, '[redacted]');
   return message;

@@ -810,12 +810,14 @@ export class ExtensionHost {
     if (!ext.warnings.includes(note)) ext.warnings.push(note);
   }
   describe(): string {
+    const counted = (count: number, one: string, many: string): string =>
+      `${count} ${count === 1 ? one : many}`;
     if (!this.extensions.length)
       return 'No extensions. Put an extension.ts or extension.js in each extension folder.';
     return this.extensions
       .map(
         (ext) =>
-          `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${!ext.enabled ? (ext.source === 'bundled' ? `off · /extensions enable ${ext.name}` : 'off') : ext.error ? 'failed to load: ' + ext.error : `${ext.tools.length} tools · ${ext.commands.length} commands`}${ext.description ? '\n  ' + ext.description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`,
+          `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${!ext.enabled ? (ext.source === 'bundled' ? `off · /extensions enable ${ext.name}` : 'off') : ext.error ? 'failed to load: ' + ext.error : `${counted(ext.tools.length, 'tool', 'tools')} · ${counted(ext.commands.length, 'command', 'commands')}`}${ext.description ? '\n  ' + ext.description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`,
       )
       .join('\n');
   }

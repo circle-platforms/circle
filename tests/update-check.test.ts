@@ -91,6 +91,21 @@ test('the terminal shows the update line unless the check is turned off', async 
   assert.deepEqual([...off.state.notices, ...quiet.state.notices], []);
 });
 
+test('circle update --help explains the command and exits 0', async () => {
+  let text = '';
+  const code = await updateInstalled(['--help'], fetch, {
+    out: {
+      write: (chunk: string) => {
+        text += chunk;
+      },
+      isTTY: false,
+    },
+  });
+  assert.equal(code, 0);
+  assert.match(text, /usage: circle update/);
+  assert.match(text, /--check/);
+});
+
 test('circle update takes a version alone or after --version', async () => {
   const previous = process.env.CIRCLE_INSTALL_PREFIX;
   delete process.env.CIRCLE_INSTALL_PREFIX;

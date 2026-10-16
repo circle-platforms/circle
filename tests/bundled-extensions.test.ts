@@ -165,3 +165,28 @@ test('/extensions enable and disable save the choice and reload the extension', 
     /No extension named nothing-here/,
   );
 });
+
+test('one tool and one command are singular on the extension line', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const path = join(home, 'extensions', 'solo');
+  mkdirSync(path, { recursive: true });
+  writeFileSync(
+    join(path, 'extension.mjs'),
+    `export function register(api) {
+      api.registerTool('solo_tool', 'one tool', { type: 'object', properties: {} }, () => 'ok', { readOnly: true });
+      api.registerCommand('solo', 'one command', async () => {});
+    }`,
+  );
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+  }).load();
+  const line = host.describe();
+  assert.match(line, /1 tool · 1 command/);
+  assert.equal(line.includes('1 tools'), false);
+  assert.equal(line.includes('1 commands'), false);
+});

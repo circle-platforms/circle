@@ -2,6 +2,7 @@ import { Brain, Copy } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { copyText } from '../host';
 import type { Message } from '../model/types';
+import { formatBusyElapsed } from '../model/format';
 import { fullTime, shownTime } from '../model/time';
 import { FileChip, IconButton } from './common';
 import { Markdown } from './Markdown';
@@ -37,7 +38,13 @@ export function MessageView({
             }}
           >
             <Brain size={13} />
-            <span>{t('thinking')}</span>
+            <span>
+              {message.thinkingSeconds === undefined
+                ? t('thinking')
+                : t('thinking {time}', {
+                    time: formatBusyElapsed(message.thinkingSeconds),
+                  })}
+            </span>
             <span className="thinking-preview">{preview}</span>
           </summary>
           <p>{message.thinking}</p>
@@ -55,12 +62,14 @@ export function MessageView({
       </div>
       <div className="message-meta">
         {message.label && <span className="label">{message.label}</span>}
-        <time
-          dateTime={fullTime(message.at) && message.at}
-          title={fullTime(message.at)}
-        >
-          {shownTime(message.at)}
-        </time>
+        {shownTime(message.at) ? (
+          <time
+            dateTime={fullTime(message.at) && message.at}
+            title={fullTime(message.at)}
+          >
+            {shownTime(message.at)}
+          </time>
+        ) : null}
         {message.usage && (
           <footer data-testid="turn-summary">{usageText(message.usage)}</footer>
         )}
@@ -87,7 +96,9 @@ const usageText = (usage: NonNullable<Message['usage']>) =>
     usage.elapsed,
     `↑ ${usage.input.toLocaleString()}`,
     `↓ ${usage.output.toLocaleString()}`,
-    usage.cost === null ? t('cost N/A') : '$' + usage.cost.toFixed(4),
+    usage.cost === null
+      ? t('cost N/A')
+      : (usage.estimated ? '~$' : '$') + usage.cost.toFixed(4),
   ]
     .filter(Boolean)
     .join(' · ');

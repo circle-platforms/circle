@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { DATABASE_BUSY_MESSAGE, uiText } from './locale.js';
 import { ensureHome, normalizeWorkspace } from './paths.js';
 import type { Message } from './types.js';
 import {
@@ -70,6 +71,118 @@ export const emptyContextState = (): ContextState => ({
   stripThinkingIds: [],
   offloaded: {},
 });
+const STORE_BUSY_MS = 5000;
+const STORE_OPEN_ATTEMPTS = 6;
+
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isDatabaseLocked(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const errno = (error as { errcode?: number }).errcode;
+  // SQLITE_BUSY is 5, SQLITE_LOCKED is 6.
+  if (errno === 5 || errno === 6) return true;
+  return /database is locked|database is busy|SQLITE_BUSY|SQLITE_LOCKED/i.test(
+    error.message,
+  );
+}
+
+/** What to show when opening the store still fails after waiting. Other errors pass through. */
+export function databaseOpenError(error: unknown): Error {
+  if (!isDatabaseLocked(error))
+    return error instanceof Error ? error : new Error(String(error));
+  const friendly = new Error(uiText(DATABASE_BUSY_MESSAGE));
+  friendly.cause = error;
+  return friendly;
+}
+
+function openDatabase(path: string, onBusy?: () => void): DatabaseSync {
+  let last: unknown;
+  let told = false;
+  for (let attempt = 0; attempt < STORE_OPEN_ATTEMPTS; attempt++) {
+    let db: DatabaseSync | undefined;
+    // The first try returns at once, so a held lock can say it is waiting
+    // before the longer tries. A free database never takes that pause.
+    const timeout = told ? STORE_BUSY_MS : 0;
+    try {
+      // `timeout` applies before the first statement. `journal_mode` can still
+      // return busy at once, so a locked open is tried again.
+      db = new DatabaseSync(path, { timeout });
+      db.exec(
+        `PRAGMA busy_timeout = ${timeout}; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;
+      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL, head TEXT, created REAL NOT NULL, updated REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, parent TEXT REFERENCES checkpoints(id), message TEXT NOT NULL, created REAL NOT NULL);
+      CREATE INDEX IF NOT EXISTS checkpoints_session ON checkpoints(session_id);
+      CREATE TABLE IF NOT EXISTS context_projections (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, at_checkpoint TEXT NOT NULL, summary TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS context_versions (version INTEGER PRIMARY KEY AUTOINCREMENT, checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id) ON DELETE CASCADE, state TEXT NOT NULL, created REAL NOT NULL);
+      CREATE INDEX IF NOT EXISTS context_versions_checkpoint ON context_versions(checkpoint_id, version);
+      CREATE TABLE IF NOT EXISTS labels (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY(session_id, message_id));
+      `,
+      );
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const version = Number(
+          db.prepare('PRAGMA user_version').get()?.user_version ?? 0,
+        );
+        const columns = db.prepare('PRAGMA table_info(sessions)').all();
+        if (!columns.some((row) => row.name === 'parent_id'))
+          db.exec('ALTER TABLE sessions ADD COLUMN parent_id TEXT');
+        if (!columns.some((row) => row.name === 'title_locked'))
+          db.exec(
+            'ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0',
+          );
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_id);',
+        );
+        // Upgrade native children once, without changing history or replaying work.
+        if (version < 4)
+          for (const row of db
+            .prepare(
+              'SELECT c.session_id,v.state FROM context_versions v JOIN checkpoints c ON c.id=v.checkpoint_id ORDER BY v.version',
+            )
+            .all()) {
+            const state = JSON.parse(String(row.state)) as ContextState;
+            for (const child of state.subagentSessionIds ?? [])
+              if (child !== row.session_id)
+                db.prepare(
+                  'UPDATE sessions SET parent_id=? WHERE id=? AND parent_id IS NULL',
+                ).run(String(row.session_id), child);
+          }
+        db.exec('PRAGMA user_version = 4; COMMIT');
+      } catch (error) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          /* No transaction when the lock failed on BEGIN. */
+        }
+        throw error;
+      }
+      if (timeout !== STORE_BUSY_MS)
+        db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_MS}`);
+      // When #154 merges, create `open_turns` and call sweepStaleSessionLocks
+      // here, before this return. Both belong inside this retry: outside it, a
+      // held lock exits with "database is locked" again.
+      return db;
+    } catch (error) {
+      try {
+        db?.close();
+      } catch {
+        /* The failed connection cannot be closed. */
+      }
+      last = error;
+      if (!isDatabaseLocked(error) || attempt === STORE_OPEN_ATTEMPTS - 1)
+        throw databaseOpenError(error);
+      if (!told) {
+        told = true;
+        onBusy?.();
+      }
+      pause(40 * (attempt + 1));
+    }
+  }
+  throw databaseOpenError(last);
+}
+
 export class CheckpointStore {
   private db: DatabaseSync;
   private readonly home?: string;
@@ -92,57 +205,12 @@ export class CheckpointStore {
   get version(): number {
     return this.writeVersion;
   }
-  constructor(home?: string) {
+  constructor(home?: string, hooks?: { onBusy?: () => void }) {
     this.home = home;
-    this.db = new DatabaseSync(
+    this.db = openDatabase(
       home ? join(ensureHome(home), 'circle.sqlite') : ':memory:',
+      hooks?.onBusy,
     );
-    this.db
-      .exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;
-      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL, head TEXT, created REAL NOT NULL, updated REAL NOT NULL);
-      CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, parent TEXT REFERENCES checkpoints(id), message TEXT NOT NULL, created REAL NOT NULL);
-      CREATE INDEX IF NOT EXISTS checkpoints_session ON checkpoints(session_id);
-      CREATE TABLE IF NOT EXISTS context_projections (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, at_checkpoint TEXT NOT NULL, summary TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS context_versions (version INTEGER PRIMARY KEY AUTOINCREMENT, checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id) ON DELETE CASCADE, state TEXT NOT NULL, created REAL NOT NULL);
-      CREATE INDEX IF NOT EXISTS context_versions_checkpoint ON context_versions(checkpoint_id, version);
-      CREATE TABLE IF NOT EXISTS labels (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY(session_id, message_id));
-      `);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const version = Number(
-        this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0,
-      );
-      const columns = this.db.prepare('PRAGMA table_info(sessions)').all();
-      if (!columns.some((row) => row.name === 'parent_id'))
-        this.db.exec('ALTER TABLE sessions ADD COLUMN parent_id TEXT');
-      if (!columns.some((row) => row.name === 'title_locked'))
-        this.db.exec(
-          'ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0',
-        );
-      this.db.exec(
-        'CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_id);',
-      );
-      // Upgrade native children once, without changing history or replaying work.
-      if (version < 4)
-        for (const row of this.db
-          .prepare(
-            'SELECT c.session_id,v.state FROM context_versions v JOIN checkpoints c ON c.id=v.checkpoint_id ORDER BY v.version',
-          )
-          .all()) {
-          const state = JSON.parse(String(row.state)) as ContextState;
-          for (const child of state.subagentSessionIds ?? [])
-            if (child !== row.session_id)
-              this.db
-                .prepare(
-                  'UPDATE sessions SET parent_id=? WHERE id=? AND parent_id IS NULL',
-                )
-                .run(String(row.session_id), child);
-        }
-      this.db.exec('PRAGMA user_version = 4; COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
   }
   /** Sessions kept in memory until the first message, so an unused /new leaves no row. */
   private deferred = new Map<string, Session>();
@@ -361,12 +429,12 @@ export class CheckpointStore {
     return (workspace
       ? this.db
           .prepare(
-            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE workspace = ? ${hidden} ORDER BY activity DESC, sessions.created DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE workspace = ? ${hidden} ORDER BY activity DESC, sessions.created DESC, sessions.id`,
           )
           .all(normalizeWorkspace(workspace))
       : this.db
           .prepare(
-            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE 1 = 1 ${hidden} ORDER BY activity DESC, sessions.created DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE 1 = 1 ${hidden} ORDER BY activity DESC, sessions.created DESC, sessions.id`,
           )
           .all()) as unknown as Session[];
   }

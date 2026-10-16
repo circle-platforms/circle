@@ -32,7 +32,7 @@ import type {
 } from '../ink/components/picker.js';
 import { palette } from '../ink/theme.js';
 import { stripAnsi } from '../ink/string_width.js';
-import { sessionRowLabel } from './session_label.js';
+import { plainPreview, sessionRowLabel } from './session_label.js';
 import {
   isSessionMode,
   SESSION_MODES,
@@ -78,6 +78,8 @@ export interface CommandHost {
   flash(text: string, ttl?: number): void;
   fail(error: unknown): void;
   repaint(): void;
+  /** Look again at a view-only session's lock and take it when it is free. */
+  watchLease?(): void;
   picker(
     title: string,
     items: PickerItem[],
@@ -247,7 +249,9 @@ export async function runCommand(
   ) {
     host.flash(
       BUSY_WORDS[name] ?? 'Busy · wait for the current turn to finish',
+      4000,
     );
+    if (!host.state.draft) host.setDraft(`/${name}${args ? ' ' + args : ''}`);
     return true;
   }
   const extension = runtime.extensions.commands().get(name);
@@ -1040,10 +1044,7 @@ async function copy(host: CommandHost): Promise<void> {
     return;
   }
   const path = join(host.home, 'exports', 'last-copy.txt');
-  if (write(host, path, text + '\n')) {
-    host.flash('Saved to file');
-    host.notice(`Saved to file · ${path}`);
-  }
+  if (write(host, path, text + '\n')) host.flash(`Saved to file · ${path}`);
 }
 
 // A list of the settings, as pi's /settings: enter changes the marked one, and the change is
@@ -1407,6 +1408,12 @@ async function continueSession(host: CommandHost): Promise<void> {
   if (host.openSession) await host.openSession(target);
   else await runtime.switchSession(target);
   host.previousSession = current;
+  if (host.runtime.viewOnly) {
+    host.notice(
+      `Open in another terminal · view only · circle --fork ${target} copies it here`,
+    );
+    return;
+  }
   const title = (host.runtime.store.get(target)?.title || target).slice(0, 40);
   host.notice(
     resumed ? `Resumed ${target} · ${title}` : `Continued ${target} · ${title}`,
@@ -1420,6 +1427,12 @@ async function openSession(host: CommandHost, id: string): Promise<void> {
   if (host.openSession) await host.openSession(id);
   else await runtime.switchSession(id);
   host.previousSession = previous;
+  if (host.runtime.viewOnly) {
+    host.notice(
+      `Open in another terminal · view only · circle --fork ${id} copies it here`,
+    );
+    return;
+  }
   const title = (
     host.runtime.store.get(host.runtime.session.id)?.title ||
     source?.title ||
@@ -1485,22 +1498,41 @@ function sessionList(
   );
   host.picker(
     everywhere ? 'Sessions · every folder' : 'Sessions · this folder',
-    sessions.map((session) => ({
-      key: session.id,
-      label: labels.get(session.id) || session.title || '(untitled)',
-      meta:
-        sessionAge(session.activity ?? session.updated) +
-        (host.sessionStatus?.(session.id)
-          ? ` · ${host.sessionStatus(session.id)}`
-          : '') +
-        (everywhere || session.workspace !== here
-          ? ` · ${pathTail(session.workspace)}`
-          : ''),
-      search: sessionSearchText(session, runtime.store.messages(session.id)),
-      current: session.id === runtime.session.id,
-    })),
+    sessions.map((session) => {
+      const messages = runtime.store.messages(session.id);
+      return {
+        key: session.id,
+        label: labels.get(session.id) || session.title || '(untitled)',
+        meta:
+          sessionAge(session.activity ?? session.updated) +
+          (host.sessionStatus?.(session.id)
+            ? ` · ${host.sessionStatus(session.id)}`
+            : '') +
+          (everywhere || session.workspace !== here
+            ? ` · ${pathTail(session.workspace)}`
+            : ''),
+        detail: messages
+          .filter(
+            (message) =>
+              (message.role === 'user' || message.role === 'assistant') &&
+              !message.internal,
+          )
+          .map((message) =>
+            plainPreview(message.display || message.content || '', 240),
+          )
+          .filter(Boolean)
+          .join(' · '),
+        search: sessionSearchText(session, messages),
+        current: session.id === runtime.session.id,
+      };
+    }),
     async (item) => {
-      if (item.key !== runtime.session.id) await openSession(host, item.key);
+      if (item.key !== host.runtime.session.id) {
+        await openSession(host, item.key);
+        return;
+      }
+      // Picking the session already on screen checks the lock again.
+      host.watchLease?.();
     },
     {
       hint: everywhere

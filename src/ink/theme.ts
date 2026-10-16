@@ -172,6 +172,9 @@ export interface Palette {
   yellow: string;
   red: string;
   blue: string;
+  /** Built-ins and calls. Magenta, so they are not the cyan of a keyword. */
+  call: string;
+  call_hex: string;
   reset: string;
   read_bg: string;
   write_bg: string;
@@ -224,6 +227,8 @@ export function buildPalette(
     yellow: '\x1b[33m',
     red: '\x1b[31m',
     blue: '\x1b[36m',
+    call: '\x1b[35m',
+    call_hex: mixWithFloor('#c026d3', bg, 0.15, 4.5, surfaces),
     reset: RESET,
     read_bg: bgSgr(tints.read_bg),
     write_bg: bgSgr(tints.write_bg),

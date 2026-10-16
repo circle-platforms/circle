@@ -133,6 +133,9 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(nextBusySeconds(8.1, Number.NaN), 8.1);
   assert.equal(formatChord('alt+up'), 'Alt+Up');
   assert.equal(formatChord('ctrl+shift+p'), 'Ctrl+Shift+P');
+  assert.equal(formatChord('f3'), 'f3');
+  assert.equal(formatChord('f12'), 'f12');
+  assert.equal(formatChord('F2'), 'F2');
   assert.equal(DESKTOP_SEARCH_CHORD, 'ctrl+k');
   assert.equal(formatChord(DESKTOP_SEARCH_CHORD), 'Ctrl+K');
   assert.equal(formatChord('ctrl+r'), 'Ctrl+R');

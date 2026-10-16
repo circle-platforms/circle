@@ -1,4 +1,5 @@
 import { palette, sgrJoin, statusLight } from '../ink/theme.js';
+import { DATABASE_WAIT_STATUS, uiText } from '../locale.js';
 import type { LampState } from '../ink/theme.js';
 import { wrap, pad, truncate, truncateStyled } from '../ink/string_width.js';
 import type { Message, Usage } from '../types.js';
@@ -76,6 +77,8 @@ export interface ScreenState {
   busy: boolean;
   waiting: boolean;
   planMode: boolean;
+  /** Another terminal is running this session. The transcript is readable. */
+  viewOnly?: boolean;
   autoMode: boolean;
   acceptEdits?: boolean;
   todos: Todo[];
@@ -88,6 +91,8 @@ export interface ScreenState {
   streaming: string;
   thinking: string;
   usage: Usage;
+  /** Streaming, and the endpoint has not reported this session's usage yet. */
+  usageUnreported?: boolean;
   flash: string;
   // Extensions' status lines, at the right of the footer.
   extensionStatus?: { text: string; lamp: LampState }[];
@@ -145,6 +150,8 @@ export interface ScreenState {
   branch?: string;
   gate?: boolean;
   connected?: boolean;
+  /** Startup is waiting out a held database lock. */
+  storeWait?: boolean;
 }
 // Blocks are separated by exactly one blank row; inside a block there is none. An answer is
 // its thinking rows plus the text after them, a tool group is consecutive tool rows.
@@ -285,10 +292,11 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     else placed.set(anchor, [...(placed.get(anchor) ?? []), note]);
   });
   const noticeBlock = (note: string): void => {
-    const failed = note.startsWith('✖') && !note.startsWith('✖ Interrupted');
+    const shown = uiText(note);
+    const failed = shown.startsWith('✖') && !note.startsWith('✖ Interrupted');
     block(
-      note.startsWith('✖') ? '✖' : ' ',
-      note.replace(/^✖\s*/, ''),
+      shown.startsWith('✖') ? '✖' : ' ',
+      shown.replace(/^✖\s*/, ''),
       '',
       failed ? p.red : p.dim,
     );
@@ -336,7 +344,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       state.showThinking ? 1 : 0,
       state.thinkingExpanded ? 1 : 0,
       state.renderToolResult ? 1 : 0,
-      state.thinkingSeconds?.[message.id] ?? '',
+      message.thinking_seconds ?? state.thinkingSeconds?.[message.id] ?? '',
       state.turnUsage?.[message.id]?.seconds ?? '',
       inKind,
       lead,
@@ -599,14 +607,22 @@ export function renderScreen(
           p.reset,
       );
   }
-  const mode = state.planMode
-    ? 'read-only'
-    : state.autoMode
-      ? 'auto'
-      : state.acceptEdits
-        ? 'accept edits'
-        : '';
-  const modeSgr = state.planMode ? p.green : state.autoMode ? p.yellow : p.blue;
+  const mode = state.viewOnly
+    ? uiText('view only')
+    : state.planMode
+      ? 'read-only'
+      : state.autoMode
+        ? 'auto'
+        : state.acceptEdits
+          ? 'accept edits'
+          : '';
+  const modeSgr = state.viewOnly
+    ? p.yellow
+    : state.planMode
+      ? p.green
+      : state.autoMode
+        ? p.yellow
+        : p.blue;
   // The reason row is the composer, so its completion list sits above the card.
   if (state.dialog?.input !== undefined && state.completion && !state.picker)
     bottom.push(...completionRows(state.completion, width));
@@ -622,18 +638,23 @@ export function renderScreen(
   else {
     // The frame says whose turn it is: the rainbow runs while the model works.
     const seconds = (Date.now() - state.started) / 1000;
-    const label = state.busy
-      ? busyLabel(
-          state.busyRetry ? 'Retrying' : (state.busyVerb ?? 'Brewing'),
-          seconds,
-          state.busyTokens ?? 0,
-          state.busyRetry,
-        )
-      : '';
+    const waiting = state.storeWait ? uiText(DATABASE_WAIT_STATUS) : '';
+    const label = waiting
+      ? ''
+      : state.busy
+        ? busyLabel(
+            state.busyRetry ? 'Retrying' : (state.busyVerb ?? 'Brewing'),
+            seconds,
+            state.busyTokens ?? 0,
+            state.busyRetry,
+          )
+        : '';
+    if (waiting)
+      bottom.push(p.yellow + pad(truncate(waiting, width), width) + p.reset);
     if (state.completion && !state.picker)
       bottom.push(...completionRows(state.completion, width));
     const frame = loopFrame(width, {
-      elapsed: state.busy ? seconds : undefined,
+      elapsed: waiting || !state.busy ? undefined : seconds,
       label,
       mode,
       modeSgr,
@@ -670,6 +691,7 @@ export function renderScreen(
           costText: state.costText,
           contextInput: state.contextInput,
           contextWindow: state.contextWindow,
+          unreported: state.usageUnreported,
         },
         state.flash,
         width,

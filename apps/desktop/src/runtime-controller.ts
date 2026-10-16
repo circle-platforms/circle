@@ -86,7 +86,7 @@ import { ModelCatalog } from '../../../src/model_catalog.js';
 import { VERSION } from '../../../src/version.js';
 import { isSessionMode } from '../../../src/approvals.js';
 import { currentBranch } from '../../../src/git_info.js';
-import { formatCosts } from '../../../src/pricing.js';
+import { cacheRateLabel, formatCosts } from '../../../src/pricing.js';
 import { TurnStatus } from '../../../src/tui/turn_status.js';
 import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
@@ -469,6 +469,13 @@ export class RuntimeController {
     return runtime;
   }
   private selectRuntime(runtime: AgentRuntime): void {
+    const leaving = this.active;
+    if (leaving && leaving !== runtime) leaving.yieldLease();
+    if (!runtime.resumeLease()) {
+      this.previous = this.selectedSessionId;
+      this.viewedSessionId = runtime.session.id;
+      return;
+    }
     this.previous = this.selectedSessionId;
     this.active = runtime;
     this.viewedSessionId = undefined;
@@ -621,7 +628,18 @@ export class RuntimeController {
     let markedAt: number | undefined;
     for (const node of nodes) {
       const raw = node.message;
-      if (!raw || raw.internal || raw.role === 'system') continue;
+      if (!raw || raw.role === 'system') continue;
+      if (raw.internal === 'interrupted') {
+        result.push({
+          id: node.id,
+          parentId: node.parent,
+          role: 'notice',
+          text: '✖ Interrupted',
+          at: new Date(node.created).toISOString(),
+        });
+        continue;
+      }
+      if (raw.internal) continue;
       if (raw.role === 'tool') {
         const call = calls.get(raw.tool_call_id ?? '');
         if (call?.tool) {
@@ -652,6 +670,9 @@ export class RuntimeController {
         role: raw.role,
         text: raw.display ?? raw.content,
         thinking: raw.thinking,
+        ...(typeof raw.thinking_seconds === 'number'
+          ? { thinkingSeconds: raw.thinking_seconds }
+          : {}),
         label: labels[raw.id],
         at: new Date(node.created).toISOString(),
         attachments: raw.attachments?.map((a, index) => ({
@@ -668,6 +689,7 @@ export class RuntimeController {
               input: turns[raw.id]!.input,
               output: turns[raw.id]!.output,
               cost: turns[raw.id]!.cost ?? null,
+              ...(raw.interrupted ? { estimated: true } : {}),
               elapsed: formatElapsed(turns[raw.id]!.seconds),
             }
           : raw.usage
@@ -679,6 +701,7 @@ export class RuntimeController {
                   raw.cost?.currency === 'USD'
                     ? (raw.cost.amount ?? null)
                     : null,
+                ...(raw.interrupted ? { estimated: true } : {}),
                 elapsed: gapElapsed(markedAt, node.created),
               }
             : undefined,
@@ -727,10 +750,13 @@ export class RuntimeController {
     }
     const parents = new Map(nodes.map((node) => [node.id, node.parent]));
     const insertedAfter = new Map<string | null, string>();
+    const storedStop = result.some(
+      (row) => row.role === 'notice' && row.text === '✖ Interrupted',
+    );
     for (const failure of [
       ...(this.failures.get(id) ?? []),
       ...(this.notices.get(id) ?? []),
-    ]) {
+    ].filter((failure) => failure.text !== '✖ Interrupted' || !storedStop)) {
       // After the message it followed and that message's tool rows
       const afterIndex = (anchor: string | null) =>
         result.findLastIndex(
@@ -1146,10 +1172,13 @@ export class RuntimeController {
     const last = runtime.harness.messages
       .filter((message) => message.role === 'assistant' && message.usage)
       .at(-1);
+    const unreported = runtime.busy && stats.usage.input_tokens === 0;
     return {
       input: stats.usage.input_tokens,
       output: stats.usage.output_tokens,
       cacheRead: stats.usage.cache_read_tokens,
+      cache: unreported ? 'N/A' : cacheRateLabel(stats.usage),
+      inputUnknown: unreported,
       cost: formatCosts(
         [stats.costs],
         facts.rates?.input !== undefined && facts.rates.output !== undefined,
@@ -1309,7 +1338,14 @@ export class RuntimeController {
         this.notices.set(id, rows);
       }
     }
-    if (event.kind === 'run_start') this.activeRuns.add(id);
+    if (event.kind === 'run_start') {
+      this.activeRuns.add(id);
+      // The stop mark belongs to the turn that was stopped, as in the terminal.
+      const kept = (this.notices.get(id) ?? []).filter(
+        (row) => row.text !== '✖ Interrupted',
+      );
+      this.notices.set(id, kept);
+    }
     if (['run_end', 'run_error'].includes(event.kind))
       this.activeRuns.delete(id);
     if (!event.tags?.subagent) {
@@ -1378,6 +1414,18 @@ export class RuntimeController {
       });
       this.notices.set(id, rows);
     }
+    if (event.kind === 'run_error' && event.payload.interrupted) {
+      const rows = this.notices.get(id) ?? [];
+      if (!rows.some((row) => row.text === '✖ Interrupted')) {
+        rows.push({
+          id: `interrupted-${randomUUID()}`,
+          after: runtime.store.get(id)?.head ?? null,
+          text: '✖ Interrupted',
+          at: event.ts,
+        });
+        this.notices.set(id, rows);
+      }
+    }
     if (event.kind === 'run_error' && !event.payload.interrupted) {
       const assistant = event.payload.completion_message_id
         ? runtime.store
@@ -1419,7 +1467,7 @@ export class RuntimeController {
         text: '',
         thinking: '',
       });
-    if (event.kind === 'llm_token') {
+    if (event.kind === 'llm_token' && !this.cancelling.has(id)) {
       const stream = this.streams.get(id);
       if (stream) {
         if (event.payload.thinking)
@@ -2185,6 +2233,8 @@ export class RuntimeController {
           if (previous !== id) await this.dropUnused(previous);
         } catch (error) {
           if (!(error instanceof SessionOccupiedError)) throw error;
+          const leaving = this.runtimes.get(previous);
+          if (leaving && leaving.session.id !== id) leaving.yieldLease();
           this.previous = this.selectedSessionId;
           this.viewedSessionId = id;
         }

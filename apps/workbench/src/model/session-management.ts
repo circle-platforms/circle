@@ -1,9 +1,15 @@
+import {
+  plainPreview,
+  shortSessionId,
+} from '../../../../src/tui/session_label.ts';
+import { t } from '../i18n/index.ts';
 import type {
   Message,
   Session,
   WorkbenchSnapshot,
   Workspace,
 } from './types.ts';
+import { sessionTitle } from './state.ts';
 import { fullTime } from './time.ts';
 
 /** User and assistant text the global search indexes. Tools and notices are not history. */
@@ -107,23 +113,15 @@ export function activityAge(at: string, now = new Date()): ActivityAge {
 }
 
 /**
- * Project groups under recent, newest message first. The name breaks a tie.
- * Opening the folder does not move it.
+ * Project groups under recent, in name order. Recent already lists what is new,
+ * so a message does not jump a folder above the others.
  */
 export function orderedProjects(
   workspaces: readonly Workspace[],
   sessions: readonly Session[],
 ): Workspace[] {
-  const activity = (id: string) =>
-    sessions
-      .filter((session) => session.workspaceId === id && !session.archivedAt)
-      .reduce(
-        (value, session) =>
-          Math.max(value, Date.parse(sessionActivityAt(session)) || 0),
-        0,
-      );
-  return sidebarProjects(workspaces, sessions).sort(
-    (a, b) => activity(b.id) - activity(a.id) || a.name.localeCompare(b.name),
+  return sidebarProjects(workspaces, sessions).sort((a, b) =>
+    a.name.localeCompare(b.name),
   );
 }
 
@@ -199,6 +197,60 @@ export function recentDetails(
     age,
     absolute: age.kind === 'raw' ? undefined : fullTime(at),
   };
+}
+
+/**
+ * Why archive is unavailable, or nothing when it can be archived.
+ * A running turn, a pending question and a live job each say so.
+ */
+export function archiveBlockReason(
+  snapshot: WorkbenchSnapshot,
+  session: Session,
+): string | undefined {
+  if (session.archivedAt) return undefined;
+  if (session.lifecycle === 'deleting')
+    return t('this session is being deleted');
+  if (session.occupied) return t('open in another terminal; view only');
+  if (session.state === 'waiting') return t('stop the turn before archiving');
+  if (
+    snapshot.interactions.some(
+      (item) => item.sessionId === session.id && item.status === 'pending',
+    )
+  )
+    return t('answer the pending request first');
+  if (
+    snapshot.jobs.some(
+      (job) =>
+        job.sessionId === session.id &&
+        ['running', 'waiting'].includes(job.state),
+    )
+  )
+    return t('stop the running job first');
+  return undefined;
+}
+
+/** A shared title gains the start of the reply, or the short id, as /resume does. */
+export function disambiguatedSessionTitle(
+  session: Session,
+  sessions: readonly Session[],
+): string {
+  const title = sessionTitle(session.title);
+  const duplicates = sessions.filter(
+    (item) => !item.archivedAt && sessionTitle(item.title) === title,
+  );
+  if (duplicates.length < 2) return title;
+  const hint = (item: Session): string => {
+    const reply = item.messages.find(
+      (message) => message.role === 'assistant' && message.text.trim(),
+    );
+    const snippet = plainPreview(reply?.text ?? '');
+    return snippet
+      ? `${title} · ${snippet}`
+      : `${title} · ${shortSessionId(item.id)}`;
+  };
+  const mine = hint(session);
+  const shared = duplicates.filter((item) => hint(item) === mine).length;
+  return shared < 2 ? mine : `${title} · ${shortSessionId(session.id)}`;
 }
 
 export function canArchiveSession(

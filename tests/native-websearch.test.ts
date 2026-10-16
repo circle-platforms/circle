@@ -101,6 +101,14 @@ test('endpoint metadata matches complete official routes and never infers vendor
     { id: 'anthropic', adapter: 'anthropic' },
   );
   assert.deepEqual(
+    searchProvider(
+      'https://open.bigmodel.cn/api/anthropic',
+      'anthropic',
+      'glm-5.3',
+    ),
+    { id: 'zhipu-anthropic', adapter: 'zhipu' },
+  );
+  assert.deepEqual(
     searchProvider('https://proxy.example/v1', 'openai', 'qwen3.8-max'),
     { id: 'custom', adapter: 'responses' },
   );
@@ -511,6 +519,36 @@ test('Zhipu tools use official search parameters and return structured links', a
     },
   ]);
   assert.equal(result.results[0]?.snippet, 'Snippet');
+  assert.equal(result.executed, true);
+});
+
+test('Zhipu on the Anthropic route searches through paas v4 with the same key', async (t) => {
+  const { request, seen, original } = await gateway(t, {
+    choices: [{ message: { content: 'Summary' } }],
+    web_search: [{ title: 'News', link: source.url, content: 'Snippet' }],
+  });
+  const link = connection(
+    'https://open.bigmodel.cn/api/anthropic',
+    'glm-5.3',
+    'anthropic',
+  );
+  assert.equal(
+    await nativeSearchCapability(link, signal(), async () => {
+      throw new Error('the models endpoint is not the search contract');
+    }),
+    'unknown',
+  );
+  const result = await nativeWebSearch(link, 'query', 2, signal(), request);
+  assert.equal(
+    original[0]?.href,
+    'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+  );
+  assert.equal(seen[0]?.headers.authorization, 'Bearer synthetic-test-key');
+  assert.equal(seen[0]?.headers['x-api-key'], undefined);
+  assert.equal(
+    (seen[0]?.body.tools as { type?: string }[])?.[0]?.type,
+    'web_search',
+  );
   assert.equal(result.executed, true);
 });
 

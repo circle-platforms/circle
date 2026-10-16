@@ -20,8 +20,10 @@ import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
   activityAge,
+  archiveBlockReason,
   afterDeleteRoute,
   canArchiveSession,
+  disambiguatedSessionTitle,
   historyMessages,
   orderedProjects,
   projectFolders,
@@ -453,7 +455,7 @@ test('core times show as local clock times, with the day when it is not today', 
   // The preview's own words stay as they are
   assert.equal(shownTime('10:24', now), '10:24');
   assert.equal(shownTime('yesterday', now), 'yesterday');
-  assert.equal(shownTime('streaming', now), 'streaming');
+  assert.equal(shownTime('streaming', now), '');
 });
 
 test('an empty new session is not listed, and hi keeps that title', () => {
@@ -989,7 +991,7 @@ test('recent lists every context newest first, and its hover names only a projec
         },
       ],
     ).map((item) => item.id),
-    ['late', 'early'],
+    ['early', 'late'],
   );
   assert.deepEqual(
     orderedProjects(
@@ -1098,4 +1100,81 @@ test('deleting a session lands on its next conversation, or home when none is le
     kind: 'home',
     workspaceId: 'proj',
   });
+});
+
+test('a streaming clock is not shown as the English word streaming', () => {
+  assert.equal(shownTime('streaming'), '');
+  assert.match(
+    shownTime('2026-10-15T12:35:00.000Z', new Date('2026-10-15T15:00:00.000Z')),
+    /35/,
+  );
+});
+
+test('duplicate titles gain a reply hint, and archive says why it is unavailable', () => {
+  const runtime = new PreviewRuntime();
+  const sample = runtime.getSnapshot().sessions.find(sessionHasContent)!;
+  const first = {
+    ...sample,
+    id: 'circle-aaaa1111',
+    title: '中秋节 800 字文章',
+    messages: [
+      {
+        id: 'reply-a',
+        parentId: null,
+        role: 'assistant' as const,
+        text: '**月亮** 很圆',
+        at: '2026-10-15T12:00:00.000Z',
+      },
+    ],
+  };
+  const second = {
+    ...sample,
+    id: 'circle-bbbb2222',
+    title: '中秋节 800 字文章',
+    messages: [
+      {
+        id: 'reply-b',
+        parentId: null,
+        role: 'assistant' as const,
+        text: '**桂花** 糕',
+        at: '2026-10-15T12:05:00.000Z',
+      },
+    ],
+  };
+  assert.equal(
+    disambiguatedSessionTitle(first, [first, second]),
+    '中秋节 800 字文章 · 月亮 很圆',
+  );
+  assert.notEqual(
+    disambiguatedSessionTitle(first, [first, second]),
+    disambiguatedSessionTitle(second, [first, second]),
+  );
+  const running = { ...first, state: 'waiting' as const };
+  assert.match(
+    archiveBlockReason(runtime.getSnapshot(), running) ?? '',
+    /stop the turn/,
+  );
+});
+
+test('a new session does not start in the untrusted project that was open', () => {
+  const trusted = folder('alpha', 'alpha');
+  const untrusted = { ...folder('beta', 'beta'), trusted: false };
+  assert.equal(
+    selectedHomeProject(
+      [untrusted, trusted],
+      [{ id: 'current', workspaceId: 'beta' }],
+      'current',
+      null,
+    )?.id,
+    'alpha',
+  );
+  assert.equal(
+    selectedHomeProject(
+      [untrusted],
+      [{ id: 'current', workspaceId: 'beta' }],
+      'current',
+      null,
+    ),
+    undefined,
+  );
 });

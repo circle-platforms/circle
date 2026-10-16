@@ -1,6 +1,8 @@
 // Simplified Chinese for the interface words in the panels files. English is the key.
 export const panels: Record<string, string> = {
   files: '文件',
+  'Circle shell': 'Circle 终端',
+  'terminal not connected': '终端未连接',
   'local workspace': '本地工作区',
   'search files': '搜索文件',
   'find a file…': '查找文件…',

@@ -32,6 +32,9 @@ export const conversation: Record<string, string> = {
     '从一条消息、一个文件或一个关于项目的问题开始。',
   you: '你',
   thinking: '思考',
+  'thinking {time}': '思考 {time}',
+  'could not reach the endpoint': '无法连接端点',
+  'cache N/A': '缓存不可用',
   'cost N/A': '费用 N/A',
   'local conversation paused · remote state unverified':
     '本地对话已暂停 · 远端状态未确认',

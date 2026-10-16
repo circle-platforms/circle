@@ -170,6 +170,21 @@ export async function uninstallInstalled(
     run = runCommand,
     spawnDetached = detach,
   } = deps;
+  if (args.includes('--help') || args.includes('-h')) {
+    out.write(
+      [
+        'usage: circle uninstall [--purge] [--yes]',
+        '',
+        'Remove this Circle installation: the circle command, every installed',
+        'version, the installation receipt, and the PATH lines the installer added.',
+        'Sessions, settings and credentials stay in the data folder.',
+        'circle uninstall --purge deletes that folder too.',
+        '--yes skips the confirmation.',
+        '',
+      ].join('\n'),
+    );
+    return 0;
+  }
   let purge = false;
   let yes = false;
   for (const arg of args)

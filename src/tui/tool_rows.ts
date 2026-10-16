@@ -5,6 +5,7 @@
 // Thinking is one folded row, `∴ Thought 6.3s · title  ctrl+t`, on the terminal
 // background: italic blue from the terminal's own slot, faint body text. No type tint.
 import { lampSgr, palette, sgrJoin, type LampState } from '../ink/theme.js';
+import { uiText } from '../locale.js';
 import { pad, stringWidth, truncate } from '../ink/string_width.js';
 import {
   markdownRows,
@@ -250,7 +251,7 @@ export function resultRows(
   if (job) return jobResultRows(job, bg, options);
   const error = result.status === 'error';
   const recoverable = error && Boolean(result.recoverable);
-  const output = terminalText(result.content);
+  const output = uiText(terminalText(result.content));
   if (call.name === 'read_file' && !error && !options.expanded) {
     const window = readWindow(output);
     if (window)
