@@ -28,6 +28,22 @@ const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0 },
   logLevel: 'error',
+  plugins: [
+    {
+      name: 'source-return-preapp-seed',
+      configureServer(server) {
+        server.middlewares.use(
+          '/__source_return_seed',
+          (_request, response) => {
+            response.setHeader('Content-Type', 'text/html');
+            response.end(
+              '<!doctype html><html><body>source return fixture seed</body></html>',
+            );
+          },
+        );
+      },
+    },
+  ],
 });
 await server.listen();
 let browser;
@@ -49,8 +65,8 @@ try {
   );
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
-  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  await page.goto(server.resolvedUrls.local[0] + '__source_return_seed');
+  assert.equal(await page.locator('.workbench').count(), 0, 'seed writes before any App runtime mounts');
   const { second, childId } = await page.evaluate(async (theme) => {
     const { PreviewRuntime } = await import('/src/model/state.ts');
     const runtime = new PreviewRuntime(localStorage);
@@ -102,7 +118,7 @@ try {
     });
     return { second: next, childId };
   }, process.env.CIRCLE_AGENT_SOURCE_THEME ?? 'dark');
-  await page.reload();
+  await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const openBySearch = async () => {
     await page.keyboard.press('ControlOrMeta+p');
@@ -244,7 +260,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    'parent/child source return, exact child reading position, parent draft and cross-session isolation passed',
+    'pre-App seed loaded actual child; parent/child source return, exact child reading position, parent draft and cross-session isolation passed',
   );
 } finally {
   await browser?.close();
