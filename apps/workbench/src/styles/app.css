@@ -151,7 +151,39 @@ pre {
   min-width: 0;
   min-height: 0;
 }
+/* The panel seen whole takes the workspace; the columns step aside but stay mounted, so
+   the conversation keeps what it holds for the way back. */
 .workspace-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-content > .columns {
+  flex: 1;
+  min-height: 0;
+}
+/* Seen whole: the panel takes the workspace, and the conversation keeps its own input
+   below it, as the chat stays in Codex's full view. Only the record steps aside. */
+.workspace-content > .columns.whole-under {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+.workspace-content > .columns.whole-under .conversation > :not(.composer-area) {
+  display: none;
+}
+.workspace-content > .columns.whole-under .main-stack,
+.workspace-content > .columns.whole-under .conversation {
+  height: auto;
+}
+.inspector-full {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.inspector-full > .inspector {
   flex: 1;
   min-height: 0;
 }
@@ -4530,6 +4562,11 @@ pre {
 .inspector-overlay > .inspector {
   flex: 1;
   min-height: 0;
+}
+.inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 /* The application's own update: a line and its next step in settings, a chip in the sidebar. */
