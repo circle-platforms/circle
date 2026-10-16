@@ -542,7 +542,12 @@ function bindOidc(
     return Promise.resolve(undefined);
   const host = '127.0.0.1';
   return new Promise((resolve) => {
-    const hit = Promise.withResolvers<{ code: string; state: string }>();
+    let resolveHit: (value: { code: string; state: string }) => void = () => {};
+    const hit = new Promise<{ code: string; state: string }>(
+      (resolveHitInner) => {
+        resolveHit = resolveHitInner;
+      },
+    );
     let sent = false;
     const server = createServer((request, response) => {
       const url = new URL(request.url ?? '/', redirect.origin);
@@ -566,7 +571,7 @@ function bindOidc(
       );
       if (!sent) {
         sent = true;
-        hit.resolve({ code, state });
+        resolveHit({ code, state });
       }
     });
     server.once('error', () => resolve(undefined));
@@ -576,7 +581,7 @@ function bindOidc(
           new Promise((resolveWait) => {
             const timer = setTimeout(() => resolveWait(undefined), 120_000);
             timer.unref?.();
-            void hit.promise.then((value) => {
+            void hit.then((value) => {
               clearTimeout(timer);
               resolveWait(value);
             });
