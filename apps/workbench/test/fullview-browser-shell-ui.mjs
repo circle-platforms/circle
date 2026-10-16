@@ -76,7 +76,22 @@ try {
     for (const width of platform === 'darwin' ? [1400, 500] : [500])
       for (const height of [684, 970])
         for (const mode of width === 1400 ? ['split', 'full'] : ['overlay']) {
+          const previousWidth = page.viewportSize().width;
           await page.setViewportSize({ width, height });
+          if (previousWidth > 1050 && width <= 1050) {
+            // The same URL below does not reload the document. Let the original
+            // narrow-layout effect close the formerly open wide Inspector before
+            // deciding whether this scenario needs to open it again.
+            await page
+              .locator('.inspector-overlay')
+              .waitFor({ state: 'attached' });
+            await page.waitForFunction(
+              () =>
+                document
+                  .querySelector('button[aria-label="browser panel"]')
+                  ?.getAttribute('aria-pressed') === 'false',
+            );
+          }
           await page.goto(
             server.resolvedUrls.local[0] +
               '?platform=' +
