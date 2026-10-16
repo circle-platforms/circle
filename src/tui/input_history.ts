@@ -9,14 +9,14 @@ import {
 import { dirname, join } from 'node:path';
 import { withPrivateJsonLock } from '../settings.js';
 
-function retryFile<T>(operation: () => T): T {
+function retryFileAccess<T>(operation: () => T): T {
   const deadline = Date.now() + 1000;
   for (;;) {
     try {
       return operation();
     } catch (error) {
       if (
-        !['EPERM', 'EBUSY'].includes(
+        !['EACCES', 'EBUSY', 'EPERM'].includes(
           (error as NodeJS.ErrnoException).code ?? '',
         ) ||
         Date.now() >= deadline
@@ -40,9 +40,11 @@ export class InputHistory {
   ) {
     this.refresh();
   }
-  private read(strict = false): string[] | undefined {
+  private read(required = false): string[] | undefined {
     try {
-      const body = readFileSync(this.path, 'utf8');
+      const body = required
+        ? retryFileAccess(() => readFileSync(this.path, 'utf8'))
+        : readFileSync(this.path, 'utf8');
       try {
         const data: unknown = JSON.parse(body);
         if (
@@ -67,21 +69,22 @@ export class InputHistory {
         .filter((line) => line.trim())
         .slice(-this.maximum);
     } catch (error) {
-      if (strict && (error as NodeJS.ErrnoException).code !== 'ENOENT')
+      // A writer must not replace another terminal's entries with a stale local view
+      // merely because a sharing violation made the current file unavailable.
+      if (required && (error as NodeJS.ErrnoException).code !== 'ENOENT')
         throw error;
       /* An unavailable history file must not prevent typing. */
       return undefined;
     }
   }
-  private merged(latest: string[]): string[] {
-    const values = [...latest];
-    for (const text of this.pending)
-      if (values.at(-1) !== text) values.push(text);
-    return values.slice(-this.maximum);
+  private merge(latest: string[]): string[] {
+    for (const entry of this.pending)
+      if (latest.at(-1) !== entry) latest = [...latest, entry];
+    return latest.slice(-this.maximum);
   }
   private refresh(): void {
     const latest = this.read();
-    if (latest) this.values = this.merged(latest);
+    if (latest) this.values = this.merge(latest);
   }
   static forHome(home: string): InputHistory {
     return new InputHistory(
@@ -94,39 +97,38 @@ export class InputHistory {
   add(text: string): void {
     text = text.trimEnd();
     if (!text.trim()) return;
-    if (this.values.at(-1) !== text)
-      this.values = [...this.values, text].slice(-this.maximum);
     if (this.pending.at(-1) !== text)
       this.pending = [...this.pending, text].slice(-this.maximum);
+    if (this.values.at(-1) !== text)
+      this.values = [...this.values, text].slice(-this.maximum);
     this.reset();
     try {
-      mkdirSync(dirname(this.path), { recursive: true });
+      retryFileAccess(() => mkdirSync(dirname(this.path), { recursive: true }));
       withPrivateJsonLock(this.path, () => {
         // Other views and terminals have their own navigation state. Merge against the
         // latest file while holding its lock, without changing their browsing snapshots.
-        // A failed read is not an empty file: never publish a stale browsing snapshot.
-        const latest = retryFile(() => this.read(true)) ?? [];
-        const values = this.merged(latest);
-        const temporary = `${this.path}.${randomUUID()}.tmp`;
-        try {
-          // Keep the compact prefix older readers recognise; publish the entire history
-          // atomically so another terminal never reads part of a multiline JSON entry.
-          writeFileSync(
-            temporary,
-            JSON.stringify({
-              format: 'circle-history',
-              version: 1,
-              items: values,
-            }) + '\n',
-            { mode: 0o600, flag: 'wx' },
-          );
-          retryFile(() => renameSync(temporary, this.path));
-          this.values = values;
-          // Publication succeeded even if releasing the lock subsequently fails.
-          this.pending = [];
-        } finally {
-          rmSync(temporary, { force: true });
-        }
+        this.values = this.merge(this.read(true) ?? []);
+        retryFileAccess(() => {
+          const temporary = `${this.path}.${randomUUID()}.tmp`;
+          try {
+            // Keep the compact prefix older readers recognise; publish the entire history
+            // atomically so another terminal never reads part of a multiline JSON entry.
+            writeFileSync(
+              temporary,
+              JSON.stringify({
+                format: 'circle-history',
+                version: 1,
+                items: this.values,
+              }) + '\n',
+              { mode: 0o600, flag: 'wx' },
+            );
+            renameSync(temporary, this.path);
+            // The rename committed the entries even if later cleanup/release fails.
+            this.pending = [];
+          } finally {
+            retryFileAccess(() => rmSync(temporary, { force: true }));
+          }
+        });
       });
     } catch {
       /* Keep the in-memory history usable. */

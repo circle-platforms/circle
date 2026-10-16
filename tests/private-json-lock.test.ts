@@ -60,7 +60,9 @@ for (const code of ['EPERM', 'EBUSY']) {
   });
 }
 
-test('permanent EACCES acquiring a private JSON lock fails without retrying or running the operation', (t) => {
+// Windows also reports sharing violations as EACCES: it is retried within the bounded
+// lock window, and a refusal that persists still fails without running anything.
+test('persistent EACCES acquiring a private JSON lock fails after its bounded retry without running the operation', (t) => {
   const path = join(scratch(t), 'state.json');
   const denied = Object.assign(new Error('permanent lock permission denial'), {
     code: 'EACCES',
@@ -81,12 +83,12 @@ test('permanent EACCES acquiring a private JSON lock fails without retrying or r
     () => withPrivateJsonLock(path, () => operations++),
     (error) => error === denied,
   );
-  assert.equal(attempts, 1);
+  assert.ok(attempts > 1, 'the refusal is retried before it fails');
   assert.equal(operations, 0);
   assert.equal(fs.existsSync(`${path}.lock`), false);
 });
 
-test('permanent EACCES releasing a private JSON lock fails without retrying or replaying a committed operation', (t) => {
+test('persistent EACCES releasing a private JSON lock fails after its bounded retry without replaying a committed operation', (t) => {
   const path = join(scratch(t), 'state.json');
   const denied = Object.assign(new Error('permanent lock permission denial'), {
     code: 'EACCES',
@@ -111,7 +113,7 @@ test('permanent EACCES releasing a private JSON lock fails without retrying or r
       }),
     (error) => error === denied,
   );
-  assert.equal(attempts, 1);
+  assert.ok(attempts > 1, 'the refusal is retried before it fails');
   assert.equal(operations, 1);
   assert.equal(fs.readFileSync(path, 'utf8'), 'committed');
   assert.equal(fs.existsSync(`${path}.lock`), true);

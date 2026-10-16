@@ -211,29 +211,36 @@ function saveSettingsUnlocked(settings: CircleSettings, path: string): string {
 // The public settings API is synchronous. Critical sections contain only local reads and
 // atomic renames; brief bounded retries serialize other Circle processes without dropping
 // a field another terminal just changed. Never call an asynchronous operation inside one.
+function transientLockError(error: unknown): boolean {
+  return ['EPERM', 'EACCES', 'EBUSY'].includes(
+    (error as NodeJS.ErrnoException).code ?? '',
+  );
+}
+function retryLockFileOperation<T>(operation: () => T): T {
+  const deadline = Date.now() + 1000;
+  for (;;) {
+    try {
+      return operation();
+    } catch (error) {
+      if (!transientLockError(error) || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+const privateJsonLockFs = { ...fs };
+for (const method of [
+  'mkdirSync',
+  'statSync',
+  'rmdirSync',
+  'utimesSync',
+] as const)
+  Object.defineProperty(privateJsonLockFs, method, {
+    value: (...args: unknown[]) =>
+      retryLockFileOperation(() => Reflect.apply(fs[method], fs, args)),
+  });
+
 export function withPrivateJsonLock<T>(path: string, operation: () => T): T {
   const deadline = Date.now() + 5000;
-  const temporaryFailure = (error: unknown): boolean =>
-    ['EPERM', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '');
-  const pause = (): void => {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-  };
-  const lockFs = {
-    ...fs,
-    rmdirSync(folder: fs.PathLike): void {
-      for (;;) {
-        try {
-          fs.rmdirSync(folder);
-          return;
-        } catch (error) {
-          // Retry removal itself: proper-lockfile has already released ownership,
-          // so retrying its release callback would leave the directory behind.
-          if (!temporaryFailure(error) || Date.now() >= deadline) throw error;
-          pause();
-        }
-      }
-    },
-  };
   let release: (() => void) | undefined;
   while (!release) {
     try {
@@ -241,16 +248,18 @@ export function withPrivateJsonLock<T>(path: string, operation: () => T): T {
         realpath: false,
         stale: 30000,
         update: 5000,
-        fs: lockFs,
+        // Retry the filesystem primitive itself, especially release: replaying a
+        // committed operation after an unlock error can duplicate its writes.
+        fs: privateJsonLockFs,
       });
     } catch (error) {
       if (
         ((error as NodeJS.ErrnoException).code !== 'ELOCKED' &&
-          !temporaryFailure(error)) ||
+          !transientLockError(error)) ||
         Date.now() >= deadline
       )
         throw error;
-      pause();
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
   }
   try {

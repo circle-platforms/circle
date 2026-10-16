@@ -1,4 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { DropdownMenu } from 'radix-ui';
 import { MoreHorizontal } from 'lucide-react';
 import { desktopHost } from '../host';
@@ -12,11 +18,41 @@ import { t } from '../i18n';
 import { IconButton } from './common';
 import '../styles/session-management.css';
 
-function Menu({ label, children }: { label: string; children: ReactNode }) {
+function Menu({
+  label,
+  children,
+  tabIndex,
+  buttonRef,
+  tipOpen,
+  open,
+  onOpenChange,
+  onFocus,
+  onBlur,
+  onKeyDown,
+}: {
+  label: string;
+  children: ReactNode;
+  tabIndex?: number;
+  buttonRef?: Ref<HTMLButtonElement>;
+  tipOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
+}) {
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root {...(open === undefined ? {} : { open, onOpenChange })}>
       <DropdownMenu.Trigger asChild>
-        <IconButton label={label}>
+        <IconButton
+          label={label}
+          tabIndex={tabIndex}
+          ref={buttonRef}
+          tipOpen={tipOpen}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          onKeyDown={onKeyDown}
+        >
           <MoreHorizontal size={13} />
         </IconButton>
       </DropdownMenu.Trigger>
@@ -63,9 +99,23 @@ function Reveal({ workspaceId }: { workspaceId: string }) {
 export function SessionMenu({
   session,
   onDialog,
+  buttonRef,
+  tipOpen,
+  open,
+  onOpenChange,
+  onFocus,
+  onBlur,
+  onKeyDown,
 }: {
   session: Session;
   onDialog: (dialog: DialogId, selection?: string) => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+  tipOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const archive = () =>
@@ -84,7 +134,17 @@ export function SessionMenu({
         });
     });
   return (
-    <Menu label={t('session actions for {title}', { title: session.title })}>
+    <Menu
+      label={t('session actions for {title}', { title: session.title })}
+      tabIndex={-1}
+      buttonRef={buttonRef}
+      tipOpen={tipOpen}
+      open={open}
+      onOpenChange={onOpenChange}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onKeyDown={onKeyDown}
+    >
       <DropdownMenu.Item
         onSelect={() =>
           perform(() =>
@@ -130,15 +190,20 @@ export function WorkspaceMenu({
   workspace,
   onNew,
   onCollapseAll,
+  tipOpen,
 }: {
   workspace: Workspace;
   onNew: () => void;
   onCollapseAll: () => void;
+  tipOpen?: boolean;
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const sessions = workspaceSessions(snapshot, workspace.id);
   return (
-    <Menu label={t('workspace actions for {name}', { name: workspace.name })}>
+    <Menu
+      label={t('workspace actions for {name}', { name: workspace.name })}
+      tipOpen={tipOpen}
+    >
       <DropdownMenu.Item onSelect={onNew}>{t('new session')}</DropdownMenu.Item>
       <Reveal workspaceId={workspace.id} />
       <DropdownMenu.Item onSelect={onCollapseAll}>

@@ -19,6 +19,20 @@ export interface ToolModelCall {
   cost?: import('./pricing.js').PriceReceipt;
   search_requests?: number;
 }
+/** Provider completion evidence. Absent on older history and custom models. */
+export interface ModelCompletion {
+  reason:
+    | 'stop'
+    | 'tool_calls'
+    | 'length'
+    | 'filter'
+    | 'pause'
+    | 'missing'
+    | 'unknown';
+  provider_reason?: string;
+  output_limit?: number;
+  client_stop?: 'repetition';
+}
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -36,11 +50,14 @@ export interface Message {
   /** Long pastes that `display` shows folded as `[Pasted text #N]`, by number. */
   pastes?: Record<string, string>;
   provider_content?: unknown[];
+  /** Opaque API/key/model identity for replaying signed thinking; never a credential. */
+  thinking_scope?: string;
   usage?: Usage;
   cost?: import('./pricing.js').PriceReceipt;
   model_calls?: ToolModelCall[];
   internal?: string;
   truncated?: boolean;
+  completion?: ModelCompletion;
   recoverable?: boolean;
   legacy_data?: { type: string; data: Record<string, unknown> };
 }

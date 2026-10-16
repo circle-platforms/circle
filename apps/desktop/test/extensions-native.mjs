@@ -5,6 +5,7 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -17,10 +18,12 @@ await mkdir(output, { recursive: true });
 const temp = await mkdtemp(join(tmpdir(), 'circle-native-extensions-'));
 const data = join(temp, 'data');
 const fixturePath = join(temp, 'model.json');
+const requestsPath = join(temp, 'model-requests.jsonl');
 // The scripted model needs a reply to start with; nothing here asks it.
 await writeFile(
   fixturePath,
   JSON.stringify({
+    requestsPath,
     replies: [{ message: { id: 'idle', role: 'assistant', content: 'idle' } }],
   }),
 );
@@ -97,9 +100,13 @@ try {
   page = await app.firstWindow();
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
-  // Extensions load once the workspace is trusted, as for a person using it.
-  assert.equal((await command('trust', { enabled: true })).ok, true);
-  await waitFor(async () => Boolean(await row('linker')), 'extensions loaded');
+  // The application-owned scratch workspace is trusted at startup. Neither a
+  // prompt, an explicit trust command nor a reload may be needed to discover it.
+  await waitFor(
+    async () => Boolean(await row('linker')),
+    'cold-start extensions loaded',
+  );
+  assert.equal(existsSync(requestsPath), false);
   const bundled = await row('hub');
   assert.equal(bundled.scope, 'bundled');
   assert.equal(bundled.version, '0.1.0');
