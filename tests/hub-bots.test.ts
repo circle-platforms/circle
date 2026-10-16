@@ -38,6 +38,12 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
   let unauthorizedGate:
     { requested: () => void; response: Promise<void> } | undefined;
   let issued = 0;
+  // The skill packs pushed so far; hold() keeps the next listing of them waiting, answered
+  // with the packs there were when it was asked, until release() is called.
+  const skillPacks = [
+    { skillPackId: 'skp_1', manifest: { id: 'nightly-compile' } },
+  ];
+  let holding: { asked: () => void; released: Promise<void> } | undefined;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
     const text = (await read(request)).toString();
@@ -70,10 +76,16 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
       posted.push({ path: url.pathname, body, by: caller.principalId });
     if (url.pathname === '/v1/status')
       return send(200, { data: { apiVersion: '1.0.0' } });
-    if (url.pathname === '/v1/skillpacks')
-      return send(200, {
-        data: [{ skillPackId: 'skp_1', manifest: { id: 'nightly-compile' } }],
-      });
+    if (url.pathname === '/v1/skillpacks') {
+      const listed = [...skillPacks];
+      const held = holding;
+      holding = undefined;
+      if (held) {
+        held.asked();
+        await held.released;
+      }
+      return send(200, { data: listed });
+    }
     const make = (id: string, kind: string) => {
       const item = {
         assetId: id,
@@ -265,6 +277,15 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
       };
     },
     taskQueries,
+    skillPacks,
+    hold: () => {
+      let ask!: () => void;
+      let release!: () => void;
+      const asked = new Promise<void>((resolve) => (ask = resolve));
+      const released = new Promise<void>((resolve) => (release = resolve));
+      holding = { asked: ask, released };
+      return { asked, release };
+    },
   };
 }
 
@@ -568,4 +589,41 @@ test('/hub refresh returns once the view shows what it read, however slowly the 
     view?.objects?.bots?.map((item: { assetId: string }) => item.assetId),
     ['ast_bot'],
   );
+});
+
+test('a refresh that started earlier and finished later does not replace the objects of a later one', async (t) => {
+  const root = scratch(t);
+  const workspace = join(root, 'project');
+  mkdirSync(workspace, { recursive: true });
+  const server = await botServer(t);
+  const dev = await person(t, root, 'dev-home', workspace);
+  await dev.run(`login ${server.url} developer`);
+  const shown = () =>
+    (
+      dev.host.view('hub') as Record<string, any> | undefined
+    )?.objects?.skillPacks?.map(
+      (item: { skillPackId: string }) => item.skillPackId,
+    );
+  assert.deepEqual(shown(), ['skp_1']);
+
+  // The first refresh is asked for the skill packs and its answer is held there.
+  const hold = server.hold();
+  const first = dev.run('refresh');
+  await hold.asked;
+  // Someone pushes a skill pack, and a second refresh reads it and finishes first.
+  server.skillPacks.push({
+    skillPackId: 'skp_2',
+    manifest: { id: 'weekly-report' },
+  });
+  await dev.run('refresh');
+  assert.deepEqual(shown(), ['skp_1', 'skp_2']);
+  // The first one now gets the packs as they were when it asked.
+  hold.release();
+  await first;
+  assert.equal(
+    dev.lines.filter((line) => /read \d+ tasks/.test(line)).length,
+    2,
+    'both refreshes ran to the end',
+  );
+  assert.deepEqual(shown(), ['skp_1', 'skp_2']);
 });
