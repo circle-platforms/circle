@@ -9,9 +9,20 @@ export interface PageCaptureState {
   height: number;
   scrollX: number;
   scrollY: number;
-  /** Nested document/frame/shadow scroll offsets, read synchronously at each hit test. */
-  nestedScroll?: [number, number, number][];
+  /**
+   * The page's record of where each element in view was at the capture: a coordinate click
+   * checks the area it clicks against it, not the whole page.
+   */
+  geometry?: string;
 }
+/** The same document, viewport and scroll: what a screenshot taken meanwhile shows stays put. */
+export const sameView = (
+  before: PageCaptureState,
+  after: PageCaptureState,
+): boolean =>
+  (['document', 'width', 'height', 'scrollX', 'scrollY'] as const).every(
+    (key) => before[key] === after[key],
+  );
 export interface CoordinateTarget extends PageElement {
   ref: string;
   x: number;

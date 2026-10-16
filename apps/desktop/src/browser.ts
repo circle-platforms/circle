@@ -8,6 +8,7 @@ import {
   screenshotCapture,
   screenshotDescription,
   screenshotMetadata,
+  sameView,
   type CoordinateTarget,
   type PageCaptureState,
   type ScreenshotCapture,
@@ -57,7 +58,12 @@ import {
   type BrowserResult,
   type DownloadApproval,
 } from '../../../src/browser/protocol.js';
-import { pageCall } from '../../../src/browser/page.js';
+import {
+  pageCall,
+  reachElement,
+  settlePage,
+  type PageRun,
+} from '../../../src/browser/page.js';
 import {
   actedOn,
   describedOther,
@@ -2101,6 +2107,26 @@ export class BrowserSessions {
     this.publish(conversation.id);
   }
   // ---- reaching into the page
+  /** A tab's page commands and state, for the waits around an action. */
+  private pageOf(tab: Tab, signal: AbortSignal) {
+    const run: PageRun = (command, args = {}) =>
+      this.js(tab, command, args, signal);
+    return {
+      run,
+      page: {
+        stopped: () =>
+          tab.closed ||
+          tab.contents.isDestroyed() ||
+          !!tab.failure ||
+          tab.dialogs.length > 0 ||
+          !!tab.choice,
+        busy: () =>
+          tab.contents.isLoading() ||
+          tab.network.size > 0 ||
+          Date.now() - tab.lastNetwork < 400,
+      },
+    };
+  }
   private async js<T = unknown>(
     tab: Tab,
     command: string,
@@ -2196,7 +2222,7 @@ export class BrowserSessions {
       const capturedState = await this.js<PageCaptureState>(
         tab,
         'capture-state',
-        {},
+        { record: true },
         signal,
       );
       const { image, attempts, retryErrors } = await this.limit(
@@ -2230,9 +2256,18 @@ export class BrowserSessions {
       );
       if (this.state(id).url !== before.url)
         throw Error('browser changed during capture');
+      // Another document, viewport or scroll meanwhile: the picture is of no use. A change
+      // within the page is the coordinate click's to judge, where it clicks.
       if (
-        JSON.stringify(capturedState) !==
-        JSON.stringify(await this.js(tab, 'capture-state', {}, signal))
+        !sameView(
+          capturedState,
+          await this.js<PageCaptureState>(
+            tab,
+            'capture-state',
+            { record: false },
+            signal,
+          ),
+        )
       )
         throw Error(
           'the page changed during capture; take a new browser_screenshot',
@@ -2736,10 +2771,11 @@ export class BrowserSessions {
       signal,
     );
     // A real mouseenter may replace the action; never press based on the pre-hover target.
+    // A hover style may restyle it: only its content and what it does count then.
     const hovered = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, capture: capture.state, hover: true },
       signal,
     );
     checkCoordinateTarget(point, hovered);
@@ -2757,6 +2793,8 @@ export class BrowserSessions {
         signal,
       );
     await this.idle(tab, signal);
+    const { run, page } = this.pageOf(tab, signal);
+    await settlePage(run, page, signal);
     await this.downloadsDone(conversation, signal);
     return {
       text: await this.result(
@@ -2811,7 +2849,9 @@ export class BrowserSessions {
           !args.values.every((value) => typeof value === 'string'))
       )
         throw Error('invalid browser options');
-      const target = await this.js<
+      // Something on top of the element (a loading mask, a message) may go in a moment
+      const { run, page } = this.pageOf(tab, signal);
+      const target = await reachElement<
         PageElement & {
           x: number;
           y: number;
@@ -2822,9 +2862,9 @@ export class BrowserSessions {
           password: boolean;
         }
       >(
-        tab,
-        'prepare',
+        run,
         { ref: args.ref, typing: action === 'type', secret: !!secret },
+        page,
         signal,
       );
       if (action === 'click' && target.action === 'proceed') {
@@ -2877,10 +2917,10 @@ export class BrowserSessions {
         signal,
       );
       // Read again as the input goes in: the result names this element, not the model's words
-      const point = await this.js<PageElement & { x: number; y: number }>(
-        tab,
-        'prepare',
+      const point = await reachElement<PageElement & { x: number; y: number }>(
+        run,
         { ref: args.ref, typing: action === 'type', secret: !!secret },
+        page,
         signal,
       );
       const which = actedOn(args.ref, point);
@@ -2949,6 +2989,11 @@ export class BrowserSessions {
     }
     tab.lastNetwork = Date.now();
     await this.idle(tab, signal);
+    // A drawer sliding in or a mask fading out: the result shows the page once it is still
+    {
+      const { run, page } = this.pageOf(tab, signal);
+      await settlePage(run, page, signal);
+    }
     await this.downloadsDone(conversation, signal);
     const shown = this.activeTab(conversation);
     // A tab the click opened is the one the result shows: its page first
