@@ -31,6 +31,7 @@ import {
   armNativeFeedback,
   captureNativeTranscriptAnchor,
   terminalObservationRows,
+  terminalVisibilityCohorts,
 } from './helpers/native-performance-observation.mjs';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import {
@@ -611,6 +612,8 @@ try {
     'original terminal panel roundtrips retain draft, selection and reading anchor',
   );
 
+  // Explicit steady-visible window: panel toggle recovery is a separate cohort.
+  await page.waitForTimeout(2000);
   await waitFor(
     async () =>
       await page.evaluate(() => window.__circleNativePerfEvents.length >= 60),
@@ -654,10 +657,17 @@ try {
   );
   report.eventMeasurement =
     'producer→runtime TerminalEvent.at; actual UI replay response→xterm.write callback parse→two RAF while visible; AX is a separate diagnostic. Raw replay below is only evidence mapping, not a substitute for product parser timestamps.';
+  report.eventMixedVisibilityRaw = report.terminalEventStages.slice(10);
+  report.eventVisibilityCohorts = terminalVisibilityCohorts(
+    report.eventMixedVisibilityRaw,
+    report.terminalTiming,
+  );
+  report.eventHiddenRecovery = report.eventVisibilityCohorts.filter(
+    (row) => row.visibilityCohort === 'hidden-recovery',
+  );
   samples.eventToFrame.push(
-    ...report.terminalEventStages
-      .slice(10)
-      .filter((row) => row.frameAt !== undefined)
+    ...report.eventVisibilityCohorts
+      .filter((row) => row.visibilityCohort === 'continuously-visible')
       .map((row) => row.producerToFrameMs),
   );
   report.eventAxDiagnostic = events.slice(10).map((row) => row.ms);

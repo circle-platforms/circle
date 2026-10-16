@@ -132,6 +132,7 @@ export function terminalObservationRows(events, timing, ax) {
       );
       const row = {
         eventSequence: event.sequence,
+        terminalId: event.terminalId,
         producerAt,
         runtimeAt: Date.parse(event.at),
         replayResponseAt: read?.at,
@@ -156,4 +157,45 @@ export function terminalObservationRows(events, timing, ax) {
     }
   }
   return rows;
+}
+
+/** Eligibility requires recorded product visibility for the entire producer-to-frame interval. */
+export function terminalVisibilityCohorts(rows, timing) {
+  const transitions = timing.filter(
+    (entry) => entry.phase === 'view-active' || entry.phase === 'view-inactive',
+  );
+  return rows.map((row) => {
+    const own = transitions
+      .filter((entry) => entry.terminalId === row.terminalId)
+      .sort((a, b) => a.at - b.at);
+    const before = own.filter((entry) => entry.at <= row.producerAt).at(-1);
+    const throughFrame = own.filter(
+      (entry) => entry.at > row.producerAt && entry.at <= row.frameAt,
+    );
+    if (row.frameAt === undefined || !before)
+      return { ...row, visibilityCohort: 'unknown' };
+    if (before.phase === 'view-active' && throughFrame.length === 0)
+      return {
+        ...row,
+        visibilityCohort: 'continuously-visible',
+        visibilityEpoch: before.visibilityEpoch,
+      };
+    const reveal = throughFrame
+      .filter((entry) => entry.phase === 'view-active')
+      .at(-1);
+    if (
+      reveal &&
+      !throughFrame.some(
+        (entry) => entry.at > reveal.at && entry.phase === 'view-inactive',
+      )
+    )
+      return {
+        ...row,
+        visibilityCohort: 'hidden-recovery',
+        revealAt: reveal.at,
+        revealToFrameMs: row.frameAt - reveal.at,
+        visibilityEpoch: reveal.visibilityEpoch,
+      };
+    return { ...row, visibilityCohort: 'not-continuously-visible' };
+  });
 }

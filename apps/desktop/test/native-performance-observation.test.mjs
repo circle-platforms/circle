@@ -5,6 +5,7 @@ import {
   armNativeFeedback,
   captureNativeTranscriptAnchor,
   terminalObservationRows,
+  terminalVisibilityCohorts,
 } from './helpers/native-performance-observation.mjs';
 
 function renderer() {
@@ -218,4 +219,32 @@ test('actual UI parse/frame and AX observations remain distinct; missing hooks n
   );
   assert.equal(missing.frameAt, undefined);
   assert.equal('producerToFrameMs' in missing, false);
+});
+
+test('visibility eligibility preserves mixed raw and distinguishes reveal recovery', () => {
+  const rows = [
+    { terminalId: 't', producerAt: 20, frameAt: 40, producerToFrameMs: 20 },
+    { terminalId: 't', producerAt: 60, frameAt: 110, producerToFrameMs: 50 },
+    { terminalId: 't', producerAt: 120, frameAt: 150, producerToFrameMs: 30 },
+    { terminalId: 'other', producerAt: 120, frameAt: 150 },
+  ];
+  const copy = structuredClone(rows);
+  const result = terminalVisibilityCohorts(rows, [
+    { terminalId: 't', phase: 'view-active', at: 10, visibilityEpoch: 1 },
+    { terminalId: 't', phase: 'view-inactive', at: 50, visibilityEpoch: 2 },
+    { terminalId: 't', phase: 'view-active', at: 100, visibilityEpoch: 3 },
+  ]);
+  assert.deepEqual(rows, copy);
+  assert.deepEqual(
+    result.map((r) => r.visibilityCohort),
+    [
+      'continuously-visible',
+      'hidden-recovery',
+      'continuously-visible',
+      'unknown',
+    ],
+  );
+  assert.equal(result[1].revealToFrameMs, 10);
+  assert.equal(result[1].producerToFrameMs, 50);
+  assert.equal(result[2].visibilityEpoch, 3);
 });
