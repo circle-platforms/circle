@@ -3994,6 +3994,31 @@ pre {
   padding: 0 4px 0 10px;
   color: var(--muted);
   font-size: var(--ui-small);
+  border-radius: 6px;
+}
+/* The folder row answers to the pointer, and to a new session drafted in it. */
+.project-header:hover {
+  background: var(--hover);
+}
+.project-header.aimed {
+  background: var(--active);
+  color: var(--fg);
+}
+.project-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.project-name svg {
+  flex-shrink: 0;
+  opacity: 0.75;
 }
 .project-header span {
   overflow: hidden;

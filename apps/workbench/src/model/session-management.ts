@@ -66,7 +66,6 @@ export function sidebarProjects(
 
 /** How many recent rows show before "show more". Project groups keep their own count. */
 export const RECENT_SHOWN = 5;
-
 /**
  * When the session last had a message. Opening, selecting, or renaming does
  * not count: those do not change a message time.
@@ -126,6 +125,42 @@ export function orderedProjects(
   return sidebarProjects(workspaces, sessions).sort(
     (a, b) => activity(b.id) - activity(a.id) || a.name.localeCompare(b.name),
   );
+}
+
+/**
+ * The project folders the sidebar groups, plus one more: a project whose home
+ * composer is open with no session yet. A new session aims its project before it
+ * exists, and deleting a folder's last session leaves the home open on it; in both
+ * the folder stays on the bar, awaiting the first message.
+ */
+export function projectFolders(
+  workspaces: readonly Workspace[],
+  sessions: readonly Session[],
+  aimedId: string | null,
+): Workspace[] {
+  const listed = orderedProjects(workspaces, sessions);
+  if (!aimedId || listed.some((item) => item.id === aimedId)) return listed;
+  const aimed = workspaces.find(
+    (item) => item.id === aimedId && item.kind !== 'scratch',
+  );
+  return aimed ? [...listed, aimed] : listed;
+}
+
+/**
+ * Where the app goes after a session was deleted: the session the runtime moved
+ * to when it holds a conversation, else the home composer aimed at the deleted
+ * session's project. An auto-made empty session is never a destination: the
+ * person is drafting, and the first message reuses it.
+ */
+export function afterDeleteRoute(
+  sessions: readonly Session[],
+  activeSessionId: string,
+  deletedWorkspaceId: string,
+): { kind: 'session'; id: string } | { kind: 'home'; workspaceId: string } {
+  const active = sessions.find((item) => item.id === activeSessionId);
+  if (active && sessionHasContent(active))
+    return { kind: 'session', id: active.id };
+  return { kind: 'home', workspaceId: deletedWorkspaceId };
 }
 
 /** Newest sessions from every project and from no project. Archived and empty rows stay out. */
