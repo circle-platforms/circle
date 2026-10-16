@@ -596,8 +596,7 @@ test('a refresh that started earlier and finished later does not replace the obj
   const workspace = join(root, 'project');
   mkdirSync(workspace, { recursive: true });
   const server = await botServer(t);
-  const dev = await person(root, 'dev-home', workspace);
-  cleanup(t, () => dev.host.close());
+  const dev = await person(t, root, 'dev-home', workspace);
   await dev.run(`login ${server.url} developer`);
   const shown = () =>
     (
