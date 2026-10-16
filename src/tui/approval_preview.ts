@@ -42,11 +42,17 @@ export function approvalBody(
   }
   if (['write_file', 'edit_file', 'delete'].includes(name))
     return String(text(args, 'file_path', 'path') ?? '');
+  // A permission card has to show the call. Cutting a value with no mark hides
+  // what is being allowed; a long value keeps a head and says how much remains.
   return Object.entries(args)
-    .slice(0, 8)
-    .map(([key, value]) =>
-      `${key}=${JSON.stringify(value) ?? String(value)}`.slice(0, 200),
-    )
+    .slice(0, 12)
+    .map(([key, value]) => {
+      const text = `${key}=${JSON.stringify(value) ?? String(value)}`;
+      const limit = 800;
+      return text.length <= limit
+        ? text
+        : `${text.slice(0, limit)}… (${text.length - limit} more characters)`;
+    })
     .join('\n');
 }
 /** Lines with their endings, as Python's `splitlines(keepends=True)` cuts them. */

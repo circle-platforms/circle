@@ -2,6 +2,7 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Code } from 'lucide-react';
+import { splitAutolink } from '../../../../src/autolink.ts';
 import { copyText } from '../host';
 import { t } from '../i18n';
 import { highlight } from './highlight';
@@ -78,11 +79,54 @@ function CodeBlock({ language, code }: { language?: string; code: string }) {
   );
 }
 
+// GFM autolinks run on through fullwidth punctuation. Stop at it, and leave
+// the following characters as text.
+type MarkdownNode = {
+  type?: string;
+  url?: string;
+  value?: string;
+  children?: MarkdownNode[];
+};
+function remarkFullwidthAutolinks() {
+  const walk = (node: MarkdownNode) => {
+    const children = node.children;
+    if (!children) return;
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index]!;
+      if (
+        child.type === 'link' &&
+        child.children?.length === 1 &&
+        child.children[0]?.type === 'text'
+      ) {
+        const shown = String(child.children[0].value ?? '');
+        const href = String(child.url ?? '');
+        if (
+          shown &&
+          (shown === href ||
+            href === `http://${shown}` ||
+            href === `https://${shown}`)
+        ) {
+          const { url, rest } = splitAutolink(shown);
+          if (rest) {
+            child.children[0].value = url;
+            child.url = shown.startsWith('www.') ? `http://${url}` : url;
+            const next = children[index + 1];
+            if (next?.type === 'text')
+              next.value = rest + String(next.value ?? '');
+            else children.splice(index + 1, 0, { type: 'text', value: rest });
+          }
+        }
+      }
+      walk(child);
+    }
+  };
+  return (tree: MarkdownNode) => walk(tree);
+}
 export function Markdown({ text }: { text: string }) {
   return (
     <div className="markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkFullwidthAutolinks]}
         components={{
           a: ({ children, href }) => (
             <a href={href} target="_blank" rel="noreferrer">

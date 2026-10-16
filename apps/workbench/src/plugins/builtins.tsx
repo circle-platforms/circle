@@ -109,7 +109,7 @@ export const circlePlugins: WorkbenchPlugin[] = [
     ],
   },
   hubPlugin,
-  // B, C, D and E as hub holds them, shown while its extension is on.
+  // B, C, D and E as hub holds them. Each page is switched on by itself.
   ...livePlatformPlugins,
 ];
 // The earlier local previews of B, C, D and E, kept for the preview store's tests and as

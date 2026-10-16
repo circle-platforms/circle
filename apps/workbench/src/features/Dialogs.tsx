@@ -574,9 +574,9 @@ export function DialogHost({
   const selectedJob = snapshot.jobs.find((job) => job.id === selection);
   const selectedSecret = snapshot.interactions.find(
     (item) =>
-      item.sessionId === current.id &&
       item.kind === 'secret' &&
-      item.status === 'pending',
+      item.status === 'pending' &&
+      item.sessionId === current.id,
   );
   const nodes = current.messages.filter(
     (message) =>

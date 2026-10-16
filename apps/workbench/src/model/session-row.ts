@@ -27,6 +27,16 @@ export function afterSidebarPointerLeave(scrollClosed: boolean): {
   return { suppressCard: true, scrollClosed };
 }
 
+/** Moving onto the controls above the session list closes the hover card.
+ * It is not a scroll and does not blur the row, so a focused ⋯ tip stays open. */
+export function afterSidebarChromeMove(scrollClosed: boolean): {
+  suppressCard: true;
+  scrollClosed: boolean;
+  blurRow: false;
+} {
+  return { suppressCard: true, scrollClosed, blurRow: false };
+}
+
 /** Whether the session card may cover the page. A page change or a press
  * outside the sidebar sets `suppressed` until the pointer actually moves. */
 export function sessionCardVisible(input: {
@@ -49,6 +59,30 @@ export function sessionCardVisible(input: {
   )
     return false;
   return input.hovered || (input.focused && input.pointerIdle);
+}
+
+/** The pointer is over the sidebar controls above the session list. */
+export function pointerOnSidebarChrome(target: EventTarget | null): boolean {
+  return (
+    !!target &&
+    typeof Element !== 'undefined' &&
+    target instanceof Element &&
+    !!target.closest('.sidebar-primary, .sidebar-search, .brand')
+  );
+}
+
+/**
+ * A control whose tip is open runs its action on the pointer press.
+ * The click after that press is the same action. A click with no press,
+ * such as Enter on the focused control, still runs.
+ */
+export function runControlAction(input: {
+  kind: 'press' | 'click';
+  button: number;
+  actedOnPress: boolean;
+}): boolean {
+  if (input.kind === 'press') return input.button === 0;
+  return !input.actedOnPress;
 }
 
 /** A press opens its row only when it lands on that row.

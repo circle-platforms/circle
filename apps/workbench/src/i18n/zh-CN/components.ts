@@ -41,6 +41,8 @@ export const components: Record<string, string> = {
   'reload required': '需要重新加载',
   'native browser': '原生浏览器',
   'not opened': '未打开',
+  'signed in': '已登录',
+  'signed out': '已退出',
   'opens a page in the browser': '在浏览器中打开页面',
   'clicks in the browser': '在浏览器中点击',
   'types in the browser': '在浏览器中输入',

@@ -55,6 +55,7 @@ async function session(
     workspace?: string;
     headless?: boolean;
     modelOverride?: string;
+    integrations?: boolean;
   } = {},
 ) {
   const home = options.home ?? scratch(t);
@@ -76,6 +77,7 @@ async function session(
     model,
     headless: options.headless ?? true,
     modelOverride: options.modelOverride,
+    integrations: options.integrations,
   });
   const runtime = app.runtime!;
   cleanup(t, async () => {
@@ -214,6 +216,17 @@ test('/undo and /redo put the screen back; the model keeps every turn', async (t
   assert.equal(app.runtime!.session.id, first);
   assert.ok(!screen().includes('third question'));
   assert.ok(screen().includes('answer one'));
+});
+
+test('/hub before the extension is on names the switch and clears the box', async (t) => {
+  const { app, ui, key } = await session(t, [], { integrations: true });
+  ui.setDraft('/hub status');
+  await key('enter');
+  assert.equal(app.state.draft, '');
+  assert.equal(
+    app.state.flash,
+    'Unknown command /hub · turn it on with /extensions enable hub',
+  );
 });
 
 test('a mistyped command stays in the box with a suggestion; a space or a path sends it as text', async (t) => {
@@ -1211,6 +1224,8 @@ test('/compact, /mcp, /extensions, /trust and /reload report what they did', asy
   await app.submit('/mcp reload');
   assert.equal(app.state.notices.at(-1), 'MCP reloaded · 0 tools');
   await app.submit('/extensions');
+  // An untrusted folder is not scanned, so the bundled hub stays unlisted
+  // until the folder is trusted and integrations load.
   assert.match(app.state.notices.at(-1)!, /^No extensions\./);
   await app.submit('/trust');
   assert.equal(app.state.notices.at(-1), `Trusted ${workspace}`);

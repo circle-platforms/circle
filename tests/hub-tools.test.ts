@@ -73,6 +73,16 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
       effect: 'write',
       mode: 'sync',
       permission: 'knowledge.write',
+      approval: true,
+    },
+    {
+      name: 'notes.save',
+      description: 'Save a note on the server.',
+      inputSchema: { type: 'object', properties: {} },
+      effect: 'write',
+      mode: 'sync',
+      permission: 'notes.write',
+      approval: false,
     },
     {
       name: 'env.inventory',
@@ -330,13 +340,14 @@ test('after signing in, the connector offers the server tools to the model, runs
   await command.handler(`login ${server.url} tester`, context);
   assert.equal(
     lines.at(-1),
-    '  4 server tools available to the model from its next turn',
+    '  5 server tools available to the model from its next turn',
   );
   assert.deepEqual(names(), [
     'hub_tool_buildsite_command_tree',
     'hub_tool_docs_list',
     'hub_tool_env_inventory',
     'hub_tool_knowledge_claim_submit',
+    'hub_tool_notes_save',
   ]);
   assert.ok(
     toolChanges >= 4,
@@ -348,6 +359,16 @@ test('after signing in, the connector offers the server tools to the model, runs
   assert.equal(tool('hub_tool_docs_list').effect, 'read');
   assert.equal(tool('hub_tool_docs_list').approval, false);
   assert.equal(tool('hub_tool_knowledge_claim_submit').approval, true);
+  assert.equal(tool('hub_tool_notes_save').effect, 'unknown');
+  assert.equal(tool('hub_tool_notes_save').approval, false);
+  assert.match(
+    tool('hub_tool_notes_save').description,
+    /It changes something on the server\./,
+  );
+  assert.equal(
+    tool('hub_tool_notes_save').description.includes('asks first'),
+    false,
+  );
   assert.deepEqual(tool('hub_tool_docs_list').parameters.required, ['folder']);
   assert.match(
     tool('hub_tool_docs_list').description,
@@ -382,13 +403,13 @@ test('after signing in, the connector offers the server tools to the model, runs
   // Asking again with nothing changed costs one 304 and changes nothing.
   await command.handler('refresh', context);
   assert.equal(server.reads().notModified, 1);
-  assert.equal(names().length, 4);
+  assert.equal(names().length, 5);
 
   // A changed catalog removes what the server no longer offers.
   server.changeCatalog();
   await command.handler('tools', context);
   assert.ok(!names().includes('hub_tool_docs_list'));
-  assert.equal(names().length, 3);
+  assert.equal(names().length, 4);
   assert.ok(
     lines.some((line) =>
       /hub_tool_knowledge_claim_submit ← knowledge\.claim_submit · asks first/.test(
@@ -543,8 +564,12 @@ test('a trial records which server tools the model used, and /hub skill push sen
     ),
   );
 
-  // A clean trial record (declared tools only) goes through: 201, candidate.
+  // A record that was not pushed is kept, and said so, until --force.
   await command.handler('trial start', context);
+  assert.match(lines.at(-1)!, /2 unpushed trial calls would be dropped/);
+  await command.handler('trial start --force', context);
+  assert.match(lines.at(-1)!, /dropped 2 unpushed trial calls/);
+  // A clean trial record (declared tools only) goes through: 201, candidate.
   await call('hub_tool_docs_list', { folder: 'manuals', depth: 1 });
   await command.handler(
     'skill push skills/mindmap-compile --outputs cases.xlsx',
@@ -555,7 +580,7 @@ test('a trial records which server tools the model used, and /hub skill push sen
   assert.equal(
     sent.scopeHeader,
     'scp_lab',
-    'the project signed in to goes along',
+    'the scope signed in to goes along',
   );
   assert.deepEqual(
     sent.files.map((file: { path: string }) => file.path),
@@ -593,6 +618,30 @@ test('a trial records which server tools the model used, and /hub skill push sen
         .digest('hex'),
     },
   ]);
+  // --outputs is optional: the files skillpack.json declares are the default.
+  await command.handler('skill push skills/mindmap-compile', context);
+  assert.deepEqual(server.packs.at(-1)!.trial.outputs, sent.trial.outputs);
+  const missing = join(workspace, 'skills', 'missing-output');
+  mkdirSync(missing);
+  writeFileSync(join(missing, 'SKILL.md'), '# Missing\n');
+  writeFileSync(
+    join(missing, 'skillpack.json'),
+    JSON.stringify({
+      id: 'missing-output',
+      version: '0.1.0',
+      title: 'Missing',
+      owner: 'tester',
+      tools: ['docs.list'],
+      triggers: ['manual'],
+      inputs: {},
+      outputs: ['gone.xlsx'],
+      model: 'any',
+    }),
+  );
+  await assert.rejects(
+    async () => command.handler('skill push skills/missing-output', context),
+    /gone\.xlsx is not in the workspace/,
+  );
   assert.ok(
     lines.some((line) =>
       /✓ submitted mindmap-compile 0\.1\.0 · 3 files · 1 trial calls · skp_1/.test(
@@ -631,7 +680,22 @@ test('a trial records which server tools the model used, and /hub skill push sen
     ),
   );
   const runs = server.packs.length;
-  assert.equal(runs, 1);
+  assert.equal(runs, 2, 'a second push without --outputs still submits');
+  await assert.rejects(
+    async () =>
+      command.handler('skill push --outputs skills/mindmap-compile', context),
+    /--outputs needs a comma-separated file list/,
+  );
+  await assert.rejects(
+    async () =>
+      command.handler('skill push skills/mindmap-compile --outputs', context),
+    /--outputs needs a comma-separated file list/,
+  );
+  assert.equal(
+    server.packs.length,
+    runs,
+    '--outputs with no file list does not submit',
+  );
   await delay(300);
 });
 

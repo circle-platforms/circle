@@ -564,6 +564,44 @@ pre {
   align-items: center;
   gap: 8px;
 }
+.hub-actions {
+  margin: 18px 0 0;
+}
+.hub-page > .extension-list,
+.hub-page > .form-stack,
+.hub-page > .hub-log-block,
+.hub-page > .panel-note {
+  margin-top: 28px;
+}
+.hub-page .form-stack > .button,
+.hub-page .form-stack > .inline-actions {
+  align-self: flex-start;
+}
+.hub-log {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: inherit;
+}
+.hub-log li {
+  margin: 0 0 10px;
+  font-size: var(--ui-small);
+  line-height: 1.55;
+}
+.hub-log li p {
+  margin: 0 0 6px;
+}
+.hub-inbox-flash {
+  animation: hub-inbox-flash 1.1s ease;
+}
+@keyframes hub-inbox-flash {
+  0% {
+    background: var(--active);
+  }
+  100% {
+    background: transparent;
+  }
+}
 .resize-handle {
   width: 5px;
   flex-shrink: 0;
@@ -1475,6 +1513,9 @@ pre {
   overflow-wrap: anywhere;
   flex: 1;
   color: var(--secondary);
+}
+.facts-note dd {
+  flex: none;
 }
 .context-source {
   border: 1px solid var(--border);
@@ -2578,7 +2619,8 @@ pre {
   color: var(--fg);
 }
 /* Read-only tips must not block the control beneath Radix's positioning box. */
-[data-radix-popper-content-wrapper]:has(> .tooltip) {
+[data-radix-popper-content-wrapper]:has(.tooltip),
+[data-radix-popper-content-wrapper]:has(.session-hover) {
   pointer-events: none !important;
 }
 .tooltip {

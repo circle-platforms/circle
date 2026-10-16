@@ -569,10 +569,16 @@ try {
       0,
     );
   await page
-    .getByRole('checkbox', { name: 'enable files interface', exact: true })
+    .getByRole('checkbox', {
+      name: 'enable file and diff inspector interface',
+      exact: true,
+    })
     .uncheck();
   await page
-    .getByRole('checkbox', { name: 'enable files interface', exact: true })
+    .getByRole('checkbox', {
+      name: 'enable file and diff inspector interface',
+      exact: true,
+    })
     .check();
   assert.equal(
     await page.evaluate(() =>

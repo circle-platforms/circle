@@ -8,6 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
+import { HUB_ZH } from '../src/hub_text.js';
 import { ExtensionSecrets } from '../src/extension_secrets.js';
 import { submitAnswer } from '../src/secret_prompt.js';
 
@@ -34,8 +35,13 @@ async function fakeServer(
   beforeDownload?: () => Promise<void>,
 ) {
   const workbook = Buffer.from('PK\u0003\u0004 synthetic workbook bytes');
-  const seen: { method: string; path: string; auth?: string; body: Buffer }[] =
-    [];
+  const seen: {
+    method: string;
+    path: string;
+    auth?: string;
+    body: Buffer;
+    pack?: string | string[];
+  }[] = [];
   const keys = new Map<string, string>();
   let delivered = false;
   let looks = 0;
@@ -48,6 +54,7 @@ async function fakeServer(
       path: url.pathname,
       auth: request.headers.authorization,
       body,
+      pack: request.headers['x-capability-pack-id'],
     });
     const send = (status: number, value: unknown) => {
       response.writeHead(status, { 'content-type': 'application/json' });
@@ -473,6 +480,17 @@ test('the bundled hub connector signs in, uploads, submits, follows and saves a 
     /● signed in to .* as tester · scope scp_lab · api 1\.0\.0/,
   );
   assert.equal(await new ExtensionSecrets(home, 'hub').get('token'), TOKEN);
+  assert.equal(
+    JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8')).extensions.hub
+      .url,
+    server.url,
+  );
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(home, 'extension_data', 'hub', 'config.json'), 'utf8'),
+    ).url,
+    server.url,
+  );
 
   await command.handler('submit mindmap-compile LBX-HA.xmind', context);
   await until(() => lines.some((line) => line.startsWith('✓ saved')));
@@ -490,6 +508,7 @@ test('the bundled hub connector signs in, uploads, submits, follows and saves a 
     sourceSha256: createHash('sha256').update(mindmap).digest('hex'),
   });
   assert.equal(upload.auth, `Bearer ${TOKEN}`);
+  assert.equal(upload.pack, 'mindmap-compile');
   assert.deepEqual(
     readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
@@ -570,6 +589,8 @@ test('the bundled hub connector signs in, uploads, submits, follows and saves a 
   await command.handler('logout', context);
   await until(() => ours()?.text === 'hub · signed out');
   assert.equal(await new ExtensionSecrets(home, 'hub').get('token'), undefined);
+  await command.handler('tools', context);
+  assert.match(lines.at(-1)!, /not signed in: \/hub login/);
   await assert.rejects(
     async () => command.handler('packs', context),
     /not signed in/,
@@ -889,8 +910,9 @@ test('the connector reads work, execution, knowledge and methods from the server
   await command.handler('reconcile task_one', context);
   assert.match(
     lines.at(-1)!,
-    /task_one · reconcile · .*No independently observed receipt/,
+    /^reconcile task_one\n {2}.*No independently observed receipt/,
   );
+  assert.equal(lines.at(-1)!.includes('{'), false);
   // Naming the operation makes it a real reconciliation request.
   await command.handler('reconcile task_one op_9', context);
   assert.deepEqual(
@@ -902,7 +924,7 @@ test('the connector reads work, execution, knowledge and methods from the server
     ),
     { operationId: 'op_9' },
   );
-  assert.match(lines.at(-1)!, /task_one · reconcile · .*accepted/);
+  assert.match(lines.at(-1)!, /^✓ reconcile task_one · .*accepted/);
   assert.ok(!JSON.stringify(host.view('hub')).includes(TOKEN));
 });
 
@@ -1228,4 +1250,1070 @@ test('a failed flow shows the rejected step and the bounded cause', async (t) =>
     ),
   );
   await delay(100);
+});
+
+test('/hub alone is a short status, and /hub help lines the descriptions up', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler('', context);
+  assert.match(lines.at(-1)!, /http:\/\/127\.0\.0\.1:7410/);
+  assert.match(lines.at(-1)!, /not signed in/);
+  assert.match(lines.at(-1)!, /\/hub help lists the commands/);
+  assert.equal(lines.at(-1)!.includes('/hub bot list'), false);
+  await command.handler('help', context);
+  const help = lines.at(-1)!;
+  const column = (prefix: string) => {
+    const line = help.split('\n').find((row) => row.startsWith(prefix + ' '))!;
+    return prefix.length + line.slice(prefix.length).search(/\S/);
+  };
+  assert.equal(
+    column('/hub approve <id> <approval>'),
+    column('/hub reconcile <id> [op]'),
+  );
+  assert.match(help, /revoke the token at the server, then forget it/);
+  assert.match(help, /\/hub bot list/);
+});
+
+test('a password given with the command is not asked for and does not appear in the reply', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const prompts: string[] = [];
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => {
+      prompts.push(request.question);
+      await submitAnswer(home, request.id, PASSWORD);
+    },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  await host
+    .commands()
+    .get('hub')!
+    .handler(`login ${server.url} tester`, {
+      workspace,
+      toast: (text) => lines.push(text),
+      append: (text) => lines.push(text),
+      sendUserMessage: () => {},
+      secret: PASSWORD,
+    });
+  assert.equal(prompts.length, 0);
+  assert.match(lines.at(-1)!, /scope scp_lab/);
+  assert.equal(lines.join('\n').includes(PASSWORD), false);
+  assert.equal(JSON.stringify(host.view('hub')).includes(PASSWORD), false);
+});
+
+test('a refused payload names the fields instead of a raw code dump', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = createServer((_request, response) => {
+    response.writeHead(400, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        status: 'failed',
+        error: {
+          code: 'INVALID_PAYLOAD',
+          message: 'invalid',
+          details: {
+            issues: [
+              {
+                path: ['manifest', 'outputs'],
+                code: 'too_small',
+                message: 'too small',
+              },
+            ],
+          },
+        },
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true, url: `http://127.0.0.1:${port}` } },
+    secret: async (request) => submitAnswer(home, request.id, 'nope'),
+  }).load();
+  cleanup(t, () => host.close());
+  await assert.rejects(
+    async () =>
+      host
+        .commands()
+        .get('hub')!
+        .handler('login tester', {
+          workspace,
+          toast: () => {},
+          append: () => {},
+          sendUserMessage: () => {},
+        }),
+    /INVALID_PAYLOAD[\s\S]*manifest\.outputs[\s\S]*skillpack\.json needs outputs/,
+  );
+});
+
+test('a decision conflict says what collided, and review, audit and modules list the ids', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: { token: TOKEN, tokenType: 'Bearer', scopes: ['scp_lab'] },
+      });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/tasks/task_ask/status')
+      return send(200, {
+        data: {
+          taskId: 'task_ask',
+          phase: 'waiting-review',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [
+            {
+              requestId: 'apr_9',
+              inputRevisionId: 'inrev_1',
+              status: 'open',
+              kind: 'approval',
+              question: 'Approve changesets.apply',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_ask/input')
+      return send(409, {
+        status: 'failed',
+        error: {
+          code: 'DECISION_CONFLICT',
+          message: 'Response rejected: missing-request',
+          details: { outcome: 'missing-request' },
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_done/status')
+      return send(200, {
+        data: {
+          taskId: 'task_done',
+          phase: 'running',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [
+            {
+              requestId: 'pin_1',
+              inputRevisionId: 'inrev_1',
+              status: 'open',
+              kind: 'clarification',
+              question: 'which build?',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_done/input')
+      return send(409, {
+        status: 'failed',
+        error: {
+          code: 'DECISION_CONFLICT',
+          message: 'Response rejected: already-answered',
+          details: { outcome: 'already-answered' },
+        },
+      });
+    if (url.pathname === '/v1/tasks' && url.searchParams.get('view') === 'page')
+      return send(200, {
+        data: {
+          total: 1,
+          items: [
+            {
+              taskId: 'task_ask',
+              phase: 'waiting-review',
+              title: 'approve skill pack',
+            },
+          ],
+          cursor: null,
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_ask/approvals')
+      return send(200, {
+        data: [{ approvalId: 'apr_9', status: 'open' }],
+      });
+    if (url.pathname === '/v1/admin/audit')
+      return send(200, {
+        data: [
+          {
+            id: 4,
+            principalId: 'prn_approver',
+            scopeId: 'scp_lab',
+            action: 'approval.decision',
+            detail: { approvalId: 'apr_9', outcome: 'approved' },
+            createdAt: '2026-10-16T00:00:00.000Z',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/skillpacks')
+      return send(200, {
+        data: [
+          {
+            skillPackId: 'skp_1',
+            manifest: { id: 'mindmap-compile', version: '0.1.0' },
+            status: 'registered',
+            lifecycle: 'approved',
+            statusLabel: 'approved',
+            assetId: 'ast_pack',
+            approvalTaskId: 'task_ask',
+          },
+          {
+            skillPackId: 'skp_old',
+            manifest: { id: 'old-pack', version: '0.1.0' },
+            status: 'registered',
+            assetId: 'ast_pack',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/assets/ast_pack')
+      return send(200, {
+        data: { assetId: 'ast_pack', lifecycle: 'approved' },
+      });
+    if (url.pathname === '/v1/assets' && url.searchParams.get('kind'))
+      return send(200, { data: { items: [], total: 0 } });
+    send(404, {
+      status: 'failed',
+      error: { code: 'TARGET_NOT_FOUND', message: 'missing' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port} tester`, context);
+  await assert.rejects(
+    async () => command.handler('respond task_ask yes', context),
+    /waiting for a decision[\s\S]*\/hub approve task_ask apr_9/,
+  );
+  await assert.rejects(
+    async () => command.handler('respond task_done 1.0', context),
+    /already has a decision[\s\S]*already-answered[\s\S]*\/hub task/,
+  );
+  await command.handler('review', context);
+  assert.match(
+    lines.at(-1)!,
+    /task_ask · waiting-review[\s\S]*\/hub approve task_ask apr_9/,
+  );
+  await command.handler('audit', context);
+  assert.match(lines.at(-1)!, /approval\.decision · prn_approver · scp_lab/);
+  await command.handler('modules', context);
+  assert.match(
+    lines.at(-1)!,
+    /skp_1 · mindmap-compile 0\.1\.0 · approved · lifecycle approved[\s\S]*skp_old · old-pack 0\.1\.0 · approved \(server status registered\)/,
+  );
+});
+
+test('inbox, a content view and a rejection reason use the general approval route when the server has it', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const posts: { path: string; body: string }[] = [];
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const body = await read(request);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (request.method === 'POST')
+      posts.push({ path: url.pathname, body: body.toString() });
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: { token: TOKEN, tokenType: 'Bearer', scopes: ['scp_lab'] },
+      });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/approvals/pending')
+      return send(200, {
+        data: [
+          {
+            kind: 'governance',
+            requestId: 'aprq_1',
+            title: 'export the register',
+          },
+          {
+            kind: 'change-set',
+            requestId: 'apr_9',
+            taskId: 'task_ask',
+            approvalId: 'apr_9',
+            title: 'Review asset change set',
+            asset: {
+              name: 'mindmap',
+              kind: 'skill-package',
+              titleZh: '审核资产变更集',
+            },
+          },
+        ],
+      });
+    if (url.pathname === '/v1/approval-requests/aprq_1')
+      return send(200, {
+        data: {
+          requestId: 'aprq_1',
+          status: 'open',
+          title: 'export the register',
+        },
+      });
+    if (url.pathname === '/v1/approval-requests/aprq_1/content') {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.end('the register itself');
+      return;
+    }
+    if (url.pathname === '/v1/approval-requests/aprq_1/decisions')
+      return send(200, {
+        data: {
+          requestId: 'aprq_1',
+          status: body.toString().includes('"approve":false')
+            ? 'declined'
+            : 'approved',
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_ask/status')
+      return send(200, {
+        data: {
+          taskId: 'task_ask',
+          phase: 'waiting-review',
+          title: 'approve skill pack',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [
+            {
+              requestId: 'pin_decision',
+              inputRevisionId: 'inrev_1',
+              status: 'open',
+              kind: 'decision',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_ask/approvals')
+      return send(200, {
+        data: [
+          {
+            approvalId: 'apr_9',
+            status: 'open',
+            inputRevisionId: 'inrev_1',
+            targetIdentity: 'SHA256:target',
+            actionDigest: 'd'.repeat(64),
+            action: { name: 'changesets.apply', target: 'ast_pack' },
+          },
+        ],
+      });
+    if (url.pathname === '/v1/tasks/task_ask/approvals/apr_9')
+      return send(200, { data: { status: 'declined' } });
+    if (url.pathname === '/v1/tasks/task_ask/input')
+      return send(409, {
+        status: 'failed',
+        error: { code: 'DECISION_CONFLICT', message: 'should not be posted' },
+      });
+    if (url.pathname === '/v1/skillpacks') return send(200, { data: [] });
+    send(404, {
+      status: 'failed',
+      error: { code: 'TARGET_NOT_FOUND', message: 'missing' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  const prompts: string[] = [];
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => {
+      prompts.push(`${request.mask ? 'masked' : 'open'}:${request.question}`);
+      await submitAnswer(
+        home,
+        request.id,
+        request.mask === false ? 'ada' : PASSWORD,
+      );
+    },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port}`, context);
+  assert.match(prompts.join('\n'), /open:User on http:\/\/127\.0\.0\.1:\d+/);
+  assert.match(prompts.join('\n'), /masked:Password for ada/);
+  assert.match(
+    lines.join('\n'),
+    /signed in to http:\/\/127\.0\.0\.1:\d+ as ada/,
+  );
+  await command.handler('approve', context);
+  await until(() => {
+    const inbox = (host.view('hub') as { inbox?: unknown[] } | undefined)
+      ?.inbox;
+    return Array.isArray(inbox) && inbox.length === 2;
+  });
+  const inbox = (host.view('hub') as { inbox: Record<string, string>[] }).inbox;
+  assert.equal(inbox[0]!.requestId, 'aprq_1');
+  assert.equal(inbox[0]!.title, 'export the register');
+  assert.equal(inbox[1]!.taskId, 'task_ask');
+  assert.equal(inbox[1]!.titleZh, '审核资产变更集');
+  assert.equal(
+    inbox[1]!.title,
+    'Review asset change set · mindmap skill-package',
+  );
+  const logged = lines.length;
+  await command.handler('inbox --quiet', context);
+  assert.equal(lines.length, logged);
+  assert.equal((host.view('hub') as { inbox: unknown[] }).inbox.length, 2);
+  assert.match(
+    lines.at(-1)!,
+    /governance aprq_1 · export the register[\s\S]*\/hub show aprq_1[\s\S]*\/hub approve aprq_1[\s\S]*change-set task_ask · apr_9 · Review asset change set · mindmap/,
+  );
+  await command.handler('show 1', context);
+  assert.match(
+    lines.slice(-4).join('\n'),
+    /the register itself[\s\S]*\/hub approve aprq_1/,
+  );
+  await assert.rejects(
+    async () => command.handler('reject aprq_1', context),
+    /a rejection needs a reason/,
+  );
+  assert.equal(
+    posts.some((post) => post.path.endsWith('/decisions')),
+    false,
+  );
+  await command.handler('reject aprq_1 out of scope', context);
+  assert.match(lines.at(-1)!, /rejected aprq_1 · declined · out of scope/);
+  assert.deepEqual(
+    JSON.parse(posts.find((post) => post.path.endsWith('/decisions'))!.body),
+    { approve: false, reason: 'out of scope' },
+  );
+  await command.handler('approve aprq_1', context);
+  const approved = posts.filter((post) => post.path.endsWith('/decisions'));
+  assert.deepEqual(JSON.parse(approved.at(-1)!.body), { approve: true });
+  await assert.rejects(
+    async () => command.handler('respond task_ask yes', context),
+    /not waiting for a text answer \(decision\)/,
+  );
+  assert.equal(
+    posts.some((post) => post.path.endsWith('/input')),
+    false,
+  );
+  await assert.rejects(
+    async () => command.handler('reject task_ask apr_9', context),
+    /a rejection needs a reason: \/hub reject task_ask apr_9/,
+  );
+  await command.handler('reject task_ask apr_9 need more material', context);
+  const classic = JSON.parse(
+    posts.find((post) => post.path.endsWith('/approvals/apr_9'))!.body,
+  );
+  assert.equal(classic.approve, false);
+  assert.equal(classic.reason, 'need more material');
+  assert.match(lines.at(-1)!, /rejected apr_9 for task_ask/);
+});
+
+test('a governance request, single sign-on, manifest errors and a knowledge snapshot', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, 'notes.txt'), 'hello file');
+  const redirectPort = await new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const port = (probe.address() as AddressInfo).port;
+      probe.close(() => resolve(port));
+    });
+  });
+  const state = 's'.repeat(24);
+  const posts: { path: string; body: string }[] = [];
+  let ssoPaste = false;
+  let packsMode: 'titles' | 'errors' = 'titles';
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const body = await read(request);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (request.method === 'POST')
+      posts.push({ path: url.pathname, body: body.toString() });
+    if (url.pathname === '/v1/auth/oidc/start') {
+      const redirect = ssoPaste
+        ? 'http://127.0.0.1:9/cb'
+        : `http://127.0.0.1:${redirectPort}/cb`;
+      return send(200, {
+        data: {
+          authorizationUrl: `http://127.0.0.1/authorize?state=${state}&redirect_uri=${encodeURIComponent(redirect)}`,
+          state,
+        },
+      });
+    }
+    if (url.pathname === '/v1/auth/oidc/callback') {
+      const input = JSON.parse(body.toString());
+      assert.equal(input.code, 'synthetic-code');
+      assert.equal(input.state, state);
+      return send(200, {
+        data: {
+          token: TOKEN,
+          tokenType: 'Bearer',
+          scopes: ['scp_lab'],
+          principalId: 'prn_ada',
+        },
+      });
+    }
+    if (url.pathname === '/v1/auth/logout') return send(200, { data: {} });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/packs' && packsMode === 'errors')
+      return send(400, {
+        status: 'failed',
+        error: {
+          code: 'INVALID_PAYLOAD',
+          message: 'first only',
+          messageZh: '清单有多处错误',
+          details: {
+            manifestErrors: [
+              { code: 'MISSING_OUTPUT', message: 'outputs is empty' },
+              { code: 'BAD_TOOL', message: 'tool name is unknown' },
+            ],
+          },
+        },
+      });
+    if (url.pathname === '/v1/packs')
+      return send(200, {
+        data: [
+          {
+            capabilityPackId: 'hub-task',
+            version: '1.0.0',
+            title: 'Create a governed task',
+            titleZh: '创建受治理的任务',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/approval-requests' && request.method === 'POST')
+      return send(201, {
+        data: { requestId: 'gov_1', taskId: 'task_gov', status: 'open' },
+      });
+    if (url.pathname === '/v1/scopes/scp_lab/approval-roles')
+      return send(201, {
+        data: { changeSetId: 'cst_1', status: 'open' },
+      });
+    if (url.pathname === '/v1/knowledge/search')
+      return send(200, {
+        data: {
+          items: [
+            {
+              recordId: 'knr_1',
+              snapshotId: 'snap_9',
+              payload: { subject: 'the register' },
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/skillpacks')
+      return send(200, {
+        data: [
+          {
+            skillPackId: 'skp_1',
+            manifest: { id: 'mindmap', version: '0.1.0' },
+            status: 'registered',
+            statusLabel: 'approved',
+            lifecycle: 'approved',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/tasks/submit')
+      return send(202, {
+        data: {
+          taskId: 'task_hub',
+          phase: 'delivered',
+          inputRevisionId: 'inrev_hub',
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_hub/status')
+      return send(200, {
+        data: {
+          taskId: 'task_hub',
+          phase: 'delivered',
+          inputRevisionId: 'inrev_hub',
+          title: 'hub-task',
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_hub/events')
+      return send(200, { data: { events: [] } });
+    if (url.pathname === '/v1/tasks/task_hub/result')
+      return send(200, {
+        data: { status: 'succeeded', phase: 'delivered', artifacts: [] },
+      });
+    if (url.pathname === '/v1/admin/audit/export') {
+      response.writeHead(200, { 'content-type': 'text/csv' });
+      response.end('id,action\n4,governance.decision\n');
+      return;
+    }
+    send(404, {
+      status: 'failed',
+      error: { code: 'TARGET_NOT_FOUND', message: 'missing' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  let redirected = false;
+  const prompts: string[] = [];
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (ask) => {
+      prompts.push(ask.question);
+      await submitAnswer(
+        home,
+        ask.id,
+        `http://127.0.0.1:9/cb?code=synthetic-code&state=${state}`,
+      );
+    },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => {
+      lines.push(text);
+      const found = /redirect_uri=(\S+)/.exec(text);
+      if (found && !ssoPaste && !redirected) {
+        redirected = true;
+        void fetch(
+          `${decodeURIComponent(found[1]!)}?code=synthetic-code&state=${state}`,
+        );
+      }
+    },
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login --sso http://127.0.0.1:${port}`, context);
+  assert.equal(prompts.length, 0);
+  assert.match(lines.join('\n'), /Open this address to sign in/);
+  assert.match(
+    lines.join('\n'),
+    /signed in to http:\/\/127\.0\.0\.1:\d+ as prn_ada/,
+  );
+  await command.handler(
+    'request export the register --text the register itself --summary quarterly --role legal --role security:2',
+    context,
+  );
+  const submitted = JSON.parse(
+    posts.find((post) => post.path === '/v1/approval-requests')!.body,
+  );
+  assert.equal(submitted.scopeId, 'scp_lab');
+  assert.equal(submitted.title, 'export the register');
+  assert.equal(submitted.summary, 'quarterly');
+  assert.equal(submitted.content.text, 'the register itself');
+  assert.deepEqual(submitted.policy.roles, [
+    { role: 'legal', count: 1 },
+    { role: 'security', count: 2 },
+  ]);
+  assert.match(String(submitted.idempotencyKey), /^[0-9a-f-]{36}$/);
+  assert.match(lines.at(-1)!, /gov_1 · open · task task_gov/);
+  await assert.rejects(
+    async () =>
+      command.handler('request nope --text x --role captain', context),
+    /an approval role is manager/,
+  );
+  await command.handler('request from a file --file notes.txt', context);
+  const filed = JSON.parse(
+    posts.filter((post) => post.path === '/v1/approval-requests').at(-1)!.body,
+  );
+  assert.equal(filed.content.fileName, 'notes.txt');
+  assert.equal(filed.content.text, 'hello file');
+  assert.deepEqual(filed.policy.roles, [{ role: 'manager', count: 1 }]);
+  await command.handler('roles prn_bob legal', context);
+  const role = JSON.parse(
+    posts.find((post) => post.path.endsWith('/approval-roles'))!.body,
+  );
+  assert.deepEqual(
+    { principalId: role.principalId, role: role.role },
+    { principalId: 'prn_bob', role: 'legal' },
+  );
+  assert.match(lines.at(-1)!, /proposed legal for prn_bob · cst_1 · open/);
+  await command.handler('search the register', context);
+  assert.match(lines.at(-1)!, /knr_1 · snapshot snap_9 · the register/);
+  await command.handler('skill list', context);
+  assert.match(
+    lines.at(-1)!,
+    /mindmap 0\.1\.0 · approved · lifecycle approved/,
+  );
+  await command.handler('submit hub-task', context);
+  const task = JSON.parse(
+    posts.find((post) => post.path === '/v1/tasks/submit')!.body,
+  );
+  assert.equal(task.capabilityPackId, 'hub-task');
+  assert.deepEqual(task.input, { kind: 'governance-request' });
+  assert.equal(
+    posts.some((post) => post.path === '/v1/sources'),
+    false,
+  );
+  assert.match(lines.join('\n'), /accepted task_hub/);
+  await until(() =>
+    lines.some((line) => /task_hub delivered no files/.test(line)),
+  );
+  await command.handler('audit --format csv', context);
+  assert.match(lines.at(-1)!, /governance\.decision/);
+  const savedLanguage = process.env.LANGUAGE;
+  t.after(() => {
+    if (savedLanguage === undefined) delete process.env.LANGUAGE;
+    else process.env.LANGUAGE = savedLanguage;
+  });
+  process.env.LANGUAGE = 'zh_CN.UTF-8';
+  await command.handler('packs', context);
+  assert.match(lines.at(-1)!, /创建受治理的任务/);
+  assert.equal(lines.at(-1)!.includes('Create a governed task'), false);
+  packsMode = 'errors';
+  await assert.rejects(
+    async () => command.handler('packs', context),
+    (error: Error) => {
+      assert.match(error.message, /清单有多处错误/);
+      assert.match(error.message, /MISSING_OUTPUT: outputs is empty/);
+      assert.match(error.message, /BAD_TOOL: tool name is unknown/);
+      assert.equal(error.message.includes('first only'), false);
+      return true;
+    },
+  );
+  delete process.env.LANGUAGE;
+  await command.handler('logout', context);
+  ssoPaste = true;
+  await command.handler(`login --sso http://127.0.0.1:${port}`, context);
+  assert.match(prompts.join('\n'), /Paste the address the browser opened/);
+  assert.match(
+    lines.slice(-4).join('\n'),
+    /signed in to http:\/\/127\.0\.0\.1:\d+ as prn_ada/,
+  );
+});
+
+test('knowledge search, sharing, review and publish use the hub routes', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, 'note.txt'), 'shared text');
+  const posts: { path: string; body: string; query: string }[] = [];
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const body = await read(request);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (request.method === 'POST')
+      posts.push({
+        path: url.pathname,
+        body: body.toString(),
+        query: url.search,
+      });
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: {
+          token: TOKEN,
+          scopes: ['scp_lab'],
+          principalId: 'prn_ada',
+        },
+      });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/knowledge/search') {
+      posts.push({ path: url.pathname, body: '', query: url.search });
+      return send(200, {
+        data: {
+          items: [
+            {
+              recordId: 'knr_claim',
+              snapshotId: 'knr_snap',
+              payload: { subject: 'the register' },
+            },
+          ],
+        },
+      });
+    }
+    if (url.pathname === '/v1/knowledge/sources')
+      return send(201, { data: { recordId: 'knr_src' } });
+    if (url.pathname.endsWith('/request-review'))
+      return send(200, {
+        data: { recordId: 'knr_claim', reviewerId: 'prn_bob' },
+      });
+    if (url.pathname === '/v1/knowledge/reviews/knr_claim')
+      return send(200, {
+        data: {
+          claim: {
+            recordId: 'knr_claim',
+            state: 'candidate',
+            visibility: 'personal',
+            payload: { subject: 'the register' },
+          },
+          records: [{ recordId: 'knr_claim' }],
+        },
+      });
+    if (url.pathname.endsWith('/review'))
+      return send(200, {
+        data: {
+          claim: { recordId: 'knr_claim', state: 'reviewed' },
+          snapshot: { recordId: 'knr_snap' },
+        },
+      });
+    if (url.pathname === '/v1/knowledge/snapshots')
+      return send(201, { data: { recordId: 'knr_snap' } });
+    send(404, {
+      status: 'failed',
+      error: { code: 'TARGET_NOT_FOUND', message: 'missing' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (ask) => {
+      await submitAnswer(home, ask.id, PASSWORD);
+    },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+    secret: PASSWORD,
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port} developer`, context);
+  await command.handler('knowledge search the register --mode exact', context);
+  assert.match(lines.at(-1)!, /knr_claim · snapshot knr_snap · the register/);
+  await until(() => {
+    const found = (
+      host.view('hub') as
+        { knowledge?: { items?: { recordId?: string }[] } } | undefined
+    )?.knowledge;
+    return found?.items?.[0]?.recordId === 'knr_claim';
+  });
+  assert.equal(
+    (
+      host.view('hub') as {
+        knowledge: {
+          query: string;
+          items: { snapshotId: string; title: string }[];
+        };
+      }
+    ).knowledge.items[0]!.snapshotId,
+    'knr_snap',
+  );
+  assert.match(
+    posts.find((post) => post.path === '/v1/knowledge/search')!.query,
+    /mode=exact/,
+  );
+  await command.handler(
+    'knowledge share lab-notes --file note.txt --readers prn_bob,* --promote',
+    context,
+  );
+  const shared = JSON.parse(
+    posts.find((post) => post.path === '/v1/knowledge/sources')!.body,
+  );
+  assert.equal(shared.scopeId, 'scp_lab');
+  assert.equal(shared.sourceId, 'lab-notes');
+  assert.equal(shared.knowledgeCategory, 'consolidated');
+  assert.equal(shared.sourceType, 'document');
+  assert.deepEqual(shared.acl, {
+    sourceReaders: ['prn_bob', '*'],
+    platformReaders: ['prn_bob', '*'],
+  });
+  assert.deepEqual(shared.sharing, { allowed: true, teamPromotion: true });
+  assert.equal(
+    Buffer.from(shared.contentBase64, 'base64').toString(),
+    'shared text',
+  );
+  assert.equal(shared.sha256, sha256(Buffer.from('shared text')));
+  assert.equal(shared.revision.length, 32);
+  assert.match(lines.at(-1)!, /shared lab-notes · knr_src/);
+  await assert.rejects(
+    async () =>
+      command.handler('knowledge acl lab-notes --file note.txt', context),
+    /name who may read/,
+  );
+  await command.handler('knowledge review knr_claim', context);
+  assert.match(
+    lines.at(-1)!,
+    /knr_claim · candidate · personal · the register/,
+  );
+  await command.handler('knowledge review request knr_claim prn_bob', context);
+  assert.equal(
+    JSON.parse(
+      posts.find((post) => post.path.endsWith('/request-review'))!.body,
+    ).reviewerId,
+    'prn_bob',
+  );
+  await command.handler(
+    'knowledge review knr_claim approve --reason checked --promote',
+    context,
+  );
+  const decision = JSON.parse(
+    posts.find((post) => post.path.endsWith('/claims/knr_claim/review'))!.body,
+  );
+  assert.equal(decision.decision, 'approve');
+  assert.equal(decision.promote, true);
+  assert.equal(decision.reason, 'checked');
+  assert.match(
+    lines.at(-1)!,
+    /reviewed knr_claim · reviewed · snapshot knr_snap/,
+  );
+  await command.handler('knowledge publish --expect none', context);
+  const published = JSON.parse(
+    posts.find((post) => post.path === '/v1/knowledge/snapshots')!.body,
+  );
+  assert.equal(published.expectedSnapshotId, null);
+  assert.equal(published.knowledgeCategory, 'consolidated');
+  assert.match(lines.at(-1)!, /published snapshot knr_snap · consolidated/);
+});
+
+test('a server that cannot be reached is named without the transport error', async (t) => {
+  assert.equal(HUB_ZH['cannot reach the server {url}'], '无法连接服务器 {url}');
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+  }).load();
+  cleanup(t, () => host.close());
+  const context = {
+    workspace,
+    toast: () => {},
+    append: () => {},
+    sendUserMessage: () => {},
+    secret: PASSWORD,
+  };
+  await assert.rejects(
+    async () => {
+      await host
+        .commands()
+        .get('hub')!
+        .handler('login http://127.0.0.1:1 ada', context);
+    },
+    (error: Error) => {
+      assert.match(
+        error.message,
+        /cannot reach the server http:\/\/127\.0\.0\.1:1|无法连接服务器 http:\/\/127\.0\.0\.1:1/,
+      );
+      assert.equal(error.message.includes('fetch failed'), false);
+      return true;
+    },
+  );
+  await until(() => {
+    const view = host.view('hub') as
+      { url?: string; username?: string } | undefined;
+    return view?.username === 'ada' && view.url === 'http://127.0.0.1:1';
+  });
 });
