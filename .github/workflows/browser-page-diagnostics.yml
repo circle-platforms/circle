@@ -11,11 +11,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { config: cold-none, replica: 1, iterations: '12', drop: 'none' }
-          - { config: cold-none, replica: 2, iterations: '12', drop: 'none' }
-          - { config: cold-app, replica: 1, iterations: '10', drop: 'app' }
-          - { config: cold-system, replica: 1, iterations: '10', drop: 'system' }
-          - { config: warm, replica: 1, iterations: '6', drop: '' }
+          - { config: stacks, replica: 1, iterations: '3', prepare: 'stacks' }
+          - { config: stacks, replica: 2, iterations: '3', prepare: 'stacks' }
+          - { config: stacks, replica: 3, iterations: '3', prepare: 'stacks' }
+          - { config: fontconfig, replica: 1, iterations: '3', prepare: 'fontconfig' }
+          - { config: fontconfig, replica: 2, iterations: '3', prepare: 'fontconfig' }
+          - { config: fontconfig, replica: 3, iterations: '3', prepare: 'fontconfig' }
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -47,17 +48,18 @@ jobs:
           helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
           sudo chown root:root "$helper"
           sudo chmod 4755 "$helper"
-          drop='sync; echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null'
-          app_files="find '$CIRCLE_DESKTOP_APP_PATH' -type f -exec cat {} + > /dev/null"
-          system_files="find /usr/lib/x86_64-linux-gnu -maxdepth 2 -type f \\( -name 'libLLVM*' -o -name 'libgallium*' -o -name 'libGL*' -o -name 'libEGL*' -o -name 'libgbm*' -o -name 'libva*' -o -name 'libvulkan*' -o -name 'libdrm*' -o -path '*/dri/*' \\) -exec cat {} + > /dev/null"
-          case "${{ matrix.drop }}" in
-            none) export PROBE_DROP_CACHES="$drop" ;;
-            app) export PROBE_DROP_CACHES="$drop; $app_files" ;;
-            system) export PROBE_DROP_CACHES="$drop; $system_files" ;;
-            *) unset PROBE_DROP_CACHES ;;
+          ls -la ~/.cache ~/.cache/fontconfig 2>&1 | head -30 || true
+          case "${{ matrix.prepare }}" in
+            stacks)
+              command -v gdb || { sudo apt-get update -q && sudo apt-get install -y -q gdb > /dev/null; }
+              export PROBE_STACKS=1 ;;
+            fontconfig)
+              time fc-list > /dev/null
+              time fc-list > /dev/null ;;
           esac
-          echo "PROBE_DROP_CACHES=${PROBE_DROP_CACHES:-}"
+          ls -la ~/.cache ~/.cache/fontconfig 2>&1 | head -30 || true
           xvfb-run -a node apps/desktop/test/diagnose-frames.mjs
+          ls -la ~/.cache ~/.cache/fontconfig 2>&1 | head -30 || true
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
         with:

@@ -60,6 +60,52 @@ async function once(iteration) {
       timeout: 60000,
     });
     mark('launched');
+    let stacking = Boolean(process.env.PROBE_STACKS) && iteration === 0;
+    record.stacks = [];
+    const stacker = (async () => {
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const run = promisify(execFile);
+      const sampled = new Map();
+      while (stacking) {
+        let pids = [];
+        try {
+          pids = (
+            await run('pgrep', ['-f', '--', '--type=gpu-process'], {
+              encoding: 'utf8',
+            })
+          ).stdout
+            .split('\n')
+            .filter(Boolean);
+        } catch {}
+        for (const pid of pids) {
+          const count = sampled.get(pid) ?? 0;
+          if (count >= 3) continue;
+          sampled.set(pid, count + 1);
+          let text;
+          try {
+            text = (
+              await run(
+                'sudo',
+                ['gdb', '-batch', '-nx', '-p', pid, '-ex', 'set pagination off', '-ex', 'thread apply all bt 30'],
+                { encoding: 'utf8', timeout: 20000, maxBuffer: 1 << 24 },
+              )
+            ).stdout;
+          } catch (error) {
+            text = String(error.stdout ?? '') + String(error.stderr ?? error);
+          }
+          record.stacks.push({
+            at: at(),
+            pid,
+            text: text
+              .split('\n')
+              .filter((line) => /^#|^Thread /.test(line))
+              .slice(0, 300),
+          });
+        }
+        await new Promise((r) => setTimeout(r, 700));
+      }
+    })();
     app.process().stderr.on('data', (chunk) => {
       for (const line of String(chunk).split('\n'))
         if (line.trim() && record.stderr.length < 400)
@@ -198,6 +244,8 @@ async function once(iteration) {
         }),
       );
     mark('trial-done', { ok: record.trial.ok });
+    stacking = false;
+    await stacker;
     // Keep watching after a stalled trial: does it ever recover, and on what event?
     const watchUntil = at() + (record.trial.ok ? 1000 : 20000);
     while (at() < watchUntil) {
