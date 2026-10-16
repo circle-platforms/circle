@@ -341,6 +341,18 @@ export function trustFolder(
   if (!copy.trusted_folders.includes(target)) copy.trusted_folders.push(target);
   return copy;
 }
+/** Takes away a folder's trust: Circle stops reading anything from it again. */
+export function untrustFolder(
+  settings: CircleSettings,
+  workspace: string,
+): CircleSettings {
+  const copy = structuredClone(settings);
+  const target = normalizeWorkspace(workspace);
+  copy.trusted_folders = copy.trusted_folders.filter(
+    (folder) => normalizeWorkspace(folder) !== target,
+  );
+  return copy;
+}
 export function withConnection(
   auth: ModelAuth,
   home = circleHome(),

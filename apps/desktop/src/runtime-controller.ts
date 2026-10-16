@@ -41,6 +41,7 @@ import {
   withConnection,
   isFolderTrusted,
   trustFolder,
+  untrustFolder,
   isReady,
   keepsSavedKey,
   writePrivateJson,
@@ -523,6 +524,15 @@ export class RuntimeController {
         !owner.isClosing
       ) {
         owner.options.localContext = true;
+        this.pendingTrustReloads.add(owner);
+      }
+      if (
+        owner.options.localContext &&
+        !isFolderTrusted(settings, owner.options.workspace) &&
+        !owner.isClosing
+      ) {
+        // The click that took a folder away takes its code out of the run too.
+        owner.options.localContext = false;
         this.pendingTrustReloads.add(owner);
       }
       Object.assign(owner.options.settings, {
@@ -1907,6 +1917,7 @@ export class RuntimeController {
     }
     return result;
   }
+
   private assertArchivable(
     id: string,
     workspace: string,
@@ -2336,7 +2347,9 @@ export class RuntimeController {
         const rows = this.store
           .list(undefined, false, true)
           .filter((row) => identity(row.workspace) === workspaceId);
-        if (!rows.length) throw Error('workspace not found');
+        // A folder that only holds archived sessions is still one the settings page
+        // can name, so ask workspaceById before deciding there is nothing to hide.
+        this.workspaceById(workspaceId);
         for (const row of rows) this.assertArchivable(row.id, row.workspace);
         this.metadata.set(
           rows.map((row) => row.id),
@@ -2545,8 +2558,11 @@ export class RuntimeController {
         return {};
       }
       case 'trust': {
-        if (p.enabled !== true)
+        // Both answers are a deliberate click: trusting loads a folder's code,
+        // revoking it takes that away again.
+        if (typeof p.enabled !== 'boolean')
           throw Error('explicit trust confirmation required');
+        const enabled = p.enabled;
         // Home can ask to trust the project in the menu while another session
         // is the one open. The id names that project; otherwise it is the open one.
         const folder =
@@ -2554,7 +2570,10 @@ export class RuntimeController {
             ? runtime.options.workspace
             : this.workspaceById(text(p.workspaceId, 'workspace', 200));
         const settings = saveSettingsChange(this.home, (saved) => {
-          Object.assign(saved, trustFolder(saved, folder));
+          Object.assign(
+            saved,
+            enabled ? trustFolder(saved, folder) : untrustFolder(saved, folder),
+          );
         });
         this.synchronizeSharedSettings(settings);
         const reloads: Promise<void>[] = [];
@@ -2567,7 +2586,7 @@ export class RuntimeController {
             reloads.push(this.reloadTrustedRuntime(owner));
           }
         await Promise.all(reloads);
-        return {};
+        return { workspaceId: identity(folder), trusted: enabled };
       }
       case 'save-settings': {
         const data = p.settings as Record<string, unknown>;

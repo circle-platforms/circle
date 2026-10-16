@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import { circleHome, normalizeWorkspace } from './paths.js';
 import { isRecord, readJson, writePrivateJson } from './settings.js';
+import { DEFAULT_CREDENTIAL_FILES, matchPattern } from './file_patterns.js';
 
 export type Verdict = 'DENY' | 'ASK' | 'ASK_FORCED';
 export interface Review {
@@ -30,25 +31,9 @@ const review = (
   covered_by: [],
   ...extra,
 });
-export const DEFAULT_CREDENTIAL_FILES = [
-  '.env',
-  '.env.*',
-  '*.env',
-  '.netrc',
-  '.pgpass',
-  '.git-credentials',
-  'credentials.json',
-  'secrets.json',
-  '*.secrets.json',
-  'token.json',
-  'id_rsa',
-  'id_dsa',
-  'id_ecdsa',
-  'id_ed25519',
-  '*.pem',
-  '*.p12',
-  '*.pfx',
-];
+// The names live in src/file_patterns.ts, where a module with no Node.js import
+// can read them: the desktop settings page lists and checks them the same way.
+export { DEFAULT_CREDENTIAL_FILES };
 const READERS = new Set(
   'ls cat head tail wc pwd which whoami date uname file stat du df tree basename dirname realpath readlink true diff cmp nl cut grep egrep fgrep rg find cd test jq git'.split(
     ' ',
@@ -83,14 +68,7 @@ const READ_GIT = new Set(
   ),
 );
 export function wildcard(pattern: string, value: string): boolean {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
-    .replace(/\?/g, '.');
-  return new RegExp(
-    `^${escaped}$`,
-    process.platform === 'win32' ? 'i' : '',
-  ).test(value);
+  return matchPattern(pattern, value, process.platform === 'win32');
 }
 export function commandTokens(command: string): string[] | null {
   const out: string[] = [];

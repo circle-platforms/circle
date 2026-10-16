@@ -254,6 +254,8 @@ Key names are written as on this page: `ctrl+k`, `alt+up`, `shift+tab`, `f1` to 
 
 The desktop application uses its own defaults for a few actions: `ctrl+b` shows or hides the sidebar, `alt+b` backgrounds a job, `ctrl+alt+s` enters a secret, `alt+c` copies the last answer, `ctrl+shift+m` opens the model list and `alt+m` cycles models. Search is `ctrl+k` from anywhere. `ctrl+r` (`history.search`) opens that same search; it is the terminal's history-search key and is kept on the desktop on purpose. The keys in the table above are the terminal's, except `sidebar.toggle`, which is desktop only.
 
+The desktop application records these keys for you instead: settings → keyboard lists every action, and [the page there](desktop.md#keyboard) keeps its own copy of what you record. It does not read or write `keybindings.json`.
+
 ## Which key wins
 
 When several places could take a key, the first of these does: an attached device terminal, a subagent's record, a card, a list, find, search, a selection, the subagent strip, a job's page, `alt+k`, `ctrl+d` on an empty box, the completion list, the other global keys, then the input box. A card passes on the control keys it does not use, which is why `ctrl+c` still stops a turn while a card is up and plain letters do not.
