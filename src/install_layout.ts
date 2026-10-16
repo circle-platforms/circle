@@ -39,8 +39,6 @@ export function targetFor(
     throw new Error(`unsupported platform: ${platform}/${arch}`);
   return `${platform === 'win32' ? 'windows' : platform}-${arch}`;
 }
-// The version is part of the name so that no release asset matches the names the Python
-// releases (0.5.0 and older) used: their `circle update` reports a missing asset instead.
 export function assetName(version: string, target = targetFor()): string {
   return `circle-${version}-${target}.${target.startsWith('windows-') ? 'zip' : 'tar.gz'}`;
 }
@@ -154,6 +152,28 @@ export function pruneVersions(prefix: string, keep: string[]): string[] {
       removed.push(name);
     }
   return removed;
+}
+// Where the installer puts a release: the given prefix and bin folder, else the defaults,
+// ~/.local/share/circle and ~/.local/bin, or %LOCALAPPDATA%\circle and its bin on Windows.
+export function installLocation(
+  given: { prefix?: string; binDir?: string },
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): { prefix: string; binDir: string } {
+  const home = env.HOME || env.USERPROFILE || '';
+  const prefix = resolve(
+    given.prefix ||
+      (platform === 'win32'
+        ? join(env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'circle')
+        : join(home, '.local', 'share', 'circle')),
+  );
+  const binDir = resolve(
+    given.binDir ||
+      (platform === 'win32'
+        ? join(prefix, 'bin')
+        : join(home, '.local', 'bin')),
+  );
+  return { prefix, binDir };
 }
 export const validRepo = (repo: string): boolean =>
   /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo);

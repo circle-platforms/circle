@@ -1,6 +1,5 @@
 import type { Message } from './types.js';
 import type { Job } from './jobs.js';
-import { isRecord } from './settings.js';
 
 /** Compatibility DTOs are data only; the runtime stores native messages. */
 export function rpcMessage(message: Message): {
@@ -13,10 +12,7 @@ export function rpcMessage(message: Message): {
     tool: 'tool',
     system: 'system',
   }[message.role];
-  const legacy = message.legacy_data?.data ?? {};
-  const extra = structuredClone(
-    isRecord(legacy.additional_kwargs) ? legacy.additional_kwargs : {},
-  );
+  const extra: Record<string, unknown> = {};
   if (message.thinking && !message.provider_content)
     extra.reasoning_content = message.thinking;
   if (message.internal) extra.circle_internal = message.internal;
@@ -35,14 +31,11 @@ export function rpcMessage(message: Message): {
       })),
     ];
   const data: Record<string, unknown> = {
-    ...structuredClone(legacy),
     content,
     additional_kwargs: extra,
-    response_metadata: structuredClone(
-      isRecord(legacy.response_metadata) ? legacy.response_metadata : {},
-    ),
+    response_metadata: {},
     type,
-    name: message.name ?? legacy.name ?? null,
+    name: message.name ?? null,
     id: message.id,
   };
   if (message.role === 'assistant') {
@@ -52,7 +45,7 @@ export function rpcMessage(message: Message): {
       id: call.id,
       type: 'tool_call',
     }));
-    data.invalid_tool_calls = legacy.invalid_tool_calls ?? [];
+    data.invalid_tool_calls = [];
     data.usage_metadata = message.usage
       ? {
           input_tokens: message.usage.input_tokens,
@@ -66,10 +59,10 @@ export function rpcMessage(message: Message): {
               : {}),
           },
         }
-      : (legacy.usage_metadata ?? null);
+      : null;
   } else if (message.role === 'tool') {
     data.tool_call_id = message.tool_call_id;
-    data.artifact = legacy.artifact ?? null;
+    data.artifact = null;
     data.status = message.status ?? 'success';
   }
   return { type, data };

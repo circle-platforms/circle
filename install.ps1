@@ -57,8 +57,8 @@
         if (-not (Test-Path -LiteralPath $node -PathType Leaf) -or -not (Test-Path -LiteralPath $manager -PathType Leaf)) { throw 'Incomplete release' }
         $manifest = Get-Content -LiteralPath (Join-Path $root 'release.json') -Raw | ConvertFrom-Json
         if ($manifest.version -ne $version) { throw 'Release version mismatch' }
-        # Installs into CIRCLE_PREFIX and CIRCLE_BIN_DIR when they are set, otherwise where the
-        # Python circle was installed, otherwise %LOCALAPPDATA%\circle. Removes the Python circle.
+        # Installs into CIRCLE_PREFIX and CIRCLE_BIN_DIR when they are set, otherwise into
+        # %LOCALAPPDATA%\circle.
         $resultFile = Join-Path $temporary 'result.json'
         $savedRepo = $env:CIRCLE_REPO
         $env:CIRCLE_REPO = $repo
@@ -71,12 +71,10 @@
         if ($LASTEXITCODE -ne 0) { throw 'Release installation failed' }
         $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
         $binDir = $result.binDir
-        # The Python installer put <prefix>\current\circle on the user PATH.
-        $stale = @($result.removedPrefixes | ForEach-Object { (Join-Path $_ 'current\circle').TrimEnd('\') })
         $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
         try {
             $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-            $entries = @($raw -split ';' | Where-Object { $_ -and ($stale -notcontains [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\')) })
+            $entries = @($raw -split ';' | Where-Object { $_ })
             if ($env:CIRCLE_NO_PATH -ne '1' -and $entries -notcontains $binDir) { $entries += $binDir }
             $value = $entries -join ';'
             $changed = $value -ne $raw
@@ -85,7 +83,6 @@
         # Setting a user variable tells running programs that the environment changed, so new
         # terminals see the new PATH.
         if ($changed) { [Environment]::SetEnvironmentVariable('CIRCLE_PATH_TOUCH', $null, 'User') }
-        $env:Path = (@($env:Path -split ';' | Where-Object { $_ -and ($stale -notcontains $_.TrimEnd('\')) }) -join ';')
         if ($env:CIRCLE_NO_PATH -ne '1') { $env:Path = "$binDir;$env:Path" }
         Write-Host "[circle-install] Run circle, or $binDir\circle.cmd."
     } finally { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }

@@ -62,7 +62,7 @@ export class InputHistory {
             )
             .slice(-this.maximum);
       } catch {
-        /* Python releases and older Circle versions wrote one line per entry. */
+        /* Circle 1.7.3 and older wrote one line per entry. */
       }
       return body
         .split(/\r?\n/)

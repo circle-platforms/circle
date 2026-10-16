@@ -27,7 +27,6 @@
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\" \"*.json\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\" \"*.json\"",
     "check": "npm run typecheck && npm test && npm run build",
-    "port:status": "tsx scripts/port-status.ts",
     "release:build": "tsx scripts/build-release.ts",
     "release:smoke": "tsx scripts/smoke-release.ts",
     "release": "tsx scripts/release.ts"
@@ -49,7 +48,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.132.1",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "@msgpack/msgpack": "3.1.3",
     "ajv": "8.20.0",
     "entities": "8.1.0",
     "glob": "13.0.6",

@@ -12,15 +12,6 @@ coverage/
 release/
 .agent/
 
-# Left in old checkouts by the Python implementation
-.venv/
-.venv311/
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-*.egg-info/
-build/
-
 # compile-excel 子仓与运行产物（独立仓库管理，不入 circle 库）
 compile-excel-skills/
 compile_outputs/

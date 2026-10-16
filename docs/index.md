@@ -7,14 +7,14 @@ permalink: /
 
 Circle is a coding agent. You describe a task, and Circle reads your code, runs commands and edits files in your project, asking before it does anything that changes something. It runs in the terminal, and as a [desktop application](desktop.md).
 
-New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? Read [Upgrading from 0.5.0](#upgrading-from-050) first.
+New here? Start with the [Quickstart](quickstart.md).
 
 ## Choose what you want to do
 
 | I want to | Read |
 |---|---|
 | Install Circle and run my first task | [Quickstart](quickstart.md) |
-| Install, update or move from the Python version | [Installation and updates](installation.md) |
+| Install, update or remove Circle | [Installation and updates](installation.md) |
 | Use Circle in its own window | [The desktop application](desktop.md) |
 | Understand what Circle does and why | [How Circle works](how-circle-works.md) |
 | Connect a model or switch to another | [Choose a model](models.md) |
@@ -33,18 +33,6 @@ New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? 
 | Add tools, commands or checks in JavaScript or TypeScript | [Build extensions](extensions.md) |
 | Work on Circle itself | [Contributing](https://github.com/circle-platforms/circle/blob/main/CONTRIBUTING.md) and [Architecture](development/architecture.md) |
 | See what does not work yet | [Known issues](known-issues.md) |
-
-## Upgrading from 0.5.0
-
-Circle 0.5.0 and older were written in Python; this version is written in TypeScript and carries its own Node.js. To upgrade, run the one-command installer from the [Quickstart](quickstart.md#1-install): the old `circle update` cannot install this version. The installer removes the Python copy and keeps your data folder, so settings, keys, trusted folders, MCP servers, skills, custom commands and prompt history carry over, and saved sessions are imported on the first start. Python extensions have to be rewritten in JavaScript or TypeScript. See [Replacing the Python circle](installation.md#replacing-the-python-circle), [Sessions from 0.5.0](sessions.md#sessions-from-050) and [Coming from 0.5.0](extensions.md#coming-from-050).
-
-What you may notice afterwards:
-
-- MCP tools ask for approval and are refused in `read-only` mode. See [MCP servers](mcp.md#security).
-- `credential_files` adds to Circle's own list instead of replacing it, and file tools refuse those files too. See [Credential files](security.md#credential-files).
-- There is no log file.
-- Sessions are kept in `circle.sqlite`. 0.5.0 cannot import this version's JSONL exports.
-- The rest is in [Known issues](known-issues.md).
 
 ## Get started
 

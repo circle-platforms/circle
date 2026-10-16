@@ -1,4 +1,4 @@
-// The grep tool, as the Python releases had it from deepagents' filesystem middleware: a
+// The grep tool, as deepagents' filesystem middleware defines it: a
 // literal (not regex) search, `output_mode` files_with_matches (the default), content or
 // count, and a total cap on matches (`max_count`, 1000 unless the call asks otherwise).
 import { readFileSync, realpathSync, statSync } from 'node:fs';

@@ -87,7 +87,7 @@ function sessionPrompt(model: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
-// `.circle/<name>` in the project, else `<name>` in the data folder, as 0.5.0 read them.
+// `.circle/<name>` in the project, else `<name>` in the data folder.
 function promptFile(
   workspace: string,
   home: string | undefined,

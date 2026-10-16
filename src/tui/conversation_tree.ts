@@ -1,4 +1,4 @@
-// The conversation as a tree, as /tree lists it (0.5.0's circle/tui/conversation_tree.py).
+// The conversation as a tree, as /tree lists it.
 // Going back to an earlier message and sending something else erases nothing: both branches
 // stay in the session. The entries are your messages and the model's answers; tool calls,
 // their results and Circle's own notes are steps between them and are not listed.

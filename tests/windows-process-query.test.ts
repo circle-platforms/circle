@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,13 +13,14 @@ import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { inspect } from 'node:util';
-import { runningCopies, type InstallerCopy } from '../src/legacy_install.js';
+import { runningFrom } from '../src/install_processes.js';
 import {
   readWindowsQueryMarkers,
   windowsProcessQuery,
   WindowsProcessQueryObservation,
 } from '../src/windows_process_query.js';
 
+// A version folder of an installation, with one program in it that the test says is held.
 function heldCopy(t: TestContext) {
   const base = mkdtempSync(join(tmpdir(), 'wq-'));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -26,26 +28,15 @@ function heldCopy(t: TestContext) {
   mkdirSync(version);
   const program = join(version, 'circle.exe');
   writeFileSync(program, 'synthetic held image');
-  const copy: InstallerCopy = {
-    kind: 'installer',
-    prefix: base,
-    versions: [version],
-    links: [],
-    leftovers: [],
-  };
-  return {
-    copy,
-    program,
-    where: { platform: 'win32' as const, home: base, path: '' },
-  };
+  return { base, folders: [version], program };
 }
 
 test('a held Windows copy is identified through one owned Node worker when PowerShell is unavailable', (t) => {
-  const { copy, program, where } = heldCopy(t);
+  const { folders, program } = heldCopy(t);
   let calls = 0;
-  const pids = runningCopies(
-    [copy],
-    where,
+  const pids = runningFrom(
+    folders,
+    'win32',
     (command, _args, timeout) => {
       calls++;
       assert.equal(command, process.execPath, 'PowerShell is unavailable');
@@ -63,14 +54,14 @@ test('a held Windows copy is identified through one owned Node worker when Power
 });
 
 test('an unreadable Windows copy fails closed when its all-process query fails without held images', (t) => {
-  const { copy, program, where } = heldCopy(t);
-  copy.versions = [join(where.home, 'unavailable-version')];
+  const { base, folders, program } = heldCopy(t);
+  folders[0] = join(base, 'unavailable-version');
   let calls = 0;
   assert.throws(
     () =>
-      runningCopies(
-        [copy],
-        where,
+      runningFrom(
+        folders,
+        'win32',
         (_command, _args, timeout) => {
           calls++;
           assert.equal(timeout, 30_000);
@@ -89,20 +80,20 @@ test('an unreadable Windows copy fails closed when its all-process query fails w
 });
 
 test('an unterminated PID record cannot turn an outside image path prefix into ownership', (t) => {
-  const { copy, where } = heldCopy(t);
-  let folder = copy.versions[0]!;
+  const { folders } = heldCopy(t);
+  let folder = folders[0]!;
   folder += 'x'.repeat((3 - (Buffer.byteLength(folder) % 3)) % 3);
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, 'circle.exe'), 'synthetic held image');
-  copy.versions = [folder];
+  folders[0] = folder;
   const full = Buffer.from(folder + '-other/circle.exe').toString('base64');
   const partial = full.slice(0, (Buffer.byteLength(folder) / 3) * 4);
   assert.equal(Buffer.from(partial, 'base64').toString('utf8'), folder);
   assert.throws(
     () =>
-      runningCopies(
-        [copy],
-        where,
+      runningFrom(
+        folders,
+        'win32',
         () => ({
           status: null,
           stdout: `41 ${partial}`,
@@ -120,7 +111,7 @@ test('an unterminated PID record cannot turn an outside image path prefix into o
 
 for (const kind of ['base64', 'utf8'] as const) {
   test(`a complete PID record with invalid ${kind} cannot establish image ownership`, (t) => {
-    const { copy, program, where } = heldCopy(t);
+    const { folders, program } = heldCopy(t);
     const encoded =
       kind === 'base64'
         ? Buffer.from(program).toString('base64') + '!'
@@ -129,9 +120,9 @@ for (const kind of ['base64', 'utf8'] as const) {
           );
     assert.throws(
       () =>
-        runningCopies(
-          [copy],
-          where,
+        runningFrom(
+          folders,
+          'win32',
           () => ({
             status: 0,
             stdout: `41 ${encoded}\n`,
@@ -146,13 +137,13 @@ for (const kind of ['base64', 'utf8'] as const) {
 }
 
 test('an unread copy with malformed successful output is unknown rather than an empty process list', (t) => {
-  const { copy, where } = heldCopy(t);
-  copy.versions = [join(where.home, 'unavailable-version')];
+  const { base, folders } = heldCopy(t);
+  folders[0] = join(base, 'unavailable-version');
   assert.throws(
     () =>
-      runningCopies(
-        [copy],
-        where,
+      runningFrom(
+        folders,
+        'win32',
         () => ({
           status: 0,
           stdout: '41 truncated',
@@ -166,12 +157,12 @@ test('an unread copy with malformed successful output is unknown rather than an 
 });
 
 test('complete valid LF and CRLF PID records retain exact image ownership', (t) => {
-  const { copy, program, where } = heldCopy(t);
+  const { folders, program } = heldCopy(t);
   for (const newline of ['\n', '\r\n'])
     assert.deepEqual(
-      runningCopies(
-        [copy],
-        where,
+      runningFrom(
+        folders,
+        'win32',
         () => ({
           status: 0,
           stdout: `41 ${Buffer.from(program).toString('base64')}${newline}`,
@@ -184,16 +175,16 @@ test('complete valid LF and CRLF PID records retain exact image ownership', (t) 
 });
 
 test('a timed out Windows query keeps its original error message and attaches the last captured stage', (t) => {
-  const { copy, program, where } = heldCopy(t);
+  const { folders, program } = heldCopy(t);
   const nativeError = Object.assign(new Error('native timeout'), {
     code: 'ETIMEDOUT',
   });
   let calls = 0;
   assert.throws(
     () =>
-      runningCopies(
-        [copy],
-        where,
+      runningFrom(
+        folders,
+        'win32',
         (_command, args, timeout) => {
           calls++;
           assert.equal(timeout, 30_000);
@@ -346,7 +337,7 @@ test('both query modes use one explicit Node worker with lossless names and a bo
 });
 
 test('nonzero exits preserve non-marker stderr in the primary message and leave the native result unchanged', (t) => {
-  const { copy, program, where } = heldCopy(t);
+  const { folders, program } = heldCopy(t);
   let native: {
     status: number;
     stdout: string;
@@ -355,9 +346,9 @@ test('nonzero exits preserve non-marker stderr in the primary message and leave 
   };
   assert.throws(
     () =>
-      runningCopies(
-        [copy],
-        where,
+      runningFrom(
+        folders,
+        'win32',
         (_command, args, timeout) => {
           assert.equal(timeout, 30_000);
           const own = args.at(-1)!;
@@ -391,7 +382,7 @@ test('nonzero exits preserve non-marker stderr in the primary message and leave 
 });
 
 test('known PIDs still block installation even when the native query times out after producing them', (t) => {
-  const { copy, program, where } = heldCopy(t);
+  const { folders, program } = heldCopy(t);
   const nativeError = Object.assign(new Error('original native error'), {
     code: 'ETIMEDOUT',
   });
@@ -405,9 +396,9 @@ test('known PIDs still block installation even when the native query times out a
     error: nativeError,
   };
   assert.deepEqual(
-    runningCopies(
-      [copy],
-      where,
+    runningFrom(
+      folders,
+      'win32',
       (_command, _args, timeout) => {
         calls++;
         assert.equal(timeout, 30_000);
@@ -432,7 +423,7 @@ test('known PIDs still block installation even when the native query times out a
 });
 
 test('the query helper started from the copy itself is never a running copy', (t) => {
-  const { copy, program, where } = heldCopy(t);
+  const { folders, program } = heldCopy(t);
   // circle uninstall runs from the installation it removes: its own node is a held program of
   // the copy, and the helper started from that node lists itself among the processes.
   const helper = process.pid + 1;
@@ -446,9 +437,9 @@ test('the query helper started from the copy itself is never a running copy', (t
     stderr: '',
   });
   assert.deepEqual(
-    runningCopies(
-      [copy],
-      where,
+    runningFrom(
+      folders,
+      'win32',
       query(record(process.pid) + record(helper)),
       () => 'EBUSY',
       () => {},
@@ -456,9 +447,9 @@ test('the query helper started from the copy itself is never a running copy', (t
     [],
   );
   assert.deepEqual(
-    runningCopies(
-      [copy],
-      where,
+    runningFrom(
+      folders,
+      'win32',
       query(record(process.pid) + record(helper) + record(other)),
       () => 'EBUSY',
       () => {},
@@ -468,9 +459,9 @@ test('the query helper started from the copy itself is never a running copy', (t
   // Listed alone, the helper does not explain who holds the program: still unknown.
   assert.throws(
     () =>
-      runningCopies(
-        [copy],
-        where,
+      runningFrom(
+        folders,
+        'win32',
         query(record(helper)),
         () => 'EBUSY',
         () => {},
@@ -479,13 +470,148 @@ test('the query helper started from the copy itself is never a running copy', (t
   );
 });
 
+// An installed version as the Windows check sees it, on any system: its runtime and a file
+// beside it, under a folder name outside any console code page.
+function installedVersion(t: TestContext) {
+  const { base } = heldCopy(t);
+  const version = join(base, '用户 prefix', 'versions', '1.0.0');
+  const node = join(version, 'runtime', 'node.exe');
+  mkdirSync(join(version, 'runtime'), { recursive: true });
+  mkdirSync(join(version, 'app'), { recursive: true });
+  writeFileSync(node, 'synthetic runtime');
+  writeFileSync(join(version, 'app', 'cli.js'), '');
+  return { base, version, node };
+}
+// What the process list prints: an id and the program's path in Base64.
+const processList = (entries: [number, string][]) => ({
+  status: 0,
+  stdout: entries
+    .map(([pid, path]) => `${pid} ${Buffer.from(path).toString('base64')}\r\n`)
+    .join(''),
+  stderr: '',
+  error: undefined,
+});
+
+test('on Windows a held program is looked up by name, and the list names the processes running a program of the installation', (t) => {
+  const { base, version, node } = installedVersion(t);
+  const probed: string[] = [];
+  const asked: { command: string; args: string[]; timeout?: number }[] = [];
+  const running = runningFrom(
+    [version],
+    'win32',
+    (command, args, timeout) => {
+      asked.push({ command, args, timeout });
+      return processList([
+        [7, join(base, 'elsewhere', 'node.exe')],
+        [41, node],
+      ]);
+    },
+    (path) => {
+      probed.push(path);
+      return path === node ? 'EBUSY' : undefined;
+    },
+  );
+  assert.deepEqual(running, [41]);
+  assert.deepEqual(probed, [node]);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0]!.command, process.execPath);
+  assert.match(asked[0]!.args[0]!, /windows_process_native\.[jt]s$/);
+  assert.equal(asked[0]!.args[2], 'names');
+  assert.deepEqual(
+    JSON.parse(Buffer.from(asked[0]!.args[1]!, 'base64').toString('utf8')),
+    ['node'],
+  );
+  assert.equal(asked[0]!.timeout, 30_000);
+});
+
+test('on Windows a program in use that no process can be named for stops the removal, and says why', (t) => {
+  const { base, version, node } = installedVersion(t);
+  const busy = (path: string) => (path === node ? 'EBUSY' : undefined);
+  const others = () => processList([[7, join(base, 'elsewhere', 'node.exe')]]);
+  const says = (text: string) => (error: unknown) => {
+    assert.equal((error as Error).message, text);
+    return true;
+  };
+  const quiet = () => {};
+  assert.throws(
+    () =>
+      runningFrom(
+        [version],
+        'win32',
+        () => ({
+          status: null,
+          stdout: '',
+          stderr: '',
+          error: Object.assign(Error('spawnSync node ETIMEDOUT'), {
+            code: 'ETIMEDOUT',
+          }),
+        }),
+        busy,
+        quiet,
+      ),
+    says(
+      `${node} is in use, and the running programs could not be listed (no answer in 30 s)`,
+    ),
+  );
+  assert.throws(
+    () =>
+      runningFrom(
+        [version],
+        'win32',
+        () => ({
+          status: 1,
+          stdout: '',
+          stderr: 'Access denied\r\n',
+          error: undefined,
+        }),
+        busy,
+        quiet,
+      ),
+    says(
+      `${node} is in use, and the running programs could not be listed (Access denied)`,
+    ),
+  );
+  assert.throws(
+    () => runningFrom([version], 'win32', others, busy, quiet),
+    says(`${node} is in use by another program`),
+  );
+  // A program that cannot be opened for another reason, a read-only file, is not in use.
+  assert.deepEqual(
+    runningFrom(
+      [version],
+      'win32',
+      others,
+      (path) => (path === node ? 'EPERM' : undefined),
+      quiet,
+    ),
+    [],
+  );
+});
+
+test('Windows process lookup matches the same held program through a directory alias', (t) => {
+  const { base, version, node } = installedVersion(t);
+  const alias = join(base, 'version alias');
+  symlinkSync(
+    version,
+    alias,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  const running = runningFrom(
+    [version],
+    'win32',
+    () => processList([[41, join(alias, 'runtime', 'node.exe')]]),
+    (path) => (path === node ? 'EBUSY' : undefined),
+  );
+  assert.deepEqual(running, [41]);
+});
+
 test('an unheld program does not start a query', (t) => {
-  const { copy, where } = heldCopy(t);
+  const { folders } = heldCopy(t);
   let reports = 0;
   assert.deepEqual(
-    runningCopies(
-      [copy],
-      where,
+    runningFrom(
+      folders,
+      'win32',
       () => assert.fail('unexpected query'),
       () => undefined,
       () => {
@@ -513,16 +639,16 @@ test('the safe observation excludes raw streams and unexpected native codes', ()
 });
 
 test('a failing diagnostic sink cannot replace the original query failure', (t) => {
-  const { copy, program, where } = heldCopy(t);
+  const { folders, program } = heldCopy(t);
   const reports: string[] = [];
   const nativeError = Object.assign(new Error('original native error'), {
     code: 'EACCES',
   });
   assert.throws(
     () =>
-      runningCopies(
-        [copy],
-        where,
+      runningFrom(
+        folders,
+        'win32',
         () => ({
           status: null,
           stdout: '',
@@ -556,18 +682,18 @@ test('a failing diagnostic sink cannot replace the original query failure', (t) 
 });
 
 test('the actual TAP reporter shows a direct caller failure observation while retaining its primary error', (t) => {
-  const { copy, program, where } = heldCopy(t);
+  const { base, folders, program } = heldCopy(t);
   const primary = `${program} is in use, and the running programs could not be listed (no answer in 30 s)`;
   const windowsPrimary =
     'C:\\synthetic\\versions\\1.7.0\\circle.exe is in use, and the running programs could not be listed (no answer in 30 s)';
-  const fixture = join(where.home, 'failure.test.mjs');
+  const fixture = join(base, 'failure.test.mjs');
   const source = pathToFileURL(
-    join(import.meta.dirname, '..', 'src', 'legacy_install.ts'),
+    join(import.meta.dirname, '..', 'src', 'install_processes.ts'),
   ).href;
   writeFileSync(
     fixture,
-    `import { test } from 'node:test'; import { runningCopies } from ${JSON.stringify(source)};\n` +
-      `test('direct timeout', () => runningCopies(${JSON.stringify([copy])}, ${JSON.stringify(where)}, (_command, args) => {\n` +
+    `import { test } from 'node:test'; import { runningFrom } from ${JSON.stringify(source)};\n` +
+      `test('direct timeout', () => runningFrom(${JSON.stringify(folders)}, 'win32', (_command, args) => {\n` +
       `const nonce = args.at(-1);\n` +
       `return { status: null, stdout: '', stderr: 'CIRCLE_QUERY_' + nonce + ' LOOKUP\\r\\n', error: Object.assign(new Error('native timeout'), { code: 'ETIMEDOUT' }) };\n` +
       `}, () => 'EBUSY'));\n` +
@@ -575,7 +701,7 @@ test('the actual TAP reporter shows a direct caller failure observation while re
   );
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
-    CIRCLE_HOME: where.home,
+    CIRCLE_HOME: base,
   };
   delete environment.NODE_TEST_CONTEXT;
   const result = spawnSync(
