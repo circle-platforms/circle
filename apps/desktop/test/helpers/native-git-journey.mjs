@@ -8,6 +8,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 const exec = promisify(execFile);
 const marker = '.circle-native-git-journey.json';
+// filter.has is evaluated relative to each row; do not repeat its panel ancestor.
+export function nativeGitFileRow(page, filename) {
+  return page.locator('.native-git .change-entry').filter({
+    has: page.getByRole('checkbox', { name: filename, exact: true }),
+  });
+}
 const names = {
   first: 'git-journey-manual-first.txt',
   second: 'git-journey-manual-second.txt',
@@ -387,9 +393,7 @@ export async function runNativeGitJourney({
       await readFile(path.join(root, names.conflict), 'utf8'),
       /<<<<<<<[\s\S]*=======/,
     );
-    const conflictRow = panel.locator('.change-entry').filter({
-      has: panel.getByRole('checkbox', { name: names.conflict, exact: true }),
-    });
+    const conflictRow = nativeGitFileRow(page, names.conflict);
     await conflictRow
       .getByRole('button', { name: 'open file', exact: true })
       .click();

@@ -25,7 +25,13 @@ function Fixture() {
     __gitLanguage: setLanguage,
   });
   applyTheme('light');
-  return <GitPanel sessionId={sessionId} embedded />;
+  return (
+    <GitPanel
+      sessionId={sessionId}
+      embedded
+      onFile={(path) => Object.assign(window, { __gitOpened: path })}
+    />
+  );
 }
 const runtime = new PreviewRuntime();
 createRoot(document.getElementById('root')!).render(
