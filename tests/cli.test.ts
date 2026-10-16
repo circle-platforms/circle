@@ -1054,3 +1054,24 @@ test(
     assert.equal(endpoint.keys.at(-1), 'Bearer secret-key');
   },
 );
+
+test('circle uninstall is its own subcommand, not a folder', async (t) => {
+  const home = scratch(t);
+  const run = await circle(home, ['uninstall'], {
+    env: { CIRCLE_INSTALL_PREFIX: '' },
+  });
+  assert.equal(run.code, 1);
+  assert.match(
+    run.stderr,
+    /circle uninstall requires an installer-managed installation/,
+  );
+});
+
+test('circle uninstall answers an unknown option with the usage exit code', async (t) => {
+  const home = scratch(t);
+  const run = await circle(home, ['uninstall', '--bogus'], {
+    env: { CIRCLE_INSTALL_PREFIX: '' },
+  });
+  assert.equal(run.code, 2);
+  assert.match(run.stderr, /usage: circle uninstall \[--purge\] \[--yes\]/);
+});

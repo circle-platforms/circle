@@ -35,6 +35,9 @@ import type {
   MediaAttachment,
 } from '../../../src/types.js';
 import type { ApprovalDecision } from '../../../src/harness.js';
+import type { ModelCompletionFailureCode } from '../../../src/model_completion.js';
+import { completionFailure } from '../../../src/model_completion.js';
+import { ModelCompletionFailure } from '../../../src/model_completion.js';
 import {
   loadSettings,
   settingsForRun,
@@ -290,7 +293,13 @@ export class RuntimeController {
   // followed, as the terminal shows its red line. They live as long as the app runs.
   private failures = new Map<
     string,
-    { id: string; after: string | null; text: string; at: string }[]
+    {
+      id: string;
+      after: string | null;
+      text: string;
+      at: string;
+      completionFailure?: ModelCompletionFailureCode;
+    }[]
   >();
   private toolStates = new Map<
     string,
@@ -1370,31 +1379,69 @@ export class RuntimeController {
         calls.set(call.id, row);
         result.push(row);
       }
+      const completion =
+        raw.role === 'assistant' &&
+        (raw.completion || raw.truncated) &&
+        completionFailure(raw);
+      if (completion)
+        result.push({
+          id: `completion-${node.id}`,
+          parentId: node.id,
+          role: 'notice',
+          text: `✖ ${completion.message}`,
+          completionFailure: completion.code,
+          at: base.at,
+        });
     }
+    const parents = new Map(nodes.map((node) => [node.id, node.parent]));
+    const insertedAfter = new Map<string | null, string>();
     for (const failure of [
       ...(this.failures.get(id) ?? []),
       ...(this.notices.get(id) ?? []),
     ]) {
       // After the message it followed and that message's tool rows
-      const at = result.findLastIndex(
-        (row) =>
-          row.id === failure.after ||
-          (row.role === 'tool' && row.parentId === failure.after) ||
-          row.id.startsWith(`${failure.after}:`),
-      );
+      const afterIndex = (anchor: string | null) =>
+        result.findLastIndex(
+          (row) =>
+            row.id === anchor ||
+            (row.role === 'tool' && row.parentId === anchor) ||
+            row.id.startsWith(`${anchor}:`),
+        );
+      let anchor = failure.after;
+      let at = afterIndex(anchor);
+      // Empty/signature-only assistant and internal messages have no renderer row.
+      // Walk their actual ancestry so an old failure cannot drift below later turns.
+      while (at < 0 && anchor !== null && parents.has(anchor)) {
+        anchor = parents.get(anchor) ?? null;
+        at = afterIndex(anchor);
+      }
+      const previous = insertedAfter.get(anchor);
+      const previousAt = previous
+        ? result.findIndex((row) => row.id === previous)
+        : -1;
       const index =
-        failure.after === null ? 0 : at < 0 ? result.length : at + 1;
+        previousAt >= 0
+          ? previousAt + 1
+          : anchor === null
+            ? 0
+            : at < 0
+              ? result.length
+              : at + 1;
       result.splice(index, 0, {
         id: failure.id,
         parentId: failure.after,
         role: 'notice',
         text: failure.text,
         at: failure.at,
+        ...('completionFailure' in failure && failure.completionFailure
+          ? { completionFailure: failure.completionFailure }
+          : {}),
         ...('planCompleted' in failure &&
         typeof failure.planCompleted === 'number'
           ? { planCompleted: failure.planCompleted }
           : {}),
       });
+      insertedAfter.set(anchor, failure.id);
     }
     const stream = this.streams.get(id);
     if (stream && (stream.text || stream.thinking))
@@ -1446,6 +1493,11 @@ export class RuntimeController {
           ...(node.message?.tool_calls ?? []).map(
             (call) => `${node.id}:${call.id}`,
           ),
+          ...(node.message?.role === 'assistant' &&
+          (node.message.completion || node.message.truncated) &&
+          completionFailure(node.message)
+            ? [`completion-${node.id}`]
+            : []),
         ]);
       for (const failure of [
         ...(this.failures.get(row.id) ?? []),
@@ -2000,14 +2052,39 @@ export class RuntimeController {
       /* A diff is a view; failing to draw one never stops the turn. */
     }
     if (event.kind === 'run_error' && !event.payload.interrupted) {
-      const rows = this.failures.get(id) ?? [];
-      rows.push({
-        id: `failure-${randomUUID()}`,
-        after: runtime.store.get(id)?.head ?? null,
-        text: `✖ ${String(event.payload.message ?? 'the turn failed')}`,
-        at: event.ts,
-      });
-      this.failures.set(id, rows);
+      const assistant = event.payload.completion_message_id
+        ? runtime.store
+            .messages(id)
+            .find(
+              (message) =>
+                message.role === 'assistant' &&
+                message.id === event.payload.completion_message_id,
+            )
+        : undefined;
+      const persisted =
+        assistant && (assistant.completion || assistant.truncated)
+          ? completionFailure(assistant)
+          : undefined;
+      // A recorded completion failure is projected from history, including after restart.
+      if (
+        !event.payload.completion_failure ||
+        persisted?.code !== event.payload.completion_failure
+      ) {
+        const rows = this.failures.get(id) ?? [];
+        rows.push({
+          id: `failure-${randomUUID()}`,
+          after: runtime.store.get(id)?.head ?? null,
+          text: `✖ ${String(event.payload.message ?? 'the turn failed')}`,
+          ...(event.payload.completion_failure
+            ? {
+                completionFailure: event.payload
+                  .completion_failure as ModelCompletionFailureCode,
+              }
+            : {}),
+          at: event.ts,
+        });
+        this.failures.set(id, rows);
+      }
     }
     if (event.kind === 'llm_start')
       this.streams.set(id, {
@@ -2373,6 +2450,8 @@ export class RuntimeController {
     this.tasks.add(task);
     void task
       .catch((error) => {
+        // Harness already emitted the typed failure and its transcript diagnostic.
+        if (error instanceof ModelCompletionFailure && !reportFailure) return;
         if (!this.closing) {
           if (this.runtimes.lifecycle(sessionId) !== 'open') return;
           // Harness errors already arrive through run_error on the source session.
@@ -2383,6 +2462,9 @@ export class RuntimeController {
               id: `failure-${randomUUID()}`,
               after: this.store.get(sessionId)?.head ?? null,
               text: `✖ ${error instanceof Error ? error.message : 'runtime failed'}`,
+              ...(error instanceof ModelCompletionFailure
+                ? { completionFailure: error.code }
+                : {}),
               at: new Date().toISOString(),
             });
             this.failures.set(sessionId, rows);

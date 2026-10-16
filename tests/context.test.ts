@@ -366,3 +366,53 @@ test('productive long turns are not cut off at the prototype one-hundred-call li
     ),
   );
 });
+
+for (const reason of [
+  'filter',
+  'pause',
+  'unknown',
+  'length',
+  'missing',
+] as const) {
+  test(`compaction rejects ${reason} with visible partial text without replacing history`, async (t) => {
+    const root = scratch(t);
+    const store = new CheckpointStore(root);
+    cleanup(t, () => store.close());
+    const session = store.create(root, 'test');
+    const raw: Message[] = [];
+    for (let i = 0; i < 6; i++)
+      raw.push(
+        { id: `u-${i}`, role: 'user', content: 'x'.repeat(2000) },
+        assistant(`a-${i}`, 'answer'),
+      );
+    store.append(session.id, raw);
+    const before = digest(store.messages(session.id));
+    const model = new ScriptedModel([
+      {
+        message: {
+          ...assistant('summary', 'unfinished summary'),
+          completion: { reason },
+        },
+        usage: { input_tokens: 17, output_tokens: 23, cache_read_tokens: 3 },
+      },
+    ]);
+    const manager = new ContextManager(store, join(root, 'data'), {
+      contextWindow: 1000,
+    });
+    await assert.rejects(
+      manager.prepare(session.id, model, '', [], new AbortController().signal),
+    );
+    assert.equal(model.requests.length, 1);
+    assert.equal(store.contextState(session.id).summary, undefined);
+    assert.equal(store.contextState(session.id).compactionCalls?.length, 1);
+    assert.deepEqual(
+      store.contextState(session.id).compactionCalls?.[0]?.usage,
+      {
+        input_tokens: 17,
+        output_tokens: 23,
+        cache_read_tokens: 3,
+      },
+    );
+    assert.equal(digest(store.messages(session.id)), before);
+  });
+}
