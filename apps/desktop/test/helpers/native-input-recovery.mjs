@@ -102,6 +102,35 @@ export async function runNativeInputRecovery({
       await page.evaluate(() => {
         const events = [];
         const beforeInputEvents = [];
+        const keyEvents = [];
+        const keyListener = (event) => {
+          const observation = {
+            at: Date.now(),
+            key: event.key,
+            code: event.code,
+            keyCode: event.keyCode,
+            isComposing: event.isComposing,
+            meta: event.metaKey,
+            ctrl: event.ctrlKey,
+            alt: event.altKey,
+            shift: event.shiftKey,
+            repeat: event.repeat,
+            modifiers: Object.fromEntries(
+              ['Meta', 'Control', 'Alt', 'Shift', 'CapsLock', 'AltGraph'].map(
+                (name) => [name, event.getModifierState(name)],
+              ),
+            ),
+            target: event.target?.getAttribute('aria-label'),
+            capturePrevented: event.defaultPrevented,
+          };
+          keyEvents.push(observation);
+          // A capture-listener microtask can run before the window bubble handler.
+          setTimeout(() => {
+            observation.finalPrevented = event.defaultPrevented;
+            observation.finalAt = Date.now();
+          }, 0);
+        };
+        window.addEventListener('keydown', keyListener, true);
         const beforeInputListener = (event) => {
           const observation = {
             inputType: event.inputType,
@@ -109,9 +138,9 @@ export async function runNativeInputRecovery({
             prevented: event.defaultPrevented,
           };
           beforeInputEvents.push(observation);
-          queueMicrotask(() => {
+          setTimeout(() => {
             observation.prevented = event.defaultPrevented;
-          });
+          }, 0);
         };
         document.addEventListener('beforeinput', beforeInputListener, true);
         const listener = (event) =>
@@ -132,8 +161,10 @@ export async function runNativeInputRecovery({
         document.addEventListener('paste', listener, true);
         window.__circlePasteObservation = {
           events,
+          keyEvents,
           beforeInputEvents,
           cleanup: () => {
+            window.removeEventListener('keydown', keyListener, true);
             document.removeEventListener('paste', listener, true);
             document.removeEventListener(
               'beforeinput',
@@ -154,30 +185,10 @@ export async function runNativeInputRecovery({
         documentFocused: document.hasFocus(),
         inputFocused: document.activeElement === node,
       }));
-      if (process.platform === 'darwin') {
-        observations.pasteMethod =
-          'original Edit Paste native first-responder action';
-        // Exercise native image delivery without mistaking Playwright CDP keys
-        // for the system menu accelerator. Shortcut coverage is a separate probe.
-        observations.menu = await app.evaluate(({ Menu }) => {
-          const paste = Menu.getApplicationMenu()
-            ?.items.flatMap((item) => item.submenu?.items ?? [])
-            .find((item) => item.role === 'paste');
-          if (!paste?.enabled)
-            throw Error('original Edit Paste menu is unavailable');
-          const diagnostic = {
-            role: paste.role,
-            enabled: paste.enabled,
-            accelerator: paste.accelerator ?? null,
-            label: paste.label,
-          };
-          Menu.sendActionToFirstResponder('paste:');
-          return diagnostic;
-        });
-      } else {
-        observations.pasteMethod = 'native keyboard ControlOrMeta+v';
-        await page.keyboard.press('ControlOrMeta+v');
-      }
+      const pasteShortcut =
+        process.platform === 'darwin' ? 'Meta+v' : 'Control+v';
+      observations.pasteMethod = `native keyboard ${pasteShortcut}`;
+      await page.keyboard.press(pasteShortcut);
       await until(
         async () => (await current()).attachments.length > before,
         'real native valid PNG paste received',
@@ -230,6 +241,7 @@ export async function runNativeInputRecovery({
             return {
               paste: observer?.events ?? [],
               beforeinput: observer?.beforeInputEvents ?? [],
+              keys: observer?.keyEvents ?? [],
             };
           });
         },
