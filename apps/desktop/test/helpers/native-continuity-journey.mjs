@@ -86,6 +86,12 @@ export async function runNativeTerminalContextJourney({
     const before = currentSession(await state(), sessionId);
     const originalDraft = await composer(page).inputValue();
     const originalView = await persistedSessionView(page, sessionId);
+    if (originalView)
+      assert.equal(
+        originalView.draft ?? '',
+        originalDraft,
+        'the initial persisted draft matches the actual composer',
+      );
     const originalAttachments = (
       originalView?.attachments ?? before.attachments
     ).map((a) => a.id);
@@ -193,8 +199,8 @@ export async function runNativeTerminalContextJourney({
     const afterAdd = currentSession(await state(), sessionId);
     assert.equal(await composer(page).inputValue(), originalDraft);
     assert.equal(
-      (await persistedSessionView(page, sessionId))?.draft,
-      originalView?.draft,
+      (await persistedSessionView(page, sessionId))?.draft ?? '',
+      originalDraft,
     );
     assert.deepEqual(
       afterAdd.messages.map((m) => m.id),
@@ -297,8 +303,8 @@ export async function runNativeTerminalContextJourney({
       .waitFor({ state: 'detached' });
     assert.equal(await composer(page).inputValue(), originalDraft);
     assert.equal(
-      (await persistedSessionView(page, sessionId))?.draft,
-      originalView?.draft,
+      (await persistedSessionView(page, sessionId))?.draft ?? '',
+      originalDraft,
     );
     const afterRemove = currentSession(await state(), sessionId);
     assert.deepEqual(
@@ -443,6 +449,12 @@ export async function runNativeChildSourceJourney({
     await writeFile(join(workspace, sourcePath), parentContent, { flag: 'wx' });
     const previousDraft = await composer(page).inputValue();
     const previousView = await persistedSessionView(page, sessionId);
+    if (previousView)
+      assert.equal(
+        previousView.draft ?? '',
+        previousDraft,
+        'the parent persisted draft matches the actual composer',
+      );
     if (entry === 'tool') {
       const sourceTool = parent.messages.find(
         (m) =>
@@ -511,19 +523,23 @@ export async function runNativeChildSourceJourney({
     await record.getByText(agent.id, { exact: true }).waitFor();
     currentSession(await state(), sessionId);
     assert.equal(
-      (await persistedSessionView(page, sessionId))?.draft,
-      previousView?.draft,
+      (await persistedSessionView(page, sessionId))?.draft ?? '',
+      previousDraft,
     );
     await record.getByRole('button', { name: 'main', exact: true }).click();
     await composer(page).waitFor();
     assert.equal(await composer(page).inputValue(), previousDraft);
     await page.keyboard.press('ControlOrMeta+p');
-    const search = page.getByRole('textbox', {
-      name: 'search workspace files',
+    const quickOpen = page.getByRole('dialog', {
+      name: 'quick open',
+      exact: true,
+    });
+    await quickOpen.waitFor();
+    const search = quickOpen.getByPlaceholder('search workspace files', {
       exact: true,
     });
     await search.fill(fixture.otherFile);
-    await page
+    await quickOpen
       .getByRole('button', {
         name: new RegExp(fixture.otherFile.replaceAll('.', '\\.')),
       })
@@ -559,8 +575,8 @@ export async function runNativeChildSourceJourney({
     await composer(page).waitFor();
     assert.equal(await composer(page).inputValue(), previousDraft);
     assert.equal(
-      (await persistedSessionView(page, sessionId))?.draft,
-      previousView?.draft,
+      (await persistedSessionView(page, sessionId))?.draft ?? '',
+      previousDraft,
     );
     receipt.checks.push(
       'actual projected child opens from original navigation',
