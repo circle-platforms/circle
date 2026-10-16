@@ -551,9 +551,9 @@ export async function runNativeChildSourceJourney({
     await page.keyboard.insertText(fixture.changedOther);
     await until(
       async () =>
-        (await file.locator('.view-lines').innerText()).includes(
-          fixture.changedOther.trim(),
-        ),
+        (await file.locator('.view-lines').textContent())
+          .replaceAll('\u00a0', ' ')
+          .includes(fixture.changedOther.trim()),
       'manual edit reaches actual Monaco buffer',
     );
     await page.keyboard.press('ControlOrMeta+s');
