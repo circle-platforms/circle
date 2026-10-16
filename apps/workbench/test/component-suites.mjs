@@ -38,6 +38,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'conversation-reading-anchor-ui.mjs',
   'github-plugin-ui.mjs',
   'command-terminal-handoff-ui.mjs',
+  'github-permissions-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
