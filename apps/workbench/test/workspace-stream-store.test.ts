@@ -125,3 +125,111 @@ test('delivery cycle journal checkpoints survive renderer reload', () => {
     'awaiting-review',
   );
 });
+
+test('rolling UTF8 accounting is exact across trimming, eviction, reset and checkpoint restoration', () => {
+  const store = new WorkspaceStreamStore({
+    maxEventsPerResource: 3,
+    maxBytes: 1400,
+    schedule: () => {},
+  });
+  const exact = () =>
+    store
+      .checkpoint()
+      .resources.reduce(
+        (sum, resource) =>
+          sum +
+          new TextEncoder().encode(JSON.stringify(resource.events)).byteLength,
+        0,
+      );
+  for (let seq = 1; seq <= 24; seq++) {
+    const next = event(seq, 'one', seq % 2 ? '中文' : 'other');
+    next.data = {
+      text: '中文🙂\n"\\'.repeat((seq % 4) + 1),
+      nested: { value: seq },
+    };
+    assert.equal(store.apply(next), 'applied');
+    assert.equal(store.cachedBytes, exact());
+    assert.ok(store.cachedBytes <= 1400);
+  }
+  const restored = new WorkspaceStreamStore({
+    maxEventsPerResource: 3,
+    maxBytes: 1400,
+    schedule: () => {},
+  });
+  assert.equal(restored.restore(store.checkpoint()), true);
+  assert.equal(restored.cachedBytes, store.cachedBytes);
+  const restoredResource = restored.checkpoint().resources[0]!;
+  assert.throws(() => {
+    restored.snapshot(restoredResource.key)[0]!.data.text =
+      'cannot mutate owned replay';
+  }, TypeError);
+  for (let seq = 25; seq <= 30; seq++) {
+    assert.equal(restored.apply(event(seq, 'one', '中文')), 'applied');
+    assert.equal(
+      restored.cachedBytes,
+      restored
+        .checkpoint()
+        .resources.reduce(
+          (sum, r) =>
+            sum + new TextEncoder().encode(JSON.stringify(r.events)).byteLength,
+          0,
+        ),
+    );
+  }
+  restored.reset();
+  assert.equal(restored.cachedBytes, 0);
+  assert.equal(restored.apply(event(1, 'new')), 'applied');
+  assert.equal(
+    restored.cachedBytes,
+    new TextEncoder().encode(
+      JSON.stringify(
+        restored.snapshot(WorkspaceStreamStore.resourceKey(event(1))),
+      ),
+    ).byteLength,
+  );
+});
+
+test('owned snapshots cannot be changed by caller mutation, and retained events serialize only once', () => {
+  const store = new WorkspaceStreamStore({
+    maxEventsPerResource: 128,
+    schedule: () => {},
+  });
+  let serialized = 0;
+  const original = event(1);
+  original.data = { nested: { text: 'original' } };
+  store.apply(original);
+  (original.data.nested as { text: string }).text = 'caller changed';
+  original.cursor.seq = 999;
+  const key = WorkspaceStreamStore.resourceKey(original);
+  const owned = store.snapshot(key)[0]!;
+  assert.equal((owned.data.nested as { text: string }).text, 'original');
+  assert.equal(owned.cursor.seq, 1);
+  assert.throws(() => {
+    (owned.data.nested as { text: string }).text = 'snapshot changed';
+  }, TypeError);
+  assert.throws(() => {
+    (store.snapshot(key) as WorkspaceStreamEvent[]).push(event(99));
+  }, TypeError);
+  for (let seq = 2; seq <= 130; seq++) {
+    const next = event(seq);
+    next.data = {
+      toJSON() {
+        serialized++;
+        return { text: 'actual owned JSON' };
+      },
+    };
+    store.apply(next);
+  }
+  assert.equal(
+    serialized,
+    129,
+    'each incoming event serializes once, never the retained128 again',
+  );
+  store.checkpoint();
+  assert.equal(serialized, 129);
+  assert.equal(store.snapshot(key).length, 128);
+  assert.equal(
+    store.cachedBytes,
+    new TextEncoder().encode(JSON.stringify(store.snapshot(key))).byteLength,
+  );
+});
