@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
+import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
 import { tlsCertificates } from '../../../tests/tls-certificates.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -158,6 +159,11 @@ try {
             return;
           }
           assert.equal(req.url, '/v1/chat/completions');
+          // The session title is asked after the turn. It is not a search turn.
+          if (isTitleRequest(body)) {
+            answerTitle(res, body);
+            return;
+          }
           const last = body.messages.at(-1);
           if (last.role === 'tool') {
             results.set(last.tool_call_id, last.content);
