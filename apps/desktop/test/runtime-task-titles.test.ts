@@ -113,7 +113,7 @@ test('task titles are persisted from human instructions before the internal prom
       service: 'tasks',
       method: 'list',
     });
-  const title = '修复登录页面的错误提示 ' + '界面'.repeat(60);
+  const title = '修复登录页面的错误提示 ' + '界面🙂'.repeat(60);
   const prompt = `\n\n${title}\n保留完整需求与验收说明。`;
   const taskId = randomUUID();
   await call('workspace-service', {
@@ -165,16 +165,22 @@ test('task titles are persisted from human instructions before the internal prom
       'independent reviewer cannot replace worker identity',
     );
     assert.equal(store.get(workerId)?.title, renamed);
-    const reviews = store
-      .list()
-      .filter(
-        (session) =>
-          session.workspace === store.get(workerId)!.workspace &&
-          session.id !== workerId,
-      );
-    assert.equal(reviews.length, 1);
-    assert.equal(reviews[0].title, expectedTitle);
-    assert.notEqual(reviews[0].id, workerId);
+    const reviewers = (await tasks())[0].reviewers ?? [];
+    assert.equal(reviewers.length, 1);
+    const reviewerId = reviewers[0].sessionId;
+    assert.notEqual(reviewerId, workerId);
+    const expectedReviewerTitle =
+      'review: ' + Array.from(title).slice(0, 92).join('');
+    assert.equal(store.get(reviewerId)?.title, expectedReviewerTitle);
+    assert.equal(Array.from(store.get(reviewerId)!.title).length, 100);
+    assert.equal(
+      controller.snapshot().agents.find((agent) => agent.id === reviewerId)
+        ?.task?.role,
+      'reviewer',
+      'the distinct title belongs to the actual registered reviewer',
+    );
+    const renamedReviewer = '登录错误提示：独立审阅记录';
+    await call('rename-session', { id: reviewerId, title: renamedReviewer });
     await call('workspace-service', {
       service: 'tasks',
       method: 'retry',
@@ -196,6 +202,25 @@ test('task titles are persisted from human instructions before the internal prom
       renamed,
       'retry leaves the previous attempt manual title intact',
     );
+    assert.equal(
+      store.get(reviewerId)?.title,
+      renamedReviewer,
+      'retry leaves the actual previous reviewer manual title intact',
+    );
+    const retriedReviewers = retried.reviewers ?? [];
+    assert.equal(retriedReviewers.length, 1);
+    const retriedReviewerId = retriedReviewers[0].sessionId;
+    assert.notEqual(retriedReviewerId, reviewerId);
+    assert.notEqual(retriedReviewerId, retried.runtimeSessionId);
+    assert.equal(
+      store.get(retriedReviewerId)?.title,
+      'review: ' + Array.from(title).slice(0, 87).join('') + ' · #2',
+    );
+    for (const id of [retried.runtimeSessionId!, retriedReviewerId])
+      assert.ok(
+        Array.from(store.get(id)!.title).length <= 100,
+        'the role prefix and retry suffix share the automatic title budget',
+      );
     assert.deepEqual(
       await readFile(join(home, 'settings.json')),
       settingsBefore,
@@ -216,6 +241,13 @@ test('task titles are persisted from human instructions before the internal prom
       renamed,
     );
     assert.equal(store.get(workerId)?.title, renamed);
+    assert.equal(store.get(reviewerId)?.title, renamedReviewer);
+    assert.equal(
+      controller
+        .snapshot()
+        .sessions.find((session) => session.id === reviewerId)?.title,
+      renamedReviewer,
+    );
     assert.equal(reopenedModel.requests.length, 0);
     await call('select-session', { id: workerId });
     assert.equal(controller.snapshot().activeSessionId, workerId);
@@ -225,6 +257,15 @@ test('task titles are persisted from human instructions before the internal prom
       renamed,
       'opening existing task history does not reapply an automatic name',
     );
+    await call('select-session', { id: reviewerId });
+    assert.equal(controller.snapshot().activeSessionId, reviewerId);
+    assert.equal(
+      store.get(reviewerId)?.title,
+      renamedReviewer,
+      'opening actual reviewer history does not reapply its automatic role title',
+    );
+    assert.equal(store.get(workerId)?.title, renamed);
+    assert.equal(reopenedModel.requests.length, 0);
     assert.deepEqual(
       await readFile(join(home, 'settings.json')),
       settingsBefore,

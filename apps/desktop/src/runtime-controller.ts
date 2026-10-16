@@ -1441,17 +1441,25 @@ export class RuntimeController {
   ): AgentRuntime {
     this.bindWorkspace(workspace);
     const settings = settingsForRun(this.home, workspace).settings;
+    const taskPrefix = role === 'reviewer' ? 'review: ' : '';
+    const taskSuffix = task && task.attempt > 1 ? ` · #${task.attempt}` : '';
     const taskTitle = task
-      ? (role === 'reviewer' ? 'review: ' : '') +
+      ? taskPrefix +
         Array.from(
           task.spec.prompt
             .trim()
             .split(/\r\n|\r|\n/u)[0]!
             .replace(/\s+/gu, ' '),
         )
-          .slice(0, task.attempt > 1 ? 90 : 100)
+          .slice(
+            0,
+            Math.min(
+              task.attempt > 1 ? 90 : 100,
+              100 - Array.from(taskPrefix + taskSuffix).length,
+            ),
+          )
           .join('') +
-        (task.attempt > 1 ? ` · #${task.attempt}` : '')
+        taskSuffix
       : undefined;
     const create = (session?: string) =>
       new AgentRuntime({
