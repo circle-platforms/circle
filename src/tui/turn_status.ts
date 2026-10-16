@@ -4,7 +4,7 @@
 // approval, a question) does not count. Kept in memory only, as the Python version did: a
 // reopened session has no turn lines.
 import type { CircleEvent } from '../events.js';
-import type { Message } from '../types.js';
+import type { Message, ToolModelCall } from '../types.js';
 import { pickBusyVerb, type TurnUsage } from './status_rows.js';
 import type { ScreenState } from './render.js';
 
@@ -56,21 +56,32 @@ export class TurnStatus {
       turn.waited += now - turn.waitingSince;
       turn.waitingSince = undefined;
     }
-    if (event.kind === 'llm_end') {
+    if (
+      event.kind === 'llm_end' ||
+      (event.kind === 'tool_result' && event.usage)
+    ) {
       const output = event.usage?.output_tokens ?? 0;
       this.tokens += output;
       if (turn) {
         turn.input += event.usage?.input_tokens ?? 0;
         turn.output += output;
-        const cost = (event.payload.message as Message | undefined)?.cost;
-        // A request without a price in dollars leaves the turn's unknown
-        turn.cost =
-          turn.cost === null ||
-          !cost ||
-          cost.currency !== 'USD' ||
-          cost.amount === null
-            ? null
-            : turn.cost + cost.amount;
+        const calls = event.payload.model_calls as ToolModelCall[] | undefined;
+        const receipts =
+          event.kind === 'llm_end'
+            ? [(event.payload.message as Message | undefined)?.cost]
+            : calls?.length
+              ? calls.map((call) => call.cost)
+              : [undefined];
+        // Hosted tool charges can be unknown even when token prices are known.
+        for (const cost of receipts)
+          turn.cost =
+            turn.cost === null ||
+            !cost ||
+            cost.currency !== 'USD' ||
+            cost.amount === null ||
+            cost.tool_fee_unknown
+              ? null
+              : turn.cost + cost.amount;
       }
     }
     if (subagent) {

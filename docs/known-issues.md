@@ -36,6 +36,7 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **Tool calls other than `task` in one reply run one after another.** 0.5.0 asked every approval first and then ran all the calls of a reply at the same time; here only `task` calls next to each other run together. To run subagents side by side, the model can start them with `background: true`.
 - **The diff on an `edit_file` card assumes its text appears once.** When the text to replace appears more than once, the card shows the change at the first place, but the tool refuses such an edit unless it replaces every one. The model is told and usually tries again with more context.
 - **`grep` searches for literal text, not regular expressions.** Its description says so and points the model to `rg` in the shell for a regular expression, which asks for approval like any command.
+- **Native web search depends on the endpoint and model.** A provider preset is not a guarantee that your model, subscription or gateway supports its search API. Custom compatible endpoints that silently ignore search tools fall back to DuckDuckGo because Circle cannot confirm execution. If native search is unavailable and both DuckDuckGo endpoints are blocked or serving challenges, `websearch` fails; `webfetch` can still read a known URL when that site is reachable. Hosted search fees are not included in known token prices and remain unpriced.
 
 ## Images and screenshots
 
