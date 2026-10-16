@@ -1,3 +1,4 @@
+import { createRuntimePerformanceDiagnostics } from './runtime-performance-diagnostics.js';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { RuntimeController } from './runtime-controller';
@@ -38,6 +39,11 @@ if (fixturePath) {
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
   model = new RuntimeFixtureModel(fixture);
 }
+const diagnostics = createRuntimePerformanceDiagnostics({
+  testProfile: Boolean(process.env.CIRCLE_WORKBENCH_TEST_PROFILE),
+  enabled: process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS === '1',
+  dataFolder: dirname(home),
+});
 const browser = new BrowserBridge((message) => port.postMessage(message));
 const credentialStore = new RuntimeCredentialClient((message) =>
   port.postMessage(message),
@@ -50,8 +56,15 @@ const controller = new RuntimeController({
   browser,
   credentialStore,
   workspaceTools,
-  emitWorkspaceEvent: (event: WorkspaceServiceEvent) =>
-    port.postMessage({ type: 'workspace-event', event }),
+  emitWorkspaceEvent: (event: WorkspaceServiceEvent) => {
+    diagnostics?.record('workspace-event-sent', {
+      resourceId: event.resourceId,
+      epoch: event.epoch,
+      seq: event.seq,
+      sourceSeq: event.sourceSeq,
+    });
+    port.postMessage({ type: 'workspace-event', event });
+  },
   beforeDelete: (sessionId) => browser.releaseSession(sessionId),
   userHome: home,
   catalog: process.env.CIRCLE_WORKBENCH_TEST_PROFILE
@@ -73,9 +86,21 @@ port.on('message', ({ data }) => {
     browser.receive(message.reply);
     return;
   }
-  void controller
-    .dispatch(data)
-    .then((reply) => port.postMessage({ type: 'reply', reply }));
+  const command = data as {
+    id?: string;
+    name?: string;
+    payload?: { service?: string; method?: string };
+  };
+  diagnostics?.record('command-start', {
+    id: command.id,
+    name: command.name,
+    service: command.payload?.service,
+    method: command.payload?.method,
+  });
+  void controller.dispatch(data).then((reply) => {
+    diagnostics?.record('command-end', { id: command.id, name: command.name });
+    port.postMessage({ type: 'reply', reply });
+  });
 });
 let exiting = false;
 async function close() {
@@ -83,6 +108,7 @@ async function close() {
   exiting = true;
   await controller.close();
   credentialStore.close();
+  diagnostics?.close();
   process.exit(0);
 }
 process.on('SIGTERM', () => {

@@ -1,3 +1,7 @@
+import {
+  installRendererPerformanceDiagnostics,
+  installMainPerformanceDiagnostics,
+} from './helpers/native-performance-diagnostics.mjs';
 /** Run serially after build, in both development and packaged app paths.
  * node --import tsx apps/desktop/test/native-performance.mjs
  * Uses real Electron, persisted history, eight scripted streaming AgentRuntimes,
@@ -248,6 +252,12 @@ try {
   page.setDefaultTimeout(15000);
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.bringToFront();
+  if (process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS === '1') {
+    await app.evaluate(installMainPerformanceDiagnostics);
+    await page.evaluate(installRendererPerformanceDiagnostics, {
+      limit: 20000,
+    });
+  }
   report.driverHead = (
     await exec('git', ['-C', desktopRoot, 'rev-parse', 'HEAD'])
   ).stdout.trim();
@@ -900,6 +910,42 @@ try {
   } catch {}
   process.exitCode = 1;
 } finally {
+  if (process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS === '1') {
+    report.diagnostics = {
+      optIn: true,
+      observerOverhead:
+        'main 250ms sampling, renderer RAF/longtask/metadata subscription; synchronous bounded worker metadata writes; metrics and eligibility unchanged',
+    };
+    try {
+      report.diagnostics.renderer = await page.evaluate(() =>
+        window.__circleNativePerfDiagnostics?.stop(),
+      );
+    } catch (error) {
+      report.diagnostics.rendererError = String(error);
+    }
+    try {
+      report.diagnostics.main = await app.evaluate(() =>
+        globalThis.__circleNativePerfMainDiagnostics?.stop(),
+      );
+    } catch (error) {
+      report.diagnostics.mainError = String(error);
+    }
+    try {
+      report.diagnostics.worker = (
+        await readFile(join(data, 'performance-worker-events.jsonl'), 'utf8')
+      )
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    } catch (error) {
+      report.diagnostics.workerUnavailable = String(error);
+    }
+    await writeFile(
+      join(output, 'stage-diagnostics.json'),
+      JSON.stringify(report.diagnostics, null, 2),
+    );
+  }
   if (page) {
     try {
       report.terminalTiming = await page.evaluate(
@@ -971,6 +1017,23 @@ try {
         };
     }
     await app.close().catch(() => {});
+    if (process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS === '1') {
+      try {
+        report.diagnostics.workerAfterAppClose = (
+          await readFile(join(data, 'performance-worker-events.jsonl'), 'utf8')
+        )
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+      } catch (error) {
+        report.diagnostics.workerAfterCloseError = String(error);
+      }
+      await writeFile(
+        join(output, 'stage-diagnostics.json'),
+        JSON.stringify(report.diagnostics, null, 2),
+      );
+    }
   }
   for (const [metric, budget] of Object.entries({
     inputKeystroke: 100,
