@@ -728,6 +728,21 @@ export class SessionApp {
     );
     this.frameRows = rows;
     this.screen.render(this.selection.frame(rows, this.state), cursor.value);
+    this.sizeOpenTerminal();
+  }
+  /**
+   * The console on the page takes the page's size, as a device console takes its
+   * window's. Without this a switch lays its tables out for 80 columns and the page
+   * cuts them in half at 62, which is what makes a device page look broken.
+   */
+  private sizeOpenTerminal(): void {
+    const page = this.state.terminalPage;
+    const detail = this.state.terminalDetail;
+    const manager = this.terminalManager;
+    if (!page || !detail || !manager || !this.runtime) return;
+    // resize() answers to nothing when the size is the one it has, so this is quiet
+    // unless the page really changed, and a device's reply repaints through onChange.
+    manager.resize(this.runtime.session.id, detail.id, page.cols, page.rows);
   }
   // Coalesced frame request for high-frequency sources; one draw at most every 16 ms.
   requestRender(): void {

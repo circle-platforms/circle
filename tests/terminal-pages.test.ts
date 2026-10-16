@@ -15,7 +15,7 @@ import {
 } from '../src/ink/theme.js';
 import { stringWidth, stripAnsi } from '../src/ink/string_width.js';
 import { renderScreen, type ScreenState } from '../src/tui/render.js';
-import { terminalRows } from '../src/tui/strip_rows.js';
+import { terminalBand, terminalRows } from '../src/tui/strip_rows.js';
 import {
   TerminalSessions,
   type TerminalView,
@@ -240,6 +240,32 @@ test('strip rows: lamp, name, the last line the device showed and its quiet time
     width: 80,
   });
   assert.match(stripAnsi(held[0]!), /waiting for you/);
+  // An idle console is not work in progress. It carries no background, as a subagent's
+  // row does; only one that is connecting, has just answered, or waits for the person
+  // takes the strip's write colour - the same 1.5 s the page's band calls "output".
+  for (const [, p] of PALETTES) {
+    setPalette(p);
+    const write = p.write_bg.slice(2, -1);
+    const quiet = (over: Partial<TerminalView>) =>
+      terminalRows([{ ...view, ...over }], { width: 80 })[0]!;
+    assert.ok(
+      !quiet({}).includes(write),
+      'a quiet console is painted as work in progress',
+    );
+    assert.ok(
+      quiet({ quiet: 200 }).includes(write),
+      'a device that answered hides it',
+    );
+    assert.ok(
+      quiet({ state: 'connecting' }).includes(write),
+      'a device still connecting hides it',
+    );
+    assert.ok(
+      quiet({ held: 'attach' as const }).includes(write),
+      'a console waiting for the person hides it',
+    );
+  }
+  setPalette(PALETTES[0]![1]);
 });
 
 test('the page draws the device screen, band included, on both palettes', async (t) => {
@@ -262,9 +288,28 @@ test('the page draws the device screen, band included, on both palettes', async 
     assert.equal(rows.length, 24);
     for (const row of rows) assert.equal(stringWidth(stripAnsi(row)), 80);
     const plain = rows.map(stripAnsi);
-    // band: lamp and name, then the transport and address; no esc hint while browsing
+    // band: lamp and name, then the transport and the size the device lays out at.
+    // A bare host is named by its address, so row two does not say it a second time.
     assert.match(plain[2]!, /^ ● t1 sw1\.lan:22 /);
-    assert.match(plain[3]!, /^   ssh sw1\.lan:22 +$/);
+    assert.match(plain[3]!, /^   ssh · 80×24 +$/);
+    // a console named by a profile keeps its address, since row one shows the name
+    const named = terminalBand(
+      {
+        id: 't1',
+        name: 'lab-core',
+        target: '10.0.0.1:22',
+        transport: 'ssh',
+        state: 'ready',
+        detail: '',
+        held: undefined,
+        quiet: 0,
+        cols: 100,
+        rows: 30,
+      },
+      80,
+      false,
+    ).map(stripAnsi);
+    assert.match(named[1]!, /^   ssh 10\.0\.0\.1:22 · 100×30/);
     assert.equal(
       plain.slice(0, 5).join('\n').includes('esc'),
       false,
@@ -343,9 +388,18 @@ test('attached typing reaches the device, ctrl+c belongs to the console, and car
   assert.equal(app.state.draft, '', 'attached keys never reach the box');
   ui.handle({ type: 'paste', text: 'show clock' });
   assert.equal(fake.consoles[0]!.typed.at(-1), 'show clock');
-  // a size change reaches the device (the SSH test proves it for the real wire)
-  ui.terminalManager.resize(conversation, 't1', 100, 40);
-  assert.deepEqual(fake.consoles[0]!.sizes.at(-1), [100, 40]);
+  // The page gives the device the size it is drawn at, so the device lays its own
+  // tables out for that width instead of 80 columns cut in half at 62. A narrower
+  // window is a narrower console; the SSH test proves it reaches the real wire.
+  const sized = fake.consoles[0]!.sizes.at(-1)!;
+  assert.equal(sized[0], 110, 'the page width reaches the device');
+  assert.ok(sized[1] >= 20, 'the page height reaches the device');
+  Object.defineProperty(process.stdout, 'columns', {
+    value: 60,
+    configurable: true,
+  });
+  ui.repaint(); // what the resize listener does; start() is not run by a headless app
+  assert.equal(fake.consoles[0]!.sizes.at(-1)![0], 60);
   // any card that is not a handoff takes the frame: attach and page both let go
   const waiting = ui.dialog({
     title: 'q',

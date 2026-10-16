@@ -304,16 +304,23 @@ export function terminalRows(
   );
   const metaW = Math.max(0, ...metas.map((meta) => stringWidth(meta)));
   const doingW = Math.max(0, width - 3 - nameW - 2 - metaW - 2 - 1);
-  const rows = shown.map((one, index) =>
-    row(
-      p.write_bg,
+  const rows = shown.map((one, index) => {
+    // A console at its prompt is not work in progress. Only a device that is
+    // connecting, has just answered, or waits for the person takes the strip's
+    // colour; the same 1.5 s the page's band calls "output".
+    const busy =
+      one.held !== undefined ||
+      one.state === 'connecting' ||
+      (one.state === 'ready' && one.quiet < 1500);
+    return row(
+      busy ? p.write_bg : '',
       p.text,
       terminalLamp(one),
       `${padTo(names[index]!, nameW)}  ${padTo(fit(doings[index]!, doingW), doingW)}  `,
       rightTo(metas[index]!, metaW),
       now,
-    ),
-  );
+    );
+  });
   if (sessions.length > shown.length)
     rows.push(
       sgrJoin(p.panel_bg, p.faint) +
@@ -358,9 +365,15 @@ export function terminalBand(
     meta +
     ' ' +
     p.reset;
+  // A bare host connect is named by its address, so the row above already shows it:
+  // say the transport and the size the device lays out at, and name the address only
+  // when the line above does not.
+  const size = `${session.cols}×${session.rows}`;
   const second = attached
     ? 'typing goes to the device · ctrl+] detaches'
-    : `${session.transport} ${session.target}`;
+    : session.name === session.target
+      ? `${session.transport} · ${size}`
+      : `${session.transport} ${session.target} · ${size}`;
   return [
     first,
     sgrJoin(p.panel_bg, attached ? p.em : p.faint) +

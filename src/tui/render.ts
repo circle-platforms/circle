@@ -113,6 +113,11 @@ export interface ScreenState {
   terminalDetail?: TerminalSession;
   // Attached: keystrokes go to the device and its cursor is drawn.
   terminalAttached?: boolean;
+  /**
+   * What the device page drew its console at, filled in by the render: the app gives
+   * that size to the device, so it lays out for the width it is actually shown at.
+   */
+  terminalPage?: { cols: number; rows: number };
   compaction?: CompactionProgress;
   contextInput?: number;
   contextWindow?: number;
@@ -771,6 +776,12 @@ export function renderScreen(
   }
   // two header rows (and a page's band) above the transcript
   const available = Math.max(1, height - bottom.length - 2 - bandRows.length);
+  // A device screen is not a file: the device wraps and redraws for the size it has.
+  // Tell the app the box this page drew into so it can hand that to the console, as
+  // the desktop panel does through circle:terminal-resize.
+  state.terminalPage = state.terminalDetail
+    ? { cols: width, rows: Math.max(2, available) }
+    : undefined;
   state.view = {
     rows: available,
     maxScroll: Math.max(0, transcript.length - available),
