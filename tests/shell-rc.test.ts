@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  shellProbe,
   shellStartupFile,
   withoutStrayZshrc,
   zshIsInstalled,
@@ -82,4 +83,13 @@ test('a stray circle PATH block is removed only when zsh is not installed', () =
   );
   assert.equal(zshIsInstalled(exists('/bin/bash')), false);
   assert.equal(zshIsInstalled(exists('/usr/bin/zsh')), true);
+  const seen: string[] = [];
+  const probe = shellProbe((path) => {
+    seen.push(path);
+    return path === '/fixture/bin/zsh';
+  }, '/fixture');
+  assert.equal(zshIsInstalled(probe), true);
+  assert.deepEqual(seen, ['/fixture/bin/zsh']);
+  assert.equal(zshIsInstalled(shellProbe(() => false, '/fixture')), false);
+  assert.equal(zshIsInstalled(shellProbe(exists('/bin/zsh'))), true);
 });

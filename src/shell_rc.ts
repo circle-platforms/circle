@@ -48,6 +48,21 @@ export function shellStartupFile(options: {
   return undefined;
 }
 
+/**
+ * Looks up shell programs under `root` instead of `/`. `/bin/zsh` becomes
+ * `<root>/bin/zsh`. Without a root, the probe is the machine's own files.
+ * The installer sets the root only from `CIRCLE_SHELL_ROOT`, which the tests use
+ * so a Mac's `/bin/zsh` does not decide the result.
+ */
+export function shellProbe(
+  exists: (path: string) => boolean,
+  root?: string,
+): (path: string) => boolean {
+  if (!root) return exists;
+  return (path) =>
+    exists(path.startsWith('/') ? posix.join(root, path.slice(1)) : path);
+}
+
 /** zsh's program is on the usual paths. A name in $SHELL is not enough. */
 export function zshIsInstalled(exists: (path: string) => boolean): boolean {
   return installed('zsh', exists);

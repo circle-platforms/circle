@@ -13,6 +13,7 @@ import {
 import { userInfo } from 'node:os';
 import { delimiter, resolve } from 'node:path';
 import {
+  shellProbe,
   shellStartupFile,
   withoutStrayZshrc,
   zshIsInstalled,
@@ -74,10 +75,13 @@ if (process.platform !== 'win32') {
       loginShell = undefined;
     }
     const home = process.env.HOME || process.env.USERPROFILE || '';
+    // Tests set CIRCLE_SHELL_ROOT so `/bin/zsh` is a file they created, not the
+    // machine's. A real install leaves it unset and sees the real programs.
+    const shellExists = shellProbe(existsSync, process.env.CIRCLE_SHELL_ROOT);
     const startup = shellStartupFile({
       home,
       env: process.env,
-      exists: existsSync,
+      exists: shellExists,
       loginShell,
     });
     if (!startup) say(`add ${binDir} to PATH, or run ${binDir}/circle`);
@@ -98,7 +102,7 @@ if (process.platform !== 'win32') {
     }
     // The old installer wrote ~/.zshrc whenever $SHELL was not bash, including
     // on a machine with no zsh. That line does nothing there; take it out.
-    if (!zshIsInstalled(existsSync)) {
+    if (!zshIsInstalled(shellExists)) {
       const zshrc = resolve(home, '.zshrc');
       if (existsSync(zshrc)) {
         const next = withoutStrayZshrc(readFileSync(zshrc, 'utf8'));

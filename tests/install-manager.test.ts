@@ -15,6 +15,13 @@ import { fixture } from './release-fixture.js';
 
 const windows = process.platform === 'win32';
 
+/** A directory that stands in for `/` when the installer looks for bash and zsh. */
+function shellRoot(dir: string, names: readonly string[]): string {
+  mkdirSync(join(dir, 'bin'), { recursive: true });
+  for (const name of names) writeFileSync(join(dir, 'bin', name), '');
+  return dir;
+}
+
 function runManager(
   base: string,
   root: string,
@@ -27,6 +34,7 @@ function runManager(
     'CIRCLE_BIN_DIR',
     'CIRCLE_REPO',
     'CIRCLE_INSTALL_RESULT',
+    'CIRCLE_SHELL_ROOT',
   ])
     delete env[name];
   // Only fake locations: the installer must never write to the real home or its startup files.
@@ -115,8 +123,12 @@ test(
   (t) => {
     const base = scratch(t);
     const root = fixture(base, '1.0.0');
+    const shells = shellRoot(join(base, 'shells'), ['bash']);
     for (const run of [1, 2]) {
-      const result = runManager(base, root, [], { SHELL: '/bin/bash' });
+      const result = runManager(base, root, [], {
+        SHELL: '/bin/bash',
+        CIRCLE_SHELL_ROOT: shells,
+      });
       assert.equal(result.status, 0, result.stderr + result.stdout);
       assert.equal(/added .* to PATH/.test(result.stdout), run === 1);
     }
@@ -131,6 +143,7 @@ test(
     const quiet = runManager(base, root, [], {
       SHELL: '/bin/zsh',
       CIRCLE_NO_PATH: '1',
+      CIRCLE_SHELL_ROOT: shells,
     });
     assert.equal(quiet.status, 0, quiet.stderr);
     assert.equal(existsSync(join(base, 'home', '.zshrc')), false);
@@ -146,6 +159,7 @@ test(
     const result = runManager(base, root, [], {
       SHELL: '/no/such/zsh',
       BASH: '/bin/bash',
+      CIRCLE_SHELL_ROOT: shellRoot(join(base, 'shells'), ['bash']),
     });
     assert.equal(result.status, 0, result.stderr + result.stdout);
     assert.match(result.stdout, /added .* to PATH in .*\.bashrc/);
@@ -163,8 +177,13 @@ test(
     const home = join(base, 'home');
     mkdirSync(home, { recursive: true });
     const zshrc = join(home, '.zshrc');
-    writeFileSync(zshrc, '# circle path\nexport PATH="/usr/local/bin:$PATH"\n');
-    const emptied = runManager(base, root, [], { SHELL: '/bin/bash' });
+    const block = '# circle path\nexport PATH="/usr/local/bin:$PATH"\n';
+    const absent = shellRoot(join(base, 'no-zsh'), ['bash']);
+    writeFileSync(zshrc, block);
+    const emptied = runManager(base, root, [], {
+      SHELL: '/bin/bash',
+      CIRCLE_SHELL_ROOT: absent,
+    });
     assert.equal(emptied.status, 0, emptied.stderr + emptied.stdout);
     assert.equal(existsSync(zshrc), false);
     assert.match(emptied.stdout, /removed .*zshrc/);
@@ -172,9 +191,23 @@ test(
       zshrc,
       'export EDITOR=vi\n\n# circle path\nexport PATH="/usr/local/bin:$PATH"\n',
     );
-    const kept = runManager(base, root, [], { SHELL: '/bin/bash' });
-    assert.equal(kept.status, 0, kept.stderr + kept.stdout);
+    const trimmed = runManager(base, root, [], {
+      SHELL: '/bin/bash',
+      CIRCLE_SHELL_ROOT: absent,
+    });
+    assert.equal(trimmed.status, 0, trimmed.stderr + trimmed.stdout);
     assert.equal(readFileSync(zshrc, 'utf8'), 'export EDITOR=vi\n');
+    // The same file stays when the probe can see zsh, including on a Mac where
+    // /bin/zsh is real. The probe root is the only place that counts.
+    const present = shellRoot(join(base, 'with-zsh'), ['bash', 'zsh']);
+    writeFileSync(zshrc, block);
+    const kept = runManager(base, root, [], {
+      SHELL: '/bin/bash',
+      CIRCLE_SHELL_ROOT: present,
+    });
+    assert.equal(kept.status, 0, kept.stderr + kept.stdout);
+    assert.equal(readFileSync(zshrc, 'utf8'), block);
+    assert.equal(/removed .*zshrc/.test(kept.stdout), false);
   },
 );
 
