@@ -893,6 +893,7 @@ test('an Anthropic title request through the terminal replaces the fallback', as
     interactions: { close: () => void };
     off?: () => void;
     offSignals?: () => void;
+    sessions?: { close(): Promise<void> };
   };
   ui.screen.render = () => {};
   await app.attach({ workspace, home, settings, headless: true });
@@ -902,7 +903,8 @@ test('an Anthropic title request through the terminal replaces the fallback', as
     if (ui.flashTimer) clearTimeout(ui.flashTimer);
     ui.input.close();
     ui.interactions.close();
-    await app.runtime?.close();
+    // Every conversation /new or /resume opened, not only the one on screen.
+    await (ui.sessions?.close() ?? app.runtime?.close());
   });
   const prompt = 'list all the files in the workspace';
   await app.submit(prompt);
@@ -1064,6 +1066,7 @@ test('an Anthropic title reply that is only thinking keeps the fallback', async 
     interactions: { close: () => void };
     off?: () => void;
     offSignals?: () => void;
+    sessions?: { close(): Promise<void> };
   };
   ui.screen.render = () => {};
   await app.attach({ workspace, home, settings, headless: true });
@@ -1073,7 +1076,8 @@ test('an Anthropic title reply that is only thinking keeps the fallback', async 
     if (ui.flashTimer) clearTimeout(ui.flashTimer);
     ui.input.close();
     ui.interactions.close();
-    await app.runtime?.close();
+    // Every conversation /new or /resume opened, not only the one on screen.
+    await (ui.sessions?.close() ?? app.runtime?.close());
   });
   const prompt = 'look at @README.md and tell me what the first heading is';
   await app.submit(prompt);
@@ -1150,6 +1154,7 @@ test('Chinese prompts are titled from the model over a real HTTP server', async 
     interactions: { close: () => void };
     off?: () => void;
     offSignals?: () => void;
+    sessions?: { close(): Promise<void> };
   };
   ui.screen.render = () => {};
   await app.attach({ workspace, home, settings, headless: true });
@@ -1159,7 +1164,8 @@ test('Chinese prompts are titled from the model over a real HTTP server', async 
     if (ui.flashTimer) clearTimeout(ui.flashTimer);
     ui.input.close();
     ui.interactions.close();
-    await app.runtime?.close();
+    // Every conversation /new or /resume opened, not only the one on screen.
+    await (ui.sessions?.close() ?? app.runtime?.close());
   });
   await app.submit(rome);
   const first = app.runtime!;
@@ -1514,6 +1520,7 @@ test('startup repairs a visible title and the resume line follows it', async (t)
     interactions: { close: () => void };
     off?: () => void;
     offSignals?: () => void;
+    sessions?: { close(): Promise<void> };
   };
   ui.screen.render = () => {};
   await app.attach({
@@ -1529,7 +1536,8 @@ test('startup repairs a visible title and the resume line follows it', async (t)
     if (ui.flashTimer) clearTimeout(ui.flashTimer);
     ui.input.close();
     ui.interactions.close();
-    await app.runtime?.close();
+    // Every conversation /new or /resume opened, not only the one on screen.
+    await (ui.sessions?.close() ?? app.runtime?.close());
   });
   const titleCalls = () =>
     model.requests.filter(

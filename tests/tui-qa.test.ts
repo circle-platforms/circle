@@ -330,14 +330,16 @@ test('every POSIX absolute path stays absolute, including outside the old top-le
   assert.equal(isHostAbsolutePath('\\\\server\\share\\a', 'win32'), true);
   assert.equal(isHostAbsolutePath('/workspace/tui-proj', 'win32'), true);
   assert.equal(isHostAbsolutePath('src\\main.ts', 'win32'), false);
+  // Windows resolves a rooted path onto the current drive: D:\srv\data\file.txt.
+  const slashes = (path: string) => path.replaceAll('\\', '/');
   const box = new Sandbox('/workspace/tui-proj');
-  const outside = box.resolvePath('/workspace/tui-proj');
+  const outside = slashes(box.resolvePath('/workspace/tui-proj'));
   assert.equal(outside.includes('/workspace/tui-proj/workspace'), false);
   assert.match(outside, /tui-proj$/);
-  const elsewhere = box.resolvePath('/srv/data/file.txt');
-  assert.equal(elsewhere.startsWith('/workspace'), false);
-  assert.match(elsewhere, /\/srv\/data\/file\.txt$/);
-  assert.match(box.resolvePath('notes.txt'), /tui-proj\/notes\.txt$/);
+  const elsewhere = slashes(box.resolvePath('/srv/data/file.txt'));
+  assert.equal(elsewhere.includes('/workspace'), false);
+  assert.match(elsewhere, /(^|:)\/srv\/data\/file\.txt$/);
+  assert.match(slashes(box.resolvePath('notes.txt')), /tui-proj\/notes\.txt$/);
 });
 
 test('a session row appears on the first message, and an empty or unanswered one does not stay', (t) => {

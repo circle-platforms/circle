@@ -24,6 +24,7 @@ import {
   type ReleaseManifest,
 } from '../src/install_layout.js';
 import { VERSION } from '../src/version.js';
+import { TITLE_MAX_TOKENS } from '../src/session_title.js';
 import { verifyRelocatedWindowsQuery } from './verify-windows-query-package.js';
 import {
   defaultSettings,
@@ -136,10 +137,36 @@ try {
   mkdirSync(home);
   mkdirSync(workspace);
   let calls = 0;
+  let titles = 0;
   server = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
-    const payload = JSON.parse(body) as { messages: unknown[] };
+    const payload = JSON.parse(body) as {
+      messages: unknown[];
+      max_tokens?: number;
+    };
+    // The prompt is long enough for a session title, asked after the turn. It
+    // is not one of the turn's two calls.
+    if (payload.max_tokens === TITLE_MAX_TOKENS) {
+      titles++;
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(
+        'data: ' +
+          JSON.stringify({
+            id: 'smoke-title',
+            object: 'chat.completion.chunk',
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', content: 'Release receipt' },
+                finish_reason: 'stop',
+              },
+            ],
+          }) +
+          '\n\ndata: [DONE]\n\n',
+      );
+      return;
+    }
     calls++;
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     const delta =
@@ -226,6 +253,7 @@ try {
   });
   assert.match(answer, /release verified/);
   assert.equal(calls, 2);
+  assert.ok(titles <= 1, `${titles} title requests`);
   assert.equal(
     readFileSync(join(workspace, 'receipt.txt'), 'utf8'),
     'release smoke',
