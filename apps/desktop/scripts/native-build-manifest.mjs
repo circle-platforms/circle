@@ -109,6 +109,7 @@ export async function generateNativeBuildManifest({
     main,
     join(dist, 'preload.cjs'),
     join(dist, 'runtime-worker.mjs'),
+    join(dist, 'tools', 'command-supervisor.mjs'),
     join(dist, 'renderer', 'index.html'),
   ];
   const renderer = join(dist, 'renderer') + sep;

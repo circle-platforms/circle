@@ -110,6 +110,39 @@ export async function ensureNativeDependencyPermissions(root) {
     });
   }
 }
+/** Static, dependency-free supervisor travels with the same verified tool resources. */
+export async function prepareCommandSupervisor(dist) {
+  const source = new URL(
+    '../src/workspace/command-supervisor.mjs',
+    import.meta.url,
+  );
+  const bytes = await readFile(source);
+  const tools = join(dist, 'tools');
+  await mkdir(tools, { recursive: true });
+  await writeFile(join(tools, 'command-supervisor.mjs'), bytes, {
+    mode: 0o600,
+  });
+  await writeFile(
+    join(tools, 'command-supervisor.json'),
+    JSON.stringify({
+      format: 1,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    }) + '\n',
+    { mode: 0o600 },
+  );
+}
+export async function verifyCommandSupervisor(dist) {
+  const tools = join(dist, 'tools');
+  const receipt = JSON.parse(
+    await readFile(join(tools, 'command-supervisor.json'), 'utf8'),
+  );
+  const bytes = await readFile(join(tools, 'command-supervisor.mjs'));
+  if (
+    receipt.format !== 1 ||
+    receipt.sha256 !== createHash('sha256').update(bytes).digest('hex')
+  )
+    throw Error('unprepared command supervisor resource');
+}
 export async function prepareDeveloperTools(
   dist,
   {
@@ -130,6 +163,7 @@ export async function prepareDeveloperTools(
   const target = `${platform}-${arch}`;
   const asset = ghAssets[target];
   if (!asset) throw Error(`unsupported developer tool target ${target}`);
+  await prepareCommandSupervisor(dist);
   const tools = join(dist, 'tools');
   await mkdir(tools, { recursive: true });
   const temp = await mkdtemp(join(tmpdir(), 'circle-developer-tools-'));

@@ -31,6 +31,9 @@ export function verifyNativeBuildManifest(manifest, executed) {
     executed.mainPath,
     executed.preloadPath,
     executed.rendererPath,
+    ...(executed.commandSupervisorManifestPath
+      ? [executed.commandSupervisorManifestPath]
+      : []),
   ])
     if (!seen.has(required))
       throw Error(
@@ -80,6 +83,15 @@ export async function executedNativeBuildEvidence(app, manifest) {
         path.dirname(mainPath),
         'runtime-worker.mjs',
       );
+      const supervisorManifestPath = path.join(
+        path.dirname(mainPath),
+        'tools',
+        'command-supervisor.mjs',
+      );
+      const commandSupervisorPath = supervisorManifestPath.replace(
+        /([\\/])app\.asar([\\/])/,
+        '$1app.asar.unpacked$2',
+      );
       const artifacts = [];
       for (const entry of requested.artifacts ?? []) {
         if (
@@ -94,7 +106,9 @@ export async function executedNativeBuildEvidence(app, manifest) {
           !relative.startsWith('..' + path.sep) &&
           !path.isAbsolute(relative);
         if (
-          ![mainPath, preloadPath, workerPath].includes(entry.path) &&
+          ![mainPath, preloadPath, workerPath, supervisorManifestPath].includes(
+            entry.path,
+          ) &&
           !rendererAsset
         )
           throw Error('manifest artifact is outside the executed application');
@@ -102,7 +116,13 @@ export async function executedNativeBuildEvidence(app, manifest) {
           path: entry.path,
           sha256: crypto
             .createHash('sha256')
-            .update(await fs.readFile(entry.path))
+            .update(
+              await fs.readFile(
+                entry.path === supervisorManifestPath
+                  ? commandSupervisorPath
+                  : entry.path,
+              ),
+            )
             .digest('hex'),
         });
       }
@@ -114,6 +134,8 @@ export async function executedNativeBuildEvidence(app, manifest) {
         preloadPath,
         rendererPath,
         rendererURL: window.webContents.getURL(),
+        commandSupervisorPath,
+        commandSupervisorManifestPath: supervisorManifestPath,
         artifacts,
       };
     },

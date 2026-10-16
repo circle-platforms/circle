@@ -61,12 +61,14 @@ test('executed evidence reads bytes only from the actual app identity and preloa
   const root = await mkdtemp(join(tmpdir(), 'circle-build-manifest-'));
   try {
     await mkdir(join(root, 'dist', 'renderer'), { recursive: true });
+    await mkdir(join(root, 'dist', 'tools'), { recursive: true });
     await writeFile(
       join(root, 'package.json'),
       JSON.stringify({ main: 'dist/main.cjs' }),
     );
     const entries = [
       ['main.cjs', 'executed main'],
+      ['tools/command-supervisor.mjs', 'executed supervisor'],
       ['preload.cjs', 'executed preload'],
       ['renderer/index.html', 'executed renderer'],
     ];
@@ -134,4 +136,25 @@ test('executed evidence reads bytes only from the actual app identity and preloa
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('an executed supervisor resource is mandatory and its exact hash cannot be omitted', () => {
+  const commandSupervisorManifestPath =
+    '/app/dist/tools/command-supervisor.mjs';
+  const run = {
+    ...executed,
+    commandSupervisorManifestPath,
+    artifacts: [
+      ...executed.artifacts,
+      { path: commandSupervisorManifestPath, sha256: hash },
+    ],
+  };
+  assert.throws(() => verifyNativeBuildManifest(manifest(), run), /missing/);
+  const complete = { ...manifest(), artifacts: structuredClone(run.artifacts) };
+  assert.equal(
+    verifyNativeBuildManifest(complete, run).commandSupervisorManifestPath,
+    commandSupervisorManifestPath,
+  );
+  complete.artifacts.at(-1).sha256 = 'd'.repeat(64);
+  assert.throws(() => verifyNativeBuildManifest(complete, run), /hash/);
 });

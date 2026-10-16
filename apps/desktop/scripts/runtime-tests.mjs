@@ -10,6 +10,7 @@ import {
   GH_VERSION,
   NODE_VERSION,
   prepareDeveloperTools,
+  verifyCommandSupervisor,
 } from './developer-toolchain.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dist = join(root, 'dist');
@@ -17,6 +18,7 @@ const target = `${process.platform}-${process.arch}`;
 // Installation verifies archives and writes receipts. A routine test run checks the
 // receipt and essential entries without rehashing hundreds of MB or downloading again.
 async function prepared() {
+  await verifyCommandSupervisor(dist);
   for (const [name, version, entry] of [
     [
       'node',

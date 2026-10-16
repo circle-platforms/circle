@@ -17,6 +17,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ensureNativeDependencyPermissions,
+  prepareCommandSupervisor,
+  verifyCommandSupervisor,
   prepareNativeDependencies,
   prepareDeveloperTools,
   verifyArchive,
@@ -190,4 +192,31 @@ test('an incomplete matching tool receipt cannot suppress preparation of a missi
     /fixture download reached/,
   );
   assert.match(requested, /node-v24\.21\.0-darwin-arm64/);
+});
+
+test('static command supervisor copies exact source bytes and rejects a tampered resource receipt', async (t) => {
+  const dist = await mkdtemp(join(tmpdir(), 'circle-supervisor-resource-'));
+  t.after(() => rm(dist, { recursive: true, force: true }));
+  await prepareCommandSupervisor(dist);
+  const entry = join(dist, 'tools', 'command-supervisor.mjs');
+  const original = await readFile(
+    new URL('../src/workspace/command-supervisor.mjs', import.meta.url),
+  );
+  assert.deepEqual(await readFile(entry), original);
+  await verifyCommandSupervisor(dist);
+  await writeFile(entry, 'tampered');
+  await assert.rejects(
+    verifyCommandSupervisor(dist),
+    /unprepared command supervisor/,
+  );
+  await prepareCommandSupervisor(dist);
+  await verifyCommandSupervisor(dist);
+  assert.deepEqual(await readFile(entry), original);
+  const source = original.toString('utf8');
+  assert.deepEqual(
+    [...source.matchAll(/from ['"]([^'"]+)['"]/g)]
+      .map((match) => match[1])
+      .every((name) => name.startsWith('node:')),
+    true,
+  );
 });

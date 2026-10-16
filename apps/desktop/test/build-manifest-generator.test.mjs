@@ -34,10 +34,12 @@ test('pre-build source receipt binds both development files and actual packaged 
       join(app, 'package.json'),
       JSON.stringify({ main: 'dist/main.cjs' }),
     );
+    await mkdir(join(app, 'dist', 'tools'), { recursive: true });
     for (const name of [
       'main.cjs',
       'preload.cjs',
       'runtime-worker.mjs',
+      'tools/command-supervisor.mjs',
       'renderer/index.html',
       'renderer/assets/asset.js',
     ])
@@ -48,7 +50,7 @@ test('pre-build source receipt binds both development files and actual packaged 
       appPath: app,
       output: join(root, 'dev.json'),
     });
-    assert.equal(dev.artifacts.length, 5);
+    assert.equal(dev.artifacts.length, 6);
     assert.ok(dev.artifacts.every((entry) => entry.path.startsWith(app)));
     const require = createRequire(import.meta.url);
     const nested = createRequire(require.resolve('@electron/packager'));
@@ -56,7 +58,9 @@ test('pre-build source receipt binds both development files and actual packaged 
       pathToFileURL(nested.resolve('@electron/asar')).href
     );
     const archive = join(root, 'app.asar');
-    await asar.createPackage(app, archive);
+    await asar.createPackageWithOptions(app, archive, {
+      unpack: '**/tools/**',
+    });
     const packaged = await generateNativeBuildManifest({
       root,
       sourceReceipt: receipt,

@@ -15,6 +15,12 @@ test('development tools resolve beside the built worker, never through PATH', ()
       'darwin',
     ),
     {
+      commandSupervisorPath: fixture(
+        'application',
+        'dist',
+        'tools',
+        'command-supervisor.mjs',
+      ),
       nodeExecutable: fixture('Electron'),
       runtimeExecutable: fixture(
         'application',
@@ -46,6 +52,7 @@ test('packaged executables and adapter resources resolve outside asar', () => {
   );
   const unpacked = join(resources, 'app.asar.unpacked', 'dist', 'tools');
   assert.deepEqual(tools, {
+    commandSupervisorPath: join(unpacked, 'command-supervisor.mjs'),
     runtimeExecutable: join(unpacked, 'node', 'bin', 'node'),
     adapterPath: join(unpacked, 'js-debug', 'src', 'dapDebugServer.js'),
     ghPath: join(unpacked, 'gh', 'bin', 'gh'),
