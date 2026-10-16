@@ -1880,6 +1880,8 @@ export class ChromeBrowser implements BrowserPort {
       conversation.tabsChanged = true;
       return { text: await this.result(conversation, text, signal) };
     }
+    if (action === 'handoff' && !this.options.handoff)
+      throw Error('there is no one to hand the browser to here');
     const tab = await this.activeTab(conversation);
     await this.onScreen(tab, signal);
     if (action === 'handoff') {
