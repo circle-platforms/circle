@@ -74,6 +74,34 @@ try {
           () => !document.querySelector('[role="alert"]'),
         );
         assert(await submit.isEnabled());
+        const recovery = page.getByText(
+          zh
+            ? '并发上限已修复；准备好后请手动启动排队任务'
+            : 'limits repaired; start queued tasks when ready',
+          { exact: true },
+        );
+        await recovery.waitFor();
+        assert.equal(
+          await page.evaluate(
+            () =>
+              window.calls.filter((c) => c.payload.method === 'start').length,
+          ),
+          0,
+        );
+        await page
+          .getByRole('button', {
+            name: zh ? '启动就绪任务' : 'start ready tasks',
+            exact: true,
+          })
+          .click();
+        await recovery.waitFor({ state: 'hidden' });
+        assert.equal(
+          await page.evaluate(
+            () =>
+              window.calls.filter((c) => c.payload.method === 'start').length,
+          ),
+          1,
+        );
         assert.equal(
           await page.locator('.task-create-form textarea').first().inputValue(),
           'recover real task creation',

@@ -7,6 +7,7 @@ const query = new URLSearchParams(location.search);
 setLanguage(query.get('language') === 'zh-CN' ? 'zh-CN' : 'en');
 applyTheme(query.get('theme') === 'dark' ? 'dark' : 'light');
 let invalid = true;
+let requiresStart = true;
 let limits = { agents: 1, builds: 1, ui: 1, browsers: 1 };
 const calls: unknown[] = [];
 Object.assign(window, {
@@ -30,11 +31,16 @@ Object.assign(window, {
           ok: true,
           data: {
             ...limits,
+            ...(requiresStart ? { requiresStart: true } : {}),
             ...(invalid
               ? { error: 'could not load task settings: invalid agents' }
               : {}),
           },
         };
+      }
+      if (method === 'start') {
+        requiresStart = false;
+        return { ok: true, data: [] };
       }
       if (method === 'list')
         return invalid
@@ -42,7 +48,27 @@ Object.assign(window, {
               ok: false,
               error: 'task scheduler unavailable until limits are repaired',
             }
-          : { ok: true, data: [] };
+          : {
+              ok: true,
+              data: [
+                {
+                  spec: {
+                    id: 'queued-before-repair',
+                    prompt: 'Queued before restart',
+                    workspace: '/synthetic',
+                    baseline: 'a'.repeat(40),
+                    dependencies: [],
+                    acceptanceCriteria: ['explicit start'],
+                    access: 'readonly',
+                    resource: 'agent',
+                  },
+                  state: 'queued',
+                  attempt: 1,
+                  createdAt: 1,
+                  updatedAt: 1,
+                },
+              ],
+            };
       if (method === 'enqueue') return { ok: true, data: [] };
       return { ok: true, data: [] };
     },

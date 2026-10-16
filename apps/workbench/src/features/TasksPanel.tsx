@@ -47,6 +47,7 @@ export function TasksPanel({
   const [error, setError] = useState('');
   const [configurationError, setConfigurationError] = useState('');
   const [tasksReady, setTasksReady] = useState(false);
+  const [requiresStart, setRequiresStart] = useState(false);
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const instruction = useRef<HTMLTextAreaElement>(null);
@@ -77,7 +78,7 @@ export function TasksPanel({
     const revision = ++refreshRevision.current;
     const [records, settings] = await Promise.allSettled([
       workspaceCall<TaskRecord[]>(sessionId, 'tasks', 'list'),
-      workspaceCall<Limits & { error?: string }>(
+      workspaceCall<Limits & { error?: string; requiresStart?: boolean }>(
         sessionId,
         'tasks',
         'settings',
@@ -91,6 +92,7 @@ export function TasksPanel({
       const { agents, builds, ui, browsers, error } = settings.value;
       setLimits({ agents, builds, ui, browsers });
       setConfigurationError(error ?? '');
+      setRequiresStart(settings.value.requiresStart === true);
     } else {
       setLimits(null);
       setConfigurationError(String(settings.reason));
@@ -104,6 +106,7 @@ export function TasksPanel({
     setLimits(null);
     setConfigurationError('');
     setTasksReady(false);
+    setRequiresStart(false);
     setError('');
     setDependencies([]);
     void refresh();
@@ -284,6 +287,11 @@ export function TasksPanel({
           </div>
         </form>
       </div>
+      {requiresStart && !configurationError && (
+        <p role="status">
+          {t('limits repaired; start queued tasks when ready')}
+        </p>
+      )}
       {configurationError && (
         <p role="alert" className="tasks-error">
           {t('fix collaboration limits in settings before starting tasks')}{' '}
