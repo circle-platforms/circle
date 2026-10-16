@@ -5,6 +5,7 @@ import { t } from '../i18n/index.ts';
 export function agentState(
   agent: Pick<AgentRecord, 'status' | 'task'>,
 ): string {
+  if (agent.task?.recovery === 'needs_reconciliation') return 'needs_review';
   return agent.task?.state === 'succeeded'
     ? 'completed'
     : (agent.task?.state ?? agent.status);
@@ -12,6 +13,7 @@ export function agentState(
 export function isAgentActive(
   agent: Pick<AgentRecord, 'status' | 'task'>,
 ): boolean {
+  if (agent.task?.recovery === 'needs_reconciliation') return false;
   return agent.task
     ? ['queued', 'preparing', 'running', 'waiting', 'cancelling'].includes(
         agent.task.state,

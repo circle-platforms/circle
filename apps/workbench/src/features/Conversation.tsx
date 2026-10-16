@@ -1,6 +1,6 @@
 import { matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
-import { agentActivityText } from '../model/activity';
+import { agentActivityText, isAgentActive } from '../model/activity';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -586,7 +586,7 @@ export function Conversation({
       ['running', 'waiting'].includes(job.state),
   );
   const agents = snapshot.agents.filter(
-    (agent) => agent.sessionId === session.id && agent.status !== 'completed',
+    (agent) => agent.sessionId === session.id && isAgentActive(agent),
   );
   const pending = snapshot.interactions.filter(
     (item) => item.sessionId === session.id && item.status === 'pending',

@@ -87,3 +87,12 @@ test('legacy failure and interruption activity retains priority over a completed
     setLanguage('en');
   }
 });
+
+test('unreconciled history keeps its ledger state but never reports an active agent', () => {
+  const agent = taskAgent('running');
+  agent.task!.recovery = 'needs_reconciliation';
+  assert.equal(agent.task!.state, 'running');
+  assert.equal(agentState(agent), 'needs_review');
+  assert.equal(isAgentActive(agent), false);
+  assert.equal(agentActivityText(agent), 'needs review');
+});

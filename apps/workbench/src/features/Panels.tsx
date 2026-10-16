@@ -1,7 +1,7 @@
 import { WorkspacePanelContents } from './WorkspacePanelContents';
 import { useSources } from '../components/SourceNavigation';
 import { desktopHost } from '../host';
-import { agentActivityText } from '../model/activity';
+import { agentActivityText, agentState } from '../model/activity';
 import { NativeBrowser } from './NativeBrowser';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
@@ -670,7 +670,7 @@ export function ActivityPanel({
                     <strong>{agent.name}</strong>
                     <small>{agentActivityText(agent)}</small>
                   </span>
-                  <Status value={agent.status} />
+                  <Status value={agentState(agent)} />
                 </button>
               ))}
           </div>

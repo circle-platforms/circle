@@ -213,6 +213,8 @@ export interface AgentRecord {
       | 'needs_review';
     access: 'write' | 'readonly';
     baseline: string;
+    /** History is visible, but an old in-flight process has not been reconciled. */
+    recovery?: 'needs_reconciliation';
   };
 }
 export interface Job {

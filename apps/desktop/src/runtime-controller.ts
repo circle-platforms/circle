@@ -96,6 +96,12 @@ import { SessionMetadata } from './session-metadata';
 import { WorkspaceServices } from './workspace/workspace-services';
 import { OperationLedger } from './workspace/operation-ledger';
 import { TaskService } from './workspace/task-service';
+import {
+  readArchivedTaskAttempts,
+  taskToolAgentIds,
+  taskNeedsReconciliation,
+  assertReadonlyTaskRequest,
+} from './workspace/task-agent-projection';
 import { createTaskVerifier } from './workspace/task-verification';
 import { CollaborationResources } from './workspace/collaboration';
 import { createCollaborationTools } from './workspace/collaboration-tools';
@@ -137,6 +143,7 @@ import type {
   Interaction,
   Effort,
   DiffView,
+  AgentRecord,
 } from '../../workbench/src/model/types';
 import {
   validateRuntimeCommand,
@@ -316,6 +323,8 @@ export class RuntimeController {
   private mutation = Promise.resolve();
   private workspaceServices = new Map<string, WorkspaceServices>();
   private taskServices = new Map<string, TaskService>();
+  private archivedTaskAttempts = new Map<string, readonly TaskRecord[]>();
+  private taskProjectionErrors = new Map<string, string>();
   private taskResources = new CollaborationResources();
   private taskVerifiers = new Map<
     string,
@@ -883,6 +892,117 @@ export class RuntimeController {
     }
     return service;
   }
+  private taskAgentAttempts(ownerSessionId: string): {
+    records: readonly TaskRecord[];
+    archived: boolean;
+  } {
+    const owner = this.store.get(ownerSessionId);
+    if (!owner) return { records: [], archived: true };
+    const root = this.taskWorkspaces.get(owner.workspace) ?? owner.workspace;
+    const live = this.taskServices.get(root);
+    if (live) {
+      this.taskProjectionErrors.delete(`${root}:${ownerSessionId}`);
+      return { records: live.taskAttempts(ownerSessionId), archived: false };
+    }
+    const key = `${root}:${ownerSessionId}`;
+    if (this.archivedTaskAttempts.has(key))
+      return { records: this.archivedTaskAttempts.get(key)!, archived: true };
+    try {
+      const records = readArchivedTaskAttempts({
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'collaboration',
+          identity(root),
+        ),
+        workspace: root,
+        ownerSessionId,
+      });
+      this.archivedTaskAttempts.set(key, records);
+      this.taskProjectionErrors.delete(key);
+      return { records, archived: true };
+    } catch (error) {
+      this.taskProjectionErrors.set(
+        key,
+        `could not read agent task history: ${(error as Error).message}`,
+      );
+      return { records: [], archived: true };
+    }
+  }
+  private nativeTaskAgents(runtime: AgentRuntime): AgentRecord[] {
+    const agents = new Map<string, AgentRecord>();
+    for (const owner of this.store.list(undefined, true)) {
+      const { records, archived } = this.taskAgentAttempts(owner.id);
+      for (const task of records) {
+        if (!task.runtimeSessionId) continue;
+        const child = this.store.get(task.runtimeSessionId);
+        if (
+          !child ||
+          !task.worktree ||
+          child.workspace !== canonicalPath(task.worktree)
+        )
+          continue;
+        // Native tasks intentionally retain their own top-level session row. The
+        // durable task ledger supplies parent identity without altering approvals.
+        const recovery = archived && taskNeedsReconciliation(task);
+        this.taskWorkspaces.set(child.workspace, task.spec.workspace);
+        agents.set(child.id, {
+          id: child.id,
+          sessionId: owner.id,
+          name:
+            child.title || task.spec.prompt.split(/\r\n|\r|\n/u)[0] || 'agent',
+          description: task.spec.prompt,
+          activity: this.activities.get(child.id),
+          status:
+            recovery ||
+            ['waiting', 'blocked', 'needs_review'].includes(task.state)
+              ? 'waiting'
+              : ['queued', 'preparing', 'running', 'cancelling'].includes(
+                    task.state,
+                  )
+                ? 'running'
+                : 'completed',
+          model: child.model,
+          tokens: 0,
+          messages: this.projectMessages(runtime, child.id),
+          workspaceId: identity(child.workspace),
+          resourceSessionId: child.id,
+          readOnly: task.spec.access === 'readonly',
+          task: {
+            id: task.spec.id,
+            attempt: task.attempt,
+            state: task.state,
+            access: task.spec.access,
+            baseline: task.spec.baseline,
+            ...(recovery ? { recovery: 'needs_reconciliation' as const } : {}),
+          },
+        });
+      }
+    }
+    return [...agents.values()];
+  }
+  private sourceTask(sessionId: string): TaskRecord | undefined {
+    const child = this.store.get(sessionId);
+    if (!child) return undefined;
+    for (const owner of this.store.list(undefined, true)) {
+      const { records } = this.taskAgentAttempts(owner.id);
+      const task = records.find(
+        (task) =>
+          task.runtimeSessionId === sessionId &&
+          task.worktree &&
+          canonicalPath(task.worktree) === child.workspace,
+      );
+      if (task) {
+        this.taskWorkspaces.set(child.workspace, task.spec.workspace);
+        return task;
+      }
+    }
+    // A failed task history read must not silently grant write permission.
+    if (this.taskProjectionErrors.size)
+      throw Error(
+        'agent source permission could not be verified; inspect task history error',
+      );
+    return undefined;
+  }
   private ledger(): Promise<OperationLedger> {
     return (this.operationLedger ??= OperationLedger.open({
       directory: join(
@@ -960,6 +1080,15 @@ export class RuntimeController {
     if (this.runtimes.lifecycle(id) !== 'open')
       throw Error('session is deleting or deleted');
     const request = validateWorkspaceRequest(command.payload);
+    if (
+      ['documents', 'language'].includes(request.service) &&
+      this.sourceTask(id)?.spec.access === 'readonly'
+    )
+      assertReadonlyTaskRequest(
+        request.service,
+        request.method,
+        request.params,
+      );
     if (
       request.service === 'inputs' &&
       (request.method === 'list' || request.params?.action !== 'resume')
@@ -1267,6 +1396,12 @@ export class RuntimeController {
               ...call.tool,
               output: raw.content,
               status: raw.status ?? 'success',
+              agentIds: taskToolAgentIds(
+                call.tool.name,
+                call.tool.input,
+                raw.content,
+                this.taskAgentAttempts(id).records,
+              ),
             },
           };
         } else
@@ -1339,6 +1474,12 @@ export class RuntimeController {
             filePath:
               String(call.args.file_path ?? call.args.path ?? '') || undefined,
             diff: this.diffs.get(`${id}:${call.id}`),
+            agentIds: taskToolAgentIds(
+              call.name,
+              call.args,
+              state?.output ?? '',
+              this.taskAgentAttempts(id).records,
+            ),
           },
         };
         calls.set(call.id, row);
@@ -1398,6 +1539,7 @@ export class RuntimeController {
         runtime.options.workspace,
       ]),
     ];
+    const nativeAgents = this.nativeTaskAgents(runtime);
     const sessions: Session[] = rows.map((row) => {
       const owner =
         this.runtimes.get(row.id) ??
@@ -1514,7 +1656,10 @@ export class RuntimeController {
         observedAt: new Date().toISOString(),
         configured: !!this.options.model || isReady(settings),
         hasKey: (this.keySaved ??= Boolean(this.savedKey())),
-        error: this.error ?? this.workspaceStreamFailures.values().next().value,
+        error:
+          this.error ??
+          this.workspaceStreamFailures.values().next().value ??
+          this.taskProjectionErrors.values().next().value,
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
@@ -1543,26 +1688,36 @@ export class RuntimeController {
       })),
       sessions,
       files: [],
-      agents: this.store
-        .list(undefined, true)
-        .filter((row) => row.parent_id)
-        .map((row) => ({
-          id: row.id,
-          sessionId: row.parent_id!,
-          name: row.title || 'agent',
-          activity: this.activities.get(row.id),
-          description: row.title,
-          status: [...this.pending.values()].some(
-            (pending) => pending.row.origin?.agent === row.id,
-          )
-            ? 'waiting'
-            : this.activeRuns.has(row.id)
-              ? 'running'
-              : 'completed',
-          model: row.model,
-          tokens: 0,
-          messages: this.projectMessages(runtime, row.id),
-        })),
+      agents: [
+        ...this.store
+          .list(undefined, true)
+          .filter((row) => row.parent_id)
+          .map(
+            (row) =>
+              ({
+                id: row.id,
+                sessionId: row.parent_id!,
+                workspaceId: identity(row.workspace),
+                resourceSessionId: row.id,
+                // Core history has no durable per-child permission metadata.
+                readOnly: true,
+                name: row.title || 'agent',
+                activity: this.activities.get(row.id),
+                description: row.title,
+                status: [...this.pending.values()].some(
+                  (pending) => pending.row.origin?.agent === row.id,
+                )
+                  ? 'waiting'
+                  : this.activeRuns.has(row.id)
+                    ? 'running'
+                    : 'completed',
+                model: row.model,
+                tokens: 0,
+                messages: this.projectMessages(runtime, row.id),
+              }) as AgentRecord,
+          ),
+        ...nativeAgents,
+      ],
       jobs: [...this.runtimes.values()].flatMap((owner) =>
         owner.jobs.list().map((job) => ({
           id: `${job.sessionId}:${job.id}`,
