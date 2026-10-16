@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { realpath } from 'node:fs/promises';
 import { GitWorkspaceService } from './git.ts';
+import type { NativeGitHubConnection } from './github-connection.ts';
 import {
   DeliveryLogin,
   type LoginSpawn,
@@ -15,15 +16,31 @@ export class DeliveryService {
   readonly root: string;
   readonly ghPath: string;
   readonly login?: DeliveryLogin;
+  private connection?: NativeGitHubConnection;
+  private operationEpoch?: number;
+  private operationSignal?: AbortSignal;
+  private repositoryScope?: Promise<string>;
+  private assertActive?: () => void;
   constructor(
     root: string,
     ghPath = 'gh',
-    options?: { spawn: LoginSpawn; credentialStore?: CredentialStore },
+    options?: {
+      spawn: LoginSpawn;
+      credentialStore?: CredentialStore;
+      connection?: NativeGitHubConnection;
+      epoch?: number;
+      signal?: AbortSignal;
+      assertActive?: () => void;
+    },
   ) {
     this.root = root;
     this.ghPath = ghPath;
     this.git = new GitWorkspaceService(root);
-    if (options)
+    this.connection = options?.connection;
+    this.operationEpoch = options?.epoch;
+    this.operationSignal = options?.signal;
+    this.assertActive = options?.assertActive;
+    if (options && !this.connection)
       this.login = new DeliveryLogin(
         options.spawn,
         ghPath,
@@ -31,7 +48,40 @@ export class DeliveryService {
         options.credentialStore,
       );
   }
-  async gh(args: string[]) {
+  private repository() {
+    return (this.repositoryScope ??= (async () => {
+      const remote = (await this.git.git(['remote', 'get-url', 'origin']))
+        .trim()
+        .replace(/^git@github\.com:/, 'https://github.com/')
+        .replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/')
+        .replace(/\.git$/, '');
+      const match = /^https:\/\/github\.com\/([-\w.]+\/[-\w.]+)$/.exec(remote);
+      if (!match) throw Error('select an authorized GitHub repository remote');
+      this.connection!.assertGrant(this.operationEpoch!, match[1]!);
+      return match[1]!;
+    })());
+  }
+  private guard() {
+    this.operationSignal?.throwIfAborted();
+    this.assertActive?.();
+    if (this.connection && this.operationEpoch !== undefined)
+      this.connection.assertEpoch(this.operationEpoch);
+  }
+  async gh(args: string[]): Promise<string> {
+    if (this.connection && this.operationEpoch === undefined)
+      return this.scoped().gh(args);
+    this.guard();
+    if (this.connection) {
+      const repository = await this.repository();
+      this.guard();
+      return this.connection.run(
+        args,
+        this.operationEpoch ?? this.connection.snapshot().epoch,
+        this.root,
+        this.operationSignal,
+        repository,
+      );
+    }
     const token = await this.login?.token();
     return (
       await exec(this.ghPath, args, {
@@ -65,9 +115,23 @@ export class DeliveryService {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<unknown> {
+    if (this.connection && this.operationEpoch === undefined)
+      return this.scoped().call(method, params);
+    this.guard();
     if (!['publish', 'ready', 'retry'].includes(method))
       return this.execute(method, params);
     return this.serialized(() => this.execute(method, params));
+  }
+  private scoped() {
+    return new DeliveryService(this.root, this.ghPath, {
+      spawn: () => {
+        throw Error('connection login belongs in settings');
+      },
+      connection: this.connection,
+      epoch: this.connection!.snapshot().epoch,
+      signal: this.operationSignal,
+      assertActive: this.assertActive,
+    });
   }
   /** Trusted host only: publish the exact candidate already pushed by the cycle ledger. */
   async publishPushed(input: {
@@ -76,6 +140,8 @@ export class DeliveryService {
     title: string;
     body: string;
   }): Promise<unknown> {
+    if (this.connection && this.operationEpoch === undefined)
+      return this.scoped().publishPushed(input);
     return this.serialized(() => this.publish(input, input.head));
   }
   private async candidateSnapshot() {
@@ -104,6 +170,7 @@ export class DeliveryService {
     params: Record<string, unknown>,
   ): Promise<unknown> {
     if (method === 'login') {
+      if (this.connection) throw Error('open GitHub connection in settings');
       if (!this.login) throw Error('native login helper is unavailable');
       if (params.action === 'poll') return this.login.poll(String(params.id));
       if (params.action === 'cancel')
@@ -446,6 +513,8 @@ export class DeliveryService {
       throw Error('publish from a feature branch');
     const preparePublishedHead = async () => {
       if (pushedHead === undefined) {
+        if (this.connection) await this.repository();
+        this.guard();
         await this.git.call('push', { revision: state.revision });
         return;
       }

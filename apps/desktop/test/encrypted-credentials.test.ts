@@ -95,3 +95,40 @@ test('credential identities, values and HTTPS native links are bounded and valid
     await rm(folder, { recursive: true, force: true });
   }
 });
+
+test('missing owned ciphertext does not initialize the cipher and opaque ciphertext can be disconnected while encryption is unavailable', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'circle-empty-cipher-'));
+  let calls = 0;
+  const store = new EncryptedCredentialStore(folder, {
+    isEncryptionAvailable: () => {
+      calls++;
+      return false;
+    },
+    encryptString: () => {
+      throw Error('must not encrypt');
+    },
+    decryptString: () => {
+      throw Error('must not decrypt');
+    },
+  });
+  try {
+    assert.equal(await store.get('github.com'), undefined);
+    assert.equal(calls, 0);
+    const { createHash } = await import('node:crypto');
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(
+      join(
+        folder,
+        createHash('sha256').update('github.com').digest('hex') + '.bin',
+      ),
+      Buffer.from('synthetic opaque ciphertext'),
+    );
+    await assert.rejects(store.get('github.com'), /securely/);
+    assert.equal(calls, 1);
+    await store.delete('github.com');
+    assert.equal(calls, 1);
+    assert.equal(await store.get('github.com'), undefined);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});

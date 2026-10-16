@@ -30,6 +30,7 @@ export type LoginSpawn = (
 export interface CredentialStore {
   get(): Promise<string | undefined>;
   put(token: string): Promise<void>;
+  delete?(): Promise<void>;
 }
 export type LoginState = {
   id: string;
@@ -51,6 +52,7 @@ export class DeliveryLogin {
       exited: boolean;
       exit: Promise<void>;
       cleanup?: Promise<void>;
+      completion?: Promise<void>;
       timer: ReturnType<typeof setTimeout>;
     }
   >();
@@ -74,7 +76,9 @@ export class DeliveryLogin {
   async token() {
     return this.sessionToken ?? this.store?.get();
   }
-  async start() {
+  async start(
+    options: { storage: 'encrypted' | 'session' } = { storage: 'encrypted' },
+  ) {
     for (const entry of this.entries.values())
       if (['starting', 'waiting'].includes(entry.state.status))
         return { ...entry.state };
@@ -151,9 +155,9 @@ export class DeliveryLogin {
       entry.exited = true;
       markExited();
       clearTimeout(timer);
-      void (async () => {
+      const completion = (async () => {
         try {
-          if (state.status === 'cancelled') return;
+          if (this.poll(id).status === 'cancelled') return;
           if (exitCode !== 0) throw Error('authorization failed');
           const result = await this.credentialCommand(
             this.executable,
@@ -170,21 +174,25 @@ export class DeliveryLogin {
           if (!token || token.includes('\n')) throw Error('invalid credential');
           if (this.poll(id).status === 'cancelled') return;
           state.status = 'saving';
-          this.sessionToken = token;
-          state.storage = 'session';
-          if (this.store) {
-            try {
-              await this.store.put(token);
-              state.storage = 'encrypted';
-            } catch {
-              state.storage = 'session';
+          if (options.storage === 'encrypted') {
+            if (!this.store)
+              throw Error('secure credential persistence is unavailable');
+            await this.store.put(token);
+            if (this.poll(id).status === 'cancelled') {
+              await this.store.delete?.();
+              return;
             }
           }
+          if (this.poll(id).status === 'cancelled') return;
+          this.sessionToken = token;
+          state.storage = options.storage;
           await this.cleanup(id);
           state.status = 'complete';
         } catch {
-          state.status = 'failed';
-          state.error = 'GitHub authorization did not complete';
+          if (state.status !== 'cancelled') {
+            state.status = 'failed';
+            state.error = 'GitHub authorization did not complete';
+          }
         } finally {
           await this.cleanup(id).catch(() => {
             state.status = 'failed';
@@ -192,6 +200,8 @@ export class DeliveryLogin {
           });
         }
       })();
+      const item = this.entries.get(id);
+      if (item) item.completion = completion;
     });
     return { ...state };
   }
@@ -211,16 +221,27 @@ export class DeliveryLogin {
   async cancel(id: string) {
     const item = this.entries.get(id);
     if (!item) throw Error('unknown login request');
-    if (['starting', 'waiting'].includes(item.state.status)) {
+    if (['starting', 'waiting', 'saving'].includes(item.state.status)) {
       item.state.status = 'cancelled';
       clearTimeout(item.timer);
       if (!item.exited) item.process.kill();
     }
     if (item.state.status === 'cancelled') {
       await item.exit;
+      await item.completion;
       await this.cleanup(id);
     }
     return { ...item.state };
+  }
+  async disconnect() {
+    this.sessionToken = undefined;
+    const results = await Promise.allSettled(
+      [...this.entries.keys()].map((id) => this.cancel(id)),
+    );
+    this.sessionToken = undefined;
+    await this.store?.delete?.();
+    if (results.some((result) => result.status === 'rejected'))
+      throw Error('GitHub helper cleanup requires attention');
   }
   async dispose() {
     for (const id of this.entries.keys()) await this.cancel(id);

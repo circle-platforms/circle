@@ -10,6 +10,7 @@ import { GitWorkspaceService } from './git.ts';
 import { LanguageService } from './language.ts';
 import { WorkspaceDebugService } from './debug.ts';
 import { DeliveryService } from './delivery.ts';
+import type { NativeGitHubConnection } from './github-connection.ts';
 import {
   DeliveryCycleService,
   type CyclePorts,
@@ -34,6 +35,9 @@ export interface WorkspaceServicesOptions {
   runtimeExecutable: string;
   adapterPath: string;
   ghPath: string;
+  githubConnection?: NativeGitHubConnection;
+  enforceGitHubConnection?: boolean;
+  githubEnabled?: (sessionId: string) => boolean;
   credentialStore?: CredentialStore;
   credentialFiles?: string[];
   terminalEnv?: NodeJS.ProcessEnv;
@@ -157,9 +161,14 @@ export class WorkspaceServices {
         (this.activeDelivery = new DeliveryService(g.root, options.ghPath, {
           spawn: (file, args, opts) => spawnPty(file, args, opts),
           credentialStore: options.credentialStore,
+          connection: options.githubConnection,
         })),
     );
     this.delivery.catch(() => {});
+  }
+  /** Trusted extension adapter only; not exposed by the renderer method router. */
+  deliveryAdapter() {
+    return this.delivery;
   }
   private async cyclesFor(sessionId: string): Promise<DeliveryCycleService> {
     if (!this.options.cyclePorts)
@@ -742,7 +751,29 @@ export class WorkspaceServices {
       }
     }
     if (service === 'git' || service === 'delivery') {
-      const target = service === 'git' ? await this.git : await this.delivery;
+      if (
+        service === 'delivery' &&
+        this.options.enforceGitHubConnection &&
+        !this.options.githubConnection
+      )
+        throw Error('GitHub connection is unavailable in this runtime');
+      let target = service === 'git' ? await this.git : await this.delivery;
+      if (service === 'delivery' && this.options.githubConnection) {
+        const source = await this.delivery;
+        target = new DeliveryService(source.root, source.ghPath, {
+          connection: this.options.githubConnection,
+          epoch: this.options.githubConnection.snapshot().epoch,
+          assertActive: () => {
+            if (!this.options.githubEnabled?.(sessionId))
+              throw Error(
+                'enable GitHub in extensions and connect in settings',
+              );
+          },
+          spawn: () => {
+            throw Error('GitHub login belongs in settings');
+          },
+        });
+      }
       if (
         service === 'delivery' &&
         method === 'login' &&

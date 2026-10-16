@@ -21,7 +21,7 @@ export class EncryptedCredentialStore {
     private directory: string,
     private cipher: NativeCredentialCipher,
   ) {}
-  private path(key: string) {
+  private path(key: string, requireCipher = true) {
     if (
       typeof key !== 'string' ||
       !key.length ||
@@ -30,8 +30,9 @@ export class EncryptedCredentialStore {
     )
       throw Error('invalid credential identity');
     if (
-      !this.cipher.isEncryptionAvailable() ||
-      this.cipher.getSelectedStorageBackend?.() === 'basic_text'
+      requireCipher &&
+      (!this.cipher.isEncryptionAvailable() ||
+        this.cipher.getSelectedStorageBackend?.() === 'basic_text')
     )
       throw Error('secure operating-system credential storage is unavailable');
     return join(
@@ -40,12 +41,19 @@ export class EncryptedCredentialStore {
     );
   }
   async get(key: string): Promise<string | undefined> {
-    const path = this.path(key);
+    const file = this.path(key, false);
     await this.writes.get(key)?.catch(() => {});
+    let encrypted: Buffer;
     try {
-      return this.cipher.decryptString(await readFile(path));
+      encrypted = await readFile(file);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw Error('saved credential could not be read securely');
+    }
+    try {
+      this.path(key);
+      return this.cipher.decryptString(encrypted);
+    } catch {
       throw Error('saved credential could not be read securely');
     }
   }
@@ -77,7 +85,7 @@ export class EncryptedCredentialStore {
     });
   }
   async delete(key: string): Promise<void> {
-    const path = this.path(key);
+    const path = this.path(key, false);
     await this.mutate(key, async () => {
       try {
         await unlink(path);

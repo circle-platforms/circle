@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { GitHubConnectionBackend } from './github_connection.js';
 import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
@@ -113,6 +114,7 @@ export interface RuntimeOptions {
   commandLauncher?: CommandLauncher;
   /** Safe process identity projection; never receives expanded command or env. */
   onCommandExecution?: (execution: CommandExecution) => void;
+  githubConnection?: GitHubConnectionBackend;
   /** Native workspace compare-and-save backend; omitted by the CLI. */
   fileMutations?: FileMutations;
   workspace: string;
@@ -738,9 +740,11 @@ export class AgentRuntime {
         if (this.userShells.busy) throw new Error('a user command is running');
         if (this.activeCompaction) throw new Error('a compaction is running');
         await this.initialize(signal);
+        this.refreshIntegrationTools();
       },
       beforeTurn: () => this.requireTurnConnection(),
       beforeStep: () => {
+        this.refreshIntegrationTools();
         this.userShells.flush();
         const messages = this.jobs.takeNotices(this.harness.sessionId);
         if (messages.length)
@@ -803,6 +807,7 @@ export class AgentRuntime {
         ? (request, signal) => this.options.secret!(request, signal)
         : undefined,
       bundledRoot: this.options.bundledExtensions,
+      githubConnection: this.options.githubConnection,
       onStatus: () => this.options.onExtensionStatus?.(),
       onTools: () => {
         this.toolsStale = true;
@@ -980,6 +985,15 @@ export class AgentRuntime {
       });
     }
     await this.integrationsReady;
+  }
+  private refreshIntegrationTools() {
+    if (!this.toolsStale || !this.integrationsReady) return;
+    this.toolsStale = false;
+    this.harness.tools = this.withIntegrationTools(
+      this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+    );
+    this.describeSubagents(this.harness.tools);
+    this.refreshSystemPrompt();
   }
   private scheduleToolRefresh(): void {
     if (this.toolsCheck) return;

@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  lstatSync,
+} from 'node:fs';
+import type { GitHubConnectionBackend } from './github_connection.js';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -125,6 +133,7 @@ export interface ExtensionServices {
   track?: (work: Promise<unknown>) => void;
   /** Called when an extension adds or removes a tool after it loaded. */
   onTools?: () => void;
+  githubConnection?: GitHubConnectionBackend;
 }
 const live = new WeakSet<ExtensionAPI>();
 const settled = (): void => undefined;
@@ -133,6 +142,7 @@ export class ExtensionAPI {
   readonly Watch = Watch;
   /** Values this extension keeps between runs, in a private file of its own. */
   readonly secrets: ExtensionSecrets;
+  readonly githubConnection?: GitHubConnectionBackend;
   /**
    * Fires when Circle closes the extension: when it leaves, and before extensions are loaded
    * again. Pass it to requests and timers, and end loops on it.
@@ -152,6 +162,7 @@ export class ExtensionAPI {
       (value) => ext.mask.remember(value),
     );
     this.signal = services?.signal ?? new AbortController().signal;
+    this.githubConnection = services?.githubConnection;
   }
   /**
    * Work that goes on after a tool or command returned, such as following something until it
@@ -503,6 +514,7 @@ export interface ExtensionHostOptions {
   /** Shows a masked card for api.askSecret; without it askSecret fails. */
   secret?: ExtensionServices['secret'];
   secretTimeoutMs?: number;
+  githubConnection?: GitHubConnectionBackend;
   settings?: Record<string, Record<string, unknown>>;
   reservedTools?: Set<string>;
   reservedCommands?: Set<string>;
@@ -600,6 +612,21 @@ export class ExtensionHost {
           {
             home: this.options.home,
             workspace: this.options.workspace,
+            githubConnection:
+              discovered.source === 'bundled' &&
+              discovered.name === 'github' &&
+              this.options.bundledRoot !== false &&
+              !lstatSync(discovered.path).isSymbolicLink() &&
+              realpathSync.native(discovered.path) ===
+                join(
+                  realpathSync.native(
+                    this.options.bundledRoot ?? bundledExtensionsRoot(),
+                  ),
+                  'github',
+                  'extension.ts',
+                )
+                ? this.options.githubConnection
+                : undefined,
             secret: this.options.secret,
             secretTimeoutMs: this.options.secretTimeoutMs,
             settings: this.options.settings?.[discovered.name],

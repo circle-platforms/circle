@@ -4,6 +4,9 @@ import { spawnPty } from './workspace/native-pty.js';
 import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
 import { GitWorkspaceService } from './workspace/git.js';
 import { DeliveryService } from './workspace/delivery.js';
+import { NativeGitHubConnection } from './workspace/github-connection.js';
+import { githubWorkspaceBackend } from './workspace/github-backend.js';
+import type { GitHubConnectionBackend } from '../../../src/github_connection.js';
 import {
   connectionModels,
   connectionSummary,
@@ -694,6 +697,44 @@ export class RuntimeController {
       return false;
     }
   }
+  private githubProfile?: NativeGitHubConnection;
+  private githubLeases = new Map<string, number>();
+  private githubConnection(): NativeGitHubConnection | undefined {
+    if (!this.options.workspaceTools?.ghPath) return undefined;
+    return (this.githubProfile ??= new NativeGitHubConnection({
+      dataDir: join(this.options.dataFolder ?? this.home, 'github-connection'),
+      ghPath: this.options.workspaceTools.ghPath,
+      spawn: (file, args, options) => spawnPty(file, args, options),
+      credentialStore: this.options.credentialStore
+        ? {
+            get: () => this.options.credentialStore!.get('github.com'),
+            put: (token) =>
+              this.options.credentialStore!.put('github.com', token),
+            delete: () => this.options.credentialStore!.delete('github.com'),
+          }
+        : undefined,
+    }));
+  }
+  private githubBackend(
+    workspace: string,
+    owner: () => string,
+  ): GitHubConnectionBackend | undefined {
+    const connection = this.githubConnection();
+    if (!connection) return undefined;
+    return githubWorkspaceBackend({
+      connection,
+      delivery: () => this.services(workspace).deliveryAdapter(),
+      acquireLease: () => {
+        const id = owner();
+        this.githubLeases.set(id, (this.githubLeases.get(id) ?? 0) + 1);
+        return () => {
+          const next = (this.githubLeases.get(id) ?? 0) - 1;
+          if (next > 0) this.githubLeases.set(id, next);
+          else this.githubLeases.delete(id);
+        };
+      },
+    });
+  }
   private services(workspace: string): WorkspaceServices {
     const root = this.trustedWorkspace(workspace);
     let services = this.workspaceServices.get(root);
@@ -717,11 +758,15 @@ export class RuntimeController {
           'workspace-services',
         ),
         ...tools,
+        githubConnection: this.githubConnection(),
+        enforceGitHubConnection: true,
+        githubEnabled: (id) => (this.githubLeases.get(id) ?? 0) > 0,
         credentialStore: this.options.credentialStore
           ? {
               get: () => this.options.credentialStore!.get('github.com'),
               put: (token) =>
                 this.options.credentialStore!.put('github.com', token),
+              delete: () => this.options.credentialStore!.delete('github.com'),
             }
           : undefined,
         cyclePorts: async (sessionId) => {
@@ -747,6 +792,12 @@ export class RuntimeController {
             createDelivery: (ownedPath) =>
               new DeliveryService(ownedPath, tools.ghPath, {
                 spawn: (file, args, options) => spawnPty(file, args, options),
+                connection: this.githubConnection(),
+                epoch: this.githubConnection()?.snapshot().epoch,
+                assertActive: () => {
+                  if (!(this.githubLeases.get(sessionId) ?? 0))
+                    throw Error('GitHub extension is disabled');
+                },
                 credentialStore: this.options.credentialStore
                   ? {
                       get: () =>
@@ -1327,6 +1378,10 @@ export class RuntimeController {
               ? { ...origin, name: task.spec.id, agent: runtime.session.id }
               : origin,
           ),
+        githubConnection: this.githubBackend(
+          workspace,
+          () => runtime.session.id,
+        ),
         onExtensionStatus: () => this.publish(),
         openUrl: async (url) => {
           this.openRequest = {
@@ -3766,6 +3821,7 @@ export class RuntimeController {
     await Promise.all(
       [...this.workspaceServices.values()].map((service) => service.dispose()),
     );
+    await this.githubProfile?.dispose();
     if (this.operationLedger) await (await this.operationLedger).close();
     this.store.close();
   }

@@ -305,3 +305,52 @@ for (const phase of ['before-code', 'waiting-code']) {
     }
   });
 }
+
+test('failed encrypted persistence never silently becomes a session grant and explicit session storage never writes credentials', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-login-explicit-'));
+  let puts = 0;
+  let child = fake();
+  const login = new DeliveryLogin(
+    () => child.pty,
+    'fake-gh',
+    root,
+    {
+      get: async () => undefined,
+      put: async () => {
+        puts++;
+        throw Error('secure store unavailable');
+      },
+      delete: async () => {},
+    },
+    async () => ({ stdout: 'synthetic-explicit-token' }),
+  );
+  try {
+    const encrypted = await login.start({ storage: 'encrypted' });
+    child.finish();
+    for (
+      let i = 0;
+      i < 100 && login.poll(encrypted.id).status !== 'failed';
+      i++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(login.poll(encrypted.id).status, 'failed');
+    assert.equal(await login.token(), undefined);
+    assert.equal(puts, 1);
+    child = fake();
+    const session = await login.start({ storage: 'session' });
+    child.finish();
+    for (
+      let i = 0;
+      i < 100 && login.poll(session.id).status !== 'complete';
+      i++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(login.poll(session.id).storage, 'session');
+    assert.equal(puts, 1);
+    await login.disconnect();
+    assert.equal(await login.token(), undefined);
+  } finally {
+    await login.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
