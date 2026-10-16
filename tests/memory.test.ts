@@ -67,6 +67,10 @@ test('real prompt assembly includes account memory once and no-context leaves ME
   );
   assert.equal(first.split('unique project instruction marker').length - 1, 1);
   assert.equal(first.split('unique account memory marker').length - 1, 1);
+  assert.match(
+    first,
+    /Do not call read_file to discover instruction files \(AGENTS\.md, CLAUDE\.md, AGENTS\.override\.md, MEMORY\.md\)/,
+  );
   options.no_context_files = true;
   const second = buildSystemPrompt(
     workspace,
@@ -77,6 +81,35 @@ test('real prompt assembly includes account memory once and no-context leaves ME
   );
   assert.ok(!second.includes('unique project instruction marker'));
   assert.match(second, /unique account memory marker/);
+  assert.equal(second.includes('Do not call read_file to discover'), false);
+});
+
+test('an empty project still tells the model not to probe for missing instruction files', (t) => {
+  const root = scratch(t);
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const prompt = buildSystemPrompt(
+    workspace,
+    'glm-5.3',
+    'openai',
+    defaultRunOptions(),
+    join(root, 'data'),
+  );
+  assert.match(
+    prompt,
+    /Do not call read_file to discover instruction files \(AGENTS\.md, CLAUDE\.md, AGENTS\.override\.md, MEMORY\.md\)\. Any of those that exist are already included in this prompt\./,
+  );
+  assert.equal(prompt.includes('<project_context>'), false);
+  const withheld = buildSystemPrompt(
+    workspace,
+    'glm-5.3',
+    'openai',
+    defaultRunOptions(),
+    join(root, 'data'),
+    { localContext: false },
+  );
+  assert.equal(withheld.includes('Do not call read_file to discover'), false);
+  assert.equal(withheld.includes('<project_context>'), false);
 });
 
 test('a file is known by its full 64-bit id, which a number would round on Windows', (t) => {

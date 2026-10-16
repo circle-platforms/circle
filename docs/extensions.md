@@ -62,42 +62,55 @@ A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.
 
 An extension shipped with Circle can have an interface half in the desktop application: a page or panel built into the application under the same name and version. The two are one plugin. The interface shows only while its extension is installed, loaded without error, of the same version and turned on; turning it on or off under **extensions → interface components** turns the extension on or off, saved in `settings.json`, and the card says why it is off. The extension feeds it with `api.setView(data)`, and the page acts by running the extension's own commands, whose lines go to the conversation.
 
-Interfaces are built into the application; an extension cannot add one by itself. The circle-server extension has five, all paired with it:
+The desktop starts loading integrations for its trusted startup workspace without a prompt or a manual reload. The first window remains available while configured MCP servers connect; discovery failures appear in the runtime status and an explicit reload can retry. An untrusted workspace is not initialized until you trust it. Closing the application cancels pending integration startup, including an extension still registering.
+
+Interfaces are built into the application; an extension cannot add one by itself. The hub extension has five, all paired with it:
 
 | Page | What it shows | What it does |
 |---|---|---|
-| **circle-server** | The connection, the tasks handed over from here and their latest lines. | Sign in, follow a task, save its results again. |
+| **hub** | The connection, the tasks handed over from here and their latest lines. | Sign in, follow a task, save its results again. |
 | **work** | Tasks the server lets you read: their phase, questions they wait on, approvals bound to an input revision. | Answer a question, approve or reject an open approval. |
 | **execution** | Operations the server's workers ran: the worker and the fencing token that held the lease. | Reconcile an operation whose outcome is unknown. |
 | **knowledge** | Each task's source, artifacts and evidence by revision and SHA-256, and the server's own read-back check. | Save the results. |
 | **methods** | The server's capability packs, at the versions it runs. | Hand a pack a file of the workspace. |
 
-What these pages show is what the server last returned to `/server refresh`, which also runs after signing in, after a decision and when a followed task ends. The server decides what you may read; nothing on them is kept by Circle.
+What these pages show is what the server last returned to `/hub refresh`, which also runs after signing in, after a decision and when a followed task ends. The server decides what you may read; nothing on them is kept by Circle.
 
 ## Extensions shipped with Circle
 
-### circle-server
+### hub
 
-Connects Circle to a [circle-server](https://github.com/circle-platforms/circle-server), which keeps work for a team: it takes a task with your files, runs it on its own, and delivers results. Turn it on with `/extensions enable circle-server`.
+Connects Circle to a [hub](https://github.com/circle-platforms/hub), which keeps work for a team: it takes a task with your files, runs it on its own, and delivers results. Turn it on with `/extensions enable hub`.
 
 | Command | What it does |
 |---|---|
-| `/server` | Where you are signed in, and the commands. |
-| `/server login <url> <user>` | Sign in. The password is asked on a masked card and is not kept; the token the server issues is kept with [`api.secrets`](#secrets). |
-| `/server logout` | Forget the token. |
-| `/server packs` | What the server can do, as capability packs. |
-| `/server submit <pack> <file>…` | Upload the files, hand the server the work, and follow it: each event is a line in the conversation, and what it delivers is saved in the workspace once its SHA-256 matches the server's. Sending the same pack and files again finds the same task; add `--again` for a new one. |
-| `/server task <id>` | Show a task and follow it until it ends. Closing Circle does not stop a task; this picks it up again. |
-| `/server tasks` | Your tasks. |
-| `/server respond <id> <answer>` | Answer the question a task is waiting on. |
-| `/server get <id>` | Save a delivered task's results again. A file never overwrites one already there: `cases.xlsx` becomes `cases-1.xlsx`. |
-| `/server refresh` | Read work, execution, knowledge and methods from the server for the pages above. |
-| `/server approve <id> <approval>` | Approve an action a task waits on, bound to the input revision, target identity and action digest the server states. `/server reject` declines it. |
-| `/server reconcile <id>` | Ask the server to check an operation whose outcome is unknown. It does not turn an unknown outcome into success. |
+| `/hub` | Where you are signed in, and the commands. |
+| `/hub login <url> <user>` | Sign in. The password is asked on a masked card and is not kept; the token the server issues is kept with [`api.secrets`](#secrets). |
+| `/hub logout` | Revoke the whole token family at the server, then forget the token locally. |
+| `/hub packs` | What the server can do, as capability packs. |
+| `/hub submit <pack> <file>…` | Upload the files, hand the server the work, and follow it: each event is a line in the conversation, and what it delivers is saved under `tasks/<taskId>/` in the workspace once its SHA-256 matches the server's. Sending the same pack and files again finds the same task; add `--again` for a new one. For the hub's generic execution flow, hand over the flow itself: `/hub submit module-execute <input-json>` with the flow input (`flowId`, `methodPin`, `resources`, `sources`, `value`, `controlledBytes`) and no file. |
+| `/hub task <id>` | Show a task and follow it until it ends. Closing Circle does not stop a task; this picks it up again. An event cursor that fell out of the server's retained window restarts at the window. |
+| `/hub tasks` | Your tasks. |
+| `/hub respond <id> <answer>` | Answer the question a task is waiting on. An input the server marks `repair` is answered with a replacement of the bound input, anything else with a response. |
+| `/hub get <id>` | Save a delivered task's results again under `tasks/<taskId>/`. A file never overwrites one already there: `cases.xlsx` becomes `cases-1.xlsx`. |
+| `/hub refresh` | Read work, execution, knowledge and methods from the server for the pages above. |
+| `/hub approve <id> <approval>` | Approve an action a task waits on, bound to the input revision, target identity and action digest the server states. `/hub reject` declines it. |
+| `/hub reconcile <id> [op]` | Ask the server to check an operation whose outcome is unknown; only naming the operation reconciles, without it the server explains what is missing. It does not turn an unknown outcome into success. |
+| `/hub tools` | The server's tools the model can use, read again from the server. |
+| `/hub trial start` | Start recording which server tools the model calls, for the trial record a skill pack is sent with. Only the tool names, whether each call worked, and a SHA-256 of its arguments are kept. |
+| `/hub skill push <folder> [--outputs a,b]` | Send a skill pack: the folder's `skillpack.json` (`id`, `version`, `tools`, …), its `SKILL.md` and other files (not hidden ones, not `node_modules`), with the trial record and the SHA-256 of the named output files. The server checks the record against the tools the pack declares and keeps the pack for approval. |
+| `/hub skill list` | The skill packs on the server. |
+| `/hub skill run <id> [json] [--file <path>]…` | Run a skill pack on the server with these inputs, and follow the task. Each `--file` attaches a file of the workspace as `inputs.files`, which the run finds in its own workspace. |
 
-The address can also be set in `settings.json` as `"extensions": { "circle-server": { "enabled": true, "url": "https://…" } }`. The lines the commands write are notices for you; the model does not see them.
+**When a program runs Circle for the server.** hub's own runner starts Circle without a person, as `circle --mode rpc --extensions`, and hands over the address and a short-lived token in the environment: `CIRCLE_HUB_URL` and `CIRCLE_HUB_TOKEN` (with `CIRCLE_HUB_USER` and `CIRCLE_HUB_SCOPE` if it has them). The extension then reads the server's tools before the first prompt, writes nothing to disk, and does not ask for a password when the token is turned down; `/hub login` and `/hub logout` are refused.
 
-It also gives the model three tools, so you can ask in words: `circle_server_packs` and `circle_server_task` only read, and `circle_server_submit` (a pack and a file in the workspace) asks first, since it sends the file and writes the results. `circle_server_submit` returns at once and waits as a [background job](background-jobs.md); when the task is delivered, the results are saved in the workspace after their SHA-256 is checked, as `/server submit` does. Sign in with `/server login` first: the tools never ask for a password themselves, except when the server has signed you out.
+The address can also be set in `settings.json` as `"extensions": { "hub": { "enabled": true, "url": "https://…" } }`. The lines the commands write are notices for you; the model does not see them.
+
+**The server's own tools.** A server that publishes a tool catalog (`GET /v1/tools`) has its tools offered to the model once you sign in, each as `hub_tool_<name>`, for example `hub_tool_docs_list` for the server's `docs.list`. The server decides which tools you get. A tool that only reads runs without asking; one that changes something asks first; one the server runs as a task is waited for in the background. The list is read again on `/hub refresh`, `/hub tools` and when a session starts, and the model sees changes from its next turn. Signing out removes them. A server without a catalog offers none.
+
+It also gives the model tools of its own, so you can ask in words: `hub_packs`, `hub_task`, `hub_evidence` and `hub_source_artifact_status` only read, while `hub_submit` (a pack and a file in the workspace, or the flow input for `module-execute`), `hub_skill_push` and `hub_source_artifact` ask first, since they send files and write results. `hub_submit` returns at once and waits as a [background job](background-jobs.md); when the task is delivered, the results are saved under `tasks/<taskId>/` in the workspace after their SHA-256 is checked, as `/hub submit` does. Sign in with `/hub login` first: the tools never ask for a password themselves, except when the server has signed you out.
+
+Not wired yet: installing modules, registering providers, approving assets and the notification stream are hub-side capabilities the extension does not surface today; they arrive with a later change.
 
 ## Coming from 0.5.0
 
@@ -129,7 +142,8 @@ Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, 
 | `api.askSecret(question, options)` | Ask you for a value on a masked card; it goes back to the extension only. See [Secrets](#secrets). |
 | `api.signal` | An `AbortSignal` that fires when Circle closes the extension: when Circle leaves, and before extensions are loaded again. Pass it to requests and timers, and end loops on it. |
 | `api.background(promise)` | Work that goes on after a tool or command returned, such as following something until it ends. Circle waits for it when it closes the extension, after `api.signal` fired, for up to two seconds; an error in it is shown under the extension in `/extensions`. |
-| `registerTool(name, description, parameters, execute, options)` | Add a tool. |
+| `registerTool(name, description, parameters, execute, options)` | Add a tool. It can also be called later, for example once a service tells the extension what it offers: the model gets the tool from its next turn, never in the middle of one. |
+| `unregisterTool(name)` | Remove a tool this extension added; returns `false` if it has none of that name. The model stops seeing it from its next turn. |
 | `registerCommand(name, description, handler)` | Add a slash command. |
 | `registerMiddleware(handler, slot)` | Wrap model calls or tool calls. `slot` defaults to `tool_boundary`. |
 | `registerSubagent(spec, tools)` | Add a subagent for `task`. |

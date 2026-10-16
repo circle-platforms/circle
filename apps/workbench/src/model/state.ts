@@ -5,13 +5,16 @@ import {
   parseSlash,
 } from '../../../../src/tui/slash_commands.ts';
 import type {
+  BeginResult,
   CommandResult,
+  Attachment,
   Effort,
   Message,
   RuntimePort,
   Session,
   SessionMode,
   WorkbenchSnapshot,
+  Workspace,
 } from './types.ts';
 import { createFixtures } from '../preview/fixtures.ts';
 import { t } from '../i18n/index.ts';
@@ -34,6 +37,34 @@ export const sessionMode = (session: Session): SessionMode =>
   (session.readOnly ? 'plan' : session.auto ? 'auto' : 'manual');
 export const nextMode = (mode: SessionMode): SessionMode =>
   MODES[(MODES.indexOf(mode) + 1) % MODES.length]!;
+/**
+ * Text files are inlined in the prompt. Pictures and PDFs stay attachments.
+ * `display` is what the person typed, without the inlined files.
+ */
+export function promptAttachments(
+  text: string,
+  attachments: readonly Attachment[],
+): { text: string; display: string; attachments: Attachment[] } {
+  const copied = attachments.filter(
+    (item) => !['image', 'document'].includes(item.kind),
+  );
+  const media = attachments.filter((item) =>
+    ['image', 'document'].includes(item.kind),
+  );
+  const prompt =
+    text +
+    copied
+      .map(
+        (item) =>
+          `\n\n<attachment name=${JSON.stringify(item.name)}>\n${item.content}\n</attachment>`,
+      )
+      .join('');
+  return {
+    text: prompt || (attachments.length ? 'See the attached files.' : ''),
+    display: text,
+    attachments: media,
+  };
+}
 export function parseMode(args: string, current: SessionMode) {
   const word = args
     .trim()
@@ -164,6 +195,7 @@ interface StoragePort {
 /** A browser-only model for exercising UI behavior. It never runs the Circle runtime. */
 export class PreviewRuntime implements RuntimePort {
   readonly mode = 'preview' as const;
+  presentationEpoch = 0;
   private snapshot: WorkbenchSnapshot;
   private listeners = new Set<() => void>();
   private storage?: StoragePort;
@@ -236,6 +268,79 @@ export class PreviewRuntime implements RuntimePort {
       state.sessions.unshift(session);
     });
     return session.id;
+  };
+  beginConversation = (input: {
+    workspaceId?: string | null;
+    text: string;
+    model?: string;
+    effort?: Effort;
+    mode?: SessionMode;
+    attachments?: Attachment[];
+  }): BeginResult => {
+    const text = input.text.trim();
+    if (!text) throw Error('prompt is empty');
+    if (
+      input.attachments !== undefined &&
+      (!Array.isArray(input.attachments) || input.attachments.length > 16)
+    )
+      throw Error('invalid attachments');
+    if (
+      input.effort !== undefined &&
+      input.effort !== 'default' &&
+      !EFFORTS.includes(input.effort)
+    )
+      throw Error('unknown thinking depth');
+    if (input.mode !== undefined && !MODES.includes(input.mode))
+      throw Error('invalid mode');
+    let workspace = input.workspaceId
+      ? this.snapshot.workspaces.find((item) => item.id === input.workspaceId)
+      : this.snapshot.workspaces.find((item) => item.kind === 'scratch');
+    if (input.workspaceId && !workspace) throw Error('workspace not found');
+    if (workspace && !workspace.trusted) return { dialog: 'trust' };
+    let created: Workspace | undefined;
+    if (!workspace) {
+      created = {
+        id: crypto.randomUUID(),
+        name: 'unscoped',
+        path: 'unscoped',
+        branch: '',
+        trusted: true,
+        kind: 'scratch',
+        origin: 'preview',
+        instructions: [],
+      };
+      workspace = created;
+    }
+    const session = freshSession(this.snapshot, workspace.id);
+    const message: Message = {
+      id: crypto.randomUUID(),
+      parentId: null,
+      role: 'user',
+      text,
+      at: new Date().toISOString(),
+      ...(input.attachments?.length
+        ? { attachments: structuredClone(input.attachments) }
+        : {}),
+    };
+    session.messages = [message];
+    session.leafId = message.id;
+    session.title = text.split('\n')[0]!.slice(0, 60);
+    session.state = 'waiting';
+    if (input.model) session.model = input.model;
+    if (input.effort) session.effort = input.effort;
+    if (input.mode) {
+      session.mode = input.mode;
+      session.readOnly = input.mode === 'plan';
+      session.auto = input.mode === 'auto';
+    }
+    this.change((state) => {
+      if (created && !state.workspaces.some((item) => item.id === created.id))
+        state.workspaces.push(created);
+      state.previousSessionId = state.activeSessionId;
+      state.activeSessionId = session.id;
+      state.sessions.unshift(session);
+    });
+    return { sessionId: session.id };
   };
   selectSession = (id: string) => {
     if (id === this.snapshot.activeSessionId) return;
@@ -318,10 +423,7 @@ export class PreviewRuntime implements RuntimePort {
           parentId: target.leafId,
           role: 'user',
           text,
-          at: new Date().toLocaleTimeString('en-GB', {
-            hour: '2-digit',
-            minute: '2-digit',
-          }),
+          at: new Date().toISOString(),
           attachments: structuredClone(target.attachments),
         };
         target.messages.push(message);
@@ -666,6 +768,7 @@ export class PreviewRuntime implements RuntimePort {
     return { notice: `unknown command /${name}` };
   };
   reset = () => {
+    this.presentationEpoch++;
     this.snapshot = createFixtures();
     this.storage?.removeItem(STORAGE_KEY);
     for (const listener of this.listeners) listener();

@@ -6,6 +6,7 @@ export const KEY_ACTIONS = {
   exit: 'ctrl+d',
   suspend: 'ctrl+z',
   'model.select': 'ctrl+l',
+  'session.select': 'alt+s',
   'model.cycle': 'ctrl+p',
   'mode.cycle': 'shift+tab',
   'thinking.cycle': 'alt+t',

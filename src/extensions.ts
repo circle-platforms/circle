@@ -11,7 +11,7 @@ import type {
   ToolContext,
 } from './types.js';
 import { isRecord } from './settings.js';
-import { Watch, waitWatch } from './watch.js';
+import { Watch, waitWatch, abortable } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
@@ -123,7 +123,10 @@ export interface ExtensionServices {
   signal?: AbortSignal;
   /** Work of the extension that the host waits for when it closes. */
   track?: (work: Promise<unknown>) => void;
+  /** Called when an extension adds or removes a tool after it loaded. */
+  onTools?: () => void;
 }
+const live = new WeakSet<ExtensionAPI>();
 const settled = (): void => undefined;
 export class ExtensionAPI {
   readonly ToolError = ToolError;
@@ -177,12 +180,13 @@ export class ExtensionAPI {
   get workspace(): string {
     return this.services?.workspace ?? '';
   }
-  /** A folder of the extension's own for what it keeps that is not secret; made on first use. */
+  /** A folder of the extension's own for what it keeps that is not secret; made on first use.
+   * Closing cleanup may still locate it, but cannot create it after the signal fires. */
   get dataDir(): string {
     if (!this.services?.home)
       throw new ExtensionError('this interface has no data folder');
     const path = join(this.services.home, 'extension_data', this.ext.name);
-    mkdirSync(path, { recursive: true, mode: 0o700 });
+    if (!this.signal.aborted) mkdirSync(path, { recursive: true, mode: 0o700 });
     return path;
   }
   /**
@@ -321,6 +325,7 @@ export class ExtensionAPI {
       );
     if (typeof execute !== 'function')
       throw new ExtensionError(`tool '${name}': execute must be callable`);
+    if (live.has(this)) this.reservedTools.add(name);
     this.ext.tools.push({
       name,
       description: description || name,
@@ -330,6 +335,16 @@ export class ExtensionAPI {
       run: (args, context) =>
         this.tracked(this.runTool(execute, args, context)),
     });
+    if (live.has(this)) this.services?.onTools?.();
+  }
+  /** Removes a tool this extension registered. A running session sees it gone from its next turn. */
+  unregisterTool(name: string): boolean {
+    const index = this.ext.tools.findIndex((tool) => tool.name === name);
+    if (index < 0) return false;
+    this.ext.tools.splice(index, 1);
+    this.reservedTools.delete(name);
+    if (live.has(this)) this.services?.onTools?.();
+    return true;
   }
   private async runTool(
     execute: (
@@ -484,6 +499,8 @@ export interface ExtensionHostOptions {
   onStatus?: () => void;
   /** Where api.openUrl opens a link; without it openUrl fails. */
   openUrl?: (url: string) => Promise<void>;
+  /** Called when a loaded extension adds or removes a tool. */
+  onTools?: () => void;
   /** Shows a masked card for api.askSecret; without it askSecret fails. */
   secret?: ExtensionServices['secret'];
   secretTimeoutMs?: number;
@@ -546,10 +563,12 @@ export class ExtensionHost {
     return [...found.values()];
   }
   async load(): Promise<this> {
+    this.controller.signal.throwIfAborted();
     const loaded: Extension[] = [];
     const tools = new Set(this.options.reservedTools);
     const commands = new Set(this.options.reservedCommands);
     for (const discovered of this.discover()) {
+      this.controller.signal.throwIfAborted();
       const setting = this.options.settings?.[discovered.name]?.enabled;
       const ext: Extension = {
         ...discovered,
@@ -573,31 +592,38 @@ export class ExtensionHost {
         const module: unknown = await import(
           pathToFileURL(ext.path).href + '?reload=' + randomUUID()
         );
+        this.controller.signal.throwIfAborted();
         if (!isRecord(module) || typeof module.register !== 'function')
           throw new ExtensionError('extension defines no register(api)');
-        await module.register(
-          new ExtensionAPI(
-            ext,
-            tools,
-            commands,
-            this.options.jobs,
-            this.options.jobOwner,
-            {
-              home: this.options.home,
-              workspace: this.options.workspace,
-              secret: this.options.secret,
-              secretTimeoutMs: this.options.secretTimeoutMs,
-              settings: this.options.settings?.[discovered.name],
-              onStatus: this.options.onStatus,
-              openUrl: this.options.openUrl,
-              signal: this.controller.signal,
-              track: (work) => this.track(work),
-            },
-          ),
+        const api = new ExtensionAPI(
+          ext,
+          tools,
+          commands,
+          this.options.jobs,
+          this.options.jobOwner,
+          {
+            home: this.options.home,
+            workspace: this.options.workspace,
+            secret: this.options.secret,
+            secretTimeoutMs: this.options.secretTimeoutMs,
+            settings: this.options.settings?.[discovered.name],
+            onStatus: this.options.onStatus,
+            openUrl: this.options.openUrl,
+            onTools: this.options.onTools,
+            signal: this.controller.signal,
+            track: (work) => this.track(work),
+          },
         );
+        await abortable(
+          Promise.resolve(module.register(api)),
+          this.controller.signal,
+        );
+        this.controller.signal.throwIfAborted();
         for (const tool of ext.tools) tools.add(tool.name);
+        live.add(api);
         for (const command of ext.commands) commands.add(command.name);
       } catch (error) {
+        this.controller.signal.throwIfAborted();
         ext.error =
           error instanceof Error
             ? `${error.name}: ${error.message}`
@@ -735,11 +761,21 @@ export class ExtensionHost {
    * api.background have ended. With a bound in milliseconds the wait stops when the time is
    * up; the signal has fired either way. Closing again waits for the same end.
    */
-  async close(timeoutMs = Infinity): Promise<void> {
+  async close(
+    timeoutMs = Infinity,
+    options: { requireSettled?: boolean } = {},
+  ): Promise<void> {
+    // Deletion must not release history ownership while extension work remains. A
+    // strict retry drains the live pending set again, rather than reusing an earlier
+    // bounded close which may have returned before cleanup finished.
+    if (options.requireSettled) return this.drain(timeoutMs, true);
     this.closing ??= this.drain(timeoutMs);
     return this.closing;
   }
-  private async drain(timeoutMs: number): Promise<void> {
+  private async drain(
+    timeoutMs: number,
+    requireSettled = false,
+  ): Promise<void> {
     this.controller.abort(new ExtensionError('the extension was closed'));
     const timer = new AbortController();
     const expired: Promise<'expired'> = Number.isFinite(timeoutMs)
@@ -754,7 +790,13 @@ export class ExtensionHost {
           Promise.allSettled([...this.pending]).then(() => 'settled' as const),
           expired,
         ]);
-        if (outcome === 'expired') return;
+        if (outcome === 'expired') {
+          if (requireSettled && this.pending.size)
+            throw new ExtensionError(
+              'extension cleanup is still running; retry after it finishes',
+            );
+          return;
+        }
       }
     } finally {
       timer.abort();

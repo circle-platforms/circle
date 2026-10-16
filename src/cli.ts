@@ -31,8 +31,9 @@ import { installExitGuard } from './exit_guard.js';
 import { initializeNetwork } from './network_bootstrap.js';
 import { networkSummary } from './net.js';
 import { VERSION } from './version.js';
+import { UsageError } from './usage_error.js';
 export { VERSION } from './version.js';
-export class UsageError extends Error {}
+export { UsageError };
 export interface CliOptions {
   version: boolean;
   help: boolean;
@@ -42,6 +43,7 @@ export interface CliOptions {
   init: boolean;
   mode: string;
   yolo: boolean;
+  extensions: boolean;
   verbose: boolean;
   continue: boolean;
   resume: boolean;
@@ -74,6 +76,7 @@ const FLAGS: Record<
   '--line': 'line',
   '--init': 'init',
   '--yolo': 'yolo',
+  '--extensions': 'extensions',
   '--verbose': 'verbose',
   '--no-session': 'no-session',
   '-nc': 'no-context-files',
@@ -109,6 +112,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): CliOptions {
     init: false,
     mode: 'text',
     yolo: false,
+    extensions: false,
     verbose: false,
     continue: false,
     resume: false,
@@ -280,7 +284,7 @@ function conflict(
   return '';
 }
 export function helpText(): string {
-  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --line               Plain line mode\n  --init               Model setup\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
+  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
 }
 // How long `-p PROMPT` waits for piped input to start before going on without it.
 const STDIN_WAIT_MS = 3000;
@@ -471,6 +475,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const { updateInstalled } = await import('./update.js');
       return await updateInstalled(argv.slice(1));
     }
+    if (argv[0] === 'uninstall') {
+      const { uninstallInstalled } = await import('./uninstall.js');
+      return await uninstallInstalled(argv.slice(1));
+    }
     const options = parseCli(argv);
     if (options.version) {
       process.stdout.write(VERSION + '\n');
@@ -601,7 +609,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       ...runtimeOptions,
       settings,
       headless: true,
+      integrations: options.extensions,
     });
+    // Asked for: extensions and MCP servers load before the first prompt, as in the
+    // full-screen interface; their tools reach the model from the first turn.
+    if (options.extensions) await runtime.initialize();
     offSignals = installExitGuard(runtime);
     for (const error of runtime.migration.errors)
       process.stderr.write(

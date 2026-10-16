@@ -38,6 +38,7 @@ Press `?` in an empty input box, or run `/hotkeys`, to see the shortcuts in the 
 | `ctrl+r` | Search earlier messages. See [Search](#search). |
 | `ctrl+s` | Enter a secret that a task is waiting for. See [Secret entry](#secret-entry). |
 | `ctrl+l` | Choose a model, the same as `/models`. Also redraws the screen. |
+| `alt+s` | Choose a session, including while a turn or approval is waiting. |
 | `ctrl+x` | Copy the last answer, the same as `/copy`. |
 | `ctrl+f` | Find text in the conversation. See [Find](#find). |
 | `ctrl+p` | Switch to the next model for this session. See [Choose a model](models.md#switch-models). |
@@ -220,6 +221,7 @@ A key named there does that action everywhere, in a card or a list too, and no l
 | `exit` | `ctrl+d` |
 | `suspend` | `ctrl+z` |
 | `model.select` | `ctrl+l` |
+| `session.select` | `alt+s` |
 | `model.cycle` | `ctrl+p` |
 | `mode.cycle` | `shift+tab` |
 | `thinking.cycle` | `alt+t` |

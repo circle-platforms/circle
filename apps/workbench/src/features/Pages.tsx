@@ -2,7 +2,7 @@ import { desktopHost, setDefaultWorkspace } from '../host';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
 import { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
 import {
   Plus,
@@ -68,7 +68,11 @@ import { Markdown } from '../components/Markdown';
 import { UpdateControl } from './Update';
 import { VariablesSettings } from './VariablesSettings';
 import { SessionMenu } from '../components/SessionMenus';
-import { canArchiveSession } from '../model/session-management';
+import {
+  canArchiveSession,
+  visibleSessions,
+} from '../model/session-management';
+import { openHome } from './home-selection';
 import { NetworkStatus } from './NetworkStatus';
 import { WorkspaceTrustSettings } from './WorkspaceTrustSettings';
 import { ProtectedFilesSettings } from './ProtectedFilesSettings';
@@ -135,11 +139,13 @@ function PageContent(props: Props) {
 }
 function SessionsPage({ onSession, onDialog }: Props) {
   const { snapshot, runtime, perform } = useRuntime();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [search, setSearch] = useState('');
   const [all, setAll] = useState(false);
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
-  const sessions = snapshot.sessions.filter(
+  const sessions = visibleSessions(snapshot.sessions).filter(
     (session) =>
       (all || session.workspaceId === current.workspaceId) &&
       Boolean(session.archivedAt) === archived &&
@@ -156,10 +162,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
       action={
         <Button
           onClick={() =>
-            perform(async () => {
-              await runtime.newSession();
-              onSession();
-            })
+            openHome(navigate, `${location.pathname}${location.search}`)
           }
         >
           <Plus size={14} />
@@ -232,8 +235,11 @@ function SessionsPage({ onSession, onDialog }: Props) {
             <IconButton
               label={t('delete {title}', { title: session.title })}
               disabled={
-                session.id === current.id ||
-                !canArchiveSession(snapshot, session)
+                session.lifecycle === 'deleting' ||
+                session.occupied ||
+                (runtime.mode !== 'live' &&
+                  (session.id === current.id ||
+                    !canArchiveSession(snapshot, session)))
               }
               onClick={() => onDialog('delete-session', session.id)}
             >

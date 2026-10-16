@@ -28,9 +28,13 @@ export class CdpPipe {
   ) {
     output.on('data', (chunk: Buffer) => this.read(chunk));
     output.on('close', () => this.close(Error('the browser was closed')));
-    output.on('error', () => this.close(Error('the browser was closed')));
-    // A write to a browser that exited ends here; the reader reports it
-    input.on('error', () => {});
+    output.on('error', (cause: Error) =>
+      this.close(Error('the browser was closed', { cause })),
+    );
+    // A failed write need not be followed by a read-side close. Settle callers now.
+    input.on('error', (cause: Error) =>
+      this.close(Error('the browser was closed', { cause })),
+    );
   }
   get closed(): boolean {
     return !!this.ended;
@@ -99,6 +103,6 @@ export class CdpPipe {
     for (const waiting of this.waiting.values()) waiting.reject(error);
     this.waiting.clear();
     for (const listener of [...this.listeners])
-      listener({ method: 'Circle.closed', params: {} });
+      listener({ method: 'Circle.closed', params: { reason: error } });
   }
 }

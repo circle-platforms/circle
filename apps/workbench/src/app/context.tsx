@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -12,6 +13,7 @@ import type {
   WorkbenchSnapshot,
 } from '../model/types';
 import { t } from '../i18n';
+import { SessionActionError } from '../model/action-error';
 interface ContextValue {
   runtime: RuntimePort;
   snapshot: WorkbenchSnapshot;
@@ -31,36 +33,76 @@ export function RuntimeProvider({
 }) {
   const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
   const [notice, setNotice] = useState('');
+  const shownNotice = useRef<
+    { text: string; source: 'action' | 'runtime' | 'session-error' } | undefined
+  >(undefined);
   const [router] = useState(() => ({
     handler: (_result: CommandResult) => {},
   }));
-  const notify = (message: string) => {
+  const showNotice = (
+    message: string,
+    source: 'action' | 'runtime' | 'session-error' = 'action',
+  ) => {
+    const shown = { text: message, source };
+    shownNotice.current = shown;
     setNotice(message);
-    setTimeout(
-      () => setNotice((current) => (current === message ? '' : current)),
-      4200,
-    );
+    setTimeout(() => {
+      if (shownNotice.current !== shown) return;
+      shownNotice.current = undefined;
+      setNotice('');
+    }, 4200);
   };
+  const notify = (message: string) => showNotice(message);
   useEffect(() => {
-    if (snapshot.runtime?.error) notify(snapshot.runtime.error);
+    if (snapshot.runtime?.error) showNotice(snapshot.runtime.error, 'runtime');
+    else if (shownNotice.current?.source === 'runtime') {
+      shownNotice.current = undefined;
+      setNotice('');
+    }
   }, [snapshot.runtime?.error]);
+  const actionError = snapshot.sessions.find(
+    (session) => session.id === snapshot.activeSessionId,
+  )?.actionError;
+  const noticeSession = useRef(snapshot.activeSessionId);
+  useEffect(() => {
+    if (noticeSession.current !== snapshot.activeSessionId) {
+      noticeSession.current = snapshot.activeSessionId;
+      shownNotice.current = undefined;
+      setNotice('');
+    }
+    if (actionError) showNotice(actionError, 'session-error');
+    else if (shownNotice.current?.source === 'session-error') {
+      shownNotice.current = undefined;
+      setNotice('');
+    }
+  }, [snapshot.activeSessionId, actionError]);
   const perform = (action: () => void | Promise<unknown>) => {
+    const sessionId = runtime.getSnapshot().activeSessionId;
+    const report = (error: unknown) => {
+      const source =
+        error instanceof SessionActionError ? error.sessionId : sessionId;
+      if (runtime.getSnapshot().activeSessionId === source)
+        showNotice(
+          error instanceof Error ? error.message : t('action failed'),
+          error instanceof SessionActionError ? 'session-error' : 'action',
+        );
+    };
     try {
       const result = action();
-      if (result instanceof Promise)
-        void result.catch((error) =>
-          notify(error instanceof Error ? error.message : t('action failed')),
-        );
+      if (result instanceof Promise) void result.catch(report);
     } catch (error) {
-      notify(error instanceof Error ? error.message : t('action failed'));
+      report(error);
     }
   };
-  const act = (action: () => CommandResult | Promise<CommandResult>) =>
+  const act = (action: () => CommandResult | Promise<CommandResult>) => {
+    const sessionId = runtime.getSnapshot().activeSessionId;
     perform(async () => {
       const result = await action();
-      if (result.notice) notify(result.notice);
-      router.handler(result);
+      const selected = runtime.getSnapshot().activeSessionId === sessionId;
+      if (result.notice && selected) notify(result.notice);
+      if (selected || result.openSession) router.handler(result);
     });
+  };
   return (
     <Context.Provider
       value={{

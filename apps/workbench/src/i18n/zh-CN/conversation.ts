@@ -1,5 +1,7 @@
 // Simplified Chinese for the interface words in the conversation files. English is the key.
 export const conversation: Record<string, string> = {
+  'stopping work before deletion…': '停止任务后删除中…',
+  'open in another terminal; view only': '已在其他终端打开，仅可查看',
   'no model connected': '未连接模型',
   // the heading and the session actions
   'find in conversation': '在对话中查找',
@@ -20,6 +22,11 @@ export const conversation: Record<string, string> = {
   'close find': '关闭查找',
   // the transcript
   'what are we working on?': '我们要做什么？',
+  'what should we build in {name}?': '你想让我们在 {name} 中构建什么？',
+  'search projects': '搜索项目',
+  'no matching projects': '没有匹配的项目',
+  'no project': '不选择项目',
+  'choose a project': '选择项目',
   'Start with a message, a file, or a question about your project.':
     '从一条消息、一个文件或一个关于项目的问题开始。',
   you: '你',
@@ -27,6 +34,17 @@ export const conversation: Record<string, string> = {
   'cost N/A': '费用 N/A',
   'local conversation paused · remote state unverified':
     '本地对话已暂停 · 远端状态未确认',
+  'model returned an empty response': '模型返回了空响应',
+  'model output limit reached; response incomplete':
+    '模型达到输出上限，响应未完成',
+  'model response ended without a complete finish signal':
+    '模型响应缺少完整的结束信号',
+  'model response was filtered': '模型响应被过滤',
+  'model response paused before completion': '模型响应尚未完成便暂停',
+  'model response ended with an unknown finish reason':
+    '模型响应的结束原因未知',
+  'model response stopped after repeating; response incomplete':
+    '模型因重复输出而停止，响应未完成',
   // the plan and the queue
   'toggle plan': '展开或收起计划',
   'plan steps': '计划步骤',

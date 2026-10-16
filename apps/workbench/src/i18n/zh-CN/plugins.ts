@@ -1,5 +1,12 @@
 // Simplified Chinese for the interface words in the plugins files. English is the key.
 export const plugins: Record<string, string> = {
+  'limited view: {shown} shown, {omitted} omitted · {bytes} byte budget':
+    '视图限额：显示 {shown} 项，省略 {omitted} 项 · {bytes} 字节预算',
+  '{count} text fields shortened': '已缩短 {count} 个文字字段',
+  'full task details and results remain on hub':
+    '完整任务详情和结果仍保存在 hub',
+  'counts apply to the records returned by this refresh':
+    '计数仅涵盖本次刷新返回的记录',
   // the bundled interface components
   'file and diff inspector': '文件与差异检查器',
   'Workspace files, local preview buffers and change comparison.':

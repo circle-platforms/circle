@@ -92,6 +92,34 @@ export class BrowserBridge implements BrowserPort {
       }
     });
   }
+  /** Internal lifecycle RPC, never exposed as a model tool. */
+  releaseSession(sessionId: string): Promise<void> {
+    if (this.closed) return Promise.reject(this.closed);
+    const id = randomUUID();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(Error('session browser cleanup timed out'));
+      }, 15000);
+      this.pending.set(id, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      try {
+        this.post({ type: 'browser-release', id, sessionId });
+      } catch (error) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(error);
+      }
+    });
+  }
   receive(reply: BrowserReply) {
     const pending = this.pending.get(reply.id);
     if (!pending) return;

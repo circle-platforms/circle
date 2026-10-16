@@ -5,6 +5,7 @@ import { ensureHome, normalizeWorkspace } from './paths.js';
 import type { Message } from './types.js';
 import type { LegacyImportPlan } from './legacy_sessions.js';
 import { createHash } from 'node:crypto';
+import { acquireSessionLease, type SessionLease } from './session_lock.js';
 import {
   validateSessionGraph,
   orderedCheckpoints,
@@ -57,6 +58,12 @@ export const emptyContextState = (): ContextState => ({
 });
 export class CheckpointStore {
   private db: DatabaseSync;
+  private readonly home?: string;
+  private readonly ownership = new Map<string, SessionLease>();
+  private readonly ownershipHandlers = new Map<
+    string,
+    (error: Error) => void
+  >();
   private closed = false;
   // The messages of each session's current head, so a repaint does not walk the checkpoint
   // chain (one query per message) again. The array and its messages are shared: callers
@@ -72,6 +79,7 @@ export class CheckpointStore {
     return this.writeVersion;
   }
   constructor(home?: string) {
+    this.home = home;
     this.db = new DatabaseSync(
       home ? join(ensureHome(home), 'circle.sqlite') : ':memory:',
     );
@@ -120,12 +128,58 @@ export class CheckpointStore {
       throw error;
     }
   }
+  /** Hold execution ownership through turns, background tasks and shutdown. */
+  claimSession(
+    sessionId: string,
+    onCompromised?: (error: Error) => void,
+  ): void {
+    if (!this.home) return;
+    if (!this.ownership.has(sessionId))
+      this.ownership.set(
+        sessionId,
+        acquireSessionLease(this.home, sessionId, (error) =>
+          this.ownershipHandlers.get(sessionId)?.(error),
+        ),
+      );
+    if (onCompromised) this.ownershipHandlers.set(sessionId, onCompromised);
+  }
+  releaseSession(sessionId: string): void {
+    this.ownership.get(sessionId)?.release();
+    this.ownership.delete(sessionId);
+    this.ownershipHandlers.delete(sessionId);
+  }
+  private writing<T>(sessionIds: string[], operation: () => T): T {
+    const temporary: SessionLease[] = [];
+    try {
+      for (const id of [...new Set(sessionIds)].sort()) {
+        const owned = this.ownership.get(id);
+        if (owned) owned.assertActive();
+        else if (this.home) temporary.push(acquireSessionLease(this.home, id));
+      }
+      return operation();
+    } finally {
+      for (const lease of temporary.reverse()) lease.release();
+    }
+  }
   create(
     workspace: string,
     model: string,
     title = '',
     id = 'circle-' + randomUUID().slice(0, 8),
     parentId: string | null = null,
+  ): Session {
+    if (parentId && this.ownership.has(parentId))
+      this.claimSession(id, this.ownershipHandlers.get(parentId));
+    return this.writing(parentId ? [parentId, id] : [id], () =>
+      this.createOwned(workspace, model, title, id, parentId),
+    );
+  }
+  private createOwned(
+    workspace: string,
+    model: string,
+    title: string,
+    id: string,
+    parentId: string | null,
   ): Session {
     const existing = this.get(id);
     if (existing) {
@@ -176,9 +230,10 @@ export class CheckpointStore {
       .all(parentId) as unknown as Session[];
   }
   rename(id: string, title: string): void {
+    // A new name is not new work. Recency stays the last message.
     this.db
-      .prepare('UPDATE sessions SET title = ?, updated = ? WHERE id = ?')
-      .run(title, Date.now(), id);
+      .prepare('UPDATE sessions SET title = ? WHERE id = ?')
+      .run(title, id);
     this.writeVersion++;
   }
   private decode(row: Record<string, unknown>): Checkpoint {
@@ -208,6 +263,15 @@ export class CheckpointStore {
       );
   }
   append(
+    sessionId: string,
+    messages: Message[],
+    expectedHead?: string | null,
+  ): string | null {
+    return this.writing([sessionId], () =>
+      this.appendOwned(sessionId, messages, expectedHead),
+    );
+  }
+  private appendOwned(
     sessionId: string,
     messages: Message[],
     expectedHead?: string | null,
@@ -270,11 +334,15 @@ export class CheckpointStore {
     return messages;
   }
   select(sessionId: string, head: string | null): void {
+    this.writing([sessionId], () => this.selectOwned(sessionId, head));
+  }
+  private selectOwned(sessionId: string, head: string | null): void {
     const messages = this.messages(sessionId, head);
     this.requireBalancedTools(messages);
+    // Choosing an earlier head is not a new message.
     this.db
-      .prepare('UPDATE sessions SET head = ?, updated = ? WHERE id = ?')
-      .run(head, Date.now(), sessionId);
+      .prepare('UPDATE sessions SET head = ? WHERE id = ?')
+      .run(head, sessionId);
     this.writeVersion++;
   }
   fork(sessionId: string, workspace: string, head?: string | null): Session {
@@ -282,7 +350,31 @@ export class CheckpointStore {
     if (!parent) throw new Error('unknown session');
     return this.importGraph(this.exportGraph(sessionId, head, true), workspace);
   }
-  delete(sessionId: string): void {
+  delete(sessionId: string, beforeDelete?: (ids: string[]) => void): void {
+    this.writing([sessionId], () => this.deleteTree(sessionId, beforeDelete));
+  }
+  private deleteTree(
+    sessionId: string,
+    beforeDelete?: (ids: string[]) => void,
+  ): void {
+    const ids = new Set<string>();
+    const collect = (id: string): void => {
+      if (ids.has(id)) throw new Error('session parent cycle');
+      ids.add(id);
+      for (const child of this.children(id)) collect(child.id);
+    };
+    collect(sessionId);
+    // The root is already leased, so a second store cannot attach new children
+    // between discovery and delete. Nested acquisition only needs descendants.
+    this.writing(
+      [...ids].filter((id) => id !== sessionId),
+      () => {
+        beforeDelete?.([...ids]);
+        this.deleteOwned(sessionId);
+      },
+    );
+  }
+  private deleteOwned(sessionId: string): void {
     const visit = (id: string, seen: Set<string>): void => {
       if (seen.has(id)) throw new Error('session parent cycle');
       seen.add(id);
@@ -355,6 +447,14 @@ export class CheckpointStore {
       : undefined;
   }
   importLegacy(plan: LegacyImportPlan): 'imported' | 'skipped' {
+    return this.writing(
+      plan.parentId
+        ? [plan.parentId, plan.session.thread_id]
+        : [plan.session.thread_id],
+      () => this.importLegacyOwned(plan),
+    );
+  }
+  private importLegacyOwned(plan: LegacyImportPlan): 'imported' | 'skipped' {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       if (
@@ -759,6 +859,15 @@ export class CheckpointStore {
     state: ContextState,
     expectedHead?: string | null,
   ): void {
+    this.writing([sessionId], () =>
+      this.setContextStateOwned(sessionId, state, expectedHead),
+    );
+  }
+  private setContextStateOwned(
+    sessionId: string,
+    state: ContextState,
+    expectedHead?: string | null,
+  ): void {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const session = this.get(sessionId);
@@ -798,6 +907,7 @@ export class CheckpointStore {
   close(): void {
     if (this.closed) return;
     this.db.close();
+    for (const id of this.ownership.keys()) this.releaseSession(id);
     this.closed = true;
   }
 }

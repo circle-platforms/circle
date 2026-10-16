@@ -30,10 +30,20 @@ Session ids look like `circle-3f9a1c2e`. `circle --session-id <id>` opens or sta
 | `enter` | Open the session. |
 | `tab` | Switch between this folder's sessions and every folder's. |
 | `ctrl+r` | Rename the session. |
-| `ctrl+d` | Delete the session and its messages, after you confirm. The session you are in cannot be deleted. |
+| `ctrl+d` | Delete the session and its messages after confirmation, stopping its turn and tasks first. |
 | `esc` | Clear the search, or close the list. |
 
 A session from another folder is not moved. Picking one copies it into a new session in this folder, and the original stays where it was.
+
+## Concurrent conversations
+
+In the full-screen terminal, `/new`, `/resume` and `/continue` switch the view while other conversations keep running. `alt+s` opens the session list even while an approval card is waiting. The list marks running conversations and requests waiting for you. Switching back restores the draft, attachments, scroll position and pending card. Interrupt stops the selected conversation; leaving Circle stops every conversation and job owned by that terminal.
+
+Changing the connection or signing out waits for every session and background task in that terminal to finish. A completed connection change refreshes the clients of all its open conversations; signing out prevents their next request. Work already running in other terminals keeps its existing client; their next turn, model change or manual compaction requires reconnecting when the saved endpoint or credentials changed.
+
+Several Circle terminals can use the same data folder and workspace with different conversations. One conversation has one executable owner: another terminal can read its stored history, but cannot resume execution, change its history or delete it while owned. Release it in the original terminal, or fork it. Ownership uses heartbeat locks; after an abrupt process death, allow up to 30 seconds before resuming. A normal exit releases ownership after cleanup.
+
+Deleting a running conversation requires confirmation to stop its turn, subagents and tasks. History is deleted only after cleanup succeeds; a failed cleanup keeps it for retry. Deleting the selected conversation chooses another available conversation in the same folder or creates an empty one. Deleting a background conversation leaves the current view alone. Actual files in the workspace remain shared, and deleting a conversation does not revert or delete them.
 
 ## Reopen a session after a restart
 
@@ -135,4 +145,4 @@ These are limits of the current version:
 - **The undo history is kept in memory only.** The tree is read from the saved messages, so it survives a restart; `/undo` does not.
 - **A session closed while a card was waiting** reopens without the card. Send a message to go on.
 - **`auto` mode is not saved** with the session. See [Security](security.md#auto-mode).
-- **Background jobs end with Circle.** A reopened session has none running; when you left normally, the conversation has a note naming the jobs that were stopped. A job of another session goes on while you switch with `/resume` or `/new`, and its notice waits until that session is open again. See [Background jobs](background-jobs.md).
+- **Background jobs end with Circle.** A reopened session has none running; when you left normally, the conversation has a note naming the jobs that were stopped. A job of another session goes on while you switch with `/resume` or `/new`. Its completion stays with the originating session and can continue that session in the background when its queue and input permit; it does not switch the view. See [Background jobs](background-jobs.md).

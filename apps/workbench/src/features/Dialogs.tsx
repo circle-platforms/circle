@@ -24,6 +24,7 @@ import { t, tn } from '../i18n';
 import { DiffBlock } from '../components/DiffBlock';
 import { BrowserApproval, requestReason } from './InlineRequest';
 import { hasToolInput } from '../model/browser';
+import { canArchiveSession } from '../model/session-management';
 import { branchMessages, currentSession, sessionText } from '../model/state';
 import type { DialogId, Interaction, Session } from '../model/types';
 import {
@@ -638,9 +639,16 @@ export function DialogHost({
         <>
           <p className="dialog-paragraph">
             {runtime.mode === 'live'
-              ? t('Delete “{title}” and its saved conversation?', {
-                  title: target.title,
-                })
+              ? !canArchiveSession(snapshot, target)
+                ? t(
+                    'Stop all work in “{title}”, then delete its saved conversation?',
+                    {
+                      title: target.title,
+                    },
+                  )
+                : t('Delete “{title}” and its saved conversation?', {
+                    title: target.title,
+                  })
               : `Delete “${target.title}” from this browser preview?`}
           </p>
           <div className="dialog-actions">
@@ -649,12 +657,14 @@ export function DialogHost({
               className="danger"
               onClick={() =>
                 perform(async () => {
-                  await runtime.deleteSession(target.id);
+                  await runtime.deleteSession(target.id, true);
                   onClose();
                 })
               }
             >
-              {t('delete local session')}
+              {runtime.mode === 'live' && !canArchiveSession(snapshot, target)
+                ? t('stop work and delete session')
+                : t('delete local session')}
             </Button>
           </div>
         </>

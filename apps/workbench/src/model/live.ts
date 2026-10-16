@@ -4,8 +4,12 @@ import type {
   RuntimeUpdate,
 } from '../../../desktop/src/runtime-protocol';
 import type {
+  Attachment,
+  BeginResult,
   CommandResult,
+  Effort,
   RuntimePort,
+  SessionMode,
   WorkbenchSnapshot,
   Session,
 } from './types';
@@ -14,6 +18,7 @@ import {
   visibleMessages,
   EFFORTS,
   parseMode,
+  promptAttachments,
   sessionMode,
 } from './state';
 import {
@@ -24,6 +29,8 @@ import {
 import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 import { t } from '../i18n/index.ts';
+import { SessionActionError } from './action-error';
+import { sessionHasContent } from './session-management';
 
 const LOCAL_SESSION = [
   'draft',
@@ -34,6 +41,7 @@ const LOCAL_SESSION = [
   'expandTools',
   'pinned',
   'shared',
+  'presentation',
 ] as const;
 const LOCAL_SETTINGS = ['textSize', 'keybindings'] as const;
 const equal = (a: unknown, b: unknown) =>
@@ -47,6 +55,7 @@ export class LiveRuntime implements RuntimePort {
   private seq = -1;
   private listeners = new Set<() => void>();
   private views = new Map<string, View>();
+  private sessionErrors = new Map<string, string>();
   private files: WorkbenchSnapshot['files'] = [];
   // The workspace whose files were last listed, and a listing in flight.
   private listed?: string;
@@ -117,8 +126,23 @@ export class LiveRuntime implements RuntimePort {
     this.snapshot.files = this.files;
     this.snapshot.settings = { ...this.snapshot.settings, ...this.settings };
     if (this.plugins) this.snapshot.uiPlugins = this.plugins;
-    for (const session of this.snapshot.sessions)
+    const existing = new Set(
+      this.snapshot.sessions.map((session) => session.id),
+    );
+    let removedView = false;
+    for (const id of this.views.keys()) {
+      if (!existing.has(id)) {
+        this.views.delete(id);
+        removedView = true;
+      }
+    }
+    if (removedView) this.persist();
+    for (const id of this.sessionErrors.keys())
+      if (!existing.has(id)) this.sessionErrors.delete(id);
+    for (const session of this.snapshot.sessions) {
       Object.assign(session, this.views.get(session.id) ?? {});
+      session.actionError = this.sessionErrors.get(session.id);
+    }
     for (const listener of this.listeners) listener();
     // A file tool or a finished turn may have added files: list the folder again.
     const kind = update.event?.kind;
@@ -159,14 +183,20 @@ export class LiveRuntime implements RuntimePort {
     this.listing = run().catch(() => undefined);
     return this.listing;
   }
-  private report(error: unknown) {
+  private report(error: unknown, sessionId = this.snapshot.activeSessionId) {
+    if (error instanceof SessionActionError) sessionId = error.sessionId;
+    const message =
+      error instanceof Error ? error.message : t('runtime action failed');
+    if (!this.snapshot.sessions.some((session) => session.id === sessionId))
+      return;
+    this.sessionErrors.set(sessionId, message);
     this.snapshot = {
       ...this.snapshot,
-      runtime: {
-        ...this.snapshot.runtime!,
-        error:
-          error instanceof Error ? error.message : t('runtime action failed'),
-      },
+      sessions: this.snapshot.sessions.map((session) =>
+        session.id === sessionId
+          ? { ...session, actionError: message }
+          : session,
+      ),
     };
     for (const listener of this.listeners) listener();
   }
@@ -185,6 +215,17 @@ export class LiveRuntime implements RuntimePort {
     payload: Record<string, unknown> = {},
     sessionId = this.snapshot.activeSessionId,
   ): Promise<unknown> {
+    if (this.sessionErrors.delete(sessionId)) {
+      this.snapshot = {
+        ...this.snapshot,
+        sessions: this.snapshot.sessions.map((session) =>
+          session.id === sessionId
+            ? { ...session, actionError: undefined }
+            : session,
+        ),
+      };
+      for (const listener of this.listeners) listener();
+    }
     const promise = (async () => {
       if (!this.snapshot.runtime?.connected)
         throw Error(t('Circle runtime disconnected'));
@@ -197,8 +238,14 @@ export class LiveRuntime implements RuntimePort {
       this.receive(await this.host.runtimeState());
       if (!reply.ok) throw Error(reply.error ?? t('runtime action failed'));
       return reply.data;
-    })();
-    void promise.catch((error) => this.report(error));
+    })().catch((error) => {
+      throw new SessionActionError(
+        error instanceof Error ? error.message : t('runtime action failed'),
+        sessionId,
+        error,
+      );
+    });
+    void promise.catch((error) => this.report(error, sessionId));
     return promise;
   }
   change = (update: (draft: WorkbenchSnapshot) => void) => {
@@ -354,10 +401,11 @@ export class LiveRuntime implements RuntimePort {
           );
         })
         .catch((error) => {
-          this.report(error);
+          this.report(error, operation.sessionId);
         });
   };
   newSession = async (workspaceId?: string) => {
+    workspaceId ??= currentSession(this.snapshot).workspaceId;
     await this.changes;
     if (
       workspaceId &&
@@ -373,19 +421,61 @@ export class LiveRuntime implements RuntimePort {
     const result = (await this.native('new-session')) as { sessionId: string };
     return result.sessionId;
   };
+  beginConversation = async (input: {
+    workspaceId?: string | null;
+    text: string;
+    model?: string;
+    effort?: Effort;
+    mode?: SessionMode;
+    attachments?: Attachment[];
+  }): Promise<BeginResult> => {
+    const text = input.text.trim();
+    if (!text) throw Error(t('prompt is empty'));
+    if (
+      input.attachments !== undefined &&
+      (!Array.isArray(input.attachments) || input.attachments.length > 16)
+    )
+      throw Error('invalid attachments');
+    await this.changes;
+    const workspaceId = input.workspaceId || undefined;
+    if (workspaceId) {
+      const workspace = this.snapshot.workspaces.find(
+        (item) => item.id === workspaceId,
+      );
+      if (!workspace)
+        throw Error(t('open the workspace through the native folder dialog'));
+      if (!workspace.trusted) return { dialog: 'trust' };
+    }
+    const folded = promptAttachments(text, input.attachments ?? []);
+    const result = (await this.native('begin-session', {
+      ...(workspaceId ? { workspaceId } : {}),
+      text: folded.text,
+      display: folded.display,
+      ...(folded.attachments.length ? { attachments: folded.attachments } : {}),
+      ...(input.model ? { modelId: input.model } : {}),
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
+    })) as { sessionId: string };
+    return { sessionId: result.sessionId };
+  };
   selectSession = async (id: string) => {
     await this.changes;
     await this.native('select-session', { id });
   };
-  deleteSession = async (id: string) => {
+  deleteSession = async (id: string, confirmed = false) => {
     await this.changes;
-    await this.native('delete-session', { id });
+    await this.native('delete-session', { id, confirmed });
   };
   branch = async (messageId: string, kind: 'tree' | 'fork') => {
+    const sessionId = this.snapshot.activeSessionId;
     await this.changes;
-    await this.native(kind === 'tree' ? 'select-branch' : 'fork', {
-      messageId,
-    });
+    await this.native(
+      kind === 'tree' ? 'select-branch' : 'fork',
+      {
+        messageId,
+      },
+      sessionId,
+    );
   };
   answer = async (id: string, revision: number, answer: string) => {
     const item = this.snapshot.interactions.find((row) => row.id === id);
@@ -402,7 +492,16 @@ export class LiveRuntime implements RuntimePort {
   request = (
     kind: string,
     payload: Record<string, unknown> = {},
+    sourceSessionId?: string,
   ): Promise<unknown> => {
+    const owner =
+      kind === 'stop-job'
+        ? this.snapshot.jobs.find((item) => item.id === payload.id)?.sessionId
+        : kind === 'cancel-interaction'
+          ? this.snapshot.interactions.find((item) => item.id === payload.id)
+              ?.sessionId
+          : undefined;
+    const sessionId = owner ?? sourceSessionId ?? this.snapshot.activeSessionId;
     const operation = async () => {
       await this.changes;
       const names: Record<string, RuntimeCommandName> = {
@@ -438,10 +537,14 @@ export class LiveRuntime implements RuntimePort {
         execute: 'shell',
       };
       if (kind === 'export-session') {
-        const data = (await this.native('export', {
-          format:
-            payload.format === 'json' ? 'jsonl' : (payload.format ?? 'jsonl'),
-        })) as { content: string; name: string };
+        const data = (await this.native(
+          'export',
+          {
+            format:
+              payload.format === 'json' ? 'jsonl' : (payload.format ?? 'jsonl'),
+          },
+          sessionId,
+        )) as { content: string; name: string };
         return saveExport(data.name, data.content, 'application/x-ndjson');
       }
       if (kind === 'exit') return this.host.windowControl('quit');
@@ -458,25 +561,34 @@ export class LiveRuntime implements RuntimePort {
       }
       const name = names[kind];
       if (!name) throw Error(t('{kind} is not connected yet', { kind }));
-      return this.native(name, payload);
+      return this.native(name, payload, sessionId);
     };
     const result = operation();
-    void result.catch((error) => this.report(error));
+    void result.catch((error) => this.report(error, sessionId));
     return result;
   };
   send = async (
     kind: 'steering' | 'follow-up' = 'steering',
   ): Promise<CommandResult> => {
+    const sessionId = this.snapshot.activeSessionId;
     await this.changes;
-    const session = currentSession(this.snapshot);
+    const session = this.snapshot.sessions.find(
+      (item) => item.id === sessionId,
+    );
+    if (!session) throw Error(t('session not found'));
     const raw = session.draft.trim();
     if (raw.startsWith('!')) {
-      await this.native('shell', {
-        command: raw.replace(/^!!?/, ''),
-        quiet: raw.startsWith('!!'),
-      });
+      await this.native(
+        'shell',
+        {
+          command: raw.replace(/^!!?/, ''),
+          quiet: raw.startsWith('!!'),
+        },
+        session.id,
+      );
       this.change((state) => {
-        currentSession(state).draft = '';
+        const target = state.sessions.find((item) => item.id === session.id);
+        if (target?.draft === session.draft) target.draft = '';
       });
       return {};
     }
@@ -486,34 +598,22 @@ export class LiveRuntime implements RuntimePort {
     );
     if (slash) {
       this.change((state) => {
-        currentSession(state).draft = '';
+        const target = state.sessions.find((item) => item.id === session.id);
+        if (target?.draft === session.draft) target.draft = '';
       });
-      return this.command(slash.name, slash.args);
+      return this.command(slash.name, slash.args, session.id);
     }
     if (commandWord(raw))
       return {
         notice: t('unknown command /{name}', { name: commandWord(raw) }),
       };
     if (!raw && !session.attachments.length) return {};
-    const textAttachments = session.attachments.filter(
-      (a) => !['image', 'document'].includes(a.kind),
-    );
-    const prompt =
-      raw +
-      textAttachments
-        .map(
-          (a) =>
-            `\n\n<attachment name=${JSON.stringify(a.name)}>\n${a.content}\n</attachment>`,
-        )
-        .join('');
-    const media = session.attachments.filter((a) =>
-      ['image', 'document'].includes(a.kind),
-    );
+    const folded = promptAttachments(raw, session.attachments);
     const payload = {
-      text: prompt || 'See the attached files.',
-      display: raw,
+      text: folded.text,
+      display: folded.display,
       kind,
-      attachments: media,
+      attachments: folded.attachments,
     };
     // Said here, with the message left in the box, rather than as a refused command
     if (JSON.stringify(payload).length > MAX_PROMPT_PAYLOAD)
@@ -522,7 +622,7 @@ export class LiveRuntime implements RuntimePort {
           'the message and its files are over 64 MB; remove some pictures or PDFs',
         ),
       };
-    await this.native('prompt', payload);
+    await this.native('prompt', payload, session.id);
     this.change((state) => {
       const item = state.sessions.find((item) => item.id === session.id);
       if (!item) return;
@@ -536,19 +636,30 @@ export class LiveRuntime implements RuntimePort {
     });
     return {};
   };
-  command = async (name: string, args = ''): Promise<CommandResult> => {
+  command = async (
+    name: string,
+    args = '',
+    sessionId = this.snapshot.activeSessionId,
+  ): Promise<CommandResult> => {
     await this.changes;
     name = parseSlash('/' + name)?.name ?? name;
-    const session = currentSession(this.snapshot);
+    const session = this.snapshot.sessions.find(
+      (item) => item.id === sessionId,
+    );
+    if (!session) throw Error(t('session not found'));
+    const native = (
+      name: RuntimeCommandName,
+      payload: Record<string, unknown> = {},
+    ) => this.native(name, payload, session.id);
     if (name === 'new') {
-      await this.newSession();
+      await this.newSession(session.workspaceId);
       return { openSession: true };
     }
     if (name === 'resume' && args) {
+      const visible = this.snapshot.sessions.filter(sessionHasContent);
       const target =
-        this.snapshot.sessions.find(
-          (s) => s.id === args || s.id.endsWith(args),
-        ) ?? this.snapshot.sessions[Number(args) - 1];
+        visible.find((s) => s.id === args || s.id.endsWith(args)) ??
+        visible[Number(args) - 1];
       if (!target) throw Error(t('session not found'));
       await this.selectSession(target.id);
       return { openSession: true };
@@ -561,22 +672,22 @@ export class LiveRuntime implements RuntimePort {
       return { openSession: true };
     }
     if (name === 'name' && args) {
-      await this.native('rename-session', { title: args });
+      await native('rename-session', { title: args });
       return {};
     }
     if (name === 'clone') {
-      await this.native('clone');
+      await native('clone');
       return { openSession: true };
     }
     if (name === 'plan') {
-      await this.native('set-plan-mode', {
+      await native('set-plan-mode', {
         enabled:
           args === 'on' ? true : args === 'off' ? false : !session.readOnly,
       });
       return {};
     }
     if (name === 'yolo') {
-      await this.native('set-auto', {
+      await native('set-auto', {
         enabled: args === 'off' ? false : args === 'on' ? true : !session.auto,
       });
       return {};
@@ -585,12 +696,13 @@ export class LiveRuntime implements RuntimePort {
       const mode = parseMode(args, sessionMode(session));
       if (!mode)
         return { notice: t('choose manual, accept-edits, plan or auto') };
-      await this.native('set-mode', { mode });
+      await native('set-mode', { mode });
       return {};
     }
     if (['thinking', 'details'].includes(name) && !args) {
       this.change((s) => {
-        const target = currentSession(s);
+        const target = s.sessions.find((item) => item.id === session.id);
+        if (!target) return;
         if (name === 'thinking') target.showThinking = !target.showThinking;
         else target.expandTools = !target.expandTools;
       });
@@ -599,11 +711,11 @@ export class LiveRuntime implements RuntimePort {
     if (['effort', 'thinking'].includes(name) && args) {
       if (!(EFFORTS as string[]).includes(args))
         throw Error(t('unknown thinking depth'));
-      await this.native('set-effort', { effort: args });
+      await native('set-effort', { effort: args });
       return {};
     }
     if (name === 'models' && args) {
-      await this.native('set-model', { modelId: args });
+      await native('set-model', { modelId: args });
       return {};
     }
     if (name === 'themes' && args) {
@@ -613,11 +725,13 @@ export class LiveRuntime implements RuntimePort {
       return {};
     }
     if (name === 'skill' && args) {
-      const result = (await this.native('load-skill', {
+      const result = (await native('load-skill', {
         name: args.split(/\s/)[0],
       })) as { name: string; content: string };
       this.change((s) => {
-        currentSession(s).attachments.push({
+        const target = s.sessions.find((item) => item.id === session.id);
+        if (!target || target.lifecycle === 'deleting') return;
+        target.attachments.push({
           id: crypto.randomUUID(),
           name: result.name,
           kind: 'skill',
@@ -628,7 +742,8 @@ export class LiveRuntime implements RuntimePort {
     }
     if (name === 'undo' || name === 'redo') {
       this.change((s) => {
-        const item = currentSession(s);
+        const item = s.sessions.find((row) => row.id === session.id);
+        if (!item) return;
         if (name === 'redo') {
           const previous = item.undoStack.pop();
           if (previous) item.hiddenIds = previous;
@@ -653,29 +768,29 @@ export class LiveRuntime implements RuntimePort {
         (r) => r.sessionId === session.id,
       )[Number(args.slice(7)) - 1];
       if (!rule) throw Error(t('rule not found'));
-      await this.native('revoke-approval', { ruleId: rule.id });
+      await native('revoke-approval', { ruleId: rule.id });
       return { page: 'approvals' };
     }
     if (name === 'logout') {
-      await this.native('logout');
+      await native('logout');
       return { dialog: 'connect' };
     }
     if (
       name === 'reload' ||
       (['mcp', 'extensions'].includes(name) && args === 'reload')
     ) {
-      await this.native('reload');
+      await native('reload');
       return { notice: t('Circle integrations reloaded') };
     }
     if (name === 'jobs') return { panel: 'activity', selection: args };
     if (name === 'copy') return { effect: 'copy' };
     if (name === 'import') return { effect: 'import' };
     if (name === 'init') {
-      await this.native('init');
+      await native('init');
       return {};
     }
     if (name === 'share' || name === 'unshare') {
-      const data = (await this.native(name)) as { path: string };
+      const data = (await native(name)) as { path: string };
       return {
         notice:
           name === 'share'
@@ -684,7 +799,7 @@ export class LiveRuntime implements RuntimePort {
       };
     }
     if (this.snapshot.commands.some((command) => command.name === name)) {
-      await this.native('custom-command', { name, args });
+      await native('custom-command', { name, args });
       return {};
     }
     const dialogs: Record<string, CommandResult['dialog']> = {

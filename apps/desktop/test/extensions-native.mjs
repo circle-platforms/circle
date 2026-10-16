@@ -1,10 +1,11 @@
 // Native check of the extension features in the application: a UI plugin paired with a
-// runtime extension (the bundled circle-server), the view that extension publishes, and a
+// runtime extension (the bundled hub), the view that extension publishes, and a
 // link an extension opens arriving in the application's own browser panel. Isolated data
 // folder, scripted model, a local page; no real data, model or network.
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -17,10 +18,12 @@ await mkdir(output, { recursive: true });
 const temp = await mkdtemp(join(tmpdir(), 'circle-native-extensions-'));
 const data = join(temp, 'data');
 const fixturePath = join(temp, 'model.json');
+const requestsPath = join(temp, 'model-requests.jsonl');
 // The scripted model needs a reply to start with; nothing here asks it.
 await writeFile(
   fixturePath,
   JSON.stringify({
+    requestsPath,
     replies: [{ message: { id: 'idle', role: 'assistant', content: 'idle' } }],
   }),
 );
@@ -97,61 +100,57 @@ try {
   page = await app.firstWindow();
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
-  // Extensions load once the workspace is trusted, as for a person using it.
-  assert.equal((await command('trust', { enabled: true })).ok, true);
-  await waitFor(async () => Boolean(await row('linker')), 'extensions loaded');
-  const bundled = await row('circle-server');
+  // The application-owned scratch workspace is trusted at startup. Neither a
+  // prompt, an explicit trust command nor a reload may be needed to discover it.
+  await waitFor(
+    async () => Boolean(await row('linker')),
+    'cold-start extensions loaded',
+  );
+  assert.equal(existsSync(requestsPath), false);
+  const bundled = await row('hub');
   assert.equal(bundled.scope, 'bundled');
   assert.equal(bundled.version, '0.1.0');
   assert.equal(bundled.enabled, false);
   assert.equal(
-    await page
-      .getByRole('link', { name: 'circle-server', exact: true })
-      .count(),
+    await page.getByRole('link', { name: 'hub', exact: true }).count(),
     0,
   );
-  checks.push(
-    'the bundled circle-server extension ships off, and its page is hidden',
-  );
+  checks.push('the bundled hub extension ships off, and its page is hidden');
 
   await route('/page/extensions');
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
   const toggle = page.getByRole('checkbox', {
-    name: 'enable circle-server interface',
+    name: 'enable hub interface',
     exact: true,
   });
   assert.equal(await toggle.isChecked(), false);
   const pairedNotes = page.getByText(
-    /paired with runtime extension circle-server · 0\.1\.0 · runtime extension circle-server is off/,
+    /paired with runtime extension hub · 0\.1\.0 · runtime extension hub is off/,
   );
   await pairedNotes.first().waitFor();
-  // circle-server and the four platform objects share one runtime extension.
+  // hub and the four platform objects share one runtime extension.
   assert.equal(await pairedNotes.count(), 5);
   // The switch follows the runtime: it flips once the extension is saved and reloaded.
   await toggle.click();
   await waitFor(
-    async () => (await row('circle-server'))?.enabled === true,
+    async () => (await row('hub'))?.enabled === true,
     'runtime extension on',
   );
   const saved = JSON.parse(
     await readFile(join(data, 'runtime-home', 'settings.json'), 'utf8'),
   );
-  assert.equal(saved.extensions['circle-server'].enabled, true);
-  await page
-    .getByRole('link', { name: 'circle-server', exact: true })
-    .waitFor();
+  assert.equal(saved.extensions['hub'].enabled, true);
+  await page.getByRole('link', { name: 'hub', exact: true }).waitFor();
   checks.push(
     'turning the paired interface on turns its runtime extension on, saved, and shows its page',
   );
 
-  await page.getByRole('link', { name: 'circle-server', exact: true }).click();
-  await page
-    .getByRole('heading', { name: 'circle-server', exact: true })
-    .waitFor();
+  await page.getByRole('link', { name: 'hub', exact: true }).click();
+  await page.getByRole('heading', { name: 'hub', exact: true }).waitFor();
   await page.getByText('signed out', { exact: true }).waitFor();
-  const view = (await row('circle-server')).view;
+  const view = (await row('hub')).view;
   assert.equal(view.signedIn, false);
   assert.deepEqual(view.tasks, []);
   checks.push('the page shows the view the runtime extension published');
@@ -192,19 +191,18 @@ try {
     .click();
   await page
     .getByRole('checkbox', {
-      name: 'enable circle-server interface',
+      name: 'enable hub interface',
       exact: true,
     })
     .click();
   await waitFor(
-    async () => (await row('circle-server'))?.enabled === false,
+    async () => (await row('hub'))?.enabled === false,
     'runtime extension off',
   );
   await waitFor(
     async () =>
-      (await page
-        .getByRole('link', { name: 'circle-server', exact: true })
-        .count()) === 0,
+      (await page.getByRole('link', { name: 'hub', exact: true }).count()) ===
+      0,
     'page hidden',
   );
   for (const id of ['knowledge', 'work', 'execution', 'methods'])

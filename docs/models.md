@@ -63,6 +63,8 @@ Circle asks models for extended thinking when the protocol supports it. The dept
 - `--thinking <level>` sets it for one run and is never saved.
 - `CIRCLE_REASONING_EFFORT` sets it for a run and wins over `default_thinking`.
 
+For documented Claude models that support thinking summaries, Circle requests `display: "summarized"` so progress can include thinking text. The thinking visibility switch only changes the interface; it does not change the model request, effort or output limit. An endpoint that explicitly rejects `thinking.display` is retried once without that field, keeping the remaining thinking settings. Unknown model aliases and older profiles keep their existing request format. Thinking blocks and signatures are retained as returned; ordinary text is shown only when the provider sends it.
+
 A change applies from the next message. When the model has a depth, the header shows it after the model name, such as `step-3.7-flash • high`.
 
 - **Anthropic protocol**: the default is `xhigh`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
@@ -84,12 +86,14 @@ Circle retries transient failures for you. While it does, the busy line says why
 
 The wait between tries doubles each time up to a cap (2 minutes for rate limits, 30 seconds otherwise). If the endpoint sends `Retry-After`, `retry-after-ms` or says how long to wait in its error message, Circle uses that. After a timeout the next try also waits twice as long for the answer to start, up to 5 minutes (Node.js's own limit), and twice as long for content in the stream, up to 8 times as long. A timeout or a dropped connection is retried even after part of the answer came: that part is dropped and the answer starts again. Other failures after the answer has started are not retried, and neither are 402, quota or billing errors, other 4xx errors, or certificate and TLS errors. When the retries run out, the error says how many were made. `esc` stops a request and a wait alike.
 
-Two more guards protect a turn:
+Additional checks protect a turn:
 
 - A model that repeats itself while thinking is sent again with a reminder, twice at most. One that repeats itself in its answer is stopped.
-- A response that ends with no finish signal and no output is sent again once. When it has output, the output is kept and Circle says it may be truncated.
+- A response that ends without a complete finish signal, reaches its output limit, is filtered, pauses, or ends with an unknown reason is kept as incomplete and reported as a failure. Partial text stays in history. Tool calls in that response are not run, even if their arguments parse; matching error results keep the history balanced.
+- A normally ended response with neither text nor tool calls is reported as empty. Circle does not automatically continue or resend it. You can continue with another message.
+- Provider finish reasons, the actual output limit where one was sent, and client repetition stops are stored with new responses. Older records stay unchanged; a missing field is not inferred from token counts.
 
-`CIRCLE_LLM_TIMEOUT`, `CIRCLE_LLM_STALL_TIMEOUT`, `CIRCLE_LLM_REPEAT_GUARD` and `CIRCLE_LLM_VERIFY_FINISH` change these. See [Environment variables](environment-variables.md#model-requests).
+`CIRCLE_LLM_TIMEOUT`, `CIRCLE_LLM_STALL_TIMEOUT` and `CIRCLE_LLM_REPEAT_GUARD` change timeouts and repetition checks. See [Environment variables](environment-variables.md#model-requests).
 
 ## Cost and context in the footer
 

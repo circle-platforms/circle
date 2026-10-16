@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { orderModeToolResults } from './tool_history.js';
 import type {
   ChatModel,
   Message,
@@ -6,6 +7,8 @@ import type {
   ToolCall,
   Usage,
   MediaAttachment,
+  ToolContext,
+  ToolModelCall,
 } from './types.js';
 import { emptyUsage, addUsage } from './types.js';
 import { EventBus } from './events.js';
@@ -22,6 +25,10 @@ import {
 } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
+import {
+  completionFailure,
+  ModelCompletionFailure,
+} from './model_completion.js';
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -50,11 +57,19 @@ export interface HarnessOptions {
   maxSteps?: number;
   headless?: boolean;
   beforeRun?: (signal: AbortSignal) => Promise<void>;
+  /** Called for each turn, including queued follow-ups, before consuming its message. */
+  beforeTurn?: () => void;
   beforeStep?: () => void;
   priceUsage?: (
     model: string,
     usage: Usage,
   ) => import('./pricing.js').PriceReceipt;
+  webSearch?: (
+    model: ChatModel,
+    query: string,
+    numResults: number,
+    context: ToolContext,
+  ) => Promise<string>;
   toolBoundary?: (
     tool: Tool,
     args: Record<string, unknown>,
@@ -305,14 +320,18 @@ export class Harness {
     signal.throwIfAborted();
     const total = emptyUsage();
     let answer = '';
-    let next: string | undefined =
-      prompt ?? this.steering.shift() ?? this.followUps.shift();
+    let first = true;
     do {
+      this.options.beforeTurn?.();
+      signal.throwIfAborted();
+      const next = first
+        ? (prompt ?? this.steering.shift() ?? this.followUps.shift())
+        : this.followUps.shift();
       const result = await this.runTurn(next, signal);
       answer = result.answer;
       addUsage(total, result.usage);
-      next = this.followUps.shift();
-    } while (next !== undefined);
+      first = false;
+    } while (this.followUps.length);
     return { answer, usage: total };
   }
   private async runTurn(
@@ -384,9 +403,11 @@ export class Harness {
                   ? '\nRead-only mode: inspect and plan; only plan.md or plan files may be changed, subject to approval. Do not run shell commands.'
                   : '\nRead-only mode: inspect and plan; do not change files or run commands.'
                 : ''),
-            messages: this.options.prepareMessages
-              ? await this.options.prepareMessages(signal)
-              : this.options.store.projectedMessages(this.sessionId),
+            messages: orderModeToolResults(
+              this.options.prepareMessages
+                ? await this.options.prepareMessages(signal)
+                : this.options.store.projectedMessages(this.sessionId),
+            ),
             tools: this.tools,
             signal: stepSignal,
             notice: (event) =>
@@ -415,10 +436,23 @@ export class Harness {
             usage: { ...response.usage },
           });
           const calls = response.message.tool_calls ?? [];
+          const incomplete = completionFailure(message);
+          if (incomplete) {
+            // No tool in an incomplete response is safe to execute, including
+            // earlier calls whose arguments happened to parse before the cutoff.
+            for (const call of calls)
+              this.finishCall({
+                id: randomUUID(),
+                role: 'tool',
+                tool_call_id: call.id,
+                name: call.name,
+                status: 'error',
+                content: `not run: ${incomplete.message}`,
+              });
+            throw incomplete;
+          }
           if (!calls.length) {
             answer = response.message.content;
-            if (!answer.trim())
-              throw new Error('model ended without an answer');
             if (this.steering.length) continue;
             this.bus.emit('run_end', {
               payload: { answer },
@@ -440,6 +474,7 @@ export class Harness {
             const settled = await Promise.allSettled(
               batch.map(async (call, at) => {
                 results[at] = await this.runCall(call, stepSignal);
+                if (results[at]!.usage) addUsage(usage, results[at]!.usage!);
                 while (results[stored]) this.finishCall(results[stored++]!);
               }),
             );
@@ -466,6 +501,12 @@ export class Harness {
           interrupted: signal.aborted,
           // 401 or 403: the endpoint turned the key down
           status: signal.aborted ? undefined : httpStatus(failure),
+          ...(!signal.aborted && failure instanceof ModelCompletionFailure
+            ? {
+                completion_failure: failure.code,
+                completion_message_id: failure.responseId,
+              }
+            : {}),
         },
         usage: { ...usage },
         elapsed_ms: Date.now() - start,
@@ -487,6 +528,7 @@ export class Harness {
     original: ToolCall,
     signal: AbortSignal,
   ): Promise<Message> {
+    const callModel = this.model;
     let call = original;
     let secrets: Record<string, string> = {};
     let content = '';
@@ -494,6 +536,7 @@ export class Harness {
     let recoverable = false;
     let attachments: MediaAttachment[] = [];
     let acceptingAttachments = true;
+    const modelCalls: ToolModelCall[] = [];
     this.bus.emit('tool_call', { payload: { ...call } });
     try {
       signal.throwIfAborted();
@@ -585,23 +628,34 @@ export class Harness {
       const usedSecrets = [...used].filter((name) =>
         Object.hasOwn(secrets, name),
       );
-      const context = {
+      const context: ToolContext = {
         signal,
         sessionId: this.sessionId,
         callId: call.id,
         ...(used.size ? { rawArgs: structuredClone(raw) } : {}),
         ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
-        imageInput: this.model.imageInput,
+        imageInput: callModel.imageInput,
+        ...(this.options.webSearch
+          ? {
+              webSearch: (query: string, numResults: number) =>
+                this.options.webSearch!(callModel, query, numResults, context),
+            }
+          : {}),
+        recordModelCall: (record) => {
+          if (!acceptingAttachments)
+            throw new Error('tool accounting channel is closed');
+          modelCalls.push(structuredClone(record));
+        },
         emitAttachments: (items: MediaAttachment[]) => {
           if (!acceptingAttachments)
             throw new Error('tool attachment channel is closed');
           signal.throwIfAborted();
           validateAttachments(items);
           if (
-            this.model.imageInput === false &&
+            callModel.imageInput === false &&
             items.some((item) => item.kind === 'image')
           )
-            throw new Error(`${this.model.model} does not read images`);
+            throw new Error(`${callModel.model} does not read images`);
           attachments.push(...structuredClone(items));
           validateAttachments(attachments);
         },
@@ -635,6 +689,8 @@ export class Harness {
     // A command or a page may show a secret back: the model reads its name instead, for the
     // values the call used and the ones saved now, unless the person or the model wrote it
     content = this.redact(content, secrets, () => written(this.messages));
+    const toolUsage = emptyUsage();
+    for (const record of modelCalls) addUsage(toolUsage, record.usage);
     return {
       id: randomUUID(),
       role: 'tool',
@@ -642,6 +698,9 @@ export class Harness {
       tool_call_id: call.id,
       name: call.name,
       status,
+      ...(modelCalls.length
+        ? { model_calls: modelCalls, usage: toolUsage }
+        : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(recoverable ? { recoverable: true } : {}),
     };
@@ -656,7 +715,11 @@ export class Harness {
         name: result.name,
         status,
         output: result.content,
+        ...(result.model_calls?.length
+          ? { model_calls: structuredClone(result.model_calls) }
+          : {}),
       },
+      ...(result.usage ? { usage: { ...result.usage } } : {}),
     });
     this.bus.emit('tool_end', { payload: { id: result.tool_call_id, status } });
   }

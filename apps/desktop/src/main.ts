@@ -23,6 +23,7 @@ import originalFs from 'original-fs';
 import { join, dirname, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { WorkspaceGrants, nativeFile } from './files';
+import { selectedFolder } from './folder-dialog';
 import { attention } from './attention';
 import {
   isNativeLocale,
@@ -56,6 +57,10 @@ const channel = channelOf(
   })(),
 );
 app.setName(channel.name);
+// Older XDG portals turn a directory chooser into a file chooser, or return no
+// path when a folder is confirmed. GTK and KDE dialogs return the folder.
+if (process.platform === 'linux')
+  app.commandLine.appendSwitch('xdg-portal-required-version', '4');
 // Windows shows notifications for the id the installer's Start menu shortcut carries.
 if (process.platform === 'win32') app.setAppUserModelId(channel.id);
 const dataPath =
@@ -94,6 +99,7 @@ let browsers: BrowserSessions | null = null;
 // Certificate exceptions live only in this application process, across window recreation.
 const browserCertificates = new Map<string, Set<string>>();
 let runtime: RuntimeSupervisor | undefined;
+let runtimeSessions = new Set<string>();
 const workspaceSelections = new Map<string, string>();
 const previewMode = process.env.CIRCLE_WORKBENCH_MODE === 'preview';
 const rendererRoot = join(__dirname, 'renderer');
@@ -386,6 +392,10 @@ async function createWindow() {
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
   );
+  runtime?.onSessionCleanup(async (id) => {
+    await browsers?.deleteSession(id);
+    browserCertificates.delete(id);
+  });
   runtime?.onBrowser((request, signal) => {
     if (!browsers) throw Error('the browser is closed');
     return browsers.agent(request, signal);
@@ -465,6 +475,15 @@ app
         },
       );
       runtime.subscribe((update) => {
+        const current = new Set(
+          update.snapshot.sessions.map((session) => session.id),
+        );
+        for (const id of runtimeSessions)
+          if (!current.has(id)) {
+            void browsers?.deleteSession(id).catch(() => {});
+            browserCertificates.delete(id);
+          }
+        runtimeSessions = current;
         window?.webContents.send('circle:runtime-update', update);
         showAttention(update);
       });
@@ -560,16 +579,24 @@ app
       );
     });
     handle('circle:choose-workspace', async () => {
-      const paths: string[] = fixtureProfile?.workspace
-        ? [fixtureProfile.workspace]
-        : (
-            await dialog.showOpenDialog(window!, {
-              title: text('open a workspace'),
-              properties: ['openDirectory'],
-            })
-          ).filePaths;
-      const selected = paths[0] ? await grants.open(paths[0]) : null;
-      if (selected) workspaceSelections.set(selected.id, selected.path);
+      if (fixtureProfile?.workspace) {
+        const selected = await grants.open(fixtureProfile.workspace);
+        workspaceSelections.set(selected.id, selected.path);
+        return selected;
+      }
+      // The click that opened the chooser is still in the GTK queue and would
+      // cancel it before a folder can be confirmed.
+      if (process.platform === 'linux')
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      const path = selectedFolder(
+        await dialog.showOpenDialog(window!, {
+          title: text('open folder'),
+          properties: ['openDirectory'],
+        }),
+      );
+      if (!path) return null;
+      const selected = await grants.open(path);
+      workspaceSelections.set(selected.id, selected.path);
       return selected;
     });
     handle('circle:reveal-workspace', (workspaceId) => {

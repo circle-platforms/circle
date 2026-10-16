@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import { circleHome, normalizeWorkspace } from './paths.js';
 import { isRecord, readJson, writePrivateJson } from './settings.js';
@@ -561,6 +561,9 @@ export class ApprovalStore {
   // Decisions in this session, oldest first: once, always, reject or revoke.
   log(thread: string): StoreData['log'] {
     return this.load(thread).log;
+  }
+  remove(thread: string): void {
+    rmSync(this.path(thread), { force: true });
   }
   matchesAny(thread: string, tool: string, patterns: string[]): boolean {
     return this.rules(thread).some(

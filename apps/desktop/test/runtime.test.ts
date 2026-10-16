@@ -1,6 +1,13 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+  unlink,
+} from 'node:fs/promises';
 import { existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +21,9 @@ import {
   type BrowserResult,
 } from '../../../src/browser/protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
+import { AgentRuntime } from '../../../src/runtime.ts';
+import { ExtensionAPI } from '../../../src/extensions.ts';
+import { ExtensionSecrets } from '../../../src/extension_secrets.ts';
 import { emptyUsage, type Message } from '../../../src/types.ts';
 import {
   saveSettings,
@@ -24,10 +34,15 @@ import {
   defaultSettings,
 } from '../../../src/settings.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
+import {
+  historyMessages,
+  visibleSessions,
+} from '../../workbench/src/model/session-management.ts';
 import { createServer } from 'node:http';
 import { ModelCatalog } from '../../../src/model_catalog.ts';
 import { loadSecrets } from '../../../src/secrets.ts';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
+import type { Socket } from 'node:net';
 import type {
   RuntimeCommandName,
   RuntimeUpdate,
@@ -54,6 +69,7 @@ async function setup(
   replies: ConstructorParameters<typeof ScriptedModel>[0],
   trusted = true,
   browser?: BrowserPort,
+  beforeDelete?: (sessionId: string) => Promise<void>,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
   const home = join(root, 'home');
@@ -73,6 +89,7 @@ async function setup(
     userHome: home,
     model,
     browser,
+    beforeDelete,
     emit: (update) => updates.push(update),
   });
   const call = (
@@ -98,6 +115,491 @@ function fakeBrowser(result: BrowserResult = { text: 'page snapshot' }) {
   };
   return { port, requests };
 }
+
+test('the desktop keeps interleaved text and thinking, then exposes one typed incomplete response without tool effects', async (t) => {
+  const f = await setup(t, [
+    async (request) => {
+      request.token('first thought', true);
+      request.token('first text ');
+      request.token(' then more thought', true);
+      request.token('second text');
+      return {
+        message: {
+          id: 'interleaved',
+          role: 'assistant',
+          content: 'first text second text',
+          thinking: 'first thought then more thought',
+          completion: { reason: 'tool_calls', provider_reason: 'tool_use' },
+          tool_calls: [
+            {
+              id: 'read',
+              name: 'read_file',
+              args: { file_path: 'fixture.txt' },
+            },
+          ],
+        },
+        usage: { input_tokens: 11, output_tokens: 4, cache_read_tokens: 0 },
+      };
+    },
+    {
+      message: {
+        id: 'partial',
+        role: 'assistant',
+        content: 'partial final answer',
+        completion: {
+          reason: 'length',
+          provider_reason: 'max_tokens',
+          output_limit: 32000,
+        },
+        truncated: true,
+        tool_calls: [
+          {
+            id: 'blocked',
+            name: 'write_file',
+            args: { file_path: 'must-not-exist.txt', content: 'blocked' },
+          },
+        ],
+      },
+      usage: { input_tokens: 12, output_tokens: 32000, cache_read_tokens: 0 },
+    },
+  ]);
+  await writeFile(join(f.workspace, 'fixture.txt'), 'real fixture bytes');
+  await f.call('prompt', { text: 'show text and incomplete response' });
+  await wait(
+    () => f.updates.some((row) => row.event?.kind === 'run_error'),
+    'specific completion failure',
+  );
+  const early = f.updates.find(
+    (row) =>
+      row.event?.kind === 'llm_end' &&
+      (row.event.payload.message as Message | undefined)?.id === 'partial',
+  )!;
+  const earlySession = early.snapshot.sessions.find(
+    (row) => row.id === early.snapshot.activeSessionId,
+  )!;
+  assert(
+    earlySession.messages.some(
+      (row) => row.completionFailure === 'output_limit',
+    ),
+    'the saved partial response already projects its diagnostic at llm_end',
+  );
+  assert.equal(
+    earlySession.messages.find((row) => row.tool?.id === 'blocked')?.tool
+      ?.status,
+    'unknown',
+    'the projected diagnostic does not mean blocked calls have their results yet',
+  );
+  assert(earlySession.turn, 'llm_end is still inside the running turn');
+  const ended = f.updates.find(
+    (row) =>
+      row.event?.kind === 'run_error' &&
+      row.event.payload.completion_message_id === 'partial',
+  )!;
+  const endedSession = ended.snapshot.sessions.find(
+    (row) => row.id === ended.snapshot.activeSessionId,
+  )!;
+  assert.equal(
+    endedSession.messages.find((row) => row.tool?.id === 'blocked')?.tool
+      ?.status,
+    'error',
+  );
+  assert.equal(
+    endedSession.turn,
+    undefined,
+    'the terminal failure clears turn presentation only after paired blocked results are saved',
+  );
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.find((row) => row.id === ended.snapshot.activeSessionId)
+        ?.state === 'idle',
+    'failed harness request settled',
+  );
+  const snapshot = f.controller.snapshot();
+  assert.equal(
+    snapshot.runtime?.error,
+    undefined,
+    'typed completion failures already have a persistent transcript diagnostic',
+  );
+  const session = snapshot.sessions.find(
+    (row) => row.id === snapshot.activeSessionId,
+  )!;
+  const interleaved = session.messages.find(
+    (row) => row.text === 'first text second text',
+  )!;
+  assert.equal(interleaved.text, 'first text second text');
+  assert.equal(interleaved.thinking, 'first thought then more thought');
+  assert(
+    f.updates.some((row) =>
+      row.snapshot.sessions.some((session) =>
+        session.messages.some(
+          (message) =>
+            message.at === 'streaming' &&
+            message.thinking === 'first thought' &&
+            message.text === 'first text ',
+        ),
+      ),
+    ),
+  );
+  const notices = session.messages.filter((row) => row.role === 'notice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.completionFailure, 'output_limit');
+  assert.equal(
+    notices[0]!.text,
+    '✖ model output limit reached; response incomplete',
+  );
+  assert.equal(existsSync(join(f.workspace, 'must-not-exist.txt')), false);
+  assert.equal(f.model.requests.length, 2);
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'run_end').length,
+    0,
+  );
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'llm_end').length,
+    2,
+  );
+  const reloadedModel = new ScriptedModel([]);
+  await f.controller.close();
+  const reloaded = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model: reloadedModel,
+    emit: () => {},
+  });
+  try {
+    const restored = reloaded.snapshot();
+    const restoredSession = restored.sessions.find(
+      (row) => row.id === restored.activeSessionId,
+    )!;
+    const restoredNotices = visibleMessages(restoredSession).filter(
+      (row) => row.role === 'notice',
+    );
+    assert.deepEqual(
+      restoredNotices.map((row) => row.completionFailure),
+      ['output_limit'],
+    );
+    assert.equal(
+      restoredSession.messages.find(
+        (row) => row.text === 'partial final answer',
+      )?.text,
+      'partial final answer',
+    );
+    assert.equal(reloadedModel.requests.length, 0);
+    (
+      reloaded as unknown as {
+        active: { bus: { emit: (kind: string, options: unknown) => void } };
+      }
+    ).active.bus.emit('run_error', {
+      payload: {
+        message: 'model output limit reached; response incomplete',
+        completion_failure: 'output_limit',
+        completion_message_id: 'unsaved-compaction-response',
+      },
+    });
+    const later = reloaded.snapshot();
+    assert.equal(
+      visibleMessages(
+        later.sessions.find((row) => row.id === later.activeSessionId)!,
+      ).filter((row) => row.completionFailure === 'output_limit').length,
+      2,
+      'an unrelated current error must not be hidden by an older persisted failure',
+    );
+  } finally {
+    await reloaded.close();
+  }
+});
+
+test('untyped harness failures retain their source-session diagnostic without a global error', async (t) => {
+  const f = await setup(t, [
+    async () => {
+      throw Error('local fixture network failed');
+    },
+  ]);
+  await f.call('prompt', { text: 'show an untyped failure' });
+  await wait(
+    () => f.updates.some((row) => row.event?.kind === 'run_error'),
+    'untyped failure diagnostic',
+  );
+  const snapshot = f.controller.snapshot();
+  assert.equal(snapshot.runtime?.error, undefined);
+  assert.equal(
+    snapshot.sessions
+      .find((row) => row.id === snapshot.activeSessionId)!
+      .messages.filter((row) => row.text === '✖ local fixture network failed')
+      .length,
+    1,
+  );
+});
+
+test('continuing after a legacy empty-answer error clears current failure state while keeping the error before the new turn', async (t) => {
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = await setup(t, [
+    async () => {
+      throw Error('model ended without an answer');
+    },
+    async () => {
+      await held;
+      return {
+        message: assistant('continued successfully'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  try {
+    await f.call('prompt', { text: 'trigger legacy empty answer' });
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_error'),
+      'legacy source-session error',
+    );
+    await f.call('prompt', { text: 'continue after legacy error' });
+    await wait(
+      () => f.model.requests.length === 2,
+      'held continuation request',
+    );
+    const current = f.controller.snapshot();
+    const session = current.sessions.find(
+      (row) => row.id === current.activeSessionId,
+    )!;
+    const shown = visibleMessages(session);
+    assert.equal(current.runtime?.error, undefined);
+    assert(session.turn, 'the continuation is running');
+    const failure = shown.findIndex(
+      (row) => row.text === '✖ model ended without an answer',
+    );
+    const continued = shown.findIndex(
+      (row) =>
+        row.role === 'user' && row.text === 'continue after legacy error',
+    );
+    assert(
+      failure >= 0 && failure < continued,
+      'the historical failure stays at its original position',
+    );
+    finish();
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_end'),
+      'continued success',
+    );
+    const final = f.controller.snapshot();
+    assert.equal(final.runtime?.error, undefined);
+    assert.equal(
+      final.sessions
+        .find((row) => row.id === final.activeSessionId)!
+        .messages.filter(
+          (row) => row.text === '✖ model ended without an answer',
+        ).length,
+      1,
+    );
+    assert.equal(f.model.requests.length, 2);
+  } finally {
+    finish();
+  }
+});
+
+test('a typed manual compaction failure remains visible on its source session without a harness run_error', async (t) => {
+  const f = await setup(t, [
+    {
+      message: {
+        id: 'failed-summary',
+        role: 'assistant',
+        content: 'partial summary',
+        completion: {
+          reason: 'length',
+          provider_reason: 'max_tokens',
+          output_limit: 32000,
+        },
+      },
+      usage: { input_tokens: 13, output_tokens: 3, cache_read_tokens: 0 },
+    },
+  ]);
+  const active = (f.controller as unknown as { active: AgentRuntime }).active;
+  active.store.append(
+    active.session.id,
+    Array.from({ length: 8 }, (_, index) => ({
+      id: 'compact-history-' + index,
+      role: index % 2 ? ('assistant' as const) : ('user' as const),
+      content: 'synthetic conversation ' + index,
+    })),
+  );
+  await f.call('compact');
+  await wait(
+    () =>
+      f.updates.some(
+        (row) =>
+          row.event?.kind === 'compaction' &&
+          row.event.payload.phase === 'error',
+      ),
+    'compaction failure event',
+  );
+  const snapshot = f.controller.snapshot();
+  const notices = snapshot.sessions
+    .find((row) => row.id === snapshot.activeSessionId)!
+    .messages.filter((row) => row.role === 'notice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.completionFailure, 'output_limit');
+  assert.equal(
+    notices[0]!.text,
+    '✖ model output limit reached; response incomplete',
+  );
+  assert.equal(snapshot.runtime?.error, undefined);
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'run_error').length,
+    0,
+  );
+  assert.equal(f.model.requests.length, 1);
+  assert.equal(
+    active.store.contextState(active.session.id).compactionCalls?.length,
+    1,
+  );
+});
+
+test('an error anchored to an invisible empty assistant stays before the continued turn', async (t) => {
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = await setup(t, [
+    {
+      message: {
+        id: 'empty-hidden-assistant',
+        role: 'assistant',
+        content: '',
+        provider_content: [
+          { type: 'thinking', thinking: '', signature: 'synthetic-signature' },
+        ],
+      },
+    },
+    async () => {
+      await held;
+      return {
+        message: assistant('continued after invisible response'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  try {
+    await f.call('prompt', { text: 'trigger invisible empty response' });
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_error'),
+      'empty response error',
+    );
+    await f.call('prompt', { text: 'continue after invisible response' });
+    await wait(
+      () => f.model.requests.length === 2,
+      'held continuation request',
+    );
+    const current = f.controller.snapshot();
+    const shown = visibleMessages(
+      current.sessions.find((row) => row.id === current.activeSessionId)!,
+    );
+    const failure = shown.findIndex(
+      (row) => row.completionFailure === 'empty_response',
+    );
+    const continued = shown.findIndex(
+      (row) =>
+        row.role === 'user' && row.text === 'continue after invisible response',
+    );
+    assert(
+      failure >= 0 && failure < continued,
+      'an invisible historical anchor must not move the failure below the new turn',
+    );
+    finish();
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_end'),
+      'continued success',
+    );
+    const final = f.controller.snapshot();
+    const finalShown = visibleMessages(
+      final.sessions.find((row) => row.id === final.activeSessionId)!,
+    );
+    assert(
+      finalShown.findIndex(
+        (row) => row.completionFailure === 'empty_response',
+      ) <
+        finalShown.findIndex(
+          (row) => row.text === 'continued after invisible response',
+        ),
+    );
+    assert.equal(f.model.requests.length, 2);
+  } finally {
+    finish();
+  }
+});
+
+test('consecutive invisible response failures keep their order and branch ownership at the same visible ancestor', async (t) => {
+  const f = await setup(t, []);
+  const active = (f.controller as unknown as { active: AgentRuntime }).active;
+  const id = active.session.id;
+  const visibleHead = active.store.append(id, [
+    {
+      id: 'visible-before-failures',
+      role: 'user',
+      content: 'shared visible ancestor',
+    },
+  ]);
+  const firstHead = active.store.append(id, [
+    { id: 'invisible-one', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'first hidden response failed' },
+  });
+  const secondHead = active.store.append(id, [
+    { id: 'invisible-two', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'second hidden response failed' },
+  });
+  const projected = () => {
+    const snapshot = f.controller.snapshot();
+    return visibleMessages(
+      snapshot.sessions.find((session) => session.id === id)!,
+    );
+  };
+  const failures = projected().filter((row) => row.role === 'notice');
+  assert.deepEqual(
+    failures.map((row) => row.text),
+    ['✖ first hidden response failed', '✖ second hidden response failed'],
+  );
+  assert.deepEqual(
+    failures.map((row) => row.parentId),
+    [firstHead, secondHead],
+  );
+  active.store.select(id, visibleHead);
+  active.store.append(id, [
+    { id: 'sibling-hidden', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'sibling hidden response failed' },
+  });
+  assert.deepEqual(
+    projected()
+      .filter((row) => row.role === 'notice')
+      .map((row) => row.text),
+    ['✖ sibling hidden response failed'],
+  );
+  active.store.select(id, secondHead);
+  active.store.append(id, [
+    {
+      id: 'continued-visible',
+      role: 'assistant',
+      content: 'visible continuation',
+    },
+  ]);
+  assert.deepEqual(
+    projected().map((row) => row.text),
+    [
+      'shared visible ancestor',
+      '✖ first hidden response failed',
+      '✖ second hidden response failed',
+      'visible continuation',
+    ],
+  );
+  assert.equal(f.model.requests.length, 0);
+});
 
 test('browser tools are available only when a browser port is connected', async (t) => {
   const absent = await setup(t, [{ message: assistant('no browser') }]);
@@ -1268,6 +1770,83 @@ test('checkpoint branches, import and restart preserve native identities and mod
   );
   assert.equal(restart.snapshot().sessions[0]!.auto, false);
   await restart.close();
+});
+
+test('trust confirms the named project while another session stays open', async (t) => {
+  const f = await setup(t, [], true);
+  const before = f.controller.snapshot();
+  const active = before.activeSessionId;
+  const homeId = before.workspaces.find((row) => row.trusted)!.id;
+  const other = join(f.root, 'other-project');
+  await mkdir(other);
+  const opened = await f.call('open-workspace', { path: other });
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  const otherId = (opened.data as { workspaceId: string }).workspaceId;
+  assert.notEqual(otherId, homeId);
+  assert.equal((await f.call('select-session', { id: active })).ok, true);
+  assert.equal(f.controller.snapshot().activeSessionId, active);
+  assert.equal(
+    f.controller.snapshot().workspaces.find((row) => row.id === otherId)
+      ?.trusted,
+    false,
+  );
+  assert.equal(
+    (await f.call('trust', { enabled: true, workspaceId: otherId })).ok,
+    true,
+  );
+  const after = f.controller.snapshot();
+  assert.equal(after.activeSessionId, active);
+  assert.equal(
+    after.workspaces.find((row) => row.id === otherId)?.trusted,
+    true,
+  );
+  assert.equal(
+    after.workspaces.find((row) => row.id === homeId)?.trusted,
+    true,
+  );
+});
+
+test('the first prompt after trust reads only the file the model asked for', async (t) => {
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'read', name: 'read_file', args: { file_path: 'README.md' } },
+        ]),
+      },
+      { message: assistant('the readme says hello') },
+    ],
+    false,
+  );
+  await writeFile(join(f.workspace, 'README.md'), 'hello from the readme\n');
+  assert.equal((await f.call('prompt', { text: 'read the readme' })).ok, false);
+  assert.equal(f.model.requests.length, 0);
+  assert.equal((await f.call('trust', { enabled: true })).ok, true);
+  assert.equal((await f.call('prompt', { text: 'read the readme' })).ok, true);
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'readme turn finished',
+  );
+  const system = f.model.requests[0]!.system;
+  assert.match(
+    system,
+    /Do not call read_file to discover instruction files \(AGENTS\.md, CLAUDE\.md, AGENTS\.override\.md, MEMORY\.md\)/,
+  );
+  assert.equal(system.includes('hello from the readme'), false);
+  const tools = f.controller
+    .snapshot()
+    .sessions[0]!.messages.filter((message) => message.tool);
+  assert.deepEqual(
+    tools.map((message) => [
+      message.tool!.name,
+      message.tool!.filePath,
+      message.tool!.status,
+    ]),
+    [['read_file', 'README.md', 'success']],
+  );
 });
 
 test('untrusted workspaces cannot load project context, extensions or execute prompts', async (t) => {
@@ -2669,17 +3248,16 @@ test('switching back to a session that waits on an approval lands on it (#57)', 
         .interactions.some((row) => row.status === 'pending'),
     'approval',
   );
-  // The person visits another workspace mid-wait, as in the reported flow.
+  // Opening another folder mid-wait selects that project and does not create
+  // a session or leave the waiting one.
   const other = join(f.root, 'workspace2');
   await mkdir(other);
+  const before = f.controller.snapshot().sessions.map((session) => session.id);
   assert.equal((await f.call('open-workspace', { path: other })).ok, true);
-  const bId = f.controller.snapshot().activeSessionId;
-  assert.notEqual(bId, aId);
-  // Coming back must land on the session, not rebuild or refuse it: the
-  // runtime already holds it, and its turn waits on the very card to click.
-  const back = await f.call('select-session', { id: aId }, bId);
-  assert.equal(back.ok, true);
-  assert.equal(back.error, undefined);
+  assert.deepEqual(
+    f.controller.snapshot().sessions.map((session) => session.id),
+    before,
+  );
   assert.equal(f.controller.snapshot().activeSessionId, aId);
   const row = f.controller
     .snapshot()
@@ -2700,7 +3278,7 @@ test('switching back to a session that waits on an approval lands on it (#57)', 
       await f.call(
         'answer',
         { id: row.id, revision: row.revision, answer: 'approve' },
-        bId,
+        'not-the-waiting-session',
       )
     ).ok,
     false,
@@ -3007,6 +3585,19 @@ test('an inactive session with a real running background job cannot be archived 
       .snapshot()
       .jobs.some((job) => job.sessionId === id && job.state === 'running'),
   );
+  const job = f.controller
+    .snapshot()
+    .jobs.find((item) => item.sessionId === id && item.state === 'running')!;
+  assert.equal(
+    (await f.call('stop-job', { id: job.id }, id)).ok,
+    true,
+    'a background job command binds its owning session',
+  );
+  assert(
+    !f.controller
+      .snapshot()
+      .jobs.some((item) => item.sessionId === id && item.state === 'running'),
+  );
 });
 
 test('completed desktop plans retain their core todos and produce one notice before the following answer (#5)', async (t) => {
@@ -3121,6 +3712,75 @@ async function setupScratch(
     call,
   };
 }
+test('the default workspace retains its circle identity through a linked home', async (t) => {
+  const root = realpathSync(
+    await mkdtemp(join(tmpdir(), 'circle-linked-home-')),
+  );
+  const actualHome = join(root, 'actual-home');
+  const home = join(root, 'linked-home');
+  await mkdir(actualHome);
+  symlinkSync(actualHome, home, 'junction');
+  saveSettings(defaultSettings(), home);
+  const model = new ScriptedModel([
+    { message: assistant('answered in the default workspace') },
+  ]);
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    model,
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const initial = controller.snapshot();
+  const sessionId = initial.activeSessionId;
+  const session = initial.sessions.find((row) => row.id === sessionId)!;
+  const workspace = initial.workspaces.find(
+    (row) => row.id === session.workspaceId,
+  )!;
+  assert.equal(workspace.path, realpathSync(join(home, 'workspace')));
+  assert.notEqual(workspace.path, join(home, 'workspace'));
+  assert.equal(workspace.name, 'circle');
+  assert.equal(workspace.trusted, true);
+  const reply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'prompt',
+    sessionId,
+    payload: { text: 'keep the default workspace identity' },
+  });
+  assert.equal(reply.ok, true, reply.error);
+  await wait(
+    () =>
+      controller
+        .snapshot()
+        .sessions.find((row) => row.id === sessionId)!
+        .messages.some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.text === 'answered in the default workspace',
+        ),
+    'the scripted turn in the linked default workspace',
+  );
+  assert.equal(model.requests.length, 1);
+  const store = new CheckpointStore(home);
+  try {
+    assert.equal(store.get(sessionId)?.workspace, workspace.path);
+    assert.ok(
+      store
+        .messages(sessionId)
+        .some(
+          (message) =>
+            message.role === 'user' &&
+            message.content === 'keep the default workspace identity',
+        ),
+    );
+  } finally {
+    store.close();
+  }
+});
+
 const activeWorkspacePath = (controller: RuntimeController) => {
   const snapshot = controller.snapshot();
   const session = snapshot.sessions.find(
@@ -3327,7 +3987,9 @@ test('startup prefers the last-used folder, then workspace_folder, then the scra
   );
   assert.equal(first.snapshot().settings.workspaceFolder, configured);
 
-  // A folder opened later is what the next start resumes.
+  // Opening a folder selects it for home. It does not write a session, so the
+  // next start still resumes the folder that already had one.
+  const beforeOpen = first.snapshot().sessions.map((session) => session.id);
   assert.equal(
     (
       await first.dispatch({
@@ -3339,9 +4001,14 @@ test('startup prefers the last-used folder, then workspace_folder, then the scra
     ).ok,
     true,
   );
+  assert.deepEqual(
+    first.snapshot().sessions.map((session) => session.id),
+    beforeOpen,
+  );
+  assert.equal(activeWorkspacePath(first), configured);
   await first.close();
   const resumed = open();
-  assert.equal(activeWorkspacePath(resumed), lastUsed);
+  assert.equal(activeWorkspacePath(resumed), configured);
   await resumed.close();
 
   // A configured folder that is gone falls back to the scratch folder, which the
@@ -3366,9 +4033,1507 @@ test('startup prefers the last-used folder, then workspace_folder, then the scra
   assert.equal(activeWorkspacePath(inside), join(home, 'workspace'));
   await inside.close();
 });
+
+// A desktop tab is a view over an independently running conversation, including
+// when both conversations share a folder and the same checkpoint database.
+test('same-workspace sessions overlap model requests and keep queues and history separate', async (t) => {
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  const aGate = new Promise<void>((resolve) => {
+    releaseA = resolve;
+  });
+  const bGate = new Promise<void>((resolve) => {
+    releaseB = resolve;
+  });
+  t.after(() => {
+    releaseA();
+    releaseB();
+  });
+  const f = await setup(t, [
+    async (request) => {
+      request.token('A streaming');
+      await aGate;
+      return { message: assistant('A completed'), usage: emptyUsage() };
+    },
+    async (request) => {
+      request.token('B streaming');
+      await bGate;
+      return { message: assistant('B completed'), usage: emptyUsage() };
+    },
+    { message: assistant('B follow-up completed') },
+    { message: assistant('A follow-up completed') },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('prompt', { text: 'A prompt' })).ok, true);
+  await wait(() => f.model.requests.length === 1, 'A request starts');
+  assert.equal((await f.call('new-session')).ok, true);
+  const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(a, b);
+  assert.equal((await f.call('prompt', { text: 'B prompt' })).ok, true);
+  await wait(() => f.model.requests.length === 2, 'B starts before A ends');
+  assert.equal(
+    (await f.call('prompt', { text: 'B queued', kind: 'follow-up' })).ok,
+    true,
+  );
+  assert.equal((await f.call('select-session', { id: a })).ok, true);
+  assert.equal(
+    (await f.call('prompt', { text: 'A queued', kind: 'follow-up' })).ok,
+    true,
+  );
+  const rows = f.controller.snapshot().sessions;
+  assert.deepEqual(
+    rows.find((row) => row.id === a)!.queue.map((item) => item.text),
+    ['A queued'],
+  );
+  assert.deepEqual(
+    rows.find((row) => row.id === b)!.queue.map((item) => item.text),
+    ['B queued'],
+  );
+  assert(
+    rows
+      .find((row) => row.id === a)!
+      .messages.some((item) => item.text === 'A streaming'),
+  );
+  assert(
+    rows
+      .find((row) => row.id === b)!
+      .messages.some((item) => item.text === 'B streaming'),
+  );
+  releaseB();
+  await wait(
+    () => f.model.requests.length === 3,
+    'B follow-up starts while A stays running',
+  );
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === a)!.state,
+    'waiting',
+  );
+  assert(!JSON.stringify(f.model.requests[2]!.messages).includes('A prompt'));
+  releaseA();
+  await wait(
+    () =>
+      f.model.requests.length === 4 &&
+      f.controller.snapshot().sessions.every((row) => row.state === 'idle'),
+    'both finish',
+  );
+  assert(!JSON.stringify(f.model.requests[3]!.messages).includes('B prompt'));
+  const store = new CheckpointStore(f.home);
+  try {
+    assert(
+      store
+        .messages(a)
+        .some((item) => item.content === 'A follow-up completed'),
+    );
+    assert(!store.messages(a).some((item) => item.content.startsWith('B ')));
+    assert(
+      store
+        .messages(b)
+        .some((item) => item.content === 'B follow-up completed'),
+    );
+    assert(!store.messages(b).some((item) => item.content.startsWith('A ')));
+  } finally {
+    store.close();
+  }
+});
+
+test('background approval survives same-workspace switching and confirmed deletion removes only its owner', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write-a',
+          name: 'write_file',
+          args: {
+            file_path: 'a-deleted.txt',
+            content: 'must never be written',
+          },
+        },
+      ]),
+    },
+    { message: assistant('B safe answer') },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'A asks approval' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'A waiting',
+  );
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  assert.equal((await f.call('new-session')).ok, true);
+  const b = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await f.call('prompt', { text: 'B executes independently' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions.find((row) => row.id === b)?.state ===
+        'idle',
+    'B completes',
+  );
+  assert.equal(
+    f.controller.snapshot().interactions.find((row) => row.id === approval.id)!
+      .sessionId,
+    a,
+  );
+  assert.equal((await f.call('delete-session', { id: a })).ok, false);
+  assert.equal(f.controller.snapshot().activeSessionId, b);
+  assert.equal(
+    (await f.call('delete-session', { id: a, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(f.controller.snapshot().activeSessionId, b);
+  assert(!f.controller.snapshot().sessions.some((row) => row.id === a));
+  assert(
+    !f.controller.snapshot().interactions.some((row) => row.id === approval.id),
+  );
+  assert.equal(existsSync(join(f.workspace, 'a-deleted.txt')), false);
+  assert.equal(
+    (
+      await f.call(
+        'answer',
+        { id: approval.id, revision: approval.revision, answer: 'approve' },
+        a,
+      )
+    ).ok,
+    false,
+  );
+  const store = new CheckpointStore(f.home);
+  try {
+    assert.equal(store.get(a), undefined);
+    assert(
+      store.messages(b).some((message) => message.content === 'B safe answer'),
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('deleting an active session selects a remaining session and preserves command identity', async (t) => {
+  const f = await setup(t, []);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  const command = {
+    id: randomUUID(),
+    name: 'delete-session',
+    sessionId: b,
+    payload: { id: b, confirmed: true },
+  };
+  const [first, duplicate] = await Promise.all([
+    f.controller.dispatch(command),
+    f.controller.dispatch(command),
+  ]);
+  assert.equal(first.ok, true);
+  assert.deepEqual(duplicate, first);
+  assert.equal(f.controller.snapshot().activeSessionId, a);
+  assert(!f.controller.snapshot().sessions.some((row) => row.id === b));
+  assert.equal(
+    (await f.call('delete-session', { id: a, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(f.controller.snapshot().sessions.length, 1);
+  assert.notEqual(f.controller.snapshot().activeSessionId, a);
+});
+
+test('aborting B leaves the simultaneous same-workspace A request alive', async (t) => {
+  let releaseA!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseA = resolve;
+  });
+  t.after(() => releaseA());
+  let aAborted = false;
+  let bAborted = false;
+  const f = await setup(t, [
+    async (request) => {
+      request.signal.addEventListener('abort', () => {
+        aAborted = true;
+      });
+      await gate;
+      return { message: assistant('A alive'), usage: emptyUsage() };
+    },
+    async (request) => {
+      await new Promise<void>((_resolve, reject) => {
+        const abort = () => {
+          bAborted = true;
+          reject(request.signal.reason);
+        };
+        request.signal.addEventListener('abort', abort, { once: true });
+        if (request.signal.aborted) abort();
+      });
+      throw Error('unreachable');
+    },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'A stays running' });
+  await wait(() => f.model.requests.length === 1, 'A starts');
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'B will stop' });
+  await wait(() => f.model.requests.length === 2, 'B starts');
+  assert.equal((await f.call('abort')).ok, true);
+  assert.equal(bAborted, true);
+  assert.equal(
+    f.controller.snapshot().runtime?.error,
+    undefined,
+    'an expected interruption is not a global runtime error',
+  );
+  assert.equal(aAborted, false);
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === a)!.state,
+    'waiting',
+  );
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === b)!.state,
+    'idle',
+  );
+  releaseA();
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+      'idle',
+    'A finishes',
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .sessions.find((row) => row.id === a)!
+      .messages.some((message) => message.text === 'A alive'),
+  );
+});
+
+test('confirmed deletion waits for a real background process and cannot stop another session', async (t) => {
+  let command = '';
+  const f = await setup(t, [
+    async () => ({
+      message: assistant('', [
+        { id: 'child', name: 'execute', args: { command, background: true } },
+      ]),
+      usage: emptyUsage(),
+    }),
+    { message: assistant('child started') },
+  ]);
+  const marker = join(f.workspace, 'synthetic-child.pid');
+  const script = `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));setInterval(()=>{},1000)`;
+  const encoded = Buffer.from(script).toString('base64');
+  command = `"${process.execPath}" -e "eval(Buffer.from('${encoded}','base64').toString())"`;
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'start local fixture child' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'shell approval',
+  );
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  await f.call('answer', {
+    id: approval.id,
+    revision: approval.revision,
+    answer: 'approve',
+  });
+  await wait(
+    () =>
+      existsSync(marker) &&
+      f.controller.snapshot().sessions.find((row) => row.id === a)?.state ===
+        'idle',
+    'real child started',
+  );
+  const pid = Number(await readFile(marker, 'utf8'));
+  process.kill(pid, 0);
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await f.call('delete-session', { id: a, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(f.controller.snapshot().activeSessionId, b);
+  assert.throws(() => process.kill(pid, 0), /ESRCH|no such process/i);
+  assert(!f.controller.snapshot().sessions.some((row) => row.id === a));
+  assert(!f.controller.snapshot().jobs.some((job) => job.sessionId === a));
+});
+
+test('desktop startup preserves a saved session owned by another terminal and starts independently', async (t) => {
+  const f = await setup(t, [{ message: assistant('saved bytes') }]);
+  const id = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'saved prompt' });
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'saved conversation',
+  );
+  await f.controller.close();
+  const external = new AgentRuntime({
+    workspace: f.workspace,
+    home: f.home,
+    userHome: f.home,
+    settings: loadSettings(f.home),
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  await external.close();
+  const owner = new AgentRuntime({
+    workspace: f.workspace,
+    home: f.home,
+    userHome: f.home,
+    session: id,
+    settings: loadSettings(f.home),
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  const restarted = new RuntimeController({
+    workspace: f.workspace,
+    home: f.home,
+    userHome: f.home,
+    model: new ScriptedModel(),
+    emit: () => {},
+  });
+  try {
+    const snapshot = restarted.snapshot();
+    assert.notEqual(snapshot.activeSessionId, id);
+    assert.equal(
+      snapshot.sessions.find((row) => row.id === id)!.occupied,
+      true,
+    );
+    assert(
+      snapshot.sessions
+        .find((row) => row.id === id)!
+        .messages.some((row) => row.text === 'saved bytes'),
+    );
+    const select = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'select-session',
+      sessionId: snapshot.activeSessionId,
+      payload: { id },
+    });
+    assert.equal(select.ok, true);
+    const viewing = restarted.snapshot();
+    assert.equal(viewing.activeSessionId, id);
+    assert.equal(viewing.sessions.find((row) => row.id === id)!.occupied, true);
+    assert(
+      viewing.sessions
+        .find((row) => row.id === id)!
+        .messages.some((row) => row.text === 'saved bytes'),
+    );
+    const prompt = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'prompt',
+      sessionId: id,
+      payload: { text: 'must not execute in the foreign writer' },
+    });
+    assert.equal(prompt.ok, false);
+    for (const name of ['delete-session', 'archive-session'] as const) {
+      const result = await restarted.dispatch({
+        id: randomUUID(),
+        name,
+        sessionId: snapshot.activeSessionId,
+        payload: { id, confirmed: true, archived: true },
+      });
+      assert.equal(result.ok, false, name);
+    }
+    assert.equal(owner.store.get(id)?.id, id);
+    const exported = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'export',
+      sessionId: id,
+      payload: { format: 'md' },
+    });
+    assert.equal(exported.ok, true);
+    assert(
+      String((exported.data as { content: string }).content).includes(
+        'saved bytes',
+      ),
+    );
+    const cloned = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'clone',
+      sessionId: id,
+      payload: {},
+    });
+    assert.equal(cloned.ok, true);
+    assert.notEqual(restarted.snapshot().activeSessionId, id);
+    assert(
+      restarted
+        .snapshot()
+        .sessions.find(
+          (row) => row.id === restarted.snapshot().activeSessionId,
+        )!
+        .messages.some((row) => row.text === 'saved bytes'),
+    );
+    assert.equal(owner.store.get(id)?.id, id);
+  } finally {
+    await restarted.close();
+    await owner.close();
+  }
+});
+
+test('a background model failure stays in its source session without a toast in the selected session', async (t) => {
+  let fail!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    fail = resolve;
+  });
+  t.after(() => fail());
+  const f = await setup(t, [
+    async () => {
+      await gate;
+      throw Error('A fixture failure');
+    },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'A will fail later' });
+  await wait(() => f.model.requests.length === 1, 'A model request');
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  fail();
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === a)?.state ===
+      'idle',
+    'background failure settles',
+  );
+  const snapshot = f.controller.snapshot();
+  assert.equal(snapshot.activeSessionId, b);
+  assert.equal(snapshot.runtime?.error, undefined);
+  assert(
+    snapshot.sessions
+      .find((row) => row.id === a)!
+      .messages.some((row) => row.text?.includes('A fixture failure')),
+  );
+  assert(
+    !snapshot.sessions
+      .find((row) => row.id === b)!
+      .messages.some((row) => row.text?.includes('A fixture failure')),
+  );
+});
+
+test('branch selection with a running background job refuses before changing the stored head', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'background-branch',
+          name: 'execute',
+          args: {
+            command: `"${process.execPath}" -e "setInterval(()=>{},1000)"`,
+            background: true,
+          },
+        },
+      ]),
+    },
+    { message: assistant('background job active') },
+  ]);
+  const id = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'start background fixture' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'command approval',
+  );
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  await f.call('answer', {
+    id: approval.id,
+    revision: approval.revision,
+    answer: 'approve',
+  });
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions.find((row) => row.id === id)?.state ===
+        'idle',
+    'foreground ends',
+  );
+  const settingsBefore = loadSettings(f.home);
+  assert.equal(
+    (
+      await f.call('configure', {
+        endpoint: 'http://127.0.0.1:1/v1',
+        protocol: 'openai',
+        model: 'synthetic-new',
+        apiKey: 'synthetic-local-only',
+      })
+    ).ok,
+    false,
+  );
+  assert.equal((await f.call('logout')).ok, false);
+  assert.deepEqual(
+    loadSettings(f.home),
+    settingsBefore,
+    'background work prevents replacing shared connection settings',
+  );
+  const reader = new CheckpointStore(f.home);
+  try {
+    const head = reader.get(id)!.head;
+    const first = reader
+      .tree(id)
+      .find((node) => node.message?.role === 'user')!;
+    assert.notEqual(head, first.id);
+    const reply = await f.call('select-branch', { messageId: first.id });
+    assert.equal(reply.ok, false);
+    assert.equal(
+      reader.get(id)!.head,
+      head,
+      'a rejected branch operation cannot move the history head',
+    );
+  } finally {
+    reader.close();
+  }
+});
+
+test('all desktop close callers wait until the same in-flight session is cleaned up', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(t, [
+    async () => {
+      await gate;
+      return { message: assistant('released'), usage: emptyUsage() };
+    },
+  ]);
+  await f.call('prompt', { text: 'hold shutdown fixture' });
+  await wait(() => f.model.requests.length === 1, 'model entered');
+  const first = f.controller.close();
+  let secondFinished = false;
+  const second = f.controller.close().then(() => {
+    secondFinished = true;
+  });
+  await delay(20);
+  assert.equal(secondFinished, false);
+  release();
+  await Promise.all([first, second]);
+  assert.equal(secondFinished, true);
+});
+
+test('browser lifecycle cleanup is acknowledged before a session loses its history and can retry failure', async (t) => {
+  let attempts = 0;
+  const f = await setup(t, [], true, undefined, async (id) => {
+    attempts++;
+    const reader = new CheckpointStore(f.home);
+    try {
+      assert.ok(reader.get(id), 'history remains while browser cleanup runs');
+    } finally {
+      reader.close();
+    }
+    if (attempts === 1) throw Error('synthetic browser cleanup failed');
+  });
+  const id = f.controller.snapshot().activeSessionId;
+  const failed = await f.call('delete-session', { id, confirmed: true });
+  assert.equal(failed.ok, false);
+  assert.match(failed.error!, /browser cleanup failed/);
+  assert.equal(f.controller.snapshot().activeSessionId, id);
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === id)!.lifecycle,
+    'deleting',
+  );
+  assert.equal(
+    (await f.call('prompt', { text: 'must not enter deleting session' })).ok,
+    false,
+  );
+  assert.equal(
+    (await f.call('delete-session', { id, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(attempts, 2);
+  assert(!f.controller.snapshot().sessions.some((row) => row.id === id));
+});
+
+test('the internal browser cleanup bridge awaits acknowledgment and rejects a failed cleanup', async () => {
+  const posted: { type: string; id: string; sessionId: string }[] = [];
+  const bridge = new BrowserBridge((message) =>
+    posted.push(message as (typeof posted)[number]),
+  );
+  let finished = false;
+  const pending = bridge.releaseSession('fixture-session').then(() => {
+    finished = true;
+  });
+  assert.deepEqual(
+    { type: posted[0]!.type, sessionId: posted[0]!.sessionId },
+    { type: 'browser-release', sessionId: 'fixture-session' },
+  );
+  await delay(5);
+  assert.equal(finished, false);
+  bridge.receive({ id: posted[0]!.id, ok: true, data: { text: 'closed' } });
+  await pending;
+  const failed = bridge.releaseSession('fixture-session');
+  bridge.receive({
+    id: posted[1]!.id,
+    ok: false,
+    error: 'fixture close failed',
+  });
+  await assert.rejects(failed, /fixture close failed/);
+  bridge.close();
+});
+
+test('a background session cleanup leaves selection and other model turns responsive', async (t) => {
+  let release!: () => void;
+  let entered = false;
+  let cleanups = 0;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(
+    t,
+    [{ message: assistant('independent answer') }],
+    true,
+    undefined,
+    async () => {
+      cleanups++;
+      entered = true;
+      await gate;
+    },
+  );
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const c = f.controller.snapshot().activeSessionId;
+  const command = {
+    id: randomUUID(),
+    name: 'delete-session' as const,
+    sessionId: c,
+    payload: { id: b, confirmed: true },
+  };
+  const deleting = f.controller.dispatch(command);
+  const retry = f.controller.dispatch(command);
+  await wait(() => entered, 'background cleanup entered');
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === b)!.lifecycle,
+    'deleting',
+  );
+  const selected = f.call('select-session', { id: a });
+  await wait(
+    () => f.controller.snapshot().activeSessionId === a,
+    'select A while B cleanup remains blocked',
+  );
+  assert.equal((await selected).ok, true);
+  assert.equal(
+    (await f.call('prompt', { text: 'A while B deletes' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+        'idle',
+    'A completes before B cleanup',
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .sessions.find((row) => row.id === a)!
+      .messages.some((row) => row.text === 'independent answer'),
+  );
+  assert.equal(cleanups, 1);
+  release();
+  assert.equal((await deleting).ok, true);
+  assert.deepEqual(await retry, await deleting);
+  assert.equal(f.controller.snapshot().activeSessionId, a);
+  assert.equal(
+    f.controller.snapshot().sessions.some((row) => row.id === b),
+    false,
+  );
+});
+
+test('closing during active deletion waits for cleanup without creating a fallback runtime', async (t) => {
+  let release!: () => void;
+  let entered = false;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(t, [], true, undefined, async () => {
+    entered = true;
+    await gate;
+  });
+  const id = f.controller.snapshot().activeSessionId;
+  const deletion = f.call('delete-session', { id, confirmed: true });
+  await wait(() => entered, 'active deletion cleanup entered');
+  let closed = false;
+  const closing = f.controller.close().then(() => {
+    closed = true;
+  });
+  await delay(10);
+  assert.equal(closed, false);
+  release();
+  assert.equal((await deletion).ok, true);
+  await closing;
+  const store = new CheckpointStore(f.home);
+  try {
+    assert.equal(store.get(id), undefined);
+    assert.equal(store.list().length, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test('shared desktop preferences and saved defaults do not revert when switching running same-folder sessions', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(t, [
+    async () => {
+      await gate;
+      return {
+        message: assistant('original model completed'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'hold A' });
+  await wait(() => f.model.requests.length === 1, 'original model in flight');
+  await f.call('new-session');
+  const settings = {
+    theme: 'dark',
+    hideThinking: true,
+    defaultModel: 'saved-default',
+    defaultEffort: 'high',
+    doubleEscape: 'fork',
+    updateCheck: false,
+    enabledModels: ['saved-default'],
+  };
+  assert.equal((await f.call('save-settings', { settings })).ok, true);
+  await f.call('select-session', { id: a });
+  const selected = f.controller.snapshot();
+  for (const [key, value] of Object.entries(settings))
+    assert.deepEqual(
+      selected.settings[key as keyof typeof selected.settings],
+      value,
+      key,
+    );
+  assert.equal(
+    selected.sessions.find((row) => row.id === a)!.model,
+    'scripted',
+  );
+  assert.equal(selected.sessions.find((row) => row.id === a)!.state, 'waiting');
+  assert.equal(f.model.requests.length, 1);
+  release();
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+      'idle',
+    'A original request completes',
+  );
+  assert(selected.sessions.every((row) => row.showThinking === false));
+});
+
+test('trusting a folder initializes every idle session with its own project context', async (t) => {
+  const f = await setup(
+    t,
+    [{ message: assistant('trusted A') }, { message: assistant('trusted B') }],
+    false,
+  );
+  await writeFile(
+    join(f.workspace, 'AGENTS.md'),
+    'Independent trusted workspace instructions marker.\n',
+  );
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('trust', { enabled: true })).ok, true);
+  await f.call('select-session', { id: a });
+  assert.equal(
+    (await f.call('prompt', { text: 'trusted A request' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+        'idle',
+    'trusted A request',
+  );
+  assert(
+    f.model.requests[0]!.system.includes(
+      'Independent trusted workspace instructions marker',
+    ),
+  );
+  await f.call('select-session', { id: b });
+  assert.equal(
+    (await f.call('prompt', { text: 'trusted B request' })).ok,
+    true,
+  );
+  await wait(() => f.model.requests.length === 2, 'trusted B request');
+  assert(
+    f.model.requests[1]!.system.includes(
+      'Independent trusted workspace instructions marker',
+    ),
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .workspaces.find((row) => row.path === realpathSync(f.workspace))!
+      .trusted,
+  );
+});
+
+test('opening a folder publishes it for the home picker and does not create a session', async (t) => {
+  const f = await setup(t, []);
+  const project = join(f.root, 'circle-packs');
+  await mkdir(project);
+  const before = f.updates.length;
+  const sessions = f.controller
+    .snapshot()
+    .sessions.map((session) => session.id);
+  const opened = await f.call('open-workspace', { path: project });
+  assert.equal(opened.ok, true, opened.error);
+  const id = (opened.data as { workspaceId: string }).workspaceId;
+  assert.ok(f.updates.length > before);
+  const workspace = f.updates
+    .at(-1)!
+    .snapshot.workspaces.find((row) => row.id === id);
+  assert.equal(workspace?.name, 'circle-packs');
+  assert.equal(workspace?.kind, 'project');
+  assert.equal(
+    f.controller.snapshot().workspaces.some((row) => row.id === id),
+    true,
+  );
+  assert.deepEqual(
+    f.controller.snapshot().sessions.map((session) => session.id),
+    sessions,
+  );
+  assert.equal(
+    f.controller
+      .snapshot()
+      .sessions.some((session) => session.workspaceId === id),
+    false,
+  );
+});
+
+test('picking folders writes no session until the first message is sent', async (t) => {
+  const f = await setup(t, [{ message: assistant('started') }]);
+  const ids = () =>
+    f.controller
+      .snapshot()
+      .sessions.map((session) => session.id)
+      .sort();
+  const stored = ids();
+  const searchIds = () =>
+    visibleSessions(f.controller.snapshot().sessions)
+      .map((session) => session.id)
+      .sort();
+  const searchable = searchIds();
+  const alpha = join(f.root, 'alpha');
+  const beta = join(f.root, 'beta');
+  await mkdir(alpha);
+  await mkdir(beta);
+  const openedAlpha = await f.call('open-workspace', { path: alpha });
+  assert.equal(openedAlpha.ok, true, openedAlpha.error);
+  assert.deepEqual(ids(), stored);
+  const openedBeta = await f.call('open-workspace', { path: beta });
+  assert.equal(openedBeta.ok, true, openedBeta.error);
+  const betaId = (openedBeta.data as { workspaceId: string }).workspaceId;
+  // A cancelled folder dialog never calls the runtime. Several picks still
+  // leave the store untouched.
+  assert.deepEqual(ids(), stored);
+  assert.deepEqual(searchIds(), searchable);
+  assert.equal(
+    f.controller
+      .snapshot()
+      .sessions.some((session) =>
+        [alpha, beta]
+          .map((folder) => realpathSync(folder))
+          .includes(
+            f.controller
+              .snapshot()
+              .workspaces.find(
+                (workspace) => workspace.id === session.workspaceId,
+              )?.path ?? '',
+          ),
+      ),
+    false,
+  );
+  const refused = await f.call('begin-session', {
+    workspaceId: betaId,
+    text: 'not yet',
+    display: 'not yet',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error), /trust the workspace/);
+  assert.deepEqual(ids(), stored);
+  assert.equal(
+    (await f.call('trust', { enabled: true, workspaceId: betaId })).ok,
+    true,
+  );
+  assert.deepEqual(ids(), stored);
+  const begun = await f.call('begin-session', {
+    workspaceId: betaId,
+    text: 'build beta',
+    display: 'build beta',
+  });
+  assert.equal(begun.ok, true, begun.error);
+  await wait(() => ids().length === stored.length + 1, 'one session stored');
+  const created = f.controller
+    .snapshot()
+    .sessions.filter((session) => !stored.includes(session.id));
+  assert.equal(created.length, 1);
+  assert.equal(created[0]!.workspaceId, betaId);
+  assert.ok(
+    created[0]!.messages.some((message) => message.text.includes('build beta')),
+  );
+  const shown = visibleSessions(f.controller.snapshot().sessions);
+  assert.equal(
+    shown.filter((session) => !stored.includes(session.id)).length,
+    1,
+  );
+  assert.equal(
+    shown.some(
+      (session) =>
+        session.title === 'new session' && session.messages.length === 0,
+    ),
+    false,
+  );
+  assert.ok(
+    historyMessages(created[0]!).some((message) =>
+      message.text.includes('build beta'),
+    ),
+  );
+  const home = f.home;
+  await f.controller.close();
+  const store = new CheckpointStore(home);
+  try {
+    const rows = store.list();
+    assert.equal(rows.length, stored.length + 1);
+    assert.equal(
+      rows.filter((row) => row.workspace === realpathSync(beta)).length,
+      1,
+    );
+    assert.equal(
+      rows.filter((row) => row.workspace === realpathSync(alpha)).length,
+      0,
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('the first message from home creates one session in the chosen project', async (t) => {
+  const f = await setup(t, [
+    { message: assistant('parser started') },
+    { message: assistant('tests added') },
+    { message: assistant('loose answer') },
+  ]);
+  const project = join(f.root, 'parser');
+  await mkdir(project);
+  saveSettingsChange(f.home, (settings) => {
+    Object.assign(settings, trustFolder(settings, project));
+  });
+  const opened = await f.call('open-workspace', { path: project });
+  assert.equal(opened.ok, true, opened.error);
+  const workspaceId = (opened.data as { workspaceId: string }).workspaceId;
+  const inProject = () =>
+    f.controller
+      .snapshot()
+      .sessions.filter((session) => session.workspaceId === workspaceId);
+  assert.equal(inProject().length, 0);
+  const before = f.controller.snapshot().sessions.length;
+  const begun = await f.call('begin-session', {
+    workspaceId,
+    text: 'build the parser',
+    display: 'build the parser',
+  });
+  assert.equal(begun.ok, true, begun.error);
+  await wait(
+    () =>
+      inProject().some((session) =>
+        session.messages.some((message) =>
+          message.text.includes('build the parser'),
+        ),
+      ),
+    'first message stored',
+  );
+  assert.equal(inProject().length, 1);
+  assert.equal(f.controller.snapshot().sessions.length, before + 1);
+  assert.equal(
+    (begun.data as { sessionId: string }).sessionId,
+    inProject()[0]!.id,
+  );
+  await wait(
+    () =>
+      inProject()[0]!.messages.some((message) => message.role === 'assistant'),
+    'first turn finished',
+  );
+  const again = await f.call('begin-session', {
+    workspaceId,
+    text: 'add tests',
+    display: 'add tests',
+  });
+  assert.equal(again.ok, true, again.error);
+  await wait(() => inProject().length === 2, 'second session');
+  await wait(
+    () =>
+      inProject().filter((session) =>
+        session.messages.some((message) => message.role === 'assistant'),
+      ).length === 2,
+    'second turn finished',
+  );
+  assert.equal(f.controller.snapshot().sessions.length, before + 2);
+  assert.ok(
+    inProject().every((session) =>
+      session.messages.some((message) => message.role === 'user'),
+    ),
+  );
+  const loose = await f.call('begin-session', {
+    text: 'a loose question',
+    display: 'a loose question',
+  });
+  assert.equal(loose.ok, true, loose.error);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.filter((session) =>
+          session.messages.some((message) =>
+            message.text.includes('a loose question'),
+          ),
+        ).length === 1,
+    'scratch session',
+  );
+  const scratch = f.controller
+    .snapshot()
+    .sessions.filter((session) =>
+      session.messages.some((message) =>
+        message.text.includes('a loose question'),
+      ),
+    );
+  assert.equal(scratch.length, 1);
+  assert.notEqual(scratch[0]!.workspaceId, workspaceId);
+  const scratchWorkspace = f.controller
+    .snapshot()
+    .workspaces.find((item) => item.id === scratch[0]!.workspaceId);
+  assert.equal(scratchWorkspace?.kind, 'scratch');
+  assert.notEqual(scratchWorkspace?.path, realpathSync(f.workspace));
+});
+
+test('the default circle workspace stays a project, and no project is a different folder', async (t) => {
+  const f = await setupScratch(t, [
+    { message: assistant('in circle') },
+    { message: assistant('loose answer') },
+  ]);
+  const circle = f.controller
+    .snapshot()
+    .workspaces.find((row) => row.path === f.scratch);
+  assert.ok(circle);
+  assert.equal(circle.name, 'circle');
+  assert.equal(circle.kind, 'project');
+  const inCircle = () =>
+    f.controller
+      .snapshot()
+      .sessions.filter((session) => session.workspaceId === circle.id);
+  const before = inCircle().length;
+  const begun = await f.call('begin-session', {
+    workspaceId: circle.id,
+    text: 'build in circle',
+    display: 'build in circle',
+  });
+  assert.equal(begun.ok, true, begun.error);
+  await wait(
+    () =>
+      inCircle().some((session) =>
+        session.messages.some((message) =>
+          message.text.includes('build in circle'),
+        ),
+      ),
+    'circle message stored',
+  );
+  assert.equal(inCircle().length, before);
+  await wait(
+    () =>
+      inCircle().some((session) =>
+        session.messages.some((message) => message.role === 'assistant'),
+      ),
+    'circle turn finished',
+  );
+  const loose = await f.call('begin-session', {
+    text: 'a loose question',
+    display: 'a loose question',
+  });
+  assert.equal(loose.ok, true, loose.error);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.some((session) =>
+          session.messages.some((message) =>
+            message.text.includes('a loose question'),
+          ),
+        ),
+    'loose message stored',
+  );
+  const looseSession = f.controller
+    .snapshot()
+    .sessions.find((session) =>
+      session.messages.some((message) =>
+        message.text.includes('a loose question'),
+      ),
+    )!;
+  assert.notEqual(looseSession.workspaceId, circle.id);
+  const looseWorkspace = f.controller
+    .snapshot()
+    .workspaces.find((item) => item.id === looseSession.workspaceId);
+  assert.equal(looseWorkspace?.kind, 'scratch');
+  assert.notEqual(looseWorkspace?.path, f.scratch);
+});
+
+test('the first message keeps the thinking depth and mode chosen on home', async (t) => {
+  const f = await setup(t, [{ message: assistant('started') }]);
+  const begun = await f.call('begin-session', {
+    text: 'think hard about the parser',
+    display: 'think hard about the parser',
+    effort: 'xhigh',
+    mode: 'plan',
+  });
+  assert.equal(begun.ok, true, begun.error);
+  const session = () =>
+    f.controller
+      .snapshot()
+      .sessions.find((row) =>
+        row.messages.some((message) =>
+          message.text.includes('think hard about the parser'),
+        ),
+      );
+  await wait(() => Boolean(session()), 'home choices stored');
+  assert.equal(session()!.effort, 'xhigh');
+  assert.equal(session()!.mode, 'plan');
+  assert.equal(session()!.readOnly, true);
+  await wait(
+    () => session()!.messages.some((message) => message.role === 'assistant'),
+    'home turn finished',
+  );
+});
+
+async function coldStartFixture(
+  t: TestContext,
+  mode: 'scratch' | 'untrusted' = 'scratch',
+  prepare?: (home: string, workspace: string) => Promise<void>,
+) {
+  const root = await mkdtemp(join(tmpdir(), 'circle-desktop-cold-start-'));
+  const home = join(root, 'home'),
+    workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  const settings = defaultSettings();
+  settings.extensions.hub = { enabled: true };
+  saveSettings(settings, home);
+  await prepare?.(home, workspace);
+  const model = new ScriptedModel([]),
+    updates: RuntimeUpdate[] = [];
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    workspace: mode === 'untrusted' ? workspace : undefined,
+    model,
+    emit: (update) => updates.push(update),
+  });
+  const controllers = [controller];
+  t.after(async () => {
+    for (const owner of controllers) await owner.close();
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  });
+  return { root, home, workspace, model, updates, controller, controllers };
+}
+
+test('trusted scratch cold start loads the enabled hub before any prompt trust or reload and retains it after restart', async (t) => {
+  const f = await coldStartFixture(t);
+  f.controller.publish();
+  assert.equal(f.updates[0]!.connected, true);
+  await f.controller.initialize();
+  const hub = f.controller.snapshot().extensions.find((x) => x.name === 'hub');
+  assert.ok(hub);
+  assert.equal(hub?.enabled, true);
+  assert.equal(hub.error, undefined);
+  await wait(
+    () =>
+      (
+        f.controller.snapshot().extensions.find((x) => x.name === 'hub')
+          ?.view as { signedIn?: boolean } | undefined
+      )?.signedIn === false,
+    'cold-start hub view',
+  );
+  assert.ok(hub.commands.includes('hub'));
+  assert.equal(f.model.requests.length, 0);
+  const saved = loadSettings(f.home);
+  assert.equal(isFolderTrusted(saved, join(f.home, 'workspace')), true);
+  assert.equal(isFolderTrusted(saved, f.workspace), false);
+  await f.controller.close();
+  const restart = new RuntimeController({
+    home: f.home,
+    userHome: f.home,
+    model: f.model,
+    emit: () => {},
+  });
+  f.controllers.push(restart);
+  await restart.initialize();
+  assert.equal(
+    restart.snapshot().extensions.find((x) => x.name === 'hub')?.enabled,
+    true,
+  );
+  assert.equal(f.model.requests.length, 0);
+});
+
+test('cold start leaves an untrusted workspace and its extension code untouched', async (t) => {
+  const f = await coldStartFixture(t, 'untrusted', async (_home, workspace) => {
+    const folder = join(workspace, '.circle/extensions/untrusted');
+    await mkdir(folder, { recursive: true });
+    await writeFile(
+      join(folder, 'extension.mjs'),
+      `import{writeFileSync}from'node:fs';export function register(){writeFileSync(${JSON.stringify(join(workspace, 'must-not-run'))},'ran')}`,
+    );
+  });
+  await f.controller.initialize();
+  assert.deepEqual(f.controller.snapshot().extensions, []);
+  assert.equal(existsSync(join(f.workspace, 'must-not-run')), false);
+  assert.equal(isFolderTrusted(loadSettings(f.home), f.workspace), false);
+  assert.equal(f.model.requests.length, 0);
+});
+
+test('cold start reports a discovery failure and an explicit reload can recover without a model turn', async (t) => {
+  const f = await coldStartFixture(t, 'scratch', async (home) => {
+    await writeFile(join(home, 'extensions'), 'invalid extension directory');
+  });
+  await f.controller.initialize();
+  assert.match(f.controller.snapshot().runtime?.error ?? '', /ENOTDIR/);
+  assert.equal(f.model.requests.length, 0);
+  await unlink(join(f.home, 'extensions'));
+  const reply = await f.controller.dispatch({
+    id: randomUUID(),
+    name: 'reload',
+    payload: {},
+    sessionId: f.controller.snapshot().activeSessionId,
+  });
+  assert.equal(reply.ok, true);
+  assert.equal(f.controller.snapshot().runtime?.error, undefined);
+  assert.equal(
+    f.controller.snapshot().extensions.find((x) => x.name === 'hub')?.enabled,
+    true,
+  );
+  assert.equal(f.model.requests.length, 0);
+});
+
+test(
+  'closing cold start cancels an MCP transport waiting for headers without hiding the first frame or leaking its socket',
+  { timeout: 5000 },
+  async (t) => {
+    const sockets = new Set<Socket>();
+    let requested!: () => void;
+    const requestSeen = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    const server = createServer(() => requested());
+    server.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    t.after(async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    const port = (server.address() as { port: number }).port;
+    const f = await coldStartFixture(t, 'scratch', async (home) => {
+      const settings = loadSettings(home);
+      settings.mcp_servers = [
+        {
+          name: 'waiting-for-headers',
+          transport: 'sse',
+          url: `http://127.0.0.1:${port}/events`,
+        },
+      ];
+      saveSettings(settings, home);
+    });
+    f.controller.publish();
+    const initializing = f.controller.initialize();
+    assert.equal(f.updates[0]!.connected, true);
+    await requestSeen;
+    const published = f.updates.length;
+    await f.controller.close();
+    await initializing;
+    await wait(() => sockets.size === 0, 'closed startup MCP socket');
+    assert.equal(f.model.requests.length, 0);
+    assert.equal(f.updates.length, published);
+  },
+);
+
+test(
+  'closing cold start aborts an async extension registration and never installs its closed host',
+  { timeout: 5000 },
+  async (t) => {
+    const f = await coldStartFixture(t, 'scratch', async (home) => {
+      const folder = join(home, 'extensions', 'waiting');
+      await mkdir(folder, { recursive: true });
+      await writeFile(
+        join(folder, 'extension.mjs'),
+        `import{writeFileSync}from'node:fs';export async function register(api){writeFileSync(${JSON.stringify(join(home, 'register-started'))},'started');api.signal.addEventListener('abort',()=>writeFileSync(${JSON.stringify(join(home, 'register-aborted'))},'aborted'),{once:true});await new Promise(()=>{});}`,
+      );
+    });
+    const initializing = f.controller.initialize();
+    await wait(
+      () => existsSync(join(f.home, 'register-started')),
+      'pending extension registration',
+    );
+    const published = f.updates.length;
+    await f.controller.close();
+    await initializing;
+    await f.controller.close();
+    assert.equal(existsSync(join(f.home, 'register-aborted')), true);
+    assert.equal(f.updates.length, published);
+    assert.ok(
+      f.updates.every((update) => update.snapshot.extensions.length === 0),
+    );
+    assert.equal(f.model.requests.length, 0);
+  },
+);
+
+for (const mode of ['released', 'bounded'] as const)
+  test(
+    `closing cold start owns a late hub token read through ${mode} drain without recreating data or publishing`,
+    { timeout: 8000 },
+    async (t) => {
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let paused = false;
+      const get = ExtensionSecrets.prototype.get,
+        background = ExtensionAPI.prototype.background,
+        setView = ExtensionAPI.prototype.setView,
+        setStatus = ExtensionAPI.prototype.setStatus;
+      const work: Promise<unknown>[] = [],
+        late: string[] = [];
+      t.mock.method(
+        ExtensionSecrets.prototype,
+        'get',
+        async function (this: ExtensionSecrets, name: string) {
+          const value = await get.call(this, name);
+          if (name === 'token' && Reflect.get(this, 'extension') === 'hub') {
+            paused = true;
+            await barrier;
+          }
+          return value;
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'background',
+        function (this: ExtensionAPI, promise: Promise<unknown>) {
+          if (this.name === 'hub') work.push(promise);
+          return background.call(this, promise);
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'setView',
+        function (this: ExtensionAPI, value: unknown) {
+          if (this.name === 'hub' && this.signal.aborted) late.push('view');
+          return setView.call(this, value);
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'setStatus',
+        function (
+          this: ExtensionAPI,
+          ...args: Parameters<ExtensionAPI['setStatus']>
+        ) {
+          if (this.name === 'hub' && this.signal.aborted) late.push('status');
+          return setStatus.apply(this, args);
+        },
+      );
+      const f = await coldStartFixture(t, 'scratch', async (home) => {
+        const folder = join(home, 'extensions', 'waiting');
+        await mkdir(folder, { recursive: true });
+        await writeFile(
+          join(folder, 'extension.mjs'),
+          `import{writeFileSync}from'node:fs';export async function register(api){writeFileSync(${JSON.stringify(join(home, 'register-started'))},'started');await new Promise(()=>{});}`,
+        );
+      });
+      let initializing: Promise<void> | undefined,
+        closing: Promise<void> | undefined;
+      try {
+        initializing = f.controller.initialize();
+        await wait(
+          () => paused && existsSync(join(f.home, 'register-started')),
+          'late hub token read and pending registration',
+        );
+        let ended = false;
+        closing = f.controller.close().then(() => {
+          ended = true;
+        });
+        if (mode === 'released') {
+          await delay(25);
+          const endedBeforeRelease = ended;
+          release();
+          await closing;
+          await initializing;
+          assert.equal(
+            endedBeforeRelease,
+            false,
+            'runtime close waits for its not-yet-installed host background work',
+          );
+        } else {
+          // A stuck background read cannot hold close forever; after its existing
+          // bounded drain expires, it still may not publish or recreate files.
+          await closing;
+          await initializing;
+        }
+        await rm(f.home, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        });
+        assert.equal(existsSync(f.home), false);
+        release();
+        await Promise.allSettled([...work]);
+        assert.equal(
+          existsSync(join(f.home, 'extension_data')),
+          false,
+          'late hub work must not recreate a removed home',
+        );
+        assert.deepEqual(
+          late,
+          [],
+          'a closed hub may publish neither a view nor a status',
+        );
+        assert.equal(f.model.requests.length, 0);
+        assert.ok(
+          f.updates.every((update) => update.snapshot.extensions.length === 0),
+        );
+      } finally {
+        release();
+        await closing;
+        await initializing;
+        await Promise.allSettled([...work]);
+      }
+    },
+  );
 // The window names the folder a trust answer is about, by the id its snapshot gave.
 const workspaceId = (path: string) =>
-  createHash('sha256').update(path).digest('hex').slice(0, 24);
+  createHash("sha256").update(path).digest("hex").slice(0, 24);
 
 test('trust is given and taken away for the folder the settings page names', async (t) => {
   const { root, home, workspace, controller, call } = await setup(t, [
@@ -3378,13 +5543,13 @@ test('trust is given and taken away for the folder the settings page names', asy
   assert.equal(controller.snapshot().workspaces[0]!.trusted, true);
   // Revoking is the other half of the same command, and it is kept on disk.
   assert.equal(
-    (await call('trust', { enabled: false, workspaceId: id })).ok,
+    (await call("trust", { enabled: false, workspaceId: id })).ok,
     true,
   );
   assert.equal(isFolderTrusted(loadSettings(home), workspace), false);
   assert.equal(controller.snapshot().workspaces[0]!.trusted, false);
   assert.equal(
-    (await call('trust', { enabled: true, workspaceId: id })).ok,
+    (await call("trust", { enabled: true, workspaceId: id })).ok,
     true,
   );
   assert.equal(isFolderTrusted(loadSettings(home), workspace), true);
@@ -3392,18 +5557,18 @@ test('trust is given and taken away for the folder the settings page names', asy
   // answer is taken without the click that means it.
   assert.equal(
     (
-      await call('trust', {
+      await call("trust", {
         enabled: true,
         workspaceId: workspaceId(join(root, 'elsewhere')),
       })
     ).ok,
     false,
   );
-  assert.equal((await call('trust', { workspaceId: id })).ok, false);
-  assert.equal((await call('trust', { enabled: 'yes' })).ok, false);
+  assert.equal((await call("trust", { workspaceId: id })).ok, false);
+  assert.equal((await call("trust", { enabled: 'yes' })).ok, false);
   // The same guard answers for the archive of a folder nothing ran in.
   assert.equal(
-    (await call('archive-workspace', { workspaceId: 'nope' })).ok,
+    (await call("archive-workspace", { workspaceId: "nope" })).ok,
     false,
   );
 });
