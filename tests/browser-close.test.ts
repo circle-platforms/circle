@@ -481,11 +481,12 @@ test(
     const exited = new Promise<void>((resolve) =>
       child.once('exit', () => resolve()),
     );
-    const browser = new ChromeBrowser({
+    const options: ConstructorParameters<typeof ChromeBrowser>[0] = {
       executable: process.execPath,
       closeTimeout: 1000,
       processInspectionTimeout: 1000,
-    });
+    };
+    const browser = new ChromeBrowser(options);
     const owned = browser as any;
     let closed = false;
     owned.processGroups.add(child.pid);
@@ -531,6 +532,9 @@ test(
       );
       const pid = Number(readFileSync(inspectorPid, 'utf8'));
       assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+      // The one-second injection belongs only to the hanging inspector. Real
+      // process inspection on the success retry uses the production default.
+      delete options.processInspectionTimeout;
       restorePath();
       await browser.close();
       await exited;
@@ -548,6 +552,72 @@ test(
         }
       }
       await closing?.catch(() => {});
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+      await exited;
+    }
+  },
+);
+
+test(
+  'restoring the normal inspector budget permits a real slow process inspection without weakening the injected deadline',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = join(scratch(t), 'slow real inspector');
+    mkdirSync(root);
+    // Execute the actual platform process listing after a controlled delay. The
+    // same command must fail with the injected second and pass with the default.
+    writeFileSync(
+      join(root, 'ps'),
+      '#!/bin/sh\n/bin/sleep 1.1\nexec /bin/ps "$@"\n',
+      { mode: 0o755 },
+    );
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const exited = new Promise<void>((resolve) =>
+      child.once('exit', () => resolve()),
+    );
+    const options: ConstructorParameters<typeof ChromeBrowser>[0] = {
+      executable: process.execPath,
+      closeTimeout: 1000,
+      processInspectionTimeout: 1000,
+    };
+    const browser = new ChromeBrowser(options);
+    const owned = browser as any;
+    owned.processGroups.add(child.pid);
+    let closed = false;
+    owned.cdp = {
+      close: () => {
+        closed = true;
+      },
+    };
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = root;
+      await assert.rejects(browser.close(), (error: any) => {
+        assert.equal(error.killed, true);
+        assert.equal(error.signal, 'SIGKILL');
+        return true;
+      });
+      assert.equal(owned.processGroups.has(child.pid), true);
+      assert.equal(child.signalCode, null);
+      assert.equal(closed, false);
+      delete options.processInspectionTimeout;
+      await browser.close();
+      await exited;
+      assert.equal(child.signalCode, 'SIGKILL');
+      assert.equal(owned.processGroups.has(child.pid), false);
+      assert.equal(closed, true);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
       if (child.exitCode === null && child.signalCode === null)
         child.kill('SIGKILL');
       await exited;
