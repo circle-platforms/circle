@@ -1,4 +1,9 @@
 import {
+  createNativeContinuityFixture,
+  runNativeTerminalContextJourney,
+  runNativeChildSourceJourney,
+} from './helpers/native-continuity-journey.mjs';
+import {
   browserDebugFixtureSource,
   runNativeBrowserDebugJourney,
 } from './helpers/native-browser-debug-journey.mjs';
@@ -100,6 +105,7 @@ await createNativeGitFixture(repo);
 await createNativeEditorFixture(repo);
 await createNativeEditorSemanticsFixture(repo);
 const terminalFixture = await createNativeTerminalFixture(repo);
+const continuityFixture = await createNativeContinuityFixture(repo);
 const debugFixture = await createNativeDebugFixture(repo);
 const isolationFiles = await createNativeEditorIsolationFixture(repo);
 const git = async (...args) =>
@@ -110,6 +116,7 @@ await git(
   ...isolationFiles,
   '.circle-editor-isolation-fixture.json',
   ...terminalFixture.files,
+  ...continuityFixture.files,
   debugFixture.program,
   '.circle-native-debug-interaction.json',
   'editor-supplement.ts',
@@ -215,6 +222,10 @@ const dependencies = {
   'two isolated write agents and readonly agent with pending Git approval': [
     'original file viewer and active-turn manual edit save',
   ],
+  'native terminal selection enters original unsent context and preserves processes':
+    ['native identity and original panels'],
+  'real child source ownership and return to child while parent saves another file':
+    ['two isolated write agents and readonly agent with pending Git approval'],
 };
 const check = async (name, action) => {
   phase = name;
@@ -322,7 +333,12 @@ const buildIdentity = {
   appPath: launchRoot,
   files: {},
   driverFiles: {},
+  fixtureFiles: {},
 };
+for (const file of continuityFixture.files)
+  buildIdentity.fixtureFiles[file] = createHash('sha256')
+    .update(await readFile(join(repo, file)))
+    .digest('hex');
 for (const file of [
   'native-developer-journey.mjs',
   ...[
@@ -332,6 +348,7 @@ for (const file of [
     'native-editor-journey',
     'native-editor-semantics',
     'native-terminal-journey',
+    'native-continuity-journey',
     'native-debug-journey',
     'native-keyboard-journey',
     'native-git-journey',
@@ -729,6 +746,23 @@ try {
       } finally {
         await restoreNativeClipboard(app, clipboardKey);
       }
+    },
+  );
+  await check(
+    'native terminal selection enters original unsent context and preserves processes',
+    async () => {
+      await closeFile();
+      return runNativeTerminalContextJourney({
+        page,
+        workspace: repo,
+        sessionId,
+        fixture: continuityFixture,
+        nodePath: buildIdentity.bundledNode.path,
+        query,
+        state,
+        until,
+        output,
+      });
     },
   );
   await check('Git working diff stage and unstage hunk', async () => {
@@ -1251,6 +1285,36 @@ try {
     },
   );
   await check(
+    'real child source ownership and return to child while parent saves another file',
+    async () => {
+      await closeFile();
+      const records = await query('tasks', 'list');
+      const writer = records.find(
+        (task) => task.spec.prompt === 'JOURNEY_WRITE_A',
+      );
+      assert(
+        writer?.runtimeSessionId && writer.worktree,
+        'a real writer child and its isolated worktree must be ready',
+      );
+      assert(
+        ['succeeded', 'needs_review'].includes(writer.state),
+        'child source check waits for the completed writer',
+      );
+      return runNativeChildSourceJourney({
+        page,
+        workspace: repo,
+        sessionId,
+        fixture: continuityFixture,
+        agentId: writer.runtimeSessionId,
+        childWorktree: writer.worktree,
+        state,
+        until,
+        output,
+        entry: 'activity',
+      });
+    },
+  );
+  await check(
     'keyboard quick open palette focus and original panel selection retention',
     async () => {
       const keyboardChecks = [];
@@ -1423,6 +1487,8 @@ try {
     'git-probe.txt',
     'debug.cjs',
     'browser-source.js',
+    ...continuityFixture.files,
+    'agent-result.txt',
   ]) {
     try {
       fixtureFinal[file] = await readFile(join(repo, file), 'utf8');
