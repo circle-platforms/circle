@@ -286,6 +286,12 @@ try {
       ),
     });
   }
+  // Selecting a usage schedules the SDK active-node update; closing immediately
+  // must dispose that pending update without an unhandled cancellation rejection.
+  await referenceWidget
+    .locator('.monaco-list-row')
+    .filter({ hasText: 'console.log(amount, label);' })
+    .click();
   await referencesPage.keyboard.press('Escape');
   await referenceLines.click();
   await referencesPage.keyboard.press(`${referenceModifier}+a`);

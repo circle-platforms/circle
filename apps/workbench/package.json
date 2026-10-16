@@ -13,7 +13,12 @@
     "format:check": "prettier --check src test package.json tsconfig.json vite.config.ts index.html",
     "test:ui": "npm --prefix ../desktop run test:interface",
     "test:editor": "node ../../node_modules/tsx/dist/cli.mjs test/editor-ui.mjs",
-    "test:components": "node test/component-suites.mjs"
+    "test:components": "node test/component-suites.mjs",
+    "postinstall": "node scripts/prepare-monaco.mjs",
+    "predev": "node scripts/prepare-monaco.mjs",
+    "prebuild": "node scripts/prepare-monaco.mjs",
+    "pretest:components": "node scripts/prepare-monaco.mjs",
+    "pretest:editor": "node scripts/prepare-monaco.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
