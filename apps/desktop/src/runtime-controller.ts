@@ -32,6 +32,7 @@ import {
   withConnection,
   isFolderTrusted,
   trustFolder,
+  untrustFolder,
   isReady,
   keepsSavedKey,
   writePrivateJson,
@@ -1558,6 +1559,35 @@ export class RuntimeController {
     }
     return result;
   }
+  // Whether the window named a folder Circle knows: one with sessions, including
+  // archived ones, one with a runtime of its own, or the active one.
+  private knownWorkspace(runtime: AgentRuntime, workspaceId: string): boolean {
+    return this.knownPaths(runtime).some(
+      (path) => identity(path) === workspaceId,
+    );
+  }
+  // The folder a trust command is about: the active one, or the one whose id the
+  // window named when it is a folder Circle already knows. Only known paths can be
+  // named, so a window cannot ask for trust to a folder it never opened.
+  private trustedWorkspace(runtime: AgentRuntime, workspaceId: string): string {
+    if (!workspaceId) return runtime.options.workspace;
+    const path = this.knownPaths(runtime).find(
+      (path) => identity(path) === workspaceId,
+    );
+    if (!path) throw Error('workspace not found');
+    return path;
+  }
+  // Every folder the window may name: the ones with sessions, including archived
+  // ones, the ones with a runtime of their own, and the active one.
+  private knownPaths(runtime: AgentRuntime): string[] {
+    return [
+      ...new Set([
+        ...runtime.store.list(undefined, true).map((row) => row.workspace),
+        ...[...this.runtimes.keys()],
+        runtime.options.workspace,
+      ]),
+    ];
+  }
   private assertArchivable(
     id: string,
     workspace: string,
@@ -1719,7 +1749,11 @@ export class RuntimeController {
         const rows = runtime.store
           .list()
           .filter((row) => identity(row.workspace) === workspaceId);
-        if (!rows.length) throw Error('workspace not found');
+        // A folder with no sessions has nothing to hide, but it is still a folder
+        // the window can ask about: the settings page removes one that only holds
+        // archived sessions.
+        if (!rows.length && !this.knownWorkspace(runtime, workspaceId))
+          throw Error('workspace not found');
         for (const row of rows) this.assertArchivable(row.id, row.workspace);
         this.metadata.set(
           rows.map((row) => row.id),
@@ -1914,15 +1948,35 @@ export class RuntimeController {
         return {};
       }
       case 'trust': {
-        if (p.enabled !== true)
+        // Both answers are a deliberate click: trusting loads a folder's code,
+        // revoking it takes that away again.
+        if (typeof p.enabled !== 'boolean')
           throw Error('explicit trust confirmation required');
+        const enabled = p.enabled;
+        const target = this.trustedWorkspace(
+          runtime,
+          p.workspaceId === undefined
+            ? ''
+            : text(p.workspaceId, 'workspace', 200),
+        );
+        const settings = loadSettings(this.home);
         saveSettings(
-          trustFolder(loadSettings(this.home), runtime.options.workspace),
+          enabled
+            ? trustFolder(settings, target)
+            : untrustFolder(settings, target),
           this.home,
         );
-        runtime.options.localContext = true;
-        await runtime.reloadIntegrations();
-        return {};
+        for (const owner of this.runtimes.values()) {
+          if (owner.options.workspace !== target) continue;
+          owner.options.localContext = enabled;
+          owner.options.settings = structuredClone(
+            enabled
+              ? trustFolder(owner.options.settings, target)
+              : untrustFolder(owner.options.settings, target),
+          );
+          await owner.reloadIntegrations();
+        }
+        return { workspaceId: identity(target), trusted: enabled };
       }
       case 'save-settings': {
         const settings = loadSettings(this.home);

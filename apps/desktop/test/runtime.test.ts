@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
 import { BrowserBridge, type BrowserPort } from '../../../src/browser/tools.ts';
@@ -19,6 +19,7 @@ import {
   saveSettings,
   saveSettingsChange,
   loadSettings,
+  isFolderTrusted,
   trustFolder,
   defaultSettings,
 } from '../../../src/settings.ts';
@@ -3364,4 +3365,45 @@ test('startup prefers the last-used folder, then workspace_folder, then the scra
   const inside = open();
   assert.equal(activeWorkspacePath(inside), join(home, 'workspace'));
   await inside.close();
+});
+// The window names the folder a trust answer is about, by the id its snapshot gave.
+const workspaceId = (path: string) =>
+  createHash('sha256').update(path).digest('hex').slice(0, 24);
+
+test('trust is given and taken away for the folder the settings page names', async (t) => {
+  const { root, home, workspace, controller, call } = await setup(t, [
+    { message: assistant('trust') },
+  ]);
+  const id = workspaceId(workspace);
+  assert.equal(controller.snapshot().workspaces[0]!.trusted, true);
+  // Revoking is the other half of the same command, and it is kept on disk.
+  assert.equal(
+    (await call('trust', { enabled: false, workspaceId: id })).ok,
+    true,
+  );
+  assert.equal(isFolderTrusted(loadSettings(home), workspace), false);
+  assert.equal(controller.snapshot().workspaces[0]!.trusted, false);
+  assert.equal(
+    (await call('trust', { enabled: true, workspaceId: id })).ok,
+    true,
+  );
+  assert.equal(isFolderTrusted(loadSettings(home), workspace), true);
+  // A folder the window never opened is not a folder it may name, and neither
+  // answer is taken without the click that means it.
+  assert.equal(
+    (
+      await call('trust', {
+        enabled: true,
+        workspaceId: workspaceId(join(root, 'elsewhere')),
+      })
+    ).ok,
+    false,
+  );
+  assert.equal((await call('trust', { workspaceId: id })).ok, false);
+  assert.equal((await call('trust', { enabled: 'yes' })).ok, false);
+  // The same guard answers for the archive of a folder nothing ran in.
+  assert.equal(
+    (await call('archive-workspace', { workspaceId: 'nope' })).ok,
+    false,
+  );
 });
