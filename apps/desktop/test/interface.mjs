@@ -806,13 +806,7 @@ try {
   // objects, all paired with a runtime extension the preview does not have, so off.
   assert.equal(await page.getByRole('checkbox').count(), 9);
   // Each switch is named by the interface's shown title.
-  for (const id of [
-    'GitHub',
-    'knowledge',
-    'long-running work',
-    'execution resources',
-    'methods',
-  ])
+  for (const id of ['GitHub', 'knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page
         .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
