@@ -272,6 +272,19 @@ const until = async (predicate, label) => {
     await new Promise((done) => setTimeout(done, 40));
   }
 };
+// Chooses a settings option. The settings page can re-render the whole row
+// while the runtime publishes state, so a click can keep landing on a button
+// that was just replaced: aim each try briefly and check the result, which is
+// the button pressed, not the click.
+const choose = async (button, label) => {
+  const deadline = Date.now() + patience(15000);
+  while (
+    (await button.getAttribute('aria-pressed').catch(() => null)) !== 'true'
+  ) {
+    assert(Date.now() < deadline, label);
+    await button.click({ timeout: 2000 }).catch(() => {});
+  }
+};
 const dependencies = {
   'original file viewer and active-turn manual edit save': [
     'native identity and original panels',
@@ -1755,18 +1768,20 @@ try {
         )
           .getByRole('button', { name: /^(settings|设置)$/, exact: true })
           .click();
-        await page
-          .getByRole('button', {
+        await choose(
+          page.getByRole('button', {
             name: locale === 'en' ? 'English' : '简体中文',
             exact: true,
-          })
-          .click();
-        await page
-          .getByRole('button', {
+          }),
+          'language chosen',
+        );
+        await choose(
+          page.getByRole('button', {
             name: theme === 'dark' ? /^(dark|深色)$/ : /^(light|浅色)$/,
             exact: true,
-          })
-          .click();
+          }),
+          'theme chosen',
+        );
         await (
           await visibleNavigation()
         )
@@ -1870,12 +1885,16 @@ try {
           .getByRole('button', { name: /^(settings|设置)$/ })
           .last()
           .click();
-        await page.getByRole('button', { name: language, exact: true }).click();
-        await page
-          .getByRole('button', {
+        await choose(
+          page.getByRole('button', { name: language, exact: true }),
+          'language chosen',
+        );
+        await choose(
+          page.getByRole('button', {
             name: theme === 'dark' ? /^(dark|深色)$/ : /^(light|浅色)$/,
-          })
-          .click();
+          }),
+          'theme chosen',
+        );
         await page
           .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
           .first()

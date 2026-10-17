@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { patience } from './patience.mjs';
+import { saveWithShortcut } from './native-editor-save.mjs';
 const main = 'editor-main.ts',
   library = 'editor-lib.ts';
 const source =
@@ -116,8 +117,9 @@ export async function runNativeEditorJourney({
   checks.push('real native document read');
   await open(main);
   await append('x');
-  await page.keyboard.press(`${modifier}+s`);
-  await until(
+  await saveWithShortcut(
+    page,
+    modifier,
     async () => (await disk(main)).endsWith('x'),
     'CmdS actual disk effect',
   );
@@ -134,8 +136,9 @@ export async function runNativeEditorJourney({
         ),
     'Undo reaches Monaco before CmdS',
   );
-  await page.keyboard.press(`${modifier}+s`);
-  await until(
+  await saveWithShortcut(
+    page,
+    modifier,
     async () => (await disk(main)) === source,
     'Undo then CmdS actual disk effect',
   );
