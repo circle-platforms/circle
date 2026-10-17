@@ -21,11 +21,18 @@ export function runtimeTestArguments(
     tsxPath,
     '--test',
     `--test-concurrency=${RUNTIME_TEST_FILE_WORKERS}`,
-    ...(ci ? ['--test-reporter=tap'] : []),
+    ...(ci
+      ? ['--test-reporter=tap', `--test-timeout=${RUNTIME_TEST_CI_TIMEOUT_MS}`]
+      : []),
     ...(rerunState ? [`--test-rerun-failures=${rerunState}`] : []),
     ...tests,
   ];
 }
+
+// On CI a test that never settles fails with its name after this long,
+// instead of holding the job until the job's own limit; the stage then runs
+// it once more like any failed test.
+export const RUNTIME_TEST_CI_TIMEOUT_MS = 240_000;
 
 // On CI a stage that fails runs once more, and only its failed tests run
 // again (Node's --test-rerun-failures keeps which tests already passed). A

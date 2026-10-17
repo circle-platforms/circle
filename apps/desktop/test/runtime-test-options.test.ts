@@ -41,6 +41,7 @@ import { syncBuiltinESMExports } from 'node:module';import assert from 'node:ass
   const args = runtimeTestArguments(tsx, files, { ci: true });
   assert.deepEqual(args.slice(-3), files);
   assert.ok(args.includes('--test-concurrency=2'));
+  assert.ok(args.includes('--test-timeout=240000'));
   let output = '';
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
@@ -73,6 +74,12 @@ import { syncBuiltinESMExports } from 'node:module';import assert from 'node:ass
   assert.equal(live.size, 0);
   assert.equal(
     runtimeTestArguments(tsx, files).includes('--test-reporter=tap'),
+    false,
+  );
+  assert.equal(
+    runtimeTestArguments(tsx, files).some((arg) =>
+      arg.startsWith('--test-timeout'),
+    ),
     false,
   );
 });

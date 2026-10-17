@@ -5,6 +5,7 @@ export function runtimeTestArguments(
   options?: { ci?: boolean; rerunState?: string },
 ): string[];
 export const RUNTIME_TEST_CI_ATTEMPTS: 2;
+export const RUNTIME_TEST_CI_TIMEOUT_MS: 240000;
 export const WINDOWS_NATIVE_TEST_PRIORITY: readonly string[];
 export function orderRuntimeTestFiles(
   files: string[],

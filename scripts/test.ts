@@ -30,6 +30,9 @@ for (let attempt = 1; attempt <= (ci ? 2 : 1); attempt++) {
     [
       tsx,
       '--test',
+      // A test that never settles fails with its name instead of holding
+      // the job until the job's own limit.
+      ...(ci ? ['--test-timeout=240000'] : []),
       ...(state ? [`--test-rerun-failures=${state}`] : []),
       ...extra,
       ...files,
