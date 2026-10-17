@@ -1787,6 +1787,14 @@ try {
         )
           .locator(`.session-link[href="#/session/${sessionId}"][tabindex="0"]`)
           .click();
+        // The session opens once the runtime has selected it; carry on only
+        // when its page is on screen.
+        await page.waitForFunction(
+          (id) =>
+            location.hash === `#/session/${id}` &&
+            !!document.querySelector('.composer textarea'),
+          sessionId,
+        );
         currentLocale = locale;
       };
       await runNativePanelAcceptance({
