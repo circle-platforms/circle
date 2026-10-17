@@ -386,10 +386,12 @@ try {
   const toolViewport = await readViewport(page);
   await setViewport(app, page, { width: 1024, height: 700 });
   await page.locator('.tool-summary').scrollIntoViewIfNeeded();
-  await page
+  const sessionLink = page
     .locator(`.sidebar .session-link[href="#/session/${b}"]`)
-    .first()
-    .hover();
+    .first();
+  await sessionLink.hover();
+  // Focus opens the same card; Windows runners do not always report the hover.
+  await sessionLink.focus();
   // Bring the tool row under the hover card: where they meet depends on each
   // platform's fonts, and the check below needs them to overlap.
   await page.waitForFunction(() =>
