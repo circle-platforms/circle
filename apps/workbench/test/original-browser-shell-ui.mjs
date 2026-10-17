@@ -178,8 +178,12 @@ try {
             );
           for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
           for (const expanded of [false, true]) {
-            const shown =
-              (await page.locator('.browser-diagnostics').count()) > 0;
+            // Visible, not merely mounted: a closing dock can stay in the
+            // DOM for a moment without its close button showing.
+            const shown = await page
+              .locator('.browser-diagnostics')
+              .first()
+              .isVisible();
             if (expanded && !shown) {
               await page
                 .getByRole('button', {

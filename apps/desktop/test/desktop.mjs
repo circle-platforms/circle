@@ -451,7 +451,10 @@ async function chromeControls() {
     );
   }
   const last = (await state()).tab;
-  await page.getByRole('button', { name: 'close tab', exact: true }).click();
+  const closeTab = page.getByRole('button', { name: 'close tab', exact: true });
+  // The strip can still show the tabs closed above for a frame or two.
+  await until(async () => (await closeTab.count()) === 1, 'one tab shown');
+  await closeTab.click();
   const fresh = await until(async () => {
     const value = await state();
     return value.tabs.length === 1 && value.tab !== last ? value : undefined;
