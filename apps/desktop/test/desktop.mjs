@@ -255,7 +255,23 @@ async function chromeControls() {
     '-',
     'Inspect',
   ]);
-  assert.deepEqual(await rightClick('#field'), [
+  // Paste is offered while the clipboard holds text, as in Chrome; a runner's may be empty.
+  const clipboardForField = await app.evaluate(({ clipboard }) =>
+    clipboard.readText(),
+  );
+  let fieldMenu;
+  try {
+    await app.evaluate(({ clipboard }) =>
+      clipboard.writeText('circle paste fixture'),
+    );
+    fieldMenu = await rightClick('#field');
+  } finally {
+    await app.evaluate(
+      ({ clipboard }, text) => clipboard.writeText(text),
+      clipboardForField,
+    );
+  }
+  assert.deepEqual(fieldMenu, [
     'Undo (disabled)',
     'Redo (disabled)',
     '-',
