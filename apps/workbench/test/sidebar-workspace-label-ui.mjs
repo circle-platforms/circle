@@ -186,11 +186,13 @@ try {
     );
     await link.click();
     await page.waitForFunction((id) => location.hash === '#/session/' + id, id);
+    // The sidebar marks the opened task once it has rendered the new route.
+    await folder
+      .locator(`.task-row .session-link.active[href="#/session/${id}"]`)
+      .waitFor();
     assert.equal(
-      await folder
-        .locator('.task-row .session-link.active')
-        .getAttribute('href'),
-      '#/session/' + id,
+      await folder.locator('.task-row .session-link.active').count(),
+      1,
     );
     // Recent opens its own task list while one of its tasks is the open session.
     assert.equal(
