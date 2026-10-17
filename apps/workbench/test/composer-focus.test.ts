@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { test } from 'node:test';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { testBrowserOptions } from './helpers/test-browser.ts';
@@ -16,8 +17,16 @@ test(
     // Do not share CIRCLE_WORKBENCH_TEST_PORT with the pin test: both can run at once.
     const port = await previewPort(process.env.CIRCLE_WORKBENCH_FOCUS_PORT);
     const server: ChildProcess = spawn(
-      'npx',
-      ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
+      // Node runs Vite itself: Windows has no `npx` file to spawn, only npx.cmd.
+      process.execPath,
+      [
+        join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
+        '--host',
+        '127.0.0.1',
+        '--port',
+        String(port),
+        '--strictPort',
+      ],
       { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     let logs = '';

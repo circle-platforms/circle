@@ -845,7 +845,8 @@ test('a trusted parent covers a subfolder, and --trust remembers a folder for a 
   assert.equal(outside.code, 2);
   assert.match(outside.stderr, /This folder is not trusted yet/);
   assert.match(outside.stderr, /--trust/);
-  const fresh = realpathSync(scratch(t));
+  // Workspaces are saved in the native spelling, which on Windows is the long path.
+  const fresh = realpathSync.native(scratch(t));
   const remembered = await circle(home, ['-p', '--trust', 'hello', fresh]);
   assert.equal(remembered.code, 0, remembered.stderr);
   assert.ok(loadSettings(home).trusted_folders.includes(fresh));

@@ -1,3 +1,4 @@
+import { testBrowserOptions } from '../../workbench/test/helpers/test-browser.ts';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -309,14 +310,12 @@ test('paused evaluation binds connection and frame, rejects running or stale rep
   assert.equal(calls, 1);
 });
 
-test('real webpage CDP evaluation changes paused local and continued program result', async () => {
+test('real webpage CDP evaluation changes paused local and continued program result', async (t) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({
-    headless: true,
-    ...(process.env.CIRCLE_TEST_BROWSER_CHANNEL
-      ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
-      : {}),
-  });
+  // Playwright's own browser where it was installed, else the runner's Chrome.
+  const options = testBrowserOptions(chromium.executablePath());
+  if (!options) return t.skip('no Chromium or Chrome is installed');
+  const browser = await chromium.launch({ headless: true, ...options });
   try {
     const page = await browser.newPage();
     const cdp = await page.context().newCDPSession(page);

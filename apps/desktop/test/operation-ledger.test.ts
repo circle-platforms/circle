@@ -47,7 +47,9 @@ async function fixture(t: TestContext, inlineResultBytes?: number) {
     await Promise.all(ledgers.map((ledger) => ledger.close()));
     await rm(root, { recursive: true, force: true });
   });
-  return { root, directory, open };
+  // A ledger opened elsewhere closes before the folder goes: Windows cannot delete an open file.
+  const track = (ledger: OperationLedger) => ledgers.push(ledger);
+  return { root, directory, open, track };
 }
 async function bytes(directory: string): Promise<Buffer[]> {
   const result: Buffer[] = [];
@@ -341,7 +343,7 @@ test('a forged shell error or typed error after a returned effect never becomes 
       unseal: async (value) => value,
     },
   });
-  t.after(() => postEffect.close());
+  f.track(postEffect);
   await assert.rejects(
     postEffect.run(
       { ...identity('returned'), service: 'shell', method: 'run' },
