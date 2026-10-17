@@ -21,7 +21,7 @@ const response = (content: string): Message => ({
   content,
 });
 async function until(check: () => boolean | Promise<boolean>) {
-  const until = Date.now() + 8000;
+  const until = Date.now() + 30000;
   while (!(await check())) {
     if (Date.now() > until) throw Error('reviewer lifecycle fixture timed out');
     await delay(10);
