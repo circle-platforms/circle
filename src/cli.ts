@@ -14,6 +14,8 @@ import {
   isReady,
   loadCredentials,
   loadSettings,
+  saveSettings,
+  trustFolder,
   applyProjectSettings,
   type CircleSettings,
 } from './settings.js';
@@ -43,6 +45,8 @@ export interface CliOptions {
   init: boolean;
   mode: string;
   yolo: boolean;
+  /** Trust this folder for this run and remember it, including when nobody is at a terminal. */
+  trust: boolean;
   extensions: boolean;
   verbose: boolean;
   continue: boolean;
@@ -76,6 +80,7 @@ const FLAGS: Record<
   '--line': 'line',
   '--init': 'init',
   '--yolo': 'yolo',
+  '--trust': 'trust',
   '--extensions': 'extensions',
   '--verbose': 'verbose',
   '--no-session': 'no-session',
@@ -112,6 +117,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): CliOptions {
     init: false,
     mode: 'text',
     yolo: false,
+    trust: false,
     extensions: false,
     verbose: false,
     continue: false,
@@ -204,7 +210,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): CliOptions {
     !(EFFORT_LEVELS as readonly string[]).includes(options.thinking)
   )
     throw new UsageError('unknown thinking depth');
-  // As in the Python releases: the words are a folder, @files and messages. The first word
+  // The words are a folder, @files and messages. The first word
   // is the folder when it is one, or when it has no spaces, so a mistyped folder is an
   // error and not a message; a folder may also come last, after a message.
   const path = (word: string): string => resolve(cwd, expandUser(word));
@@ -284,7 +290,7 @@ function conflict(
   return '';
 }
 export function helpText(): string {
-  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
+  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --trust              Trust this folder and remember it\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
 }
 // How long `-p PROMPT` waits for piped input to start before going on without it.
 const STDIN_WAIT_MS = 3000;
@@ -415,7 +421,7 @@ async function listModels(search: string, home: string): Promise<number> {
 // Setup was left unfinished, or the folder was not trusted: exit 1.
 class Declined extends Error {}
 // Settings for a run without the full-screen interface. When standard input is a terminal,
-// setup and the trust question are asked line by line, as the Python releases did.
+// setup and the trust question are asked line by line.
 async function headlessSettings(
   options: CliOptions,
   home: string,
@@ -442,14 +448,19 @@ async function headlessSettings(
   )
     throw new UsageError(`No such folder: ${options.workspace}`);
   if (!isFolderTrusted(settings, options.workspace)) {
-    if (!process.stdin.isTTY)
+    if (options.trust) {
+      settings = trustFolder(settings, options.workspace);
+      saveSettings(settings, home);
+    } else if (!process.stdin.isTTY)
       throw new UsageError(
-        `This folder is not trusted yet: ${options.workspace}\nRun \`circle\` there once in a terminal and trust it.`,
+        `This folder is not trusted yet: ${options.workspace}\nRun \`circle\` there once in a terminal and trust it, or pass --trust to trust it and remember it.`,
       );
-    const { runLineTrust } = await import('./line_setup.js');
-    const trusted = await runLineTrust(settings, options.workspace, home);
-    if (!trusted) throw new Declined();
-    settings = trusted;
+    else {
+      const { runLineTrust } = await import('./line_setup.js');
+      const trusted = await runLineTrust(settings, options.workspace, home);
+      if (!trusted) throw new Declined();
+      settings = trusted;
+    }
   }
   const { problems } = applyProjectSettings(settings, options.workspace, home);
   for (const problem of problems) process.stderr.write(problem + '\n');
@@ -500,12 +511,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const { toHtml, toSessionBundle } = await import('./session_export.js');
       const store = new CheckpointStore(home);
       try {
-        const { migrateLegacy } = await import('./migration.js');
-        const migration = migrateLegacy(home, store);
-        for (const error of migration.errors)
-          process.stderr.write(
-            `Could not migrate ${error.thread || 'legacy data'}: ${error.message}\n`,
-          );
         const session = store.find(options.export[0]!);
         if (!session) throw new UsageError('unknown session');
         const path = options.export[1] || session.id + '.html';
@@ -527,7 +532,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         store.close();
       }
     }
-    // As in the Python releases: the flag beats the variable and is never saved.
+    // The flag beats the variable and is never saved.
     if (options.thinking)
       process.env.CIRCLE_REASONING_EFFORT = options.thinking;
     const attached = fileBlocks(options.files, options.workspace);
@@ -615,10 +620,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // full-screen interface; their tools reach the model from the first turn.
     if (options.extensions) await runtime.initialize();
     offSignals = installExitGuard(runtime);
-    for (const error of runtime.migration.errors)
-      process.stderr.write(
-        `Could not migrate ${error.thread || 'legacy data'}: ${error.message}\n`,
-      );
     // Only --yolo turns auto on here; without it a saved default_mode stays.
     if (options.yolo) runtime.policy.setYolo(runtime.session.id, true);
     if (options.mode === 'rpc') {

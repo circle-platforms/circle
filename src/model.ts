@@ -392,6 +392,14 @@ export class GatewayModel implements ChatModel {
       signal: request.signal,
       timeout: this.requestTimeout(request),
     });
+    const stopStream = () => {
+      try {
+        stream.controller.abort();
+      } catch {
+        /* The body is already closed. */
+      }
+    };
+    request.signal.addEventListener('abort', stopStream, { once: true });
     request.progress?.('connected');
     let content = '';
     let thinking = '';
@@ -403,6 +411,7 @@ export class GatewayModel implements ChatModel {
     let guardedStop = false;
     try {
       for await (const chunk of stream) {
+        if (request.signal.aborted) break;
         if (chunk.model) servedModel = chunk.model;
         if (chunk.usage) {
           usage.input_tokens = Math.max(
@@ -455,6 +464,7 @@ export class GatewayModel implements ChatModel {
         request.notice?.({ event: 'repetition_stopped', period: error.period });
       } else throw error;
     } finally {
+      request.signal.removeEventListener('abort', stopStream);
       stream.controller.abort();
     }
     request.signal.throwIfAborted();
@@ -681,6 +691,14 @@ export class GatewayModel implements ChatModel {
         timeout: this.requestTimeout(request),
       },
     );
+    const stopStream = () => {
+      try {
+        stream.controller.abort();
+      } catch {
+        /* The body is already closed. */
+      }
+    };
+    request.signal.addEventListener('abort', stopStream, { once: true });
     request.progress?.('connected');
     let snapshot: Anthropic.Message | undefined;
     const inputParts = new Map<number, string>();
@@ -688,6 +706,7 @@ export class GatewayModel implements ChatModel {
     let guardedStop = false;
     try {
       for await (const event of stream) {
+        if (request.signal.aborted) break;
         if (event.type === 'message_start') {
           snapshot = structuredClone(event.message);
           for (const block of snapshot.content) {
@@ -770,6 +789,7 @@ export class GatewayModel implements ChatModel {
         request.notice?.({ event: 'repetition_stopped', period: error.period });
       } else throw error;
     } finally {
+      request.signal.removeEventListener('abort', stopStream);
       stream.controller.abort();
     }
     request.signal.throwIfAborted();

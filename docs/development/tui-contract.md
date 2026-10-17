@@ -7,7 +7,7 @@ nav_order: 3
 
 2026-09-29 定稿。渲染层（块间节奏、类型底色、单行页脚、彩虹框）沿用 InfoTest 07 章 §11.25；本文补上它没有的一半：**什么信息、什么条件下、进哪个区、待多久、谁把它撤掉**。字形、颜色、措辞都是这张分区表的下游。
 
-本契约为 Python 版（0.5.0 及以前）定稿；1.0 的 TypeScript 版实现它，代码在 `src/tui/` 与 `src/ink/`。两者不一致之处列在 [第 8 节](#8-尚未落地的部分)，以契约为准。定稿时用的方案 demo 在 Python 版里：检出 `v0.5.0` 后运行 `python docs/demo/tui_schemes_20260929/demo.py show [--lang zh]`（十一页，每区一页）。
+实现本契约的代码在 `src/tui/` 与 `src/ink/`。代码与契约不一致之处列在 [第 8 节](#8-尚未落地的部分)，以契约为准。
 
 守门测试：`tests/interaction.test.ts`、`tests/cards.test.ts`、`tests/composer.test.ts`（交互）；`tests/status-surfaces.test.ts`、`tests/status-pages.test.ts`、`tests/lamps.test.ts`、`tests/interface.test.ts`（渲染与深浅色）；`tests/render-colors.test.ts`（颜色只从 palette 取）。
 
@@ -32,7 +32,7 @@ nav_order: 3
 - **R3 阻塞的问题一种卡。** 审批、提问、机密共用 `cardRows`（`src/ink/components/dialog_card.ts`）。键一列（数字）、标签一列，当前项整行 `sel_bg`。助记键 `y` `a` `n` 可按但不显示；`esc` 永远是最保守的答案。卡片在时可打印字符一律吞掉。「本会话都允许」把范围写进标签，不再二次确认；只有一个程序的命令另有一项「本会话以这几个词开头的都允许」（`Allow "python3 -m pytest …" for this session`），排在「这条命令」之后，`a` 选的是更窄的那项。改文件的卡在路径下画将要改的 diff：对照文件现在的样子，带行号，加的绿、删的红（`added` / `removed` 语气），超过 40 行截断并写明还有多少。「拒绝并说明」把框的最后一行变成输入，原因随拒绝交给模型，空着回车是纯拒绝。
 - **R4 不阻塞的列表一种弹窗。** `Picker`（`src/ink/components/picker.ts`）与补全列表的 `popupRows`（`src/ink/components/popup.ts`）。
 - **R5 状态词只有两个，各占一角。** 忙碌词左上（模型请求重试时换成 `Retrying`，后面一段写原因和第几次：`Retrying… · timeout 3/10 · 4m 2s`），模式词右下，都是单词：`read-only`（plan mode）、`auto`（yolo）。默认的逐项审批什么都不显示。`read-only` 与 `auto` 同时开时显示更严的 `read-only`。
-- **R6 通知三类，按「以后还要看吗」分。** 状态变了、之后还要看的（换模型、恢复会话、导出、压缩完成、审批结果、撤销规则、有新版本可用）进转录，永久淡色一行，代码里是 `notice`。操作回执（已复制、排队、忙、用法、切换 ctrl+o / ctrl+t 展开）走页脚一闪，1–2 秒，不进历史，代码里是 `flash`。失败进转录，红色 `✖` 一行，留着能读，代码里是 `fail`（三者都在 `src/tui/session_app.ts`）。正在成立的走常驻，撤了就没。切换视图不在转录里留痕。通知落在它发生时的位置，前一条消息之后，之后的回合排在它下面，不钉在转录底部（`✖ Interrupted` 另在下一回合开始时撤下）。
+- **R6 通知三类，按「以后还要看吗」分。** 状态变了、之后还要看的（换模型、恢复会话、导出、压缩完成、审批结果、撤销规则、有新版本可用）进转录，永久淡色一行，代码里是 `notice`。操作回执（已复制、排队、忙、用法、切换 ctrl+o / ctrl+t 展开）走页脚一闪，1–2 秒，不进历史，代码里是 `flash`。失败进转录，红色 `✖` 一行，留着能读，代码里是 `fail`（三者都在 `src/tui/session_app.ts`）。正在成立的走常驻，撤了就没。切换视图不在转录里留痕。通知落在它发生时的位置，前一条消息之后，之后的回合排在它下面，不钉在转录底部（已保存回复上的 `✖ Interrupted` 留在那条回复上；还没有任何文字时的中止行在下一回合开始时撤下）。
 
 ## 3 装置
 
@@ -77,7 +77,7 @@ nav_order: 3
 | 你的话、模型回答、思考行、工具行与结果 | 发生 | 转录 |
 | 待审批的调用、待答的 question | 中断到达 | 转录，青灯 `waiting for you` |
 | 状态变更：模式切换、压缩完成、审批结果 | 事件发生 | 转录，淡色 |
-| 终帧 `✖` 失败红 / 中止暗；回合用量 `12s · ↑ 1.2k · ↓ 340` | 回合结束。`✖ Interrupted` 在下一回合开始时撤下，失败行留着 | 转录 |
+| 终帧 `✖` 失败红 / 中止暗；回合用量 `12s · ↑ 1.2k · ↓ 340` | 回合结束。已保存回复上的 `✖ Interrupted` 留在那条回复上；还没有任何文字时的中止行在下一回合开始时撤下，失败行留着 | 转录 |
 | 页眉：版本 · 模型（有思考深度时 `模型 • high`）· 目录 · `? for shortcuts` | 欢迎块滚出屏幕后；欢迎块在屏上时只留右侧提示，setup / trust 期间空行（行一直占着，转录不跳） | 常驻 |
 | 欢迎块：logo · `circle 版本` · 模型与端点 · 目录与分支；文件夹带来的指令、技能、命令、扩展、项目设置（各带灯）；recent 最近 3 个会话 | 每个会话开始 | 转录第一块，只画不存 |
 | 页脚：`↑ ↓ · 费用 · cache · ctx`（费用美元，窗口与价格来自 models.dev；不知道的读 `N/A`） | 始终 | 常驻 |
@@ -93,7 +93,7 @@ nav_order: 3
 | setup（URL、key、查模型、选模型）与 trust（写明会加载文件夹里的什么，有扩展时黄色提醒它会执行代码） | 没设置过或 `--init`；文件夹没信任过 | 对话框，会话连接之前；欢迎块随答随填 |
 | `/approvals` 规则 | 无参数 | 弹窗 |
 | 模型、思考深度、会话、会话树、fork 的列表 | `/models` `/effort` `/resume` `/tree` `/fork` 无参数，alt+l，空框 esc esc | 弹窗 |
-| URL、key（圆点）、模型，问法同 setup（`SessionApp.initialize`），一打开就问 URL；key 上 esc 回到 URL，URL 上 esc 离开。0.5.0 先问 API URL + KEY 还是 OAuth，Circle 不做 OAuth，这一步去掉了 | `/login` | 弹窗；选完模型才保存，成了进转录淡色一行 |
+| URL、key（圆点）、模型，问法同 setup（`SessionApp.initialize`），一打开就问 URL；key 上 esc 回到 URL，URL 上 esc 离开。Circle 只用 API URL 与 key 登录，不做 OAuth | `/login` | 弹窗；选完模型才保存，成了进转录淡色一行 |
 | key 被端点拒（401 / 403） | 回合失败 | 转录，红色 `✖` 行尾加 `· /login to change the key` |
 | 等着被读的插话 `steering: …`、回合后才发的 `follow-up: …` | 回合进行中你按了 enter | 常驻，输入框上方，淡色一行一条；读到后进转录 |
 | 压缩进行中 `auto-compacting · ████░░░░ summarizing · 12s`（`/compact` 为 `compacting`；不写触发条件；自动的那种随回合被 esc 中止，行撤下、不落失败行） | 压缩开始到结束 | 常驻，输入框上方，排在插话之前；结束撤下，转录落一条淡色 `auto-compacted · …` 或 `compacted · …`（失败红色 `✖`），回合进行中则等回合结束、落在用量行之下 |

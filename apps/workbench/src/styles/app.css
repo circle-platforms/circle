@@ -142,7 +142,7 @@ pre {
   scrollbar-color: var(--border) transparent;
 }
 #root {
-  height: 100dvh;
+  height: 100%;
   min-height: 0;
 }
 .workbench {
@@ -152,7 +152,7 @@ pre {
      clips the composer at the bottom of the window, a little further each
      time a session is added, and the page itself does not scroll. */
   grid-template-rows: minmax(0, 1fr);
-  height: 100dvh;
+  height: 100%;
   overflow: hidden;
 }
 /* The panel seen whole takes the workspace; the columns step aside but stay mounted, so
@@ -570,6 +570,44 @@ pre {
   align-items: center;
   gap: 8px;
 }
+.hub-actions {
+  margin: 18px 0 0;
+}
+.hub-page > .extension-list,
+.hub-page > .form-stack,
+.hub-page > .hub-log-block,
+.hub-page > .panel-note {
+  margin-top: 28px;
+}
+.hub-page .form-stack > .button,
+.hub-page .form-stack > .inline-actions {
+  align-self: flex-start;
+}
+.hub-log {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: inherit;
+}
+.hub-log li {
+  margin: 0 0 10px;
+  font-size: var(--ui-small);
+  line-height: 1.55;
+}
+.hub-log li p {
+  margin: 0 0 6px;
+}
+.hub-inbox-flash {
+  animation: hub-inbox-flash 1.1s ease;
+}
+@keyframes hub-inbox-flash {
+  0% {
+    background: var(--active);
+  }
+  100% {
+    background: transparent;
+  }
+}
 .resize-handle {
   width: 5px;
   flex-shrink: 0;
@@ -756,6 +794,9 @@ pre {
 }
 .token-keyword {
   color: var(--violet);
+}
+.token-call {
+  color: var(--call);
 }
 .token-number {
   color: var(--attention);
@@ -1488,6 +1529,9 @@ pre {
   direction: rtl;
   text-align: left;
 }
+.facts-note dd {
+  flex: none;
+}
 .context-source {
   min-width: 0;
   border: 1px solid var(--border);
@@ -1885,6 +1929,34 @@ pre {
 }
 .home-composer .composer textarea {
   min-height: 92px;
+}
+.whats-new {
+  width: min(680px, 100%);
+  margin: 0 auto;
+  padding: 0 28px 28px;
+}
+.whats-new-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px 14px 14px;
+}
+.whats-new-card h3 {
+  margin: 0 0 8px;
+  font-size: var(--ui);
+  font-weight: 600;
+}
+.whats-new-card p {
+  margin: 0 0 8px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  line-height: 1.45;
+}
+.whats-new-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
 }
 .project-menu {
   min-width: 260px;
@@ -2600,8 +2672,9 @@ pre {
   color: var(--fg);
 }
 /* Read-only tips must not block the control beneath Radix's positioning box. */
-[data-radix-popper-content-wrapper]:has(> .tooltip) {
-  pointer-events: none;
+[data-radix-popper-content-wrapper]:has(.tooltip),
+[data-radix-popper-content-wrapper]:has(.session-hover) {
+  pointer-events: none !important;
 }
 .tooltip {
   z-index: 110;
@@ -2616,7 +2689,7 @@ pre {
   fill: var(--fg);
 }
 .tooltip.session-hover {
-  pointer-events: none;
+  pointer-events: none !important;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -4019,6 +4092,31 @@ pre {
   padding: 0 4px 0 10px;
   color: var(--muted);
   font-size: var(--ui-small);
+  border-radius: 6px;
+}
+/* The folder row answers to the pointer, and to a new session drafted in it. */
+.project-header:hover {
+  background: var(--hover);
+}
+.project-header.aimed {
+  background: var(--active);
+  color: var(--fg);
+}
+.project-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.project-name svg {
+  flex-shrink: 0;
+  opacity: 0.75;
 }
 .project-header span {
   overflow: hidden;
@@ -4072,6 +4170,7 @@ pre {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
   gap: 8px;
   height: 52px;
   padding: 0 2px;
@@ -4110,6 +4209,23 @@ pre {
 }
 .connection-status[data-state='stopped'] i {
   background: var(--negative);
+}
+.sidebar-footer button.sidebar-settings {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: auto;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.sidebar-footer button.sidebar-settings:hover {
+  background: var(--hover);
+  color: var(--fg);
 }
 
 /* The top bar: the session's title and folder, the panels on the right. */
@@ -4863,6 +4979,61 @@ pre {
 .update-chip svg {
   flex-shrink: 0;
   color: var(--accent);
+}
+.linux-update-steps {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  line-height: 1.45;
+}
+.linux-update-steps p {
+  margin: 0 0 6px;
+}
+.linux-replace-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 35%, transparent);
+}
+.linux-replace-dialog {
+  width: min(440px, calc(100% - 32px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.linux-replace-dialog h3 {
+  margin: 0 0 8px;
+  font-size: var(--ui);
+}
+.linux-replace-dialog p {
+  margin: 0 0 8px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  line-height: 1.45;
+}
+.linux-replace-dialog pre {
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+.linux-replace-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.linux-update-steps pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--code, var(--bg));
+  color: var(--fg);
+  white-space: pre-wrap;
 }
 
 /* Variables in settings, as Windows lists environment variables: a framed table of names

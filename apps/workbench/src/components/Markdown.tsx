@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { Code } from 'lucide-react';
+import { splitAutolink } from '../../../../src/autolink.ts';
 import { t } from '../i18n';
 import './markdown.css';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
@@ -7,13 +9,47 @@ import { useSources, sourceLocation } from './SourceNavigation';
 import { remarkSourceLinks } from '../model/markdown-source-links';
 import { copyText } from '../host';
 import { highlight } from './highlight';
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  ts: 'TypeScript',
+  tsx: 'TSX',
+  js: 'JavaScript',
+  jsx: 'JSX',
+  py: 'Python',
+  python: 'Python',
+  rb: 'Ruby',
+  go: 'Go',
+  rs: 'Rust',
+  sh: 'Shell',
+  bash: 'Shell',
+  zsh: 'Shell',
+  md: 'Markdown',
+  json: 'JSON',
+  yml: 'YAML',
+  yaml: 'YAML',
+  html: 'HTML',
+  css: 'CSS',
+  sql: 'SQL',
+};
+
+function languageName(language?: string): string {
+  if (!language) return t('text');
+  return (
+    LANGUAGE_NAMES[language.toLowerCase()] ??
+    language.slice(0, 1).toUpperCase() + language.slice(1)
+  );
+}
+
 function CodeBlock({ language, code }: { language?: string; code: string }) {
   const [copied, setCopied] = useState(false);
   const tokens = highlight(code, language);
   return (
     <div className="code-block">
       <div className="code-block-bar">
-        <span>{language || t('text')}</span>
+        <span className="code-lang">
+          <Code size={12} aria-hidden="true" />
+          {languageName(language)}
+        </span>
         <button
           type="button"
           onClick={() => {
@@ -46,12 +82,59 @@ function CodeBlock({ language, code }: { language?: string; code: string }) {
   );
 }
 
+// GFM autolinks run on through fullwidth punctuation. Stop at it, and leave
+// the following characters as text.
+type MarkdownNode = {
+  type?: string;
+  url?: string;
+  value?: string;
+  children?: MarkdownNode[];
+};
+function remarkFullwidthAutolinks() {
+  const walk = (node: MarkdownNode) => {
+    const children = node.children;
+    if (!children) return;
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index]!;
+      if (
+        child.type === 'link' &&
+        child.children?.length === 1 &&
+        child.children[0]?.type === 'text'
+      ) {
+        const shown = String(child.children[0].value ?? '');
+        const href = String(child.url ?? '');
+        if (
+          shown &&
+          (shown === href ||
+            href === `http://${shown}` ||
+            href === `https://${shown}`)
+        ) {
+          const { url, rest } = splitAutolink(shown);
+          if (rest) {
+            child.children[0].value = url;
+            child.url = shown.startsWith('www.') ? `http://${url}` : url;
+            const next = children[index + 1];
+            if (next?.type === 'text')
+              next.value = rest + String(next.value ?? '');
+            else children.splice(index + 1, 0, { type: 'text', value: rest });
+          }
+        }
+      }
+      walk(child);
+    }
+  };
+  return (tree: MarkdownNode) => walk(tree);
+}
 export function Markdown({ text }: { text: string }) {
   const sources = useSources();
   return (
     <div className="markdown">
       <ReactMarkdown
-        remarkPlugins={sources ? [remarkGfm, remarkSourceLinks] : [remarkGfm]}
+        remarkPlugins={
+          sources
+            ? [remarkGfm, remarkFullwidthAutolinks, remarkSourceLinks]
+            : [remarkGfm, remarkFullwidthAutolinks]
+        }
         urlTransform={(url) =>
           sourceLocation(url) ? url : defaultUrlTransform(url)
         }

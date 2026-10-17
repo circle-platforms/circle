@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setLanguage } from '../src/i18n/index.ts';
+import { extensionErrorText } from '../src/plugins/labels.ts';
 import {
   PluginRegistry,
   effectivePlugins,
@@ -56,21 +58,58 @@ test('a paired plugin shows exactly while its runtime extension is installed, lo
   assert.equal(pairing(plain, []).live, true);
 });
 
-test('the shown plugins are the chosen plain ones and the live paired ones, whatever the chosen list says of a paired one', () => {
-  const plugins = [plain, paired];
-  assert.deepEqual(effectivePlugins(plugins, ['files'], [row()]), [
+test('a paired page shows only when it is chosen and its extension is live', () => {
+  const knowledge: WorkbenchPlugin = {
+    ...paired,
+    id: 'knowledge',
+    pages: [page('knowledge')],
+  };
+  const plugins = [plain, paired, knowledge];
+  const live = [row()];
+  assert.deepEqual(effectivePlugins(plugins, ['files', 'hub'], live), [
     'files',
     'hub',
+  ]);
+  assert.deepEqual(effectivePlugins(plugins, ['files'], live), ['files']);
+  assert.deepEqual(effectivePlugins(plugins, ['hub', 'knowledge'], live), [
+    'hub',
+    'knowledge',
   ]);
   assert.deepEqual(
     effectivePlugins(plugins, ['files', 'hub'], [row({ enabled: false })]),
     ['files'],
   );
-  assert.deepEqual(effectivePlugins(plugins, [], [row()]), ['hub']);
   const registry = new PluginRegistry(plugins);
-  const shown = effectivePlugins(registry.plugins, ['files'], [row()]);
+  const shown = effectivePlugins(registry.plugins, ['files', 'hub'], live);
   assert.deepEqual(
     registry.pages(shown).map((item) => item.page.id),
     ['server'],
+  );
+});
+
+test('pairing reasons and a missing module use the interface language', () => {
+  setLanguage('zh-CN');
+  try {
+    assert.equal(pairing(paired, []).reason, '运行时扩展 枢纽 未安装');
+    assert.equal(
+      pairing(paired, [row({ enabled: false })]).reason,
+      '运行时扩展 枢纽 已关闭',
+    );
+    assert.equal(
+      pairing(paired, [row({ error: 'Error: Cannot find module' })]).reason,
+      '运行时扩展 枢纽 加载失败',
+    );
+    assert.equal(
+      extensionErrorText(
+        "Error: Cannot find module '/opt/circle/hub_text.js' imported from extension.ts",
+      ),
+      '找不到模块 /opt/circle/hub_text.js',
+    );
+  } finally {
+    setLanguage('en');
+  }
+  assert.match(
+    pairing(paired, []).reason,
+    /runtime extension hub is not installed/,
   );
 });

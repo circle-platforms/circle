@@ -126,6 +126,21 @@ export const pages: Record<string, string> = {
     '运行时工具和界面组件的生命周期彼此独立。',
   'extension reload recorded; no code was loaded':
     '已记录扩展重新加载请求；没有加载任何代码',
+  'reloading extensions': '正在重新加载扩展',
+  bundled: '内置',
+  'Turn an extension on here. Open its pages under interface components.':
+    '在这里打开扩展。它的页面在界面组件里打开。',
+  'runtime extension {name} is not installed': '运行时扩展 {name} 未安装',
+  'runtime extension {name} failed to load': '运行时扩展 {name} 加载失败',
+  'runtime extension {name} is {version}, this interface is {interface}':
+    '运行时扩展 {name} 的版本是 {version}，这个界面是 {interface}',
+  'runtime extension {name} is unversioned, this interface is {interface}':
+    '运行时扩展 {name} 没有版本，这个界面是 {interface}',
+  'runtime extension {name} is off': '运行时扩展 {name} 已关闭',
+  'cannot find module {module}': '找不到模块 {module}',
+  'could not load the extension: {error}': '扩展无法加载：{error}',
+  'this interface needs the Circle runtime': '这个界面需要 Circle 运行时',
+  'open extensions': '打开扩展',
   'runtime extensions': '运行时扩展',
   'interface components': '界面组件',
   '{n} command': '{n} 个命令',
@@ -189,12 +204,12 @@ export const pages: Record<string, string> = {
   version: '版本',
   runtime: '运行时',
   connected: '已连接',
-  host: '宿主',
-  'desktop application': '桌面应用',
+  host: '所在',
+  'desktop application': '桌面版',
   data: '数据',
-  'Circle desktop data folder': 'Circle 桌面数据文件夹',
+  'Circle desktop data folder': '桌面版的数据文件夹',
   'check for updates': '检查更新',
-  'update check requires a connected host': '检查更新需要已连接的宿主',
+  'update check requires a connected host': '检查更新需要桌面版',
   'check now': '立即检查',
   // commands and help
   'Every Circle command has a frontend entry point. Runtime actions are recorded as requests.':
@@ -241,6 +256,21 @@ export const pages: Record<string, string> = {
   'restart to update': '重启以更新',
   'try again': '重试',
   'update to {version}': '更新到 {version}',
+  'opened the release page in your browser': '已在浏览器中打开发布页',
+  'open release page': '打开发布页',
+  'Quit Circle before replacing it.': '替换前先退出 Circle。',
+  'Delete the old Circle-linux folder, then unpack. The archive always creates that folder, so unpacking beside it collides, and unpacking onto the old files drops setuid.':
+    '先删除旧的 Circle-linux 文件夹，再解压。压缩包总会解出这个文件夹，放在旁边会撞名，盖在旧文件上会丢掉 setuid。',
+  'Circle was updated. Give chrome-sandbox to root again, or it will not start:':
+    'Circle 已更新。需要重新把 chrome-sandbox 交给 root，否则无法启动：',
+  'Circle was updated to {version}. Give chrome-sandbox to root again, or it will not start:':
+    'Circle 已更新到 {version}。需要重新把 chrome-sandbox 交给 root，否则无法启动：',
+  'Give chrome-sandbox to root again, or Circle will not start:':
+    '需要重新把 chrome-sandbox 交给 root，否则 Circle 无法启动：',
+  'Then start Circle.': '然后再启动 Circle。',
+  'This copy will quit and replace {folder}. It will not start again until chrome-sandbox belongs to root.':
+    'Circle 会退出并替换 {folder}。在 chrome-sandbox 重新属于 root 之前，它不会自己启动。',
+  'quit and replace': '退出并替换',
   'downloading {percent}%': '正在下载 {percent}%',
   'reads only': '只读取',
   'changes files': '修改文件',
@@ -289,12 +319,13 @@ export const pages: Record<string, string> = {
   'reset key': '恢复默认',
   'that key is already used': '这个按键已经用过了',
   'clear the draft': '清空草稿',
-  'resume a session': '恢复一个会话',
+  'resume a session': '恢复会话',
+  'search history': '搜索历史',
   'next thinking depth': '下一个思考深度',
-  'focus the plan': '聚焦计划',
+  'focus the plan': '查看计划',
   'expand tool details': '展开工具详情',
   'copy the last answer': '复制上一条回答',
   'queue a follow-up': '排队一条追加消息',
   'paste an image': '粘贴图片',
-  suspend: '挂起',
+  suspend: '暂停进程',
 };

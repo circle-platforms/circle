@@ -477,6 +477,105 @@ test('a home message inlines text files and sends pictures as attachments', asyn
   ]);
 });
 
+test('a stopped reply shows one interrupt mark under its stats, and the estimate is not a minus', async () => {
+  const { createElement } = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { Tooltip } = await import('radix-ui');
+  const { RuntimeProvider } = await import('../src/app/context.tsx');
+  const { MessageView } = await import('../src/components/MessageView.tsx');
+  const { PreviewRuntime } = await import('../src/model/state.ts');
+  const { setLanguage } = await import('../src/i18n/index.ts');
+  const storage = {
+    getItem: () => null,
+    setItem: () => {},
+  } as unknown as Storage;
+  setLanguage('zh-CN', storage);
+  const assistant = {
+    id: 'a',
+    parentId: 'u',
+    role: 'assistant' as const,
+    text: 'partial answer',
+    at: '2026-10-16T00:00:12.000Z',
+    interrupted: true,
+    usage: {
+      input: 12476,
+      output: 162,
+      cost: 0.0181792,
+      elapsed: '12s',
+      estimated: true,
+    },
+  };
+  const runtime = new PreviewRuntime();
+  const view = (message: import('../src/model/types.ts').Message) =>
+    createElement(Tooltip.Provider, {
+      children: createElement(RuntimeProvider, {
+        runtime,
+        children: createElement(MessageView, {
+          message,
+          showThinking: false,
+          onAttachment: () => {},
+        }),
+      }),
+    });
+  const html = renderToStaticMarkup(view(assistant));
+  const summary = html.indexOf('data-testid="turn-summary"');
+  const mark = html.indexOf('已中断');
+  assert.ok(summary >= 0);
+  assert.ok(mark > summary);
+  assert.equal(html.split('已中断').length - 1, 1);
+  assert.match(html, /\$0\.0182~/);
+  assert.equal(html.includes('-$'), false);
+  assert.equal(html.includes('~$'), false);
+  assert.equal(html.includes('$-'), false);
+  const negative = renderToStaticMarkup(
+    view({
+      ...assistant,
+      usage: { ...assistant.usage, cost: -0.0182, estimated: false },
+    }),
+  );
+  assert.match(negative, /\$0\.0000/);
+  assert.equal(negative.includes('-$'), false);
+  assert.equal(negative.includes('$-'), false);
+  setLanguage('en', storage);
+});
+
+test('a page can drop a session error it is already showing', async () => {
+  const snapshot = createFixtures();
+  snapshot.runtime = { connected: true, configured: true };
+  const update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
+  const host = {
+    async runtimeCommand() {
+      return {
+        id: '1',
+        ok: false,
+        error:
+          '登录被拒绝（UNAUTHENTICATED）。请核对用户和密码，然后重新 /hub login。',
+      };
+    },
+    async runtimeState() {
+      return update;
+    },
+    onRuntime: () => () => {},
+  } as unknown as DesktopBridge;
+  const runtime = new LiveRuntime(host, update);
+  const refused =
+    '登录被拒绝（UNAUTHENTICATED）。请核对用户和密码，然后重新 /hub login。';
+  await assert.rejects(
+    runtime.request('extension-command', {
+      name: 'hub',
+      args: 'login http://127.0.0.1:7410 ada',
+    }),
+    { message: refused },
+  );
+  const session = () =>
+    runtime
+      .getSnapshot()
+      .sessions.find((item) => item.id === snapshot.activeSessionId);
+  assert.equal(session()?.actionError, refused);
+  runtime.dismissActionError();
+  assert.equal(session()?.actionError, undefined);
+});
+
 test('an untrusted project is not given a session from home', async () => {
   const { runtime, host } = live();
   assert.deepEqual(

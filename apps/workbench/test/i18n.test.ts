@@ -69,6 +69,16 @@ test('the same English has the same Chinese in every area', async () => {
   assert.deepEqual(conflicts, []);
 });
 
+test('Chinese sentences use a full-width question mark', () => {
+  const half = Object.entries(ZH_CN).filter(([, value]) =>
+    /[\u4e00-\u9fff][^。！？]*\?/.test(value),
+  );
+  assert.deepEqual(
+    half.map(([english]) => english),
+    [],
+  );
+});
+
 test('translations keep their placeholders', () => {
   for (const [english, chinese] of Object.entries(ZH_CN)) {
     const names = (text: string) =>

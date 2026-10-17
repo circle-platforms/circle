@@ -46,8 +46,9 @@ export interface WorkbenchPlugin {
   requires?: string[];
   /**
    * The runtime extension that is this plugin's other half, by name. A paired plugin shows
-   * only while that extension is installed, loaded, enabled and of the same version, and
-   * turning it on or off turns the extension on or off.
+   * only while it is switched on and that extension is installed, loaded, enabled and of
+   * the same version. Turning the page on turns the extension on if it was off. Turning
+   * it off turns the extension off only when no other page of that extension stays on.
    */
   runtimeExtension?: string;
   detail?: ComponentType<PluginDetailProps>;

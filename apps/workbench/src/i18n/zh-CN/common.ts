@@ -34,6 +34,11 @@ export const common: Record<string, string> = {
   working: '工作中',
   'waiting for you': '等待你处理',
   interrupted: '已中断',
+  // Kept out of conversation.ts: that file's copy is added by the upgrade notice.
+  '✖ Interrupted': '✖ 已中断',
+  'Native search unavailable: search quota exceeded':
+    '原生搜索不可用：搜索额度不足',
+  'Provider: DuckDuckGo': '提供方：DuckDuckGo',
   // why the core asks
   'changes files in the workspace': '修改工作区内的文件',
   'changes files outside the workspace': '修改工作区外的文件',
@@ -109,15 +114,15 @@ export const common: Record<string, string> = {
   'long reasoning, slower and uses more tokens':
     '很长的推理，更慢，也更费 token',
   'the longest reasoning the endpoint allows': '端点允许的最长推理',
-  considering: '琢磨',
-  analyzing: '分析',
-  brewing: '酝酿',
-  pondering: '沉思',
-  cogitating: '推敲',
-  reflecting: '反省',
-  processing: '处理',
-  evaluating: '评估',
-  examining: '检视',
+  considering: '思考',
+  analyzing: '思考',
+  brewing: '思考',
+  pondering: '思考',
+  cogitating: '思考',
+  reflecting: '思考',
+  processing: '思考',
+  evaluating: '思考',
+  examining: '思考',
   // a run of tool calls in one line
   'ran a command': '运行了 1 条命令',
   'ran {n} commands': '运行了 {n} 条命令',

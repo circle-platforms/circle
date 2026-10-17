@@ -513,13 +513,29 @@ export class ChromeBrowser implements BrowserPort {
       );
       return;
     }
+    // This process group was created by launch; never target the person's browser.
+    if (await this.signalGroup(child.pid!, force ? 'SIGKILL' : 'SIGTERM'))
+      return;
+    // Fixtures/embedders may supply a child without its own process group.
+    if (!this.exited(child)) child.kill(force ? 'SIGKILL' : 'SIGTERM');
+  }
+  /**
+   * Signals a process group launch created; false when none of its members runs. macOS
+   * refuses (EPERM) to signal a group whose members have all exited but are not reaped yet,
+   * as when the browser exits just as it is stopped: that group has stopped.
+   */
+  private async signalGroup(
+    pid: number,
+    signal: NodeJS.Signals,
+  ): Promise<boolean> {
     try {
-      // This process group was created by launch; never target the person's browser.
-      process.kill(-child.pid!, force ? 'SIGKILL' : 'SIGTERM');
+      process.kill(-pid, signal);
+      return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-      // Fixtures/embedders may supply a child without its own process group.
-      if (!this.exited(child)) child.kill(force ? 'SIGKILL' : 'SIGTERM');
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return false;
+      if (code === 'EPERM' && !(await this.groupRunning(pid))) return false;
+      throw error;
     }
   }
   private async groupRunning(pid: number): Promise<boolean> {
@@ -604,11 +620,7 @@ export class ChromeBrowser implements BrowserPort {
       if (failedRoot && !this.exited(failedRoot)) continue;
       try {
         if (await this.groupRunning(pid)) {
-          try {
-            process.kill(-pid, 'SIGKILL');
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-          }
+          await this.signalGroup(pid, 'SIGKILL');
           const deadline = Date.now() + timeout;
           while (await this.groupRunning(pid)) {
             if (Date.now() >= deadline)
@@ -1242,17 +1254,50 @@ export class ChromeBrowser implements BrowserPort {
       );
   }
   // ---- reaching into the page
-  private async world(tab: Tab): Promise<number> {
+  /**
+   * A request the page's own thread answers. A dialog the page opens holds that thread, and
+   * the browser answers only once the dialog is closed, which no one can do while Circle waits:
+   * the dialog opening (`opened`), or the tab closing, ends the wait at once.
+   */
+  private inPage<T>(
+    tab: Tab,
+    opened: Promise<void>,
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+    what = method,
+  ): Promise<T> {
+    return this.limit(
+      Promise.race([
+        this.send<T>(method, params, tab.session),
+        opened.then((): never => {
+          throw Error(
+            tab.closed ? 'the tab closed' : 'the page is waiting on a dialog',
+          );
+        }),
+      ]),
+      signal,
+      5000,
+      what,
+    );
+  }
+  private async world(
+    tab: Tab,
+    opened: Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<number> {
     if (tab.world !== undefined) return tab.world;
-    const { frameTree } = await this.send<{
+    const { frameTree } = await this.inPage<{
       frameTree: { frame: { id: string } };
-    }>('Page.getFrameTree', {}, tab.session);
-    const { executionContextId } = await this.send<{
+    }>(tab, opened, 'Page.getFrameTree', {}, signal);
+    const { executionContextId } = await this.inPage<{
       executionContextId: number;
     }>(
+      tab,
+      opened,
       'Page.createIsolatedWorld',
       { frameId: frameTree.frame.id, worldName: 'circle' },
-      tab.session,
+      signal,
     );
     tab.world = executionContextId;
     return executionContextId;
@@ -1263,24 +1308,20 @@ export class ChromeBrowser implements BrowserPort {
     signal?: AbortSignal,
     what = 'Runtime.evaluate',
   ): Promise<T> {
-    for (let attempt = 0; ; attempt++) {
-      const dialog = this.dialogOpens(tab);
-      let active = true;
-      try {
-        if (tab.closed) throw Error('the tab was closed');
-        if (tab.dialogs.length) throw Error('the page is waiting on a dialog');
-        const operation = (async () => {
-          const world = await this.world(tab);
-          // A blocked CDP world request can finish after a modal was answered.
-          // Its former caller has already returned: never execute its page code.
-          if (!active) throw Error('the page command is no longer active');
-          signal?.throwIfAborted();
-          if (tab.dialogs.length)
-            throw Error('the page is waiting on a dialog');
-          return this.send<{
+    if (tab.closed) throw Error('the tab closed');
+    if (tab.dialogs.length) throw Error('the page is waiting on a dialog');
+    // Callers ask a page no dialog holds; one it opens from here on ends the wait
+    const dialog = this.dialogOpens(tab);
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const world = await this.world(tab, dialog.opened, signal);
+        try {
+          const { result, exceptionDetails } = await this.inPage<{
             result: { value?: unknown };
             exceptionDetails?: { text?: string };
           }>(
+            tab,
+            dialog.opened,
             'Runtime.evaluate',
             {
               expression,
@@ -1288,40 +1329,27 @@ export class ChromeBrowser implements BrowserPort {
               awaitPromise: true,
               returnByValue: true,
             },
-            tab.session,
+            signal,
+            what,
           );
-        })();
-        const interrupted = dialog.opened.then(() => {
-          throw Error(
-            tab.closed
-              ? 'the tab was closed'
-              : 'the page is waiting on a dialog',
-          );
-        });
-        const { result, exceptionDetails } = await this.limit(
-          Promise.race([operation, interrupted]),
-          signal,
-          5000,
-          what,
-        );
-        if (exceptionDetails)
-          throw Error(exceptionDetails.text || 'browser page action failed');
-        return result.value as T;
-      } catch (error) {
-        // The document changed under the call: its world went with it.
-        if (
-          attempt === 0 &&
-          error instanceof Error &&
-          /context/i.test(error.message)
-        ) {
-          tab.world = undefined;
-          continue;
+          if (exceptionDetails)
+            throw Error(exceptionDetails.text || 'browser page action failed');
+          return result.value as T;
+        } catch (error) {
+          // The document changed under the call: its world went with it
+          if (
+            attempt === 0 &&
+            error instanceof Error &&
+            /context/i.test(error.message)
+          ) {
+            tab.world = undefined;
+            continue;
+          }
+          throw error;
         }
-        throw error;
-      } finally {
-        active = false;
-        dialog.stop();
       }
+    } finally {
+      dialog.stop();
     }
   }
 
@@ -1805,10 +1833,19 @@ export class ChromeBrowser implements BrowserPort {
     if (blocking) return dialogSnapshot(blocking);
     if (tab.failure)
       return `This site can't be reached: ${tab.failure.error} (${tab.failure.url}).`;
+    let page: string;
+    try {
+      page = await this.js<string>(tab, 'snapshot', {}, signal);
+    } catch (error) {
+      // The page opened a dialog while Circle read it: the dialog is what it shows now
+      const opened = tab.dialogs[0];
+      if (opened && !signal.aborted) return dialogSnapshot(opened);
+      throw error;
+    }
     return (
       (tab.warning
         ? `This is the browser's certificate warning, shown in place of ${tab.warning.url} (${tab.warning.error}). It is the browser's page, not the site's. Its advanced button shows the link to proceed; proceeding asks the user's approval.\n`
-        : '') + (await this.js<string>(tab, 'snapshot', {}, signal))
+        : '') + page
     );
   }
   private overlayColors() {

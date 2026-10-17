@@ -6,6 +6,7 @@ import {
   waitDesktopReady,
   freshBrowserCapture,
 } from './helpers/desktop-readiness.mjs';
+import { waitAnimationFrames } from './helpers/frame-readiness.mjs';
 import { createServer } from 'node:http';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
@@ -151,11 +152,13 @@ try {
     timeout: 60000,
   });
   page = await app.firstWindow();
+  // Starting the application, from its first window to one that renders, has one budget
+  const renderDeadline = Date.now() + 30000;
   page.setDefaultTimeout(10000);
   observePage(page, errors);
   await page
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
-    .waitFor({ timeout: 30000 });
+    .waitFor({ timeout: Math.max(1, renderDeadline - Date.now()) });
   // DOM readiness does not prove the initially hidden native window was shown.
   // This harness owns the window; disclose any intervention instead of treating
   // it as evidence that production's ready-to-show lifecycle worked.
@@ -190,6 +193,13 @@ try {
       stableMs: 0,
     },
   );
+  // A shown, laid-out window is not yet a rendering one. On a runner's first launch the
+  // GPU process can spend seconds loading Mesa, and until it is up the page runs no
+  // animation frames, so no click can find its element stable (#124).
+  startupReadiness.frames = await waitAnimationFrames(page, {
+    label: 'test native window renders animation frames',
+    timeoutMs: Math.max(1, renderDeadline - Date.now()),
+  });
   if (process.env.CIRCLE_DESKTOP_CHECK_NARROW) {
     await page.waitForURL(/^circle:\/\/workbench/);
     viewportSizing = await setViewport(app, page, { width: 1024, height: 650 });
@@ -588,10 +598,16 @@ try {
       0,
     );
   await page
-    .getByRole('checkbox', { name: 'enable files interface', exact: true })
+    .getByRole('checkbox', {
+      name: 'enable file and diff inspector interface',
+      exact: true,
+    })
     .uncheck();
   await page
-    .getByRole('checkbox', { name: 'enable files interface', exact: true })
+    .getByRole('checkbox', {
+      name: 'enable file and diff inspector interface',
+      exact: true,
+    })
     .check();
   assert.equal(
     await page.evaluate(() =>

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { testBrowserOptions } from './helpers/test-browser.ts';
+import { previewPort } from './preview-port.ts';
 
 const browserOptions = testBrowserOptions(chromium.executablePath());
 
@@ -12,7 +13,7 @@ test(
   { skip: browserOptions ? false : 'no supported test browser is installed' },
   async () => {
     const root = fileURLToPath(new URL('..', import.meta.url));
-    const port = 4217;
+    const port = await previewPort(process.env.CIRCLE_WORKBENCH_TEST_PORT);
     const server: ChildProcess = spawn(
       'npx',
       ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
@@ -72,6 +73,7 @@ test(
     });
     try {
       await ready;
+      // The preview follows the browser language. These steps use the English names.
       const page = await browser.newPage({
         locale: 'en-US',
         viewport: { width: 1000, height: 520 },

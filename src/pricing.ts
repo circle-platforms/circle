@@ -44,6 +44,9 @@ export function priceCall(facts: ModelFacts, usage: Usage): PriceReceipt {
         write * (rates.cache_write || rates.input) +
         tokens.output * rates.output) /
       1_000_000;
+    // Cache reads are clamped to the input above, and a cache rate is a price,
+    // not a credit, so this cannot go negative. A stopped turn stores cache
+    // reads as 0 and is charged at the input rate.
     if (Number.isFinite(value) && value >= 0) amount = value;
   }
   return {
@@ -103,6 +106,38 @@ export function messageCosts(messages: Message[]): CostSummary {
   }
   return total.snapshot();
 }
+/**
+ * Dollars to four places. An estimate ends with `~` (`$0.0182~`).
+ * A leading tilde sits where a minus sign would, so a stopped turn's
+ * estimate was read as a negative bill.
+ */
+export function formatUsdAmount(amount: number, estimated = false): string {
+  const text = `$${Math.max(0, amount).toFixed(4)}`;
+  return estimated ? `${text}~` : text;
+}
+
+/**
+ * The footer's cache cell. A stopped turn stores cache reads as 0 because the
+ * endpoint never reported them, and a finished call can omit cache fields.
+ * Neither is a measured 0.0% hit rate.
+ */
+export function cacheRateLabel(usage: {
+  input_tokens: number;
+  cache_read_tokens: number;
+  estimated_input_tokens?: number;
+  cache_unreported_input?: number;
+}): string {
+  const estimatedIn = usage.estimated_input_tokens ?? 0;
+  const unreported = usage.cache_unreported_input ?? 0;
+  const measuredIn = Math.max(0, usage.input_tokens - estimatedIn - unreported);
+  if (usage.input_tokens > 0 && measuredIn === 0) return 'N/A';
+  const cached = Math.min(
+    usage.cache_read_tokens,
+    measuredIn || usage.input_tokens,
+  );
+  const rate = measuredIn ? (cached / measuredIn) * 100 : 0;
+  return `${rate.toFixed(1)}%`;
+}
 export function formatCosts(
   summaries: CostSummary[],
   knownEmpty = false,
@@ -127,15 +162,16 @@ export function formatCosts(
       if (Number.isFinite(amount) && amount > 0) estimated = true;
   const text = ['USD', 'RMB']
     .filter((currency) => Object.hasOwn(amounts, currency))
-    .map(
-      (currency) =>
-        `${currency === 'USD' ? '$' : '¥'}${amounts[currency]!.toFixed(4)}`,
+    .map((currency) =>
+      currency === 'USD'
+        ? formatUsdAmount(amounts[currency]!)
+        : `¥${Math.max(0, amounts[currency]!).toFixed(4)}`,
     )
     .join(' + ');
-  // `~` marks dollars that include a stopped turn's estimate. `+` is only a
-  // call whose usage was reported and still had no price.
+  // `~` follows an amount that includes a stopped turn's estimate. `+` is
+  // only a call whose usage was reported and still had no price.
   return text
-    ? (estimated ? '~' : '') + text + (unpriced ? '+' : '')
+    ? text + (estimated ? '~' : '') + (unpriced ? '+' : '')
     : calls
       ? 'N/A'
       : knownEmpty

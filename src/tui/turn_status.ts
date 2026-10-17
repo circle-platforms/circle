@@ -1,7 +1,7 @@
 // What the screen keeps about the turn in progress and the turns before it, from the event
 // bus: the busy word and the tokens written so far, how long each answer thought, and the
 // line under each finished turn (`12s · ↑ 1.2k · ↓ 340`). Time spent waiting on you (an
-// approval, a question) does not count. Kept in memory only, as the Python version did: a
+// approval, a question) does not count. Kept in memory only: a
 // reopened session has no turn lines.
 import type { CircleEvent } from '../events.js';
 import type { Message, ToolModelCall } from '../types.js';
@@ -76,6 +76,8 @@ export class TurnStatus {
               ? calls.map((call) => call.cost)
               : [undefined];
         // Hosted tool charges can be unknown even when token prices are known.
+        // A receipt is a price, never a credit: a negative amount is not
+        // subtracted, so a stopped turn cannot show a minus before its estimate.
         for (const cost of receipts)
           turn.cost =
             turn.cost === null ||
@@ -84,7 +86,10 @@ export class TurnStatus {
             cost.amount === null ||
             cost.tool_fee_unknown
               ? null
-              : turn.cost + cost.amount;
+              : turn.cost +
+                (typeof cost.amount === 'number' && cost.amount < 0
+                  ? 0
+                  : cost.amount);
       }
     }
     if (subagent) {

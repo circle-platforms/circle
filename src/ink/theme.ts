@@ -121,7 +121,7 @@ export function frameStops(bg: string): [number, RGB][] {
     return [at, hexToRgb(colour)];
   });
 }
-// The colour at `u` (0–1, wrapping) along `stops`, channels truncated as in the Python version.
+// The colour at `u` (0–1, wrapping) along `stops`, channels truncated rather than rounded.
 export function gradientAt(stops: readonly [number, RGB][], u: number): RGB {
   const at = ((u % 1) + 1) % 1;
   for (let index = 1; index < stops.length; index++) {
@@ -172,6 +172,9 @@ export interface Palette {
   yellow: string;
   red: string;
   blue: string;
+  /** Built-ins and calls. Magenta, so they are not the cyan of a keyword. */
+  call: string;
+  call_hex: string;
   reset: string;
   read_bg: string;
   write_bg: string;
@@ -224,6 +227,8 @@ export function buildPalette(
     yellow: '\x1b[33m',
     red: '\x1b[31m',
     blue: '\x1b[36m',
+    call: '\x1b[35m',
+    call_hex: mixWithFloor('#c026d3', bg, 0.15, 4.5, surfaces),
     reset: RESET,
     read_bg: bgSgr(tints.read_bg),
     write_bg: bgSgr(tints.write_bg),

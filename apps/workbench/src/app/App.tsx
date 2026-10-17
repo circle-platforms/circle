@@ -105,30 +105,19 @@ import { ManagementPage } from '../features/Pages';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
+import { platformTitle, shellPageTitle } from '../plugins/labels';
 import { isSessionBrowser } from '../model/browser';
 import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
 import {
   effectiveBindings,
   DESKTOP_SEARCH_CHORD,
+  DESKTOP_SETTINGS_CHORD,
   formatChord,
   isDesktopNewSession,
   isDesktopSearch,
   isDesktopSettings,
   matchingAction,
 } from '../model/shortcuts';
-// The names of the pages in the top bar; any other page shows its id.
-const PAGE_NAMES: Partial<Record<string, () => string>> = {
-  sessions: () => t('sessions'),
-  models: () => t('models'),
-  skills: () => t('skills'),
-  commands: () => t('commands'),
-  mcp: () => t('mcp servers'),
-  extensions: () => t('extensions'),
-  tools: () => t('tools'),
-  approvals: () => t('approvals'),
-  settings: () => t('settings'),
-  help: () => t('help'),
-};
 function useNarrow() {
   return useSyncExternalStore(
     (listener) => {
@@ -330,6 +319,26 @@ export function App() {
   useEffect(() => {
     if (whole) wholeBox.current?.focus();
   }, [whole]);
+  // Escape leaves the full view from anywhere in the window. The panel's own
+  // handler only hears keys while the panel itself is focused.
+  useEffect(() => {
+    if (!whole) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Escape' ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey
+      )
+        return;
+      if (document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setFullView(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [whole]);
   const sessionSelection = useRef({ revision: 0, pending: Promise.resolve() });
   const selectSessionAndNavigate = (id: string) => {
     const revision = ++sessionSelection.current.revision;
@@ -380,6 +389,22 @@ export function App() {
     setDialogSelection(choice);
     setDialog(kind);
   };
+  // A secret belongs to one session. Open it only in the live app, and only
+  // while that session is the one on screen. The preview's sample request,
+  // and a request for a session the home page is not showing, stay closed.
+  const viewedSessionId = location.pathname.startsWith('/session/')
+    ? location.pathname.slice(9)
+    : undefined;
+  const pendingSecret = snapshot.interactions.find(
+    (item) =>
+      runtime.mode === 'live' &&
+      item.kind === 'secret' &&
+      item.status === 'pending' &&
+      item.sessionId === viewedSessionId,
+  );
+  useEffect(() => {
+    if (pendingSecret) onDialog('secret');
+  }, [pendingSecret?.id]);
   const onPanel = (kind: PanelId, choice = '') => {
     setPanel(kind);
     setSelection(choice);
@@ -1109,24 +1134,27 @@ export function App() {
         })),
         ...pluginPages.map(({ page }) => ({
           id: 'plugin-' + page.id,
-          label: page.title,
+          label: platformTitle(page.id, page.title),
           detail: t('platform plugin'),
           run: () => navigate('/page/' + page.id),
         })),
-        ...visibleSessions(snapshot.sessions).map((item) => ({
-          id: item.id,
-          label: sessionTitle(item.title),
-          detail: t('session · {workspace}', {
-            workspace: String(
-              snapshot.workspaces.find(
-                (workspace) => workspace.id === item.workspaceId,
-              )?.name,
-            ),
-          }),
-          run: () => perform(() => selectSessionAndNavigate(item.id)),
-        })),
+        ...visibleSessions(snapshot.sessions).map((item) => {
+          const workspace = snapshot.workspaces.find(
+            (entry) => entry.id === item.workspaceId,
+          );
+          return {
+            id: `session:${item.id}`,
+            label: sessionTitle(item.title),
+            detail: workspace
+              ? t('session · {workspace}', {
+                  workspace: workspaceLabel(workspace, snapshot.agents),
+                })
+              : t('session'),
+            run: () => perform(() => selectSessionAndNavigate(item.id)),
+          };
+        }),
         ...NAVIGATION.map((item) => ({
-          id: item.id,
+          id: `page:${item.id}`,
           label: item.label(),
           detail: t('page'),
           run: () => navigate('/page/' + item.id),
@@ -1134,27 +1162,32 @@ export function App() {
         ...snapshot.files
           .filter((item) => item.workspaceId === session.workspaceId)
           .map((item) => ({
-            id: item.id,
+            id: `file:${item.id}`,
             label: item.path,
             detail: t('file'),
             run: () => onFile(item.path),
           })),
         ...visibleSessions(snapshot.sessions).flatMap((item) =>
           historyMessages(item).map((message) => ({
-            id: message.id,
+            id: `message:${item.id}:${message.id}`,
             label: message.text,
             detail: t('message history'),
-            run: () => {
-              void runtime.selectSession(item.id);
-              if (message.role === 'user')
-                runtime.change((state) => {
-                  const target = state.sessions.find(
-                    (session) => session.id === item.id,
-                  );
-                  if (target) target.draft = message.text;
-                });
-              onSession();
-            },
+            run: () =>
+              perform(() =>
+                selectSessionAndNavigate(item.id).then(() => {
+                  if (
+                    message.role !== 'user' ||
+                    runtime.getSnapshot().activeSessionId !== item.id
+                  )
+                    return;
+                  runtime.change((state) => {
+                    const target = state.sessions.find(
+                      (session) => session.id === item.id,
+                    );
+                    if (target) target.draft = message.text;
+                  });
+                }),
+              ),
           })),
         ),
       ].filter(
@@ -1193,7 +1226,7 @@ export function App() {
                     {home
                       ? t('new session')
                       : page
-                        ? (PAGE_NAMES[page]?.() ?? page)
+                        ? shellPageTitle(page)
                         : file
                           ? file
                           : t('agent record')}
@@ -1226,7 +1259,7 @@ export function App() {
                 {!home && (
                   <span className="project-chip" title={workspace.path}>
                     <Folder size={12} />
-                    {workspace.name}
+                    {workspaceLabel(workspace, snapshot.agents)}
                     {workspace.branch && (
                       <>
                         <GitBranch size={11} />
@@ -1253,12 +1286,24 @@ export function App() {
                   </DropdownMenu.Trigger>
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content
-                      className="dropdown"
+                      className="dropdown app-menu"
                       align="end"
                       sideOffset={6}
                     >
                       <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
-                        {t('search')}
+                        <span>{t('search')}</span>
+                        {/* A visible hint. The item is still named by its words. */}
+                        <kbd aria-hidden="true">
+                          {formatChord(DESKTOP_SEARCH_CHORD)}
+                        </kbd>
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() => navigate('/page/settings')}
+                      >
+                        <span>{t('settings')}</span>
+                        <kbd aria-hidden="true">
+                          {formatChord(DESKTOP_SETTINGS_CHORD)}
+                        </kbd>
                       </DropdownMenu.Item>
                       <DropdownMenu.Item
                         onSelect={() =>

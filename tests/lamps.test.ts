@@ -17,6 +17,25 @@ import {
 import { emptyUsage, type Message } from '../src/types.js';
 import type { Todo } from '../src/tools.js';
 
+function withLocale<T>(locale: string, run: () => T): T {
+  const saved = {
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LANGUAGE: process.env.LANGUAGE,
+  };
+  process.env.LANG = locale;
+  delete process.env.LC_ALL;
+  delete process.env.LANGUAGE;
+  try {
+    return run();
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 test('a session that ends on a user prompt shows an interrupted marker', () => {
   setPalette(buildPalette(...DEFAULT_DARK));
   const state = screen();
@@ -30,9 +49,54 @@ test('a session that ends on a user prompt shows an interrupted marker', () => {
       internal: 'interrupted',
     },
   ];
-  const text = transcriptRows(state, 80).map(stripAnsi).join('\n');
+  withLocale('C', () => {
+    const text = transcriptRows(state, 80).map(stripAnsi).join('\n');
+    assert.match(text, /Interrupted/);
+    assert.equal(text.includes('previous turn was interrupted'), false);
+    assert.equal(text.split('Interrupted').length - 1, 1);
+  });
+  withLocale('zh_CN.UTF-8', () => {
+    const text = transcriptRows(state, 80).map(stripAnsi).join('\n');
+    assert.match(text, /已中断/);
+    assert.equal(text.includes('Interrupted'), false);
+  });
+});
+
+test('a stopped reply is marked from its own flag, and a finished one is not', () => {
+  setPalette(buildPalette(...DEFAULT_DARK));
+  const stopped = screen();
+  stopped.messages = [
+    { id: 'u', role: 'user', content: 'hello' },
+    {
+      id: 'a',
+      role: 'assistant',
+      content: 'partial answer',
+      interrupted: true,
+    },
+  ];
+  const text = withLocale('C', () =>
+    transcriptRows(stopped, 80).map(stripAnsi).join('\n'),
+  );
+  assert.match(text, /partial answer/);
   assert.match(text, /Interrupted/);
-  assert.equal(text.includes('previous turn was interrupted'), false);
+  assert.equal(text.split('Interrupted').length - 1, 1);
+  withLocale('zh_CN.UTF-8', () => {
+    const chinese = transcriptRows(stopped, 80).map(stripAnsi).join('\n');
+    assert.match(chinese, /已中断/);
+    assert.equal(chinese.split('已中断').length - 1, 1);
+  });
+  const finished = screen();
+  finished.messages = [
+    { id: 'u2', role: 'user', content: 'hello' },
+    { id: 'a2', role: 'assistant', content: 'all of it' },
+  ];
+  assert.equal(
+    transcriptRows(finished, 80)
+      .map(stripAnsi)
+      .join('\n')
+      .includes('Interrupted'),
+    false,
+  );
 });
 const PALETTES: [string, Palette][] = [
   ['dark', buildPalette(...DEFAULT_DARK)],
@@ -135,7 +199,7 @@ test('a call without a result is running only in the reply a running turn works 
     content: '',
     tool_calls: [{ id: call, name: 'read_file', args: { file_path: 'a' } }],
   });
-  // an older reply whose call never got a result (an interrupted turn, or a 0.5.0 session)
+  // an older reply whose call never got a result (an interrupted turn, or an older session)
   const messages: Message[] = [
     { id: 'u1', role: 'user', content: 'one' },
     reply('a1', 'lost'),

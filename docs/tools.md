@@ -46,7 +46,7 @@ Native search failure falls back automatically to DuckDuckGo's lite and HTML end
 
 | Tool | What it does | Asks | Limits |
 |---|---|---|---|
-| `write_file` | Create or overwrite a file. | yes | |
+| `write_file` | Create or overwrite a file. Overwriting an existing skill-run output still asks in `accept edits`. | yes | |
 | `edit_file` | Replace exact text in a file. Arguments: `file_path`, `old_string`, `new_string`, `replace_all`. | yes | The file must have been read with `read_file` first. Text that occurs more than once needs `replace_all`. |
 | `apply_patch` | Apply a multi-file patch in the `*** Begin Patch` format: add, update, move and delete files. | yes, and always when it deletes | Every part is checked before a file changes; if a write fails, the earlier ones are undone. |
 | `delete` | Delete a file or a folder and everything in it. | always | |
@@ -87,7 +87,7 @@ A tool that asks does so once for each site (scheme, host and port): the card na
 
 ### Dialogs, warnings and tabs
 
-A page's alert, confirm, prompt or "leave site?" question waits in its tab. In the desktop application it appears over that tab in the browser panel, on a picture of the page as it stopped, with where it came from, and while Circle is working also in the conversation; in the terminal's browser it is the browser's own dialog, in its window. You, or the model with `browser_dialog`, can answer it; the first answer counts, and the next result says who gave it. While a page waits on a dialog, the other tools that act on it refuse and say which dialog to answer.
+A page's alert, confirm, prompt or "leave site?" question waits in its tab. In the desktop application it appears over that tab in the browser panel, on a picture of the page as it stopped, with where it came from, and while Circle is working also in the conversation; in the terminal's browser it is the browser's own dialog, in its window. You, or the model with `browser_dialog`, can answer it; the first answer counts, and the next result says who gave it. While a page waits on a dialog, the other tools that act on it refuse and say which dialog to answer. In the terminal's browser, a dialog a page opens while an action is still reading it ends that action at once, and its result shows the dialog.
 
 A site, or a proxy, that asks for a user name and password (HTTP sign-in) waits the same way, as a dialog the result shows with the site and the realm. In the desktop application it appears over the tab with fields for the user name and password, and while Circle is working also in the conversation; what you type there goes to the site, and the model learns only that you answered. The model answers with `browser_dialog`: `text` is the user name, `password` a saved [secret](security.md#secrets-by-name) written `%NAME%`, never plain text. A user name or password the site does not accept makes it ask again, and the result says so. An answer goes only to the site the action was allowed on: a dialog in another tab, or a sign-in another site asks for, is answered after showing that tab, which asks about its site. In the terminal's browser a sign-in that one of Circle's actions meets waits for the model; when the model hands you the browser it becomes the browser's own dialog, in its window, as is a sign-in that comes while Circle is not acting.
 

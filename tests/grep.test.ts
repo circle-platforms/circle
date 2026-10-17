@@ -38,7 +38,7 @@ function grep(root: string) {
   };
 }
 
-test('grep has the Python schema: a literal pattern, output_mode and max_count', (t) => {
+test("grep has deepagents' schema: a literal pattern, output_mode and max_count", (t) => {
   const tool = buildTools(new Sandbox(scratch(t))).find(
     (tool) => tool.name === 'grep',
   )!;
@@ -175,7 +175,7 @@ test('grep shows paths outside the folder as they are and does not follow links 
   );
 });
 
-test('task requires subagent_type, as in the Python releases, and a call without it starts nothing', async (t) => {
+test('task requires subagent_type, and a call without it starts nothing', async (t) => {
   const root = scratch(t);
   const model = new ScriptedModel([
     {

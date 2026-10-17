@@ -12,6 +12,8 @@ import {
   projectDataDir,
 } from '../src/paths.js';
 import { Sandbox } from '../src/sandbox.js';
+import { CheckpointStore } from '../src/checkpoint_store.js';
+import { DatabaseSync } from 'node:sqlite';
 import { scratch } from './helpers.js';
 
 test('the legacy JavaScript realpath spelling cannot replace the native canonical spelling', async (t) => {
@@ -171,3 +173,32 @@ test(
     else t.diagnostic('A distinct Windows short-name alias was exercised.');
   },
 );
+
+test('sessions stored under a workspace spelling of an earlier release still list after the upgrade', async (t) => {
+  const home = scratch(t),
+    root = scratch(t),
+    workspace = join(root, 'Project');
+  mkdirSync(workspace);
+  // The other letter case reaches the same folder only on a case-insensitive file system.
+  const alias = join(root, 'project');
+  if (!fs.existsSync(alias)) return t.skip('case-sensitive file system');
+  const canonical = normalizeWorkspace(workspace);
+  const store = new CheckpointStore(home);
+  const id = store.create(workspace, 'model').id;
+  store.close();
+  // As 1.7 recorded it: the JavaScript realpath keeps the spelling it was given.
+  const db = new DatabaseSync(join(home, 'circle.sqlite'));
+  db.prepare('UPDATE sessions SET workspace=? WHERE id=?').run(alias, id);
+  db.exec('PRAGMA user_version = 4');
+  db.close();
+  const reopened = new CheckpointStore(home);
+  try {
+    assert.equal(reopened.get(id)?.workspace, canonical);
+    assert.deepEqual(
+      reopened.list(alias, false, true).map((session) => session.id),
+      [id],
+    );
+  } finally {
+    reopened.close();
+  }
+});

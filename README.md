@@ -40,8 +40,6 @@ The installers download the latest release for your platform, verify its SHA-256
 
 Restart your terminal after installing, then run `circle`. Upgrade with `circle update`; remove an installation with `circle uninstall` (`--purge` deletes the data folder too). See [Installation and updates](https://circle-platforms.github.io/circle/installation/) and [Releases](https://github.com/circle-platforms/circle/releases).
 
-**Coming from Circle 0.5.0 or older?** Those were written in Python. Run the install command above: it removes the Python version, keeps your settings, keys, skills and sessions, and installs the current release in its place. The old `circle update` cannot install 1.0.0 or later. Python extensions have to be rewritten; see [Extensions](https://circle-platforms.github.io/circle/extensions/).
-
 ## Desktop application
 
 Each release also has Circle as a desktop application: the same agent in its own window, with a browser panel you and Circle use together. [The desktop application](https://circle-platforms.github.io/circle/desktop/) says what the window shows. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`.
@@ -55,7 +53,7 @@ Each release also has Circle as a desktop application: the same agent in its own
 
 Take the file from [Releases](https://github.com/circle-platforms/circle/releases). It is signed ad hoc, not by Apple or Microsoft, so the first launch asks you to confirm. The Windows installer puts Circle in `C:\Program Files\Circle` and on the Start menu. On Linux the sandbox helper needs one root command. The steps are in [Installation](https://circle-platforms.github.io/circle/installation/#the-desktop-application).
 
-On macOS and Windows the application updates itself: settings → about → check now, then update and restart. On Linux, check now opens the release page and the folder is replaced by hand. Releases up to 1.2.0 do not update themselves.
+On macOS and Windows the application updates itself: settings → about → check now, then update and restart. On Linux the same check replaces a folder it can write. Circle 1.6.0 and the published 1.7.4 do not have that updater: one manual update, in [Installation](https://circle-platforms.github.io/circle/installation/#the-desktop-application), is what installs it. Releases up to 1.2.0 do not update themselves on any system.
 
 The window follows the system language the first time, and can be English or 简体中文. The terminal stays English. To run it from a checkout, see [apps/desktop](apps/desktop/README.md).
 
@@ -103,7 +101,7 @@ Save a password with `/secrets NAME`, or under settings → variables in the des
 
 ## Development
 
-Circle is written in TypeScript and runs on Node.js 24 or newer. Up to 0.5.0 it was written in Python; that code is at the tag `v0.5.0`.
+Circle is written in TypeScript and runs on Node.js 24 or newer.
 
 ```bash
 git clone https://github.com/circle-platforms/circle

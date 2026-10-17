@@ -58,6 +58,9 @@ import {
   type PickerOptions,
 } from '../ink/components/picker.js';
 import { welcomeRows } from '../ink/components/welcome.js';
+import { noticeLocale, type WhatsNewNotice } from '../whats_new.js';
+import { dismissWhatsNew, pendingWhatsNew } from '../whats_new_state.js';
+import { whatsNewRows } from './whats_new_rows.js';
 import {
   renderScreen,
   transcriptRows,
@@ -214,6 +217,10 @@ export class SessionApp {
     this.view.secretReady = value;
   }
   private ended = false;
+  /** Head last drawn for a view-only session, so the lock poll can refresh totals. */
+  private watchedHead = '';
+  /** /exit during a turn: keys stop here while the turn is cancelled. */
+  private leaving = false;
   private closing?: Promise<void>;
   private externalEditor = false;
   private animation?: NodeJS.Timeout;
@@ -272,7 +279,7 @@ export class SessionApp {
   private set jobWakeSnoozed(value: boolean) {
     this.view.jobWakeSnoozed = value;
   }
-  // As in 0.5.0, a background agent's card shows whether a turn runs or not: after the
+  // A background agent's card shows whether a turn runs or not: after the
   // turn's own cards (the queue takes those first) and once typing pauses.
   // The conversation browser, when a Chrome or Edge is installed
   private get interactions() {
@@ -397,6 +404,21 @@ export class SessionApp {
       this.done = resolve;
     });
     this.welcomeState = new WelcomeState(workspace);
+    this.whatsNew = pendingWhatsNew(home);
+  }
+  /** Upgrade notes still waiting. Shown under the welcome on an empty session. */
+  private whatsNew?: WhatsNewNotice;
+  /** The notice was painted on the home page. Dismiss or a real prompt marks it seen. */
+  private whatsNewShown = false;
+  private transcriptIsHome(): boolean {
+    const messages = this.runtime?.harness.messages ?? this.state.messages;
+    return !messages.some((message) => !message.internal);
+  }
+  private dismissNotice(): void {
+    if (!this.whatsNew) return;
+    dismissWhatsNew(this.home);
+    this.whatsNew = undefined;
+    this.repaint();
   }
   private makeView(): SessionView {
     const settings = this.settings;
@@ -465,6 +487,7 @@ export class SessionApp {
         else this.scrollBy(rows);
       },
       send: (kind) => this.send(kind),
+      watchLease: () => this.watchLease(),
       command: (name) =>
         void this.command(name, '').catch((error) => this.fail(error)),
       flash: (text) => this.flash(text),
@@ -487,6 +510,8 @@ export class SessionApp {
     this.started = true;
     this.theme.start();
     this.animation = setInterval(() => {
+      this.watchLease();
+      if (this.jobsList) this.refreshJobsList();
       if (
         [...this.views.values()].some(
           (view) => view.runtime?.busy || view.interactions.pendingCount > 0,
@@ -544,6 +569,7 @@ export class SessionApp {
       this.state.queue = this.runtime.harness.queuedShown;
       this.state.model = this.runtime.harness.model.model;
       this.state.planMode = this.runtime.harness.planMode;
+      this.state.viewOnly = this.runtime.viewOnly;
       this.state.autoMode = this.runtime.policy.yoloEnabled(
         this.runtime.session.id,
       );
@@ -552,6 +578,8 @@ export class SessionApp {
       this.state.busy = this.runtime.busy;
       const stats = this.runtime.stats();
       this.state.usage = { ...stats.usage };
+      this.state.usageUnreported =
+        this.state.busy && this.state.usage.input_tokens === 0;
       if (this.state.busy && this.turns.pendingOutput)
         this.state.usage.output_tokens += this.turns.pendingOutput;
       const facts =
@@ -571,16 +599,26 @@ export class SessionApp {
         lastAnswer,
         this.runtime.harness.model.model,
       );
-      // After /undo or /redo the meter is unknown until the next answer, as in 0.5.0.
+      // After /undo or /redo the meter is unknown until the next answer.
       if (this.meterCleared !== undefined) {
         if ((lastAnswer?.id ?? '') === this.meterCleared)
           this.state.contextInput = undefined;
         else this.meterCleared = undefined;
       }
-      this.state.costText = formatCosts(
-        [stats.costs],
-        facts.rates?.input !== undefined && facts.rates.output !== undefined,
-      );
+      const priced =
+        facts.rates?.input !== undefined && facts.rates.output !== undefined;
+      const pending = this.state.busy ? this.turns.pendingOutput : 0;
+      const costs = stats.costs;
+      if (pending && facts.rates?.output !== undefined) {
+        const extra = (pending * facts.rates.output) / 1_000_000;
+        costs.amounts = { ...costs.amounts };
+        costs.amounts.USD = (costs.amounts.USD ?? 0) + extra;
+        costs.estimated_amounts = {
+          ...costs.estimated_amounts,
+          USD: (costs.estimated_amounts?.USD ?? 0) + extra,
+        };
+      }
+      this.state.costText = formatCosts([costs], priced);
       this.state.jobs = this.runtime.jobs.list();
       const cache = this.subagentCache;
       if (
@@ -755,6 +793,18 @@ export class SessionApp {
         ) +
         palette().reset,
     );
+    if (this.whatsNew && this.transcriptIsHome()) {
+      this.whatsNewShown = true;
+      const blank = this.state.welcome.pop() ?? '';
+      this.state.welcome.push(
+        ...whatsNewRows(
+          this.whatsNew,
+          noticeLocale(process.env),
+          process.stdout.columns || 80,
+        ),
+        blank,
+      );
+    }
     if (!this.started || Date.now() - this.titleAt < 1000) return;
     this.titleAt = Date.now();
     const runtime = this.runtime;
@@ -854,21 +904,32 @@ export class SessionApp {
   // A notice goes after the message on screen when it came, not under everything that
   // arrives later: `''` before the first message, nothing when no session is open yet.
   private addNotice(text: string): void {
+    // A second Resumed line for the same switch is the same event drawn twice.
+    if (
+      /^(?:Resumed|Continued|Forked) /.test(text) &&
+      this.state.notices.at(-1) === text
+    )
+      return;
     const anchors = (this.state.noticeAnchors ??= []);
     while (anchors.length < this.state.notices.length) anchors.push(undefined);
     this.state.notices.push(text);
+    const trail =
+      /^(?:Resumed|Continued|Forked|Open in another terminal) /.test(text) ||
+      text === 'this session is writable again';
     anchors.push(
-      this.runtime
-        ? (this.undo
-            .visible(this.runtime.harness.messages)
-            .filter(
-              (message) =>
-                !message.internal ||
-                message.internal === 'job_notice' ||
-                message.internal === 'interrupted',
-            )
-            .at(-1)?.id ?? '')
-        : undefined,
+      trail
+        ? undefined
+        : this.runtime
+          ? (this.undo
+              .visible(this.runtime.harness.messages)
+              .filter(
+                (message) =>
+                  !message.internal ||
+                  message.internal === 'job_notice' ||
+                  message.internal === 'interrupted',
+              )
+              .at(-1)?.id ?? '')
+          : undefined,
     );
   }
   private fail(error: unknown): void {
@@ -882,7 +943,7 @@ export class SessionApp {
   }
   async initialize(force = false): Promise<boolean> {
     // Set up, but with no URL or model (an older release's OAuth sign-in): ask again, as
-    // print mode does and 0.5.0 did
+    // print mode does
     if (force || !isReady(this.settings)) {
       this.settingUp = !this.runtime;
       // One card, a step at a time; it says what Circle is doing while the endpoint lists
@@ -910,8 +971,8 @@ export class SessionApp {
     }
     return !this.ended;
   }
-  // The URL that answered (`<url>/v1` when only that lists models), as line-mode setup and
-  // 0.5.0 save it; the typed one when nothing answered.
+  // The URL that answered (`<url>/v1` when only that lists models), as line-mode setup
+  // saves it; the typed one when nothing answered.
   private saveConnection(flow: SetupFlow): void {
     const auth = flow.auth();
     withConnectionLock(this.home, () => {
@@ -943,7 +1004,7 @@ export class SessionApp {
     if (found && !this.ended) this.notice(updateNotice(found));
   }
   // The project's .circle/settings.json and `--model` over the saved settings, in memory only.
-  // Runs once the folder is trusted, as the Python releases did.
+  // Runs once the folder is trusted.
   applyRunSettings(modelOverride?: string): void {
     const { problems } = applyProjectSettings(
       this.settings,
@@ -1008,10 +1069,6 @@ export class SessionApp {
     } finally {
       this.connecting = false;
     }
-    for (const error of runtime.migration.errors)
-      this.fail(
-        `Could not migrate ${error.thread || 'legacy data'}: ${error.message}`,
-      );
     runtime.repairRecentTitles();
     this.repaint();
   }
@@ -1061,12 +1118,20 @@ export class SessionApp {
       },
       ...this.cardHooks(view),
       onExtensionStatus: () => this.inView(view, () => this.requestRender()),
+      onStoreBusy: () => {
+        this.state.storeWait = true;
+        this.repaint();
+      },
       openUrl: async (url) => {
         await openInBrowser(url);
         this.inView(view, () => this.flash('Opened in the browser'));
       },
     });
     view.runtime = runtime;
+    if (this.state.storeWait) {
+      this.state.storeWait = false;
+      this.repaint();
+    }
     this.views.set(runtime, view);
     if (browser) this.browsers.set(runtime, browser);
     this.subscriptions.set(
@@ -1186,7 +1251,7 @@ export class SessionApp {
               this.state.usage[key] += event.usage?.[key] ?? 0;
           } else if (event.kind === 'run_error') {
             // A stop is a dim marker. A key the endpoint turned down (401, 403)
-            // says where to change it, as in 0.5.0.
+            // says where to change it.
             this.state.streaming = '';
             this.state.thinking = '';
             const assistant = event.payload.completion_message_id
@@ -1200,8 +1265,16 @@ export class SessionApp {
               assistant && (assistant.completion || assistant.truncated)
                 ? completionFailure(assistant)
                 : undefined;
-            if (event.payload.interrupted) this.addNotice('✖ Interrupted');
-            else if (
+            if (event.payload.interrupted) {
+              const saved = this.runtime?.harness.messages.findLast(
+                (message) => !message.internal,
+              );
+              // The saved reply draws this mark itself. A second live notice
+              // shows it twice, and again after switching back to the session.
+              // A stop before any text has no reply, so the notice is the mark.
+              if (!(saved?.role === 'assistant' && saved.interrupted))
+                this.addNotice('✖ Interrupted');
+            } else if (
               !event.payload.completion_failure ||
               persisted?.code !== event.payload.completion_failure
             ) {
@@ -1266,11 +1339,45 @@ export class SessionApp {
     );
     return runtime;
   }
+  /** Redraw footer totals when the other terminal has saved messages. */
+  private refreshWatchedFooter(): void {
+    const runtime = this.runtime;
+    if (!runtime) return;
+    let stamp = '';
+    try {
+      const session = runtime.store.get(runtime.session.id);
+      stamp = `${session?.head ?? ''}:${session?.updated ?? 0}`;
+    } catch {
+      return;
+    }
+    if (stamp === this.watchedHead) return;
+    this.watchedHead = stamp;
+    this.repaint();
+  }
+  /**
+   * A view-only session stays that way until something asks again. The screen
+   * asks on its timer, and enter and picking the session ask at once.
+   */
+  private watchLease(): void {
+    const runtime = this.runtime;
+    if (this.ended || !runtime?.viewOnly || runtime.isClosing) return;
+    if (sessionOccupied(this.home, runtime.session.id)) {
+      this.refreshWatchedFooter();
+      return;
+    }
+    if (!runtime.resumeLease()) return;
+    const text = 'this session is writable again';
+    if (this.state.notices.at(-1) !== text) this.notice(text);
+    else this.repaint();
+  }
   private async selectRuntime(runtime: AgentRuntime): Promise<void> {
     await runtime.initialize();
     if (this.ended || this.sessions?.lifecycle(runtime.session.id) !== 'open')
       throw new Error('session is closing');
-    const old = this.runtime?.session.id;
+    const oldRuntime = this.runtime;
+    const old = oldRuntime?.session.id;
+    if (oldRuntime && oldRuntime !== runtime) oldRuntime.yieldLease();
+    runtime.resumeLease();
     this.state.picker = undefined;
     this.jobsList = undefined;
     if (this.view.suspendedDialog) {
@@ -1313,13 +1420,38 @@ export class SessionApp {
     // empty sessions, and a live conversation can still sit beside it.
     this.ensureSessions();
     const work = this.selecting.then(async () => {
-      const runtime = id
-        ? this.sessions!.open(this.workspace, id)
-        : this.sessions!.create(this.workspace);
+      let runtime: AgentRuntime;
+      try {
+        runtime = id
+          ? this.sessions!.open(this.workspace, id)
+          : this.sessions!.create(this.workspace);
+      } catch (error) {
+        if (!(error instanceof SessionOccupiedError) || !id) throw error;
+        runtime = this.openOccupied(id);
+      }
       await this.selectRuntime(runtime);
     });
     this.selecting = work.catch(() => {});
     return work;
+  }
+  /** History of a session another terminal is running. No lease, no writes. */
+  private openOccupied(id: string): AgentRuntime {
+    const source =
+      this.runtime?.store.get(id) ?? this.sessions?.get(id)?.store.get(id);
+    if (!source) throw new Error('unknown session');
+    const runtime = this.createRuntime(
+      {
+        ...this.runtimeOptions!,
+        workspace: source.workspace,
+        session: id,
+        sessionId: undefined,
+        continue: false,
+        fork: undefined,
+        inspect: true,
+      },
+      this.makeView(),
+    );
+    return this.ensureSessions().register(runtime);
   }
   private async deleteSession(id: string): Promise<boolean> {
     this.ensureSessions();
@@ -1704,7 +1836,7 @@ export class SessionApp {
     );
   }
   private handle(event: InputEvent): void {
-    if (this.ended || this.externalEditor) return;
+    if (this.ended || this.leaving || this.externalEditor) return;
     this.theme.feed(event);
     if (event.type === 'color' || event.type === 'scheme') return;
     if (event.type === 'mouse') {
@@ -2161,7 +2293,8 @@ export class SessionApp {
       else if (this.state.draft) {
         // One esc is not enough to throw the draft away. The second clears it,
         // and ctrl+y puts that draft back.
-        if (Date.now() - this.lastEscape < 800) {
+        // The hint stays for the flash (1.8s). A second esc in that time clears.
+        if (Date.now() - this.lastEscape < 1800) {
           this.composer.stashClear();
           this.flash('cleared · ctrl+y restores');
           this.lastEscape = 0;
@@ -2169,6 +2302,8 @@ export class SessionApp {
           this.lastEscape = Date.now();
           this.flash('press esc again to clear · ctrl+y restores');
         }
+      } else if (this.whatsNew && this.transcriptIsHome()) {
+        this.dismissNotice();
       } else if (
         Date.now() - this.lastEscape < 500 &&
         this.settings.double_escape !== 'none'
@@ -2297,7 +2432,7 @@ export class SessionApp {
       this.flash(`${model.model} does not read images`);
     this.repaint();
   }
-  // ctrl+c with nothing typed, as in 0.5.0: it stops a running turn; otherwise the first press
+  // ctrl+c with nothing typed: it stops a running turn; otherwise the first press
   // says how to leave and a second within 1.5 s leaves (so does one just after a stop).
   private ctrlC(): void {
     this.jobWakeSnoozed = true;
@@ -2318,7 +2453,7 @@ export class SessionApp {
       );
     }
   }
-  // esc or ctrl+c during a turn, as in 0.5.0: the turn stops, and the messages it had not read
+  // esc or ctrl+c during a turn: the turn stops, and the messages it had not read
   // yet are sent next, one turn each, the steering ones first.
   private interrupt(): void {
     const runtime = this.runtime;
@@ -2344,7 +2479,7 @@ export class SessionApp {
     });
   }
   // ctrl+z: the shell gets the terminal back and `fg` brings Circle back with the screen drawn
-  // again (0.5.0's _suspend). Windows has no job control.
+  // again. Windows has no job control.
   private suspend(): void {
     if (this.terminal.platform === 'win32') {
       this.flash('Suspending is not supported here');
@@ -2383,7 +2518,7 @@ export class SessionApp {
     this.screen.invalidate();
     this.repaint();
   }
-  // The open /jobs list takes the jobs as they are now (0.5.0's _refresh_jobs_picker). While
+  // The open /jobs list takes the jobs as they are now. While
   // it asks something (stop this job?) it is put aside and keeps following.
   private refreshJobsList(): void {
     const open = this.jobsList;
@@ -2496,15 +2631,24 @@ export class SessionApp {
           await this.command(slash.name, slash.args);
         } else {
           const word = commandWord(raw);
-          const close = word
-            ? closeMatch(word, [...knownSlashNames(), ...extra])
-            : '';
-          this.composer.set(raw);
-          this.flash(
-            `Unknown command /${word}` +
-              (close ? ` · did you mean /${close}?` : ' · /help lists them'),
-            4000,
-          );
+          const off = word ? this.runtime?.extensions.offCommand(word) : '';
+          if (word && off) {
+            this.composer.set('');
+            this.flash(
+              `Unknown command /${word} · turn it on with /extensions enable ${off}`,
+              4000,
+            );
+          } else {
+            const close = word
+              ? closeMatch(word, [...knownSlashNames(), ...extra])
+              : '';
+            this.composer.set(raw);
+            this.flash(
+              `Unknown command /${word}` +
+                (close ? ` · did you mean /${close}?` : ' · /help lists them'),
+              4000,
+            );
+          }
         }
       }
     } catch (error) {
@@ -2592,6 +2736,15 @@ export class SessionApp {
       }
       const word = commandWord(raw);
       if (word) {
+        const off = this.runtime?.extensions.offCommand(word);
+        if (off) {
+          // The draft was already taken. A turned-off bundled command is not a typo.
+          this.flash(
+            `Unknown command /${word} · turn it on with /extensions enable ${off}`,
+            4000,
+          );
+          return;
+        }
         // Not sent: the text comes back to the box to fix.
         const close = closeMatch(word, [...knownSlashNames(), ...extra]);
         this.composer.restore(raw, pastes);
@@ -2610,6 +2763,17 @@ export class SessionApp {
       (this.sessions && this.sessions.lifecycle(runtime.session.id) !== 'open')
     )
       return;
+    if (runtime.viewOnly) {
+      // The other terminal may have left since this one opened the session.
+      this.watchLease();
+      if (runtime.viewOnly) {
+        // The box already gave the text up. Put it back and say why it was not sent.
+        this.composer.restore(raw, pastes);
+        const text = `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`;
+        if (this.state.notices.at(-1) !== text) this.notice(text);
+        return;
+      }
+    }
     if (!plain && message.startsWith('!')) {
       try {
         await runtime.userShells.run(
@@ -2627,6 +2791,10 @@ export class SessionApp {
     }
     this.jobWakeSnoozed = false;
     this.jobWakeCount = 0;
+    // The notice was on the home page and a session is starting. Hiding it
+    // because the transcript is no longer empty is not enough: /new would
+    // show it again. Dismiss or this prompt marks it seen.
+    if (this.whatsNewShown) this.dismissNotice();
     if (shown !== message)
       runtime.harness.shown.set(message, { display: shown, pastes });
     if (runtime.busy) {
@@ -2723,6 +2891,7 @@ export class SessionApp {
       },
       selected: () => owner === this.selectedView,
       refreshConnection: () => this.refreshConnections(),
+      watchLease: () => this.watchLease(),
       sessionStatus: (id) => {
         if (this.sessions?.lifecycle(id) === 'deleting') return 'deleting';
         const runtime = this.sessions?.get(id);
@@ -2811,10 +2980,9 @@ export class SessionApp {
       trustWorkspace: () => this.trustWorkspace(),
       clipboard: async (text) => {
         if (await this.clipboard.copyNative(text)) return true;
-        // No local tool (a Linux terminal without wl-copy or xclip). OSC 52 still
-        // reaches the terminal; the file fallback remains when that is all we have.
-        await this.clipboard.copySelection(text);
-        return false;
+        // No local tool (tmux, ssh, a Linux terminal without wl-copy). OSC 52
+        // asks the terminal for the clipboard. The file is only the last resort.
+        return (await this.clipboard.copySelection(text)).length > 0;
       },
       followJobs: (list, rows) => {
         owner.jobsList = { list, rows };
@@ -2939,12 +3107,14 @@ export class SessionApp {
     const view = this.view;
     if (!this.runtime) return;
     if (['login', 'logout'].includes(name) && this.connectionBusy()) {
-      this.flash(
-        'Busy · wait for all sessions to finish before changing the connection',
-      );
+      const reason =
+        'Busy · wait for all sessions to finish before changing the connection';
+      this.notice(reason);
+      this.flash(reason, 4000);
+      if (!this.state.draft) this.composer.restore(`/${name}`);
       return;
     }
-    if (await runCommand(this.commandHost(), name, args, () => this.exit(0)))
+    if (await runCommand(this.commandHost(), name, args, () => this.leave()))
       return;
     try {
       await this.inView(view, () => this.ownCommand(name, args));
@@ -3106,9 +3276,8 @@ export class SessionApp {
     this.flash(`Unknown command /${name} · try /help`);
   }
   // /login: setup's questions asked in a list, the URL and the key (as dots) on its search
-  // line (0.5.0's _open_login_picker, without its first choice between an API key and OAuth:
-  // Circle signs in only with an API URL and key). Nothing is saved before a model is chosen;
-  // esc on the key goes back to the URL, esc on the URL leaves.
+  // line; Circle signs in only with an API URL and key. Nothing is saved before a model is
+  // chosen; esc on the key goes back to the URL, esc on the URL leaves.
   private login(): void {
     const view = this.view;
     const flow = new SetupFlow(this.home);
@@ -3183,7 +3352,7 @@ export class SessionApp {
             return;
           }
           this.saveConnection(flow);
-          // The model chosen here wins over `--model` and the project's, as in 0.5.0
+          // The model chosen here wins over `--model` and the project's
           const chosen = this.settings.auth.model;
           this.applyRunSettings();
           this.settings.auth.model = this.state.model = chosen;
@@ -3295,7 +3464,7 @@ export class SessionApp {
     this.repaint();
     return true;
   }
-  /** A press on a subagent's row in the strip opens its page, as in 0.5.0. */
+  /** A press on a subagent's row in the strip opens its page. */
   private stripClick(event: Extract<InputEvent, { type: 'mouse' }>): boolean {
     const strip = this.state.stripAgents;
     if (!strip || event.action !== 'press' || event.button !== 0) return false;
@@ -3377,7 +3546,7 @@ export class SessionApp {
     );
   }
   // $VISUAL, $EDITOR, or nvim, vim or nano (notepad on Windows), on the draft in full; what
-  // it leaves in the file comes back to the box, whatever the editor exits with (0.5.0).
+  // it leaves in the file comes back to the box, whatever the editor exits with.
   private async editor(): Promise<boolean> {
     if (this.externalEditor) throw new Error('an editor is already running');
     const words = editorCommand(process.env, this.terminal.platform);
@@ -3418,6 +3587,29 @@ export class SessionApp {
       rmSync(directory, { recursive: true, force: true });
     }
   }
+  /** /exit. A running turn is stopped first, and the screen says so. */
+  private leave(): void {
+    if (this.ended || this.leaving) return;
+    const runtimes = this.sessions
+      ? [...this.sessions.values()]
+      : this.runtime
+        ? [this.runtime]
+        : [];
+    if (!runtimes.some((runtime) => runtime.busy && !runtime.viewOnly)) {
+      this.exit(0);
+      return;
+    }
+    this.leaving = true;
+    this.notice('Leaving · stopping the turn');
+    this.repaint();
+    void Promise.allSettled(
+      runtimes.map((runtime) =>
+        runtime.busy && !runtime.viewOnly
+          ? runtime.cancel({ keepQueue: false })
+          : Promise.resolve(),
+      ),
+    ).finally(() => this.exit(0));
+  }
   exit(code: number): void {
     if (this.ended) return;
     this.ended = true;
@@ -3454,7 +3646,7 @@ export class SessionApp {
     this.terminal.write(
       '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[23;0t',
     );
-    // As 0.5.0 did once the screen was gone: the jobs that leaving stopped, then the
+    // Once the screen is gone: the jobs that leaving stopped, then the
     // command that opens this conversation again.
     const runtime = this.runtime;
     const jobs = [...this.views.keys()].reduce(

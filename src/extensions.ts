@@ -18,11 +18,12 @@ import type {
   Tool,
   ToolContext,
 } from './types.js';
-import { isRecord } from './settings.js';
+import { isRecord, saveSettingsChange } from './settings.js';
 import { Watch, waitWatch, abortable } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
+import { ExtensionError } from './extension_error.js';
 import {
   SecretPromptError,
   cancelRequest,
@@ -32,12 +33,18 @@ import {
 } from './secret_prompt.js';
 
 export class ToolError extends Error {}
-export class ExtensionError extends Error {}
+export { ExtensionError };
 export interface CommandContext {
   workspace: string;
   toast(message: string): void;
   append(message: string): void;
   sendUserMessage(message: string): void;
+  /**
+   * A secret the caller already collected, such as a password typed on the hub
+   * page. It is not a slash argument: the transcript, the view and events must
+   * not contain it. Empty means the command asks itself.
+   */
+  secret?: string;
 }
 export interface ExtensionCommand {
   name: string;
@@ -94,6 +101,8 @@ export interface Extension {
   /** From an optional extension.json beside the entry file. */
   version: string;
   description: string;
+  /** Slash commands named in extension.json, even while the extension is off. */
+  declaredCommands: string[];
   enabled: boolean;
   error: string;
   warnings: string[];
@@ -259,12 +268,39 @@ export class ExtensionAPI {
     return structuredClone(this.services?.settings ?? {});
   }
   /**
+   * Merge keys into this extension's entry in settings.json. `enabled` stays as
+   * it is unless the patch sets it. The running copy is updated too.
+   */
+  saveSettings(patch: Record<string, unknown>): void {
+    if (!this.services?.home)
+      throw new ExtensionError('this interface has no settings file');
+    if (!isRecord(patch)) throw new ExtensionError('settings are an object');
+    const name = this.ext.name;
+    const running = { ...(this.services.settings ?? {}) };
+    saveSettingsChange(this.services.home, (settings) => {
+      // The file wins where it already has a value. The running copy fills a
+      // key the file does not have yet, so remembering a URL does not turn the
+      // extension off.
+      settings.extensions[name] = {
+        ...running,
+        ...(settings.extensions[name] ?? {}),
+        ...patch,
+      };
+    });
+    if (!this.services.settings) this.services.settings = {};
+    Object.assign(this.services.settings, structuredClone(patch));
+  }
+  /** Hide a value in status and views, the way a secret from askSecret is hidden. */
+  conceal(value: string): void {
+    if (typeof value === 'string' && value) this.ext.mask.remember(value);
+  }
+  /**
    * Ask the user for a value on a masked card. It goes back to the extension only: not into
    * the conversation, the session or a file. null when the user cancels or does not answer.
    */
   async askSecret(
     question: string,
-    options: { mask?: boolean; signal?: AbortSignal } = {},
+    options: { mask?: boolean; conceal?: boolean; signal?: AbortSignal } = {},
   ): Promise<string | null> {
     if (typeof question !== 'string' || !question.trim())
       throw new ExtensionError('askSecret needs a question');
@@ -296,7 +332,8 @@ export class ExtensionAPI {
     });
     try {
       const [value] = await Promise.all([answering, presenting]);
-      this.ext.mask.remember(value);
+      // A user name is asked on the same card and must stay visible afterwards.
+      if (options.conceal !== false) this.ext.mask.remember(value);
       return value;
     } catch (error) {
       options.signal?.throwIfAborted();
@@ -424,12 +461,14 @@ export class ExtensionAPI {
         this.tracked(
           (async () => {
             try {
+              if (context.secret) mask.remember(context.secret);
               await handler(args, {
                 workspace: context.workspace,
                 toast: (message) => context.toast(mask.text(String(message))),
                 append: (message) => context.append(mask.text(String(message))),
                 sendUserMessage: (message) =>
                   context.sendUserMessage(mask.text(String(message))),
+                secret: context.secret,
               });
             } catch (error) {
               throw this.masked(error);
@@ -523,6 +562,15 @@ export interface ExtensionHostOptions {
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => JobOwner;
 }
+function isEnotdir(error: unknown): boolean {
+  return (
+    !!error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code: unknown }).code === 'ENOTDIR'
+  );
+}
+
 export class ExtensionHost {
   extensions: Extension[] = [];
   // Fired by close(); every extension's api.signal.
@@ -541,14 +589,54 @@ export class ExtensionHost {
       trustedBundled: boolean;
     }
   >();
-  constructor(readonly options: ExtensionHostOptions) {}
+  constructor(readonly options: ExtensionHostOptions) {
+    // Listed before load, still with nothing registered, once the folder is
+    // trusted. The desktop publishes a snapshot before integrations finish;
+    // the bundled hub is on that first frame instead of an empty page that
+    // fills in later. An untrusted workspace is not scanned. A root that is
+    // not a directory fails the same way from load(), which is what
+    // initialize() reports.
+    if (!options.trusted) return;
+    try {
+      this.extensions = this.discover().map((found) => this.unloaded(found));
+    } catch (error) {
+      if (!isEnotdir(error)) throw error;
+    }
+  }
+  private unloaded(
+    discovered: ReturnType<ExtensionHost['discover']>[number],
+  ): Extension {
+    const setting = this.options.settings?.[discovered.name]?.enabled;
+    return {
+      ...discovered,
+      enabled:
+        discovered.source === 'bundled' ? setting === true : setting !== false,
+      error: '',
+      warnings: [],
+      tools: [],
+      commands: [],
+      middleware: [],
+      subagents: [],
+      renderers: new Map(),
+      handlers: new Map(),
+      mask: new SecretMask(),
+    };
+  }
   discover(): Pick<
     Extension,
-    'name' | 'source' | 'path' | 'version' | 'description'
+    'name' | 'source' | 'path' | 'version' | 'description' | 'declaredCommands'
   >[] {
     const found = new Map<
       string,
-      Pick<Extension, 'name' | 'source' | 'path' | 'version' | 'description'>
+      Pick<
+        Extension,
+        | 'name'
+        | 'source'
+        | 'path'
+        | 'version'
+        | 'description'
+        | 'declaredCommands'
+      >
     >();
     // Later roots replace earlier ones of the same name: yours over Circle's, the project's
     // over yours.
@@ -594,23 +682,7 @@ export class ExtensionHost {
     ));
     for (const discovered of this.discover()) {
       this.controller.signal.throwIfAborted();
-      const setting = this.options.settings?.[discovered.name]?.enabled;
-      const ext: Extension = {
-        ...discovered,
-        enabled:
-          discovered.source === 'bundled'
-            ? setting === true
-            : setting !== false,
-        error: '',
-        warnings: [],
-        tools: [],
-        commands: [],
-        middleware: [],
-        subagents: [],
-        renderers: new Map(),
-        handlers: new Map(),
-        mask: new SecretMask(),
-      };
+      const ext: Extension = this.unloaded(discovered);
       loaded.push(ext);
       if (!ext.enabled) continue;
       await this.activate(ext, tools, commands);
@@ -820,6 +892,18 @@ export class ExtensionHost {
         .map((command) => [command.name, command]),
     );
   }
+  /**
+   * A bundled extension that names this slash command in extension.json and is
+   * turned off. The command itself is not registered until `/extensions enable`.
+   */
+  offCommand(name: string): string | undefined {
+    return this.extensions.find(
+      (ext) =>
+        ext.source === 'bundled' &&
+        !ext.enabled &&
+        ext.declaredCommands.includes(name),
+    )?.name;
+  }
   subagents(available: Tool[]): { spec: SubagentSpec; tools: Tool[] }[] {
     const byName = new Map(available.map((tool) => [tool.name, tool]));
     const agents = new Map<string, { spec: SubagentSpec; tools: Tool[] }>();
@@ -977,18 +1061,24 @@ export class ExtensionHost {
     if (!ext.warnings.includes(note)) ext.warnings.push(note);
   }
   describe(): string {
+    const counted = (count: number, one: string, many: string): string =>
+      `${count} ${count === 1 ? one : many}`;
     if (!this.extensions.length)
       return 'No extensions. Put an extension.ts or extension.js in each extension folder.';
     return this.extensions
       .map(
         (ext) =>
-          `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${!ext.enabled ? (ext.source === 'bundled' ? `off · /extensions enable ${ext.name}` : 'off') : ext.error ? 'failed to load: ' + ext.error : `${ext.tools.length} tools · ${ext.commands.length} commands`}${ext.description ? '\n  ' + ext.description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`,
+          `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${!ext.enabled ? (ext.source === 'bundled' ? `off · /extensions enable ${ext.name}` : 'off') : ext.error ? 'failed to load: ' + ext.error : `${counted(ext.tools.length, 'tool', 'tools')} · ${counted(ext.commands.length, 'command', 'commands')}`}${ext.description ? '\n  ' + ext.description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`,
       )
       .join('\n');
   }
 }
-// extension.json is optional: { "version": "1.2.0", "description": "..." }, shown in /extensions.
-function manifest(path: string): { version: string; description: string } {
+// extension.json is optional: { "version": "1.2.0", "description": "...", "commands": ["hub"] }.
+function manifest(path: string): {
+  version: string;
+  description: string;
+  declaredCommands: string[];
+} {
   try {
     const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
     if (isRecord(value))
@@ -999,9 +1089,18 @@ function manifest(path: string): { version: string; description: string } {
           typeof value.description === 'string'
             ? value.description.slice(0, 200)
             : '',
+        declaredCommands: Array.isArray(value.commands)
+          ? value.commands
+              .filter(
+                (name): name is string =>
+                  typeof name === 'string' &&
+                  /^[a-z][a-z0-9_-]{0,63}$/.test(name),
+              )
+              .slice(0, 32)
+          : [],
       };
   } catch {
     /* No manifest, or one that cannot be read: the extension still loads. */
   }
-  return { version: '', description: '' };
+  return { version: '', description: '', declaredCommands: [] };
 }

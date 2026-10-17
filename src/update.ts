@@ -19,7 +19,7 @@ import {
 } from './install_layout.js';
 import { VERSION, validVersion, compareVersions } from './version.js';
 
-// ── the daily reminder ── shares update-check.json with the Python releases.
+// ── the daily reminder ── remembers the last answer in update-check.json.
 const CACHE_FILE = 'update-check.json';
 const CHECK_INTERVAL_S = 24 * 60 * 60;
 export function updateCheckEnabled(settings: {
@@ -220,8 +220,22 @@ export async function updateInstalled(
     out = process.stdout,
   }: { root?: string; out?: UpdateOutput } = {},
 ): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    out.write(
+      [
+        'usage: circle update [version] [--check]',
+        '',
+        'Download a Circle release and install it over this installation.',
+        '  circle update           the latest release',
+        '  circle update 1.2.3     that version',
+        '  circle update --check   print the installed and available versions',
+        '',
+      ].join('\n'),
+    );
+    return 0;
+  }
   const check = args.includes('--check');
-  // `--version X` is how the Python releases took a version.
+  // The version comes alone or after `--version`.
   const versions = args.flatMap((arg, index) =>
     arg === '--check' || arg === '--version'
       ? []

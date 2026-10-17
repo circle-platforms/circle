@@ -1,13 +1,13 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { DATABASE_BUSY_MESSAGE, uiText } from './locale.js';
 import { ensureHome, normalizeWorkspace } from './paths.js';
 import type { Message } from './types.js';
-import type { LegacyImportPlan } from './legacy_sessions.js';
-import { createHash } from 'node:crypto';
 import {
   acquireSessionLease,
   sessionOccupied,
+  sweepStaleSessionLocks,
   type SessionLease,
 } from './session_lock.js';
 import { InputOutbox } from './input_outbox.js';
@@ -73,6 +73,147 @@ export const emptyContextState = (): ContextState => ({
   stripThinkingIds: [],
   offloaded: {},
 });
+const STORE_BUSY_MS = 5000;
+const STORE_OPEN_ATTEMPTS = 6;
+
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isDatabaseLocked(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const errno = (error as { errcode?: number }).errcode;
+  // SQLITE_BUSY is 5, SQLITE_LOCKED is 6.
+  if (errno === 5 || errno === 6) return true;
+  return /database is locked|database is busy|SQLITE_BUSY|SQLITE_LOCKED/i.test(
+    error.message,
+  );
+}
+
+/** What to show when opening the store still fails after waiting. Other errors pass through. */
+export function databaseOpenError(error: unknown): Error {
+  if (!isDatabaseLocked(error))
+    return error instanceof Error ? error : new Error(String(error));
+  const friendly = new Error(uiText(DATABASE_BUSY_MESSAGE));
+  friendly.cause = error;
+  return friendly;
+}
+
+function openDatabase(
+  path: string,
+  onBusy?: () => void,
+  home?: string,
+): DatabaseSync {
+  let last: unknown;
+  let told = false;
+  for (let attempt = 0; attempt < STORE_OPEN_ATTEMPTS; attempt++) {
+    let db: DatabaseSync | undefined;
+    // The first try returns at once, so a held lock can say it is waiting
+    // before the longer tries. A free database never takes that pause.
+    const timeout = told ? STORE_BUSY_MS : 0;
+    try {
+      // `timeout` applies before the first statement. `journal_mode` can still
+      // return busy at once, so a locked open is tried again.
+      db = new DatabaseSync(path, { timeout });
+      db.exec(
+        `PRAGMA busy_timeout = ${timeout}; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;
+      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL, head TEXT, created REAL NOT NULL, updated REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, parent TEXT REFERENCES checkpoints(id), message TEXT NOT NULL, created REAL NOT NULL);
+      CREATE INDEX IF NOT EXISTS checkpoints_session ON checkpoints(session_id);
+      CREATE TABLE IF NOT EXISTS context_projections (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, at_checkpoint TEXT NOT NULL, summary TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS context_versions (version INTEGER PRIMARY KEY AUTOINCREMENT, checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id) ON DELETE CASCADE, state TEXT NOT NULL, created REAL NOT NULL);
+      CREATE INDEX IF NOT EXISTS context_versions_checkpoint ON context_versions(checkpoint_id, version);
+      CREATE TABLE IF NOT EXISTS labels (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY(session_id, message_id));
+      `,
+      );
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const version = Number(
+          db.prepare('PRAGMA user_version').get()?.user_version ?? 0,
+        );
+        const columns = db.prepare('PRAGMA table_info(sessions)').all();
+        if (!columns.some((row) => row.name === 'parent_id'))
+          db.exec('ALTER TABLE sessions ADD COLUMN parent_id TEXT');
+        if (!columns.some((row) => row.name === 'title_locked'))
+          db.exec(
+            'ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0',
+          );
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_id);',
+        );
+        // Upgrade native children once, without changing history or replaying work.
+        if (version < 4)
+          for (const row of db
+            .prepare(
+              'SELECT c.session_id,v.state FROM context_versions v JOIN checkpoints c ON c.id=v.checkpoint_id ORDER BY v.version',
+            )
+            .all()) {
+            const state = JSON.parse(String(row.state)) as ContextState;
+            for (const child of state.subagentSessionIds ?? [])
+              if (child !== row.session_id)
+                db.prepare(
+                  'UPDATE sessions SET parent_id=? WHERE id=? AND parent_id IS NULL',
+                ).run(String(row.session_id), child);
+          }
+        // Workspaces are now stored with the operating system's own spelling (realpath
+        // .native). Rows written by 1.7 and older may differ only in letter case or a
+        // Windows short name: rewrite them once so their sessions still list and resume.
+        // An older release that opens the store sets the version back to 4; this then
+        // runs again, and it changes nothing for rows already rewritten.
+        if (version < 5)
+          for (const row of db
+            .prepare('SELECT DISTINCT workspace FROM sessions')
+            .all()) {
+            const stored = String(row.workspace);
+            let current: string;
+            try {
+              current = normalizeWorkspace(stored);
+            } catch {
+              continue;
+            }
+            if (current !== stored)
+              db.prepare(
+                'UPDATE sessions SET workspace=? WHERE workspace=?',
+              ).run(current, stored);
+          }
+        db.exec('PRAGMA user_version = 5; COMMIT');
+      } catch (error) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          /* No transaction when the lock failed on BEGIN. */
+        }
+        throw error;
+      }
+      if (timeout !== STORE_BUSY_MS)
+        db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_MS}`);
+      // A turn that died after the user message was saved records its head here.
+      // Both this statement and the lock sweep stay inside the retry: outside
+      // it, a held lock exits with "database is locked" again.
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS open_turns (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, head TEXT, started REAL NOT NULL)`,
+      );
+      if (home) sweepStaleSessionLocks(home);
+      return db;
+    } catch (error) {
+      try {
+        db?.close();
+      } catch {
+        /* The failed connection cannot be closed. */
+      }
+      last = error;
+      if (!isDatabaseLocked(error) || attempt === STORE_OPEN_ATTEMPTS - 1)
+        throw databaseOpenError(error);
+      if (!told) {
+        told = true;
+        onBusy?.();
+      }
+      pause(40 * (attempt + 1));
+    }
+  }
+  throw databaseOpenError(last);
+}
+
 export class CheckpointStore {
   readonly inputs: InputOutbox;
   private db: DatabaseSync;
@@ -103,59 +244,13 @@ export class CheckpointStore {
   get version(): number {
     return this.writeVersion;
   }
-  constructor(home?: string) {
+  constructor(home?: string, hooks?: { onBusy?: () => void }) {
     this.home = home;
-    this.db = new DatabaseSync(
+    this.db = openDatabase(
       home ? join(ensureHome(home), 'circle.sqlite') : ':memory:',
+      hooks?.onBusy,
+      home,
     );
-    this.db
-      .exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;
-      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL, head TEXT, created REAL NOT NULL, updated REAL NOT NULL);
-      CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, parent TEXT REFERENCES checkpoints(id), message TEXT NOT NULL, created REAL NOT NULL);
-      CREATE INDEX IF NOT EXISTS checkpoints_session ON checkpoints(session_id);
-      CREATE TABLE IF NOT EXISTS context_projections (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, at_checkpoint TEXT NOT NULL, summary TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS context_versions (version INTEGER PRIMARY KEY AUTOINCREMENT, checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id) ON DELETE CASCADE, state TEXT NOT NULL, created REAL NOT NULL);
-      CREATE INDEX IF NOT EXISTS context_versions_checkpoint ON context_versions(checkpoint_id, version);
-      CREATE TABLE IF NOT EXISTS labels (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, message_id TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY(session_id, message_id));
-      CREATE TABLE IF NOT EXISTS legacy_imports (source_key TEXT PRIMARY KEY, session_id TEXT NOT NULL, receipt TEXT NOT NULL, created REAL NOT NULL);
-      CREATE TABLE IF NOT EXISTS legacy_checkpoints (source_key TEXT NOT NULL, legacy_id TEXT NOT NULL, native_head TEXT, PRIMARY KEY(source_key, legacy_id));
-      `);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const version = Number(
-        this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0,
-      );
-      const columns = this.db.prepare('PRAGMA table_info(sessions)').all();
-      if (!columns.some((row) => row.name === 'parent_id'))
-        this.db.exec('ALTER TABLE sessions ADD COLUMN parent_id TEXT');
-      if (!columns.some((row) => row.name === 'title_locked'))
-        this.db.exec(
-          'ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0',
-        );
-      this.db.exec(
-        'CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_id);',
-      );
-      // Upgrade native children once, without changing history or replaying work.
-      if (version < 4)
-        for (const row of this.db
-          .prepare(
-            'SELECT c.session_id,v.state FROM context_versions v JOIN checkpoints c ON c.id=v.checkpoint_id ORDER BY v.version',
-          )
-          .all()) {
-          const state = JSON.parse(String(row.state)) as ContextState;
-          for (const child of state.subagentSessionIds ?? [])
-            if (child !== row.session_id)
-              this.db
-                .prepare(
-                  'UPDATE sessions SET parent_id=? WHERE id=? AND parent_id IS NULL',
-                )
-                .run(String(row.session_id), child);
-        }
-      this.db.exec('PRAGMA user_version = 4; COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
     this.inputs = new InputOutbox(
       this.db,
       (id, action) => this.writing([id], action),
@@ -385,12 +480,12 @@ export class CheckpointStore {
     return (workspace
       ? this.db
           .prepare(
-            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE workspace = ? ${hidden} ORDER BY activity DESC, sessions.created DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE workspace = ? ${hidden} ORDER BY activity DESC, sessions.created DESC, sessions.id`,
           )
           .all(normalizeWorkspace(workspace))
       : this.db
           .prepare(
-            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE 1 = 1 ${hidden} ORDER BY activity DESC, sessions.created DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE 1 = 1 ${hidden} ORDER BY activity DESC, sessions.created DESC, sessions.id`,
           )
           .all()) as unknown as Session[];
   }
@@ -506,9 +601,17 @@ export class CheckpointStore {
           .run(id, sessionId, head, text, Date.now());
         head = id;
       }
-      this.db
-        .prepare('UPDATE sessions SET head = ?, updated = ? WHERE id = ?')
-        .run(head, Date.now(), sessionId);
+      // An internal-only append (an interrupted marker, a mode boundary) is not
+      // activity. Touching `updated` made the desktop list that session as just
+      // changed when it was only opened.
+      if (messages.some((message) => !message.internal))
+        this.db
+          .prepare('UPDATE sessions SET head = ?, updated = ? WHERE id = ?')
+          .run(head, Date.now(), sessionId);
+      else
+        this.db
+          .prepare('UPDATE sessions SET head = ? WHERE id = ?')
+          .run(head, sessionId);
       this.db.exec('COMMIT');
       this.deferred.delete(sessionId);
       // When the cache holds the head this append started from, the new messages extend
@@ -633,185 +736,6 @@ export class CheckpointStore {
       this.db
         .prepare('DELETE FROM labels WHERE session_id = ? AND message_id = ?')
         .run(sessionId, messageId);
-  }
-  migrationReceipts(): Record<string, unknown>[] {
-    return this.db
-      .prepare('SELECT receipt FROM legacy_imports ORDER BY created')
-      .all()
-      .map((row) => JSON.parse(String(row.receipt)) as Record<string, unknown>);
-  }
-  importedLegacyKeys(): Set<string> {
-    return new Set(
-      this.db
-        .prepare('SELECT source_key FROM legacy_imports')
-        .all()
-        .map((row) => String(row.source_key)),
-    );
-  }
-  legacyHead(
-    sourceKey: string,
-    checkpointId: string,
-  ): string | null | undefined {
-    const row = this.db
-      .prepare(
-        'SELECT native_head FROM legacy_checkpoints WHERE source_key = ? AND legacy_id = ?',
-      )
-      .get(sourceKey, checkpointId);
-    return row
-      ? row.native_head === null
-        ? null
-        : String(row.native_head)
-      : undefined;
-  }
-  importLegacy(plan: LegacyImportPlan): 'imported' | 'skipped' {
-    return this.writing(
-      plan.parentId
-        ? [plan.parentId, plan.session.thread_id]
-        : [plan.session.thread_id],
-      () => this.importLegacyOwned(plan),
-    );
-  }
-  private importLegacyOwned(plan: LegacyImportPlan): 'imported' | 'skipped' {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      if (
-        this.db
-          .prepare('SELECT source_key FROM legacy_imports WHERE source_key = ?')
-          .get(plan.sourceKey)
-      ) {
-        this.db.exec('ROLLBACK');
-        return 'skipped';
-      }
-      if (this.get(plan.session.thread_id))
-        throw new Error(
-          'legacy session ID conflicts with an existing native session',
-        );
-      const session = plan.session;
-      if (plan.parentId && !this.get(plan.parentId))
-        throw new Error('legacy parent session is missing');
-      this.db
-        .prepare(
-          'INSERT INTO sessions (id,workspace,title,model,head,created,updated,parent_id) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        )
-        .run(
-          session.thread_id,
-          session.workspace,
-          session.title,
-          session.model,
-          session.created * 1000,
-          session.updated * 1000,
-          plan.parentId ?? null,
-        );
-      const paths = new Map<
-        string,
-        { messages: Message[]; ids: string[]; head: string | null }
-      >();
-      const maps = new Map<string, string | null>();
-      for (const snapshot of plan.snapshots) {
-        const parent = snapshot.parent ? paths.get(snapshot.parent) : undefined;
-        if (snapshot.parent && !parent)
-          throw new Error('migration checkpoint parent is missing');
-        const parentMessages = parent?.messages ?? [];
-        const ids = parent?.ids ?? [];
-        let prefix = 0;
-        while (
-          prefix < Math.min(parentMessages.length, snapshot.messages.length) &&
-          JSON.stringify(parentMessages[prefix]) ===
-            JSON.stringify(snapshot.messages[prefix])
-        )
-          prefix++;
-        const current = ids.slice(0, prefix);
-        let head =
-          parent && prefix === parentMessages.length
-            ? parent.head
-            : (current.at(-1) ?? null);
-        for (let index = prefix; index < snapshot.messages.length; index++) {
-          const message = snapshot.messages[index]!;
-          const id =
-            'legacy-' +
-            createHash('sha256')
-              .update(
-                plan.sourceKey +
-                  ':' +
-                  snapshot.id +
-                  ':' +
-                  index +
-                  ':' +
-                  JSON.stringify(message),
-              )
-              .digest('hex');
-          this.db
-            .prepare('INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?)')
-            .run(
-              id,
-              session.thread_id,
-              head,
-              JSON.stringify(message),
-              snapshot.timestamp || session.updated * 1000,
-            );
-          current.push(id);
-          head = id;
-        }
-        const boundary =
-          'legacy-boundary-' +
-          createHash('sha256')
-            .update(plan.sourceKey + ':' + snapshot.id)
-            .digest('hex');
-        this.db
-          .prepare('INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?)')
-          .run(
-            boundary,
-            session.thread_id,
-            head,
-            'null',
-            snapshot.timestamp || session.updated * 1000,
-          );
-        head = boundary;
-        paths.set(snapshot.id, {
-          messages: snapshot.messages,
-          ids: current,
-          head,
-        });
-        maps.set(snapshot.id, head);
-        this.db
-          .prepare('INSERT INTO legacy_checkpoints VALUES (?, ?, ?)')
-          .run(plan.sourceKey, snapshot.id, head);
-        if (head)
-          this.db
-            .prepare(
-              'INSERT INTO context_versions (checkpoint_id,state,created) VALUES (?, ?, ?)',
-            )
-            .run(
-              head,
-              JSON.stringify(snapshot.context),
-              snapshot.timestamp || session.updated * 1000,
-            );
-      }
-      if (!maps.has(plan.selected))
-        throw new Error('migration selected checkpoint is missing');
-      this.db
-        .prepare('UPDATE sessions SET head = ? WHERE id = ?')
-        .run(maps.get(plan.selected)!, session.thread_id);
-      this.messageCache.delete(session.thread_id);
-      for (const [id, label] of Object.entries(plan.labels))
-        this.db
-          .prepare('INSERT INTO labels VALUES (?, ?, ?)')
-          .run(session.thread_id, id, label);
-      this.db
-        .prepare('INSERT INTO legacy_imports VALUES (?, ?, ?, ?)')
-        .run(
-          plan.sourceKey,
-          session.thread_id,
-          JSON.stringify(plan.receipt),
-          Date.now(),
-        );
-      this.db.exec('COMMIT');
-      this.writeVersion++;
-      return 'imported';
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
   }
   requireBalancedTools(messages: Message[]): void {
     const pending = new Set<string>();
@@ -995,6 +919,42 @@ export class CheckpointStore {
       throw error;
     }
   }
+  /**
+   * The head just after the user message of a turn, before the model answers.
+   * A crash between the two leaves this row; a reply, a cancel and a clean
+   * error clear it.
+   */
+  noteTurn(sessionId: string): void {
+    const session = this.get(sessionId);
+    if (!session?.head) return;
+    this.writing([sessionId], () => {
+      this.db
+        .prepare(
+          `INSERT INTO open_turns (session_id, head, started) VALUES (?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET head = excluded.head, started = excluded.started`,
+        )
+        .run(sessionId, session.head, Date.now());
+    });
+  }
+  /** Drops the open-turn note. Safe while the store is closing. */
+  clearTurn(sessionId: string): void {
+    try {
+      this.writing([sessionId], () => {
+        this.db
+          .prepare('DELETE FROM open_turns WHERE session_id = ?')
+          .run(sessionId);
+      });
+    } catch {
+      /* The store may already be closing. */
+    }
+  }
+  private turnMatches(sessionId: string): boolean {
+    const session = this.get(sessionId);
+    const row = this.db
+      .prepare('SELECT head FROM open_turns WHERE session_id = ?')
+      .get(sessionId) as { head: string | null } | undefined;
+    return Boolean(row && session && row.head === session.head);
+  }
   repairInterrupted(sessionId: string): void {
     const messages = this.messages(sessionId);
     const pending = new Map<string, string>();
@@ -1008,34 +968,39 @@ export class CheckpointStore {
         sessionId,
         [...pending].map(([id, name]) => ({
           id: randomUUID(),
-          role: 'tool',
+          role: 'tool' as const,
           tool_call_id: id,
           name,
-          status: 'error',
+          status: 'error' as const,
           content:
             'Interrupted before a tool result was saved. The tool is not replayed.',
         })),
       );
+      this.clearTurn(sessionId);
       return;
     }
-    if (messages.some((message) => message.internal === 'interrupted')) return;
+    if (messages.some((message) => message.internal === 'interrupted')) {
+      this.clearTurn(sessionId);
+      return;
+    }
     const last = messages.filter((message) => !message.internal).at(-1);
-    // A turn stopped while the assistant was still streaming saves that partial
-    // reply. The last message is then the assistant, and the marker was skipped.
-    const stopped =
-      last?.role === 'user' ||
-      (last?.role === 'assistant' && last.interrupted === true);
-    if (!stopped) return;
-    this.append(sessionId, [
-      {
-        id: randomUUID(),
-        role: 'user',
-        content:
-          'The previous turn was interrupted before a reply was saved. Continue from the last user message if they ask again.',
-        display: 'Interrupted',
-        internal: 'interrupted',
-      },
-    ]);
+    // Only a turn that died after this user message was saved and before any
+    // reply moved the head. A saved partial (`interrupted: true`), a finished
+    // reply, a shell line and a 1.6 session (no open-turn row) are left alone.
+    const unanswered =
+      last?.role === 'user' && !last.shell && this.turnMatches(sessionId);
+    if (unanswered)
+      this.append(sessionId, [
+        {
+          id: randomUUID(),
+          role: 'user',
+          content:
+            'The previous turn was interrupted before a reply was saved. Continue from the last user message if they ask again.',
+          display: 'Interrupted',
+          internal: 'interrupted',
+        },
+      ]);
+    this.clearTurn(sessionId);
   }
   setSummary(sessionId: string, at: string, summary: string): void {
     const checkpoint = this.checkpoint(at);

@@ -23,6 +23,7 @@ import {
   loadCredentials,
   loadSettings,
   saveCredentials,
+  isFolderTrusted,
   saveSettings,
   trustFolder,
 } from '../src/settings.js';
@@ -810,6 +811,46 @@ test('a prompt goes on without stdin that stays open, and the folder must be tru
   assert.equal(unset.code, 2);
   assert.match(unset.stderr, /Circle is not set up yet/);
   assert.equal(endpoint.bodies.length, 1);
+});
+
+test('a trusted parent covers a subfolder, and --trust remembers a folder for a later print run', async (t) => {
+  const home = scratch(t);
+  const parent = realpathSync(scratch(t));
+  const child = join(parent, 'nested');
+  mkdirSync(child);
+  const beside = parent + '-other';
+  mkdirSync(beside);
+  assert.equal(
+    isFolderTrusted(trustFolder(defaultSettings(), parent), child),
+    true,
+  );
+  assert.equal(
+    isFolderTrusted(trustFolder(defaultSettings(), parent), beside),
+    false,
+  );
+  assert.equal(
+    isFolderTrusted(trustFolder(defaultSettings(), child), parent),
+    false,
+  );
+  assert.equal(parseCli(['--trust']).trust, true);
+  const endpoint = await gateway(t, [
+    { content: 'covered' },
+    { content: 'remembered' },
+    { content: 'later' },
+  ]);
+  setUp(home, endpoint.base, [parent]);
+  const covered = await circle(home, ['-p', 'hello', child]);
+  assert.equal(covered.code, 0, covered.stderr);
+  const outside = await circle(home, ['-p', 'hello', beside]);
+  assert.equal(outside.code, 2);
+  assert.match(outside.stderr, /This folder is not trusted yet/);
+  assert.match(outside.stderr, /--trust/);
+  const fresh = realpathSync(scratch(t));
+  const remembered = await circle(home, ['-p', '--trust', 'hello', fresh]);
+  assert.equal(remembered.code, 0, remembered.stderr);
+  assert.ok(loadSettings(home).trusted_folders.includes(fresh));
+  const later = await circle(home, ['-p', 'hello', fresh]);
+  assert.equal(later.code, 0, later.stderr);
 });
 
 test('an open stdin survives a slow real CLI startup, waits three seconds and reaches the local gateway', async (t) => {

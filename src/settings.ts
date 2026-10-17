@@ -6,7 +6,7 @@ import fs, {
   chmodSync,
   realpathSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import lockfile from 'proper-lockfile';
 import {
@@ -19,7 +19,7 @@ import {
 import type { SessionMode } from './approvals.js';
 
 // Circle signs in only with an API URL and key. A `mode` or `oauth_provider` that older
-// releases wrote is dropped on load; the Python releases read a missing `mode` as `api_key`.
+// releases wrote is dropped on load.
 export interface ModelAuth {
   protocol: string;
   base_url: string;
@@ -328,9 +328,20 @@ export function isFolderTrusted(
   settings: CircleSettings,
   workspace: string,
 ): boolean {
-  return settings.trusted_folders.some(
-    (folder) => normalizeWorkspace(folder) === normalizeWorkspace(workspace),
-  );
+  const target = normalizeWorkspace(workspace);
+  return settings.trusted_folders.some((folder) => {
+    let trusted: string;
+    try {
+      trusted = normalizeWorkspace(folder);
+    } catch {
+      return false;
+    }
+    if (trusted === target) return true;
+    // A trusted folder covers what is inside it. `/a` covers `/a/b` and not `/ab`,
+    // and a trusted child does not cover its parent.
+    const rel = relative(trusted, target);
+    return rel !== '' && !isAbsolute(rel) && !rel.split(sep).includes('..');
+  });
 }
 export function trustFolder(
   settings: CircleSettings,

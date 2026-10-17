@@ -6,6 +6,8 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { useRuntime } from '../app/context';
+import { t } from '../i18n';
+import { platformTitle } from './labels';
 import { PluginRegistry, effectivePlugins } from './registry';
 import type { ServiceRegistry, WorkbenchPlugin, PluginService } from './types';
 interface Value {
@@ -39,20 +41,39 @@ export function PluginProvider({
         enabled,
         toggle: (id, enabled) => {
           const plugin = registry.plugins.find((item) => item.id === id);
-          // A paired plugin is one with its runtime extension: switch that.
+          // A paired page has its own switch. Turning it on turns the shared
+          // runtime extension on; turning the last one off turns that extension off.
           if (plugin?.runtimeExtension) {
             const name = plugin.runtimeExtension;
             perform(async () => {
               if (runtime.mode !== 'live')
-                throw Error('this interface needs the Circle runtime');
+                throw Error(t('this interface needs the Circle runtime'));
               if (!snapshot.extensions.some((item) => item.name === name))
-                throw Error(`runtime extension ${name} is not installed`);
-              // Saved like the runtime extension's own switch, then loaded.
+                throw Error(
+                  t('runtime extension {name} is not installed', {
+                    name: platformTitle(name),
+                  }),
+                );
+              let reload = false;
               runtime.change((state) => {
-                state.extensions.find((item) => item.name === name)!.enabled =
-                  enabled;
+                const row = state.extensions.find((item) => item.name === name);
+                if (!row) return;
+                const chosen = registry.change(
+                  state.uiPlugins.filter((item) =>
+                    registry.plugins.some((candidate) => candidate.id === item),
+                  ),
+                  id,
+                  enabled,
+                );
+                state.uiPlugins = chosen;
+                const still = registry.plugins.some(
+                  (item) =>
+                    item.runtimeExtension === name && chosen.includes(item.id),
+                );
+                reload = row.enabled !== still;
+                row.enabled = still;
               });
-              await runtime.request('reload', {});
+              if (reload) await runtime.request('reload', {});
             });
             return;
           }

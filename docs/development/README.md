@@ -18,14 +18,13 @@ Install Node.js 24 or newer, then run `npm ci`. The compiler and every tool are 
 | `npm run format:check` | Check the formatting, as CI does. |
 | `npm run release -- X.Y.Z` | Set the version and date the changelog. See [Releasing](releasing.md). |
 | `npm run release:build` | Build the package with its own Node.js for the current platform. |
-| `npm run release:smoke` | Install, relocate and upgrade that package in a scratch home, replace a Python circle there, reject a bad checksum, and run a real tool turn. |
-| `npm run port:status` | Count the entries of the port inventory by status. It is a record of the port, not of the code; see [The TypeScript port](migration.md). |
+| `npm run release:smoke` | Install, relocate and upgrade that package in a scratch home, install it to the default location there, reject a bad checksum, and run a real tool turn. |
 
 Use a scratch `CIRCLE_HOME` for every test and every interactive run. The tests create their own folders, local model gateways and fake credentials; they never need a model account or the network.
 
 Every change in behaviour needs a test that shows it: the next model request, the stored history, files and processes. Text on screen alone does not show that the runtime is right. Do not weaken a failing test to get green.
 
-A pull request runs `npm run check` and the format check on Linux, Apple silicon macOS and Windows and builds and smoke-tests the Linux package (`.github/workflows/check.yml`); it merges through the merge queue once those three jobs pass, and the queue runs them again on the commit that becomes `main`. Every push to `main` builds and smoke-tests the release packages on all six targets (`.github/workflows/release.yml`); a pull request runs that workflow only when it changes the installers, the release scripts, the version or the dependencies. A job that is configured is not a result: look at the run.
+A pull request runs `npm run check` and the format check on Linux and Windows and builds and smoke-tests the Linux package (`.github/workflows/check.yml`); the merge queue runs the check on Linux, Apple silicon macOS and Windows on the commit that becomes `main`, and merges once all three pass. A draft pull request runs no CI until it is marked ready. Pull requests run no macOS jobs at all: the organization has five macOS runners, shared with `main` and releases. Every push to `main` builds and smoke-tests the release packages on all six targets (`.github/workflows/release.yml`) and runs the desktop application on Linux and both macOS architectures (`.github/workflows/workbench.yml`), and a later push does not cancel those runs; a pull request runs the release workflow only when it changes the installers, the release scripts, the version or the dependencies, and then without its macOS targets. A job that is configured is not a result: look at the run.
 
 The English guides and reference in this folder are published at <https://circle-platforms.github.io/circle/>. `.github/workflows/pages.yml` builds the site. The TUI contract is in Chinese, and the desktop working notes are under `docs/workbench/`; both stay in the repository and are not pages on the site. Contributing, the security policy, the changelog, the [design specifications index](https://github.com/circle-platforms/circle/blob/main/docs/design/README.md) and the [open-source readiness record](https://github.com/circle-platforms/circle/blob/main/docs/open-source-readiness.md) stay in the repository too.
 
@@ -34,5 +33,4 @@ More:
 - [Architecture](architecture.md): the module map.
 - [The TUI contract](https://github.com/circle-platforms/circle/blob/main/docs/development/tui-contract.md): the rules for everything on screen. It is written in Chinese.
 - [Releasing](releasing.md): cutting a release.
-- [The TypeScript port](migration.md) and [Session data migration](migration-data.md): how 0.5.0 became 1.0.
 - [Register Circle in skills.sh](skills-registry.md).

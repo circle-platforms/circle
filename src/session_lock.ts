@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { ensureHome } from './paths.js';
@@ -8,11 +8,14 @@ import { ensureHome } from './paths.js';
 // proper-lockfile uses atomic mkdir and a heartbeat; no PID-based takeover is involved.
 const STALE = 30000;
 const UPDATE = 5000;
+/** What to say when another runtime holds the session. Names the copy command. */
+export function occupiedSessionMessage(sessionId: string): string {
+  return `this session is open in another terminal. Close it there to continue, or copy it with circle --fork ${sessionId}`;
+}
+
 export class SessionOccupiedError extends Error {
   constructor(readonly sessionId: string) {
-    super(
-      'session is in use by another Circle runtime; stop and release it there, or fork it',
-    );
+    super(occupiedSessionMessage(sessionId));
     this.name = 'SessionOccupiedError';
   }
 }
@@ -66,4 +69,34 @@ export function sessionOccupied(home: string, sessionId: string): boolean {
     realpath: false,
     stale: STALE,
   });
+}
+/**
+ * Removes session lock directories whose heartbeat is already stale. A live
+ * lease is left in place. Empty locks left by a killed process otherwise keep
+ * a session looking occupied until the stale window passes.
+ */
+export function sweepStaleSessionLocks(home: string): void {
+  let directory: string;
+  try {
+    directory = join(realpathSync(ensureHome(home)), 'session-locks');
+  } catch {
+    return;
+  }
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.lock')) continue;
+    const target = join(directory, name.slice(0, -'.lock'.length));
+    try {
+      if (lockfile.checkSync(target, { realpath: false, stale: STALE }))
+        continue;
+      rmSync(join(directory, name), { recursive: true, force: true });
+    } catch {
+      /* Held, or already removed. */
+    }
+  }
 }

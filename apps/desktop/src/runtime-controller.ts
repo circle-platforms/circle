@@ -33,9 +33,11 @@ import {
   writeFileSync,
   unlinkSync,
 } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
+import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
 import {
   sessionOccupied,
@@ -104,9 +106,14 @@ import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
 import { VERSION } from '../../../src/version.js';
+import {
+  dismissWhatsNew,
+  pendingWhatsNew,
+} from '../../../src/whats_new_state.js';
+import type { WhatsNewNotice } from '../../../src/whats_new.js';
 import { isSessionMode } from '../../../src/approvals.js';
 import { currentBranch } from '../../../src/git_info.js';
-import { formatCosts } from '../../../src/pricing.js';
+import { cacheRateLabel, formatCosts } from '../../../src/pricing.js';
 import { TurnStatus } from '../../../src/tui/turn_status.js';
 import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
@@ -439,6 +446,8 @@ export class RuntimeController {
   // names it so the user can delete it by hand. Read at most every two seconds
   // like branch(): snapshots follow tokens.
   private defaultFolder?: { folder: string; stale?: string; at: number };
+  /** Upgrade notes still waiting. Cleared when the home page dismisses them. */
+  private whatsNew?: WhatsNewNotice;
   constructor(readonly options: ControllerOptions) {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
@@ -481,6 +490,7 @@ export class RuntimeController {
         /* Deleted histories require explicitly reopening an existing folder. */
       }
     }
+    this.whatsNew = pendingWhatsNew(this.home);
     const saved = this.savedLocation();
     const settings = loadSettings(this.home);
     const workspace =
@@ -622,6 +632,13 @@ export class RuntimeController {
     return runtime;
   }
   private selectRuntime(runtime: AgentRuntime): void {
+    const leaving = this.active;
+    if (leaving && leaving !== runtime) leaving.yieldLease();
+    if (!runtime.resumeLease()) {
+      this.previous = this.selectedSessionId;
+      this.viewedSessionId = runtime.session.id;
+      return;
+    }
     this.previous = this.selectedSessionId;
     this.active = runtime;
     this.viewedSessionId = undefined;
@@ -2036,7 +2053,21 @@ export class RuntimeController {
     let markedAt: number | undefined;
     for (const node of nodes) {
       const raw = node.message;
-      if (!raw || raw.internal || raw.role === 'system') continue;
+      if (!raw || raw.role === 'system') continue;
+      // A crash leaves this marker and no reply. A stopped reply does not:
+      // its own `interrupted` flag is the mark, below.
+      if (raw.internal === 'interrupted') {
+        result.push({
+          id: node.id,
+          parentId: node.parent,
+          role: 'notice',
+          text: '✖ Interrupted',
+          interrupted: true,
+          at: new Date(node.created).toISOString(),
+        });
+        continue;
+      }
+      if (raw.internal) continue;
       if (raw.role === 'tool') {
         const call = calls.get(raw.tool_call_id ?? '');
         if (call?.tool) {
@@ -2085,6 +2116,9 @@ export class RuntimeController {
         ...(runtimeNotice ? { runtimeNotice } : {}),
         text: raw.display ?? raw.content,
         thinking: raw.thinking,
+        ...(typeof raw.thinking_seconds === 'number'
+          ? { thinkingSeconds: raw.thinking_seconds }
+          : {}),
         label: labels[raw.id],
         at: new Date(node.created).toISOString(),
         ...(raw.shell
@@ -2116,6 +2150,9 @@ export class RuntimeController {
           content: a.data,
           mime: a.mime_type,
         })),
+        ...(raw.role === 'assistant' && raw.interrupted
+          ? { interrupted: true }
+          : {}),
         // The last message of a finished turn shows the whole turn: its time and tokens.
         // Any other reply with usage shows the time since the prompt or the previous reply.
         usage: turns[raw.id]
@@ -2123,6 +2160,8 @@ export class RuntimeController {
               input: turns[raw.id]!.input,
               output: turns[raw.id]!.output,
               cost: turns[raw.id]!.cost ?? null,
+              // A stop prices an estimate. The mark follows the amount (`$0.0182~`).
+              ...(raw.interrupted ? { estimated: true } : {}),
               elapsed: formatElapsed(turns[raw.id]!.seconds),
             }
           : raw.usage
@@ -2134,6 +2173,7 @@ export class RuntimeController {
                   raw.cost?.currency === 'USD'
                     ? (raw.cost.amount ?? null)
                     : null,
+                ...(raw.interrupted ? { estimated: true } : {}),
                 elapsed: gapElapsed(markedAt, node.created),
               }
             : undefined,
@@ -2233,10 +2273,13 @@ export class RuntimeController {
     }
     const parents = new Map(nodes.map((node) => [node.id, node.parent]));
     const insertedAfter = new Map<string | null, string>();
+    const storedStop = result.some(
+      (row) => row.role === 'notice' && row.text === '✖ Interrupted',
+    );
     for (const failure of [
       ...(this.failures.get(id) ?? []),
       ...(this.notices.get(id) ?? []),
-    ]) {
+    ].filter((failure) => failure.text !== '✖ Interrupted' || !storedStop)) {
       // After the message it followed and that message's tool rows
       const afterIndex = (anchor: string | null) =>
         result.findLastIndex(
@@ -2292,6 +2335,101 @@ export class RuntimeController {
         at: 'streaming',
       });
     return result;
+  }
+  // A session opened later only catalogues extensions until initialize(). Hub
+  // sign-in lives in the home (config and token), so a page still reads the
+  // view and status a session that already loaded the extension published.
+  private presentExtension(
+    runtime: AgentRuntime,
+    extension: Extension,
+  ): Extension {
+    if (!extension.enabled || extension.error) return extension;
+    const needsView = extension.view === undefined;
+    const needsCommand = extension.commands.length === 0 && !extension.status;
+    if (!needsView && !needsCommand) return extension;
+    for (const owner of this.runtimes.values()) {
+      if (owner === runtime || owner.isClosing) continue;
+      if (
+        extension.source === 'project' &&
+        owner.options.workspace !== runtime.options.workspace
+      )
+        continue;
+      const peer = owner.extensions.extensions.find(
+        (item) => item.name === extension.name && item.enabled && !item.error,
+      );
+      if (!peer) continue;
+      const peerHas =
+        peer.view !== undefined || peer.commands.length > 0 || !!peer.status;
+      if (!peerHas) continue;
+      return {
+        ...extension,
+        view: extension.view ?? peer.view,
+        status: extension.status ?? peer.status,
+        commands: extension.commands.length
+          ? extension.commands
+          : peer.commands,
+        tools: extension.tools.length ? extension.tools : peer.tools,
+      };
+    }
+    return extension;
+  }
+  private extensionCommand(
+    runtime: AgentRuntime,
+    name: string,
+  ): { owner: AgentRuntime; command: ExtensionCommand } | undefined {
+    const local = runtime.extensions.commands().get(name);
+    if (local) return { owner: runtime, command: local };
+    for (const owner of this.runtimes.values()) {
+      if (owner === runtime || owner.isClosing) continue;
+      const command = owner.extensions.commands().get(name);
+      if (!command) continue;
+      const ext = owner.extensions.extensions.find((item) =>
+        item.commands.some((row) => row.name === name),
+      );
+      if (
+        ext?.source === 'project' &&
+        owner.options.workspace !== runtime.options.workspace
+      )
+        continue;
+      return { owner, command };
+    }
+    return undefined;
+  }
+  private extensionReady(runtime: AgentRuntime): boolean {
+    return runtime.extensions.extensions.some(
+      (ext) =>
+        ext.enabled &&
+        !ext.error &&
+        (ext.view !== undefined || ext.commands.length > 0 || !!ext.status),
+    );
+  }
+  // Leaving an empty session drops the only host that loaded extensions.
+  // Load them on the session that remains, from the same home, before that.
+  private async carryExtensions(
+    next: AgentRuntime,
+    previousId: string,
+  ): Promise<void> {
+    if (!previousId || previousId === next.session.id || next.isClosing) return;
+    const previous = this.runtimes.get(previousId);
+    if (!previous || previous.isClosing || !this.extensionReady(previous))
+      return;
+    if (this.extensionReady(next) || !this.unusedSession(previousId)) return;
+    if (!isFolderTrusted(loadSettings(this.home), next.options.workspace))
+      return;
+    await next.initialize();
+    const names = previous.extensions.extensions
+      .filter((ext) => ext.view !== undefined)
+      .map((ext) => ext.name);
+    const end = Date.now() + 2000;
+    while (
+      Date.now() < end &&
+      names.some(
+        (name) =>
+          next.extensions.extensions.find((ext) => ext.name === name)?.view ===
+          undefined,
+      )
+    )
+      await delay(10);
   }
   snapshot(): WorkbenchSnapshot {
     this.metadata.refresh();
@@ -2582,13 +2720,17 @@ export class RuntimeController {
                   : ('user' as const),
                 template: command.template,
               })),
-              ...[...runtime.extensions.commands().values()].map((command) => ({
-                name: command.name,
-                description: command.description,
-                arguments: '',
-                scope: 'extension' as const,
-                template: '',
-              })),
+              ...runtime.extensions.extensions.flatMap((extension) =>
+                this.presentExtension(runtime, extension).commands.map(
+                  (command) => ({
+                    name: command.name,
+                    description: command.description,
+                    arguments: '',
+                    scope: 'extension' as const,
+                    template: '',
+                  }),
+                ),
+              ),
             ]
           : [],
       mcp: savedSettings.mcp_servers.map((spec, i) => {
@@ -2626,25 +2768,27 @@ export class RuntimeController {
       }),
       extensions: inspecting
         ? []
-        : runtime.extensions.extensions.map((extension) => ({
-            id: extension.name,
-            name: extension.name,
-            version: extension.version,
-            scope: extension.source,
-            enabled: extension.enabled,
-            status:
-              extension.enabled && !extension.error
-                ? extension.status
-                : undefined,
-            view:
-              extension.enabled && !extension.error
-                ? extension.view
-                : undefined,
-            tools: extension.tools.map((tool) => tool.name),
-            commands: extension.commands.map((command) => command.name),
-            events: [...extension.handlers.keys()],
-            error: extension.error || undefined,
-          })),
+        : runtime.extensions.extensions.map((extension) => {
+            const shown = this.presentExtension(runtime, extension);
+            return {
+              id: extension.name,
+              name: extension.name,
+              version: extension.version,
+              scope: extension.source,
+              enabled: extension.enabled,
+              status:
+                extension.enabled && !extension.error
+                  ? shown.status
+                  : undefined,
+              view:
+                extension.enabled && !extension.error ? shown.view : undefined,
+              tools: shown.tools.map((tool) => tool.name),
+              commands: shown.commands.map((command) => command.name),
+              declaredCommands: extension.declaredCommands,
+              events: [...extension.handlers.keys()],
+              error: extension.error || undefined,
+            };
+          }),
       requests: [],
       tools: inspecting
         ? []
@@ -2660,6 +2804,7 @@ export class RuntimeController {
           })),
       uiPlugins: ['files', 'activity', 'browser'],
       openUrl: this.openRequest,
+      ...(this.whatsNew ? { whatsNew: this.whatsNew } : {}),
       settings: {
         theme: savedSettings.theme,
         hideThinking: savedSettings.hide_thinking,
@@ -2697,10 +2842,13 @@ export class RuntimeController {
     const last = runtime.harness.messages
       .filter((message) => message.role === 'assistant' && message.usage)
       .at(-1);
+    const unreported = runtime.busy && stats.usage.input_tokens === 0;
     return {
       input: stats.usage.input_tokens,
       output: stats.usage.output_tokens,
       cacheRead: stats.usage.cache_read_tokens,
+      cache: unreported ? 'N/A' : cacheRateLabel(stats.usage),
+      inputUnknown: unreported,
       cost: formatCosts(
         [stats.costs],
         facts.rates?.input !== undefined && facts.rates.output !== undefined,
@@ -2867,7 +3015,14 @@ export class RuntimeController {
         this.notices.set(id, rows);
       }
     }
-    if (event.kind === 'run_start') this.activeRuns.add(id);
+    if (event.kind === 'run_start') {
+      this.activeRuns.add(id);
+      // The stop mark belongs to the turn that was stopped, as in the terminal.
+      const kept = (this.notices.get(id) ?? []).filter(
+        (row) => row.text !== '✖ Interrupted',
+      );
+      this.notices.set(id, kept);
+    }
     if (['run_end', 'run_error'].includes(event.kind))
       this.activeRuns.delete(id);
     if (!event.tags?.subagent) {
@@ -2936,6 +3091,18 @@ export class RuntimeController {
       });
       this.notices.set(id, rows);
     }
+    if (event.kind === 'run_error' && event.payload.interrupted) {
+      const rows = this.notices.get(id) ?? [];
+      if (!rows.some((row) => row.text === '✖ Interrupted')) {
+        rows.push({
+          id: `interrupted-${randomUUID()}`,
+          after: runtime.store.get(id)?.head ?? null,
+          text: '✖ Interrupted',
+          at: event.ts,
+        });
+        this.notices.set(id, rows);
+      }
+    }
     if (event.kind === 'run_error' && !event.payload.interrupted) {
       const assistant = event.payload.completion_message_id
         ? runtime.store
@@ -2977,7 +3144,7 @@ export class RuntimeController {
         text: '',
         thinking: '',
       });
-    if (event.kind === 'llm_token') {
+    if (event.kind === 'llm_token' && !this.cancelling.has(id)) {
       const stream = this.streams.get(id);
       if (stream) {
         if (event.payload.thinking)
@@ -3830,6 +3997,12 @@ export class RuntimeController {
         this.selectRuntime(owner);
         this.applyHomeChoices(owner, p);
         const started = await this.submitPrompt(owner, p, true);
+        // Home shows the notice. Starting the session from there marks it
+        // seen, the same as dismissing it.
+        if (this.whatsNew) {
+          dismissWhatsNew(this.home);
+          this.whatsNew = undefined;
+        }
         return { sessionId: started.sessionId ?? owner.session.id };
       }
       case 'abort': {
@@ -3877,6 +4050,7 @@ export class RuntimeController {
         if ((await this.unusedSession(previous)) && !this.viewedSessionId)
           return { sessionId: previous };
         const owner = this.runtimes.create(this.selectedWorkspace);
+        await this.carryExtensions(owner, previous);
         this.selectRuntime(owner);
         if (previous !== owner.session.id) await this.dropUnused(previous);
         return { sessionId: owner.session.id };
@@ -3898,12 +4072,15 @@ export class RuntimeController {
         try {
           const owner = this.runtimes.open(row.workspace, id);
           await this.reloadTrustedRuntime(owner);
+          await this.carryExtensions(owner, previous);
           if (owner.isClosing || this.closing)
             throw Error('session is closing');
           this.selectRuntime(owner);
           if (previous !== id) await this.dropUnused(previous);
         } catch (error) {
           if (!(error instanceof SessionOccupiedError)) throw error;
+          const leaving = this.runtimes.get(previous);
+          if (leaving && leaving.session.id !== id) leaving.yieldLease();
           this.previous = this.selectedSessionId;
           this.viewedSessionId = id;
         }
@@ -4601,10 +4778,23 @@ export class RuntimeController {
         if (runtime.busy) throw Error('a turn is running');
         const name = text(p.name, 'command name', 100);
         const args = text(p.args ?? '', 'command args', 16000);
-        const extension = runtime.extensions.commands().get(name);
-        if (extension) {
+        const secret =
+          typeof p.secret === 'string' && p.secret.length > 0
+            ? p.secret
+            : undefined;
+        let found = this.extensionCommand(runtime, name);
+        if (
+          !found &&
+          isFolderTrusted(runtime.options.settings, runtime.options.workspace)
+        ) {
+          await runtime.initialize();
+          found = this.extensionCommand(runtime, name);
+        }
+        if (found) {
+          const extension = found.command;
           await extension.handler(args, {
-            workspace: runtime.options.workspace,
+            workspace: found.owner.options.workspace,
+            ...(secret ? { secret } : {}),
             toast: (message) => {
               const id = runtime.session.id;
               if (this.runtimes.lifecycle(id) !== 'open') return;
@@ -4618,11 +4808,14 @@ export class RuntimeController {
               this.notices.set(id, rows);
               this.publish();
             },
+            // Hub sign-in and sign-out are status. The page shows them. They
+            // are not messages in the conversation.
             append: (content) => {
+              if (name === 'hub') return;
               const runtimeNotice = githubStatusNotice(
                 content,
                 name === 'github' &&
-                  runtime.extensions.isTrustedBundledCommand(
+                  found.owner.extensions.isTrustedBundledCommand(
                     extension,
                     'github',
                   ),
@@ -4850,6 +5043,10 @@ export class RuntimeController {
           available: await availableUpdate(this.home),
           automaticInstall: false,
         };
+      case 'dismiss-whats-new':
+        dismissWhatsNew(this.home);
+        this.whatsNew = undefined;
+        return {};
       case 'launch-options':
         throw Error(
           'desktop launch options must be supplied when starting the application; use session controls for model, effort and plan mode',

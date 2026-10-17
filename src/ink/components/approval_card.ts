@@ -104,6 +104,7 @@ export class ApprovalCard implements Card<ApprovalAnswer> {
     const lines: CardLine[] = (request.body || '')
       .split('\n')
       .map((text, index) => ({ text, tone: index ? 'text' : 'em' }));
+    const anchor = lines.length;
     // a file change: what it adds and removes, coloured like the diff after the edit
     for (const row of request.preview ?? [])
       lines.push({
@@ -119,6 +120,7 @@ export class ApprovalCard implements Card<ApprovalAnswer> {
       title: request.origin ? `${request.origin} · ${title}` : title,
       body: '',
       lines,
+      anchor,
       options: this.options.map(([, label]) => label),
       focus: this.focus,
       ...(tint ? { tint } : {}),

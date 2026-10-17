@@ -284,6 +284,18 @@ export class LiveRuntime implements RuntimePort {
     };
     for (const listener of this.listeners) listener();
   }
+  dismissActionError = (sessionId = this.snapshot.activeSessionId) => {
+    if (!this.sessionErrors.delete(sessionId)) return;
+    this.snapshot = {
+      ...this.snapshot,
+      sessions: this.snapshot.sessions.map((session) =>
+        session.id === sessionId
+          ? { ...session, actionError: undefined }
+          : session,
+      ),
+    };
+    for (const listener of this.listeners) listener();
+  };
   dispose() {
     this.disposed = true;
     this.unsubscribe();
@@ -689,6 +701,7 @@ export class LiveRuntime implements RuntimePort {
         'export-session': 'export',
         'mcp.reload': 'reload',
         'extensions.reload': 'reload',
+        'extension-command': 'custom-command',
         'set-model': 'set-model',
         'set-plan-mode': 'set-plan-mode',
         'set-mode': 'set-mode',
@@ -706,6 +719,7 @@ export class LiveRuntime implements RuntimePort {
         'clear-queue': 'clear-queue',
         'write-file': 'write-file',
         'check-update': 'check-update',
+        'dismiss-whats-new': 'dismiss-whats-new',
         'discover-models': 'discover-models',
         'launch-options': 'launch-options',
         'trust-workspace': 'trust',
@@ -784,10 +798,25 @@ export class LiveRuntime implements RuntimePort {
       });
       return this.command(slash.name, slash.args, session.id);
     }
-    if (commandWord(raw))
+    if (commandWord(raw)) {
+      const word = commandWord(raw);
+      const off = this.turnedOffExtension(word);
+      if (off) {
+        this.change((state) => {
+          const target = state.sessions.find((item) => item.id === session.id);
+          if (target?.draft === session.draft) target.draft = '';
+        });
+        return {
+          notice: t(
+            'unknown command /{name} · turn it on with /extensions enable {extension}',
+            { name: word, extension: off },
+          ),
+        };
+      }
       return {
-        notice: t('unknown command /{name}', { name: commandWord(raw) }),
+        notice: t('unknown command /{name}', { name: word }),
       };
+    }
     if (!raw && !session.attachments.length) return {};
     const folded = promptAttachments(raw, session.attachments);
     const payload = {
@@ -1028,11 +1057,25 @@ export class LiveRuntime implements RuntimePort {
       skill: 'skills',
     };
     if (pages[name]) return { page: pages[name] };
-    if (!BUILTIN_SLASH.some((item) => item.name === name))
-      return { notice: t('unknown command /{name}', { name }) };
+    if (!BUILTIN_SLASH.some((item) => item.name === name)) {
+      const off = this.turnedOffExtension(name);
+      return {
+        notice: off
+          ? t(
+              'unknown command /{name} · turn it on with /extensions enable {extension}',
+              { name, extension: off },
+            )
+          : t('unknown command /{name}', { name }),
+      };
+    }
     throw Error(t('/{name} is not connected yet', { name }));
   };
   reset = () => {
     throw Error(t('live sessions are managed through the sessions page'));
   };
+  private turnedOffExtension(name: string): string | undefined {
+    return this.snapshot.extensions.find(
+      (item) => !item.enabled && item.declaredCommands?.includes(name),
+    )?.name;
+  }
 }

@@ -1,4 +1,4 @@
-// Setup's questions, the API key way (0.5.0's InitController): the base URL, the key, what
+// Setup's questions, the API key way: the base URL, the key, what
 // the endpoint lists, the kind of API when it could not tell, and the model. The first run
 // and `circle --init` ask them on one card in the frame (SetupCard); /login asks them in its
 // list. Nothing is saved here: the caller saves `auth()` once a model is chosen.

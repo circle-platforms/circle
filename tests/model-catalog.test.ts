@@ -24,7 +24,12 @@ import {
 } from '../src/settings.js';
 import { GatewayModel } from '../src/model.js';
 import { modelProfile, fitEffort } from '../src/model_profiles.js';
-import { priceCall, UsageCostTotals, formatCosts } from '../src/pricing.js';
+import {
+  priceCall,
+  UsageCostTotals,
+  formatCosts,
+  formatUsdAmount,
+} from '../src/pricing.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { ExtensionHost } from '../src/extensions.js';
@@ -340,6 +345,34 @@ test('per-call prices freeze cache writes and long-context rates, preserve multi
     Math.abs(receipt.amount! - (0.5 * 1.4 + 0.4 * 0.26 + 0.1 * 1.4 + 4.4)) <
       1e-9,
   );
+  // A stop estimates input and output and stores cache reads as 0. Those
+  // counts at GLM-5.3 rates are a positive $0.0182, not a credit. Cache
+  // tokens above the input are clamped, so they cannot subtract either.
+  const facts = catalog.facts(
+    'glm-5.3',
+    settings('https://open.bigmodel.cn/api/anthropic'),
+  );
+  const stopped = priceCall(facts, {
+    input_tokens: 12_476,
+    output_tokens: 162,
+    cache_read_tokens: 0,
+  });
+  assert.ok(
+    Math.abs(stopped.amount! - (12_476 * 1.4 + 162 * 4.4) / 1_000_000) < 1e-9,
+  );
+  assert.equal(formatUsdAmount(stopped.amount!, true), '$0.0182~');
+  assert.equal(formatUsdAmount(stopped.amount!, true).includes('-'), false);
+  assert.equal(formatUsdAmount(-stopped.amount!), '$0.0000');
+  const estimated = new UsageCostTotals();
+  estimated.add(stopped, true);
+  assert.equal(formatCosts([estimated.snapshot()]), '$0.0182~');
+  const overlap = priceCall(facts, {
+    input_tokens: 1000,
+    output_tokens: 0,
+    cache_read_tokens: 5000,
+  });
+  assert.ok(overlap.amount! >= 0);
+  assert.ok(Math.abs(overlap.amount! - (1000 * 0.26) / 1_000_000) < 1e-9);
   const long = priceCall(
     catalog.facts('claude-sonnet-5', settings('', 'anthropic')),
     { input_tokens: 300_000, output_tokens: 1000, cache_read_tokens: 0 },

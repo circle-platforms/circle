@@ -26,7 +26,7 @@ export const ACTIONS: Record<string, string> = {
   'job.background': 'ctrl+b',
   newline: 'ctrl+j',
 };
-// Names development builds used before they matched the Python releases.
+// Names that development builds before 1.0 used.
 const ALIASES: Record<string, string> = {
   'command.background': 'job.background',
 };

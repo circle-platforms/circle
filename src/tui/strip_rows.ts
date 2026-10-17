@@ -1,7 +1,7 @@
 // The strip under the footer while subagents or background jobs run: a header naming only
 // what is there, a row per subagent, then a row per job. Each row: its lamp in marker
 // column 1, the name, what it is doing (the column that gives way first) and a meter that
-// ends one column short of the edge (ported from agent_strip.py and job_rows.py).
+// ends one column short of the edge.
 import { lampSgr, palette, sgrJoin, type LampState } from '../ink/theme.js';
 import { stringWidth } from '../ink/string_width.js';
 import {
@@ -255,7 +255,7 @@ export function jobRows(
   return rows;
 }
 
-// The job page's band (0.5.0's render_job_band), on the panel background: its lamp, id and
+// The job page's band, on the panel background: its lamp, id and
 // command, its state and time; under them the file its output goes to.
 export function jobBand(job: Job, width: number, now = Date.now()): string[] {
   const p = palette();

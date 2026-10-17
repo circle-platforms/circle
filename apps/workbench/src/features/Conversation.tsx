@@ -2,7 +2,10 @@ import { preserveNativeEditing } from '../model/native-editable-shortcut';
 import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
 import { agentActivityText, isAgentActive } from '../model/activity';
-import { completionNoticeText } from '../model/completion';
+import {
+  completionNoticeText,
+  withoutDuplicateStops,
+} from '../model/completion';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -188,7 +191,7 @@ export function Conversation({
     (item) => item.id === session.workspaceId,
   )!;
   const messages = useMemo(
-    () => visibleMessages(session),
+    () => withoutDuplicateStops(visibleMessages(session)),
     [session.messages, session.branchIds, session.hiddenIds, session.leafId],
   );
   const composerWritable =

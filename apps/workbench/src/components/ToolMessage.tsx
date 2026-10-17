@@ -101,6 +101,15 @@ export function AgentToolLinks({
     </div>
   );
 }
+
+const SEARCH_QUOTA = 'Native search unavailable: search quota exceeded';
+const SEARCH_PROVIDER = 'Provider: DuckDuckGo';
+/** The provider line and its quota error, in the interface language. The stored text stays English. */
+function shownToolOutput(text: string): string {
+  return text
+    .replaceAll(SEARCH_PROVIDER, t(SEARCH_PROVIDER))
+    .replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA));
+}
 export function ToolMessage({
   tool,
   ownerSessionId,
@@ -284,7 +293,7 @@ export function ToolMessage({
                 copyText(
                   tab === 'input'
                     ? JSON.stringify(tool.input, null, 2)
-                    : tool.output,
+                    : shownToolOutput(tool.output),
                 ).then(
                   () => notify(t('copied')),
                   () => notify(t('clipboard unavailable')),
@@ -307,14 +316,19 @@ export function ToolMessage({
               </div>
               <details className="context-source">
                 <summary>{t('raw output')}</summary>
-                <DataBlock title={t('raw output')} value={tool.output} />
+                <DataBlock
+                  title={t('raw output')}
+                  value={shownToolOutput(tool.output)}
+                />
               </details>
             </>
           ) : (
             (tab === 'output' || hasToolInput(tool.input)) && (
               <DataBlock
                 title={tab === 'input' ? t('raw input') : t('raw output')}
-                value={tab === 'input' ? tool.input : tool.output}
+                value={
+                  tab === 'input' ? tool.input : shownToolOutput(tool.output)
+                }
               />
             )
           )}

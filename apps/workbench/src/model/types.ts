@@ -1,4 +1,5 @@
 import type { ModelCompletionFailureCode } from '../../../../src/model_completion';
+import type { WhatsNewNotice } from '../../../../src/whats_new';
 
 export type Theme = 'auto' | 'light' | 'dark';
 export type TextSize = 'small' | 'default' | 'large' | 'larger';
@@ -81,6 +82,8 @@ export interface Message {
   text: string;
   at: string;
   thinking?: string;
+  /** Seconds the model spent thinking, kept with the reply. */
+  thinkingSeconds?: number;
   tool?: ToolCall;
   /** Host-projected human execution, distinct from a model tool call. */
   shell?: {
@@ -100,11 +103,15 @@ export interface Message {
   planCompleted?: number;
   /** A core completion diagnostic; arbitrary model/provider text stays untranslated. */
   completionFailure?: ModelCompletionFailureCode;
+  /** The user stopped this reply, or a crash saved no reply. */
+  interrupted?: boolean;
   usage?: {
     input: number;
     output: number;
     cost: number | null;
     elapsed: string;
+    /** A stopped turn's price is an estimate. The dollar figure then ends with `~`. */
+    estimated?: boolean;
   };
 }
 export interface Todo {
@@ -154,6 +161,10 @@ export interface Session {
     input: number;
     output: number;
     cacheRead: number;
+    /** `N/A` when cache was not reported, otherwise a percent such as `63.7%`. */
+    cache?: string;
+    /** A turn is in flight and the endpoint has not reported input yet. */
+    inputUnknown?: boolean;
     cost: string;
     contextInput: number | null;
     contextWindow: number | null;
@@ -342,6 +353,8 @@ export interface RuntimeExtension {
   view?: unknown;
   tools: string[];
   commands: string[];
+  /** Slash commands named in extension.json, including while the extension is off. */
+  declaredCommands?: string[];
   events: string[];
   error?: string;
 }
@@ -422,6 +435,11 @@ export interface WorkbenchSnapshot {
   uiPlugins: string[];
   /** The last link an extension asked to open; the window opens each id once. */
   openUrl?: { id: string; url: string; sessionId: string };
+  /**
+   * The one-time upgrade notice, in both languages. Present only until it is
+   * dismissed, and only drawn on the new-session home page.
+   */
+  whatsNew?: WhatsNewNotice;
 }
 export interface CommandResult {
   openSession?: boolean;
@@ -482,6 +500,8 @@ export interface RuntimePort {
     payload?: Record<string, unknown>,
     sessionId?: string,
   ) => string | Promise<unknown>;
+  /** Drop a session error the page is already showing, so it is not also a toast. */
+  dismissActionError?: (sessionId?: string) => void;
   newSession: (workspaceId?: string) => string | Promise<string>;
   beginConversation: (
     input: BeginConversation,

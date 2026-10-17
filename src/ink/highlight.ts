@@ -1,7 +1,7 @@
 import { palette, sgrJoin } from './theme.js';
 
 export type HighlightKind =
-  'plain' | 'comment' | 'string' | 'number' | 'keyword';
+  'plain' | 'comment' | 'string' | 'number' | 'keyword' | 'call';
 export interface HighlightToken {
   kind: HighlightKind;
   text: string;
@@ -137,6 +137,51 @@ const WORDS: Record<string, string[]> = {
   ],
 };
 
+const BUILTINS: Record<string, string[]> = {
+  js: [
+    'console',
+    'Math',
+    'JSON',
+    'parseInt',
+    'parseFloat',
+    'Number',
+    'String',
+    'Boolean',
+    'Array',
+    'Object',
+    'Date',
+    'Map',
+    'Set',
+    'Promise',
+    'setTimeout',
+    'document',
+  ],
+  py: [
+    'print',
+    'len',
+    'range',
+    'str',
+    'int',
+    'list',
+    'dict',
+    'set',
+    'tuple',
+    'open',
+    'isinstance',
+    'enumerate',
+    'zip',
+    'map',
+    'filter',
+    'sum',
+    'min',
+    'max',
+    'abs',
+  ],
+  sh: ['cd', 'export', 'set', 'unset', 'source', 'printf'],
+  go: ['println', 'print', 'make', 'len', 'cap', 'append', 'panic'],
+  rust: ['println', 'print', 'vec', 'format', 'Some', 'None', 'Ok', 'Err'],
+};
+
 const ALIAS: Record<string, keyof typeof WORDS> = {
   js: 'js',
   javascript: 'js',
@@ -202,7 +247,12 @@ export function highlightTokens(
     }
     const word = /^\b[A-Za-z_][A-Za-z0-9_]*\b/.exec(rest);
     if (word) {
-      push(words.has(word[0]) ? 'keyword' : 'plain', word[0]);
+      const call = /^\s*\(/.test(rest.slice(word[0].length));
+      const builtin = (BUILTINS[family] ?? []).includes(word[0]);
+      push(
+        words.has(word[0]) ? 'keyword' : call || builtin ? 'call' : 'plain',
+        word[0],
+      );
       index += word[0].length;
       continue;
     }
@@ -221,6 +271,7 @@ export function highlightLine(language: string, line: string): string {
     string: p.green,
     number: p.yellow,
     keyword: p.blue,
+    call: p.call,
   };
   let out = '';
   let style = '';

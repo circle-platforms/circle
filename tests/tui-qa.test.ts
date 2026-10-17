@@ -17,7 +17,7 @@ import { messageCosts, formatCosts } from '../src/pricing.js';
 import { contextInputOf, footerRow } from '../src/tui/status_rows.js';
 import { thinkingRows } from '../src/tui/tool_rows.js';
 import { variableCopy, hotkeysText } from '../src/tui/slash_commands.js';
-import { Picker } from '../src/ink/components/picker.js';
+import { matchSnippet, Picker } from '../src/ink/components/picker.js';
 import { DEFAULT_DARK, buildPalette, setPalette } from '../src/ink/theme.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -32,6 +32,18 @@ test('an unanswered prompt is marked interrupted once', (t) => {
   cleanup(t, () => store.close());
   const session = store.create(home, 'model');
   store.append(session.id, [{ id: 'u', role: 'user', content: 'hello' }]);
+  const updated = store.get(session.id)!.updated;
+  // A 1.6 session has the user message and no open-turn row. Opening it must
+  // not invent an interrupted line or move the session's time.
+  store.repairInterrupted(session.id);
+  assert.equal(
+    store
+      .messages(session.id)
+      .some((message) => message.internal === 'interrupted'),
+    false,
+  );
+  assert.equal(store.get(session.id)!.updated, updated);
+  store.noteTurn(session.id);
   store.repairInterrupted(session.id);
   store.repairInterrupted(session.id);
   const marks = store
@@ -39,6 +51,7 @@ test('an unanswered prompt is marked interrupted once', (t) => {
     .filter((message) => message.internal === 'interrupted');
   assert.equal(marks.length, 1);
   assert.equal(marks[0]!.display, 'Interrupted');
+  assert.equal(store.get(session.id)!.updated, updated);
   const streamed = store.create(home, 'model');
   store.append(streamed.id, [
     { id: 'u2', role: 'user', content: 'go on' },
@@ -51,12 +64,13 @@ test('an unanswered prompt is marked interrupted once', (t) => {
       usage: { input_tokens: 10, output_tokens: 4, cache_read_tokens: 0 },
     },
   ]);
+  store.noteTurn(streamed.id);
   store.repairInterrupted(streamed.id);
   store.repairInterrupted(streamed.id);
   const after = store
     .messages(streamed.id)
     .filter((message) => message.internal === 'interrupted');
-  assert.equal(after.length, 1);
+  assert.equal(after.length, 0);
   const finished = store.create(home, 'model');
   store.append(finished.id, [
     { id: 'u3', role: 'user', content: 'done' },
@@ -172,7 +186,7 @@ test('a partial reply reports the same output on the turn line and in the footer
   assert.equal(footer.includes('cache 0.0%'), false);
   assert.match(footer, /cache N\/A/);
   assert.equal(answer?.cost?.amount, 0.0035);
-  assert.equal(formatCosts([messageCosts([answer!])]), '~$0.0035');
+  assert.equal(formatCosts([messageCosts([answer!])]), '$0.0035~');
   const unpriced = messageCosts([
     answer!,
     {
@@ -184,7 +198,7 @@ test('a partial reply reports the same output on the turn line and in the footer
       cost: { ...answer!.cost!, amount: null, currency: '' },
     },
   ]);
-  assert.equal(formatCosts([unpriced]), '~$0.0035+');
+  assert.equal(formatCosts([unpriced]), '$0.0035~+');
   const estimateOnly = messageCosts([
     {
       ...answer!,
@@ -445,6 +459,14 @@ test('help text wraps on spaces, code fences name their language, and a narrow f
   const kinds = highlightTokens('ts', 'const n = "hi";');
   assert.equal(kinds.find((token) => token.text === 'const')?.kind, 'keyword');
   assert.equal(kinds.find((token) => token.text === '"hi"')?.kind, 'string');
+  const calls = highlightTokens('py', 'print(len(items))');
+  assert.equal(calls.find((token) => token.text === 'print')?.kind, 'call');
+  assert.equal(calls.find((token) => token.text === 'len')?.kind, 'call');
+  assert.equal(
+    highlightTokens('ts', 'greet(name)').find((token) => token.text === 'greet')
+      ?.kind,
+    'call',
+  );
   const footer = stripAnsi(
     footerRow(
       {
@@ -478,6 +500,50 @@ test('a focused list row is marked and a rename starts with the old name selecte
   const asked = stripAnsi(picker.rows(80).join('\n'));
   assert.match(asked, /Rename: Z/);
   assert.doesNotMatch(asked, /Rename: question/);
+  const found = new Picker(
+    'Sessions',
+    [
+      {
+        key: 'a',
+        label: '中秋节',
+        meta: '3m',
+        search: 'the moon is very round tonight',
+        detail: 'the moon is very round tonight',
+      },
+    ],
+    () => {},
+    () => {},
+  );
+  found.query = 'moon';
+  assert.match(stripAnsi(found.rows(80).join('\n')), /moon is very round/);
+  assert.match(matchSnippet('the moon is very round tonight', 'moon'), /moon/);
+  const sessions = new Picker(
+    'Sessions',
+    Array.from({ length: 12 }, (_, index) => ({
+      key: String(index),
+      label: `session ${index}`,
+      current: index === 0,
+    })),
+    () => {},
+    () => {},
+    { focusKey: '4' },
+  );
+  const nearTop = stripAnsi(sessions.rows(40, 6).join('\n'));
+  assert.match(nearTop, /session 0/);
+  assert.equal(nearTop.includes('more above'), false);
+  sessions.focus = 11;
+  const further = stripAnsi(sessions.rows(40, 6).join('\n'));
+  const lines = further.split('\n').map((line) => line.trim());
+  const above = lines.findIndex((line) => line.includes('↑ 6 more above'));
+  const search = lines.findIndex((line) => line.includes('type to search'));
+  assert.ok(above > search);
+  assert.match(lines[above + 1] ?? '', /session /);
+  assert.equal(
+    lines.slice(search + 1, above).some((line) => line.includes('session ')),
+    false,
+  );
+  assert.match(further, /> session 11/);
+  assert.equal(further.includes('session 0'), false);
 });
 
 test('/variables and /secrets omit the Windows placeholder except on Windows', () => {

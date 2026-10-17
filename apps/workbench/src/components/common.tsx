@@ -71,13 +71,24 @@ export function SearchInput({
     </div>
   );
 }
-export function Facts({ values }: { values: Record<string, ReactNode> }) {
+export function Facts({
+  values,
+  notes = [],
+}: {
+  values: Record<string, ReactNode>;
+  notes?: readonly string[];
+}) {
   return (
     <dl className="facts">
       {Object.entries(values).map(([key, value]) => (
         <div key={key}>
           <dt>{key}</dt>
           <dd>{value}</dd>
+        </div>
+      ))}
+      {notes.map((note) => (
+        <div key={note} className="facts-note">
+          <dd>{note}</dd>
         </div>
       ))}
     </dl>
@@ -163,6 +174,8 @@ const STATES: Record<string, () => string> = {
   modified: () => t('modified'),
   'native browser': () => t('native browser'),
   'not opened': () => t('not opened'),
+  'signed in': () => t('signed in'),
+  'signed out': () => t('signed out'),
 };
 export function Status({ value }: { value: string }) {
   return (

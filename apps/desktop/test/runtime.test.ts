@@ -1724,6 +1724,50 @@ test('cancel aborts the model, invalidates the interaction, and preserves raw hi
   );
 });
 
+test('stopping mid-stream keeps the partial reply and marks the turn interrupted', async (t) => {
+  const f = await setup(t, [
+    (request) =>
+      new Promise((_resolve, reject) => {
+        request.token('partial');
+        request.signal.addEventListener('abort', () => {
+          request.token(' LATE');
+          reject(request.signal.reason ?? Error('Interrupted'));
+        });
+      }),
+  ]);
+  assert.equal(
+    (
+      await f.call('prompt', {
+        text: 'explain the files in this workspace please',
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.some((session) =>
+          session.messages.some((message) => message.text.includes('partial')),
+        ),
+    'partial text',
+  );
+  assert.equal((await f.call('abort')).ok, true);
+  await wait(() => activeSession(f).state === 'idle', 'the stopped turn');
+  const session = activeSession(f);
+  const reply = session.messages.find(
+    (message) => message.role === 'assistant',
+  );
+  assert.equal(reply?.text, 'partial');
+  assert.equal(reply?.usage?.estimated, true);
+  assert.ok(
+    session.messages.some((message) => message.text === '✖ Interrupted'),
+  );
+  assert.equal(session.meters?.cache, 'N/A');
+  if (session.meters?.cost.includes('$'))
+    assert.match(session.meters.cost, /^~/);
+});
+
 test('checkpoint branches, import and restart preserve native identities and model inputs', async (t) => {
   const f = await setup(t, [
     { message: assistant('first answer') },
@@ -5507,6 +5551,95 @@ test('trusted scratch cold start loads the enabled hub before any prompt trust o
   assert.equal(f.model.requests.length, 0);
 });
 
+test('hub sign-in stays on the page after another session is selected', async (t) => {
+  const f = await coldStartFixture(t, 'scratch', async (home) => {
+    const data = join(home, 'extension_data', 'hub');
+    const secrets = join(home, 'extension_secrets');
+    await mkdir(data, { recursive: true });
+    await mkdir(secrets, { recursive: true });
+    await writeFile(
+      join(data, 'config.json'),
+      JSON.stringify({
+        url: 'http://127.0.0.1:7410',
+        username: 'ada',
+        scopeId: 'scp_lab',
+      }),
+    );
+    await writeFile(
+      join(secrets, 'hub.secrets.json'),
+      JSON.stringify({ token: 'desktop-hub-token' }),
+    );
+  });
+  await f.controller.initialize();
+  const hub = () =>
+    f.controller.snapshot().extensions.find((item) => item.name === 'hub');
+  await wait(
+    () =>
+      (hub()?.view as { signedIn?: boolean } | undefined)?.signedIn === true &&
+      Boolean(hub()?.status?.text.includes('ada')),
+    'saved hub sign-in',
+  );
+  const call = (
+    name: RuntimeCommandName,
+    payload: Record<string, unknown> = {},
+    sessionId = f.controller.snapshot().activeSessionId,
+  ) =>
+    f.controller.dispatch({
+      id: randomUUID(),
+      name,
+      payload,
+      sessionId,
+    });
+  const first = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await call('rename-session', { id: first, title: 'kept' })).ok,
+    true,
+  );
+  const created = await call('new-session');
+  assert.equal(created.ok, true, created.error);
+  const second = (created.data as { sessionId: string }).sessionId;
+  assert.notEqual(second, first);
+  assert.equal((hub()?.view as { signedIn?: boolean }).signedIn, true);
+  assert.match(hub()?.status?.text ?? '', /ada/);
+  assert.ok(hub()?.commands.includes('hub'));
+  assert.ok(
+    f.controller.snapshot().commands.some((command) => command.name === 'hub'),
+  );
+  assert.equal(
+    (await call('rename-session', { id: second, title: 'other' }, second)).ok,
+    true,
+  );
+  assert.equal(
+    (await call('rename-session', { id: first, title: '' }, first)).ok,
+    true,
+  );
+  assert.equal((await call('select-session', { id: first })).ok, true);
+  assert.equal((hub()?.view as { signedIn?: boolean }).signedIn, true);
+  const back = await call('select-session', { id: second });
+  assert.equal(back.ok, true, back.error);
+  await wait(
+    () =>
+      (hub()?.view as { signedIn?: boolean } | undefined)?.signedIn === true,
+    'sign-in after the loaded session was left',
+  );
+  assert.match(hub()?.status?.text ?? '', /ada/);
+  const status = await call(
+    'custom-command',
+    { name: 'hub', args: '' },
+    second,
+  );
+  assert.equal(status.ok, true, status.error);
+  const session = f.controller
+    .snapshot()
+    .sessions.find((item) => item.id === second);
+  assert.equal(
+    session?.messages.some((message) =>
+      /signed in|已登录|api 1\.0\.0/.test(message.text),
+    ),
+    false,
+  );
+});
+
 test('cold start leaves an untrusted workspace and its extension code untouched', async (t) => {
   const f = await coldStartFixture(t, 'untrusted', async (_home, workspace) => {
     const folder = join(workspace, '.circle/extensions/untrusted');
@@ -5616,7 +5749,15 @@ test(
     assert.equal(existsSync(join(f.home, 'register-aborted')), true);
     assert.equal(f.updates.length, published);
     assert.ok(
-      f.updates.every((update) => update.snapshot.extensions.length === 0),
+      f.updates.every((update) =>
+        update.snapshot.extensions.every(
+          (extension) =>
+            extension.tools.length === 0 &&
+            extension.commands.length === 0 &&
+            !extension.error,
+        ),
+      ),
+      'a closed registration is not installed; discovery may already list extensions',
     );
     assert.equal(f.model.requests.length, 0);
   },
@@ -5735,7 +5876,15 @@ for (const mode of ['released', 'bounded'] as const)
         );
         assert.equal(f.model.requests.length, 0);
         assert.ok(
-          f.updates.every((update) => update.snapshot.extensions.length === 0),
+          f.updates.every((update) =>
+            update.snapshot.extensions.every(
+              (extension) =>
+                extension.tools.length === 0 &&
+                extension.commands.length === 0 &&
+                !extension.error,
+            ),
+          ),
+          'a closed registration is not installed; discovery may already list extensions',
         );
       } finally {
         release();
@@ -5745,3 +5894,97 @@ for (const mode of ['released', 'bounded'] as const)
       }
     },
   );
+
+test('opening another session still works while hub login is waiting for a password', async (t) => {
+  const f = await setup(t, [
+    { message: assistant('started') },
+    { message: assistant('second') },
+  ]);
+  saveSettingsChange(f.home, (settings) => {
+    settings.extensions.hub = { enabled: true };
+  });
+  assert.equal((await f.call('reload')).ok, true);
+  assert.equal((await f.call('prompt', { text: 'hello' })).ok, true);
+  await wait(() => {
+    const current = f.controller
+      .snapshot()
+      .sessions.find(
+        (session) => session.id === f.controller.snapshot().activeSessionId,
+      );
+    return current?.state === 'idle' && !current.turn;
+  }, 'first session is idle');
+  const first = f.controller.snapshot().activeSessionId;
+  const created = await f.call('new-session');
+  assert.equal(created.ok, true, created.error);
+  const second = f.controller.snapshot().activeSessionId;
+  assert.notEqual(second, first);
+  assert.equal((await f.call('prompt', { text: 'again' })).ok, true);
+  await wait(() => {
+    const current = f.controller
+      .snapshot()
+      .sessions.find((session) => session.id === second);
+    return current?.state === 'idle' && !current.turn;
+  }, 'second session is idle');
+  assert.equal((await f.call('select-session', { id: first })).ok, true);
+  const loggingIn = f.call('custom-command', {
+    name: 'hub',
+    args: 'login http://127.0.0.1:9 tester',
+  });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some(
+          (row) => row.kind === 'secret' && row.status === 'pending',
+        ),
+    'password card',
+  );
+  const switched = await f.call('select-session', { id: second });
+  assert.equal(switched.ok, true, switched.error);
+  assert.equal(f.controller.snapshot().activeSessionId, second);
+  const card = f.controller
+    .snapshot()
+    .interactions.find(
+      (row) => row.kind === 'secret' && row.status === 'pending',
+    )!;
+  assert.equal(
+    (
+      await f.call(
+        'answer',
+        { id: card.id, revision: card.revision, cancel: true },
+        card.sessionId,
+      )
+    ).ok,
+    true,
+  );
+  const finished = await loggingIn;
+  assert.equal(finished.ok, true, finished.error);
+});
+
+test('a hub password passed to the command is not asked for and does not enter the snapshot', async (t) => {
+  const f = await setup(t, []);
+  saveSettingsChange(f.home, (settings) => {
+    settings.extensions.hub = { enabled: true };
+  });
+  assert.equal((await f.call('reload')).ok, true);
+  const password = 'desk-secret-4419';
+  const reply = await f.call('custom-command', {
+    name: 'hub',
+    args: 'login http://127.0.0.1:9 someone',
+    secret: password,
+  });
+  assert.equal(reply.ok, false);
+  assert.match(String(reply.error), /cannot reach/);
+  assert.equal(
+    f.controller.snapshot().interactions.some((row) => row.kind === 'secret'),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(f.controller.snapshot()).includes(password),
+    false,
+  );
+  assert.equal(JSON.stringify(f.updates).includes(password), false);
+  const stored = await readFile(join(f.home, 'settings.json'), 'utf8');
+  assert.match(stored, /http:\/\/127\.0\.0\.1:9/);
+  assert.equal(stored.includes(password), false);
+});

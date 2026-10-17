@@ -53,6 +53,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `-xt`, `--exclude-tools LIST` | The model does not get these tools. |
 | `-nt`, `--no-tools` | The model gets no tools. |
 | `--yolo` | With `-p`, `--line` or `--mode`: run commands and file changes without asking. See [Print mode](#print-mode). |
+| `--trust` | Trust the folder for this run and remember it in `trusted_folders`, including when nothing is at a terminal. A folder already trusted, or sitting inside one, does not need it. See [Print mode](#print-mode). |
 | `--extensions` | With `-p`, `--line` or `--mode`: load MCP servers and enabled extensions, which print, line and rpc modes otherwise leave out. See [Print mode](#print-mode). |
 | `--verbose` | With `-p` or `--line`: show each tool call, calls not run, failed results, retries and the tokens used on standard error. |
 | `-v`, `--version` | Print the version and exit. |
@@ -92,7 +93,7 @@ A question from the model comes back to it as text, and it asks the question in 
 
 Print mode does not load MCP servers, extensions or custom commands, unless you add `--extensions`: then MCP servers and enabled extensions load before the first prompt, as in the full-screen interface, and their tools are there from the first turn. Custom commands still are not. It does apply `credential_files` and a project's `.circle/settings.json`. The conversation is saved, so `circle -c` (with or without `-p`) can go on with it.
 
-Print mode, line mode and RPC mode need Circle set up and the folder trusted. When standard input is a terminal, they ask the setup and trust questions line by line first; otherwise they stop with exit code `2`.
+Print mode, line mode and RPC mode need Circle set up and the folder trusted. When standard input is a terminal, they ask the setup and trust questions line by line first; otherwise they stop with exit code `2`, unless you pass `--trust`, which trusts this folder and remembers it for later runs. A trusted parent covers the folders inside it.
 
 | Exit code | When |
 |---|---|
@@ -151,8 +152,6 @@ A copy that runs from a git checkout is not changed: `circle update` stops with 
 
 If GitHub is reached through a proxy that inspects HTTPS, give Circle its certificate with `SSL_CERT_FILE=/path/to/ca.pem`. `circle update` downloads with it too, so the installer's own setting (`CURL_CA_BUNDLE` on macOS and Linux, the Windows certificate store on Windows) matters only for the one-command install. See [Known issues](known-issues.md#install-and-release).
 
-The Python versions' `circle update` (0.5.0 and older) cannot install this version. See [Installation](installation.md#replacing-the-python-circle).
-
 ### The reminder
 
 When the full-screen interface starts, Circle checks once a day whether a newer release exists, and if it does, adds one faint line to the conversation: ``Circle 1.1.0 is available (you have 1.0.0) · run `circle update` ``. The check is a `HEAD` request to `github.com/<repo>/releases/latest`, made in the background; it sends nothing beyond what any web request carries. The answer is kept in `update-check.json` in the [data folder](configuration.md#where-circle-keeps-things). Print mode, line mode and RPC mode never check.
@@ -173,13 +172,15 @@ circle uninstall [--purge] [--yes]
 
 `circle uninstall` removes what the installer put on the machine: the `circle` launcher, every version under the prefix with `current.ref` and `installation.json`, and the PATH change — the lines marked `# circle path` in `~/.zshrc` or `~/.bashrc`, or on Windows the launcher's folder in your user `PATH`. The data folder stays unless `--purge` deletes it too. On a terminal it lists what goes and asks; anywhere else it needs `--yes`. Files of other programs in the prefix folder, and a startup-file block for another folder, are left alone.
 
-Like `circle update`, it works on a copy that `install.sh` or `install.ps1` put in place: a git checkout is not touched, and the command stops with `circle uninstall requires an installer-managed installation`. It also stops, changing nothing, while another circle session runs from the same installation. On Windows the launcher and the running version's own files are still in use while circle runs; a small helper removes them, and the launcher folder and prefix when nothing else is left in them, a moment after this session ends. To open a folder that is called `uninstall`, write `./uninstall`.
+Like `circle update`, it works on a copy that `install.sh` or `install.ps1` put in place: a git checkout is not touched, and the command stops with `circle uninstall requires an installer-managed installation`. It also stops, changing nothing, while another circle session runs from the same installation. On Windows it lists the running programs only when a program of the installation is in use; if that list takes longer than 30 seconds, or no process in it runs the program in use, it names the program and stops the same way. On Windows the launcher and the running version's own files are still in use while circle runs; a small helper removes them, and the launcher folder and prefix when nothing else is left in them, a moment after this session ends. To open a folder that is called `uninstall`, write `./uninstall`.
 
 | Code | When |
 |---|---|
 | `0` | Removed. A PATH entry that could not be removed is a warning, not a failure. |
 | `1` | The question was declined, another session is running, the copy was not installed by the installer, the receipt could not be read, or a removal failed. |
 | `2` | An unknown option, or no terminal and no `--yes`. |
+
+When the Windows process check stops because an executable is in use and no process was identified, its error includes the last captured query boundary, bounded marker counts, the native exit or timeout code, the signal and process ID the query runner reported, and how much output it returned, in UTF-16 code units and lines; the output itself is not shown. A missing marker or runner value is `unknown`; a count of 32 may be capped. These observations do not identify the operation that stalled: reaching `COMPLETE` does not establish a successful query, a reported process ID does not establish that the query started, and a reported signal does not establish what stopped it.
 
 The desktop application is removed separately: on Windows through Settings → Apps, on macOS and Linux by deleting the application.
 

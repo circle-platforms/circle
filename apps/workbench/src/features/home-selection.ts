@@ -38,9 +38,11 @@ export function selectedHomeProject(
   }
   const active = sessions.find((session) => session.id === activeSessionId);
   const projects = homeProjects(workspaces);
-  return (
-    projects.find((item) => item.id === active?.workspaceId) ?? projects[0]
-  );
+  const current = projects.find((item) => item.id === active?.workspaceId);
+  // An untrusted folder is not the default: sending would stop on the trust
+  // question, and the person did not choose that folder for this new session.
+  if (current?.trusted) return current;
+  return projects.find((item) => item.trusted);
 }
 
 /** `null` is the explicit no-project choice. Omit the id to keep the current project. */

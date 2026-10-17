@@ -79,6 +79,11 @@ export interface Message {
   truncated?: boolean;
   completion?: ModelCompletion;
   recoverable?: boolean;
+  /**
+   * The record a message imported from the Python releases was read from. Sessions imported
+   * by earlier versions keep it in circle.sqlite; nothing reads it, and summary requests
+   * leave it out.
+   */
   /** Host-recorded bounded command facts; never a claim of arbitrary tree cleanup. */
   commandExecutions?: import('./command_process.js').CommandExecutionReceipt[];
   legacy_data?: { type: string; data: Record<string, unknown> };

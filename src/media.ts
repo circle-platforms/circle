@@ -21,6 +21,9 @@ export function mediaType(
 ): MediaAttachment['mime_type'] | undefined {
   return MIME[extname(path).toLowerCase()];
 }
+// Messages as a summary request carries them: attachments without their bytes, and without
+// the provider's own blocks or the record an imported message was read from, which can hold
+// the same images again.
 export function summaryMessages(messages: Message[]): unknown[] {
   return messages.map(
     ({
@@ -104,43 +107,6 @@ export function attachmentFromBase64(
   if (item.data !== data) throw new Error('invalid attachment base64');
   validateAttachments([item]);
   return item;
-}
-export function inlineLegacyAttachments(
-  blocks: unknown[],
-  filename = 'attachment',
-): MediaAttachment[] {
-  const items: MediaAttachment[] = [];
-  for (const block of blocks) {
-    if (!isRecord(block)) continue;
-    const source = isRecord(block.source) ? block.source : undefined;
-    const file = isRecord(block.file) ? block.file : undefined;
-    const image = isRecord(block.image_url)
-      ? block.image_url.url
-      : block.image_url;
-    const uri = typeof image === 'string' ? image : file?.file_data;
-    const match =
-      typeof uri === 'string' ? /^data:([^;,]+);base64,(.*)$/s.exec(uri) : null;
-    const mime = block.mime_type ?? source?.media_type ?? match?.[1];
-    const data =
-      block.base64 ??
-      (source?.type === 'base64' ? source.data : undefined) ??
-      match?.[2];
-    if (
-      typeof mime !== 'string' ||
-      typeof data !== 'string' ||
-      !Object.values(MIME).includes(mime as MediaAttachment['mime_type'])
-    )
-      continue;
-    const name =
-      typeof file?.filename === 'string'
-        ? file.filename
-        : `${filename.replaceAll('\\', '/').split('/').at(-1)}-${items.length + 1}.${mime.split('/')[1]}`;
-    items.push(
-      attachmentFromBase64(data, mime as MediaAttachment['mime_type'], name),
-    );
-  }
-  validateAttachments(items);
-  return items;
 }
 export async function readAttachment(
   path: string,

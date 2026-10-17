@@ -1,4 +1,4 @@
-// Mouse selection in the session screen, as circle/tui/session_app.py (0.5.0) wired it:
+// Mouse selection in the session screen:
 // drag selects and copies on release, a double click a word, a triple click a line,
 // dragging to the transcript's edge scrolls, ctrl+c copies again and esc clears.
 import type { InputEvent } from '../ink/parse_keypress.js';
@@ -79,8 +79,8 @@ export class MouseSelection {
       viewport: view.viewport && { ...view.viewport },
       key,
     };
-    // A transcript scrolled back moves when rows arrive (0.5.0's held still), so the
-    // selection follows its text then too; at the bottom it stays put, as in 0.5.0.
+    // A transcript scrolled back moves when rows arrive, so the selection follows its
+    // text then too; at the bottom it stays put.
     if (
       before?.viewport &&
       view.viewport &&

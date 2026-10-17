@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { canonicalPath, circleHome, normalizeWorkspace } from './paths.js';
+import { commandTouchesRunOutput, isExistingRunOutput } from './run_outputs.js';
 import { isRecord, readJson, writePrivateJson } from './settings.js';
 
 export type Verdict = 'DENY' | 'ASK' | 'ASK_FORCED';
@@ -560,8 +561,9 @@ export class ApprovalStore {
       const raw = readJson(this.path(thread));
       if (isRecord(raw))
         return {
-          // Python 0.5.0 revoked a rule by marking it instead of removing
-          // it; a marked rule stays revoked here, and the next save drops it.
+          // The Python releases revoked a rule by marking it instead of removing
+          // it. A conversation of theirs may still have such a file: a marked rule
+          // stays revoked, and the next save drops it.
           rules: (Array.isArray(raw.rules) ? (raw.rules as Rule[]) : []).filter(
             (rule) =>
               isRecord(rule) && !(rule as { revoked?: unknown }).revoked,
@@ -696,12 +698,42 @@ export class ApprovalPolicy {
   yoloEnabled(thread: string): boolean {
     return this.mode(thread) === 'auto';
   }
+  private absolute(path: string): string {
+    return this.resolvePath
+      ? this.resolvePath(path)
+      : normalizeWorkspace(resolve(this.workspace, path));
+  }
+  // Existing skill-run outputs are not covered by accept-edits or a saved
+  // workspace rule. Auto mode still proceeds; every other mode asks again.
+  private overwritesRunOutput(
+    tool: string,
+    args: Record<string, unknown>,
+  ): boolean {
+    const paths =
+      tool === 'apply_patch'
+        ? [
+            ...String(args.patchText || '').matchAll(
+              /^\*\*\* (?:Add File|Update File|Delete File|Move to):\s*(.+)$/gm,
+            ),
+          ].map((match) => match[1]!)
+        : [String(args.file_path || args.path || '')];
+    return paths.some(
+      (path) =>
+        path && isExistingRunOutput(this.workspace, this.absolute(path)),
+    );
+  }
   review(tool: string, args: Record<string, unknown>): Review {
     if (tool === 'execute') {
       let command = String(args.command || '');
       const found = classifyCommand(command, this.credentialFiles);
       if (found.verdict !== 'ASK' || found.pattern === 'read-only')
         return found;
+      if (commandTouchesRunOutput(this.workspace, command))
+        return review(
+          'ASK_FORCED',
+          'may overwrite an existing skill-run output',
+          { warn_delete: true },
+        );
       command = stripLeadingCd(command, this.workspace);
       const prefix = commandPrefix(command);
       const words = prefix.length ? (commandTokens(command) ?? []) : [];
@@ -715,6 +747,13 @@ export class ApprovalPolicy {
         ),
       };
     }
+    if (
+      ['write_file', 'edit_file', 'apply_patch', 'delete'].includes(tool) &&
+      this.overwritesRunOutput(tool, args)
+    )
+      return review('ASK_FORCED', 'overwrites an existing skill-run output', {
+        warn_delete: true,
+      });
     if (
       tool === 'delete' ||
       (tool === 'apply_patch' &&
@@ -730,11 +769,12 @@ export class ApprovalPolicy {
               ),
             ].map((match) => match[1]!)
           : [String(args.file_path || args.path || '')];
+      const root = canonicalPath(this.workspace);
       const inside =
         paths.length > 0 &&
         paths.every((path) => {
           const rel = relative(
-            canonicalPath(this.workspace),
+            root,
             canonicalPath(
               this.resolvePath
                 ? this.resolvePath(path)

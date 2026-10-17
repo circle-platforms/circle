@@ -1,5 +1,5 @@
 export interface HighlightToken {
-  kind: 'plain' | 'comment' | 'string' | 'number' | 'keyword';
+  kind: 'plain' | 'comment' | 'string' | 'number' | 'keyword' | 'call';
   text: string;
 }
 
@@ -213,7 +213,8 @@ function hashComment(language: string): boolean {
 
 /** A small highlighter for fenced blocks: comments, strings, numbers and keywords. */
 export function highlight(code: string, language = ''): HighlightToken[] {
-  const words = new Set(WORDS[ALIAS[language.toLowerCase()] ?? ''] ?? []);
+  const family = ALIAS[language.toLowerCase()] ?? '';
+  const words = new Set(WORDS[family] ?? []);
   const hash = hashComment(language.toLowerCase());
   const out: HighlightToken[] = [];
   let i = 0;
@@ -273,7 +274,21 @@ export function highlight(code: string, language = ''): HighlightToken[] {
     }
     const word = /^[A-Za-z_][\w$]*/.exec(rest);
     if (word) {
-      push(words.has(word[0]) ? 'keyword' : 'plain', word[0]);
+      const call = /^\s*\(/.test(rest.slice(word[0].length));
+      const builtins =
+        family === 'py'
+          ? ['print', 'len', 'range', 'str', 'int', 'open', 'list', 'dict']
+          : family === 'js'
+            ? ['console', 'Math', 'JSON', 'parseInt', 'document', 'Promise']
+            : [];
+      push(
+        words.has(word[0])
+          ? 'keyword'
+          : call || builtins.includes(word[0])
+            ? 'call'
+            : 'plain',
+        word[0],
+      );
       i += word[0].length;
       continue;
     }

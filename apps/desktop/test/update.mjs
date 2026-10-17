@@ -23,8 +23,8 @@ const appPath = process.env.CIRCLE_DESKTOP_APP_PATH;
 const executable = process.env.CIRCLE_DESKTOP_EXECUTABLE;
 if (!appPath || !executable)
   throw Error('set CIRCLE_DESKTOP_APP_PATH and CIRCLE_DESKTOP_EXECUTABLE');
-if (!['darwin', 'win32'].includes(process.platform)) {
-  console.log('the desktop update installs itself on macOS and Windows only');
+if (!['darwin', 'win32', 'linux'].includes(process.platform)) {
+  console.log(`the desktop update is not built for ${process.platform}`);
   process.exit(0);
 }
 if (process.platform === 'win32' && !process.env.CIRCLE_DESKTOP_UPDATE_MSI)
@@ -48,6 +48,23 @@ const msiexec = (...args) => {
 };
 // Each stage says when it starts, so a run that hangs shows where
 const stage = (text) => console.log(`-- ${text}`);
+// The packaged folder's helper is setuid. A copy, and the folder an update
+// swaps in, are not: Electron stops when the helper is there but not root 4755.
+const ensureSandbox = (folder) => {
+  if (process.platform !== 'linux') return;
+  const helper = join(folder, 'chrome-sandbox');
+  if (!existsSync(helper)) return;
+  for (const args of [
+    ['chown', 'root:root', helper],
+    ['chmod', '4755', helper],
+  ]) {
+    const result = spawnSync('sudo', args, { encoding: 'utf8' });
+    if (result.status !== 0)
+      throw Error(
+        `sudo ${args.join(' ')} exited with ${result.status ?? result.error}: ${result.stderr ?? ''}`,
+      );
+  }
+};
 const { version } = JSON.parse(
   await readFile(join(root, '../../package.json'), 'utf8'),
 );
@@ -129,6 +146,9 @@ try {
     await cp(appPath, installed, { recursive: true, verbatimSymlinks: true });
   installedPath = installed;
   const program = join(installed, relative(appPath, executable));
+  // cp drops root ownership, and a present chrome-sandbox that is not root
+  // and mode 4755 makes Electron abort instead of starting.
+  ensureSandbox(dirname(program));
   // The newer version, packaged as a release is
   const release = join(temp, 'release');
   const build = (script) => {
@@ -236,11 +256,22 @@ try {
     .waitFor();
   check('check now finds the newer version; settings and the sidebar offer it');
   await control.getByRole('button', { name: 'update', exact: true }).click();
+  const helper = join(dirname(program), 'chrome-sandbox');
+  const setuid =
+    process.platform === 'linux' &&
+    existsSync(helper) &&
+    ((await stat(helper)).mode & 0o4000) !== 0;
+  const installName = setuid ? 'quit and replace' : 'restart to update';
   await control
-    .getByRole('button', { name: 'restart to update' })
+    .getByRole('button', { name: installName })
     .waitFor({ timeout: 120000 });
   check('the update downloads and is checked');
-  await control.getByRole('button', { name: 'restart to update' }).click();
+  await control.getByRole('button', { name: installName }).click();
+  if (setuid) {
+    const dialog = view.getByRole('dialog');
+    await dialog.getByText('sudo chmod 4755').waitFor();
+    await dialog.getByRole('button', { name: 'quit and replace' }).click();
+  }
   stage('restarting to update');
   // An installer that does not start leaves the application open, saying why. A line every
   // 20 seconds shows that the machine is still there.
@@ -265,6 +296,25 @@ try {
   await within(browser.close(), 10000).catch(() => {});
   check('the application quits for the installer');
 
+  if (setuid) {
+    const updates = join(temp, 'data', 'updates');
+    const end = Date.now() + 120000;
+    let log = '';
+    while (Date.now() < end) {
+      if (existsSync(join(updates, 'install.log')))
+        log = await readFile(join(updates, 'install.log'), 'utf8');
+      if (/installed/.test(log)) break;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    assert.match(log, /installed/);
+    assert.match(log, /sudo chmod 4755/);
+    stage('starting the replaced copy; a setuid update does not');
+    ensureSandbox(dirname(program));
+    running = spawn(program, [`--remote-debugging-port=${port}`], {
+      env,
+      stdio: ['ignore', output, output],
+    });
+  }
   stage('waiting for the new version to start');
   const beat2 = setInterval(
     () => stage('still waiting for the new version'),

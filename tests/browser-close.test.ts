@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -170,6 +170,36 @@ test(
     await browser.close();
     assert.equal(child.signalCode, 'SIGKILL');
     assert.equal(child.exitCode, null);
+  },
+);
+
+test(
+  'a browser that exits just as it is force-stopped has stopped, though macOS refuses to signal it',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    // Its own process group, as launch gives the browser; it exits at once
+    const child = spawn(process.execPath, ['-e', ''], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    cleanup(t, () => {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+    });
+    // Node reaps it only once this turn of the event loop ends. Until then its group holds
+    // only an exited process, which macOS refuses to signal (EPERM), as when the browser
+    // exits at the end of its grace period, before Node has seen the exit
+    const state = () =>
+      spawnSync('ps', ['-o', 'stat=', '-p', String(child.pid)], {
+        encoding: 'utf8',
+      }).stdout.trim();
+    const end = Date.now() + 10_000;
+    while (!state().startsWith('Z'))
+      if (Date.now() > end) throw Error(`the child did not exit: ${state()}`);
+    const browser = browserWithChild(child);
+    await (browser as any).stopProcess(child, true);
+    await browser.close();
+    assert.equal(child.exitCode, 0);
   },
 );
 

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { testBrowserOptions } from './helpers/test-browser.ts';
+import { previewPort } from './preview-port.ts';
 
 const browserOptions = testBrowserOptions(chromium.executablePath());
 
@@ -12,7 +13,8 @@ test(
   { skip: browserOptions ? false : 'no supported test browser is installed' },
   async () => {
     const root = fileURLToPath(new URL('..', import.meta.url));
-    const port = 4219;
+    // Do not share CIRCLE_WORKBENCH_TEST_PORT with the pin test: both can run at once.
+    const port = await previewPort(process.env.CIRCLE_WORKBENCH_FOCUS_PORT);
     const server: ChildProcess = spawn(
       'npx',
       ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],

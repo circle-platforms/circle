@@ -63,7 +63,7 @@ export function jsonEvent(
   if (event.kind === 'steer') return { type: 'steer', message: data.message };
   return undefined;
 }
-// Tool rows for --verbose, as the Python releases wrote them: a short name and one phrase.
+// Tool rows for --verbose: a short name and one phrase.
 const SHORT_NAMES: Record<string, string> = {
   read_file: 'Read',
   write_file: 'Write',
