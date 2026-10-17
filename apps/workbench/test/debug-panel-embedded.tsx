@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
+import { Tooltip } from 'radix-ui';
 import { createRoot } from 'react-dom/client';
 import { DebugPanel } from '../src/components/DebugPanel';
 import '../src/styles/app.css';
 import { applyTheme } from '../src/theme';
-import { loadLanguage } from '../src/i18n';
+import { loadLanguage, t } from '../src/i18n';
 const query = new URLSearchParams(location.search);
 loadLanguage(undefined, query.get('locale') === 'zh-CN' ? 'zh-CN' : 'en');
 applyTheme(query.get('theme') === 'light' ? 'light' : 'dark');
@@ -90,7 +91,7 @@ function Harness() {
       <button onClick={() => setVisible(!visible)}>toggle debug</button>
       <aside className="inspector" style={{ width: 320, height: 680 }}>
         <header className="inspector-title">
-          <h2>activity</h2>
+          <h2>{t('activity')}</h2>
         </header>
         <div className="inspector-body">
           <div hidden={!visible}>
@@ -101,4 +102,8 @@ function Harness() {
     </>
   );
 }
-createRoot(document.getElementById('root')!).render(<Harness />);
+createRoot(document.getElementById('root')!).render(
+  <Tooltip.Provider>
+    <Harness />
+  </Tooltip.Provider>,
+);

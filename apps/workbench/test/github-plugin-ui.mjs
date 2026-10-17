@@ -28,6 +28,7 @@ try {
         });
         const errors = [];
         page.on('pageerror', (e) => errors.push(String(e)));
+        await page.clock.setFixedTime(new Date('2026-10-16T00:00:00Z'));
         const label = (en, zh) => (language === 'en' ? en : zh);
         await page.goto(
           server.resolvedUrls.local[0] +
@@ -120,6 +121,14 @@ try {
             exact: true,
           })
           .waitFor();
+        assert.equal(
+          await detail
+            .getByText(label('extension could not be loaded', '无法加载扩展'), {
+              exact: true,
+            })
+            .count(),
+          0,
+        );
         await detail
           .getByRole('heading', {
             name: label('GitHub account', 'GitHub 账户'),
@@ -132,6 +141,28 @@ try {
         });
         await tryButton.waitFor();
         assert.equal(await tryButton.isEnabled(), true);
+        assert.equal(
+          await tryButton.evaluate((button) =>
+            button.classList.contains('primary'),
+          ),
+          false,
+          'disconnected example is secondary to authorization',
+        );
+        assert.equal(
+          await detail.locator('button.primary').count(),
+          1,
+          'authorization is the only primary action before connection',
+        );
+        for (const summary of await detail
+          .locator('.context-source > summary')
+          .all())
+          assert.equal(
+            await summary.evaluate(
+              (element) => getComputedStyle(element).display,
+            ),
+            'list-item',
+            'existing disclosure arrows stay visible',
+          );
         assert.deepEqual(
           await page.evaluate(() =>
             window.githubPluginFixture.commands.map((c) => c.name),
@@ -143,7 +174,9 @@ try {
           false,
           'optional repositories folded',
         );
+        await detail.locator('#github-connection h2').click();
         await page.screenshot({
+          animations: 'disabled',
           path: `${output}/${language}-${theme}-${width}-plugin-ready.png`,
         });
         await page.evaluate(() => window.githubPluginFixture.connected());
@@ -153,6 +186,21 @@ try {
             { exact: true },
           )
           .waitFor();
+        assert.equal(
+          await tryButton.evaluate((button) =>
+            button.classList.contains('primary'),
+          ),
+          true,
+          'connected example is the primary action',
+        );
+        assert.equal(await detail.locator('button.primary').count(), 1);
+        const capabilities = detail.getByText(
+          label('capabilities', '能力介绍'),
+          {
+            exact: true,
+          },
+        );
+        await capabilities.click();
         await detail
           .getByText(
             label('read pull request checks', '读取拉取请求检查结果'),
@@ -168,7 +216,10 @@ try {
             { exact: true },
           )
           .waitFor();
+        await capabilities.click();
+        await detail.locator('#github-connection h2').click();
         await page.screenshot({
+          animations: 'disabled',
           path: `${output}/${language}-${theme}-${width}-plugin-account.png`,
         });
         await tryButton.click();

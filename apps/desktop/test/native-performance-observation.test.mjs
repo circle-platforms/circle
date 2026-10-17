@@ -93,6 +93,14 @@ function renderer() {
       )({ kind: 'click', selector, condition }),
     click: (target) =>
       inputListener({ target: target ?? { closest: () => true } }),
+    paste: (text, trusted) =>
+      inputListener({
+        target: { closest: () => true },
+        isTrusted: trusted,
+        clipboardData: {
+          getData: (type) => (type === 'text/plain' ? text : ''),
+        },
+      }),
     timeout: () => timeoutCallback(),
     backend: (id) => runtimeListener({ snapshot: { activeSessionId: id } }),
     frame: () => {
@@ -322,7 +330,7 @@ test('file save feedback cannot use a hidden matched toolbar while visible buffe
         ? { textContent: 'README.md' }
         : { getAttribute: () => 'workspace source: workspace: /actual-owner' },
     querySelectorAll: () => [
-      { ...toolbar, textContent: 'disk and buffer match', closest: () => ({}) },
+      { ...toolbar, textContent: 'no unsaved changes', closest: () => ({}) },
       toolbar,
     ],
   };
@@ -330,7 +338,7 @@ test('file save feedback cannot use a hidden matched toolbar while visible buffe
   r.install({
     selector: '.file-view-toolbar',
     file: { path: 'README.md', sourceDirectory: '/actual-owner' },
-    text: 'disk and buffer match',
+    text: 'no unsaved changes',
   });
   let finished = false;
   r.window.__circleNativePerfPending.then(() => (finished = true));
@@ -339,7 +347,7 @@ test('file save feedback cannot use a hidden matched toolbar while visible buffe
   r.frame();
   await Promise.resolve();
   assert.equal(finished, false);
-  toolbar.textContent = 'disk and buffer match';
+  toolbar.textContent = 'no unsaved changes';
   r.frame();
   r.frame();
   await Promise.resolve();
@@ -491,4 +499,66 @@ test('AX diagnostics only opt out for actual supported host OFF, not unknown or 
   );
   assert.equal(terminalAxDiagnosticRequired(null), true);
   assert.equal(terminalAxDiagnosticRequired({ supported: true }), true);
+});
+
+test('paste feedback requires actual trusted clipboard bytes and records no original text', async () => {
+  for (const [text, trusted] of [
+    ['original', false],
+    ['different', true],
+  ]) {
+    const r = renderer();
+    r.install({
+      clipboardText: 'original',
+      selector: '.session-title',
+      text: 'target conversation',
+    });
+    const rejected = assert.rejects(
+      r.window.__circleNativePerfPending,
+      /trusted system paste/,
+    );
+    r.paste(text, trusted);
+    await rejected;
+    assert.equal(
+      r.window.__circleNativePerfClipboardObservation.trusted,
+      trusted,
+    );
+    assert.equal(
+      'text' in r.window.__circleNativePerfClipboardObservation,
+      false,
+    );
+  }
+  const r = renderer();
+  let chips = [];
+  r.document.querySelectorAll = () => chips;
+  r.install({
+    clipboardAttachment: 'pasted original',
+    clipboardText: 'original',
+    selector: '.session-title',
+    text: 'target conversation',
+  });
+  r.paste('original', true);
+  let finished = false;
+  r.window.__circleNativePerfPending.then(() => (finished = true));
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(
+    finished,
+    false,
+    'paste cannot finish before its actual attachment chip is visible',
+  );
+  chips = [
+    {
+      textContent: 'pasted original',
+      closest: () => null,
+      getBoundingClientRect: () => ({ width: 100, height: 30 }),
+    },
+  ];
+  r.frame();
+  r.frame();
+  await r.window.__circleNativePerfPending;
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(r.window.__circleNativePerfClipboardObservation)),
+    { trusted: true, exact: true, characters: 8 },
+  );
 });

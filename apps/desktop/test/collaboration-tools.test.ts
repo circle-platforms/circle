@@ -473,7 +473,8 @@ test('plan parent schedules two actual parallel read-only analyses without allow
             child.requests[0]!.tools.every(
               (tool) =>
                 tool.effect === 'read' &&
-                !tool.name.startsWith('native_tasks_') &&
+                (!tool.name.startsWith('native_tasks_') ||
+                  tool.name === 'native_tasks_propose') &&
                 tool.name !== 'task',
             ),
           );

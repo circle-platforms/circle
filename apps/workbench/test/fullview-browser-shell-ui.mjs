@@ -253,8 +253,8 @@ try {
               geometry;
             assert.equal(
               body.paddingBottom,
-              20,
-              'preserve original inspector padding',
+              0,
+              'the browser fills the inspector to its edges, as in Claude',
             );
             assert(
               Math.abs(wrapper.bottom - (body.bottom - body.paddingBottom)) <=

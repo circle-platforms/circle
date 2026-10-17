@@ -4,7 +4,7 @@ import { workspaceCall } from '../model/workspace-client';
 import { recoveredDraft, type RecoveredInput } from '../model/recovered-input';
 import { useRuntime } from '../app/context';
 import { Button } from '../components/common';
-import { t } from '../i18n';
+import { t, tn, dateLocale } from '../i18n';
 import './task-panel.css';
 interface Recovery {
   version: number;
@@ -159,15 +159,15 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
           {t('refresh')}
         </Button>
       </header>
-      <p className="panel-note">
-        {t(
-          'nothing is sent automatically after restart; choose whether to resume, copy to draft or remove each input',
-        )}
-      </p>
+      <p className="panel-note">{t('nothing is sent automatically')}</p>
       {error && (
-        <p role="alert">
-          {t('input recovery unavailable')}: {error}
-        </p>
+        <div role="alert">
+          <p>{t('input recovery unavailable')}</p>
+          <details className="task-technical">
+            <summary>{t('error details')}</summary>
+            <pre>{error}</pre>
+          </details>
+        </div>
       )}
       {notice && <p role="status">{notice}</p>}
       {memoryOnly.length > 0 && (
@@ -184,10 +184,12 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
                 : t('follow-up input')}
             </strong>
             <small>
-              {new Date(input.createdAt).toLocaleString()} ·{' '}
-              {t('{n} media attachments', {
-                n: input.payload.attachments?.length ?? 0,
-              })}
+              {new Date(input.createdAt).toLocaleString(dateLocale())} ·{' '}
+              {tn(
+                input.payload.attachments?.length ?? 0,
+                '{n} media attachment',
+                '{n} media attachments',
+              )}
             </small>
           </div>
           <details className="task-technical">
@@ -239,7 +241,7 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
                 )
               }
             />
-            {t('I have checked the input and want to remove its recovery copy')}
+            {t('I checked this input; remove its recovery copy')}
           </label>
           <Button
             disabled={busy || !confirmed.includes(input.id)}

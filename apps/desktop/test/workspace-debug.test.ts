@@ -585,3 +585,54 @@ test(
     }
   },
 );
+
+test(
+  'old persisted DAP output cannot overwrite a restarted debug generation',
+  { timeout: 5000 },
+  async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), 'circle-debug-output-generation-'),
+    );
+    const adapter = path.join(root, 'adapter.cjs');
+    const source = `const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize')s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(0,'127.0.0.1',function(){console.log('Debug server listening at 127.0.0.1:'+this.address().port)});`;
+    await writeFile(
+      adapter,
+      source.replace(
+        's.write(reply(launch));',
+        's.write(reply(launch));s.write(frame({type:"event",event:"output",body:{output:"OLD_OUTPUT"}}));',
+      ),
+    );
+    await writeFile(path.join(root, 'fixture.cjs'), '');
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const writing = new Promise<void>((resolve) => (entered = resolve));
+    const persisted: string[] = [];
+    const service = new WorkspaceDebugService({
+      workspaceRoot: root,
+      nodeExecutable: process.execPath,
+      adapterPath: adapter,
+      output: async (text) => {
+        entered();
+        await held;
+        persisted.push(text);
+      },
+    });
+    try {
+      await service.handle('launch', { program: 'fixture.cjs' });
+      await writing;
+      await service.stop();
+      await writeFile(adapter, source);
+      await service.handle('launch', { program: 'fixture.cjs' });
+      assert.equal(service.snapshot().status, 'running');
+      release();
+      await service.flushOutput();
+      assert.deepEqual(persisted, ['OLD_OUTPUT']);
+      assert.equal(service.snapshot().output, '');
+      assert.equal(service.snapshot().status, 'running');
+    } finally {
+      release();
+      await service.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

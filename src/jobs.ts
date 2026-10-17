@@ -394,6 +394,20 @@ export class JobRegistry {
       ? structuredClone(matches[0]!.execution!)
       : undefined;
   }
+  executionForUserShell(
+    executionSessionId: string,
+    userShellId: string,
+  ): CommandExecution | undefined {
+    const matches = [...this.executions.values()].filter(
+      (entry) =>
+        entry.execution?.executionSessionId === executionSessionId &&
+        entry.execution.userShellId === userShellId &&
+        entry.execution.toolCallId === undefined,
+    );
+    return matches.length === 1
+      ? structuredClone(matches[0]!.execution!)
+      : undefined;
+  }
   /** Internal handoff control, scoped to the actual executing session. */
   async stopExecution(
     executionSessionId: string,
@@ -570,6 +584,8 @@ export class JobRegistry {
     this.executionChanged(entry);
   }
   private launch(command: string, owner: JobOwner): Entry {
+    if (owner.origin?.toolCallId && owner.origin.userShellId)
+      throw new Error('a command cannot have both tool and human origins');
     const verdict = classifyCommand(command, this.sandbox.credentialFiles);
     if (verdict.verdict === 'DENY')
       throw new Error(verdict.message || verdict.reason);
@@ -581,6 +597,7 @@ export class JobRegistry {
       ownerSessionId: owner.sessionId,
       executionSessionId: owner.origin?.executionSessionId ?? owner.sessionId,
       toolCallId: owner.origin?.toolCallId,
+      userShellId: owner.origin?.userShellId,
       displayCommand: owner.origin?.displayCommand,
       status: 'starting',
       started: entry.started,

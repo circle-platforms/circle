@@ -10,6 +10,10 @@
 .markdown-table-scroll > table {
   min-width: 32em;
 }
+.markdown-table-scroll td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
 .markdown-table-scroll th {
   white-space: nowrap;
 }

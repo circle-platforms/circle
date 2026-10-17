@@ -24,7 +24,11 @@ import {
   type Redactor,
 } from './secrets.js';
 import { buildSystemPrompt, type ContextInstruction } from './system_prompt.js';
-import { Harness, type ApprovalDecision } from './harness.js';
+import {
+  Harness,
+  type ApprovalDecision,
+  type HarnessOptions,
+} from './harness.js';
 import { EventBus } from './events.js';
 import { defaultRunOptions, type RunOptions } from './run_options.js';
 import type { CircleSettings } from './settings.js';
@@ -138,6 +142,10 @@ export interface RuntimeOptions {
   model?: ChatModel;
   /** Wrap every parent/child completion without replacing the provider used for connection ownership. */
   wrapModel?: (model: ChatModel) => ChatModel;
+  /** Trusted desktop resource scheduling. The CLI keeps direct tool execution. */
+  executeTool?: HarnessOptions['executeTool'];
+  /** Called only for host-built coordination tools, before extension/extra tools are added. */
+  classifyTool?: (tool: Tool, kind: 'control') => Tool;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
   /**
@@ -374,7 +382,10 @@ export class AgentRuntime {
       JobRegistry.outputLimit(),
       {
         commandLauncher: options.commandLauncher,
-        onExecution: options.onCommandExecution,
+        onExecution: (execution) => {
+          this.userShells?.executionChanged(execution);
+          options.onCommandExecution?.(execution);
+        },
       },
     );
     // A background command can print a secret: its notice reaches the model and history.
@@ -682,26 +693,28 @@ export class AgentRuntime {
               },
             ),
         });
-        const ownedChildTools = childTools.map((tool) =>
-          tool.name === 'write_todos'
-            ? {
-                ...tool,
-                run: async (args: Record<string, unknown>) => {
-                  childBus.emit('todo_list', {
-                    payload: { todos: args.todos },
-                  });
-                  return 'Updated todo list.';
-                },
-              }
-            : [
-                  'execute',
-                  'list_jobs',
-                  'stop_job',
-                  'wait_jobs',
-                  'question',
-                ].includes(tool.name)
-              ? jobTools.find((jobTool) => jobTool.name === tool.name)!
-              : tool,
+        const ownedChildTools = this.classifyCoreTools(
+          childTools.map((tool) =>
+            tool.name === 'write_todos'
+              ? {
+                  ...tool,
+                  run: async (args: Record<string, unknown>) => {
+                    childBus.emit('todo_list', {
+                      payload: { todos: args.todos },
+                    });
+                    return 'Updated todo list.';
+                  },
+                }
+              : [
+                    'execute',
+                    'list_jobs',
+                    'stop_job',
+                    'wait_jobs',
+                    'question',
+                  ].includes(tool.name)
+                ? jobTools.find((jobTool) => jobTool.name === tool.name)!
+                : tool,
+          ),
         );
         const child: Harness = new Harness({
           commandExecution: {
@@ -743,6 +756,7 @@ export class AgentRuntime {
           parentPlanMode: () => this.harness.planMode,
           toolBoundary: (tool, args, context) =>
             this.extensionToolBoundary(tool, args, context),
+          executeTool: this.options.executeTool,
           webSearch: (model, query, count, context) =>
             this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
@@ -792,6 +806,7 @@ export class AgentRuntime {
       },
     });
     tools.push(this.lsp.tool());
+    tools = this.classifyCoreTools(tools);
     tools.push(...(this.options.extraTools ?? []));
     this.coreTools = tools;
     tools = this.withIntegrationTools(
@@ -843,6 +858,7 @@ export class AgentRuntime {
       },
       toolBoundary: (tool, args, context) =>
         this.extensionToolBoundary(tool, args, context),
+      executeTool: this.options.executeTool,
       webSearch: (model, query, count, context) =>
         this.searchFromModel(model, query, count, context),
       prepareMessages: (signal) =>
@@ -876,6 +892,23 @@ export class AgentRuntime {
     });
     harness.planMode = restoredPlanMode(harness.messages);
     return harness;
+  }
+  private classifyCoreTools(tools: Tool[]): Tool[] {
+    const control = new Set([
+      'task',
+      'list_jobs',
+      'stop_job',
+      'wait_jobs',
+      'question',
+      'plan_enter',
+      'plan_exit',
+      'compact_conversation',
+    ]);
+    return tools.map((tool) =>
+      control.has(tool.name) && this.options.classifyTool
+        ? this.options.classifyTool(tool, 'control')
+        : tool,
+    );
   }
   private extensionHost(reservedTools: Set<string>): ExtensionHost {
     const commands =

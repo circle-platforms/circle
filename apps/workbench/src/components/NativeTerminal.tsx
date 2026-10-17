@@ -156,6 +156,7 @@ export function NativeTerminal({
   sessionId: parentSessionId,
   commandTerminal,
   onExitCommandTerminal,
+  focusRequest,
   active = true,
   embedded = false,
   onAddToDraft,
@@ -163,6 +164,7 @@ export function NativeTerminal({
   sessionId: string;
   commandTerminal?: CommandTerminalView;
   onExitCommandTerminal?: () => void;
+  focusRequest?: { id: string; epoch: string; requestId: string };
   active?: boolean;
   embedded?: boolean;
   onAddToDraft?: (capture: TerminalSelectionCapture) => Promise<void>;
@@ -212,6 +214,23 @@ export function NativeTerminal({
       sessionId,
     );
   }, [commandKey, sessionId]);
+  const focusOwner = useRef<
+    { requestId: string; sessionId: string } | undefined
+  >(undefined);
+  const focusSession = useRef(sessionId);
+  if (focusSession.current !== sessionId) {
+    focusSession.current = sessionId;
+    // Leaving a session permanently cancels its old focus request, including
+    // if the user later returns with the same prop still present.
+    if (focusOwner.current) focusOwner.current.sessionId = '';
+  }
+  if (focusRequest && focusOwner.current?.requestId !== focusRequest.requestId)
+    focusOwner.current = { requestId: focusRequest.requestId, sessionId };
+  const requestedFocus =
+    !commandTerminal && focusOwner.current?.sessionId === sessionId
+      ? focusRequest
+      : undefined;
+  const focusKey = requestedFocus ? JSON.stringify(requestedFocus) : '';
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([]);
   const [selectedBySession, setSelected] = useState<Record<string, string>>({});
   const [operations, setOperations] = useState<
@@ -219,6 +238,9 @@ export function NativeTerminal({
   >({});
   const busy = operations[sessionId]?.busy ?? false;
   const error = operations[sessionId]?.error ?? '';
+  const disconnected =
+    error.includes('native workspace services are not connected') ||
+    error.includes('runtime not enabled');
   const notice = operations[sessionId]?.notice ?? '';
   const [opened, setOpened] = useState<string[]>([]);
   const [query, setQuery] = useState('');
@@ -248,6 +270,16 @@ export function NativeTerminal({
   );
   const selected =
     visible.find((item) => item.id === selectedId) ?? visible.at(-1);
+  const displayedCommand =
+    selected?.managedCommand?.displayCommand ??
+    (selected?.command
+      ? [
+          selected.command.file,
+          ...(selected.command.args ?? []).map((arg) =>
+            /\s/.test(arg) ? JSON.stringify(arg) : arg,
+          ),
+        ].join(' ')
+      : undefined);
   currentSearch.current = { sessionId, query, selectedId: selected?.id ?? '' };
   const tabOrder = visible.map((item) => item.id).join('\n');
   useLayoutEffect(() => {
@@ -328,6 +360,22 @@ export function NativeTerminal({
             throw Error(t('command terminal source changed; open it again'));
           focusTarget.current = target.terminal.id;
         }
+        const requested = requestedFocus
+          ? items.find(
+              (item) =>
+                item.id === requestedFocus.id &&
+                item.epoch === requestedFocus.epoch &&
+                item.sessionId === sessionId,
+            )
+          : undefined;
+        if (requestedFocus && !requested) {
+          focusTarget.current = null;
+          throw Error(t('terminal is no longer available'));
+        }
+        if (requested) {
+          focusTarget.current = requested.id;
+          if (active) controls.current.get(requested.id)?.focus();
+        }
         setTerminals((previous) => [
           ...previous.filter((item) => item.sessionId !== sessionId),
           ...items,
@@ -335,6 +383,7 @@ export function NativeTerminal({
         setSelected((previous) => ({
           ...previous,
           [sessionId]:
+            requested?.id ??
             items.find((item) => item.id === previous[sessionId])?.id ??
             items.at(-1)?.id ??
             '',
@@ -353,7 +402,7 @@ export function NativeTerminal({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, reload, terminalRequest]);
+  }, [sessionId, reload, terminalRequest, focusKey]);
 
   useEffect(
     () =>
@@ -546,6 +595,9 @@ export function NativeTerminal({
             <ArrowLeft size={14} />
           </IconButton>
         )}
+        {!visible.length && (
+          <span className="native-terminal-title">{t('terminal')}</span>
+        )}
         <div
           className="native-terminal-tabs segmented"
           ref={tabStrip}
@@ -614,114 +666,10 @@ export function NativeTerminal({
         >
           <Plus size={15} />
         </IconButton>
-        <IconButton
-          label={t('start service')}
-          disabled={busy || !sessionId || !!commandTerminal}
-          onClick={() => setServiceOpen(true)}
-        >
-          <Play size={14} />
-        </IconButton>
-        <IconButton
-          label={
-            selected?.kind === 'service' && !selected.managedCommand
-              ? t('restart service')
-              : t('restart terminal')
-          }
-          disabled={
-            busy ||
-            !selected ||
-            !!commandTerminal ||
-            ('managedCommand' in selected && !!selected.managedCommand) ||
-            selected.status === 'stopping'
-          }
-          onClick={restart}
-        >
-          <RotateCcw size={14} />
-        </IconButton>
-        <IconButton
-          label={t('interrupt command')}
-          disabled={
-            busy ||
-            selected?.status !== 'running' ||
-            (!!commandTerminal && !capabilities?.input)
-          }
-          onClick={() =>
-            run(async () => {
-              if (selected)
-                adopt(
-                  await terminalRequest<TerminalSnapshot>('signal', {
-                    id: selected.id,
-                    signal: 'SIGINT',
-                  }),
-                );
-            })
-          }
-        >
-          <Square size={13} />
-        </IconButton>
-        <IconButton
-          label={
-            selected?.kind === 'service' && !selected.managedCommand
-              ? t('stop service')
-              : t('stop terminal')
-          }
-          disabled={
-            busy ||
-            !selected ||
-            !['running', 'stopping'].includes(selected.status) ||
-            (!!commandTerminal && !capabilities?.stop)
-          }
-          onClick={() =>
-            run(async () => {
-              if (selected)
-                adopt(
-                  await terminalRequest<TerminalSnapshot>('close', {
-                    id: selected.id,
-                  }),
-                );
-            })
-          }
-        >
-          <X size={15} />
-        </IconButton>
-        <IconButton
-          label={t('copy complete output')}
-          disabled={busy || !selected}
-          onClick={copyAll}
-        >
-          <Copy size={14} />
-        </IconButton>
-        {onAddToDraft && (
-          <IconButton
-            label={t('add selection to chat')}
-            disabled={
-              busy ||
-              !active ||
-              !selected ||
-              !hasSelection[selected.id] ||
-              (!!commandTerminal && !capabilities?.addToDraft)
-            }
-            onClick={addToDraft}
-          >
-            <MessageSquarePlus size={14} />
-          </IconButton>
-        )}
       </div>
-      {selected?.command && (
+      {selected && displayedCommand && (
         <div className="native-service-details">
-          <code
-            title={[
-              selected.command.file,
-              ...(selected.command.args ?? []),
-            ].join(' ')}
-          >
-            {[
-              selected.command.file,
-              ...(selected.command.args ?? []).map((arg) =>
-                /\s/.test(arg) ? JSON.stringify(arg) : arg,
-              ),
-            ].join(' ')}
-          </code>
+          <code title={displayedCommand}>{displayedCommand}</code>
           {selected.readiness?.port && (
             <span>localhost:{selected.readiness.port}</span>
           )}
@@ -732,57 +680,18 @@ export function NativeTerminal({
           )}
         </div>
       )}
-      {selected && (
-        <div className="native-terminal-search find-bar">
-          <input
-            ref={searchInput}
-            aria-label={t('find in terminal')}
-            placeholder={t('find in terminal')}
-            value={query}
-            onChange={(event) => {
-              searchRequest.current++;
-              setQuery(event.target.value);
-              setFound(true);
-            }}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                void find(event.shiftKey);
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                controls.current.get(selected.id)?.focus();
-              }
-            }}
-          />
-          <IconButton
-            label={t('previous match')}
-            disabled={!query}
-            onClick={() => {
-              void find(true);
-            }}
-          >
-            <ArrowUp size={14} />
-          </IconButton>
-          <IconButton
-            label={t('next match')}
-            disabled={!query}
-            onClick={() => {
-              void find(false);
-            }}
-          >
-            <ArrowDown size={14} />
-          </IconButton>
-          {!found && <span role="status">{t('no matches')}</span>}
-        </div>
-      )}
       {error && !serviceOpen && (
         <div className="native-terminal-error" role="alert">
-          <span>{error}</span>
+          <span>{disconnected ? t('not connected') : error}</span>
           <Button onClick={() => setReload((value) => value + 1)}>
             {t('retry')}
           </Button>
+          {disconnected && (
+            <details className="native-terminal-error-details">
+              <summary>{t('error details')}</summary>
+              <pre tabIndex={0}>{error}</pre>
+            </details>
+          )}
         </div>
       )}
       {selected?.readiness?.error && (
@@ -848,119 +757,259 @@ export function NativeTerminal({
             />
           ))}
       </div>
+      <div className="native-terminal-bar">
+        {selected && (
+          <div className="native-terminal-search find-bar">
+            <input
+              ref={searchInput}
+              aria-label={t('find in terminal')}
+              placeholder={t('find in terminal')}
+              value={query}
+              onChange={(event) => {
+                searchRequest.current++;
+                setQuery(event.target.value);
+                setFound(true);
+              }}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void find(event.shiftKey);
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  controls.current.get(selected.id)?.focus();
+                }
+              }}
+            />
+            <IconButton
+              label={t('previous match')}
+              disabled={!query}
+              onClick={() => {
+                void find(true);
+              }}
+            >
+              <ArrowUp size={14} />
+            </IconButton>
+            <IconButton
+              label={t('next match')}
+              disabled={!query}
+              onClick={() => {
+                void find(false);
+              }}
+            >
+              <ArrowDown size={14} />
+            </IconButton>
+            {!found && <span role="status">{t('no matches')}</span>}
+          </div>
+        )}
+        <div className="native-terminal-actions">
+          <IconButton
+            label={t('start service')}
+            disabled={busy || !sessionId || !!commandTerminal}
+            onClick={() => setServiceOpen(true)}
+          >
+            <Play size={14} />
+          </IconButton>
+          <IconButton
+            label={
+              selected?.kind === 'service' && !selected.managedCommand
+                ? t('restart service')
+                : t('restart terminal')
+            }
+            disabled={
+              busy ||
+              !selected ||
+              !!commandTerminal ||
+              ('managedCommand' in selected && !!selected.managedCommand) ||
+              selected.status === 'stopping'
+            }
+            onClick={restart}
+          >
+            <RotateCcw size={14} />
+          </IconButton>
+          <IconButton
+            label={t('interrupt command')}
+            disabled={
+              busy ||
+              selected?.status !== 'running' ||
+              (!!commandTerminal && !capabilities?.input)
+            }
+            onClick={() =>
+              run(async () => {
+                if (selected)
+                  adopt(
+                    await terminalRequest<TerminalSnapshot>('signal', {
+                      id: selected.id,
+                      signal: 'SIGINT',
+                    }),
+                  );
+              })
+            }
+          >
+            <Square size={13} />
+          </IconButton>
+          <IconButton
+            label={
+              selected?.kind === 'service' && !selected.managedCommand
+                ? t('stop service')
+                : t('stop terminal')
+            }
+            disabled={
+              busy ||
+              !selected ||
+              !['running', 'stopping'].includes(selected.status) ||
+              (!!commandTerminal && !capabilities?.stop)
+            }
+            onClick={() =>
+              run(async () => {
+                if (selected)
+                  adopt(
+                    await terminalRequest<TerminalSnapshot>('close', {
+                      id: selected.id,
+                    }),
+                  );
+              })
+            }
+          >
+            <X size={15} />
+          </IconButton>
+          <IconButton
+            label={t('copy complete output')}
+            disabled={busy || !selected}
+            onClick={copyAll}
+          >
+            <Copy size={14} />
+          </IconButton>
+          {onAddToDraft && (
+            <IconButton
+              label={t('add selection to chat')}
+              disabled={
+                busy ||
+                !active ||
+                !selected ||
+                !hasSelection[selected.id] ||
+                (!!commandTerminal && !capabilities?.addToDraft)
+              }
+              onClick={addToDraft}
+            >
+              <MessageSquarePlus size={14} />
+            </IconButton>
+          )}
+        </div>
+      </div>
       <Modal
         open={serviceOpen}
         onOpenChange={setServiceOpen}
         title={t('start service')}
-        description={t(
-          'keep a development service with its logs, readiness checks and restart action',
-        )}
       >
         <form
-          className="native-service-form form-stack"
+          className="native-service-form"
           onSubmit={(event) => {
             event.preventDefault();
             void createService();
           }}
         >
-          <label>
-            {t('service name')}
-            <input
-              value={serviceName}
-              onChange={(event) => setServiceName(event.target.value)}
-              placeholder={t('optional')}
-              maxLength={200}
-            />
-          </label>
-          <label>
-            {t('service executable')}
-            <input
-              required
-              value={serviceFile}
-              onChange={(event) => setServiceFile(event.target.value)}
-              placeholder="npm"
-            />
-          </label>
-          <label>
-            {t('service folder')}
-            <input
-              required
-              value={serviceCwd}
-              onChange={(event) => setServiceCwd(event.target.value)}
-              placeholder="."
-            />
-          </label>
-          <fieldset>
-            <legend>{t('service arguments')}</legend>
+          <div className="native-service-fields form-stack">
+            <label>
+              {t('service name')}
+              <input
+                value={serviceName}
+                onChange={(event) => setServiceName(event.target.value)}
+                placeholder={t('optional')}
+                maxLength={200}
+              />
+            </label>
+            <label>
+              {t('service executable')}
+              <input
+                required
+                value={serviceFile}
+                onChange={(event) => setServiceFile(event.target.value)}
+                placeholder="npm"
+              />
+            </label>
+            <label>
+              {t('service folder')}
+              <input
+                required
+                value={serviceCwd}
+                onChange={(event) => setServiceCwd(event.target.value)}
+                placeholder="."
+              />
+            </label>
+            <fieldset>
+              <legend>{t('service arguments')}</legend>
+              <p>
+                {t(
+                  'each field is one argument; spaces and quotes are kept exactly',
+                )}
+              </p>
+              {serviceArgs.map((arg, index) => (
+                <div className="native-service-argument" key={index}>
+                  <input
+                    aria-label={t('service argument {n}', { n: index + 1 })}
+                    value={arg}
+                    onChange={(event) =>
+                      setServiceArgs((previous) =>
+                        previous.map((value, position) =>
+                          position === index ? event.target.value : value,
+                        ),
+                      )
+                    }
+                  />
+                  <IconButton
+                    type="button"
+                    label={t('remove argument {n}', { n: index + 1 })}
+                    onClick={() =>
+                      setServiceArgs((previous) =>
+                        previous.filter((_, position) => position !== index),
+                      )
+                    }
+                  >
+                    <X size={14} />
+                  </IconButton>
+                </div>
+              ))}
+              <Button
+                type="button"
+                disabled={serviceArgs.length >= 256}
+                onClick={() => setServiceArgs((previous) => [...previous, ''])}
+              >
+                {t('add service argument')}
+              </Button>
+            </fieldset>
+            <label>
+              {t('ready port')}
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                value={servicePort}
+                onChange={(event) => setServicePort(event.target.value)}
+                placeholder={t('optional')}
+              />
+            </label>
+            <label>
+              {t('ready log text')}
+              <input
+                value={servicePattern}
+                onChange={(event) => setServicePattern(event.target.value)}
+                maxLength={512}
+                placeholder={t('optional')}
+              />
+            </label>
             <p>
               {t(
-                'each field is one argument; spaces and quotes are kept exactly',
+                'when both checks are set, both must pass before the service is ready',
               )}
             </p>
-            {serviceArgs.map((arg, index) => (
-              <div className="native-service-argument" key={index}>
-                <input
-                  aria-label={t('service argument {n}', { n: index + 1 })}
-                  value={arg}
-                  onChange={(event) =>
-                    setServiceArgs((previous) =>
-                      previous.map((value, position) =>
-                        position === index ? event.target.value : value,
-                      ),
-                    )
-                  }
-                />
-                <IconButton
-                  type="button"
-                  label={t('remove argument {n}', { n: index + 1 })}
-                  onClick={() =>
-                    setServiceArgs((previous) =>
-                      previous.filter((_, position) => position !== index),
-                    )
-                  }
-                >
-                  <X size={14} />
-                </IconButton>
-              </div>
-            ))}
-            <Button
-              type="button"
-              disabled={serviceArgs.length >= 256}
-              onClick={() => setServiceArgs((previous) => [...previous, ''])}
-            >
-              {t('add service argument')}
-            </Button>
-          </fieldset>
-          <label>
-            {t('ready port')}
-            <input
-              type="number"
-              min={1}
-              max={65535}
-              value={servicePort}
-              onChange={(event) => setServicePort(event.target.value)}
-              placeholder={t('optional')}
-            />
-          </label>
-          <label>
-            {t('ready log text')}
-            <input
-              value={servicePattern}
-              onChange={(event) => setServicePattern(event.target.value)}
-              maxLength={512}
-              placeholder={t('optional')}
-            />
-          </label>
-          <p>
-            {t(
-              'when both checks are set, both must pass before the service is ready',
+            {error && (
+              <p className="native-terminal-error" role="alert">
+                {error}
+              </p>
             )}
-          </p>
-          {error && (
-            <p className="native-terminal-error" role="alert">
-              {error}
-            </p>
-          )}
+          </div>
           <div className="native-service-actions">
             <Button type="button" onClick={() => setServiceOpen(false)}>
               {t('cancel')}
@@ -974,6 +1023,22 @@ export function NativeTerminal({
       {selected && (
         <div className="native-terminal-status" role="status">
           <span title={selected.cwd}>{selected.cwd}</span>
+          {selected.managedCommand ? (
+            <>
+              {selected.managedCommand.commandPid !== undefined && (
+                <span>
+                  {t('command pid {pid}', {
+                    pid: selected.managedCommand.commandPid,
+                  })}
+                </span>
+              )}
+              {selected.pid !== undefined && (
+                <span>{t('pty pid {pid}', { pid: selected.pid })}</span>
+              )}
+            </>
+          ) : selected.pid !== undefined ? (
+            <span>{t('process pid {pid}', { pid: selected.pid })}</span>
+          ) : null}
           <span title={selected.exitReason}>
             <Status value={status(selected)} />
             {!selected.managedCommand &&
@@ -1275,18 +1340,49 @@ function TerminalSurface({
       void synchronize().catch(showError);
     };
     void synchronize().catch(showError);
+    const writeInput = async (data: string) => {
+      for (const part of terminalInputChunks(data))
+        await call('write', { id: snapshot.id, data: part });
+    };
+    let pastedData: string[] | undefined;
     const input = terminal.onData((data) => {
       if (statusRef.current !== 'running' || !inputAllowedRef.current) return;
+      if (pastedData) pastedData.push(data);
+      else sendInput = sendInput.then(() => writeInput(data)).catch(showError);
+    });
+    const paste = (event: ClipboardEvent) => {
+      if (
+        !event.clipboardData ||
+        statusRef.current !== 'running' ||
+        !inputAllowedRef.current
+      )
+        return;
+      const text = event.clipboardData.getData('text/plain');
+      event.preventDefault();
+      event.stopPropagation();
       sendInput = sendInput
         .then(async () => {
-          for (const part of terminalInputChunks(data))
-            await call('write', {
-              id: snapshot.id,
-              data: part,
-            });
+          // Replay terminal modes before encoding paste, including after reopening.
+          await synchronize();
+          if (
+            cancelled ||
+            statusRef.current !== 'running' ||
+            !inputAllowedRef.current
+          )
+            return;
+          const data: string[] = [];
+          pastedData = data;
+          try {
+            terminal.paste(text);
+          } finally {
+            pastedData = undefined;
+          }
+          for (const part of data) await writeInput(part);
         })
         .catch(showError);
-    });
+    };
+    const pasteTarget = container.current;
+    pasteTarget.addEventListener('paste', paste, true);
     const dimensions = terminal.onResize(({ cols, rows }) => {
       if (statusRef.current !== 'running') return;
       void call('resize', {
@@ -1346,6 +1442,7 @@ function TerminalSurface({
       notifySearches();
       unsubscribe();
       input.dispose();
+      pasteTarget.removeEventListener('paste', paste, true);
       selection.dispose();
       selectionChange.current(false);
       dimensions.dispose();

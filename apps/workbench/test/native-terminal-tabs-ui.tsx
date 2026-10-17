@@ -1,5 +1,8 @@
 import { setTerminalAccessibility } from '../src/terminal-accessibility';
 import { createRoot } from 'react-dom/client';
+import { useState } from 'react';
+import { Tooltip } from 'radix-ui';
+import { NativeTerminal } from '../src/components/NativeTerminal';
 import { CircleWorkbench } from '../src/workbench';
 import { PreviewRuntime } from '../src/model/state';
 import { createFixtures } from '../src/preview/fixtures';
@@ -31,6 +34,15 @@ const workspaceId = data.workspaces[0].id;
 const listeners = new Set<(event: unknown) => void>();
 let seq = 0;
 const writes: Array<{ id: string; data: string }> = [];
+const output = new Map<string, any[]>();
+let heldReplay:
+  | {
+      id: string;
+      pending: boolean;
+      promise: Promise<void>;
+      release: () => void;
+    }
+  | undefined;
 let items = Array.from({ length: 9 }, (_, index) => ({
   id: 'terminal-' + (index + 1),
   owner: 'A',
@@ -38,6 +50,7 @@ let items = Array.from({ length: 9 }, (_, index) => ({
   epoch: 'fixture',
   cwd: '/synthetic/workspace',
   shell: 'zsh',
+  pid: 41001 + index,
   args: [],
   label: index === 1 ? 'debug' : 'zsh',
   cols: 80,
@@ -98,6 +111,7 @@ window.circleDesktop = {
         ...items[0],
         id: 'terminal-' + (items.length + 1),
         label: 'zsh',
+        pid: 41001 + items.length,
         lastSequence: 0,
       };
       items = [...items, item];
@@ -110,16 +124,23 @@ window.circleDesktop = {
       publish(item);
       return { ok: true, data: item };
     }
-    if (method === 'replay')
+    if (method === 'replay') {
+      if (heldReplay?.id === item.id) {
+        heldReplay.pending = true;
+        await heldReplay.promise;
+      }
       return {
         ok: true,
         data: {
           snapshot: item,
-          events: [],
+          events: (output.get(item.id) ?? []).filter(
+            (event) => event.sequence > params.afterSequence,
+          ),
           nextSequence: item.lastSequence,
           hasMore: false,
         },
       };
+    }
     return { ok: true, data: item };
   },
 } as unknown as NonNullable<Window['circleDesktop']>;
@@ -140,6 +161,54 @@ if (query.has('accessibility'))
 connectWorkspaceStreams(workspaceId, 'A');
 Object.assign(window, {
   terminalTabsFixture: {
+    showManagedProcess: () => {
+      const item = items.find((item) => item.id === 'terminal-10')!;
+      Object.assign(item, {
+        pid: 51010,
+        managedCommand: {
+          executionId: 'actual-fixture-execution',
+          executionEpoch: 'fixture-run',
+          toolCallId: 'fixture-call',
+          displayCommand: 'node managed-display.cjs',
+          ownership: 'pty-group',
+          commandPid: 52010,
+          completion: {
+            kind: 'pty-group',
+            descendantCoverage: {
+              state: 'unknown',
+              reason: 'coverage-unavailable',
+              observedAt: 1,
+            },
+          },
+        },
+      });
+      publish(item);
+    },
+    deferPaste: () => {
+      const item = items.at(-1)!;
+      item.lastSequence++;
+      output.set(item.id, [
+        {
+          terminalId: item.id,
+          owner: 'A',
+          sessionId: 'A',
+          epoch: item.epoch,
+          sequence: item.lastSequence,
+          kind: 'data',
+          data: '\x1b[?2004h',
+        },
+      ]);
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      heldReplay = { id: item.id, pending: false, promise, release };
+    },
+    pastePending: () => heldReplay?.pending === true,
+    releasePaste: () => {
+      heldReplay?.release();
+      heldReplay = undefined;
+    },
     accessibility: (enabled: boolean, supported = true) => {
       accessibility = {
         enabled,
@@ -164,6 +233,35 @@ Object.assign(window, {
 });
 setLanguage('en');
 location.hash = '/session/A';
+function FocusFixture() {
+  const [sessionId, setSession] = useState('A');
+  const [request, setRequest] = useState<{
+    id: string;
+    epoch: string;
+    requestId: string;
+  }>();
+  Object.assign(
+    (window as typeof window & { terminalTabsFixture: object })
+      .terminalTabsFixture,
+    {
+      focusTerminal: (request: {
+        id: string;
+        epoch: string;
+        requestId: string;
+      }) => setRequest(request),
+      focusSession: setSession,
+    },
+  );
+  return (
+    <Tooltip.Provider>
+      <NativeTerminal sessionId={sessionId} focusRequest={request} />
+    </Tooltip.Provider>
+  );
+}
 createRoot(document.getElementById('root')!).render(
-  <CircleWorkbench runtime={runtime} plugins={[]} />,
+  query.has('target') ? (
+    <FocusFixture />
+  ) : (
+    <CircleWorkbench runtime={runtime} plugins={[]} />
+  ),
 );

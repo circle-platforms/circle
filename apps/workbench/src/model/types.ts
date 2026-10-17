@@ -82,6 +82,17 @@ export interface Message {
   at: string;
   thinking?: string;
   tool?: ToolCall;
+  /** Host-projected human execution, distinct from a model tool call. */
+  shell?: {
+    id?: string;
+    sourceSessionId: string;
+    command: string;
+    output: string;
+    status: 'running' | 'done' | 'error' | 'stopped' | 'background';
+    exitCode?: number;
+    quiet?: boolean;
+    interactive: boolean;
+  };
   label?: string;
   attachments?: Attachment[];
   runtimeNotice?: import('../../../../src/runtime_notice').GitHubRuntimeNotice;

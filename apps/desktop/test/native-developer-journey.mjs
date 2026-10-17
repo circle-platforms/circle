@@ -965,6 +965,9 @@ try {
     await openInspector('activity', 'debug');
     const panel = page.locator('.debug-panel');
     await panel.getByLabel('program path', { exact: true }).fill('debug.cjs');
+    const breakpoints = panel.locator('details.debug-run');
+    if ((await breakpoints.getAttribute('open')) === null)
+      await breakpoints.locator('summary').click();
     await panel.getByLabel('breakpoint line', { exact: true }).fill('3');
     await panel
       .getByRole('button', { name: 'set breakpoint', exact: true })
@@ -986,10 +989,9 @@ try {
     assert.equal(
       await panel
         .getByRole('button', { name: 'count', exact: true })
-        .locator('..')
         .locator('code')
         .innerText(),
-      '3',
+      'count: 3',
     );
     await screenshot('05-node-breakpoint');
     await panel.getByRole('button', { name: 'step over', exact: true }).click();
@@ -1135,6 +1137,7 @@ try {
     await panel.getByRole('button', { name: /GET 200.*api\/data/ }).click();
     await panel.getByText('JOURNEY_NETWORK_OK', { exact: true }).waitFor();
     await panel.getByRole('tab', { name: 'storage', exact: true }).click();
+    await panel.getByText('journey: before', { exact: true }).waitFor();
     await panel.getByLabel('storage key', { exact: true }).fill('journey');
     await panel.getByLabel('storage value', { exact: true }).fill('after');
     await panel
@@ -1153,6 +1156,27 @@ try {
       { sessionId, origin },
     );
     assert(actual.storage.some(([k, v]) => k === 'journey' && v === 'after'));
+    // Restore the fixture's original value through the same visible controls.
+    await panel.getByLabel('storage value', { exact: true }).fill('before');
+    await panel
+      .getByRole('button', { name: 'save storage item', exact: true })
+      .click();
+    await panel.getByText('journey: before', { exact: true }).waitFor();
+    const restored = await page.evaluate(
+      ({ sessionId, origin }) =>
+        window.circleDesktop.browserDiagnostics(sessionId, {
+          action: 'storage',
+          kind: 'local',
+          origin,
+          operation: 'read',
+        }),
+      { sessionId, origin },
+    );
+    assert(
+      restored.storage.some(([k, v]) => k === 'journey' && v === 'before'),
+      'test-modified browser data is restored on the real page',
+    );
+
     const viewportSettings = panel.locator('details').filter({
       has: page.locator('summary', { hasText: 'viewport and developer tools' }),
     });
@@ -1748,6 +1772,14 @@ try {
               })
               .click();
           } else {
+            const address = page.getByRole('textbox', {
+              name: zh ? '浏览器地址' : 'browser address',
+              exact: true,
+            });
+            if (['', 'about:blank'].includes(await address.inputValue())) {
+              await address.fill(origin);
+              await address.press('Enter');
+            }
             const diagnostics = page.getByRole('button', {
               name: zh ? '页面诊断' : 'page diagnostics',
               exact: true,

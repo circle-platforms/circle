@@ -5,6 +5,17 @@ export function verifyNativeBuildManifest(manifest, executed) {
     throw Error('build manifest requires a full sourceBuildHead');
   if (!Array.isArray(manifest.artifacts) || !manifest.artifacts.length)
     throw Error('build manifest requires artifact hashes');
+  const sourceKind = manifest.sourceKind ?? 'commit';
+  if (sourceKind !== 'commit' && sourceKind !== 'working-tree')
+    throw Error('unknown build source kind');
+  if (
+    sourceKind === 'working-tree' &&
+    (manifest.sourceBaseHead !== manifest.sourceBuildHead ||
+      !/^[a-f0-9]{64}$/.test(manifest.sourceTreeSha256 ?? ''))
+  )
+    throw Error(
+      'working-tree build requires its base HEAD and exact tree hash',
+    );
   const paths = executed.platform === 'win32' ? path.win32 : path.posix;
   const actual = new Map(
     executed.artifacts.map((entry) => [entry.path, entry.sha256]),
@@ -39,7 +50,15 @@ export function verifyNativeBuildManifest(manifest, executed) {
       throw Error(
         'build manifest is missing an executed main, preload or renderer artifact',
       );
-  return { sourceBuildHead: manifest.sourceBuildHead, ...executed };
+  return {
+    ...executed,
+    sourceKind,
+    sourceBuildHead: manifest.sourceBuildHead,
+    sourceTreeSha256: manifest.sourceTreeSha256,
+    ...(sourceKind === 'working-tree'
+      ? { sourceBaseHead: manifest.sourceBaseHead }
+      : {}),
+  };
 }
 
 /** Hash only paths belonging to the actual running main window, including asar files. */

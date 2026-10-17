@@ -14,6 +14,10 @@ import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { captureFailure } from './helpers/diagnostics.mjs';
 import { setViewport } from './helpers/viewport.mjs';
 import {
+  preserveNativeClipboard,
+  restoreNativeClipboard,
+} from './helpers/native-clipboard.mjs';
+import {
   parseModelRequestFrames,
   readModelRequests,
 } from './helpers/model-requests.mjs';
@@ -560,7 +564,18 @@ const approval = (text) =>
 
 try {
   await launch();
-  const sessionId = (await state()).activeSessionId;
+  const initialState = await state();
+  const sessionId = initialState.activeSessionId;
+  const sessionOwner = initialState.sessions.find(
+    (entry) => entry.id === sessionId,
+  );
+  const sessionWorkspace = initialState.workspaces.find(
+    (entry) => entry.id === sessionOwner?.workspaceId,
+  )?.path;
+  assert(
+    sessionWorkspace,
+    'recording file belongs to the actual active session workspace',
+  );
   const info = await page.evaluate(() => window.circleDesktop.info());
   assert.equal(info.runtimeConnected, true);
   assert.equal(info.dataPath, env.CIRCLE_WORKBENCH_DATA_DIR);
@@ -1705,37 +1720,28 @@ try {
     await requests({ requireComplete: true });
 
     requestsPath = join(temp, 'trusted-requests.jsonl');
-    // A recorded script for the form on the other port, whose certificate this start has
-    // not seen: the replay passes the warning, types a secret by name and submits
-    const replayPath = join(temp, 'fixture.circle-browser.json');
-    await writeFile(
-      replayPath,
-      JSON.stringify({
-        circle: 'browser-script/1',
-        name: 'fixture form',
-        steps: [
-          { navigate: otherUrl },
-          { proceed: 'certificate' },
-          { type: { role: 'textbox', name: 'Username' }, text: 'replayed' },
-          {
-            type: { role: 'password', name: 'Password' },
-            text: '%FIXTURE_PASSWORD%',
-          },
-          {
-            select: { role: 'combobox', name: 'Role' },
-            values: ['maintainer'],
-          },
-          { click: { role: 'button', name: 'Log in' } },
-          { expect: 'Submitted admin as maintainer' },
-        ],
-      }),
-    );
+    // Record actual earlier browser actions, then clean the recording in the original editor.
+    const replayFile = 'fixture.circle-browser.json';
+    const replayPath = join(sessionWorkspace, replayFile);
     await script([
       calls('trusted-navigate', [
         call('trusted-navigate', 'browser_navigate', { url }),
       ]),
       answer('trusted-done', 'trusted site opened'),
-      calls('replay', [call('replay', 'browser_replay', { path: replayPath })]),
+      calls('record-native', [
+        call('record-native', 'browser_record', {
+          path: replayFile,
+          name: 'fixture form',
+        }),
+      ]),
+      answer('record-native-done', 'actual browser actions recorded'),
+      calls('replay-failure', [
+        call('replay-failure', 'browser_replay', { path: replayFile }),
+      ]),
+      answer('replay-failure-done', 'replay failure inspected'),
+      calls('replay', [
+        call('replay', 'browser_replay', { path: replayFile, from: 7 }),
+      ]),
       answer('replay-done', 'replay finished'),
     ]);
     await launch();
@@ -1749,9 +1755,109 @@ try {
       'a certificate trusted for good opens without a warning after another restart',
     );
 
-    // ---- a recorded script replayed: one approval for its site, the warning approved
+    await send('record the actual browser actions to a script');
+    const recordCard = page
+      .locator('.inline-request')
+      .filter({ hasText: 'browser_record' });
+    await recordCard.waitFor();
+    await recordCard
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
+    await page
+      .getByText('actual browser actions recorded', { exact: true })
+      .waitFor();
+    const recorded = JSON.parse(await readFile(replayPath, 'utf8'));
+    assert.match(await textOf('record-native'), /Recorded \d+ steps? in /);
+    const firstSubmit = recorded.steps.findIndex(
+      (step) => step.click?.role === 'button' && step.click.name === 'Log in',
+    );
+    assert(
+      firstSubmit > 0,
+      'the recording includes the actual successful form submission',
+    );
+    const formSteps = recorded.steps.slice(0, firstSubmit + 1);
+    const username = formSteps
+      .filter((step) => step.type?.name === 'Username')
+      .at(-1);
+    const password = formSteps.find((step) => step.type?.role === 'password');
+    const role = formSteps.find((step) => step.select?.name === 'Role');
+    const proceed = formSteps.find((step) => step.proceed === 'certificate');
+    assert(
+      username && password && role && proceed,
+      'real recording retains semantic controls and approved certificate step',
+    );
+    assert.equal(password.text, '%FIXTURE_PASSWORD%');
+    const edited = {
+      ...recorded,
+      name: 'fixture form',
+      steps: [
+        { ...formSteps.find((step) => 'navigate' in step), navigate: otherUrl },
+        proceed,
+        { ...username, text: 'replayed' },
+        password,
+        role,
+        formSteps[firstSubmit],
+        { expect: 'INTENTIONAL_MISSING_BROWSER_ASSERTION' },
+      ],
+    };
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    const editScript = async (content) => {
+      await page
+        .getByRole('button', { name: 'files panel', exact: true })
+        .click();
+      await page
+        .locator('.file-tree')
+        .getByRole('button', {
+          name: 'fixture.circle-browser.json',
+          exact: true,
+        })
+        .click();
+      await page.getByRole('button', { name: 'edit', exact: true }).click();
+      const lines = page.locator('.file-view:visible .view-lines');
+      await lines.click();
+      const clipboardKey = await preserveNativeClipboard(app);
+      let primary;
+      try {
+        await page.keyboard.press(`${modifier}+a`);
+        await app.evaluate(async ({ clipboard }, text) => {
+          await clipboard.writeText(text);
+        }, content);
+        await page.keyboard.press(`${modifier}+v`);
+        await page
+          .locator('.file-view')
+          .getByText('unsaved buffer', { exact: true })
+          .waitFor();
+        await page.keyboard.press(`${modifier}+s`);
+        await waitFor(
+          async () => (await readFile(replayPath, 'utf8')) === content,
+          'real Monaco saves the edited recorded script',
+        );
+        await page
+          .getByRole('button', { name: 'close file', exact: true })
+          .click();
+      } catch (error) {
+        primary = error;
+      } finally {
+        try {
+          await restoreNativeClipboard(app, clipboardKey);
+        } catch (cleanup) {
+          throw primary
+            ? new AggregateError(
+                [primary, cleanup],
+                'recorded script editing and clipboard restoration failed',
+              )
+            : cleanup;
+        }
+      }
+      if (primary) throw primary;
+    };
+    await editScript(JSON.stringify(edited, null, 2) + '\n');
+    checks.push(
+      'actual browser_record writes semantic actions and the original editor edits the recorded file without exposing secret bytes',
+    );
+    // ---- the first replay fails only at the added assertion after the original seven-step effects
     const before = posts.length;
-    await send('replay the fixture form');
+    await send('replay the recorded fixture form with its assertion');
     const replayCard = approval('runs a recorded browser script');
     await replayCard.waitFor();
     assert.match(await replayCard.innerText(), /browser_replay/);
@@ -1765,22 +1871,68 @@ try {
     await approval('trusts an untrusted certificate')
       .getByRole('button', { name: 'allow once', exact: true })
       .click();
+    await page.getByText('replay failure inspected', { exact: true }).waitFor();
+    const failed = await textOf('replay-failure');
+    assert.match(failed, /Step 7 of 7 could not be done/);
+    assert.match(
+      failed,
+      /Reason: the page does not show "INTENTIONAL_MISSING_BROWSER_ASSERTION"/,
+    );
+    assert.match(failed, /Steps 1–6 were done/);
+    assert.match(failed, /2\. Clicked e\d+ link "Proceed to /);
+    assert.match(
+      failed,
+      /Typed secret FIXTURE_PASSWORD into e2 password "Password"/,
+    );
+    assert.match(failed, /Circle proceeded, approved by the user/);
+    assert.match(failed, /Snapshot/);
+    const failureGroup = page
+      .locator('.tool-group')
+      .filter({ hasText: '1 failed' })
+      .last();
+    const groupToggle = failureGroup.locator(':scope > .tool-summary');
+    if ((await groupToggle.getAttribute('aria-expanded')) !== 'true')
+      await groupToggle.click();
+    const failureTool = failureGroup
+      .locator('.tool-call')
+      .filter({ has: page.locator('code[title="browser_replay"]') });
+    assert.equal(
+      await failureTool.count(),
+      1,
+      'the latest failed group exposes the actual replay call',
+    );
+    const failureHead = failureTool.locator('.tool-head');
+    if ((await failureHead.getAttribute('aria-expanded')) !== 'true')
+      await failureHead.click();
+    await failureTool.locator('.tool-content').waitFor({ state: 'visible' });
+    assert.match(
+      await failureTool.locator('.tool-content').innerText(),
+      /Step 7 of 7 could not be done/,
+    );
+    await page.screenshot({
+      path: join(output, 'replay-failed-step-before-edit.png'),
+    });
+
+    const browserBeforeFix = await browserState(sessionId);
+    edited.steps[6].expect = 'Submitted admin as maintainer';
+    await editScript(JSON.stringify(edited, null, 2) + '\n');
+    await send('continue the repaired browser script from failed step seven');
+    const retryApproval = approval('runs a recorded browser script');
+    await retryApproval
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
     await page.getByText('replay finished', { exact: true }).waitFor();
     const replayed = await textOf('replay');
+    assert.match(replayed, /^Replayed "fixture form": steps 7–7 of 7 done\./);
     assert.match(
       replayed,
-      /^Replayed "fixture form": steps 1–7 of 7 done\./,
-      replayed,
+      /7\. The page shows "Submitted admin as maintainer"/,
     );
-    assert.match(replayed, /\n2\. Clicked e\d+ link "Proceed to /);
-    assert.match(
-      replayed,
-      /Typed secret FIXTURE_PASSWORD into e2 password "Password"\./,
-    );
-    assert.match(replayed, /Circle proceeded, approved by the user/);
-    assert.match(
-      replayed,
-      /\n7\. The page shows "Submitted admin as maintainer"\./,
+    const browserAfterFix = await browserState(sessionId);
+    assert.equal(browserAfterFix.sessionId, browserBeforeFix.sessionId);
+    assert.equal(browserAfterFix.tab, browserBeforeFix.tab);
+    checks.push(
+      'recorded replay failure names the precise assertion and current page; the same script is repaired in Monaco and resumes only step seven in the same browser',
     );
     assert.equal(posts.length, before + 1);
     assert.deepEqual(posts.at(-1), {

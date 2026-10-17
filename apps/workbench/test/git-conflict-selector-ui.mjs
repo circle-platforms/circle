@@ -85,6 +85,13 @@ try {
   );
   const row = nativeGitFileRow(page, name);
   assert.equal(
+    await panel
+      .getByRole('button', { name: 'push branch', exact: true })
+      .isEnabled(),
+    false,
+  );
+  assert.equal(await row.locator('.git-file-state').innerText(), 'conflict');
+  assert.equal(
     await row.count(),
     1,
     'exact conflict filename resolves its actual row',
@@ -109,6 +116,14 @@ try {
           { language, id: `matrix-${width}-${language}-${theme}` },
         );
         const openLabel = language === 'en' ? 'open file' : '打开文件';
+        await panel
+          .getByText(
+            language === 'en'
+              ? 'resolve and stage conflicts first'
+              : '先解决并暂存冲突',
+            { exact: true },
+          )
+          .waitFor();
         const currentRow = nativeGitFileRow(page, name);
         await currentRow
           .getByRole('button', { name: openLabel, exact: true })
@@ -166,6 +181,7 @@ try {
         if (output) {
           await mkdir(output, { recursive: true });
           await page.screenshot({
+            animations: 'disabled',
             path: join(output, `${width}-${language}-${theme}.png`),
           });
         }
@@ -181,7 +197,10 @@ try {
       }
   if (output) {
     await mkdir(output, { recursive: true });
-    await page.screenshot({ path: join(output, 'actual-conflict-row.png') });
+    await page.screenshot({
+      animations: 'disabled',
+      path: join(output, 'actual-conflict-row.png'),
+    });
     await writeFile(
       join(output, 'receipt.json'),
       JSON.stringify(

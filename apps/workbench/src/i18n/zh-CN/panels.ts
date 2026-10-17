@@ -3,11 +3,12 @@ export const panels: Record<string, string> = {
   files: '文件',
   'local workspace': '本地工作区',
   'search files': '搜索文件',
+  'filter files': '筛选文件',
+  'filter files…': '筛选文件…',
+  'no matching files': '没有匹配的文件',
   'find a file…': '查找文件…',
-  'The folder Circle works in, read through granted handles.':
-    'Circle 工作的文件夹，通过授权句柄读取。',
-  'Trust this folder to list its files here, or open it again with open folder.':
-    '信任这个文件夹后才会在这里列出文件，或者用“打开文件夹”重新打开它。',
+  'trust this folder to browse files': '信任此文件夹以浏览文件',
+  'sample files': '示例文件',
   changes: '改动',
   '{n} file': '{n} 个文件',
   '{n} files': '{n} 个文件',
@@ -15,8 +16,6 @@ export const panels: Record<string, string> = {
   modified: '修改',
   deleted: '删除',
   'no files changed in this session yet': '这个会话还没有改动文件',
-  'Files this session changed while the app was open, each against its version before the first change.':
-    '应用打开期间这个会话改动过的文件，每个都与第一次改动前的版本对比。',
   configured: '已配置',
   'not configured': '未配置',
   // the inspector
@@ -45,6 +44,12 @@ export const panels: Record<string, string> = {
   remove: '移除',
   'no files or skills attached': '没有附加文件或技能',
   'pending requests': '待处理的请求',
+  'unsent actions': '未发送操作',
+  'request navigation': '请求打开网址',
+  'navigation saved for preview': '已保存预览导航',
+  'enter an http or https URL': '请输入 http 或 https 网址',
+  'no browser attached': '未连接浏览器',
+  'browser preview only': '此处仅预览浏览器面板',
   'not sent': '未发送',
   request: '请求',
   // the activity panel
@@ -101,8 +106,9 @@ export const panels: Record<string, string> = {
   'browser address': '浏览器地址',
   'navigate browser': '打开网址',
   'open a page': '打开一个页面',
-  'A sandboxed native browser belongs to this Circle session.':
-    '这个 Circle 会话有自己的沙盒原生浏览器。',
+  'browse the web': '浏览网页',
+  'type a URL to open a site.': '输入网址以打开网站。',
+  'type a URL': '输入网址',
   'capture browser': '截取浏览器画面',
   'captured observation': '截取的画面',
   'browser observation': '浏览器画面',

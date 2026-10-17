@@ -290,6 +290,115 @@ function transport(
     },
   };
 }
+
+test(
+  'human command identity follows its actual execution and shared receipt while quiet background work stays out of history',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = scratch(t),
+      host = transport(),
+      model = new ScriptedModel([
+        { message: { id: 'seen-shared', role: 'assistant', content: 'seen' } },
+        { message: { id: 'after-quiet', role: 'assistant', content: 'done' } },
+      ]);
+    const runtime = new AgentRuntime({
+      workspace: root,
+      home: root,
+      settings: defaultSettings(),
+      model,
+      commandLauncher: host.launcher,
+    });
+    cleanup(t, () => runtime.close());
+    const shared = await runtime.userShells.run(
+      command(root, "console.log('shared human exact 中文');", 'shared-human'),
+    );
+    const view = runtime.userShells.views[0]!;
+    assert.equal(shared.execution!.pid, host.launches[0]!.child.pid);
+    assert.equal(view.execution!.executionId, shared.execution!.executionId);
+    assert.equal(view.execution!.userShellId, view.id);
+    assert.equal(view.execution!.toolCallId, undefined);
+    const stored = runtime.store.messages(runtime.session.id)[0]!;
+    assert.equal(stored.shell!.id, view.id);
+    assert.equal(stored.shell!.output, 'shared human exact 中文\n');
+    assert.equal(stored.commandExecutions![0]!.userShellId, view.id);
+    assert.equal(stored.commandExecutions![0]!.toolCallId, undefined);
+    assert.ok(!('outputPath' in stored.commandExecutions![0]!));
+    await runtime.harness.run('Use my shared command');
+    assert.deepEqual(
+      model.requests[0]!.messages.find((message) => message.shell)
+        ?.commandExecutions,
+      stored.commandExecutions,
+    );
+    const quiet = runtime.userShells.run(
+      command(
+        root,
+        "const fs=require('node:fs');fs.writeFileSync('quiet-human-ready','yes');const timer=setInterval(()=>{if(fs.existsSync('quiet-human-release')){clearInterval(timer);console.log('QUIET_HUMAN_PRIVATE');}},5);",
+        'quiet-human',
+      ),
+      true,
+    );
+    await until(
+      () => existsSync(join(root, 'quiet-human-ready')),
+      'quiet human process started',
+    );
+    const quietView = runtime.userShells.views.at(-1)!;
+    const original = structuredClone(quietView.execution!);
+    assert.equal(original.userShellId, quietView.id);
+    assert.equal(original.pid, host.launches[1]!.child.pid);
+    assert.equal(runtime.jobs.backgroundForeground(), 1);
+    const background = await quiet;
+    assert.equal(background.execution!.executionId, original.executionId);
+    assert.equal(background.job!.execution!.userShellId, quietView.id);
+    writeFileSync(join(root, 'quiet-human-release'), 'release');
+    await until(() => quietView.status === 'done', 'quiet human completion');
+    assert.equal(quietView.execution!.executionId, original.executionId);
+    assert.equal(quietView.execution!.epoch, original.epoch);
+    assert.ok(quietView.output.includes('QUIET_HUMAN_PRIVATE'));
+    assert.equal(runtime.jobs.hasNotices(runtime.session.id), false);
+    await runtime.harness.run('After quiet work');
+    assert.ok(!JSON.stringify(model.requests).includes('QUIET_HUMAN_PRIVATE'));
+    assert.ok(
+      !JSON.stringify(runtime.store.messages(runtime.session.id)).includes(
+        quietView.id,
+      ),
+    );
+    const before = structuredClone(view.execution!);
+    runtime.userShells.executionChanged({
+      ...before,
+      executionSessionId: 'foreign-session',
+      status: 'failed',
+    });
+    runtime.userShells.executionChanged({
+      ...before,
+      epoch: 'stale-registry',
+      status: 'failed',
+    });
+    assert.deepEqual(view.execution, before);
+    const sessionId = runtime.session.id;
+    await runtime.close();
+    const launches = host.launches.length;
+    const reopened = new AgentRuntime({
+      workspace: root,
+      home: root,
+      settings: defaultSettings(),
+      sessionId,
+      model: new ScriptedModel(),
+      commandLauncher: host.launcher,
+    });
+    cleanup(t, () => reopened.close());
+    assert.equal(
+      host.launches.length,
+      launches,
+      'history reopening never launches a command',
+    );
+    assert.deepEqual(
+      reopened.store.messages(sessionId)[0]!.commandExecutions,
+      stored.commandExecutions,
+    );
+    assert.equal(reopened.store.messages(sessionId)[0]!.shell!.id, view.id);
+  },
+);
+
 function fixture(
   t: TestContext,
   options: Parameters<typeof transport>[0] = {},

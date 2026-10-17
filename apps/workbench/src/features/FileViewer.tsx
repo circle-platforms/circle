@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileText, Save, X } from 'lucide-react';
+import { Bug, FileText, Save, X } from 'lucide-react';
 import { Tooltip } from 'radix-ui';
 import type { IRange } from 'monaco-editor';
 import { useRuntime } from '../app/context';
 import { currentSession } from '../model/state';
 import { Button, IconButton, Status } from '../components/common';
-import { t, tn } from '../i18n';
+import { dateLocale, t, tn } from '../i18n';
+import { copyText } from '../host';
+import type { WorkspaceServiceEvent } from '../../../desktop/src/workspace-protocol';
 import {
   workspaceCall,
   subscribeWorkspace,
@@ -29,6 +31,112 @@ type SaveFlight = {
   writes: Map<string, string>;
   latest: Map<string, EditorDocument>;
 };
+type LanguageProcessStatus = {
+  kind: 'external' | 'in-process';
+  provider: string;
+  state: 'idle' | 'starting' | 'running' | 'stopping' | 'exited' | 'failed';
+  pid?: number;
+  command?: string;
+  cwd?: string;
+  stderrTail?: string;
+  exitCode?: number;
+  signal?: string;
+  reason?: string;
+  canStop: boolean;
+  canRestart: boolean;
+};
+type LanguageOwner = { identity: string; sequence: number; busy: boolean };
+type DiagnosticHistory = {
+  owner: LanguageOwner;
+  events: WorkspaceServiceEvent[];
+  cursor: { offset: number; seq: number };
+  hasMore: boolean;
+  loaded: boolean;
+  pending: boolean;
+  error?: string;
+  errorTitle?: string;
+};
+function diagnosticBatches(events: WorkspaceServiceEvent[]) {
+  const batches = new Map<
+    string,
+    {
+      id: string;
+      at: string;
+      provider?: string;
+      version?: number;
+      count: number;
+      parts: Map<number, string>;
+      invalid: boolean;
+    }
+  >();
+  for (const event of events) {
+    const data = event.data;
+    if (
+      data.kind !== 'diagnostics' ||
+      typeof data.batchId !== 'string' ||
+      !Number.isSafeInteger(data.index) ||
+      !Number.isSafeInteger(data.count) ||
+      Number(data.count) < 1 ||
+      Number(data.index) < 0 ||
+      Number(data.index) >= Number(data.count) ||
+      typeof data.body !== 'string'
+    )
+      continue;
+    let batch = batches.get(data.batchId);
+    if (!batch) {
+      batch = {
+        id: data.batchId,
+        at: event.at,
+        count: Number(data.count),
+        provider: typeof data.provider === 'string' ? data.provider : undefined,
+        version:
+          typeof data.documentVersion === 'number'
+            ? data.documentVersion
+            : undefined,
+        parts: new Map(),
+        invalid: false,
+      };
+      batches.set(batch.id, batch);
+    }
+    const old = batch.parts.get(Number(data.index));
+    if (batch.count !== data.count || (old !== undefined && old !== data.body))
+      batch.invalid = true;
+    batch.parts.set(Number(data.index), data.body);
+  }
+  return [...batches.values()].map((batch) => {
+    const parts = [...batch.parts].sort(([a], [b]) => a - b);
+    const body = parts.map(([, text]) => text).join('');
+    let diagnostics: Record<string, unknown>[] = [];
+    let complete =
+      !batch.invalid &&
+      parts.length === batch.count &&
+      parts.every(([index], position) => index === position);
+    if (complete) {
+      try {
+        const parsed = JSON.parse(body);
+        complete = Array.isArray(parsed);
+        if (complete) diagnostics = parsed;
+      } catch {
+        complete = false;
+      }
+    }
+    return { ...batch, body, complete, diagnostics };
+  });
+}
+const LANGUAGE_STATE_LABEL = {
+  idle: () => t('idle'),
+  starting: () => t('starting'),
+  running: () => t('running'),
+  stopping: () => t('stopping'),
+  exited: () => t('exited'),
+  failed: () => t('failed'),
+};
+const DIAGNOSTIC_SEVERITY_LABEL: Record<number, () => string> = {
+  8: () => t('error'),
+  4: () => t('warning'),
+  2: () => t('information'),
+  1: () => t('hint'),
+};
 const MODE_LABEL = {
   file: () => t('file'),
   diff: () => t('diff'),
@@ -40,6 +148,7 @@ export function FileViewer({
   column,
   resourceOwner,
   onClose,
+  onDebugSource,
   onNavigate: onSourceNavigate,
 }: {
   path: string;
@@ -47,6 +156,7 @@ export function FileViewer({
   column?: number;
   resourceOwner?: SourceResourceOwner;
   onClose: () => void;
+  onDebugSource?: (path: string, line?: number) => void;
   onNavigate?: (
     path: string,
     line?: number,
@@ -96,6 +206,46 @@ export function FileViewer({
       startColumn: number;
     }[]
   >([]);
+  const languageOwner = useRef<LanguageOwner>({
+    identity,
+    sequence: 0,
+    busy: false,
+  });
+  if (languageOwner.current.identity !== identity)
+    languageOwner.current = { identity, sequence: 0, busy: false };
+  const owner = languageOwner.current;
+  const [languageDetailsOpen, setLanguageDetailsOpen] = useState(false);
+  const [languageView, setLanguageView] = useState<{
+    owner: LanguageOwner;
+    status?: LanguageProcessStatus;
+    error?: string;
+    pending?: 'stop' | 'restart';
+  }>({ owner });
+  const languageViewCurrent: typeof languageView =
+    languageView.owner === owner ? languageView : { owner };
+  const [diagnosticHistoryOpen, setDiagnosticHistoryOpen] = useState(false);
+  const emptyHistory = (): DiagnosticHistory => ({
+    owner,
+    events: [],
+    cursor: { offset: 0, seq: 0 },
+    hasMore: true,
+    loaded: false,
+    pending: false,
+  });
+  const [diagnosticHistory, setDiagnosticHistory] =
+    useState<DiagnosticHistory>(emptyHistory);
+  const history =
+    diagnosticHistory.owner === owner ? diagnosticHistory : emptyHistory();
+  const historyRequest = useRef(0);
+  const historyPending = useRef<LanguageOwner | null>(null);
+  const [copyingDiagnostic, setCopyingDiagnostic] =
+    useState<LanguageOwner | null>(null);
+  useEffect(
+    () => () => {
+      owner.sequence++;
+    },
+    [owner],
+  );
   const [loading, setLoading] = useState(true);
   const [missing, setMissing] = useState(false);
   const [moved, setMoved] = useState<EditorDocument | null>(null);
@@ -131,7 +281,7 @@ export function FileViewer({
     ? sourceAgent
       ? t('agent source: {name}', { name: sourceAgent.name })
       : t('agent source')
-    : t('workspace source: {name}', {
+    : t('workspace: {name}', {
         name: sourceWorkspace?.name ?? t('workspace'),
       });
   const sourceDirectory = sourceWorkspace?.path;
@@ -346,15 +496,27 @@ export function FileViewer({
             });
             continue;
           }
-          void workspaceCall<EditorDocument>(session.id, 'documents', 'read', {
-            path: target,
-          })
-            .then((document) => {
+          const readCurrent = async () => {
+            // Recheck a snapshot overtaken by our own save, but never spin
+            // indefinitely under continuous writes. A newer event supersedes us.
+            for (let attempt = 0; attempt < 3; attempt++) {
               if (!alive || reads.get(target) !== readVersion) return;
+              const baselineRevision = editorDocuments.get(uri)?.revision;
+              const document = await workspaceCall<EditorDocument>(
+                session.id,
+                'documents',
+                'read',
+                { path: target },
+              );
+              if (!alive || reads.get(target) !== readVersion) return;
+              if (editorDocuments.get(uri)?.revision !== baselineRevision)
+                continue;
               const pending = [...inFlightSaves.current.values()].find(
                 (flight) => flight.writes.has(uri),
               );
               if (pending) {
+                // The pre-save disk baseline is expected while the write is pending.
+                if (document.revision === baselineRevision) return;
                 pending.latest.set(uri, document);
                 if (
                   target === path &&
@@ -385,13 +547,14 @@ export function FileViewer({
                 setConflict(null);
                 setError('');
               }
-            })
-            .catch((cause) => {
-              if (alive && target === path)
-                setError(
-                  String(cause instanceof Error ? cause.message : cause),
-                );
-            });
+              return;
+            }
+            throw Error(t('file changed on disk; buffer kept'));
+          };
+          void readCurrent().catch((cause) => {
+            if (alive && reads.get(target) === readVersion && target === path)
+              setError(String(cause instanceof Error ? cause.message : cause));
+          });
         }
       });
       return () => {
@@ -410,6 +573,196 @@ export function FileViewer({
     window.addEventListener('circle-language-project', update);
     return () => window.removeEventListener('circle-language-project', update);
   }, [workspaceId]);
+  useEffect(() => {
+    if (!live || !languageDetailsOpen) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (!active || languageOwner.current !== owner) return;
+      if (!owner.busy) {
+        const sequence = ++owner.sequence;
+        try {
+          const status = await workspaceCall<LanguageProcessStatus>(
+            session.id,
+            'language',
+            'request',
+            { method: 'status', path },
+          );
+          if (
+            active &&
+            languageOwner.current === owner &&
+            owner.sequence === sequence
+          )
+            setLanguageView({ owner, status });
+        } catch (cause) {
+          if (
+            active &&
+            languageOwner.current === owner &&
+            owner.sequence === sequence
+          )
+            setLanguageView((view) => ({
+              ...(view.owner === owner ? view : { owner }),
+              error: String(cause instanceof Error ? cause.message : cause),
+            }));
+        }
+      }
+      if (active) timer = setTimeout(poll, 1000);
+    };
+    void poll();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [live, languageDetailsOpen, owner, session.id, path]);
+  const controlLanguage = async (method: 'stop' | 'restart') => {
+    if (!live || readOnly || owner.busy || languageOwner.current !== owner)
+      return;
+    owner.busy = true;
+    const sequence = ++owner.sequence;
+    setLanguageView((view) => ({
+      ...(view.owner === owner ? view : { owner }),
+      pending: method,
+      error: undefined,
+    }));
+    try {
+      const status = await workspaceCall<LanguageProcessStatus>(
+        session.id,
+        'language',
+        'request',
+        { method, path },
+      );
+      if (languageOwner.current === owner && owner.sequence === sequence)
+        setLanguageView({ owner, status });
+    } catch (cause) {
+      if (languageOwner.current === owner && owner.sequence === sequence)
+        setLanguageView((view) => ({
+          ...(view.owner === owner ? view : { owner }),
+          pending: undefined,
+          error: String(cause instanceof Error ? cause.message : cause),
+        }));
+    } finally {
+      owner.busy = false;
+    }
+  };
+  const acceptsDiagnostic = (event: WorkspaceServiceEvent) =>
+    event.workspaceId === workspaceId &&
+    event.sessionId === session.id &&
+    event.service === 'language' &&
+    event.resourceId === path &&
+    event.data.kind === 'diagnostics';
+  const appendDiagnostics = (events: WorkspaceServiceEvent[]) => {
+    const accepted = events.filter(acceptsDiagnostic);
+    setDiagnosticHistory((previous) => {
+      if (languageOwner.current !== owner) return previous;
+      const current = previous.owner === owner ? previous : emptyHistory();
+      const merged = new Map(
+        current.events.map((event) => [`${event.epoch}:${event.seq}`, event]),
+      );
+      for (const event of accepted)
+        merged.set(`${event.epoch}:${event.seq}`, event);
+      return {
+        ...current,
+        events: [...merged.values()].sort((a, b) => a.seq - b.seq),
+      };
+    });
+  };
+  const readDiagnosticHistory = async () => {
+    if (
+      !live ||
+      historyPending.current === owner ||
+      languageOwner.current !== owner
+    )
+      return;
+    historyPending.current = owner;
+    const sequence = ++historyRequest.current;
+    const version = editorBuffer(workspaceId, path)?.version;
+    const current = () =>
+      languageOwner.current === owner &&
+      historyRequest.current === sequence &&
+      editorBuffer(workspaceId, path)?.version === version;
+    setDiagnosticHistory((previous) => ({
+      ...(previous.owner === owner ? previous : emptyHistory()),
+      pending: true,
+      error: undefined,
+      errorTitle: undefined,
+    }));
+    try {
+      const page = await workspaceCall<{
+        events: WorkspaceServiceEvent[];
+        cursor: DiagnosticHistory['cursor'];
+        hasMore: boolean;
+      }>(session.id, 'events', 'replay', { after: history.cursor, limit: 32 });
+      if (!current()) return;
+      if (
+        page.cursor.seq < history.cursor.seq ||
+        page.cursor.offset < history.cursor.offset ||
+        (page.hasMore && page.cursor.seq === history.cursor.seq)
+      )
+        throw Error('diagnostic history cursor did not advance');
+      appendDiagnostics(page.events);
+      setDiagnosticHistory((previous) =>
+        languageOwner.current !== owner
+          ? previous
+          : {
+              ...previous,
+              owner,
+              cursor: page.cursor,
+              hasMore: page.hasMore,
+              loaded: true,
+              pending: false,
+            },
+      );
+    } catch (cause) {
+      if (current())
+        setDiagnosticHistory((previous) => ({
+          ...previous,
+          owner,
+          pending: false,
+          error: String(cause instanceof Error ? cause.message : cause),
+        }));
+    } finally {
+      if (historyPending.current === owner) historyPending.current = null;
+      if (
+        languageOwner.current === owner &&
+        historyRequest.current === sequence
+      )
+        setDiagnosticHistory((previous) =>
+          previous.owner === owner ? { ...previous, pending: false } : previous,
+        );
+    }
+  };
+  useEffect(() => {
+    if (!live || !languageDetailsOpen || !diagnosticHistoryOpen) return;
+    if (!history.loaded) void readDiagnosticHistory();
+    return subscribeWorkspace((event) => {
+      if (languageOwner.current === owner && acceptsDiagnostic(event))
+        appendDiagnostics([event]);
+    });
+  }, [live, languageDetailsOpen, diagnosticHistoryOpen, owner]);
+  const copyDiagnostic = async (
+    batch: ReturnType<typeof diagnosticBatches>[number],
+  ) => {
+    if (
+      !batch.complete ||
+      languageOwner.current !== owner ||
+      copyingDiagnostic === owner
+    )
+      return;
+    setCopyingDiagnostic(owner);
+    try {
+      await copyText(batch.body);
+      if (languageOwner.current === owner) notify(t('diagnostics copied'));
+    } catch (cause) {
+      if (languageOwner.current === owner)
+        setDiagnosticHistory((previous) => ({
+          ...previous,
+          errorTitle: t('could not copy diagnostics'),
+          error: String(cause instanceof Error ? cause.message : cause),
+        }));
+    } finally {
+      if (languageOwner.current === owner) setCopyingDiagnostic(null);
+    }
+  };
   const changed = (text: string) => {
     setValue(text);
     setBufferCount(pendingEditorDocuments(workspaceId).length);
@@ -490,28 +843,43 @@ export function FileViewer({
           );
         const result = await workspaceCall<{
           status: string;
+          applied?: EditorDocument[];
           committedPaths?: string[];
+          remaining?: { path: string }[];
           failures?: { path: string; message?: string }[];
         }>(target.sessionId, 'documents', 'applyEdits', { edits });
         for (const committed of result.committedPaths ?? []) {
-          const doc = await workspaceCall<EditorDocument>(
-            target.sessionId,
-            'documents',
-            'read',
-            { path: committed },
-          );
+          const doc =
+            result.applied?.find((document) => document.path === committed) ??
+            (await workspaceCall<EditorDocument>(
+              target.sessionId,
+              'documents',
+              'read',
+              { path: committed },
+            ));
           setEditorDocument(target.workspaceId, doc);
           if (selected() && committed === target.path) setDocument(doc);
         }
-        if (result.failures?.length)
+        if (result.status !== 'applied' || result.failures?.length) {
+          const committed = new Set(result.committedPaths ?? []);
+          const remaining =
+            result.remaining?.map((edit) => edit.path) ??
+            edits
+              .map((edit) => edit.path)
+              .filter((path) => !committed.has(path));
           throw Error(
-            result.failures
-              .map(
+            [
+              t('saved: {saved}; not saved: {unsaved}', {
+                saved: [...committed].join(', ') || t('none'),
+                unsaved: remaining.join(', ') || t('none'),
+              }),
+              ...(result.failures ?? []).map(
                 (item) =>
                   `${item.path}: ${item.message ?? t('file changed on disk')}`,
-              )
-              .join('\n'),
+              ),
+            ].join('\n'),
           );
+        }
       } else {
         const doc = await workspaceCall<EditorDocument>(
           target.sessionId,
@@ -569,7 +937,17 @@ export function FileViewer({
           'read',
           { path: target.path },
         );
-        if (selected() && disk.revision !== target.revision) setConflict(disk);
+        if (selected()) {
+          // SaveAll may have committed this file before a later file failed.
+          const baseline = editorDocuments.get(buffer.uri);
+          if (disk.revision !== (baseline?.revision ?? target.revision)) {
+            if (disk.content !== baseline?.content) setConflict(disk);
+            else {
+              setEditorDocument(target.workspaceId, disk);
+              setDocument(disk);
+            }
+          }
+        }
       } catch {
         /* Keep the original failure and the target's retained draft. */
       }
@@ -612,6 +990,15 @@ export function FileViewer({
     <section className="file-view">
       <header className="file-view-heading">
         {sourceHeading}
+        {onDebugSource && /\.[cm]?[jt]sx?$/i.test(path) && (
+          <IconButton
+            label={t('debug file')}
+            disabled={readOnly || saving || missing || !!conflict}
+            onClick={() => onDebugSource(path, line)}
+          >
+            <Bug size={15} />
+          </IconButton>
+        )}
         <IconButton label={t('close file')} onClick={onClose}>
           <X size={15} />
         </IconButton>
@@ -630,7 +1017,7 @@ export function FileViewer({
         </div>
         <span>
           {value === document.content
-            ? t('disk and buffer match')
+            ? t('no unsaved changes')
             : t('unsaved buffer')}
         </span>
         {mode === 'edit' && (
@@ -645,19 +1032,211 @@ export function FileViewer({
           </Button>
         )}
       </div>
-      {!!projectErrors.length && (
+      {(live || !!projectErrors.length) && (
         <details
           className="editor-notice editor-project-diagnostics"
-          role="alert"
+          role={projectErrors.length ? 'alert' : undefined}
+          open={languageDetailsOpen}
+          onToggle={(event) => setLanguageDetailsOpen(event.currentTarget.open)}
         >
           <summary>
-            {projectErrors.every(
-              (problem) => problem.source === 'configuration',
-            )
-              ? t('project configuration needs attention')
-              : t('language service needs attention')}{' '}
-            ({projectErrors.length})
+            {!projectErrors.length
+              ? t('language service')
+              : projectErrors.every(
+                    (problem) => problem.source === 'configuration',
+                  )
+                ? t('project configuration needs attention')
+                : t('language service needs attention')}{' '}
+            {projectErrors.length ? `(${projectErrors.length})` : ''}
           </summary>
+          {live && languageViewCurrent.status && (
+            <div
+              className="editor-language-status"
+              aria-label={t('language service')}
+              aria-busy={!!languageViewCurrent.pending}
+            >
+              <span>
+                {languageViewCurrent.status.provider} ·{' '}
+                {LANGUAGE_STATE_LABEL[languageViewCurrent.status.state]()}
+              </span>
+              {languageViewCurrent.status.pid !== undefined && (
+                <span>
+                  {t('process id')}: {languageViewCurrent.status.pid}
+                </span>
+              )}
+              {languageViewCurrent.status.command && (
+                <span>
+                  {t('command')}:{' '}
+                  <code>{languageViewCurrent.status.command}</code>
+                </span>
+              )}
+              {languageViewCurrent.status.cwd && (
+                <span>
+                  {t('working directory')}:{' '}
+                  <code>{languageViewCurrent.status.cwd}</code>
+                </span>
+              )}
+              {languageViewCurrent.status.exitCode !== undefined && (
+                <span>
+                  {t('exit code')}: {languageViewCurrent.status.exitCode}
+                </span>
+              )}
+              {languageViewCurrent.status.signal && (
+                <span>
+                  {t('ended by signal {signal}', {
+                    signal: languageViewCurrent.status.signal,
+                  })}
+                </span>
+              )}
+              {languageViewCurrent.status.reason && (
+                <span>{languageViewCurrent.status.reason}</span>
+              )}
+              {languageViewCurrent.status.stderrTail && (
+                <pre aria-label={t('language service errors')}>
+                  {languageViewCurrent.status.stderrTail}
+                </pre>
+              )}
+              {languageViewCurrent.status.kind === 'external' && (
+                <Button
+                  disabled={
+                    readOnly ||
+                    !!languageViewCurrent.pending ||
+                    !languageViewCurrent.status.canStop
+                  }
+                  onClick={() => void controlLanguage('stop')}
+                >
+                  {languageViewCurrent.pending === 'stop'
+                    ? t('stopping')
+                    : t('stop')}
+                </Button>
+              )}
+              <Button
+                disabled={
+                  readOnly ||
+                  !!languageViewCurrent.pending ||
+                  !languageViewCurrent.status.canRestart
+                }
+                onClick={() => void controlLanguage('restart')}
+              >
+                {languageViewCurrent.pending === 'restart'
+                  ? languageViewCurrent.status.kind === 'in-process'
+                    ? t('refreshing…')
+                    : t('restarting…')
+                  : languageViewCurrent.status.kind === 'in-process'
+                    ? t('refresh')
+                    : t('restart')}
+              </Button>
+              {languageViewCurrent.status.kind === 'in-process' && (
+                <details>
+                  <summary>{t('details')}</summary>
+                  <span>{t('runs inside Circle')}</span>
+                </details>
+              )}
+            </div>
+          )}
+          {live &&
+            !languageViewCurrent.status &&
+            !languageViewCurrent.error && (
+              <span>{t('loading language service status')}</span>
+            )}
+          {live && languageViewCurrent.error && (
+            <div>
+              <span role="alert">{t('could not update language service')}</span>
+              <details>
+                <summary>{t('details')}</summary>
+                <pre>{languageViewCurrent.error}</pre>
+              </details>
+            </div>
+          )}
+          {live && (
+            <details
+              className="editor-diagnostic-history"
+              open={diagnosticHistoryOpen}
+              onToggle={(event) =>
+                setDiagnosticHistoryOpen(event.currentTarget.open)
+              }
+            >
+              <summary>{t('diagnostic history')}</summary>
+              {diagnosticBatches(history.events).map((batch) => (
+                <details
+                  key={batch.id}
+                  data-diagnostic-batch={batch.id}
+                  className="editor-diagnostic-batch"
+                >
+                  <summary title={batch.at}>
+                    {new Date(batch.at).toLocaleString(dateLocale())}
+                    {batch.provider && ` · ${batch.provider}`}
+                    {batch.version !== undefined &&
+                      ` · ${t('document version {version}', { version: batch.version })}`}
+                  </summary>
+                  {batch.complete ? (
+                    <>
+                      {!batch.diagnostics.length && (
+                        <span>{t('no problems')}</span>
+                      )}
+                      {!!batch.diagnostics.length && (
+                        <ul>
+                          {batch.diagnostics.map((problem, index) => (
+                            <li key={index}>
+                              {String(problem.source ?? batch.provider ?? '')}{' '}
+                              {typeof problem.severity === 'number' &&
+                                `${DIAGNOSTIC_SEVERITY_LABEL[problem.severity]?.() ?? t('severity {severity}', { severity: problem.severity })} · `}
+                              {typeof problem.startLineNumber === 'number' &&
+                                `${t('line {line}', { line: problem.startLineNumber })} · `}
+                              {typeof problem.message === 'string'
+                                ? problem.message
+                                : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <details>
+                        <summary>{t('original diagnostic data')}</summary>
+                        <pre>{batch.body}</pre>
+                      </details>
+                    </>
+                  ) : (
+                    <span>{t('diagnostic batch incomplete; read more')}</span>
+                  )}
+                  <Button
+                    disabled={!batch.complete || copyingDiagnostic === owner}
+                    onClick={() => void copyDiagnostic(batch)}
+                  >
+                    {t('copy complete diagnostics')}
+                  </Button>
+                </details>
+              ))}
+              {history.loaded && !history.events.length && (
+                <span>
+                  {history.hasMore
+                    ? t('no diagnostics in this page; continue reading')
+                    : t('no diagnostic history')}
+                </span>
+              )}
+              {history.hasMore && (
+                <Button
+                  disabled={history.pending}
+                  onClick={() => void readDiagnosticHistory()}
+                >
+                  {history.pending
+                    ? t('reading diagnostic history')
+                    : t('read more diagnostic history')}
+                </Button>
+              )}
+              {history.error && (
+                <div>
+                  <span role="alert">
+                    {history.errorTitle ??
+                      t('could not read diagnostic history')}
+                  </span>
+                  <details>
+                    <summary>{t('details')}</summary>
+                    <pre>{history.error}</pre>
+                  </details>
+                </div>
+              )}
+            </details>
+          )}
           {projectErrors.map((problem, index) => (
             <span key={index}>
               {problem.path && (

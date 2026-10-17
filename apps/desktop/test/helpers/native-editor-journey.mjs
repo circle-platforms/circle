@@ -149,7 +149,7 @@ export async function runNativeEditorJourney({
         ),
     'clean model external refresh',
   );
-  await page.getByText('disk and buffer match', { exact: true }).waitFor();
+  await page.getByText('no unsaved changes', { exact: true }).waitFor();
   await append('// protected human draft\n');
   await writeFile(join(workspace, main), source + '// competing external\n');
   await page
@@ -263,7 +263,7 @@ export async function runNativeEditorJourney({
     async () => (await disk(main)) === before + fixedSuffix,
     'manual diagnostic repair saves exact expected disk bytes',
   );
-  await page.getByText('disk and buffer match', { exact: true }).waitFor();
+  await page.getByText('no unsaved changes', { exact: true }).waitFor();
   checks.push(
     'actual keyboard error edit, F8 problem location, manual correction and exact saved file',
   );

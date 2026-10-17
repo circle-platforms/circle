@@ -58,6 +58,28 @@ test('pre-build source receipt binds both development files and actual packaged 
       appPath: app,
       output: join(root, 'dev.json'),
     });
+    await assert.rejects(
+      () =>
+        generateNativeBuildManifest({
+          root,
+          sourceReceipt: receipt,
+          appPath: app,
+          output: join(root, 'wrong-kind.json'),
+          allowWorkingTree: true,
+        }),
+      /source kind/,
+    );
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src/untracked-only.ts'), 'new source');
+    await assert.rejects(
+      () =>
+        captureNativeBuildSource({
+          root,
+          output: join(root, 'untracked-default.json'),
+        }),
+      /untracked build source/,
+    );
+    await rm(join(root, 'src/untracked-only.ts'));
     assert.equal(dev.artifacts.length, 8);
     assert.ok(dev.artifacts.every((entry) => entry.path.startsWith(app)));
     const require = createRequire(import.meta.url);
@@ -95,6 +117,73 @@ test('pre-build source receipt binds both development files and actual packaged 
       JSON.parse(await readFile(join(root, 'dev.json'))).sourceBuildHead,
       dev.sourceBuildHead,
     );
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'apps/desktop/assets'), { recursive: true });
+    await writeFile(join(root, 'src/new.ts'), 'untracked source');
+    await writeFile(join(root, 'apps/desktop/assets/new.svg'), '<svg/>');
+    await rm(join(root, 'source.txt'));
+    await assert.rejects(
+      () => captureNativeBuildSource({ root, output: receipt }),
+      'default clean rules still reject WIP',
+    );
+    const wip = await captureNativeBuildSource({
+      root,
+      output: receipt,
+      allowWorkingTree: true,
+    });
+    assert.equal(wip.sourceKind, 'working-tree');
+    assert.equal(wip.sourceBaseHead, dev.sourceBuildHead);
+    assert.match(wip.sourceTreeSha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      wip.sourceFiles.find((file) => file.path === 'source.txt'),
+      { path: 'source.txt', kind: 'tracked', sha256: null, deleted: true },
+    );
+    assert.equal(
+      wip.sourceFiles.find((file) => file.path === 'src/new.ts').kind,
+      'untracked',
+    );
+    assert.equal(
+      wip.sourceFiles.find(
+        (file) => file.path === 'apps/desktop/assets/new.svg',
+      ).kind,
+      'untracked',
+    );
+    const build = () =>
+      generateNativeBuildManifest({
+        root,
+        sourceReceipt: receipt,
+        appPath: app,
+        output: join(root, 'wip.json'),
+        allowWorkingTree: true,
+      });
+    await assert.rejects(
+      () =>
+        generateNativeBuildManifest({
+          root,
+          sourceReceipt: receipt,
+          appPath: app,
+          output: join(root, 'no-opt-in.json'),
+        }),
+      /explicit/,
+    );
+    const wipManifest = await build();
+    assert.equal(wipManifest.sourceKind, 'working-tree');
+    assert.equal(wipManifest.sourceTreeSha256, wip.sourceTreeSha256);
+    assert.deepEqual(wipManifest.sourceFiles, wip.sourceFiles);
+    for (const [file, content] of [
+      ['src/new.ts', 'untracked source'],
+      ['apps/desktop/assets/new.svg', '<svg/>'],
+    ]) {
+      await writeFile(join(root, file), content + 'changed');
+      await assert.rejects(build, /source changed/);
+      await writeFile(join(root, file), content);
+    }
+    await writeFile(join(root, 'source.txt'), 'restored tracked file');
+    await assert.rejects(build, /source changed/);
+    await rm(join(root, 'source.txt'));
+    await writeFile(join(root, 'src/added-after-receipt.ts'), 'new');
+    await assert.rejects(build, /source changed/);
+    await rm(join(root, 'src/added-after-receipt.ts'));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

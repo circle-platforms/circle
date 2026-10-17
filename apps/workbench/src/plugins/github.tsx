@@ -33,6 +33,9 @@ export function GitHubPluginDetails({
     extension.tools.includes('github_connection') &&
     (extension.view as { provider?: string } | undefined)?.provider ===
       'github';
+  const connected =
+    ready &&
+    (extension?.view as { state?: string } | undefined)?.state === 'connected';
   function tryExample() {
     setError('');
     try {
@@ -90,7 +93,7 @@ export function GitHubPluginDetails({
     ([tool]) => ready && extension?.tools.includes(tool),
   );
   return (
-    <section aria-label={t('GitHub plugin')}>
+    <section className="github-plugin" aria-label={t('GitHub plugin')}>
       <div className="inline-actions">
         <details className="context-source">
           <summary>{t('manage')}</summary>
@@ -100,20 +103,19 @@ export function GitHubPluginDetails({
             onChange={onToggle}
           />
         </details>
-        <Button disabled={!ready} onClick={tryExample}>
+        <Button
+          className={connected ? 'primary' : undefined}
+          disabled={!ready}
+          onClick={tryExample}
+        >
           {t('try now')}
         </Button>
       </div>
       {feedback}
       {error && <p role="alert">{error}</p>}
       <GitHubConnectionCard embedded />
-      <section className="panel-section">
-        <h2>{t('capabilities')}</h2>
-        <p>
-          {t(
-            'Use GitHub connection status, draft pull requests and CI results in your Circle conversation.',
-          )}
-        </p>
+      <details className="panel-section">
+        <summary>{t('capabilities')}</summary>
         {available.length ? (
           <ul>
             {available.map(([tool, label]) => (
@@ -131,17 +133,7 @@ export function GitHubPluginDetails({
                   )}
           </p>
         )}
-        <p className="panel-note">
-          {t(
-            'Repository tools appear after connecting an account and allowing specific repositories. Writes require approval; merging remains your decision.',
-          )}
-        </p>
-        <p className="panel-note">
-          {t(
-            'Try now prepares a read-only connection example. Nothing is sent automatically.',
-          )}
-        </p>
-      </section>
+      </details>
     </section>
   );
 }

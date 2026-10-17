@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import '../src/styles/app.css';
 import { PendingOperations } from '../src/features/PendingOperations';
 let reviewed = false;
 let rejectReview = true;

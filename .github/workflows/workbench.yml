@@ -94,6 +94,12 @@ jobs:
           unset CIRCLE_TEST_BROWSER_CHANNEL
           node apps/workbench/node_modules/playwright/cli.js install --with-deps chromium
           npm --prefix apps/workbench run test:components
+      - name: Compare desktop appearance on Apple silicon
+        if: matrix.target == 'darwin-arm64'
+        timeout-minutes: 10
+        run: |
+          node apps/workbench/node_modules/playwright/cli.js install chromium
+          npm --prefix apps/workbench run test:visual
       - run: npm --prefix apps/desktop test
         timeout-minutes: 5
       - name: Verify native developer tool resources
@@ -157,6 +163,7 @@ jobs:
             apps/desktop/out/*.sha256
             apps/desktop/out/artifact-receipt.json
             apps/desktop/artifacts/
+            apps/workbench/artifacts/visual/
             outputs/
             ${{ runner.temp }}/circle-xvfb.log
           if-no-files-found: error

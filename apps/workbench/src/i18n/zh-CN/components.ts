@@ -51,6 +51,7 @@ export const components: Record<string, string> = {
   key: '按键',
   'accept dialog': '接受对话框',
   // the sidebar
+  'frontend preview': '前端预览',
   recent: '最近',
   'just now': '刚刚',
   '{n} minute ago': '{n} 分钟前',

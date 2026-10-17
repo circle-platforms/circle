@@ -1050,7 +1050,12 @@ function ExtensionsPage() {
     let changed = false;
     const next = { ...actions };
     for (const [name, action] of Object.entries(actions)) {
-      if (action.phase !== 'waiting' && action.phase !== 'complete') continue;
+      if (
+        action.phase !== 'waiting' &&
+        action.phase !== 'complete' &&
+        action.phase !== 'load-error'
+      )
+        continue;
       const extension = snapshot.extensions.find((item) => item.name === name);
       if (!extension) continue;
       if (action.phase === 'complete') {
@@ -1074,6 +1079,8 @@ function ExtensionsPage() {
         }
       }
       if (action.target && extension.enabled && extension.error) {
+        if (action.phase === 'load-error' && action.error === extension.error)
+          continue;
         next[name] = { ...action, phase: 'load-error', error: extension.error };
         changed = true;
       } else if (

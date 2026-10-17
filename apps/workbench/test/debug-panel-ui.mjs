@@ -46,10 +46,25 @@ try {
       id,
       data,
     });
+  await page
+    .getByRole('button', { name: 'copy complete debug output', exact: true })
+    .click();
+  await page.waitForFunction(() => window.debugFixture.copied.endsWith('尾😀'));
+  assert.equal(
+    await page.evaluate(() => window.debugFixture.copied),
+    '中文😀\n'.repeat(150000) + '尾😀',
+  );
   const stackA = await waitPending('stackTrace', 'A');
   await hold('');
   await setSession('B');
   await page.getByRole('button', { name: /frame-B/ }).waitFor();
+  await page.evaluate(() =>
+    window.debugFixture.output('B', 'fresh Chinese 中文😀 output'),
+  );
+  await page
+    .getByLabel('debug output', { exact: true })
+    .filter({ hasText: 'fresh Chinese 中文😀 output' })
+    .waitFor();
   await resolve(stackA.id, {
     stackFrames: [
       {
@@ -114,6 +129,68 @@ try {
     await page.locator('form output').innerText(),
     '',
     'an old paused-frame evaluation must not survive the next pause',
+  );
+  await hold('');
+  await page.evaluate(() =>
+    window.debugFixture.source({
+      id: 'source-one',
+      path: '/fixture/source.cjs',
+      line: 12,
+    }),
+  );
+  await page.waitForFunction(() =>
+    window.debugFixture
+      .calls()
+      .some(
+        (call) =>
+          call.payload.method === 'setBreakpoints' &&
+          call.payload.params.path === '/fixture/source.cjs',
+      ),
+  );
+  assert.equal(
+    await page.getByLabel('program path', { exact: true }).inputValue(),
+    '/fixture/source.cjs',
+  );
+  assert.equal(
+    await page.getByLabel('breakpoint line', { exact: true }).inputValue(),
+    '12',
+  );
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.debugFixture
+          .calls()
+          .filter((call) => call.payload.method === 'launch').length,
+    ),
+    0,
+    'source navigation only prepares debugging; the user still chooses launch',
+  );
+  await page
+    .getByText('debug adapter process: 4242', { exact: true })
+    .waitFor();
+  const callsBeforeTerminalLink = await page.evaluate(
+    () =>
+      window.debugFixture
+        .calls()
+        .filter((call) =>
+          ['launch', 'start', 'create'].includes(call.payload.method),
+        ).length,
+  );
+  await page.getByRole('button', { name: /^open debug terminal/ }).click();
+  assert.deepEqual(await page.evaluate(() => window.debugFixture.opened), [
+    { id: 'owned-debug-terminal', epoch: 'owned-epoch' },
+  ]);
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.debugFixture
+          .calls()
+          .filter((call) =>
+            ['launch', 'start', 'create'].includes(call.payload.method),
+          ).length,
+    ),
+    callsBeforeTerminalLink,
+    'opening the existing terminal only navigates; it cannot launch another process',
   );
   assert.deepEqual(errors, []);
   console.log(

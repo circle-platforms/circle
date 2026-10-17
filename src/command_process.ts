@@ -2,6 +2,8 @@
 export interface CommandOrigin {
   executionSessionId: string;
   toolCallId?: string;
+  /** Host-created identity for an explicit human ! command, never a provider call ID. */
+  userShellId?: string;
   /** Optional raw-argument display after the Runtime's known-secret redaction. */
   displayCommand?: string;
   secretNames?: string[];
@@ -96,6 +98,7 @@ export interface CommandExecution {
   ownerSessionId: string;
   executionSessionId: string;
   toolCallId?: string;
+  userShellId?: string;
   displayCommand?: string;
   status: 'starting' | 'running' | 'background' | 'done' | 'failed' | 'stopped';
   started: number;
@@ -116,6 +119,7 @@ export interface CommandExecutionReceipt {
   ownerSessionId: string;
   executionSessionId: string;
   toolCallId?: string;
+  userShellId?: string;
   status: CommandExecution['status'];
   started: number;
   jobId?: string;
@@ -135,6 +139,7 @@ export function commandExecutionReceipt(
     ownerSessionId: execution.ownerSessionId,
     executionSessionId: execution.executionSessionId,
     toolCallId: execution.toolCallId,
+    userShellId: execution.userShellId,
     status: execution.status,
     started: execution.started,
     jobId: execution.jobId,

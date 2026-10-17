@@ -59,7 +59,64 @@ try {
           0,
         );
         await surface.screenshot({
+          animations: 'disabled',
           path: join(output, `${theme}-${language}-${width}.png`),
+        });
+        const recovery = surface.locator('.recovered-inputs');
+        assert(
+          (
+            await recovery.locator('.task-recovery-title small').textContent()
+          ).endsWith(language === 'en' ? '1 media attachment' : '1 个媒体附件'),
+          'a single recovered attachment has the correct localized count',
+        );
+        const discard = recovery.getByRole('button', {
+          name: language === 'en' ? 'discard recovered input' : '移除恢复副本',
+          exact: true,
+        });
+        const assertActionVisible = async () => {
+          const panel = await recovery.boundingBox();
+          const action = await discard.boundingBox();
+          const draft = await surface
+            .getByRole('textbox', { name: 'restored draft' })
+            .boundingBox();
+          assert(panel && action && draft);
+          assert(
+            action.y >= panel.y &&
+              action.y + action.height <= panel.y + panel.height,
+            'the complete removal action is visible inside the recovery area',
+          );
+          assert(
+            panel.y + panel.height < draft.y,
+            'the recovery area leaves a clear gap before the original draft',
+          );
+        };
+        await assertActionVisible();
+        const summary = recovery.locator(
+          ':scope > article > details > summary',
+        );
+        await summary.click();
+        assert.match(
+          await recovery
+            .locator(':scope > article > details > pre')
+            .first()
+            .textContent(),
+          /preserved line 599$/,
+        );
+        await discard.scrollIntoViewIfNeeded();
+        await assertActionVisible();
+        assert(
+          await recovery.evaluate((node) => node.scrollTop > 0),
+          'expanded long content scrolls within the recovery area',
+        );
+        await recovery.getByRole('checkbox').check();
+        assert.equal(await discard.isEnabled(), true);
+        await assertActionVisible();
+        await surface.screenshot({
+          animations: 'disabled',
+          path: join(
+            output,
+            `${theme}-${language}-${width}-expanded-actions.png`,
+          ),
         });
         await surface.close();
       }

@@ -103,6 +103,7 @@ protocol.registerSchemesAsPrivileged([
 const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
 let browsers: BrowserSessions | null = null;
+let browserClosePending: Promise<void> = Promise.resolve();
 // Certificate exceptions live only in this application process, across window recreation.
 const browserCertificates = new Map<string, Set<string>>();
 let runtime: RuntimeSupervisor | undefined;
@@ -438,6 +439,7 @@ async function createWindow() {
       if (window && !window.isDestroyed())
         window.webContents.send('circle:browser-diagnostic-event', event);
     },
+    join(dataPath, 'browser-diagnostics'),
   );
   window.webContents.on('did-start-loading', () =>
     browsers?.clearDiagnosticSubscriptions(),
@@ -462,7 +464,20 @@ async function createWindow() {
     if (!trustedAppUrl(url)) event.preventDefault();
   });
   window.once('ready-to-show', () => window?.show());
-  window.on('close', () => browsers?.close());
+  window.on('close', () => {
+    if (!browsers) return;
+    browserClosePending = Promise.all([
+      browserClosePending,
+      browsers.close(),
+    ]).then(() => {});
+    void browserClosePending.catch((error) => {
+      void dialog.showMessageBox({
+        type: 'error',
+        message: text('Circle could not stop its runtime'),
+        detail: String(error),
+      });
+    });
+  });
   window.on('closed', () => {
     browsers = null;
     window = null;
@@ -766,7 +781,7 @@ app
       if (!session) throw Error('browser session not found');
       const request = validateBrowserDiagnosticRequest(value);
       if (
-        !['read', 'watch'].includes(request.action) &&
+        !['read', 'watch', 'log'].includes(request.action) &&
         !snapshot.workspaces.find((row) => row.id === session.workspaceId)
           ?.trusted
       )
@@ -885,6 +900,10 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   void runtime
     .close()
+    .then(async () => {
+      await browsers?.close();
+      await browserClosePending;
+    })
     .then(() => {
       quitting = true;
       app.quit();

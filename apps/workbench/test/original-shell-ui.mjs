@@ -14,6 +14,135 @@ const server = await createServer({
 await server.listen();
 let browser;
 const receipts = [];
+async function capturePanels(page, locale, theme, width) {
+  const zh = locale === 'zh';
+  await page
+    .getByRole('button', {
+      name: zh ? '关闭检查器' : 'close inspector',
+      exact: true,
+    })
+    .click();
+  const titleGeometry = await page.locator('.topbar').evaluate((node) => ({
+    titleRight: node
+      .querySelector('.session-title button')
+      .getBoundingClientRect().right,
+    actionsLeft: node.querySelector('.topbar-actions').getBoundingClientRect()
+      .left,
+  }));
+  assert.ok(
+    titleGeometry.titleRight <= titleGeometry.actionsLeft + 1,
+    `session title does not overlap panel controls at ${width}px`,
+  );
+  await page.screenshot({
+    path: `${output}/${locale}-${theme}-${width}-main.png`,
+    animations: 'disabled',
+  });
+  for (const [kind, chinese] of [
+    ['terminal', '终端'],
+    ['files', '文件'],
+    ['activity', '活动'],
+    ['browser', '浏览器'],
+    ['context', '上下文'],
+    ['changes', '改动'],
+  ]) {
+    await page
+      .getByRole('button', {
+        name: zh ? `${chinese}面板` : `${kind} panel`,
+        exact: true,
+      })
+      .click();
+    const inspector = await page.locator('.inspector').evaluate((node) => ({
+      headerHeight: node
+        .querySelector('.inspector-title')
+        .getBoundingClientRect().height,
+      width: node.clientWidth,
+      scrollWidth: node.scrollWidth,
+      flush: node.querySelector('.inspector-body').classList.contains('flush'),
+      headerIcons: [
+        ...node.querySelectorAll(
+          '.inspector-title .icon-button, .panel-switch button, .native-terminal-toolbar > .icon-button, .browser-tabs > .icon-button',
+        ),
+      ]
+        .filter((button) => button.getClientRects().length)
+        .map((button) => {
+          const box = button.getBoundingClientRect();
+          return {
+            width: box.width,
+            height: box.height,
+            radius: getComputedStyle(button).borderRadius,
+          };
+        }),
+      tabsInHeader: (() => {
+        const tabs = node.querySelector(
+          `.workspace-panel-${node.dataset.inspectorPanel} > .panel-header-tabs`,
+        );
+        if (!tabs) return true;
+        const header = node
+          .querySelector('.inspector-title')
+          .getBoundingClientRect();
+        const box = tabs.getBoundingClientRect();
+        return box.top >= header.top && box.bottom <= header.bottom;
+      })(),
+    }));
+    assert.equal(inspector.headerHeight, 40, `${kind}: one 40px header`);
+    for (const icon of inspector.headerIcons) {
+      assert.equal(icon.width, 26, `${kind}: 26px icon width`);
+      assert.equal(icon.height, 26, `${kind}: 26px icon height`);
+      assert.equal(icon.radius, '6px', `${kind}: 6px icon radius`);
+    }
+    assert.ok(inspector.tabsInHeader, `${kind}: own tabs share the header row`);
+    assert.ok(
+      inspector.scrollWidth <= inspector.width + 1,
+      `${kind}: no horizontal overflow at ${width}px`,
+    );
+    assert.equal(
+      inspector.flush,
+      ['terminal', 'browser', 'files'].includes(kind),
+    );
+    if (kind === 'browser') {
+      assert.equal(
+        await page
+          .getByText(zh ? '未连接浏览器' : 'no browser attached', {
+            exact: true,
+          })
+          .count(),
+        1,
+      );
+      assert.equal(
+        await page
+          .getByText(zh ? '此处仅预览浏览器面板' : 'browser preview only', {
+            exact: true,
+          })
+          .count(),
+        1,
+      );
+      assert.equal(
+        await page
+          .getByText('same session, shared view', { exact: true })
+          .count(),
+        0,
+      );
+    }
+    if (kind === 'context') {
+      await page
+        .getByRole('heading', { name: zh ? '上下文' : 'context', exact: true })
+        .waitFor({ state: 'visible' });
+      assert.equal(
+        await page
+          .getByRole('heading', {
+            name: zh ? '未发送操作 0' : 'unsent actions 0',
+            exact: true,
+          })
+          .count(),
+        1,
+      );
+    }
+    await page.screenshot({
+      animations: 'disabled',
+      path: `${output}/${locale}-${theme}-${width}-${kind}.png`,
+    });
+  }
+}
 async function actualTheme(page, theme) {
   await page.waitForFunction(
     (theme) => {
@@ -58,11 +187,12 @@ try {
       ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
       : {}),
   });
-  for (const width of [1280, 500])
+  for (const width of [1280, 500, 290])
     for (const theme of ['dark', 'light']) {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e)));
+      await page.clock.setFixedTime(new Date('2026-10-16T00:00:00Z'));
       await page.addInitScript(() =>
         localStorage.setItem('circle.workbench.language', 'en'),
       );
@@ -177,7 +307,11 @@ try {
         await composer.inputValue(),
         'Original shell preserved draft',
       );
-      await page.screenshot({ path: `${output}/${theme}-${width}.png` });
+      await page.screenshot({
+        animations: 'disabled',
+        path: `${output}/${theme}-${width}.png`,
+      });
+      await capturePanels(page, 'en', theme, width);
       await page.evaluate(async () => {
         const { setLanguage } = await import('/src/i18n/index.ts');
         setLanguage('zh-CN');
@@ -201,7 +335,11 @@ try {
         paletteBefore,
         'locale change preserves the actual configured palette',
       );
-      await page.screenshot({ path: `${output}/zh-${theme}-${width}.png` });
+      await page.screenshot({
+        animations: 'disabled',
+        path: `${output}/zh-${theme}-${width}.png`,
+      });
+      await capturePanels(page, 'zh', theme, width);
       const noOverflow = await page
         .locator('.inspector')
         .evaluate((el) => el.scrollWidth <= el.clientWidth + 1);

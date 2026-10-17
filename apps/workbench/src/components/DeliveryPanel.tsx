@@ -180,6 +180,7 @@ export function DeliveryPanel({
         />
       </label>
       <Button
+        className="primary"
         disabled={busy || !auth || !title.trim()}
         onClick={() => action('publish', { title, body })}
       >

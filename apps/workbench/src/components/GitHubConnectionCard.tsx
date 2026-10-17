@@ -1,3 +1,4 @@
+import './GitPanel.css';
 import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import type { GitHubConnectionState } from '../../../../src/github_connection';
@@ -161,11 +162,6 @@ export function GitHubConnectionCard({
                   ? permissions.granted.join(', ')
                   : t('GitHub reported no OAuth scopes.')}
             </p>
-            <p className="panel-note">
-              {t(
-                'Circle allowed repositories limit Circle actions; they do not reduce GitHub OAuth permissions.',
-              )}
-            </p>
           </details>
           {view.repositories.length === 0 && (
             <p className="panel-note">
@@ -260,6 +256,7 @@ export function GitHubConnectionCard({
                 </label>
               </details>
               <Button
+                className="primary"
                 disabled={busy || !valid}
                 onClick={() => {
                   pendingRepositories.current = allowed;
@@ -296,6 +293,7 @@ export function GitHubConnectionCard({
                   view.authorization?.code &&
                   view.authorization.url && (
                     <Button
+                      className="primary"
                       disabled={!desktopHost()?.openExternal}
                       onClick={async () => {
                         try {

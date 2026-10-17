@@ -51,7 +51,7 @@ export interface Message {
   /** A desktop host-authored notice; content itself remains unchanged in history. */
   runtimeNotice?: import('./runtime_notice.js').GitHubRuntimeNotice;
   attachments?: MediaAttachment[];
-  shell?: { command: string; output: string; exit_code: number };
+  shell?: { id?: string; command: string; output: string; exit_code: number };
   thinking?: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;

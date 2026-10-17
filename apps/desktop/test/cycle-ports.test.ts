@@ -1244,3 +1244,137 @@ test('a retired provider generation blocks its old cycle while a newly created r
   );
   assert.equal(cycles.snapshot(old.id).state, 'needs_review');
 });
+
+test('accepted diagnosis creates a real readonly revised plan and dependent write task before isolated merge', async (t) => {
+  const f = await fixture(t);
+  const seen: { id: string; access: string; messages: unknown }[] = [];
+  const service = new TaskService({
+    workspace: f.workspace,
+    dataDir: join(f.dataDir, 'replan-tasks'),
+    identity,
+    emit: () => {},
+    verify: async (task, context) =>
+      task.spec.acceptanceCriteria.map((criterion) => ({
+        criterion,
+        status: 'passed',
+        source: 'inspection',
+        evidence: `Independent fixture inspection: ${context.answer}`,
+      })),
+    createRuntime: async (task, context) => {
+      const home = join(f.dataDir, 'replan-homes', task.spec.id);
+      await mkdir(home, { recursive: true });
+      const model = new ScriptedModel(
+        task.spec.access === 'readonly'
+          ? [
+              {
+                message: message(
+                  'diagnosis and revised strategy: preserve acceptance, repair the implementation',
+                ),
+              },
+            ]
+          : [
+              {
+                message: message('', [
+                  {
+                    id: 'repair',
+                    name: 'write_file',
+                    args: {
+                      file_path: 'app.cjs',
+                      content:
+                        "exports.greeting='hello';exports.readyForCI=true;\n",
+                    },
+                  },
+                ]),
+              },
+              { message: message('repair complete') },
+            ],
+      );
+      const runtime = new AgentRuntime({
+        workspace: context.worktree,
+        home,
+        userHome: home,
+        model,
+        settings: trustFolder(defaultSettings(), context.worktree),
+        bundledExtensions: false,
+        screenshot: false,
+        headless: true,
+        approve: async () => 'approve',
+      });
+      context.onCleanup(() => {
+        seen.push({
+          id: task.spec.id,
+          access: task.spec.access,
+          messages: model.requests[0]?.messages,
+        });
+      });
+      return runtime;
+    },
+  });
+  cleanup(t, () => service.close());
+  const ports = createWorkspaceCyclePorts({
+    workspace: f.workspace,
+    dataDir: join(f.dataDir, 'replan-ports'),
+    sessionId: 'replan-owner',
+    getTaskService: () => service,
+    identity,
+    withResource: async (_resource, run) => run(),
+    verify: async () => [],
+  });
+  const cycle: CycleRecord = {
+    id: 'replan',
+    workspace: f.workspace,
+    title: 'Repair safely',
+    body: 'Repair actual app',
+    acceptanceCriteria: [criterion],
+    state: 'repairing',
+    attempt: 3,
+    taskIds: [],
+    failureCounts: {},
+    updatedAt: new Date().toISOString(),
+  };
+  const diagnosis = await ports.tasks.create(
+    cycle,
+    { kind: 'diagnosis', prompt: 'Diagnose the repeated failure' },
+    { operationId: 'diagnose' },
+  );
+  const wait = async (ids: string[]) => {
+    const deadline = Date.now() + 10000;
+    while (
+      (await ports.tasks.status(cycle, ids)) === 'pending' &&
+      Date.now() < deadline
+    )
+      await delay(10);
+    assert.equal(await ports.tasks.status(cycle, ids), 'passed');
+  };
+  await wait(diagnosis);
+  const ids = await ports.tasks.create(
+    cycle,
+    {
+      kind: 'repair',
+      prompt: 'Use completed diagnosis to plan a revised repair',
+      dependencies: diagnosis,
+    },
+    { operationId: 'replan' },
+  );
+  assert.equal(ids.length, 2);
+  assert.equal(service.getTask(ids[0])!.spec.access, 'readonly');
+  assert.equal(service.getTask(ids[1])!.spec.access, 'write');
+  assert.deepEqual(service.getTask(ids[1])!.spec.dependencies, [
+    ...diagnosis,
+    ids[0],
+  ]);
+  await wait(ids);
+  assert.match(
+    JSON.stringify(seen.find((item) => item.id === ids[1])!.messages),
+    /diagnosis and revised strategy/,
+  );
+  const result = await ports.tasks.merge(cycle, ids, {
+    operationId: 'merge-replan',
+  });
+  assert.equal(result.status, 'merged');
+  assert.match(
+    await readFile(join(result.workspace!, 'app.cjs'), 'utf8'),
+    /readyForCI=true/,
+  );
+  assert.equal(await git(f.workspace, 'rev-parse', 'HEAD'), f.baseline);
+});

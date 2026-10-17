@@ -111,11 +111,18 @@ async function fixture(t: TestContext, supervisorOverride?: string) {
       );
     await rm(root, { recursive: true, force: true });
   });
-  const run = async (body: string, extraEnv: NodeJS.ProcessEnv = {}) => {
+  const run = async (
+    body: string,
+    extraEnv: NodeJS.ProcessEnv = {},
+    userShellId?: string,
+  ) => {
     await writeFile(join(workspace, 'program.cjs'), body);
     active = await launcher({
       executionId: 'windows-original',
-      origin: { executionSessionId: 'owner', toolCallId: 'call' },
+      origin: {
+        executionSessionId: 'owner',
+        ...(userShellId ? { userShellId } : { toolCallId: 'call' }),
+      },
       notificationOwner: { sessionId: 'owner' },
       command: 'node program.cjs',
       cwd: workspace,
@@ -231,6 +238,8 @@ test(
     const f = await fixture(t),
       handle = await f.run(
         "require('fs').writeFileSync('ran','once');console.log('natural-output');",
+        {},
+        'human-original',
       );
     if (handle.kind !== 'pty-group') throw Error('wrong process handle');
     assert.equal((await handle.rootExit).exitCode, 0);
@@ -239,6 +248,8 @@ test(
     assert.equal(await readFile(join(f.workspace, 'ran'), 'utf8'), 'once');
     assert.match(await readFile(f.output, 'utf8'), /natural-output/);
     const snapshot = (await f.terminals.list('owner'))[0]!;
+    assert.equal(snapshot.managedCommand!.userShellId, 'human-original');
+    assert.equal(snapshot.managedCommand!.toolCallId, undefined);
     assert.equal(snapshot.managedCommand!.completion.rootExit!.exitCode, 0);
     assert.equal(
       'remainingProcesses' in snapshot.managedCommand!.completion.rootExit!,

@@ -100,6 +100,34 @@ test(
       const terminal = terminals.find((item) => item.label === 'debug');
       assert.ok(terminal?.pid);
       assert.equal(terminal.owner, 'debug-owner');
+      const debugSnapshot = (await service.call(
+        'debug-owner',
+        'debug',
+        'snapshot',
+      )) as {
+        adapterPid?: number;
+        debugTerminals: { id: string; epoch: string }[];
+      };
+      assert.ok(debugSnapshot.adapterPid && debugSnapshot.adapterPid > 0);
+      process.kill(debugSnapshot.adapterPid, 0);
+      assert.deepEqual(debugSnapshot.debugTerminals, [
+        { id: terminal.id, epoch: terminal.epoch },
+      ]);
+      const foreignSnapshot = (await service.call(
+        'other-owner',
+        'debug',
+        'snapshot',
+      )) as { debugTerminals: unknown[] };
+      assert.deepEqual(
+        foreignSnapshot.debugTerminals,
+        [],
+        'another session cannot acquire debug terminal links',
+      );
+      assert.equal(
+        (await service.terminals.list('debug-owner')).length,
+        terminals.length,
+        'reading exact terminal links must not spawn',
+      );
       assert.ok(
         terminal.command?.args?.includes(''),
         'adapter lost empty argv before PTY: ' +

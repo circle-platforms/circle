@@ -98,6 +98,195 @@ async function setup(
     updates,
   };
 }
+test('language restart is performed once per host operation and readonly child sources cannot stop it', async (t) => {
+  const f = await setup(
+    t,
+    Array.from({ length: 6 }, () => ({ message: assistant('read completed') })),
+  );
+  await writeFile(join(f.workspace, 'main.ts'), 'export const value = 1;\n');
+  execFileSync('git', ['-C', f.workspace, 'add', 'main.ts']);
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit',
+    '-qm',
+    'Create language fixture',
+  ]);
+  const parent = f.controller.snapshot().activeSessionId;
+  const project = () => f.service('language', 'request', { method: 'project' });
+  const before = await project();
+  assert.equal(before.ok, true, before.error);
+  const command = {
+    id: randomUUID(),
+    name: 'workspace-service' as const,
+    sessionId: parent,
+    payload: {
+      service: 'language',
+      method: 'request',
+      params: { method: 'restart', path: 'main.ts' },
+    },
+  };
+  const replies = await Promise.all([
+    f.controller.dispatch(command),
+    f.controller.dispatch(command),
+  ]);
+  for (const reply of replies) assert.equal(reply.ok, true, reply.error);
+  const after = await project();
+  assert.equal(after.ok, true, after.error);
+  assert.equal((after.data as any).version, (before.data as any).version + 1);
+  const replay = await f.controller.dispatch(command);
+  assert.equal(replay.ok, true, replay.error);
+  assert.equal(
+    ((await project()).data as any).version,
+    (after.data as any).version,
+  );
+  const invalidOuter = await f.service('language', 'restart', {
+    method: 'definition',
+    path: 'main.ts',
+  });
+  assert.equal(
+    invalidOuter.ok,
+    false,
+    'the protocol rejects an invalid outer method before execution',
+  );
+  assert.equal(
+    ((await project()).data as any).version,
+    (after.data as any).version,
+  );
+  const enqueued = await f.service('tasks', 'enqueue', {
+    operationId: 'language-reader',
+    tasks: [
+      {
+        id: 'language-reader',
+        prompt: 'Read main.ts',
+        access: 'readonly',
+        acceptanceCriteria: ['inspect actual source'],
+      },
+    ],
+  });
+  assert.equal(enqueued.ok, true, enqueued.error);
+  await wait(() =>
+    f.controller
+      .snapshot()
+      .agents.some((agent) => agent.task?.id === 'language-reader'),
+  );
+  const child = f.controller
+    .snapshot()
+    .agents.find((agent) => agent.task?.id === 'language-reader')!;
+  const stopped = await f.service(
+    'language',
+    'request',
+    { method: 'stop', path: 'main.ts' },
+    child.id,
+  );
+  assert.equal(stopped.ok, false);
+  assert.match(stopped.error ?? '', /read-only agent source/);
+  assert.equal(
+    ((await project()).data as any).version,
+    (after.data as any).version,
+  );
+});
+test('legacy write-file requires an explicit revision without changing existing or missing files', async (t) => {
+  const f = await setup(t);
+  await writeFile(join(f.workspace, 'README.md'), 'human content');
+  for (const path of ['README.md', 'not-created.txt']) {
+    const denied = await f.call('write-file', {
+      path,
+      content: 'unversioned overwrite',
+    });
+    if (path === 'README.md')
+      assert.equal(
+        await readFile(join(f.workspace, path), 'utf8'),
+        'human content',
+        'an unversioned request must preserve the actual disk contents',
+      );
+    assert.equal(denied.ok, false);
+    assert.match(denied.error!, /revision.*required.*read/i);
+  }
+  await assert.rejects(readFile(join(f.workspace, 'not-created.txt')), {
+    code: 'ENOENT',
+  });
+  assert.equal(f.model.requests.length, 0);
+});
+test('legacy write-file rejects an earlier read revision and preserves the later human contents', async (t) => {
+  const f = await setup(t);
+  await writeFile(join(f.workspace, 'README.md'), 'before');
+  const read = await f.service('documents', 'read', { path: 'README.md' });
+  assert.equal(read.ok, true, read.error);
+  const revision = (read.data as { revision: string }).revision;
+  await writeFile(join(f.workspace, 'README.md'), 'human after read');
+  const denied = await f.call('write-file', {
+    path: 'README.md',
+    content: 'stale draft',
+    expectedRevision: revision,
+  });
+  assert.equal(denied.ok, false);
+  assert.match(denied.error!, /file changed on disk/);
+  assert.equal(
+    await readFile(join(f.workspace, 'README.md'), 'utf8'),
+    'human after read',
+  );
+  assert.equal(f.model.requests.length, 0);
+});
+test('legacy write-file accepts null only for an explicit new file', async (t) => {
+  const f = await setup(t);
+  const created = await f.call('write-file', {
+    path: 'nested/new.txt',
+    content: 'new content',
+    expectedRevision: null,
+  });
+  assert.equal(created.ok, true, created.error);
+  assert.equal(
+    await readFile(join(f.workspace, 'nested/new.txt'), 'utf8'),
+    'new content',
+  );
+  const read = await f.service('documents', 'read', { path: 'nested/new.txt' });
+  assert.equal(read.ok, true, read.error);
+  assert.equal(
+    (created.data as any).document.revision,
+    (read.data as any).revision,
+  );
+  const collision = await f.call('write-file', {
+    path: 'nested/new.txt',
+    content: 'replace with null',
+    expectedRevision: null,
+  });
+  assert.equal(collision.ok, false);
+  assert.match(collision.error!, /file changed on disk/);
+  assert.equal(
+    await readFile(join(f.workspace, 'nested/new.txt'), 'utf8'),
+    'new content',
+  );
+});
+test('legacy write-file accepts the current read revision and returns the saved disk revision', async (t) => {
+  const f = await setup(t);
+  await writeFile(join(f.workspace, 'README.md'), 'before');
+  const read = await f.service('documents', 'read', { path: 'README.md' });
+  assert.equal(read.ok, true, read.error);
+  const revision = (read.data as { revision: string }).revision;
+  const saved = await f.call('write-file', {
+    path: 'README.md',
+    content: 'versioned human save',
+    expectedRevision: revision,
+  });
+  assert.equal(saved.ok, true, saved.error);
+  assert.equal(
+    await readFile(join(f.workspace, 'README.md'), 'utf8'),
+    'versioned human save',
+  );
+  const current = await f.service('documents', 'read', { path: 'README.md' });
+  assert.equal(current.ok, true, current.error);
+  assert.notEqual((saved.data as any).document.revision, revision);
+  assert.equal(
+    (saved.data as any).document.revision,
+    (current.data as any).revision,
+  );
+  assert.equal(f.model.requests.length, 0);
+});
 test('busy and inactive known sessions can save with CAS without switching selection or publishing chat snapshots', async (t) => {
   const f = await setup(t, [
     async (request) =>
@@ -339,7 +528,11 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
         },
       };
     assert.ok(
-      !request.tools.some((tool) => tool.name.startsWith('native_tasks_')),
+      !request.tools.some(
+        (tool) =>
+          tool.name.startsWith('native_tasks_') &&
+          tool.name !== 'native_tasks_propose',
+      ),
     );
     const name = match[1];
     const hadTool = request.messages.some((m) => m.role === 'tool');

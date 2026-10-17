@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
-  ArrowUpRight,
   Camera,
   Download,
   FileUp,
@@ -30,7 +29,7 @@ import type {
   BrowserCapture,
   BrowserPermission,
 } from '../../../desktop/src/contracts';
-import { Button, IconButton, Status } from '../components/common';
+import { Button, IconButton } from '../components/common';
 import { BrowserDialogPanel, CertificateChoicePanel } from './BrowserDialog';
 import { t } from '../i18n';
 
@@ -63,8 +62,19 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
   const editingAddress = useRef(false);
   const addressTab = useRef<string | undefined>(undefined);
   const navigationVersion = useRef(0);
-  const currentIdentity = useRef({ session: id, tab: state?.tab });
-  currentIdentity.current = { session: id, tab: state?.tab };
+  const captureGeneration = useRef(0);
+  const currentIdentity = useRef({
+    session: id,
+    tab: state?.tab,
+    url: state?.url,
+  });
+  if (
+    currentIdentity.current.session !== id ||
+    currentIdentity.current.tab !== state?.tab ||
+    currentIdentity.current.url !== state?.url
+  )
+    captureGeneration.current++;
+  currentIdentity.current = { session: id, tab: state?.tab, url: state?.url };
   const updateBounds = useRef<() => void>(() => {});
   const host = desktopHost()!;
   const opened = browserOpened(state);
@@ -112,9 +122,32 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
       dialogs.disconnect();
       removeEventListener('resize', update);
       removeEventListener('scroll', update, true);
+      captureGeneration.current++;
       void host.browserHide(id);
     };
   }, [id]);
+  useEffect(() => {
+    setCapture(null);
+  }, [id, state?.tab, state?.url]);
+  const captureBrowser = () => {
+    const identity = currentIdentity.current;
+    const navigation = navigationVersion.current;
+    const generation = ++captureGeneration.current;
+    const current = () =>
+      generation === captureGeneration.current &&
+      navigation === navigationVersion.current &&
+      identity.session === currentIdentity.current.session &&
+      identity.tab === currentIdentity.current.tab &&
+      identity.url === currentIdentity.current.url;
+    void host.browserCapture(id).then(
+      (value) => {
+        if (current()) setCapture(value);
+      },
+      () => {
+        if (current()) notify(t('browser capture failed'));
+      },
+    );
+  };
   // The page's own view shows once a page is open; it follows the shown tab.
   useEffect(() => {
     if (!state) return;
@@ -184,9 +217,9 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
   return (
     // One column the height of the panel: the page takes what the bars leave
     <div className="native-browser">
-      {!!state?.tabs?.length && (
-        <div className="browser-tabs" role="tablist">
-          {state.tabs.map((tab) => (
+      <div className="browser-tabs" role="tablist">
+        {state?.tabs?.length ? (
+          state.tabs.map((tab) => (
             <div
               key={tab.id}
               className={`browser-tab${tab.active ? ' active' : ''}`}
@@ -201,24 +234,41 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
                 {state.dialogs?.some((dialog) => dialog.tab === tab.id) && (
                   <i className="browser-tab-alert" />
                 )}
-                {tab.title ||
-                  (tab.url && tab.url !== 'about:blank'
+                {tab.title && tab.title !== 'about:blank'
+                  ? tab.title
+                  : tab.url && tab.url !== 'about:blank'
                     ? tab.url
-                    : t('new tab'))}
+                    : t('new tab')}
               </button>
-              <IconButton
-                label={t('close tab')}
-                onClick={() => tabs('close', tab.id)}
-              >
-                <X size={12} />
-              </IconButton>
+              {state.tabs!.length > 1 && (
+                <IconButton
+                  label={t('close tab')}
+                  onClick={() => tabs('close', tab.id)}
+                >
+                  <X size={12} />
+                </IconButton>
+              )}
             </div>
-          ))}
-          <IconButton label={t('new tab')} onClick={() => tabs('new')}>
-            <Plus size={13} />
-          </IconButton>
-        </div>
-      )}
+          ))
+        ) : (
+          // Before the page is made, the one tab it will open in
+          <div className="browser-tab active" role="tab" aria-selected>
+            <span className="browser-tab-title">{t('new tab')}</span>
+          </div>
+        )}
+        <IconButton label={t('new tab')} onClick={() => tabs('new')}>
+          <Plus size={14} />
+        </IconButton>
+      </div>
+      <span className="panel-header-actions">
+        <IconButton
+          label={t('capture browser')}
+          disabled={!opened || !!failure || !!dialog}
+          onClick={captureBrowser}
+        >
+          <Camera size={14} />
+        </IconButton>
+      </span>
       <div className="browser-address">
         <IconButton
           label={t('go back')}
@@ -241,37 +291,39 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
         >
           <RotateCw size={13} />
         </IconButton>
-        {state?.warning ? (
-          <span className="browser-insecure" data-testid="browser-warning">
-            <ShieldAlert size={13} />
-            {t('certificate error')}
-          </span>
-        ) : state?.insecure ? (
-          <span className="browser-insecure" data-testid="browser-insecure">
-            <ShieldAlert size={13} />
-            {t('not secure')}
-          </span>
-        ) : (
-          <Globe size={13} />
-        )}
-        <input
-          aria-label={t('browser address')}
-          value={url}
-          placeholder="https://…"
-          onChange={(event) => {
-            editingAddress.current = true;
-            setUrl(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') void navigate(url);
-          }}
-        />
-        <IconButton
-          label={t('navigate browser')}
-          onClick={() => void navigate(url)}
-        >
-          <ArrowUpRight size={14} />
-        </IconButton>
+        <div className="browser-url">
+          {state?.warning ? (
+            <span className="browser-insecure" data-testid="browser-warning">
+              <ShieldAlert size={13} />
+              {t('certificate error')}
+            </span>
+          ) : state?.insecure ? (
+            <span className="browser-insecure" data-testid="browser-insecure">
+              <ShieldAlert size={13} />
+              {t('not secure')}
+            </span>
+          ) : null}
+          <input
+            aria-label={t('browser address')}
+            value={url}
+            placeholder={t('type a URL')}
+            spellCheck={false}
+            onChange={(event) => {
+              editingAddress.current = true;
+              setUrl(event.target.value);
+            }}
+            onFocus={(event) => event.currentTarget.select()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void navigate(url);
+            }}
+          />
+          <IconButton
+            label={t('navigate browser')}
+            onClick={() => void navigate(url)}
+          >
+            <ArrowRight size={13} />
+          </IconButton>
+        </div>
       </div>
       <div className="native-browser-viewport" ref={viewport}>
         {dialog ? (
@@ -293,11 +345,9 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
           </div>
         ) : !opened ? (
           <div className="browser-empty">
-            <Globe size={30} />
-            <h3>{t('open a page')}</h3>
-            <p>
-              {t('A sandboxed native browser belongs to this Circle session.')}
-            </p>
+            <Globe size={22} strokeWidth={1.5} />
+            <h3>{t('browse the web')}</h3>
+            <p>{t('type a URL to open a site.')}</p>
           </div>
         ) : null}
       </div>
@@ -370,25 +420,7 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
               {t('take over')}
             </Button>
           </span>
-        ) : (
-          <Status value={opened ? 'native browser' : 'not opened'} />
-        )}
-        <code>
-          {(state?.sessionId ?? 'browser:' + id) +
-            (state?.tab ? ' · ' + state.tab : '')}
-        </code>
-        <IconButton
-          label={t('capture browser')}
-          disabled={!opened || !!failure || !!dialog}
-          onClick={() =>
-            void host.browserCapture(id).then(
-              (value) => setCapture(value),
-              () => notify(t('browser capture failed')),
-            )
-          }
-        >
-          <Camera size={14} />
-        </IconButton>
+        ) : null}
       </div>
       {opened && (
         <BrowserDiagnostics

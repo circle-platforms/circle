@@ -162,3 +162,45 @@ test('an executed supervisor resource is mandatory and its exact hash cannot be 
   complete.artifacts.at(-1).sha256 = 'd'.repeat(64);
   assert.throws(() => verifyNativeBuildManifest(complete, run), /hash/);
 });
+
+test('working-tree execution preserves kind, base HEAD and tree identity and rejects ambiguous attribution', () => {
+  const input = {
+    ...manifest(),
+    sourceKind: 'working-tree',
+    sourceBaseHead: head,
+    sourceTreeSha256: hash,
+  };
+  const verified = verifyNativeBuildManifest(input, executed);
+  assert.equal(verified.sourceKind, 'working-tree');
+  assert.equal(verified.sourceBaseHead, head);
+  assert.equal(verified.sourceTreeSha256, hash);
+  assert.throws(
+    () =>
+      verifyNativeBuildManifest(
+        { ...input, sourceTreeSha256: undefined },
+        executed,
+      ),
+    /tree hash/,
+  );
+  assert.throws(
+    () =>
+      verifyNativeBuildManifest(
+        { ...input, sourceBaseHead: 'd'.repeat(40) },
+        executed,
+      ),
+    /base HEAD/,
+  );
+  assert.throws(
+    () =>
+      verifyNativeBuildManifest(
+        { ...input, sourceKind: 'unidentified' },
+        executed,
+      ),
+    /source kind/,
+  );
+  assert.equal(
+    verifyNativeBuildManifest(manifest(), executed).sourceKind,
+    'commit',
+    'legacy clean manifests remain compatible',
+  );
+});

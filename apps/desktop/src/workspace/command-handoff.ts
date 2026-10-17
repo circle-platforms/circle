@@ -56,32 +56,53 @@ function identity(value: unknown, label: string): string {
 function parseTarget(value: unknown): CommandTerminalTarget {
   const target = object(
     value,
-    ['executionId', 'epoch', 'executionSessionId', 'toolCallId', 'terminal'],
+    [
+      'executionId',
+      'epoch',
+      'executionSessionId',
+      'toolCallId',
+      'userShellId',
+      'origin',
+      'terminal',
+    ],
     'command target',
   );
   const terminal = object(target.terminal, ['id', 'epoch'], 'command terminal');
-  return {
+  const base = {
     executionId: identity(target.executionId, 'execution'),
     epoch: identity(target.epoch, 'execution epoch'),
     executionSessionId: identity(
       target.executionSessionId,
       'execution session',
     ),
-    toolCallId: identity(target.toolCallId, 'tool call'),
     terminal: {
       id: identity(terminal.id, 'terminal'),
       epoch: identity(terminal.epoch, 'terminal epoch'),
     },
   };
+  if (target.origin === 'user-shell') {
+    if (target.toolCallId !== undefined)
+      throw Error('human command target cannot include a tool call');
+    return {
+      ...base,
+      origin: 'user-shell',
+      userShellId: identity(target.userShellId, 'human command'),
+    };
+  }
+  if (target.origin !== undefined || target.userShellId !== undefined)
+    throw Error('invalid command target origin');
+  return { ...base, toolCallId: identity(target.toolCallId, 'tool call') };
 }
 function targetFor(execution: CommandExecution): CommandTerminalTarget {
-  return {
+  const base = {
     executionId: execution.executionId,
     epoch: execution.epoch,
     executionSessionId: execution.executionSessionId,
-    toolCallId: execution.toolCallId!,
     terminal: { id: execution.terminal!.id, epoch: execution.terminal!.epoch },
   };
+  return execution.userShellId
+    ? { ...base, origin: 'user-shell', userShellId: execution.userShellId }
+    : { ...base, toolCallId: execution.toolCallId! };
 }
 function sameTarget(left: CommandTerminalTarget, right: CommandTerminalTarget) {
   return (
@@ -89,6 +110,8 @@ function sameTarget(left: CommandTerminalTarget, right: CommandTerminalTarget) {
     left.epoch === right.epoch &&
     left.executionSessionId === right.executionSessionId &&
     left.toolCallId === right.toolCallId &&
+    left.userShellId === right.userShellId &&
+    left.origin === right.origin &&
     left.terminal.id === right.terminal.id &&
     left.terminal.epoch === right.terminal.epoch
   );
@@ -97,17 +120,29 @@ interface ExecutionSource {
   execution: CommandExecution;
   current: boolean;
 }
+type CommandOriginIdentity = { toolCallId: string } | { userShellId: string };
+const originFor = (target: CommandTerminalTarget): CommandOriginIdentity =>
+  target.origin === 'user-shell'
+    ? { userShellId: target.userShellId }
+    : { toolCallId: target.toolCallId };
 function originalExecution(
   source: CommandTerminalSource,
   sessionId: string,
-  callId: string,
+  origin: CommandOriginIdentity,
 ): ExecutionSource | undefined {
-  const current = source.jobs?.executionFor(sessionId, callId);
+  const human = 'userShellId' in origin;
+  const current = human
+    ? source.jobs?.executionForUserShell(sessionId, origin.userShellId)
+    : source.jobs?.executionFor(sessionId, origin.toolCallId);
   const candidates = new Map<string, CommandExecution>();
   for (const receipt of source.receipts?.() ?? []) {
     if (
       receipt.executionSessionId !== sessionId ||
-      receipt.toolCallId !== callId
+      (human
+        ? receipt.userShellId !== origin.userShellId ||
+          receipt.toolCallId !== undefined
+        : receipt.toolCallId !== origin.toolCallId ||
+          receipt.userShellId !== undefined)
     )
       continue;
     candidates.set(`${receipt.epoch}\0${receipt.executionId}`, {
@@ -149,7 +184,8 @@ async function bind(
     !source.workspaceId ||
     (current && execution.epoch !== source.jobs?.runName) ||
     !execution.terminal ||
-    !execution.toolCallId ||
+    (!execution.toolCallId && !execution.userShellId) ||
+    (!!execution.toolCallId && !!execution.userShellId) ||
     execution.completion?.kind !== 'pty-group'
   )
     return;
@@ -163,6 +199,7 @@ async function bind(
     snapshot.sessionId !== execution.executionSessionId ||
     snapshot.managedCommand?.executionId !== execution.executionId ||
     snapshot.managedCommand.toolCallId !== execution.toolCallId ||
+    snapshot.managedCommand.userShellId !== execution.userShellId ||
     snapshot.managedCommand.ownership !== 'pty-group' ||
     (current
       ? snapshot.managedCommand.executionEpoch !== undefined &&
@@ -213,14 +250,19 @@ export async function resolveCommandTerminal(
 ): Promise<CommandTerminalResolution> {
   const request = object(
     value,
-    ['sourceSessionId', 'toolCallId'],
+    ['sourceSessionId', 'toolCallId', 'userShellId'],
     'command resolution',
   );
-  const sourceId = identity(request.sourceSessionId, 'source session'),
-    callId = identity(request.toolCallId, 'tool call');
+  const sourceId = identity(request.sourceSessionId, 'source session');
+  if (request.toolCallId !== undefined && request.userShellId !== undefined)
+    throw Error('command resolution must use exactly one origin');
+  const origin: CommandOriginIdentity =
+    request.userShellId === undefined
+      ? { toolCallId: identity(request.toolCallId, 'tool call') }
+      : { userShellId: identity(request.userShellId, 'human command') };
   const source = access.sourceFor(viewSessionId, sourceId);
   if (!source) return { available: false, reason: 'not-found' };
-  const original = originalExecution(source, sourceId, callId);
+  const original = originalExecution(source, sourceId, origin);
   if (!original) return { available: false, reason: 'unavailable' }; // missing or ambiguous remains unbound
   const { execution, current } = original;
   if (!execution.terminal || execution.completion?.kind !== 'pty-group')
@@ -258,7 +300,7 @@ export async function commandTerminalAction(
     exact.epoch === source.jobs?.runName &&
     sameTarget(target, targetFor(exact))
       ? { execution: exact, current: true }
-      : originalExecution(source, target.executionSessionId, target.toolCallId);
+      : originalExecution(source, target.executionSessionId, originFor(target));
   if (
     !original ||
     !original.execution.terminal ||

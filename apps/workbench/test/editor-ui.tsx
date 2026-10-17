@@ -103,6 +103,17 @@ function Fixture() {
 const nativeFixture = new URL(location.href).searchParams.has('viewer');
 if (nativeFixture) {
   window.circleDesktop = {
+    copyText: async (text) => {
+      const response = await fetch('/__editor_workspace?copy-diagnostics=1', {
+        method: 'POST',
+        body: text,
+      });
+      const reply = await response.json();
+      if (reply.ok === false) throw Error(reply.error);
+      document.documentElement.dataset.diagnosticCopies = String(
+        Number(document.documentElement.dataset.diagnosticCopies ?? 0) + 1,
+      );
+    },
     onWorkspaceEvent: (listener) => {
       const source = new EventSource('/__editor_events');
       source.onmessage = (message) => {
@@ -165,6 +176,7 @@ if (nativeFixture) {
       <Tooltip.Provider>
         <RuntimeProvider runtime={runtime}>
           <button onClick={() => setTarget('main.ts')}>open main</button>
+          <button onClick={() => setTarget('lib.ts')}>open lib</button>
           <button onClick={() => setTarget('AGENTS.md')}>open rules</button>
           <button
             onClick={() =>

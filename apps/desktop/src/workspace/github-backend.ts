@@ -33,6 +33,36 @@ const safePR = (value: unknown): GitHubPR => {
     state: text(p.state, 'state', 30),
   };
 };
+/** Resolve only locally known remote refs; never fetch or guess an arbitrary branch. */
+export async function githubPublicationBase(git: DeliveryService['git']) {
+  const refs = (
+    await git.git([
+      'for-each-ref',
+      '--format=%(refname)%09%(objectname)%09%(symref)',
+      'refs/remotes/origin/',
+    ])
+  )
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.split('\t'));
+  const target = refs.find(
+    ([name]) => name === 'refs/remotes/origin/HEAD',
+  )?.[2];
+  const selected = target
+    ? refs.find(([name]) => name === target)
+    : ['refs/remotes/origin/main', 'refs/remotes/origin/master']
+        .map((name) => refs.find(([ref]) => ref === name))
+        .find(Boolean);
+  if (!selected || !/^[a-f\d]{40,64}$/i.test(selected[1]))
+    throw Error(
+      'remote default branch is unavailable; refresh the origin default ref',
+    );
+  return {
+    base: selected[0].replace(/^refs\/remotes\//, ''),
+    baseHead: selected[1],
+  };
+}
 export function githubWorkspaceBackend(options: {
   connection: NativeGitHubConnection;
   delivery: () => Promise<DeliveryService>;
@@ -139,10 +169,7 @@ export function githubWorkspaceBackend(options: {
           );
         const state = await delivery.git.snapshot();
         if (method === 'candidate') {
-          const base = 'origin/main';
-          const baseHead = (
-            await delivery.git.git(['rev-parse', '--verify', base])
-          ).trim();
+          const { base, baseHead } = await githubPublicationBase(delivery.git);
           const paths = (
             await delivery.git.git([
               'diff',
@@ -157,8 +184,8 @@ export function githubWorkspaceBackend(options: {
           const after = await delivery.git.snapshot();
           if (
             after.revision !== state.revision ||
-            (await delivery.git.git(['rev-parse', '--verify', base])).trim() !==
-              baseHead
+            JSON.stringify(await githubPublicationBase(delivery.git)) !==
+              JSON.stringify({ base, baseHead })
           )
             throw Error(
               'GitHub candidate changed; read github_candidate again',
@@ -175,6 +202,7 @@ export function githubWorkspaceBackend(options: {
             publishable:
               state.entries.length === 0 &&
               !['main', 'master', 'detached'].includes(state.branch) &&
+              state.branch !== base.slice('origin/'.length) &&
               paths.length > 0,
           } as never;
         }
@@ -186,7 +214,9 @@ export function githubWorkspaceBackend(options: {
           throw Error('GitHub candidate head changed');
         }
         if (method === 'publish') {
+          const { base, baseHead } = await githubPublicationBase(delivery.git);
           if (
+            state.branch === base.slice('origin/'.length) ||
             text(p.branch, 'branch', 300) !== state.branch ||
             ['main', 'master', 'detached'].includes(state.branch)
           )
@@ -207,7 +237,7 @@ export function githubWorkspaceBackend(options: {
               'diff',
               '--name-only',
               '-z',
-              'origin/main...HEAD',
+              `${baseHead}...${state.head}`,
             ])
           )
             .split('\0')
@@ -220,6 +250,13 @@ export function githubWorkspaceBackend(options: {
           )
             throw Error(
               'GitHub publication paths differ from the reviewed branch',
+            );
+          if (
+            JSON.stringify(await githubPublicationBase(delivery.git)) !==
+            JSON.stringify({ base, baseHead })
+          )
+            throw new DeliveryPreflightError(
+              'GITHUB_CANDIDATE_REFRESH_REQUIRED',
             );
           connection.assertGrant(epoch as number, repository);
           result = safePR(

@@ -31,6 +31,8 @@ export function sameCommandTerminal(
     left.epoch === right.epoch &&
     left.executionSessionId === right.executionSessionId &&
     left.toolCallId === right.toolCallId &&
+    left.userShellId === right.userShellId &&
+    left.origin === right.origin &&
     left.terminal.id === right.terminal.id &&
     left.terminal.epoch === right.terminal.epoch
   );

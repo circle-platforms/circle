@@ -170,6 +170,76 @@ test('tool links bind real attempt sessions and cannot claim output IDs outside 
     undefined,
   );
 });
+test('adopted proposal links use exact ledger attempts and reviewers while proposals never grant identities', (t) => {
+  const dataDir = scratch(t),
+    workspace = realpathSync.native(scratch(t));
+  const old = task(workspace, 'adopted'),
+    current = task(workspace, 'adopted', 2),
+    foreign = task(workspace, 'foreign', 1, 'another-parent');
+  current.reviewers = [
+    {
+      sessionId: 'actual-reviewer',
+      workspace,
+      baseline: current.spec.baseline,
+      head: 'b'.repeat(40),
+      patchSha256: 'c'.repeat(64),
+      state: 'succeeded',
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  const store = new TaskStore(join(dataDir, 'collaboration.sqlite'));
+  store.put(old);
+  store.put(current);
+  store.put(foreign);
+  store.close();
+  const attempts = readArchivedTaskAttempts({
+    dataDir,
+    workspace,
+    ownerSessionId: 'parent',
+  });
+  const output = JSON.stringify({
+    tasks: [
+      {
+        ...current,
+        runtimeSessionId: 'forged-worker',
+        reviewers: [{ sessionId: 'forged-reviewer' }],
+      },
+      foreign,
+      { ...current, attempt: 99 },
+      current,
+    ],
+    artifacts: [{ agentIds: ['forged-artifact-agent'] }],
+    agentIds: ['forged-top-level-agent'],
+  });
+  assert.deepEqual(
+    taskToolAgentIds('native_tasks_adopt_proposal', {}, output, attempts),
+    [current.runtimeSessionId, 'actual-reviewer'],
+  );
+  assert.deepEqual(
+    taskToolAgentIds(
+      'native_tasks_adopt_proposal',
+      {},
+      JSON.stringify({ tasks: [old], artifacts: [] }),
+      attempts,
+    ),
+    [old.runtimeSessionId],
+  );
+  for (const invalid of [
+    'not JSON',
+    JSON.stringify({ tasks: {} }),
+    JSON.stringify({ tasks: [foreign] }),
+    JSON.stringify({ tasks: [{ ...current, attempt: 99 }] }),
+  ])
+    assert.equal(
+      taskToolAgentIds('native_tasks_adopt_proposal', {}, invalid, attempts),
+      undefined,
+    );
+  assert.equal(
+    taskToolAgentIds('native_tasks_propose', {}, output, attempts),
+    undefined,
+  );
+});
 test('read-only source policy permits inspection and language previews but rejects disk mutation', () => {
   for (const method of ['read', 'refresh', 'resolveSource'])
     assert.doesNotThrow(() => assertReadonlyTaskRequest('documents', method));

@@ -42,8 +42,6 @@ export const githubConnection: Record<string, string> = {
   'GitHub has not reported granted permissions.':
     'GitHub 尚未回报已授予的权限。',
   'GitHub reported no OAuth scopes.': 'GitHub 实际回报没有 OAuth 权限范围。',
-  'Circle allowed repositories limit Circle actions; they do not reduce GitHub OAuth permissions.':
-    'Circle 允许仓库列表仅限制 Circle 操作，不会缩小 GitHub OAuth 权限。',
 
   'the draft changed; review it before trying the example again':
     '草稿已变化，请检查后再试用示例',

@@ -19,8 +19,8 @@ try {
       ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
       : {}),
   });
-  for (const native of [true, false]) {
-    const label = native ? 'native' : 'legacy';
+  for (const label of ['native', 'legacy', 'human']) {
+    const native = label !== 'legacy';
     const f = await createCommandTerminalControllerFixture(
       { after() {} },
       {
@@ -62,9 +62,43 @@ try {
     let server, page, timer;
     const checks = [];
     try {
-      const parent = await f.startParent();
+      let humanRun;
+      if (label === 'human') {
+        await writeFile(
+          join(f.workspace, 'human-ui-input.cjs'),
+          `const fs = require('node:fs');
+fs.appendFileSync('human-starts', 'once\\n');
+process.stdin.setRawMode(true);
+let received = Buffer.alloc(0);
+process.stdin.on('data', bytes => {
+  fs.appendFileSync('human-input', bytes);
+  received = Buffer.concat([received, bytes]);
+  if (received.includes(13)) process.stdout.write('HUMAN-ECHO:' + received.toString('utf8'), () => process.exit(7));
+});
+process.stdin.resume();
+console.log('HUMAN-READY');
+fs.writeFileSync('human-pid', String(process.pid));
+`,
+        );
+        const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+        humanRun = f.call('shell', {
+          command: `exec ${quote(process.execPath)} human-ui-input.cjs`,
+        });
+        await f.until(
+          async () => Number(await f.read(f.workspace, 'human-pid')) > 0,
+          'actual human command starts before its original card opens',
+        );
+      }
+      const parent =
+        label === 'human'
+          ? {
+              sessionId: f.parentId,
+              workspace: f.workspace,
+              pid: Number(await f.read(f.workspace, 'human-pid')),
+            }
+          : await f.startParent();
       let child;
-      if (native) {
+      if (native && label !== 'human') {
         await f.enqueueChild('ui-command-child');
         child = await f.startChild();
       }
@@ -153,9 +187,9 @@ try {
       });
       await composer.waitFor();
       await composer.fill('PARENT_DRAFT_EXACT 保留');
-      const parentCard = page
-        .locator('.conversation .tool-call')
-        .filter({ hasText: 'command-input.cjs' });
+      const parentCard = page.locator('.conversation .tool-call').filter({
+        hasText: label === 'human' ? 'human-ui-input.cjs' : 'command-input.cjs',
+      });
       const parentGroup = page
         .locator('.conversation .tool-group > button')
         .first();
@@ -167,9 +201,162 @@ try {
         name: 'open in terminal',
         exact: true,
       });
-      const parentStarts = await f.read(parent.workspace, f.files.starts);
+      const parentStarts = await f.read(
+        parent.workspace,
+        label === 'human' ? 'human-starts' : f.files.starts,
+      );
       assert.equal(parentStarts.match(/once/g)?.length, 1);
-      if (!native) {
+      if (label === 'human') {
+        const card = f.controller
+          .snapshot()
+          .sessions.find((session) => session.id === parent.sessionId)
+          .messages.find((message) => message.shell?.interactive);
+        assert(card?.shell?.id);
+        const userShellId = card.shell.id;
+        const resolution = await f.service('terminal', 'resolveCommand', {
+          sourceSessionId: parent.sessionId,
+          userShellId,
+        });
+        assert.equal(resolution.available, true);
+        assert.equal(resolution.target.origin, 'user-shell');
+        assert.equal(resolution.target.userShellId, userShellId);
+        assert.equal(resolution.target.toolCallId, undefined);
+        assert.equal(f.model.requests.length, 0);
+        await parentOpen.click();
+        const terminal = page.getByRole('region', {
+          name: 'interactive terminal',
+          exact: true,
+        });
+        const input = terminal.locator(
+          `#terminal-${resolution.target.terminal.id} .xterm-helper-textarea`,
+        );
+        await input.waitFor();
+        const originalSurface = await terminal
+          .locator(`#terminal-${resolution.target.terminal.id}`)
+          .elementHandle();
+        await page
+          .getByRole('button', { name: 'close inspector', exact: true })
+          .click();
+        assert.equal(await composer.inputValue(), 'PARENT_DRAFT_EXACT 保留');
+        await parentOpen.click();
+        await input.waitFor();
+        assert.equal(
+          await terminal
+            .locator(`#terminal-${resolution.target.terminal.id}`)
+            .evaluate((node, original) => node === original, originalSurface),
+          true,
+        );
+        const listing = await f.service('terminal', 'command', {
+          target: resolution.target,
+          action: 'list',
+        });
+        assert.equal(listing.available, true);
+        assert.equal(listing.value[0].managedCommand.commandPid, parent.pid);
+        assert.equal(listing.value[0].managedCommand.userShellId, userShellId);
+        assert.equal(
+          await terminal
+            .getByRole('button', { name: 'restart terminal', exact: true })
+            .isDisabled(),
+          true,
+        );
+        await input.focus();
+        await page.keyboard.type('human-exact-input');
+        await page.keyboard.press('Enter');
+        const ended = await humanRun;
+        assert.equal(ended.ok, true, ended.error);
+        assert.equal(ended.data.exit_code, 7);
+        assert.equal(
+          await f.read(parent.workspace, 'human-input'),
+          'human-exact-input\r',
+        );
+        assert.equal(await f.read(parent.workspace, 'human-starts'), 'once\n');
+        await page
+          .getByRole('button', { name: 'close inspector', exact: true })
+          .click();
+        await parentCard.waitFor();
+        await page
+          .locator('.conversation article.message.user')
+          .filter({ hasText: 'human-ui-input.cjs' })
+          .getByText('exit 7', { exact: true })
+          .waitFor();
+        await parentCard
+          .locator('pre')
+          .filter({ hasText: 'HUMAN-ECHO:human-exact-input' })
+          .first()
+          .waitFor();
+        await parentOpen.click();
+        await input.waitFor();
+        assert.equal(await composer.inputValue(), 'PARENT_DRAFT_EXACT 保留');
+        await f.restart();
+        await page.reload();
+        await composer.waitFor();
+        await parentCard.waitFor();
+        if (!(await parentCard.locator('.tool-content').isVisible()))
+          await parentCard.locator('.tool-head').click();
+        await parentOpen.click();
+        await input.waitFor();
+        const restored = await f.service('terminal', 'resolveCommand', {
+          sourceSessionId: parent.sessionId,
+          userShellId,
+        });
+        assert.equal(restored.available, true);
+        assert.deepEqual(restored.target, resolution.target);
+        assert.equal(restored.capabilities.input, false);
+        assert.equal(restored.capabilities.stop, false);
+        const replay = await f.service('terminal', 'command', {
+          target: restored.target,
+          action: 'replay',
+          params: { limit: 2000 },
+        });
+        assert.equal(replay.available, true);
+        assert(
+          replay.value.events
+            .filter((event) => event.kind === 'data')
+            .map((event) => event.data)
+            .join('')
+            .includes('HUMAN-ECHO:human-exact-input'),
+        );
+        assert.equal(
+          await terminal
+            .getByRole('button', { name: 'stop terminal', exact: true })
+            .isDisabled(),
+          true,
+        );
+        assert.equal(
+          await terminal
+            .getByRole('button', { name: 'restart terminal', exact: true })
+            .isDisabled(),
+          true,
+        );
+        assert.equal(await composer.inputValue(), 'PARENT_DRAFT_EXACT 保留');
+        assert.equal(f.controller.snapshot().activeSessionId, parent.sessionId);
+        assert.equal(await f.read(parent.workspace, 'human-starts'), 'once\n');
+        assert.equal(f.model.requests.length, 0);
+        const humanResolves = calls.filter(
+          (call) => call.payload?.method === 'resolveCommand',
+        );
+        assert(humanResolves.length >= 4);
+        assert(
+          humanResolves.every(
+            (call) =>
+              call.payload.params.userShellId === userShellId &&
+              call.payload.params.toolCallId === undefined,
+          ),
+        );
+        assert(
+          !calls.some(
+            (call) =>
+              call.payload?.service === 'terminal' &&
+              ['create', 'restart'].includes(call.payload?.method),
+          ),
+        );
+        checks.push(
+          'human ! original card opens same PTY without a fake provider call or model request',
+          'hide/reopen preserves original surface, actual PID and unsent draft',
+          'UI exact stdin reaches original process once and its real exit7 remains visible',
+          'restart restores the shared original card and same double-epoch terminal readonly without rerunning',
+        );
+      } else if (!native) {
         for (let attempt = 0; attempt < 2; attempt++) {
           await parentOpen.click();
           await parentCard

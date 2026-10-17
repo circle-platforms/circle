@@ -390,6 +390,8 @@ export function createWorkspaceCyclePorts(
       create: (cycle, request, operation) =>
         serial(cycle, async () => {
           const owner = await initialize(cycle);
+          const replanning =
+            request.kind === 'repair' && Boolean(request.dependencies?.length);
           let round = owner.rounds.find(
             (item) => item.operationId === operation.operationId,
           );
@@ -407,30 +409,58 @@ export function createWorkspaceCyclePorts(
               operationId: operation.operationId,
               baseline: snapshot.head,
               kind: request.kind,
-              taskIds: [
-                `cycle-${hash([options.sessionId, cycle.id, operation.operationId]).slice(0, 40)}`,
-              ],
+              taskIds: (replanning ? ['plan', 'implement'] : ['task']).map(
+                (role) =>
+                  `cycle-${hash(role === 'task' ? [options.sessionId, cycle.id, operation.operationId] : [options.sessionId, cycle.id, operation.operationId, role]).slice(0, 40)}`,
+              ),
             };
             owner.rounds.push(round);
             await save(cycle, owner);
+          }
+          const dependencies = request.dependencies ?? [];
+          if (dependencies.length) {
+            const prior = await records(owner, dependencies);
+            if (
+              prior.some(
+                (task) =>
+                  task.spec.access !== 'readonly' ||
+                  task.state !== 'succeeded' ||
+                  task.spec.baseline !== round!.baseline ||
+                  (task.result as { verdict?: string } | undefined)?.verdict !==
+                    'passed',
+              )
+            )
+              throw Error(
+                'replanning requires independently accepted diagnosis dependencies',
+              );
           }
           await (
             await options.getTaskService()
           ).call(options.sessionId, 'enqueue', {
             operationId: `cycle-enqueue-${hash([options.sessionId, cycle.id, operation.operationId])}`,
-            tasks: round.taskIds.map((id) => ({
+            tasks: round.taskIds.map((id, index) => ({
               id,
               baseline: round!.baseline,
-              access: request.kind === 'diagnosis' ? 'readonly' : 'write',
+              access:
+                request.kind === 'diagnosis' || (replanning && index === 0)
+                  ? 'readonly'
+                  : 'write',
               resource: 'agent',
-              dependencies: [],
+              dependencies:
+                replanning && index > 0
+                  ? [...dependencies, round!.taskIds[0]]
+                  : dependencies,
               acceptanceCriteria:
-                request.kind === 'diagnosis'
+                replanning && index === 0
                   ? [
-                      'diagnose the actual repeated CI failure and propose a revised plan',
+                      'produce a revised task breakdown grounded in the accepted diagnosis, preserving the original acceptance criteria and explaining a different repair strategy',
                     ]
-                  : cycle.acceptanceCriteria,
-              prompt: `${request.prompt}\n\nTask: ${cycle.title}\n${cycle.body}\n\nAcceptance criteria:\n${cycle.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}`,
+                  : request.kind === 'diagnosis'
+                    ? [
+                        'diagnose the actual repeated CI failure and propose a revised plan',
+                      ]
+                    : cycle.acceptanceCriteria,
+              prompt: `${replanning && index === 0 ? 'Plan only. Read the accepted diagnosis dependencies and produce a concrete revised task breakdown; do not edit files.\n' : ''}${request.prompt}\n\nTask: ${cycle.title}\n${cycle.body}\n\nAcceptance criteria:\n${cycle.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}`,
             })),
           });
           return [...round.taskIds];
@@ -477,11 +507,39 @@ export function createWorkspaceCyclePorts(
           const snapshot = await (await git(owner.integration.path)).snapshot();
           if (snapshot.entries.length || snapshot.head !== round.baseline)
             return { status: 'needs_review' };
+          // Preserve the graph: readonly dependencies are accepted empty patches,
+          // not silently removed from the integrator's dependency checks.
+          const candidates = new Map(tasks.map((task) => [task.spec.id, task]));
+          const taskService = await options.getTaskService();
+          for (const task of candidates.values()) {
+            for (const id of task.spec.dependencies) {
+              if (candidates.has(id)) continue;
+              const dependency = taskService.getTask(id);
+              const report = dependency?.result as
+                | { verdict?: string; changes?: { paths?: string[] } }
+                | undefined;
+              if (
+                !dependency ||
+                !owner.rounds.some((item) => item.taskIds.includes(id)) ||
+                dependency.spec.sessionId !== options.sessionId ||
+                dependency.spec.workspace !== owner.source ||
+                dependency.spec.baseline !== round.baseline ||
+                dependency.spec.access !== 'readonly' ||
+                dependency.state !== 'succeeded' ||
+                report?.verdict !== 'passed' ||
+                report.changes?.paths?.length !== 0
+              )
+                throw Error(
+                  'replanning dependency is not an accepted readonly candidate',
+                );
+              candidates.set(id, dependency);
+            }
+          }
           const result = (await (
             await options.getTaskService()
           ).call(options.sessionId, 'mergeCandidates', {
             integrationId: owner.integration.id,
-            taskIds: ids,
+            taskIds: [...candidates.keys()],
             expectedHead: snapshot.head,
             expectedBaseline: round.baseline,
           })) as MergeCandidatesResult;

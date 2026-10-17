@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import '../src/styles/app.css';
 import { useState } from 'react';
 import { NativeResourceBoundary } from '../src/components/NativeResourceBoundary';
 import '../src/styles/developer-workbench.css';

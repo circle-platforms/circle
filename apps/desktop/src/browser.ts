@@ -334,6 +334,9 @@ export class BrowserSessions {
   // Where downloads wait for the person, made when one first does
   private held?: string;
   private closed = false;
+  private closePromise?: Promise<void>;
+  private diagnosticCloses = new Set<Promise<void>>();
+  private diagnosticCloseError?: unknown;
   // The window's theme, which Circle's own pages and the pointer follow
   private dark = nativeTheme.shouldUseDarkColors;
   constructor(
@@ -348,6 +351,7 @@ export class BrowserSessions {
     // The conversation's mode (manual, accept-edits, plan or auto), as the runtime has it
     private modeOf: (id: string) => string | undefined = () => undefined,
     private emitDiagnostics: (event: BrowserDiagnosticEvent) => void = () => {},
+    private diagnosticLogDir?: string,
   ) {
     this.trusted = new TrustedCertificates(trustFile);
   }
@@ -626,8 +630,23 @@ export class BrowserSessions {
           sessionId: conversation.id,
           tab: tab.id,
         }),
+      this.diagnosticLogDir
+        ? {
+            directory: this.diagnosticLogDir,
+            sessionId: conversation.id,
+            tab: tab.id,
+          }
+        : undefined,
     );
-    contents.once('destroyed', () => tab.diagnostics?.dispose());
+    contents.once('destroyed', () => {
+      const pending = tab.diagnostics!.dispose();
+      this.diagnosticCloses.add(pending);
+      void pending
+        .catch((error) => {
+          this.diagnosticCloseError = error;
+        })
+        .finally(() => this.diagnosticCloses.delete(pending));
+    });
     const enableDiagnostics = () => tab.diagnostics!.enable();
     contents.on('devtools-closed', () => {
       void (async () => {
@@ -1595,13 +1614,18 @@ export class BrowserSessions {
   async diagnostics(idValue: unknown, request: unknown) {
     const id = this.validId(idValue);
     const input = validateBrowserDiagnosticRequest(request);
-    const conversation = this.conversation(id);
-    const tab =
-      input.action === 'watch'
-        ? conversation.tabs.get(input.tab)
-        : this.activeTab(conversation);
+    const conversation =
+      input.action === 'log'
+        ? this.conversations.get(id)
+        : this.conversation(id);
+    if (!conversation) throw Error('browser session has no existing tab');
+    const tab = ['watch', 'log'].includes(input.action)
+      ? conversation.tabs.get((input as { tab: string }).tab)
+      : this.activeTab(conversation);
     if (!tab) throw Error('browser tab no longer exists');
     await tab.ready;
+    if (input.action === 'log')
+      return tab.diagnostics!.log(input.domain, input.cursor, input.limit);
     if (input.action === 'watch')
       return tab.diagnostics!.watch(
         input.subscription,
@@ -3207,6 +3231,11 @@ export class BrowserSessions {
     clearInterval(conversation.autoReturn);
     for (const wake of conversation.handedBack) wake();
     conversation.handedBack.clear();
+    const journals = [...conversation.tabs.values()].map((tab) =>
+      tab.diagnostics!.dispose(),
+    );
+    const drained = Promise.all(journals);
+    void drained.catch(() => {});
     const mask = conversation.mask;
     const contents = this.retiringContents.get(id) ?? new Set<WebContents>();
     for (const tab of conversation.tabs.values()) contents.add(tab.contents);
@@ -3238,12 +3267,21 @@ export class BrowserSessions {
       if (!content.isDestroyed()) content.close({ waitForBeforeUnload: false });
     for (const hold of [...conversation.holds])
       this.decideHold(conversation, hold, false, false);
-    await stopped;
+    await Promise.all([stopped, drained]);
     this.retiringContents.delete(id);
     this.exceptions.delete(id);
     this.conversations.delete(id);
   }
-  close() {
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    const pending = [
+      ...this.diagnosticCloses,
+      ...[...this.conversations.values()].flatMap((conversation) =>
+        [...conversation.tabs.values()].map((tab) =>
+          tab.diagnostics!.dispose(),
+        ),
+      ),
+    ];
     this.closed = true;
     for (const conversation of this.conversations.values())
       clearInterval(conversation.autoReturn);
@@ -3256,5 +3294,8 @@ export class BrowserSessions {
         this.closeTab(conversation, tab, 'the browser closed');
     }
     this.conversations.clear();
+    return (this.closePromise = Promise.all(pending).then(() => {
+      if (this.diagnosticCloseError) throw this.diagnosticCloseError;
+    }));
   }
 }

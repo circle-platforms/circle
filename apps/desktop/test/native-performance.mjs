@@ -176,6 +176,7 @@ const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? desktopRoot);
 const samples = {
   inputKeystroke: [],
   inputPaste: [],
+  inputClear: [],
   click: [],
   sessionSwitch: [],
   fileSwitch: [],
@@ -586,23 +587,142 @@ try {
   ).join('\n');
   report.inputWorkloads = {
     keystrokes: 40,
-    wholeInputUpdates: 40,
+    clipboardPastes: 20,
+    keyboardClears: 20,
     longPasteLines: 600,
     longPasteCharacters: longPaste.length,
+    method:
+      'actual system clipboard paste; original bulk .fill failures remain separate engineering diagnostics, not product optimization evidence',
   };
-  for (let index = 0; index < 40; index++) {
-    const value = index % 2 ? '' : longPaste;
-    await arm('input', 'textarea[aria-label="message"]', {
-      selector: 'textarea[aria-label="message"]',
-      value,
-      feedback: {
-        selector: 'button[aria-label="send message"]',
-        disabled: !value,
+  const localView = (initial = false) =>
+    page.evaluate(
+      ({ id, initial }) => {
+        const entry = JSON.parse(
+          localStorage.getItem('circle.workbench.live.views.v1') ?? 'null',
+        )?.views?.find(([key]) => key === id)?.[1];
+        if (
+          !entry ||
+          (!Array.isArray(entry.attachments) &&
+            !(initial && entry.attachments === undefined))
+        )
+          throw Error('actual composer view is unavailable');
+        return {
+          draft: entry.draft ?? '',
+          attachments: entry.attachments ?? [],
+        };
       },
-    });
-    await input.fill(value);
-    await finish('inputPaste');
+      { id: mainSession, initial },
+    );
+  const initialPasteView = await localView(true);
+  assert.equal(initialPasteView.draft, '');
+  const originalAttachments = initialPasteView.attachments;
+  assert.equal(
+    await page.locator('.attachment-strip .file-chip').count(),
+    originalAttachments.length,
+    'initial local attachment view matches actual composer',
+  );
+  const marker = `[pasted text ${originalAttachments.filter((file) => file.kind === 'paste').length + 1} · 600 lines]`;
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  report.nativePasteObservations = [];
+  let pasted;
+  for (let index = 0; index < 40; index++) {
+    if (index % 2 === 0) {
+      await app.evaluate(
+        ({ clipboard }, text) => clipboard.writeText(text),
+        longPaste,
+      );
+      await arm('paste', 'textarea[aria-label="message"]', {
+        selector: 'textarea[aria-label="message"]',
+        value: marker,
+        clipboardText: longPaste,
+        clipboardAttachment: marker,
+        feedback: {
+          selector: 'button[aria-label="send message"]',
+          disabled: false,
+        },
+      });
+      await input.press(`${modifier}+v`);
+      await finish('inputPaste');
+      const observation = await page.evaluate(
+        () => window.__circleNativePerfClipboardObservation,
+      );
+      assert.deepEqual(observation, {
+        trusted: true,
+        exact: true,
+        characters: longPaste.length,
+      });
+      report.nativePasteObservations.push(observation);
+      const view = await localView();
+      assert.equal(view.draft, marker);
+      const added = view.attachments.filter(
+        (file) =>
+          !originalAttachments.some((original) => original.id === file.id),
+      );
+      assert.equal(
+        added.length,
+        1,
+        'each actual paste adds exactly one attachment',
+      );
+      pasted = added[0];
+      assert.equal(pasted.kind, 'paste');
+      assert.equal(pasted.name, marker);
+      assert.equal(pasted.content, longPaste);
+      assert.deepEqual(
+        view.attachments.filter((file) => file.id !== pasted.id),
+        originalAttachments,
+      );
+      if (index === 0) {
+        await page
+          .locator('.attachment-strip')
+          .getByRole('button', { name: marker, exact: true })
+          .click();
+        const source = page
+          .locator('.inspector .context-source')
+          .filter({ has: page.locator('summary', { hasText: marker }) });
+        if (!(await source.evaluate((node) => node.open)))
+          await source.locator(':scope > summary').click();
+        assert.equal(
+          await source.locator(':scope > pre').textContent(),
+          longPaste,
+          'original UI exposes all600lines exactly',
+        );
+        await page
+          .getByRole('button', { name: 'terminal panel', exact: true })
+          .click();
+      }
+    } else {
+      assert.equal(
+        await input.inputValue(),
+        marker,
+        'clear starts from a nonempty actual pasted draft',
+      );
+      await page
+        .locator('.attachment-strip')
+        .getByRole('button', { name: `remove ${pasted.name}`, exact: true })
+        .click();
+      await input.press(`${modifier}+a`);
+      await arm('keydown', 'textarea[aria-label="message"]', {
+        selector: 'textarea[aria-label="message"]',
+        value: '',
+        feedback: {
+          selector: 'button[aria-label="send message"]',
+          disabled: originalAttachments.length === 0,
+        },
+      });
+      await input.press('Backspace');
+      await finish('inputClear');
+      const restored = await localView();
+      assert.equal(restored.draft, '');
+      assert.deepEqual(
+        restored.attachments,
+        originalAttachments,
+        'clear removes only this iteration attachment and preserves initial context',
+      );
+    }
   }
+  checks.push(
+    '20 trusted native clipboard pastes retain exact600line originals and20 keyboard clears restore composer context',
+  );
   report.interfaceScope =
     'original topbar panels, inspector and main file view; no dual layout';
   await input.fill('retained developer draft');
@@ -889,7 +1009,7 @@ try {
     await arm('click', '[data-perf-target="save"]', {
       selector: '.file-view-toolbar',
       file: { path: 'README.md', sourceDirectory },
-      text: 'disk and buffer match',
+      text: 'no unsaved changes',
     });
     await save.click();
     await finish('save');
@@ -903,12 +1023,144 @@ try {
     'each save completed a real disk write while eight agents stream',
   );
   await page.getByRole('button', { name: 'close file', exact: true }).click();
+  const originalImage = page.getByRole('button', {
+    name: 'performance-original.png',
+    exact: true,
+  });
+  // Scroll the real viewport, not an overscanned virtual row that can unmount
+  // while Playwright is preparing an element-level scroll operation.
+  await page
+    .locator('.transcript:visible')
+    .evaluate((node) =>
+      node.scrollTo({ top: node.scrollHeight, behavior: 'instant' }),
+    );
+  await originalImage.waitFor({ state: 'visible' });
+  // Layout-visible overscan rows are not yet a usable target after reopening.
+  // Wait for the actual viewport, using the driver's existing readiness deadline.
+  await waitFor(
+    () =>
+      page.evaluate(() => {
+        const transcript = document.querySelector('.transcript');
+        const button = [...(transcript?.querySelectorAll('button') ?? [])].find(
+          (node) => node.textContent.trim() === 'performance-original.png',
+        );
+        if (!transcript || !button || transcript.closest('[hidden]'))
+          return false;
+        const viewport = transcript.getBoundingClientRect();
+        const rect = button.getBoundingClientRect();
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.top >= viewport.top &&
+          rect.bottom <= viewport.bottom &&
+          rect.left >= viewport.left &&
+          rect.right <= viewport.right
+        );
+      }),
+    'historical image is inside the restored transcript viewport',
+  );
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  const imagePreparation = await page.evaluate(async () => {
+    const capture = () => {
+      const box = document.querySelector('.transcript');
+      const button = [...(box?.querySelectorAll('button') ?? [])].find(
+        (node) => node.textContent.trim() === 'performance-original.png',
+      );
+      if (!box || !button) return null;
+      const viewport = box.getBoundingClientRect();
+      const rect = button.getBoundingClientRect();
+      const message = button.closest('[data-message-id]');
+      const visible =
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.top >= viewport.top &&
+        rect.bottom <= viewport.bottom &&
+        rect.left >= viewport.left &&
+        rect.right <= viewport.right;
+      const readingNode = visible
+        ? [...box.querySelectorAll('[data-message-id]')].find((node) => {
+            const bounds = node.getBoundingClientRect();
+            return (
+              bounds.height > 0 &&
+              bounds.bottom > viewport.top &&
+              bounds.top < viewport.bottom
+            );
+          })
+        : null;
+      return {
+        viewport: {
+          top: viewport.top,
+          bottom: viewport.bottom,
+          left: viewport.left,
+          right: viewport.right,
+        },
+        rect: {
+          top: rect.top,
+          bottom: rect.bottom,
+          left: rect.left,
+          right: rect.right,
+          width: rect.width,
+          height: rect.height,
+        },
+        readingAnchor: readingNode
+          ? {
+              id: readingNode.getAttribute('data-message-id'),
+              offset: readingNode.getBoundingClientRect().top - viewport.top,
+              scrollTop: box.scrollTop,
+            }
+          : null,
+        messageId: message?.getAttribute('data-message-id'),
+        offset: message
+          ? message.getBoundingClientRect().top - viewport.top
+          : null,
+        visible,
+      };
+    };
+    const before = capture();
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    return { before, after: capture() };
+  });
+  report.historicalImagePreparation = { imagePreparation };
+  assert.ok(
+    imagePreparation.before?.visible && imagePreparation.after?.visible,
+    'the historical image button must be inside the actual transcript viewport',
+  );
+  assert.ok(
+    imagePreparation.before.messageId && imagePreparation.after.messageId,
+    'historical image preparation uses a real persisted message identity',
+  );
+  assert.equal(
+    imagePreparation.before.messageId,
+    imagePreparation.after.messageId,
+    'the virtualized image message remains mounted across two frames',
+  );
+  assert.ok(
+    Math.abs(imagePreparation.before.offset - imagePreparation.after.offset) <=
+      2,
+    'the historical image row settles before reading-position measurement',
+  );
+  const imageReadingAnchor = imagePreparation.before.readingAnchor;
+  const settledImageAnchor = imagePreparation.after.readingAnchor;
+  assert.ok(
+    imageReadingAnchor && settledImageAnchor,
+    'the in-viewport image preparation must include an actual visible reading anchor',
+  );
+  assert.equal(settledImageAnchor.id, imageReadingAnchor.id);
+  assert.ok(
+    Math.abs(settledImageAnchor.offset - imageReadingAnchor.offset) <= 2,
+  );
+  report.historicalImagePreparation.readingAnchor = settledImageAnchor;
   const scrollBeforeImage = await page
     .locator('.transcript')
     .evaluate((node) => node.scrollTop);
-  await page
-    .getByRole('button', { name: 'performance-original.png', exact: true })
-    .click();
+  await originalImage.click();
   const image = page.getByRole('dialog').locator('img');
   await image.waitFor();
   assert.equal(await image.getAttribute('src'), `data:image/png;base64,${png}`);
@@ -926,6 +1178,18 @@ try {
       (await page.locator('.transcript').evaluate((node) => node.scrollTop)) -
         scrollBeforeImage,
     ) <= 2,
+  );
+  const restoredImageAnchor = await page.evaluate(
+    captureNativeTranscriptAnchor,
+  );
+  assert.equal(
+    restoredImageAnchor.id,
+    settledImageAnchor.id,
+    'closing the image restores the actual visible message identity',
+  );
+  assert.ok(
+    Math.abs(restoredImageAnchor.offset - settledImageAnchor.offset) <= 2,
+    'closing the image restores the actual reading anchor within two pixels',
   );
   checks.push(
     'historical PNG opens exact persisted original and returns to reading position',
@@ -953,6 +1217,7 @@ try {
   for (const [metric, budget] of Object.entries({
     inputKeystroke: 100,
     inputPaste: 100,
+    inputClear: 100,
     click: 100,
     eventToFrame: 200,
     sessionSwitch: 300,
@@ -968,7 +1233,7 @@ try {
     };
   }
   report.measurement =
-    '40 actual keys and40 alternating empty/600line updates require textarea and React Send state; original-panel click feedback and session backend/route/header/visible-body require two frames; producer-to-frame uses actual xterm write callback plus two visible RAF opportunities, never a compositor pixel timestamp. AX latency is reported independently.';
+    '40 actual keys plus20 trusted system clipboard600line pastes and20 keyboard clears require actual composer and React Send state; original-panel click feedback and session backend/route/header/visible-body require two frames; producer-to-frame uses actual xterm write callback plus two visible RAF opportunities, never a compositor pixel timestamp. AX latency is reported independently.';
   report.complete = true;
   report.passed =
     Object.values(report.metrics).every((metric) => metric.passed) &&
@@ -1185,6 +1450,7 @@ try {
   for (const [metric, budget] of Object.entries({
     inputKeystroke: 100,
     inputPaste: 100,
+    inputClear: 100,
     click: 100,
     eventToFrame: 200,
     sessionSwitch: 300,

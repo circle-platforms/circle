@@ -7,6 +7,7 @@ import type { DesktopBridge } from '../../desktop/src/contracts';
 import { applyTheme } from '../src/theme';
 import { setLanguage } from '../src/i18n';
 import '../src/styles/app.css';
+import '../src/styles/developer-workbench.css';
 const query = new URLSearchParams(location.search);
 applyTheme(query.get('theme') === 'dark' ? 'dark' : 'light');
 setLanguage(query.get('language') === 'zh-CN' ? 'zh-CN' : 'en');

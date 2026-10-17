@@ -62,7 +62,7 @@ export async function register(api: ExtensionAPI) {
     for (const [method, description, properties, required, readOnly] of [
       [
         'candidate',
-        'Inspect the current owner workspace publication candidate: exact commit head, feature branch, opaque revision (not a commit SHA), origin/main base and complete reviewed paths. Read this before github_publish; never guess revision. Dirty candidates cannot publish.',
+        'Inspect the current owner workspace publication candidate: exact commit head, feature branch, opaque revision (not a commit SHA), resolved origin default base and complete reviewed paths. Read this before github_publish; never guess revision. Dirty candidates cannot publish.',
         { epoch: base.epoch, repository: base.repository },
         ['epoch', 'repository'],
         true,

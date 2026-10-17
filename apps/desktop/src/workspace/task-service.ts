@@ -31,7 +31,12 @@ import {
   type AgentTaskExecutorOptions,
 } from './task-executor.js';
 import { TaskIntegrator } from './task-merge.js';
-import { taskArtifactDirectory } from './task-store.js';
+import {
+  taskArtifactDirectory,
+  proposedTasks,
+  TASK_RESOURCES,
+  taskResourceGrants,
+} from './task-store.js';
 const exec = promisify(execFile);
 const settingsQueues = new Map<string, Promise<unknown>>();
 export interface TaskServiceOptions extends AgentTaskExecutorOptions {
@@ -41,7 +46,7 @@ export interface TaskServiceOptions extends AgentTaskExecutorOptions {
   /** Already granted and trusted by the root controller, never copied from renderer params. */
   workspace: string;
   emit(event: CollaborationEvent): void;
-  allowedResources?: string[];
+  allowedResources?: readonly TaskResource[];
   identity?: { name: string; email: string };
   /** Queued work starts automatically; interrupted attempts are never replayed. */
   autoStart?: boolean;
@@ -229,6 +234,9 @@ export class TaskService {
       dataDir: options.dataDir,
       limits: saved,
       executor: createAgentTaskExecutor(options),
+      allowedResources: taskResourceGrants(
+        options.allowedResources ?? TASK_RESOURCES,
+      ),
     });
     for (const task of this.scheduler.list())
       for (const attempt of this.scheduler.attempts(task.spec.id))
@@ -412,9 +420,9 @@ export class TaskService {
       ...(value.resource !== undefined
         ? { resource: value.resource as TaskResource }
         : {}),
-      ...(this.options.allowedResources
-        ? { allowedResources: [...this.options.allowedResources] }
-        : {}),
+      allowedResources: taskResourceGrants(
+        this.options.allowedResources ?? TASK_RESOURCES,
+      ),
     };
   }
   private serial<T>(action: () => Promise<T>): Promise<T> {
@@ -458,6 +466,8 @@ export class TaskService {
         if (this.options.autoStart !== false) this.scheduler.start();
         return tasks;
       }
+      case 'adoptProposal':
+        return this.adoptProposal(sessionId, params);
       case 'start':
         this.scheduler.start();
         return this.scheduler.list();
@@ -466,6 +476,9 @@ export class TaskService {
       case 'retry':
         return this.scheduler.retry(string(params.id, 'task id'), {
           operationId: string(params.operationId, 'operation id'),
+          allowedResources: taskResourceGrants(
+            this.options.allowedResources ?? TASK_RESOURCES,
+          ),
         });
       case 'events':
         return this.scheduler.eventsAfter(
@@ -529,6 +542,203 @@ export class TaskService {
       default:
         throw new Error('unknown task operation');
     }
+  }
+  private async adoptProposal(
+    sessionId: string,
+    params: Record<string, unknown>,
+  ): Promise<TaskRecord[]> {
+    if (
+      Object.keys(params).some(
+        (key) =>
+          ![
+            'operationId',
+            'artifactId',
+            'expectedSha256',
+            'expectedAttempt',
+            'keys',
+          ].includes(key),
+      )
+    )
+      throw Error('proposal adoption cannot select task authority');
+    const operationId = string(params.operationId, 'operation id'),
+      artifactId = string(params.artifactId, 'proposal artifact id'),
+      expectedSha256 = string(params.expectedSha256, 'proposal hash'),
+      expectedAttempt = params.expectedAttempt;
+    if (
+      !/^[0-9a-f]{64}$/.test(expectedSha256) ||
+      !Number.isSafeInteger(expectedAttempt) ||
+      Number(expectedAttempt) < 1
+    )
+      throw Error('invalid proposal version');
+    const artifact = this.scheduler
+      .artifacts()
+      .find((entry) => entry.id === artifactId);
+    if (
+      !artifact ||
+      artifact.kind !== 'task-proposal' ||
+      artifact.sha256 !== expectedSha256
+    )
+      throw Error('unknown or changed task proposal');
+    const source = this.scheduler.get(artifact.taskId);
+    const canonicalWorkspace = this.canonicalWorkspace;
+    const assertSource = () => {
+      const current = this.scheduler.get(artifact.taskId);
+      if (
+        !current ||
+        current.spec.sessionId !== sessionId ||
+        current.spec.workspace !== canonicalWorkspace ||
+        current.attempt !== expectedAttempt ||
+        current.attempt !== artifact.attempt ||
+        current.spec.baseline !== artifact.baseline ||
+        current.runtimeSessionId !== source?.runtimeSessionId ||
+        !current.runtimeSessionId ||
+        current.runtimeState !== 'succeeded' ||
+        current.state !== 'succeeded'
+      )
+        throw Error(
+          'proposal source is foreign, stale or not independently accepted',
+        );
+    };
+    assertSource();
+    const shown = await this.readArtifact({
+      id: artifact.taskId,
+      artifactId,
+      limit: 1024 * 1024,
+    });
+    if (shown.truncated) throw Error('task proposal is too large');
+    const proposal = object(JSON.parse(shown.content), 'task proposal');
+    const origin = object(proposal.source, 'proposal source');
+    if (
+      proposal.version !== 1 ||
+      Object.keys(proposal).some(
+        (key) => !['version', 'source', 'tasks'].includes(key),
+      ) ||
+      JSON.stringify(Object.keys(origin).sort()) !==
+        JSON.stringify(
+          [
+            'taskId',
+            'attempt',
+            'sessionId',
+            'runtimeSessionId',
+            'workspace',
+            'baseline',
+          ].sort(),
+        ) ||
+      origin.taskId !== source!.spec.id ||
+      origin.attempt !== source!.attempt ||
+      origin.sessionId !== sessionId ||
+      origin.runtimeSessionId !== source!.runtimeSessionId ||
+      origin.workspace !== canonicalWorkspace ||
+      origin.baseline !== source!.spec.baseline
+    )
+      throw Error('task proposal provenance does not match its ledger');
+    const tasks = proposedTasks(proposal.tasks);
+    // The executor's independent acceptance artifact must include this exact proposal.
+    // A worker's final answer or a later human override cannot substitute for it.
+    const acceptance = this.scheduler
+      .artifacts(source!.spec.id)
+      .find(
+        (entry) =>
+          entry.kind === 'acceptance' &&
+          entry.attempt === source!.attempt &&
+          entry.baseline === source!.spec.baseline,
+      );
+    if (!acceptance)
+      throw Error('proposal has no independent acceptance artifact');
+    const accepted = await this.readArtifact({
+      id: source!.spec.id,
+      artifactId: acceptance.id,
+      limit: 1024 * 1024,
+    });
+    if (accepted.truncated) throw Error('proposal acceptance is too large');
+    const report = object(JSON.parse(accepted.content), 'proposal acceptance');
+    if (
+      report.taskId !== source!.spec.id ||
+      report.attempt !== source!.attempt ||
+      report.sessionId !== source!.runtimeSessionId ||
+      report.verdict !== 'passed' ||
+      !Array.isArray(report.proposals) ||
+      !report.proposals.includes(artifactId) ||
+      !Array.isArray(report.checks) ||
+      !source!.spec.acceptanceCriteria.every((criterion) =>
+        (report.checks as unknown[]).some((input) => {
+          const check = object(input, 'proposal acceptance check');
+          return (
+            check.criterion === criterion &&
+            check.status === 'passed' &&
+            typeof check.evidence === 'string' &&
+            Boolean(check.evidence.trim()) &&
+            ['inspection', 'independent-review', 'command'].includes(
+              String(check.source),
+            ) &&
+            (check.source !== 'command' ||
+              (typeof check.command === 'string' &&
+                Boolean(check.command.trim()) &&
+                check.exitCode === 0))
+          );
+        }),
+      )
+    )
+      throw Error('proposal has not passed independent acceptance');
+    const changes = object(report.changes, 'accepted proposal changes');
+    if (
+      changes.baseline !== source!.spec.baseline ||
+      typeof changes.sha256 !== 'string' ||
+      !this.scheduler
+        .artifacts(source!.spec.id)
+        .some(
+          (entry) =>
+            entry.kind === 'task-patch' &&
+            entry.attempt === source!.attempt &&
+            entry.baseline === source!.spec.baseline &&
+            entry.sha256 === changes.sha256,
+        )
+    )
+      throw Error('proposal acceptance has no matching candidate patch');
+    const keys =
+      params.keys === undefined
+        ? tasks.map((task) => task.key)
+        : strings(params.keys, 'proposed task keys');
+    const selected = new Set(keys);
+    if (
+      !selected.size ||
+      selected.size !== keys.length ||
+      keys.some((key) => !tasks.some((task) => task.key === key))
+    )
+      throw Error('invalid proposed task selection');
+    const chosen = tasks.filter((task) => selected.has(task.key));
+    if (
+      chosen.some((task) => task.dependencies.some((key) => !selected.has(key)))
+    )
+      throw Error('proposal selection omits a required dependency');
+    const idFor = (key: string) =>
+      `proposal-${createHash('sha256')
+        .update(JSON.stringify([artifact.id, artifact.sha256, key]))
+        .digest('hex')
+        .slice(0, 32)}`;
+    const created = await this.scheduler.enqueue(
+      chosen.map((task) =>
+        this.task(
+          {
+            id: idFor(task.key),
+            parentId: source!.spec.id,
+            baseline: source!.spec.baseline,
+            prompt: task.prompt,
+            access: task.access,
+            acceptanceCriteria: task.acceptanceCriteria,
+            dependencies: [source!.spec.id, ...task.dependencies.map(idFor)],
+            ...(task.resource ? { resource: task.resource } : {}),
+          },
+          sessionId,
+        ),
+      ),
+      {
+        operationId: `adopt:${sessionId}:${operationId}`,
+        beforeCommit: assertSource,
+      },
+    );
+    if (this.options.autoStart !== false) this.scheduler.start();
+    return created;
   }
   private async readArtifact(params: Record<string, unknown>) {
     if (Object.hasOwn(params, 'path') || Object.hasOwn(params, 'patchPath'))

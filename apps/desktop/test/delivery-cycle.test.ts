@@ -202,16 +202,26 @@ test('real Git and stateful fakegh drive failed CI to repair, new push and human
   assert.ok(state.calls.every((call: string[]) => !call.includes('merge')));
 });
 
-test('third identical CI failure dispatches independent diagnosis and pauses only its cycle', async (t) => {
+test('third identical CI failure independently diagnoses then creates dependent revised repair tasks', async (t) => {
   const f = await fixture(t);
   f.setAlwaysFail();
   await f.cycle.create(f.spec, { operationId: 'create' });
   await f.cycle.advance('web');
   await f.cycle.advance('web');
-  assert.equal((await f.cycle.advance('web')).state, 'needs_review');
+  assert.equal((await f.cycle.advance('web')).state, 'repairing');
+  assert.equal(f.cycle.snapshot('web').recoveryPhase, 'diagnosis');
   assert.equal(f.effects.repair, 2);
   assert.equal(f.effects.diagnosis, 1);
+  let dependencies: string[] | undefined;
+  const create = f.ports.tasks.create;
+  f.ports.tasks.create = async (cycle, request, operation) => {
+    dependencies = request.dependencies;
+    return create(cycle, request, operation);
+  };
   await f.cycle.advance('web');
+  assert.deepEqual(dependencies, ['diagnosis']);
+  assert.equal(f.cycle.snapshot('web').recoveryPhase, undefined);
+  assert.equal(f.effects.repair, 3);
   assert.equal(f.effects.diagnosis, 1);
   const other = { ...f.spec, id: 'unrelated' };
   await f.cycle.create(other, { operationId: 'other' });
@@ -417,3 +427,147 @@ test('cycle scope binding is tied to durable record identity and a failed bindin
     await reopened.close();
   }
 });
+
+test('a real clean candidate local verification failure schedules repair and revalidates before publishing', async (t) => {
+  const f = await fixture(t);
+  const verify = f.ports.verify;
+  let verificationCount = 0;
+  f.ports.tasks.merge = async () => {
+    await f.git('add', '--', 'app.txt');
+    await f.git(
+      '-c',
+      'user.name=Fixture',
+      '-c',
+      'user.email=fixture@example.invalid',
+      'commit',
+      '-m',
+      'Integrate accepted task',
+    );
+    return { status: 'merged' };
+  };
+  f.ports.verify = async (cycle) => {
+    const result = await verify(cycle);
+    if (++verificationCount === 1)
+      return {
+        ...result,
+        passed: false,
+        evidence: cycle.acceptanceCriteria.map((criterion) => ({
+          criterion,
+          status: 'failed' as const,
+          source: 'command' as const,
+          detail: 'actual local assertion failed',
+        })),
+      };
+    return result;
+  };
+  await f.cycle.create(f.spec, { operationId: 'local-recovery' });
+  assert.equal((await f.cycle.advance('web')).state, 'repairing');
+  assert.equal(f.effects.repair, 1);
+  assert.equal(f.effects.push, 0);
+  assert.equal((await f.cycle.advance('web')).state, 'pending_human_merge');
+  assert.equal(verificationCount, 2);
+  assert.equal(f.effects.push, 1);
+});
+
+for (const differentError of [false, true])
+  test(`local failure fingerprints ignore timestamps but ${differentError ? 'separate different errors' : 'diagnose the third repeated error and replan'}`, async (t) => {
+    const f = await fixture(t);
+    f.ports.tasks.merge = async () => {
+      await f.git('add', '--', 'app.txt');
+      await f.git(
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.invalid',
+        'commit',
+        '-m',
+        'Integrate accepted repair',
+      );
+      return { status: 'merged' };
+    };
+    f.ports.verify = async (cycle) => ({
+      passed: false,
+      head: await f.git('rev-parse', 'HEAD'),
+      paths: ['app.txt'],
+      evidence: cycle.acceptanceCriteria.map((criterion) => ({
+        criterion,
+        status: 'failed',
+        source: 'command',
+        detail: `\x1b[31m2026-10-16T12:00:0${cycle.attempt}.123Z\x1b[0m local assertion failure${differentError ? ` ${cycle.attempt}` : ''}`,
+      })),
+    });
+    await f.cycle.create(f.spec, { operationId: 'local-repeat' });
+    await f.cycle.advance('web');
+    await f.cycle.advance('web');
+    const third = await f.cycle.advance('web');
+    assert.match(third.lastFailure!.logs, /2026-10-16T12:00:02\.123Z/);
+    if (differentError) {
+      assert.equal(third.recoveryPhase, undefined);
+      assert.equal(f.effects.diagnosis, 0);
+      assert.equal(f.effects.repair, 3);
+      assert.deepEqual(Object.values(third.failureCounts), [1, 1, 1]);
+      assert.equal(f.effects.push, 0);
+      return;
+    }
+    assert.equal(third.recoveryPhase, 'diagnosis');
+    assert.equal(f.effects.repair, 2);
+    assert.equal(f.effects.diagnosis, 1);
+    assert.equal(f.effects.push, 0);
+    let dependencies: string[] | undefined;
+    const create = f.ports.tasks.create;
+    f.ports.tasks.create = (cycle, request, operation) => {
+      dependencies = request.dependencies;
+      return create(cycle, request, operation);
+    };
+    const revised = await f.cycle.advance('web');
+    assert.deepEqual(dependencies, ['diagnosis']);
+    assert.equal(revised.state, 'repairing');
+    assert.equal(revised.recoveryPhase, undefined);
+    assert.equal(f.effects.push, 0);
+  });
+
+for (const source of ['local', 'CI'])
+  test(`${source} A B A A A diagnoses only the last three consecutive failures`, async (t) => {
+    const f = await fixture(t);
+    f.setAlwaysFail();
+    let index = 0;
+    const errors = ['A', 'B', 'A', 'A', 'A'];
+    if (source === 'local') {
+      f.ports.tasks.merge = async () => {
+        await f.git('add', '--', 'app.txt');
+        await f.git(
+          '-c',
+          'user.name=Fixture',
+          '-c',
+          'user.email=fixture@example.invalid',
+          'commit',
+          '-m',
+          'Integrate accepted repair',
+        );
+        return { status: 'merged' };
+      };
+      f.ports.verify = async (cycle) => ({
+        passed: false,
+        head: await f.git('rev-parse', 'HEAD'),
+        paths: ['app.txt'],
+        evidence: cycle.acceptanceCriteria.map((criterion) => ({
+          criterion,
+          status: 'failed',
+          source: 'command',
+          detail: `2026-10-16T12:00:0${index}.000Z error ${errors[index++]}`,
+        })),
+      });
+    } else
+      f.ports.delivery.logs = async () =>
+        `2026-10-16T12:00:0${index}.000Z error ${errors[index++]}`;
+    await f.cycle.create(f.spec, { operationId: 'consecutive' });
+    const counts = [];
+    for (let attempt = 0; attempt < errors.length; attempt++) {
+      const state = await f.cycle.advance('web');
+      counts.push(state.failureCounts[state.lastFailure!.fingerprint]);
+      assert.equal(f.effects.diagnosis, attempt === 4 ? 1 : 0);
+    }
+    assert.deepEqual(counts, [1, 1, 1, 2, 3]);
+    assert.equal(f.cycle.snapshot('web').recoveryPhase, 'diagnosis');
+    assert.equal(f.effects.repair, 4);
+  });

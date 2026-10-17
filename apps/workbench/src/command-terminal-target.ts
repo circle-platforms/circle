@@ -1,12 +1,16 @@
 /** A host-resolved original execution; opening it must never launch a command. */
-export interface CommandTerminalTarget {
+interface CommandTerminalIdentity {
   executionId: string;
   /** The original JobRegistry run epoch, independent from the terminal epoch. */
   epoch: string;
   executionSessionId: string;
-  toolCallId: string;
   terminal: { id: string; epoch: string };
 }
+export type CommandTerminalTarget = CommandTerminalIdentity &
+  (
+    | { toolCallId: string; origin?: never; userShellId?: never }
+    | { origin: 'user-shell'; userShellId: string; toolCallId?: never }
+  );
 
 export interface CommandTerminalCapabilities {
   read: true;
@@ -33,10 +37,12 @@ export type CommandTerminalResolution =
   CommandTerminalUnavailable | CommandTerminalAvailable;
 
 /** workspaceCall(viewSessionId, 'terminal', 'resolveCommand', request). */
-export interface CommandTerminalResolveRequest {
+export type CommandTerminalResolveRequest = {
   sourceSessionId: string;
-  toolCallId: string;
-}
+} & (
+  | { toolCallId: string; userShellId?: never }
+  | { userShellId: string; toolCallId?: never }
+);
 
 /** No create/restart action exists: this route can address only the original PTY. */
 export type CommandTerminalAction =

@@ -141,6 +141,7 @@ export interface DebugOptions {
   runtimeExecutable?: string;
   adapterPath: string;
   emit?: (snapshot: DebugSnapshot) => void;
+  output?: (text: string) => Promise<void>;
   runInTerminal?: (args: {
     args: string[];
     cwd: string;
@@ -155,6 +156,7 @@ export interface DebugSnapshot {
   output: string;
   breakpoints: Record<string, any[]>;
   adapterPid?: number;
+  debugTerminals?: { id: string; epoch: string }[];
 }
 export class WorkspaceDebugService {
   private adapter?: ChildProcess;
@@ -170,6 +172,12 @@ export class WorkspaceDebugService {
     breakpoints: {},
   };
   private emptyArgument?: string;
+  private outputPending: Promise<void> = Promise.resolve();
+  private outputFailure?: Error;
+  async flushOutput() {
+    await this.outputPending;
+    if (this.outputFailure) throw this.outputFailure;
+  }
   constructor(private options: DebugOptions) {}
   snapshot() {
     return structuredClone(this.state);
@@ -295,11 +303,28 @@ export class WorkspaceDebugService {
         this.connections.add(connection);
         connection.on('output', (body) => {
           if (generation !== this.generation) return;
-          if (body.category !== 'telemetry')
-            this.publish({
-              output: (this.state.output + (body.output ?? '')).slice(
-                -1024 * 1024,
-              ),
+          if (body.category === 'telemetry' || typeof body.output !== 'string')
+            return;
+          const text = body.output;
+          this.outputPending = this.outputPending
+            .then(async () => {
+              if (this.outputFailure) return;
+              await this.options.output?.(text);
+              if (generation !== this.generation) return;
+              const bytes = Buffer.from(this.state.output + text);
+              let start = Math.max(0, bytes.length - 64 * 1024);
+              while (start < bytes.length && (bytes[start] & 0xc0) === 0x80)
+                start++;
+              this.publish({ output: bytes.subarray(start).toString('utf8') });
+            })
+            .catch((error) => {
+              this.outputFailure =
+                error instanceof Error ? error : Error(String(error));
+              if (generation === this.generation)
+                this.publish({
+                  status: 'failed',
+                  reason: this.outputFailure.message,
+                });
             });
         });
         connection.on('breakpoint', (body) => {
@@ -622,5 +647,6 @@ export class WorkspaceDebugService {
   }
   async dispose() {
     await this.stop();
+    await this.flushOutput();
   }
 }

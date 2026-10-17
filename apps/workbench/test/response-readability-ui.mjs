@@ -49,6 +49,39 @@ try {
           exact: true,
         });
         await table.waitFor();
+        const words = await table.evaluate((element) => {
+          const walker = document.createTreeWalker(
+            element,
+            NodeFilter.SHOW_TEXT,
+          );
+          const words = [];
+          let node;
+          while ((node = walker.nextNode())) {
+            for (const match of node.textContent.matchAll(/\bcompleted\b/gi)) {
+              const range = document.createRange();
+              range.setStart(node, match.index);
+              range.setEnd(node, match.index + match[0].length);
+              const rects = [...range.getClientRects()].filter(
+                (rect) => rect.width > 0 && rect.height > 0,
+              );
+              words.push({
+                word: match[0],
+                fragments: rects.map((rect) => ({
+                  top: rect.top,
+                  left: rect.left,
+                  width: rect.width,
+                  height: rect.height,
+                })),
+              });
+            }
+          }
+          return words;
+        });
+        assert.ok(words.length >= 3, 'representative Completed words exist');
+        assert.ok(
+          words.every((word) => word.fragments.length === 1),
+          `English words must stay whole: ${JSON.stringify(words)}`,
+        );
         const resultHeading = table.getByRole('columnheader', {
           name: '结果',
           exact: true,
@@ -174,6 +207,7 @@ try {
           theme,
           width,
           heading,
+          words,
           overflow,
           before,
           after,

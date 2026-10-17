@@ -42,6 +42,40 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
+.file-view .editor-project-diagnostics {
+  padding-bottom: 12px;
+}
+.file-view .editor-project-diagnostics summary {
+  line-height: 1.5;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.file-view .editor-language-status {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 8px 0;
+}
+.file-view .editor-language-status span {
+  margin-top: 0;
+}
+.file-view .editor-diagnostic-history > summary {
+  margin: 8px 0;
+}
+.file-view .editor-diagnostic-batch[open] {
+  padding: 8px 0 12px 8px;
+}
+.file-view .editor-diagnostic-batch > :not(summary) {
+  margin-top: 8px;
+}
+.file-view .editor-diagnostic-batch li + li {
+  margin-top: 8px;
+}
+.file-view .editor-project-diagnostics pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 /* Monaco's popup surfaces use the same Circle controls and typography. */
 .monaco-menu-container .monaco-action-bar,

@@ -1,10 +1,16 @@
 .debug-panel {
   min-width: 0;
   color: var(--fg);
-  padding: 0 17px 20px;
+  padding: 0 16px 16px;
 }
 .debug-panel.embedded {
   padding: 0;
+}
+.debug-panel .button.primary:disabled {
+  opacity: 1;
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--muted);
 }
 .debug-heading .debug-status {
   display: flex;
@@ -14,6 +20,19 @@
 }
 .debug-heading .debug-status small {
   color: var(--muted);
+}
+.debug-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 16px;
+}
+.debug-toolbar .icon-button {
+  width: 30px;
+  height: 30px;
+}
+.debug-run > .debug-controls {
+  margin-top: 12px;
 }
 .debug-controls,
 .debug-evaluate {
@@ -45,6 +64,16 @@
 }
 .debug-inspection section {
   min-width: 0;
+}
+.debug-frames {
+  max-height: 240px;
+  overflow: auto;
+}
+.debug-frames strong,
+.debug-frames small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .debug-inspection .activity-row {
   width: 100%;
@@ -97,4 +126,19 @@
   overflow-wrap: anywhere;
   white-space: normal;
   text-align: left;
+}
+
+.debug-source-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  text-align: start;
+}
+.debug-source-label small,
+.debug-variable-row code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.debug-variable-row {
+  min-width: 0;
 }

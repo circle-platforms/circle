@@ -5,7 +5,8 @@ import { workspaceCall } from '../model/workspace-client';
 import { t } from '../i18n';
 import './GitPanel.css';
 import { DeliveryPanel, WorkspaceServiceError } from './DeliveryPanel';
-import { Button } from './common';
+import { Button, IconButton } from './common';
+import { RotateCcw, FileText, ExternalLink } from 'lucide-react';
 import { DiffBlock } from './DiffBlock';
 import type { DiffView } from '../model/types';
 import type { GitSnapshot } from '../../../desktop/src/workspace/git';
@@ -141,6 +142,24 @@ export function GitPanel({
       if (current(request, session)) setBusy(false);
     }
   }
+  const conflict = (entry: GitSnapshot['entries'][number]) =>
+    ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(
+      entry.index + entry.working,
+    );
+  const hasConflicts = state?.entries.some(conflict);
+  const fileStatus = (entry: GitSnapshot['entries'][number]) => {
+    if (conflict(entry)) return t('conflict');
+    if (entry.index === '?') return t('untracked');
+    const code =
+      scope === 'index' ? entry.index : entry.working.trim() || entry.index;
+    return code === 'A'
+      ? t('added')
+      : code === 'D'
+        ? t('deleted')
+        : code === 'R'
+          ? t('renamed')
+          : t('modified');
+  };
   return (
     <section
       className={`native-git${embedded ? ' embedded' : ''}`}
@@ -152,9 +171,13 @@ export function GitPanel({
       <header className="inspector-heading">
         {!embedded && <h2>{t('git workspace')}</h2>}
         <span>{state?.branch}</span>
-        <Button disabled={busy} onClick={() => void refresh()}>
-          {t('refresh')}
-        </Button>
+        <IconButton
+          label={t('refresh')}
+          disabled={busy}
+          onClick={() => void refresh()}
+        >
+          <RotateCcw size={14} />
+        </IconButton>
       </header>
       {error && <WorkspaceServiceError key={sessionId} error={error} />}
       {draftUnavailable && (
@@ -164,6 +187,21 @@ export function GitPanel({
           )}
         </p>
       )}
+      <label className="field-label">
+        {t('commit message')}
+        <input
+          className="input"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+        />
+      </label>
+      <Button
+        className="primary git-commit"
+        disabled={busy || !!hasConflicts || !message.trim() || !selected.length}
+        onClick={() => run('commit', { message })}
+      >
+        {t('commit selected')}
+      </Button>
       <div
         className="native-git-scopes segmented"
         role="group"
@@ -211,10 +249,7 @@ export function GitPanel({
                 )
               }
             />
-            <code>
-              {e.index}
-              {e.working}
-            </code>
+            <FileText size={14} aria-hidden="true" />
             <button
               className="change-file"
               onClick={() => {
@@ -224,7 +259,16 @@ export function GitPanel({
             >
               <span>{e.path}</span>
             </button>
-            <Button onClick={() => onFile?.(e.path)}>{t('open file')}</Button>
+            <span
+              className={
+                conflict(e) ? 'git-file-state conflict' : 'git-file-state'
+              }
+            >
+              {fileStatus(e)}
+            </span>
+            <IconButton label={t('open file')} onClick={() => onFile?.(e.path)}>
+              <ExternalLink size={14} />
+            </IconButton>
           </li>
         ))}
       </ul>
@@ -241,7 +285,10 @@ export function GitPanel({
         >
           {t('unstage selected')}
         </Button>
-        <Button disabled={busy} onClick={() => run('push')}>
+        <Button
+          disabled={busy || !!hasConflicts || !!state?.merging}
+          onClick={() => run('push')}
+        >
           {t('push branch')}
         </Button>
       </div>
@@ -285,39 +332,32 @@ export function GitPanel({
             )}
           </div>
         ))}
-      <label className="field-label">
-        {t('commit message')}
-        <input
-          className="input"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-        />
-      </label>
-      <Button
-        disabled={busy || !message.trim() || !selected.length}
-        onClick={() => run('commit', { message })}
-      >
-        {t('commit selected staged files')}
-      </Button>
       {state?.merging && (
-        <div>
-          <Button disabled={busy} onClick={() => run('continueMerge')}>
-            {t('continue merge')}
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() => {
-              if (
-                window.confirm(
-                  t('abort this merge and restore its pre-merge state?'),
+        <>
+          {hasConflicts && (
+            <p className="panel-note" role="status">
+              {t('resolve and stage conflicts first')}
+            </p>
+          )}
+          <div className="native-git-actions">
+            <Button disabled={busy} onClick={() => run('continueMerge')}>
+              {t('continue merge')}
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    t('abort this merge and restore its pre-merge state?'),
+                  )
                 )
-              )
-                void run('abortMerge');
-            }}
-          >
-            {t('abort merge')}
-          </Button>
-        </div>
+                  void run('abortMerge');
+              }}
+            >
+              {t('abort merge')}
+            </Button>
+          </div>
+        </>
       )}
       <DeliveryPanel
         embedded

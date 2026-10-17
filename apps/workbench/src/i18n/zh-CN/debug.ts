@@ -1,4 +1,5 @@
 export const debug: Record<string, string> = {
+  'copy complete debug output': '复制完整调试输出',
   attach: '附加',
   'launch options': '启动选项',
   'each argument is passed literally without shell expansion':
@@ -32,4 +33,6 @@ export const debug: Record<string, string> = {
   evaluate: '求值',
   breakpoints: '断点',
   'debug output': '调试输出',
+  'debug adapter process: {pid}': '调试适配器进程：{pid}',
+  'open debug terminal': '打开调试终端',
 };

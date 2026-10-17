@@ -175,7 +175,7 @@ export async function runNativeGitJourney({
     await panel.getByLabel('commit message', { exact: true }).fill(message);
     await panel
       .getByRole('button', {
-        name: 'commit selected staged files',
+        name: 'commit selected',
         exact: true,
       })
       .click();

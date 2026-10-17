@@ -42,7 +42,8 @@ export function agentActivityText(
   if (state === 'waiting') return t('waiting for you');
   if (agent.status === 'waiting' || agent.activity === 'waiting for you')
     return t('waiting for you');
-  if (!agent.activity || agent.activity === 'working') return t('working');
+  if (!agent.activity) return state === 'completed' ? t('done') : t('working');
+  if (agent.activity === 'working') return t('working');
   if (agent.activity === 'done') return t('done');
   if (agent.activity === 'failed') return t('failed');
   if (agent.activity === 'interrupted') return t('interrupted');

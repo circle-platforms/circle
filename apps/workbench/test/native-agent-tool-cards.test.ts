@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { createCollaborationTools } from '../../desktop/src/workspace/collaboration-tools.ts';
 import { agentTools } from '../src/i18n/zh-CN/agent-tools.ts';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -49,7 +50,11 @@ const summary = (name: string, status = 'success') =>
   ]).text;
 
 test('native dispatch reports scheduling, while queries never claim another agent ran', () => {
-  for (const name of ['native_tasks_enqueue', 'native_tasks_analyze']) {
+  for (const name of [
+    'native_tasks_enqueue',
+    'native_tasks_analyze',
+    'native_tasks_adopt_proposal',
+  ]) {
     assert.match(summary(name), /scheduled agents/);
     assert.doesNotMatch(summary(name), /completed|ran a subagent|used native/);
     assert.doesNotMatch(summary(name, 'error'), /scheduled/);
@@ -151,4 +156,71 @@ test('matching trusted IDs cannot link a different parent owner, including dupli
     foreign,
   ]);
   assert.deepEqual(mappedToolAgents(tool, [foreign, own], ''), []);
+});
+
+test('proposal cards never navigate child agents and adoption uses only actual projected owner IDs', () => {
+  const hostTools = createCollaborationTools({
+    sessionId: 'parent',
+    service: () => ({
+      call: async () => {
+        throw Error('schema-only test must not execute tasks');
+      },
+    }),
+  });
+  const adoption = hostTools.find(
+    (tool) => tool.name === 'native_tasks_adopt_proposal',
+  );
+  assert(adoption, 'the card name must be an actual exported host tool');
+  assert.equal(
+    hostTools.some((tool) => tool.name === 'native_tasks_adopt'),
+    false,
+  );
+  assert.equal(agentToolTitle(adoption.name), 'schedule agents');
+  assert.equal(summary(adoption.name), 'scheduled agents');
+  const agents = [child('a', 'running')];
+  assert.equal(
+    agentToolTitle('native_tasks_propose'),
+    'propose follow-up tasks',
+  );
+  assert.equal(
+    agentToolTitle('native_tasks_adopt_proposal'),
+    'schedule agents',
+  );
+  assert.equal(summary('native_tasks_propose'), 'proposed follow-up tasks');
+  const proposal = call('native_tasks_propose', {
+    agentIds: ['a'],
+    output: '{"agentIds":["a"],"tasks":[{"prompt":"only a proposal"}]}',
+  });
+  const original = proposal.output;
+  assert.deepEqual(mappedToolAgents(proposal, agents, 'parent'), []);
+  assert.equal(
+    proposal.output,
+    original,
+    'human naming does not change original tool output',
+  );
+  assert.deepEqual(
+    mappedToolAgents(
+      call('native_tasks_adopt_proposal', { output: '{"agentIds":["a"]}' }),
+      agents,
+      'parent',
+    ),
+    [],
+    'raw output cannot create navigation',
+  );
+  assert.deepEqual(
+    mappedToolAgents(
+      call('native_tasks_adopt_proposal', { agentIds: ['a', 'invented'] }),
+      agents,
+      'parent',
+    ),
+    agents,
+  );
+  assert.deepEqual(
+    mappedToolAgents(
+      call('native_tasks_adopt_proposal', { agentIds: ['a'] }),
+      agents,
+      'other-parent',
+    ),
+    [],
+  );
 });

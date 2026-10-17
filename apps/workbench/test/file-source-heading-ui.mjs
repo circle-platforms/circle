@@ -36,9 +36,16 @@ try {
             server.resolvedUrls.local[0] +
               `test/file-source-heading-ui.html?${new URLSearchParams({ theme, lang, source, readonly: 'true' })}`,
           );
+          await page.waitForFunction(
+            ({ theme, lang }) =>
+              document.documentElement.dataset.theme === theme &&
+              document.documentElement.lang === lang,
+            { theme, lang },
+          );
           const heading = page.locator('.file-view-heading');
           await heading.getByText('README.md', { exact: true }).waitFor();
           const origin = heading.locator('.file-source-origin');
+
           assert.doesNotMatch(
             await heading.innerText(),
             /a0b1c2d3e4f5678901234567|task-worktrees/,
@@ -55,8 +62,8 @@ try {
                 ? /agent source:/
                 : /Agent 来源/
               : lang === 'en'
-                ? /workspace source:/
-                : /工作区来源/,
+                ? /workspace:/
+                : /工作区/,
           );
           await heading
             .getByText(lang === 'en' ? 'read-only source' : '只读来源', {
@@ -81,9 +88,15 @@ try {
               .last()
               .isDisabled(),
           );
+          await page.evaluate(() => document.fonts.ready);
           await origin.focus();
           const tooltip = page.getByRole('tooltip');
           await tooltip.waitFor();
+          const sourceTooltipId = await tooltip.getAttribute('id');
+          assert(
+            sourceTooltipId,
+            'the source tooltip has a stable rendered identity',
+          );
           assert.match(
             await tooltip.textContent(),
             new RegExp(
@@ -107,6 +120,38 @@ try {
               );
             }),
             'source, readonly and close remain within original header',
+          );
+          // The directory tooltip is tested above, but is not part of a header
+          // baseline: close it before capturing to avoid overlaying its label.
+          await heading.click({ position: { x: 5, y: 5 } });
+          await page
+            .locator(`[id="${sourceTooltipId}"]`)
+            .waitFor({ state: 'hidden' });
+          await page.evaluate(() => document.fonts.ready);
+          assert(
+            await heading
+              .locator('.file-view-filename strong')
+              .evaluate((node) => {
+                const rect = node.getBoundingClientRect();
+                const actual = document.elementFromPoint(
+                  rect.left + rect.width / 2,
+                  rect.top + rect.height / 2,
+                );
+                return (
+                  node.textContent === 'README.md' &&
+                  rect.width >= node.scrollWidth &&
+                  (actual === node || node.contains(actual))
+                );
+              }),
+            'filename must be fully sized and unobscured, including Chinese child sources',
+          );
+          assert.equal(
+            await page.evaluate(() => document.documentElement.dataset.theme),
+            theme,
+          );
+          assert.equal(
+            await page.evaluate(() => document.documentElement.lang),
+            lang,
           );
           if (evidence)
             await heading.screenshot({

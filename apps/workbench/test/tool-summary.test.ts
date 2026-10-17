@@ -180,3 +180,30 @@ test('native scheduling summaries retain real successful effects without claimin
     /waiting for approval/,
   );
 });
+
+test('follow-up proposals are informational while only successful adoption schedules agents', () => {
+  assert.equal(
+    toolSummary([row('native_tasks_propose')]).text,
+    'proposed follow-up tasks',
+  );
+  assert.doesNotMatch(
+    toolSummary([row('native_tasks_propose')]).text,
+    /scheduled|created|completed|ran/,
+  );
+  assert.equal(
+    toolSummary([row('native_tasks_adopt_proposal')]).text,
+    'scheduled agents',
+  );
+  for (const name of ['native_tasks_propose', 'native_tasks_adopt_proposal'])
+    for (const status of [
+      'waiting',
+      'running',
+      'error',
+      'rejected',
+      'cancelled',
+    ] as const)
+      assert.doesNotMatch(
+        toolSummary([call(name, status)]).text,
+        /scheduled agents|proposed follow-up tasks/,
+      );
+});

@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Tool, ToolContext } from '../../../../src/types.js';
-import type { TaskRecord } from './collaboration.js';
+import { bindToolResource, type TaskRecord } from './collaboration.js';
 
 /** The controller captures an authorized workspace. Arguments never select it. */
 export interface CollaborationToolService {
@@ -101,7 +101,7 @@ export function createCollaborationTools(
     };
   }
   const base = { subagents: false, variables: 'plain' as const };
-  return [
+  const tools: Tool[] = [
     {
       ...base,
       name: 'native_tasks_enqueue',
@@ -144,6 +144,47 @@ export function createCollaborationTools(
           )
         ).flat();
         return JSON.stringify({ tasks, artifacts });
+      },
+    },
+    {
+      ...base,
+      name: 'native_tasks_adopt_proposal',
+      effect: 'execute',
+      description:
+        'Adopt a structured follow-up proposal from an independently accepted native task. Supply its exact registered artifact ID, hash and attempt, plus a stable operationId. Only the parent coordinator may do this through normal execution approval. This verifies ownership, provenance and the complete dependency graph before atomically enqueuing tasks; it never executes a final-report text as a plan. An optional keys selection must include all of its local dependencies. Unverified, stale or foreign proposals are rejected.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          operationId: id,
+          artifactId: id,
+          expectedSha256: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+          expectedAttempt: { type: 'integer', minimum: 1 },
+          keys: { type: 'array', minItems: 1, maxItems: 100, items: id },
+        },
+        required: [
+          'operationId',
+          'artifactId',
+          'expectedSha256',
+          'expectedAttempt',
+        ],
+      },
+      async run(args, context) {
+        const service = await owner(context);
+        const tasks = (await service.call(
+          'adoptProposal',
+          args,
+        )) as TaskRecord[];
+        return JSON.stringify({
+          tasks,
+          artifacts: (
+            await Promise.all(
+              tasks.map((task) =>
+                service.call('artifacts', { id: task.spec.id }),
+              ),
+            )
+          ).flat(),
+        });
       },
     },
     {
@@ -345,4 +386,5 @@ export function createCollaborationTools(
       },
     },
   ];
+  return tools.map((tool) => bindToolResource(tool, 'control'));
 }

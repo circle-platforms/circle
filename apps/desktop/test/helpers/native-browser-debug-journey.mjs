@@ -17,9 +17,10 @@ export function browserDebugFixtureSource(source) {
   return {
     source:
       observed +
-      'window.__journeyBrowserDebug = function nativeBrowserDebugFixture(){\n  const count = 3;\n  const next = count + 1;\n  return next;\n};\n',
+      'window.__journeyBrowserDebug = function nativeBrowserDebugFixture(){\n  let count = 3;\n  debugger;\n  const next = count + 1;\n  return next;\n};\n',
     breakpointLine: start + 2,
-    afterStepLine: start + 3,
+    computationLine: start + 3,
+    afterStepLine: start + 4,
   };
 }
 export async function runNativeBrowserDebugJourney({
@@ -74,6 +75,29 @@ export async function runNativeBrowserDebugJourney({
     await frame.getByRole('button', { name: 'local', exact: true }).click();
     await panel.getByText('count: 3', { exact: true }).waitFor();
     observed.checks.push('GUI breakpoint and real local variable');
+    await frame
+      .getByLabel('debug expression', { exact: true })
+      .fill('count = 7');
+    await frame.getByRole('button', { name: 'evaluate', exact: true }).click();
+    await frame
+      .locator('.debug-evaluate output')
+      .getByText('7', { exact: true })
+      .waitFor();
+    await panel.getByText('count: 7', { exact: true }).waitFor();
+    observed.checks.push(
+      'GUI paused evaluation writes actual local count to7 and refreshes variables',
+    );
+    await panel.getByRole('button', { name: 'step over', exact: true }).click();
+    await until(
+      async () =>
+        (await read()).state.debugger.stackFrames[0]?.line ===
+        fixture.computationLine,
+      'first real step reaches the computation before it completes',
+    );
+    await panel.getByText('count: 7', { exact: true }).waitFor();
+    observed.checks.push(
+      'first real step preserves changed binding and automatically refreshes selected scope',
+    );
     await panel.getByRole('button', { name: 'step over', exact: true }).click();
     await until(
       async () =>
@@ -82,7 +106,7 @@ export async function runNativeBrowserDebugJourney({
       'actual web step reaches next line',
     );
     // Selected scope must refresh automatically; a second scope click would hide stale locals.
-    await panel.getByText('next: 4', { exact: true }).waitFor();
+    await panel.getByText('next: 8', { exact: true }).waitFor();
     observed.checks.push(
       'step refreshes selected local scope without another click',
     );
@@ -131,9 +155,9 @@ export async function runNativeBrowserDebugJourney({
     await until(
       async () =>
         (await read()).state.console.some(
-          (row) => row.text === 'JOURNEY_BROWSER_DEBUG_RESULT 4',
+          (row) => row.text === 'JOURNEY_BROWSER_DEBUG_RESULT 8',
         ),
-      'resumed real page function returns4',
+      'resumed real page function returns8 after actual paused variable write',
     );
     assert.equal(
       typeof getApp,

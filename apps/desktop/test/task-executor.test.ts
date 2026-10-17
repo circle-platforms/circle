@@ -742,7 +742,11 @@ test('task runtime cannot inherit parent-only native task tools through a mistak
   assert.ok(
     model.requests.every(
       (request) =>
-        !request.tools.some((tool) => tool.name.startsWith('native_tasks_')),
+        !request.tools.some(
+          (tool) =>
+            tool.name.startsWith('native_tasks_') &&
+            tool.name !== 'native_tasks_propose',
+        ),
     ),
   );
 });

@@ -1,6 +1,13 @@
 /** Human-facing diagnostics use the browser's existing CDP connection. */
 export type BrowserDiagnosticRequest =
   | { action: 'read'; domains?: BrowserDiagnosticDomain[] }
+  | {
+      action: 'log';
+      tab: string;
+      domain: 'console' | 'network';
+      cursor?: { offset: number; seq: number };
+      limit?: number;
+    }
   | { action: 'clearConsole' | 'clearNetwork' | 'devtools' }
   | { action: 'response'; requestId: string }
   | { action: 'source'; url: string }
@@ -30,11 +37,15 @@ export type BrowserDiagnosticRequest =
         | 'stepOut'
         | 'breakpoints'
         | 'variables'
-        | 'removeBreakpoint';
+        | 'removeBreakpoint'
+        | 'evaluate';
       url?: string;
       line?: number;
       reference?: string;
       expectedPauseEpoch?: number;
+      expectedConnectionEpoch?: string;
+      frameId?: string;
+      expression?: string;
     };
 export type BrowserDiagnosticDomain =
   'console' | 'network' | 'storage' | 'debug' | 'lifecycle';
@@ -68,6 +79,7 @@ export interface BrowserNetworkEntry {
 export interface BrowserDiagnosticState {
   owner: 'circle' | 'devtools';
   reconnectError?: string;
+  logError?: string;
   console: BrowserConsoleEntry[];
   network: BrowserNetworkEntry[];
   debugger: {
@@ -90,12 +102,24 @@ export interface BrowserDiagnosticState {
   };
 }
 export interface BrowserDiagnosticResult {
+  log?: {
+    domain: 'console' | 'network';
+    entries: {
+      seq: number;
+      at: string;
+      epoch: string;
+      data: Record<string, unknown>;
+    }[];
+    cursor: { offset: number; seq: number };
+    hasMore: boolean;
+  };
   stream?: { epoch: string; sequence: number };
   domains?: BrowserDiagnosticDomain[];
   state: BrowserDiagnosticState;
   source?: { url: string; content: string };
   response?: { body: string; base64Encoded: boolean };
   storage?: [string, string][];
+  evaluation?: { frameId: string; value: string; type?: string };
   variables?: {
     name: string;
     value: string;
@@ -112,6 +136,7 @@ export function validateBrowserDiagnosticRequest(
   const r = value as Record<string, unknown>;
   const allowed: Record<string, string[]> = {
     read: ['domains'],
+    log: ['tab', 'domain', 'cursor', 'limit'],
     clearConsole: [],
     clearNetwork: [],
     devtools: [],
@@ -120,7 +145,16 @@ export function validateBrowserDiagnosticRequest(
     watch: ['tab', 'subscription', 'domains', 'enabled'],
     storage: ['kind', 'origin', 'operation', 'key', 'value'],
     viewport: ['width', 'height', 'mobile'],
-    debug: ['command', 'url', 'line', 'reference', 'expectedPauseEpoch'],
+    debug: [
+      'command',
+      'url',
+      'line',
+      'reference',
+      'expectedPauseEpoch',
+      'expectedConnectionEpoch',
+      'frameId',
+      'expression',
+    ],
   };
   if (
     typeof r.action !== 'string' ||
@@ -130,6 +164,35 @@ export function validateBrowserDiagnosticRequest(
     )
   )
     throw Error('invalid browser diagnostic action');
+  if (r.action === 'log') {
+    if (
+      typeof r.tab !== 'string' ||
+      !/^[a-zA-Z0-9_-]{1,100}$/.test(r.tab) ||
+      !['console', 'network'].includes(String(r.domain))
+    )
+      throw Error('invalid browser log target');
+    if (
+      r.limit !== undefined &&
+      (!Number.isSafeInteger(r.limit) ||
+        Number(r.limit) < 1 ||
+        Number(r.limit) > 256)
+    )
+      throw Error('invalid browser log page size');
+    if (r.cursor !== undefined) {
+      const c = r.cursor as Record<string, unknown>;
+      if (
+        !c ||
+        typeof c !== 'object' ||
+        Array.isArray(c) ||
+        Object.keys(c).some((key) => !['offset', 'seq'].includes(key)) ||
+        !Number.isSafeInteger(c.offset) ||
+        !Number.isSafeInteger(c.seq) ||
+        Number(c.offset) < 0 ||
+        Number(c.seq) < 0
+      )
+        throw Error('invalid browser log cursor');
+    }
+  }
   for (const key of [
     'requestId',
     'kind',
@@ -159,6 +222,7 @@ export function validateBrowserDiagnosticRequest(
       'breakpoints',
       'variables',
       'removeBreakpoint',
+      'evaluate',
     ].includes(String(r.command))
   )
     throw Error('invalid debugger command');
@@ -175,6 +239,19 @@ export function validateBrowserDiagnosticRequest(
       Number(r.expectedPauseEpoch) < 0)
   )
     throw Error('invalid browser pause epoch');
+  if (
+    r.action === 'debug' &&
+    r.command === 'evaluate' &&
+    (typeof r.expectedConnectionEpoch !== 'string' ||
+      !r.expectedConnectionEpoch ||
+      !Number.isSafeInteger(r.expectedPauseEpoch) ||
+      typeof r.frameId !== 'string' ||
+      !r.frameId ||
+      typeof r.expression !== 'string' ||
+      !r.expression.trim() ||
+      r.expression.length > 10000)
+  )
+    throw Error('paused debugger target, frame and expression are required');
   if (r.mobile !== undefined && typeof r.mobile !== 'boolean')
     throw Error('invalid viewport mode');
   if (

@@ -1,6 +1,13 @@
+import {
+  DebugSourceLabel,
+  DebugBreakpointRow,
+  DebugVariableRow,
+} from './DebugRows';
 import { useEffect, useState, useRef } from 'react';
 import { t } from '../i18n';
+import { copyText } from '../host';
 import { Button, Status } from './common';
+import { DebugToolbar } from './DebugToolbar';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import './debug-panel.css';
 
@@ -8,6 +15,8 @@ type Snapshot = {
   status: string;
   pauseId?: number;
   reason?: string;
+  adapterPid?: number;
+  debugTerminals?: { id: string; epoch: string }[];
   output: string;
   breakpoints: Record<string, any[]>;
 };
@@ -15,9 +24,13 @@ export function DebugPanel({
   sessionId,
   onFile,
   embedded = false,
+  sourceRequest,
+  onOpenTerminal,
 }: {
   sessionId: string;
+  sourceRequest?: { id: string; path: string; line?: number };
   embedded?: boolean;
+  onOpenTerminal?: (target: { id: string; epoch: string }) => void;
   onFile?: (path: string, line?: number) => void;
 }) {
   const context = useRef({
@@ -77,6 +90,36 @@ export function DebugPanel({
   const [result, setResult] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const copyOutput = async () => {
+    const current = ticket('session');
+    setCopying(true);
+    try {
+      let after = { offset: 0, seq: 0 };
+      const chunks: string[] = [];
+      let throughSeq: number | undefined;
+      for (;;) {
+        const page = await workspaceCall<{
+          events: { data: { text: string } }[];
+          cursor: typeof after;
+          hasMore: boolean;
+          throughSeq: number;
+        }>(sessionId, 'debug', 'output', { after, throughSeq });
+        if (!current()) return;
+        throughSeq = page.throughSeq;
+        for (const event of page.events) chunks.push(event.data.text);
+        if (!page.hasMore) break;
+        if (page.cursor.offset <= after.offset)
+          throw Error('debug output cursor did not advance');
+        after = page.cursor;
+      }
+      if (current()) await copyText(chunks.join(''));
+    } catch (failure) {
+      if (current()) setError(String(failure));
+    } finally {
+      if (current()) setCopying(false);
+    }
+  };
   const call = <T,>(method: string, params: Record<string, unknown> = {}) =>
     workspaceCall<T>(sessionId, 'debug', method, params);
   const refresh = () => {
@@ -110,6 +153,7 @@ export function DebugPanel({
     setResult('');
     setExpression('');
     setBusy(false);
+    setCopying(false);
     void refresh();
     return subscribeWorkspace((event) => {
       if (event.sessionId === sessionId && event.service === 'debug')
@@ -139,6 +183,44 @@ export function DebugPanel({
     state.reason,
     state.pauseId,
   ]);
+  const preparedSource = useRef('');
+  useEffect(() => {
+    if (
+      !sourceRequest ||
+      preparedSource.current === sessionId + ':' + sourceRequest.id
+    )
+      return;
+    preparedSource.current = sessionId + ':' + sourceRequest.id;
+    setProgram(sourceRequest.path);
+    if (
+      !sourceRequest.line ||
+      !Number.isSafeInteger(sourceRequest.line) ||
+      sourceRequest.line < 1
+    )
+      return;
+    setLine(String(sourceRequest.line));
+    const current = ticket('session');
+    const requestKey = preparedSource.current;
+    void call<Snapshot>('snapshot')
+      .then(async (snapshot) => {
+        if (!current() || preparedSource.current !== requestKey) return;
+        const existing = snapshot.breakpoints[sourceRequest.path] ?? [];
+        await call<Snapshot>('setBreakpoints', {
+          path: sourceRequest.path,
+          lines: [
+            ...new Set([
+              ...existing.map((b) => b.requestedLine ?? b.line),
+              sourceRequest.line!,
+            ]),
+          ],
+        });
+        if (current() && preparedSource.current === requestKey) void refresh();
+      })
+      .catch((error) => {
+        if (current() && preparedSource.current === requestKey)
+          setError(String(error));
+      });
+  }, [sessionId, sourceRequest?.id, sourceRequest?.path, sourceRequest?.line]);
   async function act(method: string, params: Record<string, unknown> = {}) {
     const current = ticket('session');
     setBusy(true);
@@ -219,9 +301,22 @@ export function DebugPanel({
                 : (statuses[state.status] ?? state.status)
             }
           />
-          {state.reason && <small>{state.reason}</small>}
+          {state.status === 'paused' &&
+            state.reason &&
+            state.reason !== 'pause' && <small>{state.reason}</small>}
         </span>
       </div>
+      <DebugToolbar
+        busy={busy}
+        enabled={(action) =>
+          action === 'pause'
+            ? state.status === 'running'
+            : action === 'stop'
+              ? !['idle', 'stopped'].includes(state.status)
+              : state.status === 'paused'
+        }
+        onAction={(action) => void act(action)}
+      />
       <div className="panel-section first debug-launch">
         <div className="debug-controls">
           <input
@@ -231,6 +326,7 @@ export function DebugPanel({
             onChange={(e) => setProgram(e.target.value)}
           />
           <Button
+            className="primary"
             disabled={
               busy ||
               !program ||
@@ -243,9 +339,6 @@ export function DebugPanel({
         </div>
         <details className="debug-launch-options">
           <summary>{t('launch options')}</summary>
-          <p>
-            {t('each argument is passed literally without shell expansion')}
-          </p>
           {args.map((argument, index) => (
             <div className="debug-argument" key={index}>
               <input
@@ -302,7 +395,8 @@ export function DebugPanel({
           </div>
         </details>
       </div>
-      <div className="panel-section debug-run">
+      <details className="panel-section debug-run">
+        <summary>{t('breakpoints')}</summary>
         <div className="debug-controls">
           <input
             aria-label={t('breakpoint line')}
@@ -322,62 +416,46 @@ export function DebugPanel({
           >
             {t('set breakpoint')}
           </Button>
-          <Button
-            disabled={busy || state.status !== 'paused'}
-            onClick={() => void act('continue')}
-          >
-            {t('continue')}
-          </Button>
-          <Button
-            disabled={busy || state.status !== 'running'}
-            onClick={() => void act('pause')}
-          >
-            {t('pause')}
-          </Button>
-          <Button
-            disabled={busy || state.status !== 'paused'}
-            onClick={() => void act('next')}
-          >
-            {t('step over')}
-          </Button>
-          <Button
-            disabled={busy || state.status !== 'paused'}
-            onClick={() => void act('stepIn')}
-          >
-            {t('step into')}
-          </Button>
-          <Button
-            disabled={busy || state.status !== 'paused'}
-            onClick={() => void act('stepOut')}
-          >
-            {t('step out')}
-          </Button>
-          <Button
-            disabled={['idle', 'stopped'].includes(state.status)}
-            onClick={() => void act('stop')}
-          >
-            {t('stop')}
-          </Button>
         </div>
-      </div>
+        {Object.entries(state.breakpoints).flatMap(([file, rows]) =>
+          rows.map((row, i) => (
+            <DebugBreakpointRow
+              key={`${file}:${i}`}
+              path={file}
+              line={row.line}
+              verified={row.verified}
+              onOpen={() => onFile?.(file, row.line)}
+              onRemove={() =>
+                void act('setBreakpoints', {
+                  path: file,
+                  lines: rows
+                    .filter((_, index) => index !== i)
+                    .map((b) => b.requestedLine ?? b.line),
+                })
+              }
+            />
+          )),
+        )}
+      </details>
       {error && <p role="alert">{error}</p>}
       <div className="debug-inspection">
         <section className="panel-section">
           <h3>{t('call stack')}</h3>
-          {frames.map((f) => (
-            <button
-              className="activity-row"
-              key={f.id}
-              onClick={() => void inspect(f)}
-            >
-              <span>
-                <strong>{f.name}</strong>
-                <small>
-                  {f.source?.name ?? f.source?.path}:{f.line}
-                </small>
-              </span>
-            </button>
-          ))}
+          <div className="debug-frames">
+            {frames.map((f) => (
+              <button
+                className="activity-row"
+                key={f.id}
+                onClick={() => void inspect(f)}
+              >
+                <DebugSourceLabel
+                  name={f.name}
+                  path={f.source?.name ?? f.source?.path ?? ''}
+                  line={f.line}
+                />
+              </button>
+            ))}
+          </div>
         </section>
         <section className="panel-section">
           <h3>{t('variables')}</h3>
@@ -390,15 +468,16 @@ export function DebugPanel({
             </Button>
           ))}
           {variables.map((v, i) => (
-            <div key={i}>
-              <Button
-                disabled={!v.variablesReference}
-                onClick={() => void loadVariables(v.variablesReference)}
-              >
-                {v.name}
-              </Button>
-              <code>{v.value}</code>
-            </div>
+            <DebugVariableRow
+              key={i}
+              name={v.name}
+              value={v.value}
+              onExpand={
+                v.variablesReference
+                  ? () => void loadVariables(v.variablesReference)
+                  : undefined
+              }
+            />
           ))}
         </section>
       </div>
@@ -417,37 +496,25 @@ export function DebugPanel({
         <Button disabled={state.status !== 'paused'}>{t('evaluate')}</Button>
         <output>{result}</output>
       </form>
-      <details className="panel-section">
-        <summary>{t('breakpoints')}</summary>
-        {Object.entries(state.breakpoints).flatMap(([file, rows]) =>
-          rows.map((row, i) => (
-            <div className="debug-breakpoint" key={`${file}:${i}`}>
-              <Button onClick={() => onFile?.(file, row.line)}>
-                {file}:{row.line}
-              </Button>
-              <span>
-                {row.verified
-                  ? t('verified breakpoint')
-                  : t('pending breakpoint')}
-              </span>
-              <Button
-                onClick={() =>
-                  void act('setBreakpoints', {
-                    path: file,
-                    lines: rows
-                      .filter((_, index) => index !== i)
-                      .map((b) => b.requestedLine ?? b.line),
-                  })
-                }
-              >
-                {t('remove breakpoint')}
-              </Button>
-            </div>
-          )),
-        )}
-      </details>
       <section className="panel-section">
         <h3>{t('debug output')}</h3>
+        <Button disabled={copying} onClick={() => void copyOutput()}>
+          {t('copy complete debug output')}
+        </Button>
+        {state.adapterPid && (
+          <p className="panel-note">
+            {t('debug adapter process: {pid}', { pid: state.adapterPid })}
+          </p>
+        )}
+        {state.debugTerminals?.map((terminal) => (
+          <Button
+            key={terminal.id}
+            disabled={!onOpenTerminal}
+            onClick={() => onOpenTerminal?.(terminal)}
+          >
+            {t('open debug terminal')} <code>{terminal.id.slice(0, 8)}</code>
+          </Button>
+        ))}
         <pre className="debug-output" aria-label={t('debug output')}>
           {state.output}
         </pre>

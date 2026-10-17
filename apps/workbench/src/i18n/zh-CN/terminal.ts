@@ -1,4 +1,8 @@
 export const terminal: Record<string, string> = {
+  'terminal is no longer available': '此终端已不可用',
+  'command pid {pid}': '命令进程 {pid}',
+  'pty pid {pid}': '终端进程 {pid}',
+  'process pid {pid}': '进程 {pid}',
   'text output': '文本输出',
   'copy text output': '复制完整文本输出',
   'terminal screen reader': '终端屏幕阅读支持',

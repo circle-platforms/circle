@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { WorkspaceEventStream } from './workspace/event-stream';
+import { join } from 'node:path';
 import type {
   BrowserDiagnosticState,
   BrowserDiagnosticRequest,
@@ -29,12 +31,81 @@ export class BrowserDiagnostics {
   private dirty = new Set<BrowserDiagnosticDomain>();
   private dirtyAt = 0;
   private timer?: ReturnType<typeof setTimeout>;
+  private logStreams = new Map<
+    'console' | 'network',
+    Promise<WorkspaceEventStream>
+  >();
+  private logPending: Promise<unknown> = Promise.resolve();
+  private closing?: Promise<void>;
   constructor(
     private send: Send,
     private emit: (
       event: Omit<BrowserDiagnosticEvent, 'sessionId' | 'tab'>,
     ) => void = () => {},
+    private logTarget?: { directory: string; sessionId: string; tab: string },
   ) {}
+  private logStream(domain: 'console' | 'network') {
+    if (!this.logTarget) throw Error('browser log is unavailable');
+    let stream = this.logStreams.get(domain);
+    if (!stream) {
+      stream = WorkspaceEventStream.open(
+        join(
+          this.logTarget.directory,
+          this.logTarget.sessionId,
+          this.logTarget.tab + '-' + domain + '.jsonl',
+        ),
+      );
+      this.logStreams.set(domain, stream);
+    }
+    return stream;
+  }
+  private journal(
+    domain: 'console' | 'network',
+    data: Record<string, unknown>,
+  ) {
+    if (!this.logTarget || this.closing || this.state.logError) return;
+    const target = this.logTarget;
+    const epoch = this.epoch;
+    // Take an immutable normalized copy, not Chromium's mutable request object.
+    const normalized = JSON.parse(JSON.stringify(data));
+    const write = (async () => {
+      const stream = await this.logStream(domain);
+      await stream.append({
+        workspaceId: 'browser',
+        sessionId: target.sessionId,
+        service: 'events',
+        resourceId: target.tab,
+        sourceEpoch: epoch,
+        data: normalized,
+      });
+    })();
+    this.logPending = Promise.all([this.logPending, write]).catch(() => {
+      this.state.logError = 'browser log could not be saved';
+      this.invalidate('lifecycle');
+    });
+  }
+  async log(
+    domain: 'console' | 'network',
+    cursor?: { offset: number; seq: number },
+    limit = 256,
+  ) {
+    await this.logPending;
+    const page = await (await this.logStream(domain)).replay(cursor, limit);
+    return {
+      state: this.state,
+      log: {
+        domain,
+        entries: page.events.map((event) => ({
+          seq: event.seq,
+          at: event.at,
+          epoch: event.sourceEpoch ?? event.epoch,
+          data: event.data,
+        })),
+        cursor: page.cursor,
+        hasMore: page.hasMore,
+      },
+    };
+  }
   cursor() {
     return { epoch: this.epoch, sequence: this.eventSequence };
   }
@@ -61,8 +132,16 @@ export class BrowserDiagnostics {
     this.timer = undefined;
     this.dirty.clear();
   }
-  dispose() {
+  dispose(): Promise<void> {
     this.clearWatches();
+    return (this.closing ??= (async () => {
+      await this.logPending;
+      await Promise.all(
+        [...this.logStreams.values()].map(async (stream) =>
+          (await stream).close(),
+        ),
+      );
+    })());
   }
   invalidateConnection() {
     // DevTools can resume, navigate and finish requests while this CDP client
@@ -196,6 +275,7 @@ export class BrowserDiagnostics {
             }),
           ) ?? [],
       });
+      this.journal('console', { ...this.state.console.at(-1)! });
       this.state.console = this.state.console.slice(-LIMIT);
     }
     if (method === 'Network.requestWillBeSent') {
@@ -231,6 +311,36 @@ export class BrowserDiagnostics {
         duration: Math.max(0, (p.timestamp - request.started) * 1000),
         ...(p.errorText ? { error: p.errorText } : {}),
       });
+    if (
+      [
+        'Network.requestWillBeSent',
+        'Network.responseReceived',
+        'Network.loadingFinished',
+        'Network.loadingFailed',
+      ].includes(method)
+    ) {
+      this.journal('network', {
+        phase: method.slice('Network.'.length),
+        id: p.requestId,
+        timestamp: p.timestamp,
+        ...(method === 'Network.requestWillBeSent'
+          ? {
+              url: p.request.url,
+              method: p.request.method,
+              ...(p.redirectResponse
+                ? { redirectStatus: p.redirectResponse.status }
+                : {}),
+            }
+          : {}),
+        ...(method === 'Network.responseReceived'
+          ? { status: p.response.status, mimeType: p.response.mimeType }
+          : {}),
+        ...(request?.duration !== undefined
+          ? { duration: request.duration }
+          : {}),
+        ...(p.errorText ? { error: p.errorText } : {}),
+      });
+    }
     if (method === 'Debugger.paused')
       this.state.debugger = {
         ...this.state.debugger,
@@ -397,9 +507,64 @@ export class BrowserDiagnostics {
         });
         this.state.debugger.breakpoints =
           this.state.debugger.breakpoints.filter((b) => b.id !== r.reference);
+      } else if (r.command === 'evaluate') {
+        const pauseEpoch = this.state.debugger.pauseEpoch;
+        const connectionEpoch = this.epoch;
+        const valid = () =>
+          this.state.owner === 'circle' &&
+          this.state.debugger.paused &&
+          this.epoch === connectionEpoch &&
+          r.expectedConnectionEpoch === connectionEpoch &&
+          this.state.debugger.pauseEpoch === pauseEpoch &&
+          r.expectedPauseEpoch === pauseEpoch &&
+          this.state.debugger.stackFrames.some(
+            (frame) => frame.id === r.frameId,
+          );
+        if (!valid()) throw Error('stale browser target, frame or pause');
+        if (
+          typeof r.expression !== 'string' ||
+          !r.expression.trim() ||
+          r.expression.length > 10000
+        )
+          throw Error('a debug expression is required');
+        const evaluated = await this.send('Debugger.evaluateOnCallFrame', {
+          callFrameId: r.frameId,
+          expression: r.expression,
+          returnByValue: true,
+          generatePreview: true,
+          silent: false,
+          timeout: 1000,
+        });
+        if (!valid())
+          throw Error('browser target or pause changed while evaluating');
+        if (evaluated.exceptionDetails)
+          throw Error(
+            evaluated.exceptionDetails.exception?.description ??
+              evaluated.exceptionDetails.text ??
+              'debug expression failed',
+          );
+        result.evaluation = {
+          frameId: r.frameId!,
+          value:
+            evaluated.result && Object.hasOwn(evaluated.result, 'value')
+              ? typeof evaluated.result.value === 'object'
+                ? JSON.stringify(evaluated.result.value)
+                : String(evaluated.result.value)
+              : String(
+                  evaluated.result?.unserializableValue ??
+                    evaluated.result?.description ??
+                    'undefined',
+                ),
+          type: evaluated.result?.type,
+        };
       } else if (r.command === 'variables') {
         const pauseEpoch = this.state.debugger.pauseEpoch;
         const connectionEpoch = this.epoch;
+        if (
+          r.expectedConnectionEpoch !== undefined &&
+          r.expectedConnectionEpoch !== connectionEpoch
+        )
+          throw Error('stale browser target');
         if (
           r.expectedPauseEpoch !== undefined &&
           r.expectedPauseEpoch !== pauseEpoch
@@ -423,6 +588,86 @@ export class BrowserDiagnostics {
           this.state.debugger.pauseEpoch !== pauseEpoch
         )
           throw Error('browser pause changed while reading variables');
+        // Chromium's synthetic local-scope RemoteObject retains its first-read
+        // values after evaluateOnCallFrame writes a binding. Read observed local
+        // binding names in their actual paused frame, without evaluating getters
+        // or confusing an outer shadowed closure with the innermost local scope.
+        const frame = this.state.debugger.stackFrames.find((frame) =>
+          frame.scopes.some(
+            (scope) =>
+              scope.name === 'local' &&
+              scope.variablesReference === r.reference,
+          ),
+        );
+        const current = () =>
+          this.state.owner === 'circle' &&
+          this.epoch === connectionEpoch &&
+          this.state.debugger.paused &&
+          this.state.debugger.pauseEpoch === pauseEpoch &&
+          this.state.debugger.stackFrames.some(
+            (candidate) =>
+              candidate.id === frame?.id &&
+              candidate.scopes.some(
+                (scope) => scope.variablesReference === r.reference,
+              ),
+          );
+        if (frame) {
+          const shadowed = new Set<string>();
+          let lexical = true;
+          const localIndex = frame.scopes.findIndex(
+            (scope) => scope.variablesReference === r.reference,
+          );
+          for (const scope of frame.scopes.slice(0, localIndex)) {
+            if (!['block', 'catch'].includes(scope.name)) {
+              lexical = false;
+              break;
+            }
+            if (!current())
+              throw Error('browser pause changed while reading variables');
+            const inner = await this.send('Runtime.getProperties', {
+              objectId: scope.variablesReference,
+              ownProperties: true,
+            });
+            if (!current())
+              throw Error('browser pause changed while reading variables');
+            for (const property of inner.result ?? [])
+              shadowed.add(property.name);
+          }
+          const properties = lexical ? (v.result as any[]) : [];
+          for (let start = 0; start < properties.length; start += 8) {
+            await Promise.all(
+              properties.slice(start, start + 8).map(async (property) => {
+                if (
+                  shadowed.has(property.name) ||
+                  !property.value ||
+                  !/^[$_\p{ID_Start}][$_\u200C\u200D\p{ID_Continue}]*$/u.test(
+                    property.name,
+                  )
+                )
+                  return;
+                if (!current())
+                  throw Error('browser pause changed while reading variables');
+                const fresh = await this.send('Debugger.evaluateOnCallFrame', {
+                  callFrameId: frame.id,
+                  expression: property.name,
+                  throwOnSideEffect: true,
+                  returnByValue: false,
+                  silent: true,
+                  generatePreview: true,
+                  timeout: 1000,
+                });
+                if (!current())
+                  throw Error('browser pause changed while reading variables');
+                if (
+                  !fresh.exceptionDetails &&
+                  fresh.result &&
+                  typeof fresh.result.type === 'string'
+                )
+                  property.value = fresh.result;
+              }),
+            );
+          }
+        }
         result.variables = v.result.map((p: any) => ({
           name: p.name,
           value: String(p.value?.value ?? p.value?.description ?? ''),

@@ -12,15 +12,28 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { AgentRuntime } from '../../../src/runtime.js';
+import { wrapModelCompletion } from '../../../src/model_wrapper.js';
 import { defaultSettings, trustFolder } from '../../../src/settings.js';
 import { ScriptedModel } from '../../../src/testing.js';
-import type { Message } from '../../../src/types.js';
-import { TaskService } from '../src/workspace/task-service.js';
-import type {
-  CollaborationEvent,
-  TaskRecord,
+import { emptyUsage, type Message } from '../../../src/types.js';
+import {
+  TaskService,
+  type TaskServiceOptions,
+} from '../src/workspace/task-service.js';
+import { createCollaborationTools } from '../src/workspace/collaboration-tools.js';
+import {
+  proposedTasks,
+  TaskStore,
+  type TaskArtifact,
+  type TaskResource,
+} from '../src/workspace/task-store.js';
+import {
+  CollaborationResources,
+  bindToolResource,
+  type CollaborationEvent,
+  type TaskRecord,
 } from '../src/workspace/collaboration.js';
 import { cleanup, scratch } from '../../../tests/helpers.js';
 const exec = promisify(execFile);
@@ -73,6 +86,642 @@ const message = (
   ...(tool_calls ? { tool_calls } : {}),
 });
 
+test('a real readonly child records a verified proposal and only its parent atomically adopts it through the original tool approval', async (t) => {
+  const workspace = scratch(t),
+    dataDir = scratch(t);
+  const baseline = await repository(workspace);
+  const resources = new CollaborationResources({ agents: 1 });
+  const wrapModel = (model: import('../../../src/types.js').ChatModel) =>
+    wrapModelCompletion(model, (request, invoke) =>
+      resources.withResource('agent', () => invoke(request), request.signal),
+    );
+  const recommendations = [
+    {
+      key: 'first',
+      prompt: 'Write first.txt',
+      access: 'write',
+      acceptanceCriteria: ['first file'],
+    },
+    {
+      key: 'second',
+      prompt: 'Write second.txt',
+      access: 'write',
+      acceptanceCriteria: ['second file'],
+      dependencies: ['first'],
+    },
+  ];
+  let service!: TaskService, artifact!: TaskArtifact;
+  let approvals = 0,
+    verifyEntered = false,
+    releaseVerify!: () => void;
+  const verifyGate = new Promise<void>((resolve) => {
+    releaseVerify = resolve;
+  });
+  const models = new Map<string, ScriptedModel>();
+  const child = new ScriptedModel([
+    {
+      message: message('', [
+        {
+          id: 'proposal',
+          name: 'native_tasks_propose',
+          args: { operationId: 'follow-up', tasks: recommendations },
+        },
+      ]),
+    },
+    {
+      message: message('', [
+        {
+          id: 'duplicate',
+          name: 'native_tasks_propose',
+          args: { operationId: 'follow-up', tasks: recommendations },
+        },
+      ]),
+    },
+    {
+      message: message('', [
+        {
+          id: 'collision-proposal',
+          name: 'native_tasks_propose',
+          args: { operationId: 'collision', tasks: recommendations },
+        },
+      ]),
+    },
+    {
+      message: message('', [
+        {
+          id: 'recursive-adopt',
+          name: 'native_tasks_adopt_proposal',
+          args: {},
+        },
+        { id: 'recursive-enqueue', name: 'native_tasks_enqueue', args: {} },
+      ]),
+    },
+    {
+      message: message(
+        'Recommendations recorded; no tasks started by this child',
+      ),
+    },
+  ]);
+  const parentModel = new ScriptedModel([
+    async () => ({
+      usage: emptyUsage(),
+      message: message('', [
+        {
+          id: 'adopt',
+          name: 'native_tasks_adopt_proposal',
+          args: {
+            operationId: 'adopt-follow-up',
+            artifactId: artifact.id,
+            expectedSha256: artifact.sha256,
+            expectedAttempt: 1,
+          },
+        },
+      ]),
+    }),
+    async (request) => {
+      const result = JSON.parse(
+        request.messages.find((item) => item.tool_call_id === 'adopt')!.content,
+      ) as { tasks: TaskRecord[] };
+      return {
+        usage: emptyUsage(),
+        message: message('', [
+          {
+            id: 'wait-for-children',
+            name: 'native_tasks_wait',
+            args: {
+              ids: result.tasks.map((task) => task.spec.id),
+              timeoutMs: 5000,
+            },
+          },
+        ]),
+      };
+    },
+    { message: message('The verified follow-up tasks completed') },
+  ]);
+  const parentHome = join(dataDir, 'parent');
+  await mkdir(parentHome);
+  const parent: AgentRuntime = new AgentRuntime({
+    workspace,
+    home: parentHome,
+    userHome: parentHome,
+    model: parentModel,
+    wrapModel,
+    executeTool: resources.executeTool,
+    classifyTool: bindToolResource,
+    settings: trustFolder(defaultSettings(), workspace),
+    bundledExtensions: false,
+    screenshot: false,
+    headless: true,
+    approve: async () => {
+      approvals++;
+      return 'approve';
+    },
+    extraTools: createCollaborationTools({
+      sessionId: () => parent.session.id,
+      service: () => service,
+    }),
+  });
+  cleanup(t, () => parent.close());
+  const options: TaskServiceOptions = {
+    workspace,
+    dataDir,
+    resources,
+    settingsPath: join(dataDir, 'task-settings.json'),
+    emit: () => {},
+    createRuntime: async (record, ctx) => {
+      const home = join(
+        dataDir,
+        'homes',
+        `${record.spec.id}-${record.attempt}`,
+      );
+      await mkdir(home, { recursive: true });
+      const name = record.spec.prompt.includes('first.txt')
+        ? 'first'
+        : 'second';
+      const model =
+        record.spec.id === 'proposer'
+          ? child
+          : record.spec.prompt === 'Reserve proposal ID'
+            ? new ScriptedModel([
+                { message: message('Reserved identity inspected') },
+              ])
+            : new ScriptedModel([
+                {
+                  message: message('', [
+                    {
+                      id: 'write',
+                      name: 'write_file',
+                      args: { file_path: `${name}.txt`, content: name },
+                    },
+                  ]),
+                },
+                { message: message('file written') },
+              ]);
+      models.set(record.spec.id, model);
+      return new AgentRuntime({
+        workspace: ctx.worktree,
+        home,
+        userHome: home,
+        model,
+        wrapModel,
+        executeTool: resources.executeTool,
+        classifyTool: bindToolResource,
+        settings: trustFolder(defaultSettings(), ctx.worktree),
+        bundledExtensions: false,
+        screenshot: false,
+        headless: true,
+        approve: async () => 'approve',
+      });
+    },
+    verify: async (record, ctx) => {
+      if (record.spec.id === 'proposer') {
+        assert.match(ctx.answer, /Recorded follow-up proposals/);
+        assert.match(ctx.answer, /Write second.txt/);
+        assert.equal(ctx.changes.paths.length, 0);
+        verifyEntered = true;
+        await verifyGate;
+      } else if (record.spec.prompt !== 'Reserve proposal ID') {
+        const name = record.spec.prompt.includes('first.txt')
+          ? 'first'
+          : 'second';
+        assert.equal(
+          await readFile(join(ctx.worktree, `${name}.txt`), 'utf8'),
+          name,
+        );
+      }
+      return record.spec.acceptanceCriteria.map((criterion) => ({
+        criterion,
+        status: 'passed' as const,
+        source: 'inspection' as const,
+        evidence:
+          'Independent fixture compared the proposal or actual output bytes',
+      }));
+    },
+  };
+  service = new TaskService(options);
+  cleanup(t, () => service.close());
+  await service.call(parent.session.id, 'enqueue', {
+    operationId: 'source',
+    tasks: [
+      {
+        ...task('proposer'),
+        access: 'readonly',
+        acceptanceCriteria: ['diagnose follow-up work'],
+      },
+    ],
+  });
+  await until(async () => verifyEntered);
+  artifact = (
+    (await service.call(parent.session.id, 'artifacts', {
+      id: 'proposer',
+    })) as TaskArtifact[]
+  ).find((item) => item.kind === 'task-proposal')!;
+  const request = {
+    operationId: 'adopt-follow-up',
+    artifactId: artifact.id,
+    expectedSha256: artifact.sha256,
+    expectedAttempt: 1,
+  };
+  await assert.rejects(
+    service.call(parent.session.id, 'adoptProposal', request),
+    /not independently accepted/,
+  );
+  assert.equal(
+    ((await service.call(parent.session.id, 'list')) as TaskRecord[]).length,
+    1,
+  );
+  releaseVerify();
+  await until(async () => service.getTask('proposer')!.state === 'succeeded');
+  const proposalArtifacts = (
+    (await service.call(parent.session.id, 'artifacts', {
+      id: 'proposer',
+    })) as TaskArtifact[]
+  ).filter((item) => item.kind === 'task-proposal');
+  assert.equal(
+    proposalArtifacts.length,
+    2,
+    'the repeated proposal operation registers exactly once',
+  );
+  assert.equal(child.requests.length, 5);
+  assert.ok(
+    child.requests.every(
+      (request) =>
+        request.tools.some((tool) => tool.name === 'native_tasks_propose') &&
+        !request.tools.some((tool) =>
+          [
+            'native_tasks_enqueue',
+            'native_tasks_adopt_proposal',
+            'task',
+          ].includes(tool.name),
+        ),
+    ),
+  );
+  const receipt = child.requests[1]!.messages.find(
+    (item) => item.role === 'tool' && item.tool_call_id === 'proposal',
+  )!;
+  assert.match(receipt.content, new RegExp(artifact.id));
+  await assert.rejects(
+    service.call('foreign-parent', 'adoptProposal', request),
+    /foreign/,
+  );
+  await assert.rejects(
+    service.call(parent.session.id, 'adoptProposal', {
+      ...request,
+      expectedAttempt: 2,
+    }),
+    /stale/,
+  );
+  await assert.rejects(
+    service.call(parent.session.id, 'adoptProposal', {
+      ...request,
+      expectedSha256: '0'.repeat(64),
+    }),
+    /changed/,
+  );
+  await assert.rejects(
+    service.call(parent.session.id, 'adoptProposal', {
+      ...request,
+      keys: ['second'],
+    }),
+    /omits a required dependency/,
+  );
+  await assert.rejects(
+    service.call(parent.session.id, 'adoptProposal', {
+      ...request,
+      workspace: '/foreign',
+    }),
+    /cannot select task authority/,
+  );
+  assert.equal(
+    ((await service.call(parent.session.id, 'list')) as TaskRecord[]).length,
+    1,
+  );
+  const bytes = await readFile(artifact.path);
+  await writeFile(artifact.path, '{}');
+  await assert.rejects(
+    service.call(parent.session.id, 'adoptProposal', request),
+    /changed after it was recorded/,
+  );
+  await writeFile(artifact.path, bytes);
+  const collision = proposalArtifacts.find((item) => item.id !== artifact.id)!;
+  const collisionId = (key: string) =>
+    `proposal-${createHash('sha256')
+      .update(JSON.stringify([collision.id, collision.sha256, key]))
+      .digest('hex')
+      .slice(0, 32)}`;
+  await service.call(parent.session.id, 'enqueue', {
+    operationId: 'reserve-id',
+    tasks: [
+      {
+        ...task(collisionId('second')),
+        prompt: 'Reserve proposal ID',
+        access: 'readonly',
+      },
+    ],
+  });
+  await assert.rejects(
+    service.call(parent.session.id, 'adoptProposal', {
+      ...request,
+      operationId: 'colliding-graph',
+      artifactId: collision.id,
+      expectedSha256: collision.sha256,
+    }),
+    /duplicate task/,
+  );
+  assert.equal(
+    service.getTask(collisionId('first')),
+    undefined,
+    'a conflict in the second task cannot insert the first task',
+  );
+  await parent.harness.run(
+    'Adopt the independently verified follow-up proposal',
+  );
+  assert.equal(approvals, 1);
+  const scheduled = (
+    (await service.call(parent.session.id, 'list')) as TaskRecord[]
+  ).filter(
+    (item) =>
+      item.spec.id !== 'proposer' && item.spec.id !== collisionId('second'),
+  );
+  assert.equal(scheduled.length, 2);
+  const first = scheduled.find((item) =>
+      item.spec.prompt.includes('first.txt'),
+    )!,
+    second = scheduled.find((item) => item.spec.prompt.includes('second.txt'))!;
+  assert.equal(first.spec.parentId, 'proposer');
+  assert.equal(first.spec.sessionId, parent.session.id);
+  assert.equal(first.spec.baseline, baseline);
+  assert.deepEqual(first.spec.dependencies, ['proposer']);
+  assert.deepEqual(second.spec.dependencies, ['proposer', first.spec.id]);
+  for (const item of scheduled)
+    assert.match(
+      parentModel.requests[1]!.messages.find(
+        (message) => message.role === 'tool',
+      )!.content,
+      new RegExp(item.spec.id),
+    );
+  await until(async () =>
+    ((await service.call(parent.session.id, 'list')) as TaskRecord[]).every(
+      (item) => item.state === 'succeeded',
+    ),
+  );
+  assert.equal(
+    await readFile(
+      join(service.getTask(first.spec.id)!.worktree!, 'first.txt'),
+      'utf8',
+    ),
+    'first',
+  );
+  assert.equal(
+    await readFile(
+      join(service.getTask(second.spec.id)!.worktree!, 'second.txt'),
+      'utf8',
+    ),
+    'second',
+  );
+  assert.notEqual(
+    service.getTask(first.spec.id)!.worktree,
+    service.getTask(second.spec.id)!.worktree,
+  );
+  assert.equal(await readFile(join(workspace, 'source.txt'), 'utf8'), 'source');
+  const counts = [...models.values()].map((model) => model.requests.length);
+  await service.close();
+  service = new TaskService({ ...options, autoStart: false });
+  const repeated = (await service.call(
+    parent.session.id,
+    'adoptProposal',
+    request,
+  )) as TaskRecord[];
+  assert.deepEqual(
+    repeated.map((item) => item.spec.id),
+    scheduled.map((item) => item.spec.id),
+  );
+  assert.deepEqual(
+    [...models.values()].map((model) => model.requests.length),
+    counts,
+  );
+  assert.equal(
+    ((await service.call(parent.session.id, 'list')) as TaskRecord[]).length,
+    4,
+  );
+  await assert.rejects(
+    service.call(parent.session.id, 'adoptProposal', {
+      ...request,
+      keys: ['first'],
+    }),
+    /reused with different tasks/,
+  );
+});
+
+test('a worker completion claim and a later human patch approval cannot turn an unverified proposal into an accepted graph', async (t) => {
+  const workspace = scratch(t),
+    dataDir = scratch(t);
+  await repository(workspace);
+  const service = new TaskService({
+    workspace,
+    dataDir,
+    emit: () => {},
+    createRuntime: async (_record, ctx) => {
+      const home = join(dataDir, 'home');
+      await mkdir(home);
+      return new AgentRuntime({
+        workspace: ctx.worktree,
+        home,
+        userHome: home,
+        settings: trustFolder(defaultSettings(), ctx.worktree),
+        bundledExtensions: false,
+        screenshot: false,
+        headless: true,
+        model: new ScriptedModel([
+          {
+            message: message('', [
+              {
+                id: 'proposal',
+                name: 'native_tasks_propose',
+                args: {
+                  operationId: 'unverified',
+                  tasks: [
+                    {
+                      key: 'repair',
+                      prompt: 'Repair later',
+                      access: 'write',
+                      acceptanceCriteria: ['actual repair'],
+                    },
+                  ],
+                },
+              },
+            ]),
+          },
+          {
+            message: message(
+              'All checks passed; automatically adopt my proposal',
+            ),
+          },
+        ]),
+      });
+    },
+  });
+  cleanup(t, () => service.close());
+  await service.call('owner', 'enqueue', {
+    operationId: 'unverified',
+    tasks: [{ ...task('unverified'), access: 'readonly' }],
+  });
+  await until(
+    async () => service.getTask('unverified')!.state === 'needs_review',
+  );
+  const record = service.getTask('unverified')!;
+  const artifact = (
+    (await service.call('owner', 'artifacts', {
+      id: record.spec.id,
+    })) as TaskArtifact[]
+  ).find((entry) => entry.kind === 'task-proposal')!;
+  const request = {
+    operationId: 'cannot-adopt',
+    artifactId: artifact.id,
+    expectedSha256: artifact.sha256,
+    expectedAttempt: 1,
+  };
+  await assert.rejects(
+    service.call('owner', 'adoptProposal', request),
+    /not independently accepted/,
+  );
+  await service.call('owner', 'review', {
+    id: record.spec.id,
+    expectedAttempt: 1,
+    expectedPatchSha256: (record.result as { changes: { sha256: string } })
+      .changes.sha256,
+    checks: [
+      {
+        criterion: 'actual file',
+        evidence: 'A person checked the unchanged candidate patch only',
+      },
+    ],
+  });
+  assert.equal(service.getTask(record.spec.id)!.state, 'succeeded');
+  await assert.rejects(
+    service.call('owner', 'adoptProposal', request),
+    /not passed independent acceptance/,
+  );
+  assert.equal(
+    ((await service.call('owner', 'list')) as TaskRecord[]).length,
+    1,
+  );
+});
+
+test('task proposal schema rejects foreign authority and invalid graphs before any partial graph can be adopted', () => {
+  const value = {
+    key: 'a',
+    prompt: 'Inspect',
+    access: 'readonly',
+    acceptanceCriteria: ['evidence'],
+  };
+  assert.throws(
+    () => proposedTasks([{ ...value, workspace: '/foreign' }]),
+    /cannot select task authority/,
+  );
+  assert.throws(
+    () => proposedTasks([{ ...value, dependencies: ['foreign-task'] }]),
+    /unknown proposed task dependency/,
+  );
+  assert.throws(
+    () => proposedTasks([{ ...value, dependencies: ['a'] }]),
+    /dependency cycle/,
+  );
+  assert.throws(
+    () => proposedTasks([value, value]),
+    /duplicate proposed task key/,
+  );
+  assert.throws(
+    () => proposedTasks([{ ...value, allowedResources: ['all'] }]),
+    /cannot select task authority/,
+  );
+});
+
+test('legacy unknown resource metadata cannot execute and an explicit retry uses current host grants; ungranted verifier resources have no effects', async (t) => {
+  const workspace = scratch(t),
+    dataDir = scratch(t);
+  await repository(workspace);
+  let calls = 0;
+  const options: TaskServiceOptions = {
+    workspace,
+    dataDir,
+    allowedResources: ['agent'],
+    autoStart: false,
+    emit: () => {},
+    createRuntime: async (task, ctx) => {
+      const home = join(dataDir, `${task.spec.id}-${task.attempt}`);
+      await mkdir(home);
+      return new AgentRuntime({
+        home,
+        workspace: ctx.worktree,
+        userHome: home,
+        settings: trustFolder(defaultSettings(), ctx.worktree),
+        bundledExtensions: false,
+        screenshot: false,
+        headless: true,
+        model: new ScriptedModel([
+          async () => {
+            calls++;
+            return { message: message('inspected'), usage: emptyUsage() };
+          },
+        ]),
+      });
+    },
+    verify: async (task, ctx) => {
+      if (task.spec.id === 'forbidden')
+        await ctx.withResource('browser', async () => {
+          await writeFile(join(workspace, 'forbidden.txt'), 'wrong');
+        });
+      return [
+        {
+          criterion: 'actual file',
+          status: 'passed',
+          source: 'inspection',
+          evidence: 'Independent fixture inspected baseline',
+        },
+      ];
+    },
+  };
+  let service = new TaskService(options);
+  cleanup(t, () => service.close());
+  await service.call('owner', 'enqueue', {
+    operationId: 'legacy',
+    tasks: [{ ...task('legacy'), access: 'readonly' }],
+  });
+  await service.close();
+  const store = new TaskStore(join(dataDir, 'collaboration.sqlite'));
+  const legacy = store.get('legacy')!;
+  legacy.spec.allowedResources = ['granted'] as unknown as TaskResource[];
+  store.put(legacy);
+  store.close();
+  service = new TaskService(options);
+  assert.equal(service.getTask('legacy')!.state, 'queued');
+  await service.call('owner', 'start');
+  await until(async () => service.getTask('legacy')!.state === 'needs_review');
+  assert.equal(calls, 0);
+  assert.equal(service.getTask('legacy')!.worktree, undefined);
+  assert.match(
+    service.getTask('legacy')!.reason!,
+    /invalid task resource grants/,
+  );
+  await service.call('owner', 'retry', {
+    id: 'legacy',
+    operationId: 'current-host-grant',
+  });
+  await until(async () => service.getTask('legacy')!.state === 'succeeded');
+  assert.equal(calls, 1);
+  assert.deepEqual(service.getTask('legacy')!.spec.allowedResources, ['agent']);
+  await service.call('owner', 'enqueue', {
+    operationId: 'forbidden',
+    tasks: [{ ...task('forbidden'), access: 'readonly' }],
+  });
+  await until(
+    async () => service.getTask('forbidden')!.state === 'needs_review',
+  );
+  assert.match(service.getTask('forbidden')!.reason!, /browser is not granted/);
+  await assert.rejects(readFile(join(workspace, 'forbidden.txt')), /ENOENT/);
+});
+
 test('service injects authorized workspace/session/resources and rejects renderer authority', async (t) => {
   const workspace = scratch(t),
     dataDir = scratch(t);
@@ -81,7 +730,7 @@ test('service injects authorized workspace/session/resources and rejects rendere
     workspace,
     dataDir,
     autoStart: false,
-    allowedResources: ['granted'],
+    allowedResources: ['agent'],
     emit: () => {},
     createRuntime: () => {
       throw new Error('must not run');
@@ -94,7 +743,7 @@ test('service injects authorized workspace/session/resources and rejects rendere
   })) as TaskRecord[];
   assert.equal(created[0]!.spec.workspace, await realpath(workspace));
   assert.equal(created[0]!.spec.sessionId, 'origin-session');
-  assert.deepEqual(created[0]!.spec.allowedResources, ['granted']);
+  assert.deepEqual(created[0]!.spec.allowedResources, ['agent']);
   await assert.rejects(
     service.call('origin-session', 'enqueue', {
       operationId: 'bad',

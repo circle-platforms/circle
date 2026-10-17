@@ -14,6 +14,7 @@
     "test:ui": "npm --prefix ../desktop run test:interface",
     "test:editor": "node ../../node_modules/tsx/dist/cli.mjs test/editor-ui.mjs",
     "test:components": "node test/component-suites.mjs",
+    "test:visual": "playwright test --config test/visual/playwright.config.mjs",
     "postinstall": "node scripts/prepare-monaco.mjs",
     "predev": "node scripts/prepare-monaco.mjs",
     "prebuild": "node scripts/prepare-monaco.mjs",

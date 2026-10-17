@@ -7,9 +7,18 @@ import { agentActivityText, agentState } from '../model/activity';
 import { NativeBrowser } from './NativeBrowser';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useState } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   FileText,
+  FileCode,
+  FileImage,
+  FileJson,
   Folder,
   ChevronRight,
   ChevronDown,
@@ -37,7 +46,12 @@ import { currentSession, sessionMode } from '../model/state';
 import { DiffBlock } from '../components/DiffBlock';
 import { EFFORT_TEXT, MODE_TEXT } from './Composer';
 import { t, tn } from '../i18n';
-import type { PanelId, Interaction, DialogId } from '../model/types';
+import type {
+  PanelId,
+  Interaction,
+  DialogId,
+  WorkbenchSnapshot,
+} from '../model/types';
 import {
   Button,
   IconButton,
@@ -71,6 +85,9 @@ const REQUEST_KIND: Record<string, () => string> = {
 interface Props {
   resourcesPaused?: boolean;
   commandTerminal?: CommandTerminalView;
+  debugSourceRequest?: { id: string; path: string; line?: number };
+  onOpenTerminal?: (target: { id: string; epoch: string }) => void;
+  terminalFocusRequest?: { id: string; epoch: string; requestId: string };
   onExitCommandTerminal?: () => void;
   panel: PanelId;
   selection: string;
@@ -150,6 +167,8 @@ export function PanelButtons({
     </>
   );
 }
+// Panels that fill the inspector to its edges, as Claude's terminal, browser and files do.
+const FLUSH = new Set<string>(['terminal', 'browser', 'files']);
 export function Inspector(props: Props) {
   const { snapshot } = useRuntime();
   const session = currentSession(snapshot);
@@ -157,9 +176,13 @@ export function Inspector(props: Props) {
   const selected = panels.find((item) => item.panel.id === props.panel);
   const terminal = props.panel === 'terminal';
   return (
-    <aside className="inspector">
+    <aside
+      className="inspector"
+      data-inspector-panel={props.panel}
+      data-inspector-whole-button={props.canBeWhole ? '' : undefined}
+    >
       <header className="inspector-title">
-        <h2>
+        <h2 className="inspector-title-name">
           {terminal
             ? t('terminal')
             : selected
@@ -182,7 +205,9 @@ export function Inspector(props: Props) {
           </IconButton>
         </span>
       </header>
-      <div className={`inspector-body ${terminal ? 'flush' : ''}`}>
+      <div
+        className={`inspector-body ${FLUSH.has(props.panel) ? 'flush' : ''}`}
+      >
         {props.resourcesPaused && (
           <p
             className="panel-note"
@@ -245,6 +270,11 @@ function InspectorResources(
                 commandTerminal={
                   id === 'terminal' ? props.commandTerminal : undefined
                 }
+                debugSourceRequest={
+                  id === 'activity' ? props.debugSourceRequest : undefined
+                }
+                onOpenTerminal={props.onOpenTerminal}
+                terminalFocusRequest={props.terminalFocusRequest}
                 onExitCommandTerminal={props.onExitCommandTerminal}
                 sessionId={props.sessionId}
                 visible={!!props.visible && id === props.panel}
@@ -264,90 +294,173 @@ function InspectorResources(
     </>
   );
 }
+// The workspace's files as a tree, folders first, each level sorted by name.
+interface TreeNode {
+  name: string;
+  path: string;
+  folders: Map<string, TreeNode>;
+  files: WorkbenchSnapshot['files'];
+}
+function fileTree(files: WorkbenchSnapshot['files']) {
+  const root: TreeNode = { name: '', path: '', folders: new Map(), files: [] };
+  for (const file of files) {
+    const parts = file.path.split('/');
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      const path = node.path ? node.path + '/' + part : part;
+      let next = node.folders.get(part);
+      if (!next) {
+        next = { name: part, path, folders: new Map(), files: [] };
+        node.folders.set(part, next);
+      }
+      node = next;
+    }
+    node.files.push(file);
+  }
+  return root;
+}
+const byName = (a: string, b: string) =>
+  a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+// A file's kind by its extension, for the colour of its icon.
+function fileKind(name: string) {
+  const extension = name.includes('.') ? name.split('.').at(-1)! : '';
+  if (/^(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(extension)) return 'image';
+  if (/^(json|jsonc|ya?ml|toml|lock|ini|env)$/i.test(extension)) return 'data';
+  if (/^(md|mdx|txt|rst)$/i.test(extension)) return 'text';
+  if (extension) return 'code';
+  return 'plain';
+}
+function FileIcon({ name }: { name: string }) {
+  const kind = fileKind(name);
+  const Icon =
+    kind === 'image'
+      ? FileImage
+      : kind === 'data'
+        ? FileJson
+        : kind === 'code'
+          ? FileCode
+          : FileText;
+  return <Icon size={14} className={`file-icon ${kind}`} aria-hidden />;
+}
 export function FilesPanel({
   selection,
   onFile,
 }: Pick<Props, 'selection' | 'onFile'>) {
   const { snapshot } = useRuntime();
   const [query, setQuery] = useState('');
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
+  const panel = useRef<HTMLDivElement>(null);
   const session = currentSession(snapshot);
+  // The folders around the open file stay open, so it shows in the tree.
+  useEffect(() => {
+    const parts = selection.split('/').slice(0, -1);
+    if (!parts.length) return;
+    setOpen((old) => {
+      const next = new Set(old);
+      parts.forEach((_, index) =>
+        next.add(parts.slice(0, index + 1).join('/')),
+      );
+      return next.size === old.size ? old : next;
+    });
+  }, [selection]);
   const files = snapshot.files.filter(
     (file) =>
       file.workspaceId === session.workspaceId &&
       file.path.toLowerCase().includes(query.toLowerCase()),
   );
-  const folders = [
-    ...new Set(
-      files.map((file) =>
-        file.path.includes('/') ? file.path.split('/')[0]! : 'root',
-      ),
-    ),
+  const tree = fileTree(files);
+  const native =
+    snapshot.workspaces.find(
+      (workspace) => workspace.id === session.workspaceId,
+    )?.origin === 'native';
+  // While a filter is typed every folder that holds a match is open.
+  const isOpen = (path: string) => !!query || open.has(path);
+  const toggle = (path: string) =>
+    setOpen((old) => {
+      const next = new Set(old);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  const rows = (node: TreeNode, depth: number): ReactNode[] => [
+    ...[...node.folders.values()]
+      .sort((a, b) => byName(a.name, b.name))
+      .flatMap((folder) => [
+        <button
+          key={'d:' + folder.path}
+          className="tree-folder"
+          aria-expanded={isOpen(folder.path)}
+          style={{ '--depth': depth } as CSSProperties}
+          onClick={() => toggle(folder.path)}
+        >
+          {isOpen(folder.path) ? (
+            <ChevronDown size={13} aria-hidden />
+          ) : (
+            <ChevronRight size={13} aria-hidden />
+          )}
+          <span>{folder.name}</span>
+        </button>,
+        ...(isOpen(folder.path) ? rows(folder, depth + 1) : []),
+      ]),
+    ...[...node.files]
+      .sort((a, b) =>
+        byName(a.path.split('/').at(-1)!, b.path.split('/').at(-1)!),
+      )
+      .map((file) => {
+        const name = file.path.split('/').at(-1)!;
+        return (
+          <button
+            className={`tree-file ${selection === file.path ? 'active' : ''}`}
+            key={file.id}
+            title={file.path}
+            style={{ '--depth': depth } as CSSProperties}
+            onClick={() => onFile(file.path)}
+          >
+            <FileIcon name={name} />
+            <span>{name}</span>
+            {file.status && (
+              <small className={file.status}>
+                {file.status === 'added' ? 'A' : 'M'}
+              </small>
+            )}
+          </button>
+        );
+      }),
   ];
   return (
-    <>
-      <div className="inspector-heading">
-        <h2>{t('files')}</h2>
-        <span>
-          {snapshot.workspaces.find(
-            (workspace) => workspace.id === session.workspaceId,
-          )?.origin === 'native'
-            ? t('local workspace')
-            : 'sample workspace'}
-        </span>
-      </div>
+    <div className="files-panel" ref={panel}>
+      <span className="panel-header-name">
+        <Folder size={14} aria-hidden />
+        {t('files')}
+      </span>
+      <span className="panel-header-actions">
+        <IconButton
+          label={t('search files')}
+          onClick={() =>
+            panel.current
+              ?.querySelector<HTMLInputElement>('.search-field input')
+              ?.focus()
+          }
+        >
+          <Search size={14} />
+        </IconButton>
+      </span>
       <SearchInput
         value={query}
         onChange={setQuery}
-        label={t('search files')}
-        placeholder={t('find a file…')}
+        label={t('filter files')}
+        placeholder={t('filter files…')}
       />
-      <div className="file-tree">
-        {folders.map((folder) => (
-          <div key={folder}>
-            {folder !== 'root' && (
-              <div className="tree-folder">
-                <ChevronDown size={12} />
-                <Folder size={14} />
-                {folder}
-              </div>
-            )}
-            {files
-              .filter(
-                (file) =>
-                  (file.path.includes('/')
-                    ? file.path.split('/')[0]
-                    : 'root') === folder,
-              )
-              .map((file) => (
-                <button
-                  className={selection === file.path ? 'active' : ''}
-                  key={file.id}
-                  onClick={() => onFile(file.path)}
-                >
-                  <FileText size={14} />
-                  <span>{file.path.split('/').at(-1)}</span>
-                  {file.status && (
-                    <small className={file.status}>
-                      {file.status === 'added' ? 'A' : 'M'}
-                    </small>
-                  )}
-                </button>
-              ))}
-          </div>
-        ))}
-      </div>
-      <p className="panel-note">
-        {snapshot.workspaces.find(
-          (workspace) => workspace.id === session.workspaceId,
-        )?.origin === 'native'
-          ? files.length || query
-            ? t('The folder Circle works in, read through granted handles.')
-            : t(
-                'Trust this folder to list its files here, or open it again with open folder.',
-              )
-          : 'Files shown here are isolated sample data. Opening a file does not access your disk.'}
-      </p>
-    </>
+      <div className="file-tree">{rows(tree, 0)}</div>
+      {(!native || !(files.length || query)) && (
+        <p className="panel-note">
+          {native ? t('trust this folder to browse files') : t('sample files')}
+        </p>
+      )}
+      {!!query && !files.length && (
+        <p className="panel-note">{t('no matching files')}</p>
+      )}
+    </div>
   );
 }
 export function ChangesPanel({ onFile }: Pick<Props, 'onFile'>) {
@@ -401,11 +514,6 @@ function LiveChanges({ onFile }: Pick<Props, 'onFile'>) {
       ) : (
         <p className="muted">{t('no files changed in this session yet')}</p>
       )}
-      <p className="panel-note">
-        {t(
-          'Files this session changed while the app was open, each against its version before the first change.',
-        )}
-      </p>
     </>
   );
 }
@@ -484,7 +592,11 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
       </div>
       <Facts
         values={{
-          [t('workspace')]: workspace.path,
+          [t('workspace')]: (
+            <span className="context-workspace-path" title={workspace.path}>
+              <bdi dir="ltr">{workspace.path}</bdi>
+            </span>
+          ),
           [t('model')]: session.model,
           [t('effort')]: EFFORT_TEXT[session.effort]?.label() ?? session.effort,
           [t('mode')]: MODE_TEXT[sessionMode(session)].label(),
@@ -502,7 +614,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
           <details key={item.path ?? item.name} className="context-source">
             <summary>
               <FileText size={14} />
-              {item.name}
+              {item.name.split(/[\\/]/).pop()}
             </summary>
             {item.path && (
               <button
@@ -569,7 +681,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
       {runtime.mode !== 'live' && (
         <div className="panel-section">
           <h3>
-            {t('pending requests')}{' '}
+            {t('unsent actions')}{' '}
             <span>
               {
                 snapshot.requests.filter(
@@ -770,20 +882,20 @@ function BrowserPlaceholder() {
       <div className="browser-address">
         <Globe size={13} />
         <input
-          aria-label="browser address"
+          aria-label={t('browser address')}
           value={url}
           onChange={(event) => setUrl(event.target.value)}
         />
         <IconButton
-          label="request navigation"
+          label={t('request navigation')}
           onClick={() => {
             try {
               const parsed = new URL(url);
               if (!['https:', 'http:'].includes(parsed.protocol)) throw Error();
               runtime.request('browser.navigate', { url });
-              notify('navigation requested; no browser is attached');
+              notify(t('navigation saved for preview'));
             } catch {
-              notify('enter an http or https URL');
+              notify(t('enter an http or https URL'));
             }
           }}
         >
@@ -792,18 +904,8 @@ function BrowserPlaceholder() {
       </div>
       <div className="browser-empty">
         <Globe size={32} />
-        <h3>no browser attached</h3>
-        <p>
-          The desktop host will display the browser that the agent is using.
-        </p>
-        <span className="label">layout preview</span>
-      </div>
-      <div className="panel-section">
-        <h3>same session, shared view</h3>
-        <p>
-          Page observation and control will refer to one browser session.
-          Navigation requests are currently saved locally.
-        </p>
+        <h3>{t('no browser attached')}</h3>
+        <p>{t('browser preview only')}</p>
       </div>
     </>
   );

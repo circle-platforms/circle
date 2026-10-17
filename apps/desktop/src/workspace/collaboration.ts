@@ -9,8 +9,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
+import type { Tool, ToolContext } from '../../../../src/types.js';
 import {
   TaskStore,
   taskArtifactDirectory,
@@ -23,6 +24,11 @@ import {
   type TaskSpec,
   type TaskState,
   type TaskReviewerUpdate,
+  proposedTasks,
+  type TaskProposal,
+  type TaskProposalReceipt,
+  TASK_RESOURCES,
+  taskResourceGrants,
 } from './task-store.js';
 import { resolveTaskBaseline, TaskWorktrees } from './task-worktrees.js';
 export type {
@@ -54,7 +60,13 @@ export interface TaskExecutionContext {
   signal: AbortSignal;
   worktree: string;
   artifactDirectory: string;
-  bindRuntimeSession(sessionId: string): void;
+  bindRuntimeSession(
+    sessionId: string,
+    operationScopedResources?: boolean,
+  ): void;
+  /** The closed worker has no live operations using the declared resource. */
+  releaseResourceAdmission?(): void;
+  allowedResources?: readonly TaskResource[];
   runtimeState?(state: TaskState): void;
   reviewer?(record: TaskReviewerUpdate): void;
   /** Enforce this in the injected runtime's permissions; Git worktrees are not security sandboxes. */
@@ -74,6 +86,12 @@ export interface TaskExecutionContext {
     action: () => Promise<T>,
   ): Promise<T>;
   artifact(path: string, kind: string): Promise<TaskArtifact>;
+  /** Records a suggestion only; a separately authorized coordinator must adopt it. */
+  proposeTasks?(
+    runtimeSessionId: string,
+    operationId: string,
+    tasks: unknown,
+  ): Promise<TaskProposalReceipt>;
   onCleanup(action: () => void | Promise<void>): void;
 }
 export type TaskExecutor = (
@@ -85,6 +103,7 @@ export interface CollaborationOptions {
   executor: TaskExecutor;
   limits?: Partial<CollaborationLimits>;
   resources?: CollaborationResources;
+  allowedResources?: readonly TaskResource[];
 }
 export class OperationNeedsReviewError extends Error {
   constructor(readonly operationId: string) {
@@ -210,10 +229,39 @@ class ResourcePool {
     });
   }
 }
+interface ResourceLease {
+  external: boolean;
+  users: number;
+  held: boolean;
+  finished: Promise<void>;
+  settle(): void;
+  release(): void;
+}
+interface ResourceOwnership {
+  lease: ResourceLease;
+  active: boolean;
+}
+export class TaskResourceError extends Error {}
+const toolResources = new WeakMap<
+  Tool,
+  Exclude<TaskResource, 'agent'> | 'control'
+>();
+/** Only host-constructed tool objects are tagged; names and model arguments cannot claim a resource. */
+export function bindToolResource<T extends Tool>(
+  tool: T,
+  resource: Exclude<TaskResource, 'agent'> | 'control',
+): T {
+  if (!['build', 'ui', 'browser', 'control'].includes(resource))
+    throw Error('invalid tool resource');
+  toolResources.set(tool, resource);
+  return tool;
+}
 /** One instance per app worker; every authorized workspace shares these limits. */
 export class CollaborationResources {
   readonly pools: Record<TaskResource, ResourcePool>;
-  private readonly ownership = new AsyncLocalStorage<Set<TaskResource>>();
+  private readonly ownership = new AsyncLocalStorage<
+    Map<TaskResource, ResourceOwnership>
+  >();
   private limits: CollaborationLimits;
   private readonly listeners = new Set<() => void>();
   constructor(limits: Partial<CollaborationLimits> = {}) {
@@ -232,12 +280,91 @@ export class CollaborationResources {
   getLimits(): CollaborationLimits {
     return { ...this.limits };
   }
-  /** @internal The scheduler already owns these leases before starting an executor. */
-  runWithHeldResources<T>(resources: TaskResource[], action: () => T): T {
-    return this.ownership.run(
-      new Set([...(this.ownership.getStore() ?? []), ...resources]),
-      action,
-    );
+  private lease(release: () => void, external = false): ResourceLease {
+    let settle!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    return { users: 0, held: true, finished, settle, release, external };
+  }
+  private async useLease<T>(
+    resource: TaskResource,
+    lease: ResourceLease,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const owner: ResourceOwnership = { lease, active: true };
+    const scope = new Map(this.ownership.getStore());
+    scope.set(resource, owner);
+    lease.users++;
+    try {
+      return await this.ownership.run(scope, action);
+    } finally {
+      this.releaseOwner(owner);
+    }
+  }
+  private releaseOwner(owner: ResourceOwnership): void {
+    if (!owner.active) return;
+    owner.active = false;
+    if (--owner.lease.users === 0) {
+      owner.lease.held = false;
+      try {
+        owner.lease.release();
+      } finally {
+        owner.lease.settle();
+      }
+    }
+  }
+  /** Only the scheduler's fresh-runtime/closed-worker admission can be released early. */
+  releaseAdmission(resource: TaskResource): void {
+    const owner = this.ownership.getStore()?.get(resource);
+    if (!owner?.active) return;
+    if (owner.lease.users !== 1)
+      throw new TaskResourceError(
+        'resource operations have not settled; admission cannot be released',
+      );
+    this.releaseOwner(owner);
+  }
+  /** A trusted nested approval may yield only its own unshared operation lease. */
+  async suspendResource<T>(
+    resource: TaskResource,
+    wait: () => Promise<T>,
+    signal: AbortSignal,
+  ): Promise<T> {
+    const owner = this.ownership.getStore()?.get(resource);
+    if (!owner?.active) return wait();
+    if (owner.lease.external || owner.lease.users !== 1)
+      throw new TaskResourceError(
+        'cannot suspend a shared or scheduler admission lease',
+      );
+    this.releaseOwner(owner);
+    const result = await wait();
+    signal.throwIfAborted();
+    const release = await this.pools[resource].acquire(signal);
+    owner.lease = this.lease(release);
+    owner.lease.users = 1;
+    owner.active = true;
+    return result;
+  }
+  /** @internal External scheduler leases remain held until all nested operations settle. */
+  async runWithHeldResources<T>(
+    resources: TaskResource[],
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const held = [...new Set(resources)].map((resource) => ({
+      resource,
+      lease: this.lease(() => {}, true),
+    }));
+    const run = (index: number): Promise<T> =>
+      index === held.length
+        ? action()
+        : this.useLease(held[index]!.resource, held[index]!.lease, () =>
+            run(index + 1),
+          );
+    try {
+      return await run(0);
+    } finally {
+      await Promise.all(held.map(({ lease }) => lease.finished));
+    }
   }
   async withResource<T>(
     resource: TaskResource,
@@ -245,17 +372,51 @@ export class CollaborationResources {
     signal: AbortSignal = new AbortController().signal,
   ): Promise<T> {
     signal.throwIfAborted();
-    if (this.ownership.getStore()?.has(resource)) return action();
+    const owner = this.ownership.getStore()?.get(resource);
+    if (owner?.active && owner.lease.held)
+      return this.useLease(resource, owner.lease, action);
+    if (
+      resource !== 'agent' &&
+      [...(this.ownership.getStore() ?? [])].some(
+        ([held, owner]) =>
+          held !== 'agent' &&
+          held !== resource &&
+          owner.active &&
+          owner.lease.held,
+      )
+    )
+      throw new TaskResourceError(
+        'release the current resource before requesting a different resource',
+      );
     const release = await this.pools[resource].acquire(signal);
-    try {
-      return await this.runWithHeldResources([resource], async () => {
-        signal.throwIfAborted();
-        return action();
-      });
-    } finally {
-      release();
-    }
+    return this.useLease(resource, this.lease(release), async () => {
+      signal.throwIfAborted();
+      return action();
+    });
   }
+  /** Suitable for RuntimeOptions.executeTool; permission checks still belong to the harness. */
+  executeTool = (
+    tool: Tool,
+    _args: Record<string, unknown>,
+    context: ToolContext,
+    run: () => Promise<string>,
+    allowedResources: readonly TaskResource[] = TASK_RESOURCES,
+  ): Promise<string> => {
+    const grants = taskResourceGrants(allowedResources);
+    const resource = toolResources.get(tool);
+    if (resource === 'control') {
+      context.signal.throwIfAborted();
+      return run();
+    }
+    if (resource && !grants.includes(resource))
+      return Promise.reject(
+        new TaskResourceError(`tool resource ${resource} is not granted`),
+      );
+    const invoke = () => this.withResource('agent', run, context.signal);
+    return resource
+      ? this.withResource(resource, invoke, context.signal)
+      : invoke();
+  };
   setLimits(limits: Partial<CollaborationLimits>): void {
     const next = { ...this.limits, ...limits };
     validateLimits(next);
@@ -292,6 +453,7 @@ export class CollaborationScheduler {
   private readonly leasePath: string;
   private readonly leaseToken = randomUUID();
   private limits: CollaborationLimits;
+  private readonly allowedResources: TaskResource[];
   private started = false;
   private pumping = false;
   private closing = false;
@@ -302,6 +464,9 @@ export class CollaborationScheduler {
       throw new Error('collaboration data directory must be absolute');
     this.limits = { ...DEFAULT_COLLABORATION_LIMITS, ...options.limits };
     validateLimits(this.limits);
+    this.allowedResources = taskResourceGrants(
+      options.allowedResources ?? TASK_RESOURCES,
+    );
     mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
     this.leasePath = join(options.dataDir, 'collaboration.lock');
     this.acquireLease();
@@ -489,7 +654,7 @@ export class CollaborationScheduler {
   }
   async enqueue(
     specs: TaskSpec[],
-    options: { operationId: string },
+    options: { operationId: string; beforeCommit?: () => void },
   ): Promise<TaskRecord[]> {
     this.assertOpen();
     if (!options.operationId || !specs.length)
@@ -519,6 +684,10 @@ export class CollaborationScheduler {
         return {
           ...input,
           ...pin,
+          allowedResources: taskResourceGrants(
+            input.allowedResources ?? this.allowedResources,
+            this.allowedResources,
+          ),
           dependencies: [...new Set(input.dependencies ?? [])],
         };
       }),
@@ -527,6 +696,7 @@ export class CollaborationScheduler {
     const now = Date.now();
     const events: CollaborationEvent[] = [];
     const tasks = this.store.transaction(() => {
+      options.beforeCommit?.();
       const previous = this.store.operation(operationId);
       if (previous) return this.enqueued(previous, hash);
       const all = new Map(
@@ -646,6 +816,19 @@ export class CollaborationScheduler {
           )
         )
           continue;
+        try {
+          const grants = taskResourceGrants(
+            task.spec.allowedResources ?? this.allowedResources,
+            this.allowedResources,
+          );
+          if (!grants.includes(task.spec.resource ?? 'agent'))
+            throw new TaskResourceError(
+              'the task resource is not granted by its host',
+            );
+        } catch (error) {
+          this.update(task.spec.id, 'needs_review', { reason: message(error) });
+          continue;
+        }
         const releaseAgent = this.pools.agent.tryAcquire();
         if (!releaseAgent) break;
         const resource = task.spec.resource ?? 'agent';
@@ -660,7 +843,13 @@ export class CollaborationScheduler {
         const done = Promise.resolve()
           .then(() =>
             this.resources.runWithHeldResources(['agent', resource], () =>
-              this.execute(task.spec.id, controller, resource),
+              this.execute(
+                task.spec.id,
+                controller,
+                resource,
+                releaseAgent,
+                releaseResource,
+              ),
             ),
           )
           .finally(() => {
@@ -683,6 +872,8 @@ export class CollaborationScheduler {
     id: string,
     controller: AbortController,
     resource: TaskResource,
+    releaseAgent: () => void,
+    releaseResource: () => void,
   ): Promise<void> {
     const cleanups: (() => void | Promise<void>)[] = [];
     const ownedActions: Promise<unknown>[] = [];
@@ -708,7 +899,19 @@ export class CollaborationScheduler {
         signal: controller.signal,
         worktree: prepared.path,
         artifactDirectory,
-        bindRuntimeSession: (sessionId) => {
+        allowedResources: Object.freeze(
+          taskResourceGrants(
+            task.spec.allowedResources ?? this.allowedResources,
+            this.allowedResources,
+          ),
+        ),
+        releaseResourceAdmission: () => {
+          if (resource !== 'agent') {
+            this.resources.releaseAdmission(resource);
+            releaseResource();
+          }
+        },
+        bindRuntimeSession: (sessionId, operationScopedResources) => {
           if (!sessionId.trim())
             throw new Error('runtime session id is required');
           this.updateAttempt(
@@ -726,6 +929,10 @@ export class CollaborationScheduler {
             'task.session',
             { runtimeSessionId: sessionId },
           );
+          if (operationScopedResources) {
+            this.resources.releaseAdmission('agent');
+            releaseAgent();
+          }
         },
         runtimeState: (state) =>
           this.updateAttempt(
@@ -830,8 +1037,18 @@ export class CollaborationScheduler {
               runtimeState: 'running',
             });
         },
-        withResource: (name, action) =>
-          track(this.resources.withResource(name, action, controller.signal)),
+        withResource: (name, action) => {
+          if (
+            !taskResourceGrants(
+              task.spec.allowedResources ?? this.allowedResources,
+              this.allowedResources,
+            ).includes(name)
+          )
+            throw new TaskResourceError(`task resource ${name} is not granted`);
+          return track(
+            this.resources.withResource(name, action, controller.signal),
+          );
+        },
         runOperation: (operationId, input, action) =>
           track(
             this.runOperation(
@@ -844,6 +1061,65 @@ export class CollaborationScheduler {
           ),
         artifact: (path, kind) =>
           track(this.recordArtifact(this.store.get(id)!, path, kind)),
+        proposeTasks: (runtimeSessionId, operationId, input) => {
+          if (!operationId.trim() || operationId.length > 256)
+            throw Error('invalid proposal operation id');
+          const tasks = proposedTasks(input);
+          return track(
+            this.runOperation(
+              task,
+              `proposal:${operationId}`,
+              { runtimeSessionId, tasks } as unknown as Json,
+              async () => {
+                const current = this.store.get(id);
+                if (
+                  current?.attempt !== task.attempt ||
+                  current.runtimeSessionId !== runtimeSessionId ||
+                  !current.spec.sessionId ||
+                  !['running', 'waiting'].includes(current.state)
+                )
+                  throw Error(
+                    'proposal does not belong to the active task attempt',
+                  );
+                const proposal: TaskProposal = {
+                  version: 1,
+                  source: {
+                    taskId: id,
+                    attempt: task.attempt,
+                    sessionId: current.spec.sessionId,
+                    runtimeSessionId,
+                    workspace: current.spec.workspace,
+                    baseline: current.spec.baseline,
+                  },
+                  tasks,
+                };
+                const path = join(
+                  artifactDirectory,
+                  `proposal-${fingerprint(operationId)}.json`,
+                );
+                await writeFile(
+                  path,
+                  JSON.stringify(proposal, null, 2) + '\n',
+                  {
+                    mode: 0o600,
+                    flag: 'wx',
+                  },
+                );
+                const artifact = await this.recordArtifact(
+                  current,
+                  path,
+                  'task-proposal',
+                );
+                return {
+                  artifact,
+                  source: proposal.source,
+                  taskKeys: tasks.map((task) => task.key),
+                } as unknown as Json;
+              },
+              controller.signal,
+            ),
+          ) as Promise<unknown> as Promise<TaskProposalReceipt>;
+        },
         onCleanup: (cleanup) => {
           cleanups.push(cleanup);
         },
@@ -897,6 +1173,8 @@ export class CollaborationScheduler {
         result: result?.result,
         reason: `${unresolvedOperations.length} operation outcome${unresolvedOperations.length === 1 ? '' : 's'} require${unresolvedOperations.length === 1 ? 's' : ''} review; a completion claim cannot verify an unknown side effect`,
       });
+    else if (error instanceof TaskResourceError)
+      this.update(id, 'needs_review', { reason: message(error) });
     else if (error !== undefined)
       this.update(id, 'failed', { reason: message(error) });
     else
@@ -1141,7 +1419,13 @@ export class CollaborationScheduler {
     this.checkIdle();
     return this.store.get(id)!;
   }
-  retry(id: string, options: { operationId: string }): TaskRecord {
+  retry(
+    id: string,
+    options: {
+      operationId: string;
+      allowedResources?: readonly TaskResource[];
+    },
+  ): TaskRecord {
     this.assertOpen();
     if (!options.operationId) throw new Error('operationId is required');
     const operationId = `retry:${options.operationId}`,
@@ -1163,7 +1447,15 @@ export class CollaborationScheduler {
     )
       throw new Error('only a settled unsuccessful task can be retried');
     const next: TaskRecord = {
-      spec: task.spec,
+      spec: options.allowedResources
+        ? {
+            ...task.spec,
+            allowedResources: taskResourceGrants(
+              options.allowedResources,
+              this.allowedResources,
+            ),
+          }
+        : task.spec,
       state: 'queued',
       attempt: task.attempt + 1,
       createdAt: task.createdAt,

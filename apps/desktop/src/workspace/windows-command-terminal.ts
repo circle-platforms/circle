@@ -282,6 +282,7 @@ export function createWindowsTerminalCommandLauncher(
         executionId: request.executionId,
         executionEpoch: options.executionEpoch,
         toolCallId: request.origin.toolCallId,
+        userShellId: request.origin.userShellId,
         displayCommand: request.origin.displayCommand,
         completion,
         cwd: request.cwd,

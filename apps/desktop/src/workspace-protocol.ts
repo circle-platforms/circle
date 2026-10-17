@@ -75,6 +75,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   ]),
   language: new Set(['open', 'change', 'close', 'request']),
   debug: new Set([
+    'output',
     'start',
     'snapshot',
     'launch',
@@ -97,6 +98,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   ]),
   tasks: new Set([
     'enqueue',
+    'adoptProposal',
     'list',
     'start',
     'cancel',

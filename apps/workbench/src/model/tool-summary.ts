@@ -172,7 +172,12 @@ function symbolPhrase(outcome: EditOutcome, count: number) {
 const READS = ['read_file'];
 const EDITS = ['write_file', 'edit_file', 'apply_patch', 'delete'];
 const WEB = ['webfetch', 'websearch'];
-const AGENT_SCHEDULE = ['native_tasks_enqueue', 'native_tasks_analyze'];
+const AGENT_SCHEDULE = [
+  'native_tasks_enqueue',
+  'native_tasks_analyze',
+  'native_tasks_adopt_proposal',
+];
+const AGENT_PROPOSE = ['native_tasks_propose'];
 const AGENT_QUERY = [
   'native_tasks_list',
   'native_tasks_wait',
@@ -233,6 +238,8 @@ export function toolSummary(rows: Message[]): {
   if (agents) parts.push(tn(agents, 'ran a subagent', 'ran {n} subagents'));
   if (completed.some((tool) => AGENT_SCHEDULE.includes(tool.name)))
     parts.push(t('scheduled agents'));
+  if (completed.some((tool) => AGENT_PROPOSE.includes(tool.name)))
+    parts.push(t('proposed follow-up tasks'));
   if (completed.some((tool) => AGENT_QUERY.includes(tool.name)))
     parts.push(t('checked agent progress'));
   if (completed.some((tool) => AGENT_CONTROL.includes(tool.name)))
@@ -247,6 +254,7 @@ export function toolSummary(rows: Message[]): {
     'grep',
     'lsp',
     ...AGENT_SCHEDULE,
+    ...AGENT_PROPOSE,
     ...AGENT_QUERY,
     ...AGENT_CONTROL,
     ...READS,

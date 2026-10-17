@@ -679,6 +679,42 @@ test(
   },
 );
 
+test('managed terminal rejects mixed human and tool origins before any process allocation', async (t) => {
+  const f = await setup(t);
+  await assert.rejects(
+    f.terminals.createManagedCommand({
+      owner: 'owner',
+      sessionId: 'owner',
+      executionId: 'mixed',
+      toolCallId: 'provider-call',
+      userShellId: 'human-command',
+      completion: {
+        kind: 'pty-group',
+        descendantCoverage: {
+          state: 'unknown',
+          reason: 'coverage-unavailable',
+          observedAt: Date.now(),
+        },
+      },
+      launch: {
+        file: process.execPath,
+        args: ['-e', "require('fs').writeFileSync('must-not-run','started')"],
+      },
+      cwd: f.workspace,
+      env: {},
+      outputPath: join(f.workspace, 'unused.log'),
+      signal: new AbortController().signal,
+      stop: async () => {},
+    }),
+    /both tool and human origins/,
+  );
+  assert.deepEqual(await f.terminals.list('owner'), []);
+  assert.equal(f.events.length, 0);
+  await assert.rejects(readFile(join(f.workspace, 'must-not-run')), {
+    code: 'ENOENT',
+  });
+});
+
 test(
   'Windows native adapter fails before allocating a PTY without claiming shell exit proves owned tree exit',
   { skip: unix },

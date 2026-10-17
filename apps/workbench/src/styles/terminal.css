@@ -126,6 +126,7 @@
 .native-terminal-error {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 7px 10px;
   color: var(--negative);
@@ -134,6 +135,16 @@
 .native-terminal-error > span {
   flex: 1;
   min-width: 0;
+}
+.native-terminal-error-details {
+  flex-basis: 100%;
+  min-width: 0;
+  color: var(--secondary);
+}
+.native-terminal-error-details pre {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 .native-terminal-empty {
   display: flex;
@@ -180,8 +191,27 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dialog-content:has(> .native-service-form) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dialog-content:has(> .native-service-form) > .dialog-heading {
+  flex-shrink: 0;
+}
 .native-service-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.native-service-fields {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .native-service-form fieldset {
   display: flex;
@@ -209,6 +239,9 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  flex-shrink: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 .native-terminal-lamp.ready {
   background: var(--accent);

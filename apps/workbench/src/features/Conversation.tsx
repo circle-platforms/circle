@@ -415,7 +415,9 @@ export function Conversation({
     input.current?.focus({ preventScroll: true });
   };
   useEffect(() => {
-    if (input.current) {
+    // Chromium sizes content during its normal layout, without a draft-triggered
+    // write -> scrollHeight read -> write forcing a second synchronous layout.
+    if (input.current && !CSS.supports('field-sizing', 'content')) {
       input.current.style.height = 'auto';
       input.current.style.height =
         Math.min(input.current.scrollHeight, 180) + 'px';
@@ -949,11 +951,11 @@ export function Conversation({
           </Button>
         </div>
       )}
-      {snapshot.runtime?.connected && (
-        <RecoveredInputs key={session.id} sessionId={session.id} />
-      )}
       {composerWritable && (
         <div className="composer-area">
+          {snapshot.runtime?.connected && (
+            <RecoveredInputs key={session.id} sessionId={session.id} />
+          )}
           {planVisible(
             session.todos,
             pending.some(
@@ -1250,6 +1252,7 @@ export function Conversation({
             )}
             <textarea
               ref={input}
+              style={{ fieldSizing: 'content' }}
               rows={1}
               aria-label={t('message')}
               placeholder={t('Ask anything, or describe a change…')}

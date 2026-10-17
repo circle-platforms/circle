@@ -53,6 +53,7 @@ export interface CycleRecord extends CycleSpec {
   attempt: number;
   taskIds: string[];
   publishedHead?: string;
+  recoveryPhase?: 'diagnosis';
   ciQueryRetry?: { failures: number; notBefore: number };
   pr?: { url: string; number?: number; head: string };
   lastFailure?: {
@@ -73,6 +74,7 @@ export interface CyclePorts {
       request: {
         kind: 'implementation' | 'repair' | 'diagnosis';
         prompt: string;
+        dependencies?: string[];
       },
       operation: { operationId: string },
     ): Promise<string[]>;
@@ -139,6 +141,20 @@ interface Ledger {
 }
 const hash = (input: unknown) =>
   createHash('sha256').update(JSON.stringify(input)).digest('hex');
+// Ignore transport decoration and ISO timestamps, preserving actual error text.
+const normalizeFailureLog = (logs: string) =>
+  logs
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, '<time>')
+    .trim();
+const countConsecutiveFailure = (cycle: CycleRecord, fingerprint: string) => {
+  const count =
+    cycle.lastFailure?.fingerprint === fingerprint
+      ? (cycle.failureCounts[fingerprint] ?? 0) + 1
+      : 1;
+  cycle.failureCounts[fingerprint] = count;
+  return count;
+};
 const now = () => new Date().toISOString();
 const copy = <T>(value: T): T => structuredClone(value);
 /** One owner per ledger. All mutations are durable before effects; unknown effects are never replayed. */
@@ -387,6 +403,45 @@ export class DeliveryCycleService {
       if (this.queues.get(id) === result) this.queues.delete(id);
     }
   }
+  private async recover(
+    cycle: CycleRecord,
+    logs: string,
+    head: string,
+    checks: CycleCheck[],
+  ) {
+    const fingerprint = hash({
+      checks,
+      logs: normalizeFailureLog(logs),
+    });
+    const count = countConsecutiveFailure(cycle, fingerprint);
+    cycle.lastFailure = { fingerprint, logs, checks, head };
+    const kind = count >= 3 ? 'diagnosis' : 'repair';
+    const operationId = `${cycle.id}:${kind}:${cycle.attempt + 1}`;
+    const ids = await this.operation(
+      cycle,
+      `create ${kind} tasks`,
+      operationId,
+      cycle.lastFailure,
+      () =>
+        this.options.ports.tasks.create(
+          copy(cycle),
+          {
+            kind,
+            prompt: `${kind === 'diagnosis' ? 'Independently diagnose this repeated failure and propose a revised task breakdown. Do not repeat the same repair.' : 'Repair the failed verification and verify the original acceptance criteria.'}\n${logs}`,
+          },
+          { operationId },
+        ),
+    );
+    cycle.taskIds = ids;
+    cycle.attempt++;
+    if (kind === 'diagnosis') cycle.recoveryPhase = 'diagnosis';
+    else delete cycle.recoveryPhase;
+    await this.update(
+      cycle,
+      ids.length ? 'repairing' : 'needs_review',
+      ids.length ? undefined : 'recovery created no tasks',
+    );
+  }
   private async advanceOwned(cycle: CycleRecord): Promise<CycleRecord> {
     const ports = this.options.ports;
     if (['needs_review', 'pending_human_merge'].includes(cycle.state))
@@ -429,6 +484,33 @@ export class DeliveryCycleService {
           );
           return copy(cycle);
         }
+        if (cycle.recoveryPhase === 'diagnosis') {
+          const operationId = `${cycle.id}:replan:${cycle.attempt}`;
+          const dependencies = [...cycle.taskIds];
+          cycle.taskIds = await this.operation(
+            cycle,
+            'create revised repair tasks',
+            operationId,
+            dependencies,
+            () =>
+              ports.tasks.create(
+                copy(cycle),
+                {
+                  kind: 'repair',
+                  dependencies,
+                  prompt: `Use the independently accepted diagnosis in the completed dependency results/artifacts to revise the task breakdown and implement a different repair. Preserve all original acceptance criteria; propose further follow-up tasks to the coordinator when needed.\n${cycle.lastFailure?.logs ?? ''}`,
+                },
+                { operationId },
+              ),
+          );
+          delete cycle.recoveryPhase;
+          cycle.attempt++;
+          await this.update(
+            cycle,
+            cycle.taskIds.length ? 'repairing' : 'needs_review',
+          );
+          return copy(cycle);
+        }
         const operationId = `${cycle.id}:merge:${cycle.attempt}`;
         const merged = await this.operation(
           cycle,
@@ -466,6 +548,26 @@ export class DeliveryCycleService {
             ),
           );
         if (!verified) {
+          if (
+            !verification.passed &&
+            !after.dirty &&
+            before.revision === after.revision &&
+            verification.head === after.head &&
+            verification.evidence.some(
+              (item) => item.status === 'failed' && item.detail.trim(),
+            )
+          ) {
+            await this.recover(
+              cycle,
+              verification.evidence
+                .filter((item) => item.status === 'failed')
+                .map((item) => `${item.criterion}: ${item.detail}`)
+                .join('\n'),
+              after.head,
+              [{ name: 'local verification', bucket: 'fail' }],
+            );
+            return copy(cycle);
+          }
           await this.update(
             cycle,
             'needs_review',
@@ -630,13 +732,9 @@ export class DeliveryCycleService {
           delete cycle.ciQueryRetry;
           const fingerprint = hash({
             checks: failures.map(({ name, bucket }) => ({ name, bucket })),
-            logs: logs
-              .replace(/\x1b\[[0-9;]*m/g, '')
-              .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, '<time>')
-              .trim(),
+            logs: normalizeFailureLog(logs),
           });
-          const count = (cycle.failureCounts[fingerprint] ?? 0) + 1;
-          cycle.failureCounts[fingerprint] = count;
+          const count = countConsecutiveFailure(cycle, fingerprint);
           cycle.lastFailure = {
             fingerprint,
             logs,
@@ -660,13 +758,8 @@ export class DeliveryCycleService {
           );
           cycle.taskIds = ids;
           cycle.attempt++;
-          await this.update(
-            cycle,
-            kind === 'diagnosis' || !ids.length ? 'needs_review' : 'repairing',
-            kind === 'diagnosis'
-              ? 'same CI failure occurred three times; independent diagnosis dispatched, review the revised plan before continuing'
-              : undefined,
-          );
+          if (kind === 'diagnosis') cycle.recoveryPhase = 'diagnosis';
+          await this.update(cycle, !ids.length ? 'needs_review' : 'repairing');
           return copy(cycle);
         }
         if (

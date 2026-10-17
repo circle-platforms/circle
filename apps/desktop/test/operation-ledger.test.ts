@@ -23,6 +23,7 @@ import {
   type OperationIdentity,
 } from '../src/workspace/operation-ledger.ts';
 import { WorkspaceDocuments } from '../src/workspace/documents.ts';
+import { UserShellPreflightError } from '../../../src/user_shell.ts';
 const exec = promisify(execFile);
 const paramsHash = (value: string) =>
   createHash('sha256').update(value).digest('hex');
@@ -246,6 +247,113 @@ test('crashed operation remains unknown on restart and its real file effect is n
     OperationNeedsReviewError,
   );
   assert.equal(await readFile(effect, 'utf8'), 'once');
+});
+
+test('typed shell preflight rejections replay fixed safe feedback without executing after restart', async (t) => {
+  const f = await fixture(t);
+  let ledger = await f.open(),
+    attempts = 0;
+  const codes = [
+    'USER_SHELL_BUSY',
+    'USER_SHELL_PLAN_MODE',
+    'USER_SHELL_EMPTY',
+  ] as const;
+  for (const code of codes) {
+    const op = { ...identity(code), service: 'shell', method: 'run' };
+    const expected = new UserShellPreflightError(code);
+    await assert.rejects(
+      ledger.run(op, async () => {
+        attempts++;
+        const error = new UserShellPreflightError(code);
+        error.message =
+          'PRIVATE mutated diagnostic must not be returned or persisted';
+        throw error;
+      }),
+      (error: unknown) =>
+        error instanceof UserShellPreflightError &&
+        error.code === code &&
+        error.message === expected.message,
+    );
+    assert.equal(ledger.status(code)?.state, 'rejected');
+  }
+  await ledger.close();
+  ledger = await f.open();
+  for (const code of codes) {
+    const expected = new UserShellPreflightError(code);
+    await assert.rejects(
+      ledger.run(
+        { ...identity(code), service: 'shell', method: 'run' },
+        async () => assert.fail('rejected shell command must never execute'),
+      ),
+      (error: unknown) =>
+        error instanceof UserShellPreflightError &&
+        error.code === code &&
+        error.message === expected.message,
+    );
+  }
+  assert.equal(attempts, codes.length);
+  for (const file of await bytes(f.directory))
+    assert.equal(
+      file.includes(Buffer.from('PRIVATE mutated diagnostic')),
+      false,
+    );
+});
+
+test('a forged shell error or typed error after a returned effect never becomes a safe preflight rejection', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open();
+  const effect = join(f.root, 'unknown-effect');
+  await assert.rejects(
+    ledger.run(
+      { ...identity('forged'), service: 'shell', method: 'run' },
+      async () => {
+        await writeFile(effect, 'once');
+        throw Object.assign(
+          new Error(new UserShellPreflightError('USER_SHELL_BUSY').message),
+          { code: 'USER_SHELL_BUSY' },
+        );
+      },
+    ),
+    OperationNeedsReviewError,
+  );
+  assert.equal(ledger.status('forged')?.state, 'needs_review');
+  await assert.rejects(
+    ledger.run(
+      { ...identity('forged'), service: 'shell', method: 'run' },
+      async () => writeFile(effect, 'twice'),
+    ),
+    OperationNeedsReviewError,
+  );
+  assert.equal(await readFile(effect, 'utf8'), 'once');
+  await assert.rejects(
+    ledger.run(identity('wrong-service'), async () => {
+      throw new UserShellPreflightError('USER_SHELL_BUSY');
+    }),
+    OperationNeedsReviewError,
+  );
+  assert.equal(ledger.status('wrong-service')?.state, 'needs_review');
+  const postEffect = await OperationLedger.open({
+    directory: join(f.root, 'post-effect'),
+    resultCodec: {
+      seal: async () => {
+        throw new UserShellPreflightError('USER_SHELL_PLAN_MODE');
+      },
+      unseal: async (value) => value,
+    },
+  });
+  t.after(() => postEffect.close());
+  await assert.rejects(
+    postEffect.run(
+      { ...identity('returned'), service: 'shell', method: 'run' },
+      async () => {
+        await writeFile(join(f.root, 'returned-effect'), 'once');
+        return 'effect returned';
+      },
+    ),
+    OperationNeedsReviewError,
+  );
+  assert.equal(postEffect.status('returned')?.state, 'needs_review');
+  assert.equal(await readFile(join(f.root, 'returned-effect'), 'utf8'), 'once');
 });
 
 test('errors persist only safe classification and a live owner cannot be opened twice', async (t) => {

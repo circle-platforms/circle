@@ -128,6 +128,76 @@ try {
     1,
     'plain text is not misclassified as an image',
   );
+  // The native sizing path must not force textarea layout after every draft.
+  await box.evaluate((node) => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'scrollHeight',
+    );
+    window.composerHeightReads = 0;
+    window.restoreComposerHeightRead = () =>
+      Object.defineProperty(Element.prototype, 'scrollHeight', descriptor);
+    Object.defineProperty(Element.prototype, 'scrollHeight', {
+      ...descriptor,
+      get() {
+        if (this === node) window.composerHeightReads++;
+        return descriptor.get.call(this);
+      },
+    });
+  });
+  const longDraft = Array.from(
+    { length: 600 },
+    (_, index) => `full pasted line ${index} ${'developer input '.repeat(4)}`,
+  ).join('\n');
+  for (let index = 0; index < 40; index++) {
+    await box.fill(index % 2 ? '' : longDraft);
+    await page.waitForFunction(
+      (value) =>
+        document.querySelector('textarea[aria-label="message"]').value ===
+        value,
+      index % 2 ? '' : longDraft,
+    );
+    const height = await box.evaluate(
+      (node) => node.getBoundingClientRect().height,
+    );
+    assert.ok(
+      height <= 180 && height >= 46,
+      'same min/max composer bounds survive the full600line workload',
+    );
+  }
+  const nativeSizing = await page.evaluate(() =>
+    CSS.supports('field-sizing', 'content'),
+  );
+  const heightReads = await page.evaluate(() => window.composerHeightReads);
+  await page.evaluate(() => window.restoreComposerHeightRead());
+  if (nativeSizing)
+    assert.equal(
+      heightReads,
+      0,
+      'native content sizing avoids every draft-triggered scrollHeight read',
+    );
+  await box.fill('draft selection preserved');
+  await box.evaluate((node) => {
+    node.focus();
+    node.setSelectionRange(6, 15);
+  });
+  assert.deepEqual(
+    await box.evaluate((node) => [node.selectionStart, node.selectionEnd]),
+    [6, 15],
+  );
+  await page.keyboard.insertText('EDIT');
+  assert.equal(await box.inputValue(), 'draft EDIT preserved');
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  );
+  assert.equal(
+    await box.inputValue(),
+    'draft selection preserved',
+    'native undo survives sizing changes',
+  );
+  console.log(
+    JSON.stringify({ nativeSizing, heightReads, fullDraftUpdates: 40 }),
+  );
   console.log(
     JSON.stringify({
       passed: true,

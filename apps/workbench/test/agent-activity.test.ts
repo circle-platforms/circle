@@ -121,3 +121,24 @@ test('worker execution can finish while acceptance and an independent reviewer r
   assert.equal(agentState(worker), 'needs_review');
   assert.notEqual(agentActivityText(worker), 'done');
 });
+
+test('legacy activity fallback follows status without replacing actual event text', () => {
+  const agent = taskAgent('succeeded');
+  delete agent.task;
+  for (const language of ['en', 'zh-CN'] as const) {
+    setLanguage(language);
+    assert.equal(
+      agentActivityText(agent),
+      language === 'zh-CN' ? '完成' : 'done',
+    );
+    assert.equal(
+      agentActivityText({ ...agent, activity: 'actual tool output' }),
+      'actual tool output',
+    );
+    assert.equal(
+      agentActivityText({ ...agent, status: 'waiting' }),
+      language === 'zh-CN' ? '等待你处理' : 'waiting for you',
+    );
+  }
+  setLanguage('en');
+});

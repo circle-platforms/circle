@@ -7,6 +7,7 @@ import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
+import { History, SquareTerminal } from 'lucide-react';
 import { TasksPanel } from './TasksPanel';
 import { DeliveryCyclePanel } from './DeliveryCyclePanel';
 import { appendTerminalSelection } from '../model/terminal-context';
@@ -29,6 +30,9 @@ export function WorkspacePanelContents({
   kind,
   resourcesPaused = false,
   commandTerminal,
+  debugSourceRequest,
+  onOpenTerminal,
+  terminalFocusRequest,
   onExitCommandTerminal,
   sessionId,
   visible,
@@ -41,6 +45,9 @@ export function WorkspacePanelContents({
   kind: 'terminal' | 'changes' | 'activity';
   resourcesPaused?: boolean;
   commandTerminal?: CommandTerminalView;
+  debugSourceRequest?: { id: string; path: string; line?: number };
+  onOpenTerminal?: (target: { id: string; epoch: string }) => void;
+  terminalFocusRequest?: { id: string; epoch: string; requestId: string };
   onExitCommandTerminal?: () => void;
   sessionId: string;
   visible: boolean;
@@ -60,7 +67,12 @@ export function WorkspacePanelContents({
   };
   useEffect(() => {
     if (kind === 'activity' && selection.startsWith('task:')) select('tasks');
-  }, [kind, selection]);
+    else if (
+      kind === 'activity' &&
+      (selection === 'debug' || debugSourceRequest)
+    )
+      select('debug');
+  }, [kind, selection, debugSourceRequest?.id]);
   const tabs =
     kind === 'terminal'
       ? [
@@ -99,7 +111,11 @@ export function WorkspacePanelContents({
   return (
     <div className={`workspace-panel-contents workspace-panel-${kind}`}>
       <div
-        className="segmented"
+        className={
+          kind === 'terminal'
+            ? 'segmented panel-switch'
+            : 'segmented panel-header-tabs'
+        }
         role="tablist"
         aria-label={
           kind === 'changes'
@@ -117,6 +133,8 @@ export function WorkspacePanelContents({
             className={tab === item.id ? 'active' : ''}
             aria-selected={tab === item.id}
             aria-controls={`inspector-${kind}-${item.id}`}
+            aria-label={kind === 'terminal' ? item.label : undefined}
+            title={kind === 'terminal' ? item.label : undefined}
             tabIndex={tab === item.id ? 0 : -1}
             onClick={() => select(item.id)}
             onKeyDown={(e) => {
@@ -140,7 +158,13 @@ export function WorkspacePanelContents({
                 ?.focus();
             }}
           >
-            {item.label}
+            {kind !== 'terminal' ? (
+              item.label
+            ) : item.id === 'terminal' ? (
+              <SquareTerminal size={14} aria-hidden />
+            ) : (
+              <History size={14} aria-hidden />
+            )}
           </button>
         ))}
       </div>
@@ -170,6 +194,7 @@ export function WorkspacePanelContents({
                       embedded
                       sessionId={sessionId}
                       commandTerminal={commandTerminal}
+                      focusRequest={terminalFocusRequest}
                       onExitCommandTerminal={onExitCommandTerminal}
                       active={visible && tab === 'terminal'}
                       onAddToDraft={(capture) =>
@@ -206,6 +231,8 @@ export function WorkspacePanelContents({
                     />
                   ) : item.id === 'debug' ? (
                     <DebugPanel
+                      sourceRequest={debugSourceRequest}
+                      onOpenTerminal={onOpenTerminal}
                       sessionId={sessionId}
                       embedded
                       onFile={onFile}

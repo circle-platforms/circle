@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef } from 'react';
 import { applyMonacoLocale } from './monaco-locale';
 import * as monaco from 'monaco-editor/editor/editor.api';
+// Monaco 0.57 exposes this runtime service entry without TypeScript declarations.
+// @ts-expect-error The pinned standalone module has no declaration file.
+import { StandaloneServices } from 'monaco-editor/editor/standalone/browser/standaloneServices';
 import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching';
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard';
 import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu';
@@ -23,6 +26,30 @@ import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import './native-editor.css';
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
+const editorWorkspaceIds = new Set<string>();
+// Labels are presentation only: model URIs keep their stable workspace identity.
+StandaloneServices.initialize({
+  labelService: {
+    getUriLabel(resource: monaco.Uri) {
+      const firstSlash = resource.path.indexOf('/', 1);
+      const workspace = resource.path.slice(
+        1,
+        firstSlash < 0 ? undefined : firstSlash,
+      );
+      if (editorWorkspaceIds.has(workspace))
+        return firstSlash < 0
+          ? '.'
+          : resource.path.slice(firstSlash + 1) || '.';
+      return resource.scheme === 'file' ? resource.fsPath : resource.path;
+    },
+    getUriBasenameLabel(resource: monaco.Uri) {
+      return (
+        resource.path.slice(resource.path.lastIndexOf('/') + 1) ||
+        resource.authority
+      );
+    },
+  },
+});
 export type EditorDocument = {
   path: string;
   content: string;
@@ -44,6 +71,11 @@ export function refreshEditorDocument(
   const model = monaco.editor.getModel(uri);
   if (!model || !previous || previous.revision === document.revision)
     return 'unchanged';
+  // Metadata-only changes advance CAS without replacing the human draft or Undo stack.
+  if (previous.content === document.content) {
+    setEditorDocument(workspace, document);
+    return 'updated';
+  }
   if (model.getValue() !== previous.content) return 'conflict';
   setEditorDocument(workspace, document);
   model.pushStackElement();
@@ -114,6 +146,7 @@ export function retainedModel(
   content: string,
   language: string,
 ) {
+  editorWorkspaceIds.add(workspace);
   const uri = editorUri(workspace, path);
   const existing = monaco.editor.getModel(uri);
   if (existing) return existing;

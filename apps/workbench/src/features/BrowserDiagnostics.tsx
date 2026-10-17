@@ -1,7 +1,13 @@
+import {
+  DebugSourceLabel,
+  DebugBreakpointRow,
+  DebugVariableRow,
+} from '../components/DebugRows';
+import { DebugToolbar } from '../components/DebugToolbar';
 import { Button, Status } from '../components/common';
 import { useSources, sourceLocation } from '../components/SourceNavigation';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { desktopHost } from '../host';
+import { desktopHost, copyText } from '../host';
 import { t } from '../i18n';
 import type {
   BrowserDiagnosticEvent,
@@ -35,6 +41,10 @@ export function BrowserDiagnostics({
   >('console');
   const [result, setResult] = useState<BrowserDiagnosticResult>();
   const [error, setError] = useState('');
+  const [log, setLog] = useState<BrowserDiagnosticResult['log']>();
+  const [logBusy, setLogBusy] = useState(false);
+  const [logIncomplete, setLogIncomplete] = useState(false);
+  const logGeneration = useRef(0);
   const [kind, setKind] = useState<'local' | 'session'>('local');
   const [key, setKey] = useState('');
   const [value, setValue] = useState('');
@@ -42,6 +52,7 @@ export function BrowserDiagnostics({
   const [height, setHeight] = useState('812');
   const [source, setSource] = useState('');
   const [line, setLine] = useState('1');
+  const [expression, setExpression] = useState('');
   const results = useRef<HTMLDivElement>(null);
   const followConsole = useRef(true);
   useLayoutEffect(() => {
@@ -55,14 +66,73 @@ export function BrowserDiagnostics({
   }, [open, section, result?.state.console.at(-1)?.id]);
   const selectedScope = useRef<string | undefined>(undefined);
   const latestPause = useRef({ identity: '', epoch: 0, paused: false });
+  const latestConnection = useRef('');
+  const evaluationSequence = useRef(0);
   const identity = useRef('');
   identity.current = sessionId + ':' + tab + ':' + url;
-  if (latestPause.current.identity !== identity.current)
+  if (latestPause.current.identity !== identity.current) {
+    latestConnection.current = '';
     latestPause.current = {
       identity: identity.current,
       epoch: 0,
       paused: false,
     };
+  }
+  useEffect(() => {
+    logGeneration.current++;
+    setLog(undefined);
+    setLogIncomplete(false);
+    setLogBusy(false);
+  }, [sessionId, tab, url, section, open, result?.stream?.epoch]);
+  const readLog = async (complete = false, next = false) => {
+    if (!tab || (section !== 'console' && section !== 'network')) return;
+    const target = identity.current;
+    const connection = latestConnection.current;
+    const generation = ++logGeneration.current;
+    const domain = section;
+    const host = desktopHost() as Host | undefined;
+    if (!host?.browserDiagnostics) return;
+    const current = () =>
+      identity.current === target &&
+      latestConnection.current === connection &&
+      logGeneration.current === generation;
+    setLogBusy(true);
+    try {
+      let cursor = next ? log?.cursor : undefined;
+      const pages: string[] = [];
+      for (;;) {
+        const response = await host.browserDiagnostics(sessionId, {
+          action: 'log',
+          tab,
+          domain,
+          cursor,
+          limit: 256,
+        });
+        if (!current()) return;
+        setLogIncomplete(!!response.state.logError);
+        if (complete && response.state.logError)
+          throw Error(t('browser log is incomplete'));
+        const page = response.log;
+        if (!page) throw Error('browser log is unavailable');
+        if (!complete) {
+          setLog(page);
+          break;
+        }
+        pages.push(...page.entries.map((entry) => JSON.stringify(entry)));
+        if (!page.hasMore) {
+          await copyText(pages.join('\n'));
+          break;
+        }
+        if (cursor && page.cursor.offset <= cursor.offset)
+          throw Error('browser log is unavailable');
+        cursor = page.cursor;
+      }
+    } catch (failure) {
+      if (current()) setError(String(failure));
+    } finally {
+      if (current()) setLogBusy(false);
+    }
+  };
   const kindRef = useRef(kind);
   kindRef.current = kind;
   const apply = (
@@ -71,7 +141,13 @@ export function BrowserDiagnostics({
   ) => {
     if (r.action === 'storage' && r.kind !== kindRef.current) return;
     const pauseEpoch = response.state.debugger.pauseEpoch ?? 0;
-    if (pauseEpoch < latestPause.current.epoch) return;
+    if (
+      response.stream?.epoch === latestConnection.current &&
+      pauseEpoch < latestPause.current.epoch
+    )
+      return;
+    if (response.stream?.epoch)
+      latestConnection.current = response.stream.epoch;
     latestPause.current = {
       identity: identity.current,
       epoch: pauseEpoch,
@@ -102,26 +178,72 @@ export function BrowserDiagnostics({
             ? previous?.variables
             : undefined))
         : undefined,
+      evaluation:
+        response.state.debugger.paused &&
+        previous?.state.debugger.pauseEpoch ===
+          response.state.debugger.pauseEpoch &&
+        previous?.stream?.epoch === response.stream?.epoch
+          ? (response.evaluation ?? previous?.evaluation)
+          : response.evaluation,
       ...(r.action === 'clearNetwork' ? { response: undefined } : {}),
     }));
   };
   const request = async (r: BrowserDiagnosticRequest) => {
     const ownIdentity = identity.current;
+    const evaluation =
+      r.action === 'debug' && r.command === 'evaluate'
+        ? ++evaluationSequence.current
+        : undefined;
     try {
       const host = desktopHost() as unknown as Host;
       if (!host?.browserDiagnostics) throw Error(t('diagnostics unavailable'));
       const response = await host.browserDiagnostics(sessionId, r);
-      if (ownIdentity !== identity.current) return;
-      apply(response, r);
-      if (r.action !== 'read') setError('');
-    } catch (e) {
-      if (ownIdentity !== identity.current) return;
+      if (
+        ownIdentity !== identity.current ||
+        (evaluation !== undefined && evaluation !== evaluationSequence.current)
+      )
+        return;
       if (
         r.action === 'debug' &&
-        r.command === 'variables' &&
+        r.command === 'evaluate' &&
+        (r.expectedPauseEpoch !== latestPause.current.epoch ||
+          !latestPause.current.paused ||
+          response.stream?.epoch !== r.expectedConnectionEpoch ||
+          latestConnection.current !== r.expectedConnectionEpoch)
+      )
+        return;
+      apply(response, r);
+      if (r.action !== 'read') setError('');
+      if (r.action === 'debug' && r.command === 'evaluate') {
+        const frame = response.state.debugger.stackFrames.find(
+          (frame) => frame.id === r.frameId,
+        );
+        const scope =
+          frame?.scopes.find((scope) => scope.name === selectedScope.current) ??
+          frame?.scopes.find((scope) => scope.name === 'local');
+        if (scope)
+          void request({
+            action: 'debug',
+            command: 'variables',
+            reference: scope.variablesReference,
+            expectedPauseEpoch: r.expectedPauseEpoch,
+            expectedConnectionEpoch: r.expectedConnectionEpoch,
+          });
+      }
+    } catch (e) {
+      if (
+        ownIdentity !== identity.current ||
+        (evaluation !== undefined && evaluation !== evaluationSequence.current)
+      )
+        return;
+      if (
+        r.action === 'debug' &&
+        ['variables', 'evaluate'].includes(r.command) &&
         r.expectedPauseEpoch !== undefined &&
         (r.expectedPauseEpoch !== latestPause.current.epoch ||
-          !latestPause.current.paused)
+          !latestPause.current.paused ||
+          (r.expectedConnectionEpoch !== undefined &&
+            r.expectedConnectionEpoch !== latestConnection.current))
       )
         return;
       setError(e instanceof Error ? e.message : String(e));
@@ -392,24 +514,29 @@ export function BrowserDiagnostics({
             </button>
           </div>
           {(error || result?.state.reconnectError) && (
-            <p role="alert">{error || result?.state.reconnectError}</p>
+            <div role="alert">
+              <p>{t('page status unavailable')}</p>
+              <details className="context-source">
+                <summary>{t('error details')}</summary>
+                <pre>{error || result?.state.reconnectError}</pre>
+              </details>
+            </div>
           )}
-          <div role="status">
-            <Status
-              value={
-                !result
-                  ? error
-                    ? t('page status unavailable')
-                    : t('loading diagnostics')
-                  : result.state.reconnectError ||
-                      result.state.owner === 'devtools'
-                    ? t('page status unavailable')
-                    : result.state.debugger.paused
-                      ? t('page paused')
-                      : t('page running')
-              }
-            />
-          </div>
+          {!error && !result?.state.reconnectError && (
+            <div role="status">
+              <Status
+                value={
+                  !result
+                    ? t('loading diagnostics')
+                    : result.state.owner === 'devtools'
+                      ? t('page status unavailable')
+                      : result.state.debugger.paused
+                        ? t('page paused')
+                        : t('page running')
+                }
+              />
+            </div>
+          )}
           {result?.state.owner === 'devtools' && (
             <p>{t('devtools owns this page; close it to reconnect')}</p>
           )}
@@ -432,13 +559,71 @@ export function BrowserDiagnostics({
                   node.scrollHeight - node.scrollTop - node.clientHeight < 24;
             }}
           >
+            {(section === 'console' || section === 'network') && (
+              <>
+                <div className="browser-diagnostic-tools">
+                  <Button disabled={logBusy} onClick={() => void readLog()}>
+                    {t('view log')}
+                  </Button>
+                  <Button
+                    onClick={() =>
+                      void request({
+                        action:
+                          section === 'console'
+                            ? 'clearConsole'
+                            : 'clearNetwork',
+                      })
+                    }
+                  >
+                    {t(
+                      section === 'console' ? 'clear console' : 'clear network',
+                    )}
+                  </Button>
+                </div>
+                {(result?.state.logError || logIncomplete) && (
+                  <p role="alert">{t('browser log is incomplete')}</p>
+                )}
+                {log?.domain === section && (
+                  <details className="context-source" open>
+                    <summary>{t('saved browser log')}</summary>
+                    <div className="browser-diagnostic-tools">
+                      <Button
+                        onClick={() =>
+                          void copyText(
+                            log.entries
+                              .map((entry) => JSON.stringify(entry))
+                              .join('\n'),
+                          )
+                        }
+                      >
+                        {t('copy shown content')}
+                      </Button>
+                      <Button
+                        disabled={
+                          logBusy || logIncomplete || !!result?.state.logError
+                        }
+                        onClick={() => void readLog(true)}
+                      >
+                        {t('copy complete log')}
+                      </Button>
+                      <Button
+                        disabled={logBusy || !log.hasMore}
+                        onClick={() => void readLog(false, true)}
+                      >
+                        {t('next page')}
+                      </Button>
+                    </div>
+                    <pre>
+                      {log.entries
+                        .map((entry) => JSON.stringify(entry))
+                        .join('\n')}
+                    </pre>
+                  </details>
+                )}
+              </>
+            )}
             {section === 'console' && (
               <>
-                <Button
-                  onClick={() => void request({ action: 'clearConsole' })}
-                >
-                  {t('clear console')}
-                </Button>
                 {result && !error && result.state.console.length === 0 && (
                   <p className="panel-note">{t('no console messages')}</p>
                 )}
@@ -466,11 +651,6 @@ export function BrowserDiagnostics({
             )}
             {section === 'network' && (
               <>
-                <Button
-                  onClick={() => void request({ action: 'clearNetwork' })}
-                >
-                  {t('clear network')}
-                </Button>
                 {result?.state.network.map((n) => (
                   <div key={n.id}>
                     <Button
@@ -516,11 +696,13 @@ export function BrowserDiagnostics({
                 </Button>
                 <input
                   aria-label={t('storage key')}
+                  placeholder={t('storage key')}
                   value={key}
                   onChange={(e) => setKey(e.target.value)}
                 />
                 <input
                   aria-label={t('storage value')}
+                  placeholder={t('storage value')}
                   value={value}
                   onChange={(e) => setValue(e.target.value)}
                 />
@@ -541,32 +723,28 @@ export function BrowserDiagnostics({
             )}
             {section === 'debug' && (
               <>
-                <div className="browser-diagnostic-tools">
-                  {(
-                    [
-                      'pause',
-                      'resume',
-                      'stepOver',
-                      'stepInto',
-                      'stepOut',
-                    ] as const
-                  ).map((command) => (
-                    <Button
-                      key={command}
-                      onClick={() => void request({ action: 'debug', command })}
-                    >
-                      {command === 'pause'
-                        ? t('pause')
-                        : command === 'resume'
-                          ? t('resume')
-                          : command === 'stepOver'
-                            ? t('step over')
-                            : command === 'stepInto'
-                              ? t('step into')
-                              : t('step out')}
-                    </Button>
-                  ))}
-                </div>
+                <DebugToolbar
+                  stop={false}
+                  continueLabel={t('resume')}
+                  enabled={(action) =>
+                    result?.state.owner === 'circle' &&
+                    (action === 'pause'
+                      ? !result.state.debugger.paused
+                      : result.state.debugger.paused)
+                  }
+                  onAction={(action) => {
+                    const command = (
+                      {
+                        continue: 'resume',
+                        pause: 'pause',
+                        next: 'stepOver',
+                        stepIn: 'stepInto',
+                        stepOut: 'stepOut',
+                      } as const
+                    )[action as Exclude<typeof action, 'stop'>];
+                    if (command) void request({ action: 'debug', command });
+                  }}
+                />
                 <input
                   aria-label={t('source URL')}
                   value={source}
@@ -590,27 +768,29 @@ export function BrowserDiagnostics({
                   {t('add breakpoint')}
                 </Button>
                 {result?.state.debugger.breakpoints.map((b) => (
-                  <div key={b.id}>
-                    <code>
-                      {b.verified ? '●' : '○'} {b.source.path}:{b.line}
-                    </code>
-                    <Button
-                      onClick={() =>
-                        void request({
-                          action: 'debug',
-                          command: 'removeBreakpoint',
-                          reference: b.id,
-                        })
-                      }
-                    >
-                      {t('remove breakpoint')}
-                    </Button>
-                  </div>
+                  <DebugBreakpointRow
+                    key={b.id}
+                    path={b.source.path}
+                    line={b.line}
+                    verified={b.verified}
+                    onOpen={() => void openSource(b.source.path, b.line, 1)}
+                    onRemove={() =>
+                      void request({
+                        action: 'debug',
+                        command: 'removeBreakpoint',
+                        reference: b.id,
+                      })
+                    }
+                  />
                 ))}
                 {result?.state.debugger.stackFrames.map((f) => (
                   <details className="context-source" key={f.id}>
                     <summary>
-                      {f.name} {f.source.path}:{f.line}
+                      <DebugSourceLabel
+                        name={f.name}
+                        path={f.source.path}
+                        line={f.line}
+                      />
                     </summary>
                     <Button
                       onClick={() =>
@@ -619,6 +799,41 @@ export function BrowserDiagnostics({
                     >
                       {t('open source location')}
                     </Button>
+                    <form
+                      className="debug-evaluate"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void request({
+                          action: 'debug',
+                          command: 'evaluate',
+                          frameId: f.id,
+                          expression,
+                          expectedPauseEpoch: result.state.debugger.pauseEpoch,
+                          expectedConnectionEpoch: result.stream?.epoch,
+                        });
+                      }}
+                    >
+                      <input
+                        aria-label={t('debug expression')}
+                        value={expression}
+                        onChange={(event) => setExpression(event.target.value)}
+                      />
+                      <Button
+                        disabled={
+                          !result.state.debugger.paused ||
+                          result.state.owner !== 'circle' ||
+                          !result.stream?.epoch ||
+                          !expression.trim()
+                        }
+                      >
+                        {t('evaluate')}
+                      </Button>
+                      <output>
+                        {result.evaluation?.frameId === f.id
+                          ? result.evaluation.value
+                          : ''}
+                      </output>
+                    </form>
                     {f.scopes.map((s) => (
                       <Button
                         key={s.variablesReference}
@@ -639,11 +854,11 @@ export function BrowserDiagnostics({
                   </details>
                 ))}
                 {result?.variables?.map((v) => (
-                  <div key={v.name}>
-                    <code>
-                      {v.name}: {v.value}
-                    </code>
-                  </div>
+                  <DebugVariableRow
+                    key={v.name}
+                    name={v.name}
+                    value={v.value}
+                  />
                 ))}
               </>
             )}

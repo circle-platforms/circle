@@ -18,6 +18,143 @@ export type TaskState =
   | 'interrupted'
   | 'needs_review';
 export type TaskResource = 'agent' | 'build' | 'ui' | 'browser';
+export const TASK_RESOURCES: readonly TaskResource[] = Object.freeze([
+  'agent',
+  'build',
+  'ui',
+  'browser',
+]);
+/** Scheduling grants only: file, tool and credential authorization remain separate. */
+export function taskResourceGrants(
+  value: unknown,
+  host: readonly TaskResource[] = TASK_RESOURCES,
+): TaskResource[] {
+  if (
+    !Array.isArray(value) ||
+    !value.length ||
+    value.some(
+      (item) =>
+        typeof item !== 'string' ||
+        !TASK_RESOURCES.includes(item as TaskResource),
+    )
+  )
+    throw Error(
+      'invalid task resource grants; create a new attempt using current host grants',
+    );
+  const grants = [...new Set(value as TaskResource[])];
+  if (
+    !grants.includes('agent') ||
+    grants.some((resource) => !host.includes(resource))
+  )
+    throw Error('task resource grants exceed the current host grant');
+  return grants;
+}
+export interface ProposedTask {
+  key: string;
+  prompt: string;
+  access: 'write' | 'readonly';
+  acceptanceCriteria: string[];
+  /** Only keys in this proposal; the host adds the proposing task as a dependency. */
+  dependencies: string[];
+  resource?: TaskResource;
+}
+export interface TaskProposal {
+  version: 1;
+  source: {
+    taskId: string;
+    attempt: number;
+    sessionId: string;
+    runtimeSessionId: string;
+    workspace: string;
+    baseline: string;
+  };
+  tasks: ProposedTask[];
+}
+export interface TaskProposalReceipt {
+  artifact: TaskArtifact;
+  source: TaskProposal['source'];
+  taskKeys: string[];
+}
+/** A proposal contains recommendations, never caller-selected authority or executable callbacks. */
+export function proposedTasks(input: unknown): ProposedTask[] {
+  if (!Array.isArray(input) || !input.length || input.length > 100)
+    throw Error('a proposal requires 1 to 100 tasks');
+  const text = (value: unknown, maximum: number): string => {
+    if (typeof value !== 'string' || !value.trim() || value.length > maximum)
+      throw Error('invalid proposed task text');
+    return value;
+  };
+  const tasks = input.map((item): ProposedTask => {
+    if (!item || typeof item !== 'object' || Array.isArray(item))
+      throw Error('invalid proposed task');
+    const value = item as Record<string, unknown>;
+    if (
+      Object.keys(value).some(
+        (key) =>
+          ![
+            'key',
+            'prompt',
+            'access',
+            'acceptanceCriteria',
+            'dependencies',
+            'resource',
+          ].includes(key),
+      )
+    )
+      throw Error('proposals cannot select task authority');
+    const key = text(value.key, 128);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key))
+      throw Error('invalid proposed task key');
+    if (value.access !== 'write' && value.access !== 'readonly')
+      throw Error('invalid proposed task access');
+    if (
+      !Array.isArray(value.acceptanceCriteria) ||
+      !value.acceptanceCriteria.length ||
+      value.acceptanceCriteria.length > 100 ||
+      (value.dependencies !== undefined && !Array.isArray(value.dependencies))
+    )
+      throw Error('invalid proposed task criteria or dependencies');
+    const dependencies = (value.dependencies ?? []) as unknown[];
+    if (dependencies.length > 100)
+      throw Error('too many proposed task dependencies');
+    if (
+      value.resource !== undefined &&
+      (typeof value.resource !== 'string' ||
+        !['agent', 'build', 'ui', 'browser'].includes(value.resource))
+    )
+      throw Error('invalid proposed task resource');
+    return {
+      key,
+      prompt: text(value.prompt, 1024 * 1024),
+      access: value.access,
+      acceptanceCriteria: value.acceptanceCriteria.map((item) =>
+        text(item, 8192),
+      ),
+      dependencies: [...new Set(dependencies.map((item) => text(item, 128)))],
+      ...(value.resource === undefined
+        ? {}
+        : { resource: value.resource as TaskResource }),
+    };
+  });
+  if (JSON.stringify(tasks).length > 1024 * 1024)
+    throw Error('task proposal is too large');
+  const byKey = new Map(tasks.map((task) => [task.key, task]));
+  if (byKey.size !== tasks.length) throw Error('duplicate proposed task key');
+  const visiting = new Set<string>(),
+    done = new Set<string>();
+  const visit = (key: string) => {
+    if (visiting.has(key)) throw Error('proposed task dependency cycle');
+    if (done.has(key)) return;
+    const task = byKey.get(key);
+    if (!task) throw Error('unknown proposed task dependency');
+    visiting.add(key);
+    for (const dependency of task.dependencies) visit(dependency);
+    visiting.delete(key);
+    done.add(key);
+  };
+  for (const task of tasks) visit(task.key);
+  return tasks;
+}
 export interface TaskSpec {
   id: string;
   sessionId?: string;
@@ -29,7 +166,7 @@ export interface TaskSpec {
   access: 'write' | 'readonly';
   prompt: string;
   acceptanceCriteria: string[];
-  allowedResources?: string[];
+  allowedResources?: TaskResource[];
   resource?: TaskResource;
 }
 export interface TaskRecord {

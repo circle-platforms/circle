@@ -98,6 +98,7 @@ export interface TerminalSnapshot {
     /** Original Registry identity, required for read-only historical handoff. */
     executionEpoch?: string;
     toolCallId?: string;
+    userShellId?: string;
     displayCommand?: string;
     ownership: 'pty-group';
     commandPid?: number;
@@ -172,6 +173,7 @@ export interface ManagedTerminalCommandOptions {
   executionId: string;
   executionEpoch?: string;
   toolCallId?: string;
+  userShellId?: string;
   displayCommand?: string;
   completion: CommandPtyCompletion;
   /** Trusted supervisor executable; expanded commands travel over its private control pipe. */
@@ -277,6 +279,10 @@ export class TerminalManager {
       identity(options.executionEpoch, 'execution epoch');
     if (options.toolCallId !== undefined)
       identity(options.toolCallId, 'tool call');
+    if (options.userShellId !== undefined)
+      identity(options.userShellId, 'human command');
+    if (options.toolCallId && options.userShellId)
+      throw Error('a managed command cannot have both tool and human origins');
     if (
       options.displayCommand !== undefined &&
       typeof options.displayCommand !== 'string'
@@ -311,6 +317,7 @@ export class TerminalManager {
       executionId: options.executionId,
       executionEpoch: options.executionEpoch,
       toolCallId: options.toolCallId,
+      userShellId: options.userShellId,
       displayCommand: options.displayCommand,
       ownership: 'pty-group',
       completion: safeCompletion(options.completion),

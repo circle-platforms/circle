@@ -544,6 +544,12 @@ pre {
   border-color: var(--accent);
   color: var(--bg);
 }
+.button.primary:disabled {
+  opacity: 1;
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--secondary);
+}
 .button.danger,
 .danger {
   color: var(--negative);
@@ -1298,7 +1304,7 @@ pre {
   color: var(--fg);
 }
 .inspector-body {
-  padding: 0 17px 20px;
+  padding: 0 16px 16px;
   overflow: auto;
   flex: 1;
   min-height: 0;
@@ -1469,11 +1475,21 @@ pre {
 }
 .facts dd {
   margin: 0;
+  min-width: 0;
   overflow-wrap: anywhere;
   flex: 1;
   color: var(--secondary);
 }
+.context-workspace-path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
 .context-source {
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
@@ -1487,6 +1503,15 @@ pre {
   gap: 7px;
   cursor: pointer;
   overflow-wrap: anywhere;
+}
+.context-source .text-button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.context-source summary svg {
+  flex-shrink: 0;
 }
 .context-source summary span,
 .context-source summary small {
@@ -2603,11 +2628,10 @@ pre {
   bottom: 25px;
 }
 .toast {
-  position: absolute;
-  /* Above the composer, centered on the main pane. */
-  bottom: 140px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
+  top: 72px;
+  right: 20px;
+  bottom: auto;
   z-index: 120;
   max-width: calc(100vw - 40px);
   background: var(--surface);
@@ -2618,6 +2642,7 @@ pre {
   font-size: var(--ui-small);
   line-height: 1.7;
   color: var(--fg);
+  pointer-events: none;
 }
 .search-results {
   max-height: 50vh;
@@ -4109,7 +4134,7 @@ pre {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 46vw;
+  max-width: min(46vw, 100%);
   padding: 4px 8px;
   margin-left: -8px;
   border-radius: 7px;
@@ -4131,6 +4156,22 @@ pre {
 .session-title svg {
   color: var(--muted);
   flex-shrink: 0;
+}
+@media (max-width: 360px) {
+  .topbar {
+    gap: 6px;
+    padding-inline: 6px;
+  }
+  .topbar-title {
+    gap: 4px;
+  }
+  .topbar-actions {
+    gap: 0;
+  }
+  .topbar-actions .icon-button {
+    width: 26px;
+    height: 26px;
+  }
 }
 .project-chip {
   display: inline-flex;
@@ -4766,10 +4807,9 @@ pre {
   z-index: 30;
   display: flex;
   flex-direction: column;
-  width: min(380px, 92%);
+  width: 100%;
   background: var(--bg);
-  border-left: 1px solid var(--border);
-  box-shadow: -10px 0 28px color-mix(in srgb, var(--fg) 10%, transparent);
+  border-left: 0;
 }
 .inspector-overlay > .inspector {
   flex: 1;

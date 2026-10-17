@@ -144,14 +144,33 @@ export async function runNativeDebugJourney({
   let launched = false;
   let terminal, inspectorPort;
   try {
-    await showDebug();
+    const files = page.getByRole('button', {
+      name: 'files panel',
+      exact: true,
+    });
+    if ((await files.getAttribute('aria-pressed')) !== 'true')
+      await files.click();
+    await page
+      .locator('.file-tree')
+      .getByRole('button', { name: program, exact: true })
+      .click();
+    await page.getByRole('button', { name: 'debug file', exact: true }).click();
+    await wait(
+      async () =>
+        (await panel
+          .getByLabel('program path', { exact: true })
+          .inputValue()) === program,
+      'source prepared in original debug panel',
+    );
     const previous = await observe('debug', 'snapshot');
     if (!['idle', 'stopped', 'failed'].includes(previous.status))
       throw Error('finish prior debug journey before starting this helper');
     const beforeTerminals = new Set(
       (await observe('terminal', 'list')).map((item) => item.id),
     );
-    await panel.getByLabel('program path', { exact: true }).fill(program);
+    report.checks.push(
+      'source file prepares original debugger without launching',
+    );
     const options = panel.locator('.debug-launch-options');
     if ((await options.getAttribute('open')) === null)
       await options.locator('summary').click();
@@ -166,6 +185,9 @@ export async function runNativeDebugJourney({
         .getByRole('button', { name: /^remove argument / })
         .first()
         .click();
+    const breakpoints = panel.locator('details.debug-run');
+    if ((await breakpoints.getAttribute('open')) === null)
+      await breakpoints.locator('summary').click();
     await panel.getByLabel('breakpoint line', { exact: true }).fill('12');
     await button('set breakpoint').click();
     await button('launch').click();

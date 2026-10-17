@@ -1,4 +1,8 @@
 export const nativeGit: Record<string, string> = {
+  'resolve and stage conflicts first': '先解决并暂存冲突',
+  conflict: '冲突',
+  untracked: '未跟踪',
+  renamed: '重命名',
   'publication was sent, but GitHub has not confirmed the reviewed commit; refresh PR checks before retrying and do not repeat the push':
     '发布请求已发送，但 GitHub 尚未确认已审阅的提交；请刷新 PR 检查后再决定下一步，不要重复推送',
   'GitHub candidate changed or the revision is not the inspected opaque revision; read github_candidate and review its current head, revision and paths before publishing; nothing was pushed':
@@ -49,7 +53,7 @@ export const nativeGit: Record<string, string> = {
   'git diff': 'Git 差异',
   'select a file to inspect its diff': '选择文件查看差异',
   'commit message': '提交说明',
-  'commit selected staged files': '提交所选暂存文件',
+  'commit selected': '提交所选',
   'continue merge': '继续合并',
   'abort merge': '中止合并',
   'abort this merge and restore its pre-merge state?':

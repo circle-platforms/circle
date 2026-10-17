@@ -1,5 +1,8 @@
 import { CommandTerminalNavigation } from '../components/CommandTerminalNavigation';
-import type { CommandTerminalResolution } from '../command-terminal-target';
+import type {
+  CommandTerminalResolution,
+  CommandTerminalResolveRequest,
+} from '../command-terminal-target';
 import {
   commandTerminalUnavailable,
   type CommandTerminalView,
@@ -75,6 +78,7 @@ import { Conversation } from '../features/Conversation';
 import { Home } from '../features/Home';
 import { homePath, openHome, startPath } from '../features/home-selection';
 import '../styles/developer-workbench.css';
+import '../styles/panes.css';
 import {
   sourceLocation,
   workspaceRelativePath,
@@ -178,9 +182,21 @@ export function App() {
   );
   const [sourceLine, setSourceLine] = useState<number | undefined>();
   const [sourceColumn, setSourceColumn] = useState<number | undefined>();
+  const [debugSourceRequest, setDebugSourceRequest] = useState<{
+    id: string;
+    sessionId: string;
+    path: string;
+    line?: number;
+  }>();
   const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
   const [commandTerminal, setCommandTerminal] = useState<CommandTerminalView>();
+  const [terminalFocusRequest, setTerminalFocusRequest] = useState<{
+    id: string;
+    epoch: string;
+    requestId: string;
+    sessionId: string;
+  }>();
   const commandRequest = useRef(0);
   const commandReturnFocus = useRef<
     { origin: string; trigger: HTMLElement } | undefined
@@ -196,9 +212,8 @@ export function App() {
     commandRequest.current++;
     setCommandTerminal(undefined);
   }, [session.id, agent]);
-  const openCommandTerminal = async (
-    sourceSessionId: string,
-    toolCallId: string,
+  const openOriginalCommandTerminal = async (
+    source: CommandTerminalResolveRequest,
     trigger?: HTMLElement,
   ) => {
     const request = ++commandRequest.current;
@@ -210,7 +225,7 @@ export function App() {
         viewSessionId,
         'terminal',
         'resolveCommand',
-        { sourceSessionId, toolCallId },
+        source,
       );
     } catch {
       if (
@@ -224,8 +239,12 @@ export function App() {
       return;
     if (!reply.available) throw Error(commandTerminalUnavailable(reply.reason));
     if (
-      reply.target.executionSessionId !== sourceSessionId ||
-      reply.target.toolCallId !== toolCallId
+      reply.target.executionSessionId !== source.sourceSessionId ||
+      (source.userShellId !== undefined
+        ? reply.target.origin !== 'user-shell' ||
+          reply.target.userShellId !== source.userShellId
+        : reply.target.origin !== undefined ||
+          reply.target.toolCallId !== source.toolCallId)
     )
       throw Error(t('command terminal source changed; open it again'));
     commandReturnFocus.current = trigger ? { origin, trigger } : undefined;
@@ -234,6 +253,16 @@ export function App() {
     setSelection('');
     setInspectorOpen(true);
   };
+  const openCommandTerminal = (
+    sourceSessionId: string,
+    toolCallId: string,
+    trigger?: HTMLElement,
+  ) => openOriginalCommandTerminal({ sourceSessionId, toolCallId }, trigger);
+  const openUserShellTerminal = (
+    sourceSessionId: string,
+    userShellId: string,
+    trigger?: HTMLElement,
+  ) => openOriginalCommandTerminal({ sourceSessionId, userShellId }, trigger);
 
   const selectAgent = (id: string | null) => {
     commandRequest.current++;
@@ -948,6 +977,26 @@ export function App() {
                 line={sourceLine}
                 column={sourceColumn}
                 resourceOwner={fileOwner}
+                onDebugSource={
+                  runtime.mode === 'live'
+                    ? (path, line) => {
+                        const owner = fileOwner?.sessionId ?? session.id;
+                        perform(async () => {
+                          if (owner !== runtime.getSnapshot().activeSessionId)
+                            await selectSessionAndNavigate(owner);
+                          if (runtime.getSnapshot().activeSessionId !== owner)
+                            return;
+                          setDebugSourceRequest({
+                            id: crypto.randomUUID(),
+                            sessionId: owner,
+                            path,
+                            line,
+                          });
+                          onPanel('activity', 'debug');
+                        });
+                      }
+                    : undefined
+                }
                 onNavigate={(path, line, column) =>
                   openSource(path, line, column, fileOwner)
                 }
@@ -984,6 +1033,26 @@ export function App() {
         panel={panel}
         visible={inspectorVisible}
         commandTerminal={commandTerminal}
+        terminalFocusRequest={
+          terminalFocusRequest?.sessionId === session.id
+            ? terminalFocusRequest
+            : undefined
+        }
+        onOpenTerminal={(target) => {
+          commandRequest.current++;
+          setCommandTerminal(undefined);
+          setTerminalFocusRequest({
+            ...target,
+            requestId: crypto.randomUUID(),
+            sessionId: session.id,
+          });
+          onPanel('terminal');
+        }}
+        debugSourceRequest={
+          debugSourceRequest?.sessionId === session.id
+            ? debugSourceRequest
+            : undefined
+        }
         onExitCommandTerminal={() => {
           commandRequest.current++;
           commandReturnFocus.current = undefined;
@@ -1245,6 +1314,7 @@ export function App() {
                 <Group
                   orientation="horizontal"
                   id="workbench-columns"
+                  disabled={!inspectorVisible || narrow || whole}
                   data-inspector-mode={
                     inspectorVisible && !whole
                       ? narrow
@@ -1417,6 +1487,9 @@ export function App() {
   return (
     <CommandTerminalNavigation
       onOpen={runtime.mode === 'live' ? openCommandTerminal : undefined}
+      onOpenUserShell={
+        runtime.mode === 'live' ? openUserShellTerminal : undefined
+      }
     >
       {surface}
     </CommandTerminalNavigation>

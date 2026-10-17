@@ -104,7 +104,7 @@ try {
     );
   }
   const commit = page.getByRole('button', {
-    name: 'commit selected staged files',
+    name: 'commit selected',
     exact: true,
   });
   const stage = page.getByRole('button', {

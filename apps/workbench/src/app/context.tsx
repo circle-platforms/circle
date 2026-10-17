@@ -50,7 +50,7 @@ export function RuntimeProvider({
       if (shownNotice.current !== shown) return;
       shownNotice.current = undefined;
       setNotice('');
-    }, 4200);
+    }, 1800);
   };
   const notify = (message: string) => showNotice(message);
   useEffect(() => {

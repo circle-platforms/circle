@@ -126,7 +126,11 @@ import {
   assertReadonlyTaskRequest,
 } from './workspace/task-agent-projection';
 import { createTaskVerifier } from './workspace/task-verification';
-import { CollaborationResources } from './workspace/collaboration';
+import {
+  CollaborationResources,
+  bindToolResource,
+} from './workspace/collaboration';
+import { TASK_RESOURCES } from './workspace/task-store';
 import { createCollaborationTools } from './workspace/collaboration-tools';
 import type { TaskRecord } from './workspace/task-store';
 import type { FileMutations } from '../../../src/file_mutations.js';
@@ -1451,6 +1455,7 @@ export class RuntimeController {
       debug: [
         'snapshot',
         'list',
+        'output',
         'threads',
         'stack',
         'stackTrace',
@@ -1465,7 +1470,14 @@ export class RuntimeController {
       delivery: ['status', 'checks', 'logs'],
     };
     const read =
-      request.service === 'language' ||
+      (request.service === 'language' &&
+        !['stop', 'restart'].includes(
+          String(
+            request.method === 'request'
+              ? request.params?.method
+              : request.method,
+          ),
+        )) ||
       request.service === 'events' ||
       (request.service === 'terminal' &&
         request.method === 'command' &&
@@ -1581,11 +1593,16 @@ export class RuntimeController {
     }
     const receipts = () =>
       this.store.tree(sourceSessionId).flatMap(({ message }) => {
-        if (message.role !== 'tool' || !message.tool_call_id) return [];
+        const tool = message.role === 'tool' && message.tool_call_id;
+        const human = message.role === 'user' && message.shell?.id;
+        if (!tool && !human) return [];
         return (message.commandExecutions ?? []).flatMap((receipt) => {
           if (
             receipt.executionSessionId !== sourceSessionId ||
-            receipt.toolCallId !== message.tool_call_id
+            (tool
+              ? receipt.toolCallId !== tool || receipt.userShellId !== undefined
+              : receipt.userShellId !== human ||
+                receipt.toolCallId !== undefined)
           )
             return [];
           const safe = commandExecutionReceipt({ ...receipt, outputPath: '' });
@@ -1816,6 +1833,15 @@ export class RuntimeController {
       new AgentRuntime({
         workspace,
         fileMutations: this.fileMutations(workspace),
+        classifyTool: bindToolResource,
+        executeTool: (tool, args, context, run) =>
+          this.taskResources.executeTool(
+            tool,
+            args,
+            context,
+            run,
+            task?.spec.allowedResources ?? TASK_RESOURCES,
+          ),
         commandLauncher: this.options.workspaceTools?.commandSupervisorPath
           ? (request) =>
               createTerminalCommandLauncher({
@@ -1899,7 +1925,7 @@ export class RuntimeController {
                 // Paths as the file tools take them (a credential file never goes), the
                 // conversation to record and the values a replayed script takes
                 ...runtimeBrowserOptions(() => runtime),
-              })
+              }).map((tool) => bindToolResource(tool, 'browser'))
             : []),
         ],
         approve: (call, signal, origin) =>
@@ -2061,6 +2087,28 @@ export class RuntimeController {
         thinking: raw.thinking,
         label: labels[raw.id],
         at: new Date(node.created).toISOString(),
+        ...(raw.shell
+          ? {
+              shell: {
+                id: raw.shell.id,
+                sourceSessionId: id,
+                command: raw.shell.command,
+                output: raw.shell.output,
+                exitCode: raw.shell.exit_code,
+                status:
+                  raw.shell.exit_code === 0
+                    ? ('done' as const)
+                    : ('error' as const),
+                interactive: (raw.commandExecutions ?? []).some(
+                  (execution) =>
+                    execution.executionSessionId === id &&
+                    execution.userShellId === raw.shell!.id &&
+                    execution.toolCallId === undefined &&
+                    !!execution.terminal,
+                ),
+              },
+            }
+          : {}),
         attachments: raw.attachments?.map((a, index) => ({
           id: `${node.id}-attachment-${index}`,
           name: a.filename,
@@ -2137,6 +2185,51 @@ export class RuntimeController {
           completionFailure: completion.code,
           at: base.at,
         });
+    }
+    const actual =
+      this.runtimes.get(id) ??
+      [...this.taskRuntimes.values()].find(
+        (runtime) => runtime.session.id === id,
+      );
+    const shellAnchors = new Map<string | null, string>();
+    for (const view of actual?.userShells.views ?? []) {
+      if (
+        view.sessionId !== id ||
+        (view.persistedMessageId &&
+          nodes.some((node) => node.message?.id === view.persistedMessageId))
+      )
+        continue;
+      const anchor =
+        nodes.find((node) => node.message?.id === view.anchor)?.id ?? null;
+      const shell: Message = {
+        id: 'user-shell-' + view.id,
+        parentId: anchor,
+        role: 'user',
+        text: (view.quiet ? '!!' : '!') + view.command,
+        at: new Date(
+          view.startedAt ?? view.execution?.started ?? 0,
+        ).toISOString(),
+        shell: {
+          id: view.id,
+          sourceSessionId: id,
+          command: view.command,
+          output: view.output,
+          status: view.status,
+          exitCode: view.exitCode,
+          quiet: view.quiet,
+          interactive: !!view.execution?.terminal,
+        },
+      };
+      const previous = shellAnchors.get(anchor);
+      const after = previous ?? anchor;
+      const at = result.findLastIndex(
+        (message) =>
+          message.id === after ||
+          (message.role === 'tool' && message.parentId === after),
+      );
+      const index = after === null ? 0 : at < 0 ? result.length : at + 1;
+      result.splice(index, 0, shell);
+      shellAnchors.set(anchor, shell.id);
     }
     const parents = new Map(nodes.map((node) => [node.id, node.parent]));
     const insertedAfter = new Map<string | null, string>();
@@ -2254,6 +2347,13 @@ export class RuntimeController {
           branchIds.push(failure.id);
       const stream = this.streams.get(row.id);
       if (stream) branchIds.push(stream.id);
+      for (const view of owner?.userShells.views ?? [])
+        if (
+          view.sessionId === row.id &&
+          (!view.anchor || path.has(view.anchor)) &&
+          !nodes.some((node) => node.message?.id === view.persistedMessageId)
+        )
+          branchIds.push('user-shell-' + view.id);
       return {
         id: row.id,
         archivedAt: this.metadata.archivedAt(row.id),
@@ -2958,30 +3058,35 @@ export class RuntimeController {
       revision: 1,
       origin: origin ? { ...origin } : undefined,
     };
-    return new Promise((resolve, reject) => {
-      const abort = () => {
-        this.pending.delete(id);
-        reject(new Error('interaction cancelled'));
-        this.publish();
-      };
-      const finish = (answer: string) => {
-        signal.removeEventListener('abort', abort);
-        resolve(answer);
-      };
-      this.pending.set(id, {
-        row: interaction,
-        signal,
-        resolve: finish,
-        reject: (error) => {
-          signal.removeEventListener('abort', abort);
-          reject(error);
-        },
-        secret,
-      });
-      signal.addEventListener('abort', abort, { once: true });
-      if (signal.aborted) abort();
-      else this.publish();
-    });
+    return this.taskResources.suspendResource(
+      'agent',
+      () =>
+        new Promise<string>((resolve, reject) => {
+          const abort = () => {
+            this.pending.delete(id);
+            reject(new Error('interaction cancelled'));
+            this.publish();
+          };
+          const finish = (answer: string) => {
+            signal.removeEventListener('abort', abort);
+            resolve(answer);
+          };
+          this.pending.set(id, {
+            row: interaction,
+            signal,
+            resolve: finish,
+            reject: (error) => {
+              signal.removeEventListener('abort', abort);
+              reject(error);
+            },
+            secret,
+          });
+          signal.addEventListener('abort', abort, { once: true });
+          if (signal.aborted) abort();
+          else this.publish();
+        }),
+      signal,
+    );
   }
   private async approve(
     runtime: AgentRuntime,
@@ -4465,9 +4570,27 @@ export class RuntimeController {
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
         )
           throw Error('trust this workspace first');
-        return runtime.userShells.run(
-          text(p.command, 'shell command', 32000),
-          p.quiet === true,
+        const workspace = this.trustedWorkspace(runtime.options.workspace);
+        const shellCommand = text(p.command, 'shell command', 32000);
+        const quiet = p.quiet === true;
+        return (await this.ledger()).run(
+          {
+            id: command.id,
+            sessionId: runtime.session.id,
+            service: 'shell',
+            method: 'run',
+            paramsHash: createHash('sha256')
+              .update(
+                JSON.stringify({
+                  workspace,
+                  grant: this.workspaceRoots.get(workspace),
+                  command: shellCommand,
+                  quiet,
+                }),
+              )
+              .digest('hex'),
+          },
+          () => runtime.userShells.run(shellCommand, quiet),
         );
       }
       case 'custom-command': {
@@ -4620,18 +4743,17 @@ export class RuntimeController {
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
         )
           throw Error('trust this workspace first');
+        const expected = p.expectedRevision;
+        if (expected !== null && typeof expected !== 'string')
+          throw Error(
+            'expected revision is required; read the file, or use null to create it',
+          );
         const path = text(p.path, 'path', 8000);
         const target = runtime.sandbox.resolvePath(path);
         const documents = this.services(runtime.options.workspace).documents;
         const file = relative(documents.root, canonicalPath(target))
           .split(sep)
           .join('/');
-        const expected =
-          p.expectedRevision === undefined
-            ? ((await documents.snapshot(file))?.revision ?? null)
-            : p.expectedRevision;
-        if (expected !== null && typeof expected !== 'string')
-          throw Error('invalid expected document revision');
         const document = await documents.save(
           file,
           text(p.content, 'file', 4_000_000),

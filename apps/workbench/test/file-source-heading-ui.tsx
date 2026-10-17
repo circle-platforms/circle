@@ -7,8 +7,8 @@ import { FileViewer } from '../src/features/FileViewer';
 import { applyTheme } from '../src/theme';
 import { setLanguage } from '../src/i18n';
 const query = new URLSearchParams(location.search);
-setLanguage(query.get('lang') === 'zh-CN' ? 'zh-CN' : 'en');
-applyTheme(query.get('theme') === 'light' ? 'light' : 'dark');
+const language = query.get('lang') === 'zh-CN' ? 'zh-CN' : 'en';
+const theme = query.get('theme') === 'light' ? 'light' : 'dark';
 const child = query.get('source') === 'child';
 const readOnly = query.get('readonly') === 'true';
 const runtime = new PreviewRuntime();
@@ -52,6 +52,10 @@ runtime.change((snapshot) => {
     },
   ];
 });
+// Apply the requested screenshot identity after creating the preview data.
+// The fixture does not mount App's settings/theme effects.
+setLanguage(language);
+applyTheme(theme);
 createRoot(document.getElementById('root')!).render(
   <Tooltip.Provider delayDuration={0}>
     <RuntimeProvider runtime={runtime}>

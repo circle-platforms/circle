@@ -2,6 +2,7 @@ import {
   DeliveryPreflightError,
   DeliveryConfirmationPendingError,
 } from './delivery-preflight.ts';
+import { UserShellPreflightError } from '../../../../src/user_shell.js';
 import {
   createCipheriv,
   createDecipheriv,
@@ -239,6 +240,9 @@ export class OperationLedger {
         throw new OperationIdentityConflictError();
       if (saved.state === 'rejected')
         throw (
+          (operation.service === 'shell' && operation.method === 'run'
+            ? UserShellPreflightError.fromCode(saved.error_code)
+            : undefined) ??
           DeliveryPreflightError.fromCode(saved.error_code) ??
           new OperationRejectedError()
         );
@@ -334,6 +338,23 @@ export class OperationLedger {
         return value;
       } catch (error) {
         const rawCode = (error as { code?: unknown })?.code;
+        const shellPreflight =
+          error instanceof UserShellPreflightError
+            ? UserShellPreflightError.fromCode(error.code)
+            : undefined;
+        if (
+          !effectReturned &&
+          operation.service === 'shell' &&
+          operation.method === 'run' &&
+          shellPreflight
+        ) {
+          this.db
+            .prepare(
+              "UPDATE operations SET state='rejected',error_code=?,updated_at=? WHERE id=?",
+            )
+            .run(shellPreflight.code, Date.now(), operation.id);
+          throw shellPreflight;
+        }
         if (
           !effectReturned &&
           operation.method === 'publish' &&

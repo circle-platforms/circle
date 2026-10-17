@@ -126,6 +126,13 @@ export interface HarnessOptions {
     args: Record<string, unknown>,
     context: import('./types.js').ToolContext,
   ) => Promise<string>;
+  /** Optional trusted-host scheduling, after approval and before the prepared action runs. */
+  executeTool?: (
+    tool: Tool,
+    args: Record<string, unknown>,
+    context: ToolContext,
+    run: () => Promise<string>,
+  ) => Promise<string>;
   prepareMessages?: (signal: AbortSignal) => Promise<Message[]>;
   approvalSessionId?: string;
   parentPlanMode?: () => boolean;
@@ -1327,14 +1334,19 @@ export class Harness {
       const guardedTool: Tool = {
         ...tool,
         run: async (args, context) => {
-          signal.throwIfAborted();
-          if (
-            this.readOnly &&
-            tool.effect !== 'read' &&
-            !this.options.planFileMutation?.(call)
-          )
-            throw new Error('read-only mode: this tool cannot run');
-          return (preparedRun ?? tool.run)(args, context);
+          const run = async () => {
+            signal.throwIfAborted();
+            if (
+              this.readOnly &&
+              tool.effect !== 'read' &&
+              !this.options.planFileMutation?.(call)
+            )
+              throw new Error('read-only mode: this tool cannot run');
+            return (preparedRun ?? tool.run)(args, context);
+          };
+          return this.options.executeTool
+            ? this.options.executeTool(tool, args, context, run)
+            : run();
         },
       };
       content = this.options.toolBoundary

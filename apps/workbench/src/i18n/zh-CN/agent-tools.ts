@@ -1,4 +1,6 @@
 export const agentTools: Record<string, string> = {
+  'propose follow-up tasks': '建议后续任务',
+  'proposed follow-up tasks': '已提出后续任务建议',
   'schedule agents': '调度子 Agent',
   'schedule read-only agents': '调度只读子 Agent',
   'agent progress': '子 Agent 进度',

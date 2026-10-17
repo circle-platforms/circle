@@ -69,12 +69,20 @@
   overflow-wrap: anywhere;
 }
 
-.recovered-inputs {
-  flex: 0 0 auto;
+.recovered-inputs.task-recovery {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  flex: 0 1 auto;
   max-height: 40vh;
   overflow: auto;
-  padding: 12px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 10px;
+  padding: 10px 0 14px;
   border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  margin-bottom: 10px;
 }
 .recovered-inputs header {
   display: flex;
@@ -125,7 +133,24 @@
   flex-wrap: wrap;
 }
 .inspector-body.flush .workspace-panel-contents > .segmented {
-  margin: 12px 17px;
+  margin: 12px 16px;
+}
+#github-connection .field-label {
+  margin: 12px 0;
+}
+#github-connection .inline-actions {
+  margin-top: 12px;
+}
+.github-plugin > .inline-actions {
+  align-items: flex-start;
+  margin-block: 16px;
+}
+.github-plugin > .inline-actions .context-source {
+  margin: 0;
+}
+.github-plugin > details > summary {
+  cursor: pointer;
+  color: var(--secondary);
 }
 .inspector-resource-view[data-inspector-resource='browser'] {
   display: flex;
@@ -163,7 +188,7 @@
 }
 .inspector-column.inspector-overlay {
   flex: none !important;
-  max-width: 92% !important;
+  max-width: 100% !important;
   min-width: 0 !important;
 }
 .delivery-cycle-panel label {

@@ -631,7 +631,7 @@ export function Sidebar({
           <i />
           <span>
             {connection === 'preview'
-              ? 'frontend preview'
+              ? t('frontend preview')
               : connection === 'stopped'
                 ? t('runtime stopped')
                 : connection === 'not-configured'

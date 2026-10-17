@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react';
 import { structuredTextOutput } from '../model/tool-output';
-import { useCommandTerminal } from './CommandTerminalNavigation';
+import {
+  useCommandTerminal,
+  useUserShellTerminal,
+} from './CommandTerminalNavigation';
 import { copyText } from '../host';
 import {
   useSessionDisclosure,
@@ -32,6 +35,8 @@ import { hasToolInput } from '../model/browser';
 const AGENT_TOOLS = new Set([
   'task',
   'native_tasks_enqueue',
+  'native_tasks_propose',
+  'native_tasks_adopt_proposal',
   'native_tasks_analyze',
   'native_tasks_list',
   'native_tasks_wait',
@@ -41,7 +46,9 @@ const AGENT_TOOLS = new Set([
   'native_tasks_artifacts',
 ]);
 export function agentToolTitle(name: string): string {
-  if (name === 'native_tasks_enqueue') return t('schedule agents');
+  if (name === 'native_tasks_enqueue' || name === 'native_tasks_adopt_proposal')
+    return t('schedule agents');
+  if (name === 'native_tasks_propose') return t('propose follow-up tasks');
   if (name === 'native_tasks_analyze') return t('schedule read-only agents');
   if (
     name === 'native_tasks_list' ||
@@ -60,6 +67,8 @@ export function mappedToolAgents(
   agents: AgentRecord[],
   ownerSessionId: string,
 ): AgentRecord[] {
+  // A proposal is informational; it does not create or adopt child executions.
+  if (tool.name === 'native_tasks_propose') return [];
   const ids = new Set([
     ...(tool.agentIds ?? []),
     ...(tool.agentId ? [tool.agentId] : []),
@@ -95,18 +104,21 @@ export function AgentToolLinks({
 export function ToolMessage({
   tool,
   ownerSessionId,
+  userShellId,
   expanded,
   onFile,
   onAgent,
 }: {
   tool: ToolCall;
   ownerSessionId?: string;
+  userShellId?: string;
   expanded: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
 }) {
   const sources = useSources();
   const openCommandTerminal = useCommandTerminal();
+  const openUserShellTerminal = useUserShellTerminal();
   const [terminalBusy, setTerminalBusy] = useState(false);
   const [terminalError, setTerminalError] = useState('');
   const attachments =
@@ -133,7 +145,7 @@ export function ToolMessage({
   )?.path;
   const Icon = AGENT_TOOLS.has(tool.name)
     ? Users
-    : tool.name === 'execute'
+    : ['execute', '!', '!!'].includes(tool.name)
       ? Terminal
       : tool.name.startsWith('browser_')
         ? Globe
@@ -210,7 +222,8 @@ export function ToolMessage({
                 </button>
               )}
             </div>
-            {tool.name === 'execute' && openCommandTerminal && (
+            {((tool.name === 'execute' && openCommandTerminal) ||
+              (userShellId && openUserShellTerminal)) && (
               <button
                 className="text-button"
                 disabled={terminalBusy}
@@ -219,11 +232,15 @@ export function ToolMessage({
                   setTerminalBusy(true);
                   setTerminalError('');
                   try {
-                    await openCommandTerminal(
-                      ownerSessionId ?? currentSession(snapshot).id,
-                      tool.id,
-                      trigger,
-                    );
+                    const source =
+                      ownerSessionId ?? currentSession(snapshot).id;
+                    if (userShellId)
+                      await openUserShellTerminal!(
+                        source,
+                        userShellId,
+                        trigger,
+                      );
+                    else await openCommandTerminal!(source, tool.id, trigger);
                   } catch (error) {
                     setTerminalError(
                       error instanceof Error

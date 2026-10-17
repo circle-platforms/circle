@@ -135,6 +135,19 @@ export function armNativeFeedback({ kind, selector, condition }) {
         const panel = document.querySelector(condition.panel.selector);
         if (visible(panel) !== condition.panel.visible) return false;
       }
+      if (
+        condition.clipboardAttachment &&
+        ![
+          ...document.querySelectorAll(
+            '.attachment-strip .file-chip > button:first-child',
+          ),
+        ].some(
+          (node) =>
+            visible(node) &&
+            node.textContent.trim() === condition.clipboardAttachment,
+        )
+      )
+        return false;
       if (condition.feedback) {
         const feedback = document.querySelector(condition.feedback.selector);
         if (!feedback || feedback.disabled !== condition.feedback.disabled)
@@ -171,6 +184,24 @@ export function armNativeFeedback({ kind, selector, condition }) {
         });
       }
       if (started !== undefined || !event.target.closest(selector)) return;
+      if (condition.clipboardText !== undefined) {
+        const actual = event.clipboardData?.getData('text/plain');
+        const observed = {
+          trusted: event.isTrusted === true,
+          exact: actual === condition.clipboardText,
+          characters: actual?.length ?? 0,
+        };
+        window.__circleNativePerfClipboardObservation = observed;
+        if (!observed.trusted || !observed.exact) {
+          cleanup();
+          reject(
+            Error(
+              'expected a trusted system paste with the exact original text',
+            ),
+          );
+          return;
+        }
+      }
       started = performance.now();
       requestAnimationFrame(frame);
     };

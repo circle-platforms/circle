@@ -364,7 +364,7 @@ export async function runNativeInputRecovery({
     .filter({ hasText: 'OUTBOX_PLAIN_DISCARD' });
   await plain
     .getByRole('checkbox', {
-      name: 'I have checked the input and want to remove its recovery copy',
+      name: 'I checked this input; remove its recovery copy',
       exact: true,
     })
     .check();

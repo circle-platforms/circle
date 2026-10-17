@@ -83,9 +83,12 @@ export function taskToolAgentIds(
         : [],
     );
   } else if (
-    ['native_tasks_retry', 'native_tasks_list', 'native_tasks_wait'].includes(
-      name,
-    )
+    [
+      'native_tasks_retry',
+      'native_tasks_list',
+      'native_tasks_wait',
+      'native_tasks_adopt_proposal',
+    ].includes(name)
   ) {
     const records =
       parsed &&
@@ -173,6 +176,7 @@ export function assertReadonlyTaskRequest(
         'completion',
         'format',
         'diagnostics',
+        'status',
         'hover',
       ].includes(request) ||
       params.apply === true ||

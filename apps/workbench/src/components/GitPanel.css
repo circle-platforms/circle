@@ -4,6 +4,27 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.native-git .inspector-heading {
+  justify-content: space-between;
+}
+.native-git .git-commit {
+  width: 100%;
+  margin: 8px 0 4px;
+}
+.native-git .git-commit:disabled {
+  opacity: 1;
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--muted);
+}
+.git-file-state {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  flex-shrink: 0;
+}
+.git-file-state.conflict {
+  color: var(--attention);
+}
 .native-git-files,
 .native-delivery-checks {
   list-style: none;
@@ -13,17 +34,38 @@
 .native-git-files > li {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
+  padding: 4px 0;
+  margin: 0;
+  min-height: 36px;
+  border-bottom: 1px solid var(--border);
 }
 .native-git-files .change-file {
   min-width: 0;
   width: auto;
   flex: 1 1 12ch;
+  padding: 4px 0;
+  border: 0;
+  overflow: hidden;
+}
+.native-git-files .change-file > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-git-files .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.native-git [aria-label] > .muted {
+  margin-block: 16px;
 }
 .native-git-files > li > input,
 .native-git-files > li > code,
+.native-git-files > li > svg,
+.native-git-files > li > .icon-button,
 .native-git-files > li > .button {
   flex: 0 0 auto;
 }
@@ -49,4 +91,10 @@
 }
 .native-delivery .activity-row {
   flex-wrap: wrap;
+}
+
+/* Preserve the native disclosure marker used by the existing details controls. */
+.github-plugin .context-source > summary,
+#github-connection .context-source > summary {
+  display: list-item;
 }
