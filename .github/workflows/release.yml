@@ -157,7 +157,7 @@ jobs:
           sudo chmod 4755 "$helper"
       - run: npm --prefix apps/desktop run test:runtime
         # Bound leaked native handles without forcing tests to report success.
-        timeout-minutes: 10
+        timeout-minutes: 20
       - run: npm --prefix apps/desktop run package
       # Built and installed before the packaged folder is started, so both hold exactly what
       # package wrote

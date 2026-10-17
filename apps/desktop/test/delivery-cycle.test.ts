@@ -601,7 +601,7 @@ test('pending CI is polled at a widening persisted interval instead of every tic
   for (let i = 0; i < 5; i++) await f.cycle.advance('web');
   assert.equal(reads, 1);
   const delays: number[] = [];
-  for (let poll = 0; poll < 4; poll++) {
+  for (let poll = 0; poll < 6; poll++) {
     const delay = f.cycle.snapshot('web').ciPoll!.delay;
     delays.push(delay);
     f.tick(delay - 1);
@@ -611,7 +611,7 @@ test('pending CI is polled at a widening persisted interval instead of every tic
     await f.cycle.advance('web');
     assert.equal(reads, poll + 2);
   }
-  assert.deepEqual(delays, [15_000, 30_000, 60_000, 60_000]);
+  assert.deepEqual(delays, [5_000, 10_000, 20_000, 40_000, 60_000, 60_000]);
   const ledger = JSON.parse(
     await readFile(join(f.dataDir, 'delivery-cycles.json'), 'utf8'),
   );

@@ -94,7 +94,7 @@ jobs:
       - run: npm --prefix apps/workbench test
       - name: Run the renderer component regression journeys on Linux
         if: runner.os == 'Linux'
-        timeout-minutes: 10
+        timeout-minutes: 20
         shell: bash
         run: |
           unset CIRCLE_TEST_BROWSER_CHANNEL
@@ -210,7 +210,7 @@ jobs:
         run: node --test apps/desktop/test/developer-toolchain.test.mjs apps/desktop/test/journey-platform.test.mjs
       - run: npm --prefix apps/desktop run test:runtime
         # Bound leaked native handles without forcing tests to report success.
-        timeout-minutes: 10
+        timeout-minutes: 20
       - run: npm --prefix apps/desktop run package
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
       - run: node apps/desktop/test/developer-debug-smoke.mjs

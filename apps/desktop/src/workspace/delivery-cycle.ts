@@ -164,7 +164,7 @@ const countConsecutiveFailure = (cycle: CycleRecord, fingerprint: string) => {
 };
 // Pending CI is polled at a widening interval; a PR that never reports
 // checks is handed to a person instead of waiting forever.
-const CI_POLL_FIRST = 15_000,
+const CI_POLL_FIRST = 5_000,
   CI_POLL_LAST = 60_000,
   CI_NO_CHECKS_LIMIT = 5 * 60_000;
 const FAILURE_LOG_LIMIT = 64 * 1024;
