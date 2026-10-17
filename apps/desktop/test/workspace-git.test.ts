@@ -932,3 +932,41 @@ test('git that exits before reading its input rejects instead of crashing on EPI
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('discarding one hunk keeps an LF file LF under core.autocrlf, as on Windows', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-hunk-eol-'));
+  const s = new ObservedGit(root);
+  try {
+    await s.git(['init']);
+    // Git for Windows' default: the working tree is written with CRLF.
+    await s.git(['config', 'core.autocrlf', 'true']);
+    await s.git(['config', 'user.name', 'Test']);
+    await s.git(['config', 'user.email', 'test@example.invalid']);
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`);
+    await writeFile(path.join(root, 'file'), lines.join('\n') + '\n');
+    await s.git(['add', 'file']);
+    await s.git(['commit', '-m', 'Base']);
+    const changed = [...lines];
+    changed[1] = 'kept edit';
+    changed[28] = 'discarded edit';
+    await writeFile(path.join(root, 'file'), changed.join('\n') + '\n');
+    const { text } = (await s.call('diff', { paths: ['file'] })) as {
+      text: string;
+    };
+    const offset = text.search(/^@@ /m);
+    const hunks = text.slice(offset).split(/(?=^@@ )/m);
+    assert.equal(hunks.length, 2);
+    await s.call('discard', {
+      revision: (await s.snapshot()).revision,
+      patch: text.slice(0, offset) + hunks[1],
+    });
+    const expected = [...lines];
+    expected[1] = 'kept edit';
+    assert.equal(
+      await readFile(path.join(root, 'file'), 'utf8'),
+      expected.join('\n') + '\n',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

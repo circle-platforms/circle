@@ -58,6 +58,14 @@ export interface GitWorkspaceOptions {
   signoff?: boolean;
   setUpstream?: boolean;
 }
+/** The files a git patch writes: its `+++ b/…` targets, without /dev/null. */
+export function patchTargets(patch: string): string[] {
+  return [
+    ...new Set(
+      [...patch.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((match) => match[1]!),
+    ),
+  ];
+}
 export class GitWorkspaceService {
   readonly root: string;
   private options: GitWorkspaceOptions;
@@ -712,6 +720,22 @@ export class GitWorkspaceService {
       await opened.handle.close();
     }
   }
+  /** Working-tree files of a patch that use LF line endings now. */
+  private async lfFiles(targets: string[]): Promise<string[]> {
+    const files: string[] = [];
+    for (const target of targets) {
+      if (
+        !target ||
+        path.isAbsolute(target) ||
+        target.split(/[\\/]/).includes('..')
+      )
+        continue;
+      const file = path.join(this.root, target);
+      const text = await readFile(file, 'utf8').catch(() => undefined);
+      if (text !== undefined && !text.includes('\r\n')) files.push(file);
+    }
+    return files;
+  }
   private paths(value: unknown): string[] {
     if (
       !Array.isArray(value) ||
@@ -830,7 +854,19 @@ export class GitWorkspaceService {
               ? ['--cached', '--reverse']
               : ['--reverse'];
         await this.git(['apply', '--check', ...flags, '-'], params.patch);
+        // Applying to the working tree writes the whole file through Git's
+        // line-ending conversion (core.autocrlf on Windows): an LF file would
+        // come back CRLF. Discarding one hunk keeps the file's own line endings.
+        const lfFiles =
+          params.action === 'discard'
+            ? await this.lfFiles(patchTargets(params.patch))
+            : [];
         await this.git(['apply', ...flags, '-'], params.patch);
+        for (const file of lfFiles) {
+          const written = await readFile(file, 'utf8').catch(() => undefined);
+          if (written?.includes('\r\n'))
+            await writeFile(file, written.replace(/\r\n/g, '\n'));
+        }
       } else if (method === 'commit') {
         if (typeof params.message !== 'string' || !params.message.trim())
           throw Error('commit message is required');

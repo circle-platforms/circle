@@ -20,15 +20,8 @@ export function workspaceToolsForWorker(
     '$1app.asar.unpacked$2',
   );
   return {
-    ...(platform === 'win32'
-      ? {}
-      : {
-          commandSupervisorPath: join(
-            directory,
-            'tools',
-            'command-supervisor.mjs',
-          ),
-        }),
+    // Windows runs the same supervisor inside a Job object (windows-command-job.ts).
+    commandSupervisorPath: join(directory, 'tools', 'command-supervisor.mjs'),
     nodeExecutable: executable,
     runtimeExecutable: join(
       directory,

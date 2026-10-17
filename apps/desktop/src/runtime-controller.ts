@@ -1869,6 +1869,8 @@ export class RuntimeController {
                   this.options.workspaceTools!.runtimeExecutable,
                 supervisorPath:
                   this.options.workspaceTools!.commandSupervisorPath!,
+                // Windows commands run in a ConPTY whose processes a Job object owns.
+                windowsJobObject: process.platform === 'win32',
                 executionEpoch: runtime.jobs.runName,
                 stopExecution: (actualSessionId, executionId, reason) =>
                   runtime.jobs.stopExecution(

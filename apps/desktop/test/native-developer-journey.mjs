@@ -342,6 +342,11 @@ const check = async (name, action) => {
       status: 'failed',
       durationMs: Date.now() - start,
       error: String(error),
+      // An aggregated failure keeps each underlying cause, for platforms we cannot run locally.
+      causes: Array.isArray(error?.errors)
+        ? error.errors.map((cause) => String(cause?.stack ?? cause))
+        : undefined,
+      stack: String(error?.stack ?? ''),
       screenshot: image,
     });
     if (!diagnostic) throw error;

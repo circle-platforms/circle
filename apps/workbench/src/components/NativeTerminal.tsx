@@ -1484,6 +1484,16 @@ function TerminalSurface({
       }).catch(showError);
     });
     terminal.attachCustomKeyEventHandler((event) => {
+      // Ctrl+V and Ctrl+Shift+V paste, as in Windows Terminal: the browser's paste
+      // event sends the text once, and no ^V control character goes to the shell.
+      if (
+        !/mac/i.test(navigator.platform) &&
+        event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        event.key.toLowerCase() === 'v'
+      )
+        return false;
       if (
         event.type === 'keydown' &&
         (event.metaKey || (event.ctrlKey && event.shiftKey)) &&

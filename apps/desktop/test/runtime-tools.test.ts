@@ -69,6 +69,7 @@ test('Windows tool names use native executable suffixes', () => {
   );
   const unpacked = fixture('resources', 'app.asar.unpacked', 'dist', 'tools');
   assert.deepEqual(tools, {
+    commandSupervisorPath: join(unpacked, 'command-supervisor.mjs'),
     runtimeExecutable: join(unpacked, 'node', 'bin', 'node.exe'),
     adapterPath: join(unpacked, 'js-debug', 'src', 'dapDebugServer.js'),
     ghPath: join(unpacked, 'gh', 'bin', 'gh.exe'),
