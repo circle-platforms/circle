@@ -6,6 +6,14 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Added
 
+- **The desktop application is a development workbench.** It edits, runs, debugs and reviews a project without leaving Circle, while the agent keeps working. See [Developing in the window](docs/desktop.md#developing-in-the-window) and [Known issues](docs/known-issues.md#desktop-application).
+  - **Files open in an editor** (Monaco) with go to definition, references, rename, completion, formatting and diagnostics for TypeScript and JavaScript, including unsaved changes. A save checks the version it was edited from: when the agent or another program changed the file meanwhile, your text stays and the disk version is shown to compare. You can open and save files and switch sessions without stopping a running turn.
+  - **Interactive terminals in the Terminal panel**, with real input, `ctrl+c`, several tabs, search and full copy. Each terminal shows its command, folder, state and exit, and can be stopped or restarted.
+  - **Node debugging** with breakpoints, the call stack, variables and stepping, started from a file or a task. The program's input and output go to a terminal tab.
+  - **A Git tab in Changes** shows the working tree, the index and branch differences, including what you and commands changed. It stages and reverts single hunks, marks conflicted files until you resolve and stage them, commits and pushes.
+  - **Browser diagnostics**: the desktop browser panel shows the page's console, network requests, storage and viewport, and can hand the page to the browser's developer tools and back.
+  - **Agent tasks.** The agent can split work into tasks that run in parallel, each writing task in its own Git worktree, with their dependencies, state and results in the Activity panel. Up to eight run at once by default; settings change the limits.
+  - **Automatic delivery** (with a connected GitHub account and an allowed repository): Circle commits a task's verified result to its own branch, opens a draft pull request, follows its checks and schedules repairs when they fail. It never merges; a passing pull request waits for you.
 - **A one-time notice after an upgrade**, on the terminal's home screen and the desktop home page. It names what changed since the version you had — not every older release — and it stays gone after you dismiss it or start a session. The full notes are the release's own page. Someone who never had the `circle-server` extension is not told to rename it.
 
 ### Changed

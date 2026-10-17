@@ -113,7 +113,7 @@ export function BrowserDiagnostics({
         if (complete && response.state.logError)
           throw Error(t('browser log is incomplete'));
         const page = response.log;
-        if (!page) throw Error('browser log is unavailable');
+        if (!page) throw Error(t('browser log is unavailable'));
         if (!complete) {
           setLog(page);
           break;
@@ -124,7 +124,7 @@ export function BrowserDiagnostics({
           break;
         }
         if (cursor && page.cursor.offset <= cursor.offset)
-          throw Error('browser log is unavailable');
+          throw Error(t('browser log is unavailable'));
         cursor = page.cursor;
       }
     } catch (failure) {

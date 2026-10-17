@@ -59,13 +59,13 @@ async function fixture(
     `#!${process.execPath}\n` +
       String.raw`
 const fs=require('node:fs');const p=process.argv[1]+'.state';const s=JSON.parse(fs.readFileSync(fs.readFileSync(p,'utf8'),'utf8'));const a=process.argv.slice(2);s.calls.push(a);const save=()=>fs.writeFileSync(fs.readFileSync(p,'utf8'),JSON.stringify(s));
-if(a[0]==='run'&&a[1]==='view'){save();if(s.primarySuccess){console.log('FULL_RUN_LOG '+process.env.GH_TOKEN);process.exit(0)}console.error('workflow is not completed '+process.env.GH_TOKEN);process.exit(1)}
+if(a[0]==='run'&&a[1]==='view'){save();if(s.primarySuccess){if(s.bigPrimary){let o='';for(const job of ['build','test'])o+=(job+'\tstep\tearly '+job+'\n'+(job+'\tstep\tnoise\n').repeat(20000)+job+'\tstep\tlast '+job+' '+process.env.GH_TOKEN+'\n');process.stdout.write(o,()=>process.exit(0));return}console.log('FULL_RUN_LOG '+process.env.GH_TOKEN);process.exit(0)}console.error('workflow is not completed '+process.env.GH_TOKEN);process.exit(1)}
 if(a[0]==='repo'&&a[1]==='view'){save();console.log(JSON.stringify(s.repo??{nameWithOwner:'fixture/project',url:'https://github.invalid/fixture/project'}));process.exit(0)}
 if(a[0]!=='api'||a[1]!=='--hostname'||a[2]!=='github.invalid')throw Error('untrusted API host');
 const endpoint=a[3];let out;
 if(endpoint==='repos/fixture/project/actions/runs/42'){s.runReads++;out={...s.run};if(s.changeRunAfterLogs&&s.runReads>1)out.run_attempt=2}
 else if(endpoint.startsWith('repos/fixture/project/actions/runs/42/attempts/1/jobs?')){const page=Number(new URL('https://fixture.invalid/?'+endpoint.split('?')[1]).searchParams.get('page'));out={total_count:s.jobs.length,jobs:s.jobs.slice((page-1)*100,page*100)}}
-else if(endpoint.match(/^repos\/fixture\/project\/actions\/jobs\/\d+\/logs$/)){const id=Number(endpoint.split('/').at(-2));out='ACTUAL_JOB_LOG '+id+' '+process.env.GH_TOKEN+' ghp_012345678901234567890123456789012345\nassert expected repaired output'}
+else if(endpoint.match(/^repos\/fixture\/project\/actions\/jobs\/\d+\/logs$/)){const id=Number(endpoint.split('/').at(-2));out='ACTUAL_JOB_LOG '+id+' '+process.env.GH_TOKEN+' ghp_012345678901234567890123456789012345\n'+'noise\n'.repeat(s.jobNoise??0)+'assert expected repaired output '+id}
 else if(endpoint.match(/^repos\/fixture\/project\/actions\/jobs\/\d+$/)){const id=Number(endpoint.split('/').at(-1));out=s.detail??s.jobs.find(job=>job.id===id)}
 else throw Error('unexpected endpoint '+endpoint);
 save();console.log(typeof out==='string'?out:JSON.stringify(out));
@@ -215,4 +215,37 @@ test('fallback never labels running jobs as completed logs and rejects reruns ob
     (await rerun.calls()).filter((args) => args[3]?.endsWith('/logs')).length,
     1,
   );
+});
+
+test('failure logs keep the tail of each job for the renderer while the trusted host gets the complete text', async (t) => {
+  const primary = await fixture(t, { primarySuccess: true, bigPrimary: true });
+  const shown = (await primary.service.call('logs', { runId })) as Record<
+    string,
+    unknown
+  > & { text: string; truncated: boolean };
+  assert.equal(shown.truncated, true);
+  assert.equal('full' in shown, false);
+  assert.ok(shown.text.length < 2 * 33 * 1024, String(shown.text.length));
+  for (const job of ['build', 'test']) {
+    assert.match(shown.text, new RegExp(`last ${job} \\[redacted\\]`));
+    assert.doesNotMatch(shown.text, new RegExp(`early ${job}`));
+  }
+  const trusted = await primary.service.failureLogs(runId);
+  assert.equal(trusted.text, shown.text);
+  assert.match(trusted.full, /early build[\s\S]*early test/);
+  assert.equal(trusted.full.includes(primary.secret), false);
+
+  const fallback = await fixture(t, { jobNoise: 20_000 });
+  const jobs = (await fallback.service.call('logs', { runId })) as {
+    text: string;
+    truncated: boolean;
+  };
+  assert.equal(jobs.truncated, true);
+  assert.ok(jobs.text.length < 40 * 1024, String(jobs.text.length));
+  assert.match(jobs.text, /=== job 101 \(job 101, failure\) ===/);
+  assert.match(jobs.text, /assert expected repaired output 101\s*$/);
+  assert.doesNotMatch(jobs.text, /ACTUAL_JOB_LOG/);
+  const complete = await fallback.service.failureLogs(runId);
+  assert.match(complete.full, /ACTUAL_JOB_LOG 101 \[redacted\] \[redacted\]/);
+  assert.equal(complete.full.includes(fallback.secret), false);
 });

@@ -1,3 +1,4 @@
+import { useOwnerState } from '../model/owner-state';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   CycleRecord,
@@ -30,9 +31,10 @@ export function DeliveryCyclePanel({
   active?: boolean;
 }) {
   const [cycles, setCycles] = useState<CycleRecord[]>([]);
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [criteria, setCriteria] = useState('');
+  // Drafts belong to their session: one typed in another session is never submitted here.
+  const [title, setTitle] = useOwnerState(sessionId, '');
+  const [body, setBody] = useOwnerState(sessionId, '');
+  const [criteria, setCriteria] = useOwnerState(sessionId, '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const generation = useRef(0);
@@ -113,7 +115,6 @@ export function DeliveryCyclePanel({
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
-              const epoch = generation.current;
               await workspaceCall(
                 sessionId,
                 'cycles' as WorkspaceService,
@@ -129,11 +130,10 @@ export function DeliveryCyclePanel({
                     .filter(Boolean),
                 },
               );
-              if (epoch === generation.current) {
-                setTitle('');
-                setBody('');
-                setCriteria('');
-              }
+              // The setters are bound to the session that submitted.
+              setTitle('');
+              setBody('');
+              setCriteria('');
             });
           }}
         >

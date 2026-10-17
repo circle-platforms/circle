@@ -16,6 +16,38 @@ import {
 const exec = promisify(execFile);
 const deliveryLocks = new Map<string, Promise<unknown>>();
 export const GH_VERSION = '2.83.2';
+const JOB_LOG_TAIL = 32 * 1024;
+function tailText(text: string): string {
+  if (text.length <= JOB_LOG_TAIL) return text;
+  const tail = text.slice(-JOB_LOG_TAIL),
+    line = tail.indexOf('\n');
+  return `[earlier log output omitted]\n${line >= 0 && line < tail.length - 1 ? tail.slice(line + 1) : tail}`;
+}
+/** Keep the tail of each job in `gh run view --log-failed` output, whose lines start with the job name and a tab. */
+export function boundFailedRunLog(text: string): {
+  text: string;
+  truncated: boolean;
+} {
+  const jobs = new Map<string, string[]>();
+  let current = '';
+  for (const line of text.split('\n')) {
+    const tab = line.indexOf('\t');
+    if (tab > 0) current = line.slice(0, tab);
+    let lines = jobs.get(current);
+    if (!lines) jobs.set(current, (lines = []));
+    lines.push(line);
+  }
+  let truncated = false;
+  const sections = [...jobs.values()].map((lines) => {
+    const job = lines.join('\n'),
+      bounded = tailText(job);
+    if (bounded !== job) truncated = true;
+    return bounded;
+  });
+  return truncated
+    ? { text: sections.join('\n'), truncated }
+    : { text, truncated };
+}
 export class DeliveryService {
   readonly git: GitWorkspaceService;
   readonly root: string;
@@ -149,6 +181,53 @@ export class DeliveryService {
       return this.scoped().publishPushed(input);
     return this.serialized(() => this.publish(input, input.head));
   }
+  /** Trusted host only: bounded failure logs together with the complete redacted text. */
+  async failureLogs(runId: number): Promise<{
+    text: string;
+    full: string;
+    truncated: boolean;
+  }> {
+    if (this.connection && this.operationEpoch === undefined)
+      return this.scoped().failureLogs(runId);
+    this.guard();
+    return this.readFailureLogs(runId);
+  }
+  private async readFailureLogs(runId: unknown) {
+    if (!Number.isSafeInteger(runId) || Number(runId) <= 0)
+      throw Error('valid run id is required');
+    try {
+      const full = await this.redactLogs(
+        await this.gh(['run', 'view', String(runId), '--log-failed']),
+      );
+      return { ...boundFailedRunLog(full), full };
+    } catch (primary) {
+      try {
+        return await this.completedJobLogs(Number(runId));
+      } catch (fallback) {
+        throw Error(
+          await this.redactLogs(
+            `failed logs are unavailable: ${String(primary)}\ncompleted-job fallback: ${String(fallback)}`,
+          ),
+        );
+      }
+    }
+  }
+  /** The local origin/HEAD, else GitHub's answer; undefined when neither knows. */
+  private async defaultBranch(): Promise<string | undefined> {
+    const local = await this.git
+      .git(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'])
+      .catch(() => '');
+    const tracked = /^refs\/remotes\/origin\/(.+)$/.exec(local.trim());
+    if (tracked) return tracked[1]!;
+    const name = await this.gh(['repo', 'view', '--json', 'defaultBranchRef'])
+      .then(
+        (text) =>
+          (JSON.parse(text) as { defaultBranchRef?: { name?: unknown } })
+            .defaultBranchRef?.name,
+      )
+      .catch(() => undefined);
+    return typeof name === 'string' && name.trim() ? name : undefined;
+  }
   private async candidateSnapshot() {
     const state = await this.git.snapshot();
     if ((await realpath(state.root)) !== (await realpath(this.root)))
@@ -204,39 +283,35 @@ export class DeliveryService {
           'checks',
           '--json',
           'name,state,bucket,link,workflow',
-        ]).catch((error: { stdout?: string }) => {
+        ]).catch(async (error: { stdout?: string }) => {
           if (error.stdout) {
             const value = JSON.parse(error.stdout);
             if (Array.isArray(value)) return error.stdout;
           }
+          // gh exits nonzero when a PR has no checks at all; that is an
+          // empty result, not an outage.
+          const rollup = await this.gh([
+            'pr',
+            'view',
+            '--json',
+            'statusCheckRollup',
+          ])
+            .then(
+              (text) =>
+                (JSON.parse(text) as { statusCheckRollup?: unknown })
+                  .statusCheckRollup,
+            )
+            .catch(() => undefined);
+          if (Array.isArray(rollup) && !rollup.length) return '[]';
           throw error;
         }),
       );
     if (method === 'logs') {
-      if (!Number.isSafeInteger(params.runId) || Number(params.runId) <= 0)
-        throw Error('valid run id is required');
-      try {
-        return {
-          text: await this.redactLogs(
-            await this.gh([
-              'run',
-              'view',
-              String(params.runId),
-              '--log-failed',
-            ]),
-          ),
-        };
-      } catch (primary) {
-        try {
-          return await this.completedJobLogs(Number(params.runId));
-        } catch (fallback) {
-          throw Error(
-            await this.redactLogs(
-              `failed logs are unavailable: ${String(primary)}\ncompleted-job fallback: ${String(fallback)}`,
-            ),
-          );
-        }
-      }
+      // The renderer sees only the bounded text; the complete log stays in the host.
+      const { full: _full, ...bounded } = await this.readFailureLogs(
+        params.runId,
+      );
+      return bounded;
     }
     if (method === 'publish') return this.publish(params);
     if (method === 'ready') {
@@ -320,6 +395,8 @@ export class DeliveryService {
   /** Read completed failures while other jobs continue. Repository and job IDs come only from verified API records. */
   private async completedJobLogs(runId: number): Promise<{
     text: string;
+    full: string;
+    truncated: boolean;
     source: 'completed-jobs';
     runId: number;
     attempt: number;
@@ -462,7 +539,8 @@ export class DeliveryService {
     if (!complete) throw Error('workflow job pagination limit reached');
     if (!jobs.length)
       throw Error('no completed failed jobs have downloadable logs yet');
-    const sections: string[] = [];
+    const sections: string[] = [],
+      bounded: string[] = [];
     for (const job of jobs.sort((left, right) => left.id - right.id)) {
       const current = validateJob(
         JSON.parse(await api(`${endpoint}/jobs/${job.id}`)) as Job,
@@ -473,16 +551,21 @@ export class DeliveryService {
         !failures.has(current.conclusion)
       )
         throw Error('failed job changed before its logs could be read');
-      const text = await api(`${endpoint}/jobs/${job.id}/logs`);
+      // Redact before cutting so a credential cannot survive half-cut.
+      const text = await this.redactLogs(
+        await api(`${endpoint}/jobs/${job.id}/logs`),
+      );
       if (!text.trim())
         throw Error(`completed failed job ${job.id} returned empty logs`);
       const name =
         typeof current.name === 'string'
           ? current.name.replace(/[\r\n\0]/g, ' ').slice(0, 1000)
           : 'failed job';
-      sections.push(
-        `=== ${name} (job ${job.id}, ${current.conclusion}) ===\n${text}`,
+      const title = await this.redactLogs(
+        `=== ${name} (job ${job.id}, ${current.conclusion}) ===\n`,
       );
+      sections.push(title + text);
+      bounded.push(title + tailText(text));
     }
     const after = validateRun(
       JSON.parse(await api(`${endpoint}/runs/${runId}`)) as Run,
@@ -492,10 +575,13 @@ export class DeliveryService {
       after.run_attempt !== run.run_attempt
     )
       throw Error('workflow run changed while reading completed job logs');
+    const header = await this.redactLogs(
+      `workflow run ${runId}, attempt ${run.run_attempt}: completed failed job logs${after.status === 'completed' ? '' : '; other jobs are still running'}\n\n`,
+    );
     return {
-      text: await this.redactLogs(
-        `workflow run ${runId}, attempt ${run.run_attempt}: completed failed job logs${after.status === 'completed' ? '' : '; other jobs are still running'}\n\n${sections.join('\n\n')}`,
-      ),
+      text: header + bounded.join('\n\n'),
+      full: header + sections.join('\n\n'),
+      truncated: bounded.some((section, index) => section !== sections[index]),
       source: 'completed-jobs',
       runId,
       attempt: run.run_attempt,
@@ -519,7 +605,11 @@ export class DeliveryService {
       throw pushedHead === undefined
         ? new DeliveryPreflightError('DELIVERY_WORKSPACE_DIRTY')
         : Error('commit or preserve workspace changes before publishing');
-    if (state.branch === 'detached' || /^(main|master)$/.test(state.branch))
+    if (
+      state.branch === 'detached' ||
+      /^(main|master)$/.test(state.branch) ||
+      state.branch === (await this.defaultBranch())
+    )
       throw pushedHead === undefined
         ? new DeliveryPreflightError('DELIVERY_FEATURE_BRANCH_REQUIRED')
         : Error('publish from a feature branch');

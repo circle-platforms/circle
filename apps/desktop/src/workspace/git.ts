@@ -127,6 +127,7 @@ export class GitWorkspaceService {
       args[0] === 'diff' ? ['-c', 'diff.autoRefreshIndex=false'] : [];
     if (input !== undefined)
       return new Promise<string>((resolve, reject) => {
+        let inputError: Error | undefined;
         const child = execFile(
           'git',
           ['--literal-pathspecs', '-C', this.root, ...prefix, ...args],
@@ -136,8 +137,14 @@ export class GitWorkspaceService {
             env,
           },
           (error, stdout, stderr) =>
-            error ? reject(Error(stderr || error.message)) : resolve(stdout),
+            error || inputError
+              ? reject(Error(stderr || error?.message || inputError!.message))
+              : resolve(stdout),
         );
+        // Git may exit before reading its input; EPIPE must reject, not crash.
+        child.stdin?.on('error', (error: Error) => {
+          inputError = error;
+        });
         child.stdin?.end(input);
       });
     const execute = async (

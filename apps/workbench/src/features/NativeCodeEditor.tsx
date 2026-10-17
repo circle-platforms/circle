@@ -468,7 +468,16 @@ export function NativeCodeEditor({
         }),
       });
     if (live) {
-      const selector = { language, scheme: 'file', pattern: model.uri.path };
+      // A pattern is a glob: `[id]` in a route folder would never match its own file.
+      // Each glob character matches any one character, and `own` keeps the answers to
+      // this model alone.
+      const selector = {
+        language,
+        scheme: 'file',
+        pattern: model.uri.path.replace(/[[\]{}*?!]/g, '?'),
+      };
+      const own = (target: monaco.editor.ITextModel) =>
+        target.uri.toString() === model.uri.toString();
       const at = (position: monaco.Position) => ({
         line: position.lineNumber,
         column: position.column,
@@ -480,44 +489,52 @@ export function NativeCodeEditor({
         }));
       disposables.push(
         monaco.languages.registerDefinitionProvider(selector, {
-          provideDefinition: (_, position) => locations('definition', position),
+          provideDefinition: (target, position) =>
+            own(target) ? locations('definition', position) : [],
         }),
       );
       disposables.push(
         monaco.languages.registerReferenceProvider(selector, {
-          provideReferences: (_, position) => locations('references', position),
+          provideReferences: (target, position) =>
+            own(target) ? locations('references', position) : [],
         }),
       );
       disposables.push(
         monaco.languages.registerCompletionItemProvider(selector, {
           triggerCharacters: ['.'],
-          provideCompletionItems: async (_, position) => ({
-            suggestions: (
-              await request<
-                { label: string; insertText: string; sortText: string }[]
-              >('completion', at(position))
-            ).map((item) => ({
-              ...item,
-              kind: monaco.languages.CompletionItemKind.Text,
-              range: model.getWordUntilPosition(position) && {
-                startLineNumber: position.lineNumber,
-                endLineNumber: position.lineNumber,
-                startColumn: model.getWordUntilPosition(position).startColumn,
-                endColumn: position.column,
-              },
-            })),
+          provideCompletionItems: async (target, position) => ({
+            suggestions: !own(target)
+              ? []
+              : (
+                  await request<
+                    { label: string; insertText: string; sortText: string }[]
+                  >('completion', at(position))
+                ).map((item) => ({
+                  ...item,
+                  kind: monaco.languages.CompletionItemKind.Text,
+                  range: model.getWordUntilPosition(position) && {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    startColumn:
+                      model.getWordUntilPosition(position).startColumn,
+                    endColumn: position.column,
+                  },
+                })),
           }),
         }),
       );
       disposables.push(
         monaco.languages.registerDocumentFormattingEditProvider(selector, {
-          provideDocumentFormattingEdits: () =>
-            request<{ range: Range; text: string }[]>('format'),
+          provideDocumentFormattingEdits: (target) =>
+            own(target)
+              ? request<{ range: Range; text: string }[]>('format')
+              : [],
         }),
       );
       disposables.push(
         monaco.languages.registerRenameProvider(selector, {
-          provideRenameEdits: async (_, position, newName) => {
+          provideRenameEdits: async (target, position, newName) => {
+            if (!own(target)) return { edits: [] };
             const edits = await request<(Location & { text: string })[]>(
               'rename',
               { ...at(position), newName },

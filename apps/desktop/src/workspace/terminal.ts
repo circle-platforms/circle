@@ -1,6 +1,6 @@
 import type { IPty } from 'node-pty';
 import { hasNativePtyProcessExited, spawnPty } from './native-pty.ts';
-import { ptyEnvironment } from './pty-environment.ts';
+import { ptyEnvironment, withTextLocale } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
 import {
   createReadStream,
@@ -427,6 +427,7 @@ export class TerminalManager {
         environment,
       );
       effectiveEnvironment.TERM = 'xterm-256color';
+      withTextLocale(effectiveEnvironment, process.platform);
       if (readiness?.port && (await portOpen(readiness.port)))
         throw Error(`port ${readiness.port} is already in use`);
       const command =
@@ -512,6 +513,7 @@ export class TerminalManager {
         });
         stream.on('error', (error) => this.#logFailure(entry, error));
       }
+      let exitHooked = false;
       try {
         if (entry.managed)
           await Promise.all(
@@ -582,6 +584,7 @@ export class TerminalManager {
           this.#append(entry, 'exit', undefined, true);
           void this.#finish(entry);
         });
+        exitHooked = true;
         if (snapshot.readiness?.state === 'waiting')
           this.#startReadiness(entry);
         await this.#persist(entry);
@@ -596,12 +599,31 @@ export class TerminalManager {
         snapshot.exitedAt = new Date().toISOString();
         snapshot.exitReason = snapshot.error;
         if (snapshot.kind === 'service') snapshot.serviceState = 'failed';
-        this.#append(entry, 'error', snapshot.error, true);
         // An allocated transport must be returned to its Registry so startup
         // persistence failure cannot strand a process outside its stop owner.
         if (entry.managed && entry.pty) {
+          this.#append(entry, 'error', snapshot.error, true);
           entry.managed.fail(Error(snapshot.error));
           return clone(snapshot);
+        }
+        try {
+          this.#append(entry, 'error', snapshot.error, true);
+        } catch {}
+        // A spawned shell is stopped here; if its exit is unconfirmed the entry
+        // keeps its pty so releaseSession and dispose still close it.
+        const pty = entry.pty;
+        if (pty) {
+          const exited = exitHooked
+            ? undefined
+            : new Promise<void>((resolve) =>
+                pty.onExit(() => {
+                  entry.pty = undefined;
+                  resolve();
+                }),
+              );
+          await terminateOwnedTree(entry, 'SIGKILL').catch(() => undefined);
+          if (exited) await Promise.race([exited, delay(3000)]);
+          else if (await untilStopped(entry, 3000)) throw error;
         }
         await this.#finish(entry);
         throw error;
@@ -762,6 +784,20 @@ export class TerminalManager {
     entry.snapshot.restartOf = id;
     await this.#persist(entry);
     return clone(entry.snapshot);
+  }
+
+  /** Terminals that are running, stopping or still hold a live pty after a failed start. */
+  async activeIds(owner: string): Promise<string[]> {
+    await this.#ready;
+    identity(owner, 'owner');
+    return [...this.#entries.values()]
+      .filter(
+        (entry) =>
+          entry.snapshot.owner === owner &&
+          (!!entry.pty ||
+            ['running', 'stopping'].includes(entry.snapshot.status)),
+      )
+      .map((entry) => entry.snapshot.id);
   }
 
   async list(owner: string): Promise<TerminalSnapshot[]> {

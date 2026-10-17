@@ -698,7 +698,7 @@ export function FileViewer({
         page.cursor.offset < history.cursor.offset ||
         (page.hasMore && page.cursor.seq === history.cursor.seq)
       )
-        throw Error('diagnostic history cursor did not advance');
+        throw Error(t('diagnostic history cursor did not advance'));
       appendDiagnostics(page.events);
       setDiagnosticHistory((previous) =>
         languageOwner.current !== owner
@@ -892,7 +892,7 @@ export function FileViewer({
           },
         );
         if (doc.path !== target.path)
-          throw Error('saved document identity changed');
+          throw Error(t('saved document identity changed'));
         setEditorDocument(target.workspaceId, doc);
         if (selected()) {
           setDocument(doc);
@@ -1315,7 +1315,10 @@ export function FileViewer({
         live={live}
         selection={selection}
         onChange={changed}
-        onSave={() => perform(() => save())}
+        // As the save button: a conflict or a missing file is settled first.
+        onSave={() => {
+          if (!conflict && !missing) perform(() => save());
+        }}
         onNavigate={navigate}
       />
       <footer className="file-view-footer">

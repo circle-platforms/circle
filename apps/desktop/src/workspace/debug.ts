@@ -215,6 +215,12 @@ export class WorkspaceDebugService {
           stdio: ['ignore', 'pipe', 'pipe'],
         },
       ));
+      // Both pipes are drained for the adapter's lifetime so a chatty adapter
+      // cannot fill one and block; only a bounded stderr tail is kept for errors.
+      let stderrTail = '';
+      adapter.stderr?.on('data', (chunk: Buffer) => {
+        stderrTail = (stderrTail + chunk.toString()).slice(-4096);
+      });
       const port = await new Promise<number>((resolve, reject) => {
         let text = '';
         const timer = setTimeout(
@@ -224,6 +230,7 @@ export class WorkspaceDebugService {
         const cleanup = () => {
           clearTimeout(timer);
           adapter.stdout?.off('data', data);
+          adapter.stdout?.resume();
           adapter.off('error', error);
           adapter.off('exit', exit);
         };
@@ -232,12 +239,18 @@ export class WorkspaceDebugService {
           reject(e);
         };
         const exit = () =>
-          error(Error('debug adapter exited before listening'));
+          error(
+            Error(
+              'debug adapter exited before listening' +
+                (stderrTail.trim() ? `: ${stderrTail.trim()}` : ''),
+            ),
+          );
         const data = (chunk: Buffer) => {
           text += chunk.toString();
           const m =
             /listening (?:on|at).*?:(\d+)/i.exec(text) ??
             /listening at port (\d+)/i.exec(text);
+          text = text.slice(-4096);
           if (m) {
             cleanup();
             resolve(+m[1]);
@@ -531,33 +544,47 @@ export class WorkspaceDebugService {
         throw Error(
           'breakpoint columns must match the requested positive positions',
         );
+      // `add` keeps the file's other breakpoints: DAP replaces a file's whole set, and only
+      // this side knows the resolved path they are stored under.
+      const requested: { line: number; column?: number }[] = lines.map(
+        (line: number, index: number) => ({
+          line,
+          ...(params.columns?.[index] !== undefined
+            ? { column: Number(params.columns[index]) }
+            : {}),
+        }),
+      );
+      if (params.add === true)
+        requested.unshift(
+          ...(this.state.breakpoints[source] ?? [])
+            .map((b) => ({
+              line: Number(b.requestedLine ?? b.line),
+              ...(b.requestedColumn !== undefined
+                ? { column: Number(b.requestedColumn) }
+                : {}),
+            }))
+            .filter((b) => !lines.includes(b.line)),
+        );
       const result = this.dap
         ? await (this.target ?? this.dap).request(method, {
             source: { path: source },
-            breakpoints: lines.map((line, index) => ({
-              line,
-              ...(params.columns?.[index] !== undefined
-                ? { column: params.columns[index] }
-                : {}),
-            })),
+            breakpoints: requested,
           })
         : {
-            breakpoints: lines.map((line) => ({
+            breakpoints: requested.map(({ line }) => ({
               line,
               verified: false,
               source: { path: source },
             })),
           };
-      result.breakpoints = lines.map((line, index) => {
+      result.breakpoints = requested.map(({ line, column }, index) => {
         const bound = result.breakpoints?.[index] ?? { verified: false };
         return {
           ...bound,
           line: bound.line ?? line,
           source: bound.source ?? { path: source },
           requestedLine: line,
-          ...(params.columns?.[index] !== undefined
-            ? { requestedColumn: params.columns[index] }
-            : {}),
+          ...(column !== undefined ? { requestedColumn: column } : {}),
         };
       });
       this.state.breakpoints[source] = result.breakpoints;

@@ -80,6 +80,8 @@ export function GitPanel({
     setSelected((selection) =>
       method === 'commit' ? [] : selection.filter((path) => visible.has(path)),
     );
+    // A committed message is not the draft of the next commit.
+    if (method === 'commit') setMessage('');
   };
   const refresh = async () => {
     const request = begin(),

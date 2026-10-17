@@ -52,6 +52,9 @@ function payload(value: InputPayload): InputPayload {
   if (value.attachments) validateAttachments(value.attachments);
   return structuredClone(value);
 }
+// A consumed or discarded row keeps its identity and state but not the input:
+// the message itself (or nothing, once discarded) holds that.
+const CLEARED = JSON.stringify({ text: '', display: '' });
 /** Private per-session outbox in the existing checkpoint database. Never executes recovered inputs. */
 export class InputOutbox {
   constructor(
@@ -259,7 +262,7 @@ export class InputOutbox {
             'UPDATE input_outbox SET payload=?,kind=?,state=?,updated=? WHERE session_id=? AND id=?',
           )
           .run(
-            JSON.stringify(next),
+            change.state === 'discarded' ? CLEARED : JSON.stringify(next),
             change.kind ?? previous.kind,
             change.state ?? previous.state,
             Date.now(),
@@ -274,9 +277,9 @@ export class InputOutbox {
   consumeInTransaction(sessionId: string, id: string, epoch: string): void {
     const result = this.db
       .prepare(
-        "UPDATE input_outbox SET state='consumed',updated=? WHERE session_id=? AND id=? AND epoch=? AND state='queued'",
+        "UPDATE input_outbox SET state='consumed',payload=?,updated=? WHERE session_id=? AND id=? AND epoch=? AND state='queued'",
       )
-      .run(Date.now(), sessionId, id, epoch);
+      .run(CLEARED, Date.now(), sessionId, id, epoch);
     if (result.changes !== 1)
       throw new Error('queued input changed before consumption');
     this.bump(sessionId);
@@ -321,10 +324,16 @@ export class InputOutbox {
           throw new Error(
             'input recovery operation reused with different input',
           );
+        const replay = JSON.parse(
+          String(previous.result),
+        ) as ResolveInputsResult;
         return {
-          ...JSON.parse(String(previous.result)),
+          ...replay,
+          items: replay.items.map(
+            (input) => this.get(sessionId, input.id) ?? input,
+          ),
           applied: false,
-        } as ResolveInputsResult;
+        };
       }
       if (this.version(sessionId) !== request.expectedVersion)
         throw new Error(
@@ -342,11 +351,14 @@ export class InputOutbox {
         for (const input of selected)
           this.db
             .prepare(
-              'UPDATE input_outbox SET epoch=?,state=?,updated=? WHERE session_id=? AND id=?',
+              'UPDATE input_outbox SET epoch=?,state=?,payload=?,updated=? WHERE session_id=? AND id=?',
             )
             .run(
               epoch,
               request.action === 'resume' ? 'queued' : 'discarded',
+              request.action === 'resume'
+                ? JSON.stringify(input.payload)
+                : CLEARED,
               Date.now(),
               sessionId,
               input.id,
@@ -361,7 +373,19 @@ export class InputOutbox {
       };
       this.db
         .prepare('INSERT INTO input_outbox_operations VALUES (?,?,?,?)')
-        .run(sessionId, request.operationId, signature, JSON.stringify(result));
+        .run(
+          sessionId,
+          request.operationId,
+          signature,
+          // The receipt names the rows; a replay reads them again.
+          JSON.stringify({
+            ...result,
+            items: result.items.map((input) => ({
+              ...input,
+              payload: JSON.parse(CLEARED),
+            })),
+          }),
+        );
       return result;
     });
   }

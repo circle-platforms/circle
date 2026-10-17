@@ -317,13 +317,7 @@ export class WorkspaceServices {
       )
         return true;
     }
-    if (
-      (await this.terminals.list(sessionId)).some(
-        (t) =>
-          t.owner === sessionId && ['running', 'stopping'].includes(t.status),
-      )
-    )
-      return true;
+    if ((await this.terminals.activeIds(sessionId)).length) return true;
     const debug = this.debuggers.get(sessionId)?.snapshot();
     if (debug && ['starting', 'running', 'paused'].includes(debug.status))
       return true;
@@ -352,11 +346,10 @@ export class WorkspaceServices {
       const closingCycles = this.closeCycles(sessionId).catch((error) => {
         cycleCloseError = error;
       });
-      const terminals = await this.terminals.list(sessionId);
       await Promise.all(
-        terminals
-          .filter((t) => ['running', 'stopping'].includes(t.status))
-          .map((t) => this.terminals.close(sessionId, t.id)),
+        (await this.terminals.activeIds(sessionId)).map((id) =>
+          this.terminals.close(sessionId, id),
+        ),
       );
       const debug = this.debuggers.get(sessionId);
       if (debug) {

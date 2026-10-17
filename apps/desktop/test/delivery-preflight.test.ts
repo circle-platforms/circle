@@ -113,3 +113,77 @@ test('dirty candidate publish remains a safe actionable rejection through the re
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("publishing from the repository's default branch is refused even when it is not main or master", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-publish-default-'));
+  try {
+    for (const source of ['local', 'gh'] as const) {
+      const workspace = path.join(root, source),
+        origin = path.join(root, `${source}.git`);
+      await mkdir(workspace);
+      const delivery = new DeliveryService(workspace, process.execPath);
+      const git = (args: string[]) => delivery.git.git(args);
+      await git(['init', '--bare', '--initial-branch=trunk', origin]);
+      await git(['init', '--initial-branch=trunk']);
+      await git(['config', 'user.name', 'Fixture']);
+      await git(['config', 'user.email', 'fixture@example.invalid']);
+      await writeFile(path.join(workspace, 'tracked.txt'), 'baseline\n');
+      await git(['add', '--', 'tracked.txt']);
+      await git(['commit', '-m', 'Baseline']);
+      await git(['remote', 'add', 'origin', origin]);
+      if (source === 'local') {
+        // The local origin/HEAD names the default without asking GitHub.
+        await git(['update-ref', 'refs/remotes/origin/trunk', 'HEAD']);
+        await git([
+          'symbolic-ref',
+          'refs/remotes/origin/HEAD',
+          'refs/remotes/origin/trunk',
+        ]);
+      }
+      const calls: string[][] = [];
+      delivery.gh = async (args) => {
+        calls.push(args);
+        if (
+          source === 'gh' &&
+          args.join(' ') === 'repo view --json defaultBranchRef'
+        )
+          return JSON.stringify({ defaultBranchRef: { name: 'trunk' } });
+        throw Error('unexpected GitHub call');
+      };
+      const before = await delivery.git.snapshot();
+      await assert.rejects(
+        delivery.call('publish', {
+          revision: before.revision,
+          title: 'Fixture',
+          body: 'Fixture',
+        }),
+        (error: unknown) =>
+          error instanceof DeliveryPreflightError &&
+          error.code === 'DELIVERY_FEATURE_BRANCH_REQUIRED',
+        source,
+      );
+      await assert.rejects(
+        delivery.publishPushed({
+          revision: before.revision,
+          head: before.head,
+          title: 'Fixture',
+          body: 'Fixture',
+        }),
+        /publish from a feature branch/,
+        source,
+      );
+      assert.deepEqual(
+        calls,
+        source === 'local'
+          ? []
+          : [
+              ['repo', 'view', '--json', 'defaultBranchRef'],
+              ['repo', 'view', '--json', 'defaultBranchRef'],
+            ],
+      );
+      assert.equal(await git(['ls-remote', '--heads', origin]), '');
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

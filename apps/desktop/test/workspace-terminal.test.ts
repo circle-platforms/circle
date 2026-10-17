@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { terminalInputChunks } from '../../workbench/src/model/terminal-stream.ts';
 import {
   TerminalManager,
@@ -919,5 +920,42 @@ test(
     } finally {
       await restored.dispose();
     }
+  },
+);
+
+test(
+  'a startup persistence failure after spawn stops the shell before rejecting',
+  { skip: !unix },
+  async (t) => {
+    const { manager, logRoot } = await setup(t);
+    const require = createRequire(import.meta.url);
+    const fsp =
+      require('node:fs/promises') as typeof import('node:fs/promises');
+    const original = fsp.rename;
+    fsp.rename = (async (from, to) => {
+      if (
+        String(to).startsWith(logRoot) &&
+        String(to).endsWith('metadata.json')
+      )
+        throw Object.assign(Error('injected metadata failure'), {
+          code: 'EIO',
+        });
+      return original(from, to);
+    }) as typeof fsp.rename;
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        manager.create({ owner, sessionId: 'session-a' }),
+        /injected metadata failure/,
+      );
+    } finally {
+      fsp.rename = original;
+      syncBuiltinESMExports();
+    }
+    const [failed] = await manager.list(owner);
+    assert.equal(failed!.status, 'failed');
+    assert.ok(failed!.pid);
+    assert.throws(() => process.kill(failed!.pid!, 0), { code: 'ESRCH' });
+    assert.deepEqual(await manager.activeIds(owner), []);
   },
 );

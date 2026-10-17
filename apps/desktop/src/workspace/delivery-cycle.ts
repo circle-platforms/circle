@@ -55,12 +55,15 @@ export interface CycleRecord extends CycleSpec {
   publishedHead?: string;
   recoveryPhase?: 'diagnosis';
   ciQueryRetry?: { failures: number; notBefore: number };
+  ciPoll?: { notBefore: number; delay: number };
+  ciNoChecksSince?: number;
   pr?: { url: string; number?: number; head: string };
   lastFailure?: {
     fingerprint: string;
     logs: string;
     checks: CycleCheck[];
     head: string;
+    artifacts?: string[];
   };
   failureCounts: Record<string, number>;
   reason?: string;
@@ -112,7 +115,11 @@ export interface CyclePorts {
       operation: { operationId: string },
     ): Promise<{ url: string; number?: number; head: string }>;
     checks(cycle: CycleRecord): Promise<{ head: string; checks: CycleCheck[] }>;
-    logs(cycle: CycleRecord, runId: number): Promise<string>;
+    /** Bounded failure text, optionally with the path of the complete saved log. */
+    logs(
+      cycle: CycleRecord,
+      runId: number,
+    ): Promise<string | { text: string; artifact?: string }>;
     retry(
       cycle: CycleRecord,
       runId: number,
@@ -155,6 +162,22 @@ const countConsecutiveFailure = (cycle: CycleRecord, fingerprint: string) => {
   cycle.failureCounts[fingerprint] = count;
   return count;
 };
+// Pending CI is polled at a widening interval; a PR that never reports
+// checks is handed to a person instead of waiting forever.
+const CI_POLL_FIRST = 15_000,
+  CI_POLL_LAST = 60_000,
+  CI_NO_CHECKS_LIMIT = 5 * 60_000;
+const FAILURE_LOG_LIMIT = 64 * 1024;
+const tailLog = (text: string, limit = FAILURE_LOG_LIMIT) => {
+  if (text.length <= limit) return text;
+  const tail = text.slice(-limit),
+    line = tail.indexOf('\n');
+  return `[earlier log output omitted]\n${line >= 0 && line < tail.length - 1 ? tail.slice(line + 1) : tail}`;
+};
+const artifactNote = (artifacts: string[] = []) =>
+  artifacts.length
+    ? `\nComplete failure logs are saved at:\n${artifacts.map((path) => `- ${path}`).join('\n')}`
+    : '';
 const now = () => new Date().toISOString();
 const copy = <T>(value: T): T => structuredClone(value);
 /** One owner per ledger. All mutations are durable before effects; unknown effects are never replayed. */
@@ -409,6 +432,7 @@ export class DeliveryCycleService {
     head: string,
     checks: CycleCheck[],
   ) {
+    logs = tailLog(logs);
     const fingerprint = hash({
       checks,
       logs: normalizeFailureLog(logs),
@@ -498,7 +522,7 @@ export class DeliveryCycleService {
                 {
                   kind: 'repair',
                   dependencies,
-                  prompt: `Use the independently accepted diagnosis in the completed dependency results/artifacts to revise the task breakdown and implement a different repair. Preserve all original acceptance criteria; propose further follow-up tasks to the coordinator when needed.\n${cycle.lastFailure?.logs ?? ''}`,
+                  prompt: `Use the independently accepted diagnosis in the completed dependency results/artifacts to revise the task breakdown and implement a different repair. Preserve all original acceptance criteria; propose further follow-up tasks to the coordinator when needed.\n${cycle.lastFailure?.logs ?? ''}${artifactNote(cycle.lastFailure?.artifacts)}`,
                 },
                 { operationId },
               ),
@@ -673,11 +697,16 @@ export class DeliveryCycleService {
           );
           return copy(cycle);
         }
+        delete cycle.ciPoll;
+        delete cycle.ciNoChecksSince;
         await this.update(cycle, 'waiting_ci');
       }
       if (cycle.state === 'waiting_ci') {
         const timestamp = this.options.clock?.() ?? Date.now();
-        if (cycle.ciQueryRetry && timestamp < cycle.ciQueryRetry.notBefore)
+        if (
+          (cycle.ciQueryRetry && timestamp < cycle.ciQueryRetry.notBefore) ||
+          (cycle.ciPoll && timestamp < cycle.ciPoll.notBefore)
+        )
           return copy(cycle);
         // Read failures may be retried. Mutations below still use the durable
         // operation journal and must never be classified as safe to replay.
@@ -718,18 +747,32 @@ export class DeliveryCycleService {
           .filter((item) => item.bucket === 'fail' || item.bucket === 'cancel')
           .sort((left, right) => left.name.localeCompare(right.name));
         if (failures.length) {
-          const logs = (
-            await query(() =>
-              Promise.all(
-                failures.map((item) =>
-                  item.runId
-                    ? ports.delivery.logs(copy(cycle), item.runId)
-                    : Promise.resolve(`${item.name}: no log run available`),
-                ),
+          // Jobs of one workflow run share its log; read each run once.
+          const sources = [
+            ...new Map(
+              failures.map((item) => [item.runId ?? item.name, item]),
+            ).values(),
+          ];
+          const entries = await query(() =>
+            Promise.all(
+              sources.map((item) =>
+                item.runId
+                  ? ports.delivery.logs(copy(cycle), item.runId)
+                  : Promise.resolve(`${item.name}: no log run available`),
               ),
+            ),
+          );
+          const logs = entries
+            .map((entry) =>
+              tailLog(typeof entry === 'string' ? entry : entry.text),
             )
-          ).join('\n');
+            .join('\n');
+          const artifacts = entries.flatMap((entry) =>
+            typeof entry !== 'string' && entry.artifact ? [entry.artifact] : [],
+          );
           delete cycle.ciQueryRetry;
+          delete cycle.ciPoll;
+          delete cycle.ciNoChecksSince;
           const fingerprint = hash({
             checks: failures.map(({ name, bucket }) => ({ name, bucket })),
             logs: normalizeFailureLog(logs),
@@ -740,10 +783,11 @@ export class DeliveryCycleService {
             logs,
             checks: failures,
             head: state.head,
+            ...(artifacts.length ? { artifacts } : {}),
           };
           const kind = count >= 3 ? 'diagnosis' : 'repair';
           const operationId = `${cycle.id}:${kind}:${cycle.attempt + 1}`;
-          const prompt = `${kind === 'diagnosis' ? 'Independently diagnose the repeated failure and propose a revised plan. Do not repeat the same repair.' : 'Repair the failed CI checks and verify the original acceptance criteria.'}\n${logs}`;
+          const prompt = `${kind === 'diagnosis' ? 'Independently diagnose the repeated failure and propose a revised plan. Do not repeat the same repair.' : 'Repair the failed CI checks and verify the original acceptance criteria.'}\n${logs}${artifactNote(artifacts)}`;
           const ids = await this.operation(
             cycle,
             `create ${kind} tasks`,
@@ -762,19 +806,40 @@ export class DeliveryCycleService {
           await this.update(cycle, !ids.length ? 'needs_review' : 'repairing');
           return copy(cycle);
         }
+        const evidence = results.checks.filter(
+          (item) => item.bucket !== 'skipping',
+        );
         if (
-          !results.checks.some((item) => item.bucket === 'pass') ||
-          results.checks.some(
-            (item) => item.bucket !== 'pass' && item.bucket !== 'skipping',
-          )
+          !evidence.some((item) => item.bucket === 'pass') ||
+          evidence.some((item) => item.bucket !== 'pass')
         ) {
-          if (cycle.ciQueryRetry) {
-            delete cycle.ciQueryRetry;
-            await this.update(cycle, 'waiting_ci');
+          const recovered = Boolean(cycle.ciQueryRetry);
+          delete cycle.ciQueryRetry;
+          if (evidence.length) delete cycle.ciNoChecksSince;
+          else {
+            cycle.ciNoChecksSince ??= timestamp;
+            if (timestamp - cycle.ciNoChecksSince >= CI_NO_CHECKS_LIMIT) {
+              delete cycle.ciPoll;
+              delete cycle.ciNoChecksSince;
+              await this.update(
+                cycle,
+                'needs_review',
+                'the pull request reports no CI checks; review it without CI evidence',
+              );
+              return copy(cycle);
+            }
           }
+          const delay = cycle.ciPoll
+            ? Math.min(CI_POLL_LAST, cycle.ciPoll.delay * 2)
+            : CI_POLL_FIRST;
+          cycle.ciPoll = { notBefore: timestamp + delay, delay };
+          if (recovered) await this.update(cycle, 'waiting_ci');
+          else await this.save();
           return copy(cycle);
         }
         delete cycle.ciQueryRetry;
+        delete cycle.ciPoll;
+        delete cycle.ciNoChecksSince;
         const operationId = `${cycle.id}:ready:${cycle.attempt}`;
         await this.operation(
           cycle,
@@ -818,6 +883,11 @@ export class DeliveryCycleService {
       { runId, head: cycle.publishedHead },
       () => this.options.ports.delivery.retry(copy(cycle), runId, operation),
     );
+    // Look at the rerun soon rather than at the widened pending interval.
+    if (cycle.ciPoll) {
+      delete cycle.ciPoll;
+      await this.save();
+    }
     return copy(cycle);
   }
   async retryCI(

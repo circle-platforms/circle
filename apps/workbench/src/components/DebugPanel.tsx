@@ -110,7 +110,7 @@ export function DebugPanel({
         for (const event of page.events) chunks.push(event.data.text);
         if (!page.hasMore) break;
         if (page.cursor.offset <= after.offset)
-          throw Error('debug output cursor did not advance');
+          throw Error(t('debug output cursor did not advance'));
         after = page.cursor;
       }
       if (current()) await copyText(chunks.join(''));
@@ -201,19 +201,12 @@ export function DebugPanel({
     setLine(String(sourceRequest.line));
     const current = ticket('session');
     const requestKey = preparedSource.current;
-    void call<Snapshot>('snapshot')
-      .then(async (snapshot) => {
-        if (!current() || preparedSource.current !== requestKey) return;
-        const existing = snapshot.breakpoints[sourceRequest.path] ?? [];
-        await call<Snapshot>('setBreakpoints', {
-          path: sourceRequest.path,
-          lines: [
-            ...new Set([
-              ...existing.map((b) => b.requestedLine ?? b.line),
-              sourceRequest.line!,
-            ]),
-          ],
-        });
+    void call<Snapshot>('setBreakpoints', {
+      path: sourceRequest.path,
+      lines: [sourceRequest.line],
+      add: true,
+    })
+      .then(() => {
         if (current() && preparedSource.current === requestKey) void refresh();
       })
       .catch((error) => {
@@ -411,6 +404,7 @@ export function DebugPanel({
               void act('setBreakpoints', {
                 path: program,
                 lines: [Number(line)],
+                add: true,
               })
             }
           >

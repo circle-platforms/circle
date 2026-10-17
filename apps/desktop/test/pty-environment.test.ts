@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ptyEnvironment } from '../src/workspace/pty-environment.ts';
+import {
+  ptyEnvironment,
+  withTextLocale,
+} from '../src/workspace/pty-environment.ts';
 
 const exec = promisify(execFile);
 
@@ -72,4 +75,14 @@ test('a real child receives merged values, debug options and literal argv', asyn
     deleted: null,
     arg: argument,
   });
+});
+
+test('a terminal without a locale reads UTF-8, and a chosen locale stays', () => {
+  assert.equal(withTextLocale({}, 'darwin').LC_CTYPE, 'UTF-8');
+  assert.equal(withTextLocale({}, 'linux').LC_CTYPE, 'C.UTF-8');
+  assert.deepEqual(withTextLocale({ LANG: 'C' }, 'linux'), { LANG: 'C' });
+  assert.deepEqual(withTextLocale({ LC_ALL: 'POSIX' }, 'darwin'), {
+    LC_ALL: 'POSIX',
+  });
+  assert.deepEqual(withTextLocale({}, 'win32'), {});
 });

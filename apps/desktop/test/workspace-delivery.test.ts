@@ -42,3 +42,34 @@ test('local gh adapter reports checks and refuses ready on failing CI', async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('a pull request without any checks reads as no checks, while other failures still fail', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-gh-no-checks-'));
+  try {
+    const gh = path.join(root, 'fake-gh');
+    const rollup = path.join(root, 'rollup.json');
+    await writeFile(
+      gh,
+      `#!/usr/bin/env node\nconst fs=require('fs');const a=process.argv.slice(2);if(a[0]==='pr'&&a[1]==='checks'){console.error("no checks reported on the 'codex/x' branch");process.exit(1)}else if(a[0]==='pr'&&a[1]==='view'&&a[3]==='statusCheckRollup')console.log(fs.readFileSync(${JSON.stringify(rollup)},'utf8'));else process.exit(3);`,
+    );
+    await chmod(gh, 0o755);
+    const s = new DeliveryService(root, gh);
+    if (process.platform === 'win32')
+      s.gh = async (args) =>
+        (
+          await promisify(execFile)(process.execPath, [gh, ...args], {
+            cwd: root,
+            encoding: 'utf8',
+          })
+        ).stdout;
+    await writeFile(rollup, JSON.stringify({ statusCheckRollup: [] }));
+    assert.deepEqual(await s.call('checks'), []);
+    await writeFile(
+      rollup,
+      JSON.stringify({ statusCheckRollup: [{ name: 'build' }] }),
+    );
+    await assert.rejects(s.call('checks'), /no checks reported|Command failed/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

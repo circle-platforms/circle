@@ -907,3 +907,28 @@ test('untracked previews enforce parent boundaries and preserve the Git executab
     await rm(outside, { recursive: true, force: true });
   }
 });
+
+test('git that exits before reading its input rejects instead of crashing on EPIPE', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-epipe-'));
+  try {
+    const s = new GitWorkspaceService(root);
+    const crashes: unknown[] = [];
+    const record = (error: unknown) => crashes.push(error);
+    process.on('uncaughtException', record);
+    try {
+      const outcome = await s
+        .git(['version'], 'x'.repeat(16 * 1024 * 1024))
+        .then(
+          () => undefined,
+          (error: Error) => error,
+        );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(crashes, []);
+      if (outcome) assert.match(outcome.message, /EPIPE|write/);
+    } finally {
+      process.off('uncaughtException', record);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

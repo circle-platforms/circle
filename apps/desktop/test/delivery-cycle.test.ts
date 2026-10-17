@@ -141,7 +141,12 @@ async function fixture(t: TestContext) {
       },
     },
   };
-  const cycle = await DeliveryCycleService.open({ dataDir, ports });
+  let clock = 1_000_000;
+  const cycle = await DeliveryCycleService.open({
+    dataDir,
+    ports,
+    clock: () => clock,
+  });
   t.after(async () => {
     await cycle.close();
     await rm(root, { recursive: true, force: true });
@@ -165,6 +170,7 @@ async function fixture(t: TestContext) {
     setAlwaysFail: () => (alwaysFail = true),
     setUnverified: () => (verified = false),
     setStale: () => (stale = true),
+    tick: (ms: number) => (clock += ms),
   };
 }
 
@@ -364,6 +370,8 @@ test('a failed check dispatches repair while unrelated checks are still pending'
     0,
   );
   pending = false;
+  assert.equal((await f.cycle.advance('web')).state, 'waiting_ci');
+  f.tick(15_000);
   assert.equal((await f.cycle.advance('web')).state, 'pending_human_merge');
   assert.equal(f.effects.repair, 1);
   assert.equal(f.effects.commit, 2);
@@ -571,3 +579,96 @@ for (const source of ['local', 'CI'])
     assert.equal(f.cycle.snapshot('web').recoveryPhase, 'diagnosis');
     assert.equal(f.effects.repair, 4);
   });
+
+test('pending CI is polled at a widening persisted interval instead of every tick', async (t) => {
+  const f = await fixture(t);
+  const checks = f.ports.delivery.checks;
+  let reads = 0,
+    pending = true;
+  f.ports.delivery.checks = async (cycle) => {
+    reads++;
+    const result = await checks(cycle);
+    if (pending)
+      result.checks = [{ name: 'long-build', bucket: 'pending', runId: 1 }];
+    return result;
+  };
+  const state = JSON.parse(await readFile(f.fakeState, 'utf8'));
+  state.ci = 'pass';
+  await writeFile(f.fakeState, JSON.stringify(state));
+  await f.cycle.create(f.spec, { operationId: 'create' });
+  assert.equal((await f.cycle.advance('web')).state, 'waiting_ci');
+  assert.equal(reads, 1);
+  for (let i = 0; i < 5; i++) await f.cycle.advance('web');
+  assert.equal(reads, 1);
+  const delays: number[] = [];
+  for (let poll = 0; poll < 4; poll++) {
+    const delay = f.cycle.snapshot('web').ciPoll!.delay;
+    delays.push(delay);
+    f.tick(delay - 1);
+    await f.cycle.advance('web');
+    assert.equal(reads, poll + 1);
+    f.tick(1);
+    await f.cycle.advance('web');
+    assert.equal(reads, poll + 2);
+  }
+  assert.deepEqual(delays, [15_000, 30_000, 60_000, 60_000]);
+  const ledger = JSON.parse(
+    await readFile(join(f.dataDir, 'delivery-cycles.json'), 'utf8'),
+  );
+  assert.equal(
+    ledger.cycles[0].ciPoll.notBefore,
+    f.cycle.snapshot('web').ciPoll!.notBefore,
+  );
+  pending = false;
+  f.tick(60_000);
+  assert.equal((await f.cycle.advance('web')).state, 'pending_human_merge');
+  assert.equal(f.cycle.snapshot('web').ciPoll, undefined);
+});
+
+test('a pull request that never reports checks is handed to a person instead of waiting forever', async (t) => {
+  const f = await fixture(t);
+  const state = JSON.parse(await readFile(f.fakeState, 'utf8'));
+  state.ci = 'empty';
+  await writeFile(f.fakeState, JSON.stringify(state));
+  await f.cycle.create(f.spec, { operationId: 'create' });
+  let cycle = await f.cycle.advance('web');
+  for (let i = 0; i < 20 && cycle.state === 'waiting_ci'; i++) {
+    f.tick(60_000);
+    cycle = await f.cycle.advance('web');
+  }
+  assert.equal(cycle.state, 'needs_review');
+  assert.match(cycle.reason!, /no CI checks/);
+  const result = JSON.parse(await readFile(f.fakeState, 'utf8'));
+  assert.equal(result.draft, true);
+  assert.ok(result.calls.every((call: string[]) => call[0] !== 'ready'));
+});
+
+test('large CI failure logs are bounded in the ledger and prompts and point at the saved full log', async (t) => {
+  const f = await fixture(t);
+  const prompts: string[] = [];
+  const create = f.ports.tasks.create;
+  f.ports.tasks.create = (cycle, request, operation) => {
+    prompts.push(request.prompt);
+    return create(cycle, request, operation);
+  };
+  const huge = `early-marker\n${'noise line\n'.repeat(50_000)}final assertion failed`;
+  f.ports.delivery.logs = async () => ({
+    text: huge,
+    artifact: '/private/cycle-logs/run-1.log',
+  });
+  await f.cycle.create(f.spec, { operationId: 'create' });
+  const cycle = await f.cycle.advance('web');
+  assert.equal(cycle.state, 'repairing');
+  const logs = cycle.lastFailure!.logs;
+  assert.ok(logs.length <= 64 * 1024 + 100, String(logs.length));
+  assert.match(logs, /final assertion failed$/);
+  assert.doesNotMatch(logs, /early-marker/);
+  assert.deepEqual(cycle.lastFailure!.artifacts, [
+    '/private/cycle-logs/run-1.log',
+  ]);
+  const repair = prompts.at(-1)!;
+  assert.ok(repair.length < 70 * 1024);
+  assert.match(repair, /\/private\/cycle-logs\/run-1\.log/);
+  const saved = await readFile(join(f.dataDir, 'delivery-cycles.json'), 'utf8');
+  assert.ok(saved.length < 200 * 1024, String(saved.length));
+});

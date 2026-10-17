@@ -250,4 +250,8 @@ export const developer: Record<string, string> = {
   'copy complete log': '复制完整日志',
   'next page': '下一页',
   'browser log could not be saved': '浏览器日志未能保存',
+  'browser log is unavailable': '浏览器日志不可用',
+  'diagnostic history cursor did not advance': '诊断记录的读取位置没有前进',
+  'saved document identity changed': '已保存文件的身份发生了变化',
+  'debug output cursor did not advance': '调试输出的读取位置没有前进',
 };

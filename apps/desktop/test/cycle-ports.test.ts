@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -167,7 +174,7 @@ else if(a[0]==='pr'&&a[1]==='checks'){
  out=s.checks??[{name:'remote acceptance',state:content.includes('readyForCI=true')?'SUCCESS':'FAILURE',bucket:s.holdCI?'pending':s.forcePass||content.includes('readyForCI=true')?'pass':'fail',link:'https://github.invalid/fixture/repo/actions/runs/42/job/3'}];
 }
 else if(a[0]==='pr'&&a[1]==='ready'){pr();if(a.includes('--undo')){s.undos=(s.undos??0)+1;s.pr.isDraft=true;out='draft'}else{s.ready++;s.pr.isDraft=false;if(s.changeDuringReady)s.overrideHead='unverified-head-during-ready';out='ready'}}
-else if(a[0]==='run'&&a[1]==='view'){s.logs++;out='CI_ACTUAL_LOG: remote acceptance requires readyForCI=true';}
+else if(a[0]==='run'&&a[1]==='view'){s.logs++;out=s.bigLog?'build\tstep\tearly-marker\n'+'build\tstep\tnoise\n'.repeat(5000)+'build\tstep\tCI_ACTUAL_LOG: last line':'CI_ACTUAL_LOG: remote acceptance requires readyForCI=true';}
 else if(a[0]==='run'&&a[1]==='rerun'){s.retries++;out='retry requested';}
 else throw Error('unsupported fake gh call '+a.join(' '));
 save();console.log(typeof out==='string'?out:JSON.stringify(out));
@@ -340,6 +347,8 @@ test('real scripted tasks integrate and repair failing CI on one draft PR withou
       cycles = await DeliveryCycleService.open({
         dataDir: join(f.dataDir, 'cycles'),
         ports: createWorkspaceCyclePorts(portsOptions),
+        // The restart also outlasts the pending CI poll interval.
+        clock: () => Date.now() + 60_000,
       });
       restarted = true;
       assert.equal(
@@ -428,6 +437,21 @@ test('real scripted tasks integrate and repair failing CI on one draft PR withou
     ports.git.snapshot({ ...cycle, workspace: f.root }),
     /owned integration/,
   );
+  const large = JSON.parse(await readFile(f.ghState, 'utf8'));
+  large.bigLog = true;
+  await writeFile(f.ghState, JSON.stringify(large));
+  const bounded = await ports.delivery.logs(cycle, 42);
+  assert.equal(typeof bounded, 'object');
+  const { text, artifact } = bounded as { text: string; artifact: string };
+  assert.ok(text.length < 33 * 1024, String(text.length));
+  assert.match(text, /CI_ACTUAL_LOG: last line/);
+  assert.doesNotMatch(text, /early-marker/);
+  assert.ok(artifact.startsWith(join(deepPorts, 'cycle-logs')));
+  const full = await readFile(artifact, 'utf8');
+  assert.match(full, /^build\tstep\tearly-marker\n/);
+  assert.match(full, /CI_ACTUAL_LOG: last line/);
+  if (process.platform !== 'win32')
+    assert.equal((await stat(artifact)).mode & 0o777, 0o600);
 });
 
 test('cycle adapter refuses unverified candidates, changed ownership and missing integration manifests', async (t) => {

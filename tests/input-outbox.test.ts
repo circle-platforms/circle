@@ -47,6 +47,8 @@ function runtime(
     headless: true,
     bundledExtensions: false,
     screenshot: false,
+    // The desktop host keeps a closing runtime's queue to offer back.
+    preserveQueuedInputs: true,
   });
 }
 function database(store: CheckpointStore) {
@@ -137,7 +139,9 @@ test('same text has separate durable identities and media, and taking back one r
   assert.notEqual(inputs[0]!.id, inputs[1]!.id);
   const returned = running.harness.takeBack();
   assert.deepEqual(returned[0]!.attachments, [second]);
-  assert.equal(running.harness.recoverableInputs.items[0]!.id, inputs[1]!.id);
+  // Taken back into the box: no recovery copy, and the row keeps no payload.
+  assert.equal(running.harness.recoverableInputs.items.length, 0);
+  assert.equal(running.store.inputs.get(id, inputs[1]!.id)!.state, 'discarded');
   await running.harness.run();
   const messages = running.harness.messages.filter(
     (item) => item.role === 'user',
@@ -145,13 +149,22 @@ test('same text has separate durable identities and media, and taking back one r
   assert.equal(messages.length, 1);
   assert.equal(messages[0]!.id, inputs[0]!.id);
   assert.deepEqual(messages[0]!.attachments, [first]);
+  assert.deepEqual(running.store.inputs.get(id, inputs[0]!.id)!.payload, {
+    text: '',
+    display: '',
+  });
+  running.harness.queue('same text', 'steer', [second]);
+  const kept = running.store.inputs.list(id, 'queued')[0]!;
   await running.close();
   running = runtime(home, workspace, undefined, id);
   const recovery = running.harness.recoverableInputs;
-  assert.equal(recovery.items.length, 1);
+  assert.deepEqual(
+    recovery.items.map((item) => item.id),
+    [kept.id],
+  );
   assert.deepEqual(recovery.items[0]!.payload.attachments, [second]);
   const copy = running.harness.resolveInputs({
-    ids: [inputs[1]!.id],
+    ids: [kept.id],
     expectedVersion: recovery.version,
     operationId: 'copy',
     action: 'returnToDraft',

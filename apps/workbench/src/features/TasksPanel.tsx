@@ -1,3 +1,4 @@
+import { useOwnerState } from '../model/owner-state';
 import {
   useCallback,
   useEffect,
@@ -37,9 +38,13 @@ export function TasksPanel({
   >([]);
   const [limits, setLimits] = useState<Limits | null>(null);
   const [agents, setAgents] = useState('8');
-  const [prompt, setPrompt] = useState('');
-  const [criteria, setCriteria] = useState('');
-  const [dependencies, setDependencies] = useState<string[]>([]);
+  // Drafts belong to their session: one typed in another session is never submitted here.
+  const [prompt, setPrompt] = useOwnerState(sessionId, '');
+  const [criteria, setCriteria] = useOwnerState(sessionId, '');
+  const [dependencies, setDependencies] = useOwnerState<string[]>(
+    sessionId,
+    [],
+  );
   const [access, setAccess] = useState<'write' | 'readonly'>('write');
   const [resource, setResource] = useState<
     'agent' | 'build' | 'ui' | 'browser'
@@ -108,7 +113,6 @@ export function TasksPanel({
     setTasksReady(false);
     setRequiresStart(false);
     setError('');
-    setDependencies([]);
     void refresh();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = subscribeWorkspace((event) => {
@@ -195,12 +199,11 @@ export function TasksPanel({
                   },
                 ],
               });
-              if (epoch === generation.current) {
-                setPrompt('');
-                setCriteria('');
-                setDependencies([]);
-                setCreateOpen(false);
-              }
+              // The setters are bound to the session that submitted.
+              setPrompt('');
+              setCriteria('');
+              setDependencies([]);
+              if (epoch === generation.current) setCreateOpen(false);
             });
           }}
         >

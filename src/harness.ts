@@ -424,10 +424,19 @@ export class Harness {
   }
   /** The waiting messages as the input box showed them (long pastes and images folded). */
   get queuedShown(): { steering: string[]; followUp: string[] } {
-    return {
-      steering: this.steeringIds.map((id) => this.input(id).payload.display),
-      followUp: this.followUpIds.map((id) => this.input(id).payload.display),
-    };
+    try {
+      return {
+        steering: this.steeringIds.map((id) => this.input(id).payload.display),
+        followUp: this.followUpIds.map((id) => this.input(id).payload.display),
+      };
+    } catch {
+      // Drawn on every repaint: a busy or failing store shows what memory holds.
+      const shown = (text: string) => this.shown.get(text)?.display ?? text;
+      return {
+        steering: this.steering.map(shown),
+        followUp: this.followUps.map(shown),
+      };
+    }
   }
   /**
    * Take back messages the model has not read, as the box showed them: the last one listed
@@ -443,7 +452,8 @@ export class Harness {
     this.options.store.inputs.update(
       this.sessionId,
       this.inputEpoch,
-      ids.map((id) => ({ id, state: 'recovery_pending' as const })),
+      // The input box has it now; a copy left here would come back as a stale draft.
+      ids.map((id) => ({ id, state: 'discarded' as const })),
     );
     if (all) {
       this.steeringIds = [];

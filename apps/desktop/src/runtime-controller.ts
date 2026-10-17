@@ -1849,6 +1849,8 @@ export class RuntimeController {
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
+        // The recovered-input panel offers a closed runtime's queue back.
+        preserveQueuedInputs: true,
         fileMutations: this.fileMutations(workspace),
         classifyTool: bindToolResource,
         executeTool: (tool, args, context, run) =>

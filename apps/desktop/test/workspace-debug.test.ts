@@ -636,3 +636,82 @@ test(
     }
   },
 );
+
+test('adding a breakpoint keeps the file’s others, whatever spelling of the path is used', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-add-'));
+  const file = path.join(root, 'fixture.cjs');
+  await writeFile(file, 'a;\nb;\nc;\nd;\n');
+  const service = new WorkspaceDebugService({
+    workspaceRoot: root,
+    nodeExecutable,
+    runtimeExecutable: process.execPath,
+    adapterPath,
+  });
+  try {
+    await service.handle('setBreakpoints', { path: file, lines: [1] });
+    // The editor sends a workspace-relative path; the state is keyed by the resolved one.
+    await service.handle('setBreakpoints', {
+      path: 'fixture.cjs',
+      lines: [3],
+      add: true,
+    });
+    await service.handle('setBreakpoints', {
+      path: 'fixture.cjs',
+      lines: [3],
+      add: true,
+    });
+    const stored = Object.values(service.snapshot().breakpoints);
+    assert.equal(stored.length, 1);
+    assert.deepEqual(
+      stored[0]!.map((b: { requestedLine: number }) => b.requestedLine),
+      [1, 3],
+    );
+    // Without `add` the request is still the file's whole set, as the remove button needs.
+    await service.handle('setBreakpoints', { path: file, lines: [3] });
+    assert.deepEqual(
+      Object.values(service.snapshot().breakpoints)[0]!.map(
+        (b: { requestedLine: number }) => b.requestedLine,
+      ),
+      [3],
+    );
+  } finally {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test(
+  'an adapter that writes a lot to stdout and stderr after listening does not stall',
+  { timeout: 10000 },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-chatty-'));
+    const adapter = path.join(root, 'adapter.cjs');
+    await writeFile(path.join(root, 'fixture.cjs'), '');
+    // Blocking writes: a pipe nobody reads would stop this adapter from replying.
+    await writeFile(
+      adapter,
+      `const fs=require('fs');const flood=fd=>{const b=Buffer.alloc(1<<20,101);let o=0;while(o<b.length){try{o+=fs.writeSync(fd,b,o)}catch(e){if(e.code!=='EAGAIN')throw e}}};const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize'){flood(2);flood(1);s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));}else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(0,'127.0.0.1',function(){console.log('Debug server listening at 127.0.0.1:'+this.address().port)});`,
+    );
+    const service = new WorkspaceDebugService({
+      workspaceRoot: root,
+      nodeExecutable: process.execPath,
+      adapterPath: adapter,
+    });
+    try {
+      const launched = await Promise.race([
+        service.handle('launch', { program: 'fixture.cjs' }),
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(
+            () => reject(Error('adapter stalled on a full pipe')),
+            5000,
+          );
+          timer.unref();
+        }),
+      ]);
+      assert.equal(launched.status, 'running');
+    } finally {
+      await service.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

@@ -202,6 +202,11 @@ export interface RuntimeOptions {
    * the session: this one can read it and cannot continue, change or delete it.
    */
   inspect?: boolean;
+  /**
+   * Keep messages still queued when the runtime closes, for the host to offer
+   * back later (the desktop). The terminal drops them, as a stopped turn does.
+   */
+  preserveQueuedInputs?: boolean;
 }
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
@@ -1862,7 +1867,15 @@ export class AgentRuntime {
     await this.catalog.close();
     this.compactionController?.abort(new Error('Interrupted'));
     await this.activeCompaction?.catch(() => {});
-    await this.harness.cancel({ preserveInputs: !deleteSession });
+    await this.harness
+      .cancel({
+        preserveInputs: !deleteSession && this.options.preserveQueuedInputs,
+      })
+      // The turn is stopped either way. A queue the store could not drop stays
+      // queued, and the next open offers it back rather than sending it.
+      .catch((error) => {
+        if (deleteSession) throw error;
+      });
     await this.harness.finishTitle();
     await this.userShells.cancel();
     const stopped = await this.jobs.close();

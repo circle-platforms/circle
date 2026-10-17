@@ -44,10 +44,11 @@ test('repeated activity consumers parse each unchanged timestamp once while keep
     'view-only changes never reparse ten thousand timestamps',
   );
   recentSessions([session]);
+  // Project groups are in name order; they read no activity at all.
   orderedProjects(snapshot.workspaces, [session]);
   assert.equal(
     calls,
-    10002,
+    10001,
     'sort consumers parse their one summary, not the full history',
   );
 });

@@ -753,10 +753,26 @@ export function createWorkspaceCyclePorts(
       },
       logs: async (cycle, runId) => {
         const owner = await owned(cycle);
-        const result = (await (
-          await delivery(owner, cycle)
-        ).call('logs', { runId })) as { text: string };
-        return redacted(result.text);
+        const result = await (await delivery(owner, cycle)).failureLogs(runId);
+        const text = redacted(result.text);
+        if (!result.truncated) return text;
+        // Prompts carry the bounded tail; the complete log is a private file.
+        const full = redacted(result.full),
+          directory = join(
+            options.dataDir,
+            'cycle-logs',
+            hash(options.sessionId),
+            hash(cycle.id),
+          ),
+          artifact = join(
+            directory,
+            `run-${runId}-${hash(full).slice(0, 16)}.log`,
+          );
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        const temporary = `${artifact}.${randomUUID()}.tmp`;
+        await writeFile(temporary, full, { mode: 0o600 });
+        await rename(temporary, artifact);
+        return { text, artifact };
       },
       retry: (cycle, runId) =>
         serial(cycle, async () => {

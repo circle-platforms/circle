@@ -90,7 +90,7 @@ import { emptyUsage, type ToolCall } from '../types.js';
 import { ScreenRenderer } from '../ink/screen.js';
 import { Clipboard } from '../ink/clipboard.js';
 import { MouseSelection } from './mouse_selection.js';
-import { type ApprovalDecision } from '../harness.js';
+import { type ApprovalDecision, type QueuedMessage } from '../harness.js';
 import {
   BUILTIN_SLASH,
   closeMatch,
@@ -2276,11 +2276,7 @@ export class SessionApp {
       if (this.state.draft && !this.runtime?.busy) {
         // What you typed is cleared but stays in the history
         this.jobWakeSnoozed = true;
-        if (!this.history.add(this.state.draft))
-          this.fail(
-            this.history.persistenceError ??
-              new Error('input history could not be saved'),
-          );
+        this.remember(this.state.draft);
         this.composer.clear();
         this.lastCtrlC = 0;
       } else this.ctrlC();
@@ -2359,7 +2355,7 @@ export class SessionApp {
         this.fail(error);
       }
     } else if (key === 'alt+up' && this.runtime) {
-      const taken = this.runtime.harness.takeBack(true);
+      const taken = this.takeBack(true);
       if (taken.length) {
         this.composer.putBack(
           [
@@ -2378,8 +2374,8 @@ export class SessionApp {
       this.runtime?.harness.pendingMessageCount
     ) {
       // ↑ in an empty box takes back the last message waiting, to change or drop
-      const [taken] = this.runtime.harness.takeBack();
-      this.composer.putBack(taken!.display, taken!.pastes);
+      const [taken] = this.takeBack(false);
+      if (taken) this.composer.putBack(taken.display, taken.pastes);
     } else if (
       key === 'enter' &&
       !this.state.draft.trim() &&
@@ -2668,6 +2664,44 @@ export class SessionApp {
     }
     this.repaint();
   }
+  // A history file that cannot be written (read-only folder, antivirus) is said
+  // once per error; the entry stays in memory and is retried with the next one.
+  private historyFailures = new Set<string>();
+  private remember(text: string): void {
+    if (this.history.add(text)) return;
+    const error =
+      this.history.persistenceError ??
+      new Error('input history could not be saved');
+    if (this.historyFailures.has(error.message)) return;
+    this.historyFailures.add(error.message);
+    this.fail(error);
+  }
+  /** Queue a message. A store that cannot keep it puts it back in an empty box and says why. */
+  private queueMessage(
+    runtime: AgentRuntime,
+    message: string,
+    mode: 'steer' | 'followUp',
+    raw: string,
+    pastes?: Record<string, string>,
+  ): boolean {
+    try {
+      runtime.harness.queue(message, mode);
+      return true;
+    } catch (error) {
+      if (!this.state.draft) this.composer.restore(raw, pastes);
+      this.fail(error);
+      return false;
+    }
+  }
+  /** Take back queued messages; a store that cannot let them go keeps them queued. */
+  private takeBack(all: boolean): QueuedMessage[] {
+    try {
+      return this.runtime?.harness.takeBack(all) ?? [];
+    } catch (error) {
+      this.fail(error);
+      return [];
+    }
+  }
   /** Send the draft: the model reads the long pastes, the screen and the history keep it as shown. */
   private send(kind: 'steer' | 'followUp'): void {
     const view = this.view;
@@ -2677,16 +2711,12 @@ export class SessionApp {
     this.composer.take();
     const message = this.composer.modelText(shown);
     const pastes = this.composer.pastesOf(shown);
-    if (!this.history.add(this.composer.historyText(shown)))
-      this.fail(
-        this.history.persistenceError ??
-          new Error('input history could not be saved'),
-      );
+    this.remember(this.composer.historyText(shown));
     if (kind === 'followUp' && this.runtime?.busy) {
       if (message !== shown)
         this.runtime.harness.shown.set(message, { display: shown, pastes });
-      this.runtime.harness.queue(message, 'followUp');
-      this.flash('Queued follow-up');
+      if (this.queueMessage(this.runtime, message, 'followUp', raw, pastes))
+        this.flash('Queued follow-up');
     } else
       void this.submit(message, raw, false, shown, pastes).catch((error) =>
         this.inView(view, () => this.fail(error)),
@@ -2798,8 +2828,8 @@ export class SessionApp {
     if (shown !== message)
       runtime.harness.shown.set(message, { display: shown, pastes });
     if (runtime.busy) {
-      runtime.harness.queue(message);
-      this.flash('Queued steering');
+      if (this.queueMessage(runtime, message, 'steer', raw, pastes))
+        this.flash('Queued steering');
     } else {
       try {
         await runtime.harness.run(message);
