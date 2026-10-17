@@ -476,14 +476,14 @@ export async function runNativeChildCommandHandoffJourney({
     );
     assert.equal(denied.ok, false);
     assert.match(denied.error, /read-only agent source/);
-    assert.equal(
-      await readFile(join(reviewer.workspace, fixture.paths.source), 'utf8'),
-      fixture.source,
-    );
-    assert.equal(
-      await readFile(join(workspace, fixture.paths.source), 'utf8'),
-      fixture.source,
-    );
+    // A reviewer worktree is a Git checkout, which writes CRLF on Windows.
+    const text = async (root) =>
+      (await readFile(join(root, fixture.paths.source), 'utf8')).replace(
+        /\r\n/g,
+        '\n',
+      );
+    assert.equal(await text(reviewer.workspace), fixture.source);
+    assert.equal(await text(workspace), fixture.source);
     await page.screenshot({
       path: join(output, 'child-command-readonly-reviewer-source.png'),
     });

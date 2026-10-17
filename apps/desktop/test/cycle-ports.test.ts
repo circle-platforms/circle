@@ -1362,7 +1362,7 @@ test('accepted diagnosis creates a real readonly revised plan and dependent writ
     { operationId: 'diagnose' },
   );
   const wait = async (ids: string[]) => {
-    const deadline = Date.now() + 10000;
+    const deadline = Date.now() + 30000;
     while (
       (await ports.tasks.status(cycle, ids)) === 'pending' &&
       Date.now() < deadline

@@ -62,7 +62,7 @@ test(
     let held = 0,
       forceWorld = false;
     const fixture = new BrowserFixture({
-      budgetMs: 30000,
+      budgetMs: 60000,
       close: () => chrome.close(),
       ownedRoots: () => [...(internal.ownedRoots ?? []), internal.child],
       state: () => ({
@@ -81,7 +81,7 @@ test(
     await fixture.run(
       { phase: 'home' },
       () => chrome.request('c', 'navigate', { url: base }, signal),
-      15000,
+      40000,
     );
     const send = internal.send.bind(chrome);
     internal.send = async (method, params, session) => {

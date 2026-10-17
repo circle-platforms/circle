@@ -490,13 +490,14 @@ export async function runNativeTerminalJourney({
         const terminal = (await list()).find((terminal) => terminal.id === id);
         if (terminal && ['running', 'stopping'].includes(terminal.status)) {
           await select(id);
-          await panel
-            .getByRole('button', {
-              name:
-                terminal.kind === 'service' ? 'stop service' : 'stop terminal',
-              exact: true,
-            })
-            .click();
+          const stop = panel.getByRole('button', {
+            name:
+              terminal.kind === 'service' ? 'stop service' : 'stop terminal',
+            exact: true,
+          });
+          // A stop the journey already asked for keeps its button disabled
+          // until the process tree has exited, which is slow on Windows.
+          if (await stop.isEnabled()) await stop.click();
           await until(
             async () =>
               !['running', 'stopping'].includes(
