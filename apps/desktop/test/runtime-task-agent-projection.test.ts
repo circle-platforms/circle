@@ -35,7 +35,8 @@ const assistant = (
   tool_calls?: Message['tool_calls'],
 ): Message => ({ id: randomUUID(), role: 'assistant', content, tool_calls });
 async function wait(check: () => boolean, description: string) {
-  const until = Date.now() + 8000;
+  // A task builds its own worktree first, which Windows runners take seconds to do.
+  const until = Date.now() + 30000;
   while (!check()) {
     if (Date.now() > until) throw Error(`timed out: ${description}`);
     await delay(10);

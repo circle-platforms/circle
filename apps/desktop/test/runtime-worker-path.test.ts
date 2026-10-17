@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import {
   mkdtemp,
+  readdir,
   mkdir,
   writeFile,
   readFile,
@@ -11,6 +12,7 @@ import {
   realpath,
   rm,
 } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -62,11 +64,24 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
       join(app, 'tools/node'),
       process.platform === 'win32' ? 'junction' : 'dir',
     );
-    await symlink(
-      appModules,
-      join(app, 'node_modules'),
-      process.platform === 'win32' ? 'junction' : 'dir',
+    // The shipped worker finds its external packages beside it: the desktop's own,
+    // plus koffi and its native package (the Windows command Job), from the root.
+    const modules = join(app, 'node_modules');
+    await mkdir(modules);
+    const link = (from: string, name: string) =>
+      symlink(
+        from,
+        join(modules, name),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    for (const name of await readdir(appModules))
+      if (!name.startsWith('.')) await link(join(appModules, name), name);
+    const rootModules = fileURLToPath(
+      new URL('../../../node_modules', import.meta.url),
     );
+    for (const name of ['koffi', '@koromix'])
+      if (!existsSync(join(modules, name)))
+        await link(join(rootModules, name), name);
     await writeFile(
       join(workspace, 'package.json'),
       JSON.stringify({

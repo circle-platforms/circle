@@ -68,7 +68,8 @@ export async function runComponentSuites({
     new URL('./helpers/component-evidence.mjs', import.meta.url).href,
   ],
   environment = process.env,
-  timeoutMs = 90_000,
+  // The live-pressure suite drives eight runtimes and a PTY; shared runners need over 90 s.
+  timeoutMs = 180_000,
 } = {}) {
   await mkdir(outputRoot, { recursive: true });
   const output = await mkdtemp(join(outputRoot, 'attempt-'));

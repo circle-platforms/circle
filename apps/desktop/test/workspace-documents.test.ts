@@ -644,7 +644,8 @@ test('a slow catalog scan does not hold the document mutation queue', async (t) 
   try {
     const saved = await Promise.race([
       documents.save('fast.txt', 'saved during discovery', fast.revision),
-      delay(500).then(() => {
+      // The scan stays held until release(); finishing at all shows it does not block.
+      delay(5000).then(() => {
         throw Error('discovery blocked manual save');
       }),
     ]);

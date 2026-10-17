@@ -28,7 +28,8 @@ import {
   trustFolder,
 } from '../../../src/settings.ts';
 async function until(check: () => boolean | Promise<boolean>, label: string) {
-  const deadline = Date.now() + 4000;
+  // A worker and its reviewer each build a worktree; Windows runners need seconds for that.
+  const deadline = Date.now() + 30000;
   while (!(await check())) {
     if (Date.now() > deadline) throw Error(label);
     await delay(5);
