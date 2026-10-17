@@ -294,6 +294,12 @@ test('held rename rejects changed target buffers for unversioned changes and nul
         path: 'main.py',
         newName,
       });
+      // Observed from the start: a rejection that arrives before the assertion below
+      // must fail that assertion, not the process as an unhandled rejection.
+      const outcome = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       // The real server holds this reply until didChange; await recorded receipt, not a timing guess.
       const deadline = Date.now() + 1000;
       while (true) {
@@ -311,7 +317,7 @@ test('held rename rejects changed target buffers for unversioned changes and nul
         content: `target ${index}`,
         version: index + 2,
       });
-      await assert.rejects(pending, /stale language rename target/);
+      assert.match(String(await outcome), /stale language rename target/);
     }
     const result = (await service.call('request', {
       method: 'rename',

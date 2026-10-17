@@ -86,7 +86,8 @@ try {
   await box.press('End');
   await box.press('x');
   assert.equal(await box.inputValue(), 'basex');
-  await box.press('Meta+z');
+  // The platform's own undo: Chromium on Linux and Windows does not undo on Meta+z.
+  await box.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
   await page.waitForFunction(
     () =>
       document.querySelector('textarea[aria-label=message]').value === 'base',
