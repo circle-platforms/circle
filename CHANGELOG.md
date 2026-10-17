@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.8.0 - 2026-10-18
+
 ### Added
 
 - **The desktop application is a development workbench.** It edits, runs, debugs and reviews a project without leaving Circle, while the agent keeps working. See [Developing in the window](docs/desktop.md#developing-in-the-window) and [Known issues](docs/known-issues.md#desktop-application).
@@ -29,6 +31,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **Check now does not offer the version you already have.** A checkout's package version is not Circle's version, so a local build of 1.7.4 no longer offers an update to 1.7.4. A newer local build is not offered an older release either.
 - **The terminal's browser could hang when a page opened a dialog while Circle was reading it.** Chrome answers nothing about a page while its dialog is open, and Circle waited for an answer with no limit, so the action never ended and `esc` did not free it. The action now ends as soon as the dialog opens, and its result shows the dialog.
 - **On macOS, closing a session could report a browser cleanup failure for a browser that had already exited.** macOS refuses to signal a process group whose last process has exited but is not yet cleaned up; Circle now counts that as stopped when no live process is left in the group.
+- **A conversation still opening no longer pulls you back.** In the desktop application, choosing a conversation in the sidebar and then opening settings or another page before it had opened brought that conversation back on screen once it did. The page you opened last now stays.
+- **Screen readers hear which theme is chosen** in settings › appearance, as they already did for the language and the text size.
 
 ### Removed
 

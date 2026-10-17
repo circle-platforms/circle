@@ -32,13 +32,14 @@ import { cleanup, scratch } from './helpers.js';
 
 test('notes cover the releases after the one last seen', () => {
   const hub = { hub: true };
-  assert.equal(notesSince(undefined, VERSION, hub).length, 3);
+  assert.equal(notesSince(undefined, VERSION, hub).length, 4);
   assert.equal(notesSince('1.6.0', '1.7.4').length, 2);
   assert.equal(notesSince('1.6.0', '1.7.4', hub).length, 3);
   assert.equal(notesSince('1.7.0', '1.7.4').length, 2);
   assert.equal(notesSince('1.7.4', '1.7.4', hub).length, 0);
   assert.equal(notesSince('0.5.0', '1.6.0', hub).length, 0);
-  assert.equal(notesSince('1.7.4', '1.8.0', hub).length, 0);
+  assert.equal(notesSince('1.7.4', '1.8.0', hub).length, 1);
+  assert.equal(notesSince('1.8.0', '1.8.0', hub).length, 0);
   const notice = noticeFor('1.7.4', notesSince('1.6.0', '1.7.4', hub));
   assert.equal(notice?.link, releaseNotesUrl('1.7.4'));
   assert.equal(notice?.link.includes('blob/main'), false);
@@ -67,11 +68,11 @@ test('notes cover the releases after the one last seen', () => {
 test('a later version shows only the releases that were skipped', (t) => {
   const home = scratch(t);
   writeFileSync(join(home, 'credentials.json'), '{}\n');
-  assert.equal(pendingWhatsNew(home, '1.8.0', ''), undefined);
-  assert.equal(
-    JSON.parse(readFileSync(join(home, 'whats-new.json'), 'utf8')).seen,
-    '1.8.0',
-  );
+  // No file past 1.7.4 means 1.7.4 was the last release seen.
+  const latest = pendingWhatsNew(home, '1.8.0', '');
+  assert.match(latest!.title.en, /what's new in 1\.8\.0$/);
+  assert.equal(latest!.items.length, 1);
+  assert.match(latest!.items[0]!.en, /workbench/);
   const prefix = scratch(t);
   mkdirSync(join(prefix, 'versions', '1.6.0'), { recursive: true });
   mkdirSync(join(prefix, 'versions', '1.7.4'), { recursive: true });
@@ -81,7 +82,7 @@ test('a later version shows only the releases that were skipped', (t) => {
   const older = scratch(t);
   writeFileSync(join(older, 'credentials.json'), '{}\n');
   const notice = pendingWhatsNew(older, '1.8.0', from16);
-  assert.match(notice!.title.en, /what's new in 1\.7\.4/);
+  assert.match(notice!.title.en, /what's new in 1\.7\.4–1\.8\.0/);
   assert.match(notice!.items.map((item) => item.en).join('\n'), /alt\+l \(L\)/);
   assert.equal(
     notice!.items.some((item) => /circle-server/.test(item.en)),
@@ -122,7 +123,7 @@ test('a first run records the version and an upgrade shows the notice once', (t)
     false,
   );
   const rows = stripAnsi(whatsNewRows(notice!, 'zh-CN', 72).join('\n'));
-  assert.match(rows, /alt\+l \(L\)/);
+  assert.match(rows, /开发工作台/);
   assert.match(rows, /完整的发布说明/);
   assert.match(rows, /releases\/tag\/v/);
   assert.match(rows, /esc/);
@@ -210,6 +211,8 @@ test('the terminal shows the notice under the welcome and esc dismisses it', asy
     { id: 'a', role: 'assistant', content: 'there' },
   ]);
   store.close();
+  // Upgraded from 1.6.0, the last release that had circle-server.
+  seedWhatsNewFrom(home, '1.6.0', VERSION);
   const { saveSettings, defaultSettings } = await import('../src/settings.js');
   saveSettings(
     {

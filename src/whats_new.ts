@@ -55,6 +55,15 @@ export const WHATS_NEW_ITEMS: WhatsNewItem[] = [
         'Anthropic 模型默认以 medium 思考。没有保存过自己的深度时，不再默认使用 xhigh。',
     },
   },
+  {
+    id: 'workbench',
+    since: '1.8.0',
+    text: {
+      en: 'The desktop app is now a workbench: edit, run, debug and review your project in the window while the agent works.',
+      'zh-CN':
+        '桌面应用现在是开发工作台：在窗口中编辑、运行、调试和审阅项目，智能体同时继续工作。',
+    },
+  },
 ];
 
 export interface WhatsNewNotice {
