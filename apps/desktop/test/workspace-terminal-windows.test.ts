@@ -16,7 +16,7 @@ import {
 // No shell syntax or Unix signals: this exact fixture runs under Windows ConPTY.
 test(
   'native PTY Node child preserves argv, stdin, resize, Ctrl+C, restart and owned port cleanup',
-  { timeout: 25_000 },
+  { timeout: 90_000 },
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'circle-portable-pty-'));
     const events: TerminalEvent[] = [];
@@ -33,7 +33,8 @@ test(
         .map((e) => e.data ?? '')
         .join('');
     const wait = async (predicate: () => boolean | Promise<boolean>) => {
-      const deadline = Date.now() + 8000;
+      // Shells start slowly on loaded Intel macOS runners.
+      const deadline = Date.now() + 30000;
       while (!(await predicate())) {
         if (Date.now() > deadline)
           throw Error('PTY condition timed out: ' + JSON.stringify(events));

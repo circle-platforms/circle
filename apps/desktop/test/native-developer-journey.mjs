@@ -1917,6 +1917,16 @@ try {
     }
   }
   phase = 'final verification';
+  // The evidence folder may not reach CI's artifacts, so the log says why too.
+  for (const failed of checks.filter((c) => c.status !== 'passed'))
+    console.error(
+      `native journey ${failed.status}: ${failed.name}\n  ${String(
+        failed.error ?? failed.reason ?? '',
+      )
+        .split('\n')
+        .slice(0, 12)
+        .join('\n  ')}`,
+    );
   assert.equal(
     checks.filter((c) => c.status !== 'passed').length,
     0,

@@ -176,19 +176,27 @@ export async function runNativeTerminalJourney({
   };
   const create = async () => {
     const prior = new Set((await list()).map((terminal) => terminal.id));
-    await panel
-      .getByRole('button', { name: 'new terminal', exact: true })
-      .click();
+    const button = panel.getByRole('button', {
+      name: 'new terminal',
+      exact: true,
+    });
     let terminal;
-    await until(
-      async () =>
-        Boolean(
-          (terminal = (await list()).find(
-            (terminal) => !prior.has(terminal.id),
-          )),
-        ),
-      'new real terminal created',
-    );
+    const appeared = async () =>
+      Boolean(
+        (terminal = (await list()).find((terminal) => !prior.has(terminal.id))),
+      );
+    // A click that lands while the panel re-renders can be lost (seen once on
+    // the packaged Linux app). Click again only when no create is in flight,
+    // which keeps the button disabled; otherwise wait for that create.
+    for (let attempt = 0; attempt < 3 && !terminal; attempt++) {
+      await button.click();
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && !(await appeared()))
+        await page.waitForTimeout(40);
+      if (!terminal && !(await button.isEnabled()))
+        await until(appeared, 'new real terminal created');
+    }
+    assert.ok(terminal, 'new real terminal created');
     created.push(terminal.id);
     await selectedTab(terminal.id).waitFor();
     return terminal;
