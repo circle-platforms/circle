@@ -27,8 +27,8 @@ export async function createNativeTerminalShortcutsFixture(workspace) {
   const promptMarker = `NATIVE_PROMPT_CONTINUES_${id}`;
   const source = `const fs=require('node:fs'),http=require('node:http'),readline=require('node:readline');
 fs.appendFileSync(${JSON.stringify(paths.starts)},'once\\n');
-const reader=readline.createInterface({input:process.stdin,terminal:false});
 process.stdin.on('data',bytes=>fs.appendFileSync(${JSON.stringify(paths.raw)},bytes));
+const reader=readline.createInterface({input:process.stdin,terminal:false});
 reader.on('line',line=>{fs.appendFileSync(${JSON.stringify(paths.line)},line);console.log('NATIVE_PASTE_LINE_RECEIVED');});
 const server=http.createServer((_request,response)=>{response.setHeader('content-type','application/json');response.end(JSON.stringify({id:${JSON.stringify(id)},pid:process.pid}));});
 process.on('SIGINT',()=>{fs.writeFileSync(${JSON.stringify(paths.interrupted)},JSON.stringify({id:${JSON.stringify(id)},pid:process.pid,signal:'SIGINT'}));reader.close();process.stdin.pause();server.close(()=>{process.stdin.destroy();console.log('NATIVE_CTRL_C_EXIT');});});
