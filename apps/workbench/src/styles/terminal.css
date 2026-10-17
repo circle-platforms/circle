@@ -50,19 +50,39 @@
 .native-terminal-lamp.failed {
   background: var(--negative);
 }
-.native-terminal-search {
+/* Find opens on demand (the search button or ctrl+f) in place of the
+   status, so the terminal keeps its size. */
+.native-terminal-bar > .native-terminal-search.find-bar {
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 7px 13px;
-}
-.native-terminal-search > input {
   flex: 1;
   min-width: 0;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.native-terminal-bar > .native-terminal-search > input {
+  flex: 1;
+  min-width: 48px;
+  height: 26px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font-size: var(--ui-small);
+  box-shadow: none;
+  outline: none;
 }
 .native-terminal-search > span {
+  flex-shrink: 0;
+  margin-inline: 4px;
   color: var(--muted);
-  font-size: var(--ui-small);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+}
+.native-terminal-bar > .native-terminal-search + .native-terminal-actions {
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
 }
 .native-terminal-surfaces {
   flex: 1;
@@ -103,24 +123,51 @@
 .native-terminal-screen .xterm-viewport {
   background: var(--bg);
 }
-.native-terminal-status {
+/* One quiet bar: where and how the terminal runs, then its actions. */
+.native-terminal-bar {
+  margin-top: auto;
   display: flex;
-  gap: 12px;
-  padding: 7px 13px;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 4px 6px 4px 12px;
   border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: var(--ui-small);
 }
-.native-terminal-status > span:first-child {
-  min-width: 0;
+.native-terminal-bar > .native-terminal-status,
+.inspector .native-terminal-bar > .native-terminal-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.native-terminal-status > span {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.native-terminal-status > .native-terminal-folder {
+  flex-shrink: 1;
+  min-width: 24px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
+  color: var(--secondary);
+  font-weight: 500;
 }
-.native-terminal-status > span:not(:first-child) {
+.native-terminal-status > span:not(.native-terminal-folder) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.native-terminal-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: auto;
   flex-shrink: 0;
 }
 .native-terminal-error {
@@ -155,19 +202,6 @@
   padding: 24px;
   color: var(--muted);
 }
-@media (max-width: 600px) {
-  .native-terminal-search {
-    flex-wrap: wrap;
-  }
-  .native-terminal-status {
-    flex-wrap: wrap;
-    gap: 5px 10px;
-  }
-  .native-terminal-status > span:first-child {
-    flex-basis: 100%;
-  }
-}
-
 .native-service-details {
   display: flex;
   align-items: center;

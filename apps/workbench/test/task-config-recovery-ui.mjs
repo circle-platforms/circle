@@ -33,10 +33,22 @@ try {
         const zh = language === 'zh-CN';
         const name = `${language}-${theme}-${width}`;
         if (output) await mkdir(output, { recursive: true });
-        await page
+        const panelAlert = page
+          .locator('.tasks-panel')
           .getByRole('alert')
-          .filter({ hasText: 'invalid agents' })
+          .filter({ hasText: 'invalid agents' });
+        await panelAlert.waitFor();
+        await panelAlert
+          .getByRole('button', {
+            name: zh ? '打开设置' : 'open settings',
+            exact: true,
+          })
           .waitFor();
+        assert.equal(
+          await page.locator('.tasks-panel input[type=number]').count(),
+          0,
+          'limits are edited on the settings page, not in the tasks panel',
+        );
         await page
           .getByRole('button', {
             name: zh ? '新建任务' : 'new task',
@@ -56,17 +68,20 @@ try {
         assert(await submit.isDisabled());
         if (output)
           await page.screenshot({ path: join(output, name + '-error.png') });
-        await page
-          .getByText(zh ? '协作设置' : 'collaboration settings', {
-            exact: true,
-          })
-          .click();
-        await page
-          .getByLabel(zh ? '活跃代理' : 'active agents', { exact: true })
+        const settingsSection = page.getByRole('region', {
+          name: zh ? '并行任务' : 'parallel tasks',
+          exact: true,
+        });
+        await settingsSection
+          .getByRole('alert')
+          .filter({ hasText: 'invalid agents' })
+          .waitFor();
+        await settingsSection
+          .getByLabel(zh ? '同时运行的代理' : 'agents at once')
           .fill('4');
-        await page
+        await settingsSection
           .getByRole('button', {
-            name: zh ? '保存上限' : 'save limits',
+            name: zh ? '保存' : 'save',
             exact: true,
           })
           .click();

@@ -6,6 +6,32 @@
 }
 .native-git .inspector-heading {
   justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+/* A long branch name shortens; the whole name is in its tooltip. */
+.native-git-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.native-git-branch > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.native-git-branch > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.native-git .inspector-heading > .icon-button {
+  flex-shrink: 0;
 }
 .native-git .git-commit {
   width: 100%;
@@ -84,6 +110,18 @@
 .native-git .field-label,
 .native-delivery .field-label {
   align-items: stretch;
+}
+.native-delivery-connection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-block: 8px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.native-delivery-connection > .button {
+  margin-left: auto;
 }
 .native-delivery > .button {
   margin-block: 4px;

@@ -304,10 +304,14 @@ try {
       };
       const initial = await visible();
       assert.match(initial.label, /zsh 9/);
+      // Process ids stay out of the status line, in the folder's tooltip.
       await page
-        .locator('.native-terminal-status')
-        .getByText('process pid 41009', { exact: true })
+        .locator('.native-terminal-status [title$="process pid 41009"]')
         .waitFor();
+      assert.doesNotMatch(
+        await page.locator('.native-terminal-status').innerText(),
+        /pid/,
+      );
       await page
         .getByRole('button', { name: 'new terminal', exact: true })
         .click();
@@ -372,7 +376,7 @@ try {
       const manual = await geometry();
       await page.evaluate(() => window.terminalTabsFixture.log());
       await page
-        .locator('.native-terminal-status [title="/synthetic/log-update"]')
+        .locator('.native-terminal-status [title^="/synthetic/log-update"]')
         .waitFor();
       const afterLog = await geometry();
       assert.equal(afterLog.scrollLeft, manual.scrollLeft);
@@ -458,17 +462,13 @@ try {
         .getByText('node managed-display.cjs', { exact: true })
         .waitFor();
       await page
-        .locator('.native-terminal-status')
-        .getByText('command pid 52010', { exact: true })
-        .waitFor();
-      await page
-        .locator('.native-terminal-status')
-        .getByText('pty pid 51010', { exact: true })
+        .locator(
+          '.native-terminal-status [title$="command pid 52010 · pty pid 51010"]',
+        )
         .waitFor();
       assert.equal(
         await page
-          .locator('.native-terminal-status')
-          .getByText('process pid 51010', { exact: true })
+          .locator('.native-terminal-status [title*="process pid 51010"]')
           .count(),
         0,
         'supervisor PID must not be mislabeled as the actual command',

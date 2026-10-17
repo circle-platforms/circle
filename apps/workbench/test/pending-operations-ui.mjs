@@ -21,7 +21,7 @@ try {
     `${server.resolvedUrls.local[0]}test/pending-operations-ui.html`,
   );
   const button = page.getByRole('button', {
-    name: 'record review without replay',
+    name: 'mark as checked',
   });
   await button.waitFor();
   assert.equal(await button.isDisabled(), true);
@@ -38,9 +38,10 @@ try {
     'Inspected remote branch and terminal; push completed once.',
   );
   await button.click();
+  // Once nothing needs review, the section leaves the panel.
   await page
-    .getByText('no operations awaiting review', { exact: true })
-    .waitFor();
+    .getByRole('region', { name: 'needs your review', exact: true })
+    .waitFor({ state: 'detached' });
   const calls = await page.evaluate(() => window.calls);
   assert.deepEqual(
     calls

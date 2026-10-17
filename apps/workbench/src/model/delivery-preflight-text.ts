@@ -11,8 +11,9 @@ export function deliveryPreflightText(error: string): string {
         'publication was sent, but GitHub has not confirmed the reviewed commit; refresh PR checks before retrying and do not repeat the push',
       );
     case 'GitHub candidate changed or the revision is not the inspected opaque revision; read github_candidate and review its current head, revision and paths before publishing; nothing was pushed':
+      // The host's words name a tool for the model; people get the plain version.
       return t(
-        'GitHub candidate changed or the revision is not the inspected opaque revision; read github_candidate and review its current head, revision and paths before publishing; nothing was pushed',
+        'the branch changed after it was reviewed; refresh and review it again before publishing; nothing was pushed',
       );
     case 'GitHub connection is disconnected or expired':
       return t(

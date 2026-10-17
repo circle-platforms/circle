@@ -74,7 +74,7 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
       async () => (await visibleText()).includes(text.trim()),
       'inserted text reaches the active Monaco model',
     );
-    await page.getByText('unsaved buffer', { exact: true }).waitFor();
+    await page.getByText('unsaved changes', { exact: true }).waitFor();
   };
   const save = () => page.keyboard.press(`${modifier}+s`);
   const a = 'isolation-a.ts',

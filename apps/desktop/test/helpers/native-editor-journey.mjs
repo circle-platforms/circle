@@ -105,10 +105,10 @@ export async function runNativeEditorJourney({
           ),
       'inserted text reaches the active Monaco model',
     );
-    await page.getByText('unsaved buffer', { exact: true }).waitFor();
+    await page.getByText('unsaved changes', { exact: true }).waitFor();
   };
   const save = async () =>
-    page.getByRole('button', { name: 'save to disk', exact: true }).click();
+    page.getByRole('button', { name: 'save', exact: true }).click();
   const initial = await call('documents', 'read', { path: main });
   assert.equal(initial.content, source);
   assert.ok(initial.revision);
@@ -149,7 +149,7 @@ export async function runNativeEditorJourney({
         ),
     'clean model external refresh',
   );
-  await page.getByText('no unsaved changes', { exact: true }).waitFor();
+  await page.getByText('all changes saved', { exact: true }).waitFor();
   await append('// protected human draft\n');
   await writeFile(join(workspace, main), source + '// competing external\n');
   await page
@@ -197,9 +197,7 @@ export async function runNativeEditorJourney({
   const rename = page.locator('input.rename-input');
   await rename.fill('total');
   await rename.press('Enter');
-  await page
-    .getByRole('button', { name: 'save all buffers', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'save all', exact: true }).click();
   await until(
     async () =>
       /export const total/.test(await disk(library)) &&
@@ -225,7 +223,7 @@ export async function runNativeEditorJourney({
         (await lines.textContent()).replaceAll('\u00a0', ' ').includes(marker),
       'actual human edit reaches the current Monaco buffer',
     );
-    await page.getByText('unsaved buffer', { exact: true }).waitFor();
+    await page.getByText('unsaved changes', { exact: true }).waitFor();
   };
   await replaceByKeyboard(before + errorSuffix, 'human-error');
   assert.equal(
@@ -263,7 +261,7 @@ export async function runNativeEditorJourney({
     async () => (await disk(main)) === before + fixedSuffix,
     'manual diagnostic repair saves exact expected disk bytes',
   );
-  await page.getByText('no unsaved changes', { exact: true }).waitFor();
+  await page.getByText('all changes saved', { exact: true }).waitFor();
   checks.push(
     'actual keyboard error edit, F8 problem location, manual correction and exact saved file',
   );

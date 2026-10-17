@@ -6,7 +6,7 @@ import { t } from '../i18n';
 import './GitPanel.css';
 import { DeliveryPanel, WorkspaceServiceError } from './DeliveryPanel';
 import { Button, IconButton } from './common';
-import { RotateCcw, FileText, ExternalLink } from 'lucide-react';
+import { RotateCcw, FileText, ExternalLink, GitBranch } from 'lucide-react';
 import { DiffBlock } from './DiffBlock';
 import type { DiffView } from '../model/types';
 import type { GitSnapshot } from '../../../desktop/src/workspace/git';
@@ -165,14 +165,19 @@ export function GitPanel({
   return (
     <section
       className={`native-git${embedded ? ' embedded' : ''}`}
-      aria-label={t('git workspace')}
+      aria-label={t('git')}
       aria-busy={busy}
       data-revision={state?.revision}
       data-branch={state?.branch}
     >
       <header className="inspector-heading">
-        {!embedded && <h2>{t('git workspace')}</h2>}
-        <span>{state?.branch}</span>
+        {!embedded && <h2>{t('git')}</h2>}
+        {state?.branch && (
+          <span className="native-git-branch" title={state.branch}>
+            <GitBranch size={13} aria-hidden="true" />
+            <span>{state.branch}</span>
+          </span>
+        )}
         <IconButton
           label={t('refresh')}
           disabled={busy}
@@ -207,7 +212,7 @@ export function GitPanel({
       <div
         className="native-git-scopes segmented"
         role="group"
-        aria-label={t('diff scope')}
+        aria-label={t('show changes')}
       >
         {(['working', 'index', 'branch'] as const).map((s) => (
           <button
@@ -218,16 +223,16 @@ export function GitPanel({
             onClick={() => showDiff(s)}
           >
             {s === 'working'
-              ? t('working tree')
+              ? t('unstaged')
               : s === 'index'
-                ? t('staged changes')
-                : t('branch changes')}
+                ? t('staged')
+                : t('whole branch')}
           </button>
         ))}
       </div>
       {scope === 'branch' && (
         <label className="field-label">
-          {t('comparison base')}
+          {t('compare with')}
           <input
             className="input"
             value={base}

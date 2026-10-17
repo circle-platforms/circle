@@ -47,6 +47,10 @@ try {
         .click();
       const terminal = page.locator('#inspector-terminal-terminal');
       await terminal.waitFor();
+      // Find opens on demand from the terminal bar.
+      await terminal
+        .getByRole('button', { name: 'find in terminal', exact: true })
+        .click();
       const find = terminal.getByRole('textbox', {
         name: 'find in terminal',
         exact: true,

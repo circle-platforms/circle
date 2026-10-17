@@ -4,6 +4,7 @@ import {
 } from '../../../../src/tui/session_label.ts';
 import { t } from '../i18n/index.ts';
 import type {
+  AgentRecord,
   Message,
   Session,
   WorkbenchSnapshot,
@@ -186,6 +187,134 @@ export function afterDeleteRoute(
   if (active && sessionHasContent(active))
     return { kind: 'session', id: active.id };
   return { kind: 'home', workspaceId: deletedWorkspaceId };
+}
+
+/**
+ * A task the sidebar folds under the conversation that started it: the
+ * worker's conversation, with its reviewer kept out of sight. `sessionIds`
+ * holds every conversation of the task, so a request waiting in the reviewer
+ * still marks the task.
+ */
+export interface SidebarTask {
+  session: Session;
+  agent: AgentRecord;
+  sessionIds: string[];
+}
+
+/**
+ * Which top conversation each task conversation belongs to. A task is an
+ * agent with a task record whose own session is the child; its `sessionId`
+ * is the conversation that started it. A chain of tasks resolves to its top
+ * conversation. A task whose owner is gone or archived is not folded, so it
+ * stays reachable in the sidebar.
+ */
+export function taskOwners(
+  sessions: readonly Session[],
+  agents: readonly AgentRecord[],
+): Map<string, string> {
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const direct = new Map<string, string>();
+  for (const agent of agents) {
+    if (
+      !agent.task ||
+      agent.resourceSessionId !== agent.id ||
+      agent.sessionId === agent.id ||
+      !byId.has(agent.id) ||
+      !byId.has(agent.sessionId)
+    )
+      continue;
+    direct.set(agent.id, agent.sessionId);
+  }
+  const owners = new Map<string, string>();
+  for (const child of direct.keys()) {
+    let owner = direct.get(child)!;
+    const seen = new Set([child]);
+    while (direct.has(owner) && !seen.has(owner)) {
+      seen.add(owner);
+      owner = direct.get(owner)!;
+    }
+    if (seen.has(owner) || byId.get(owner)?.archivedAt) continue;
+    owners.set(child, owner);
+  }
+  return owners;
+}
+
+/** Sessions that stand on their own in recent and in folders: task conversations fold under their owner. */
+export function topLevelSessions(
+  sessions: readonly Session[],
+  agents: readonly AgentRecord[],
+): Session[] {
+  const owners = taskOwners(sessions, agents);
+  return sessions.filter((session) => !owners.has(session.id));
+}
+
+/**
+ * Folders that only hold task conversations: a task's own copy of the project. They are
+ * reached through the task, never listed as projects of their own.
+ */
+export function taskWorkspaceIds(
+  sessions: readonly Session[],
+  agents: readonly AgentRecord[],
+): Set<string> {
+  const owners = taskOwners(sessions, agents);
+  const tasks = new Set<string>();
+  const own = new Set<string>();
+  for (const session of sessions)
+    (owners.has(session.id) ? tasks : own).add(session.workspaceId);
+  for (const id of own) tasks.delete(id);
+  return tasks;
+}
+
+/**
+ * The tasks under each top conversation, one entry per task: the worker's
+ * conversation, or the reviewer's when no worker is listed. Archived and
+ * empty task conversations stay out. Newest activity first.
+ */
+export function sidebarTasks(
+  sessions: readonly Session[],
+  agents: readonly AgentRecord[],
+): Map<string, SidebarTask[]> {
+  const owners = taskOwners(sessions, agents);
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const tasks = new Map<string, Map<string, SidebarTask>>();
+  for (const agent of agents) {
+    const owner = owners.get(agent.id);
+    const session = byId.get(agent.id);
+    if (!owner || !session || !agent.task) continue;
+    if (session.archivedAt || !sessionHasContent(session)) continue;
+    const group = tasks.get(owner) ?? new Map<string, SidebarTask>();
+    tasks.set(owner, group);
+    const key = `${agent.sessionId}\n${agent.task.id}`;
+    const known = group.get(key);
+    if (!known) {
+      group.set(key, { session, agent, sessionIds: [session.id] });
+      continue;
+    }
+    known.sessionIds.push(session.id);
+    // The worker names the task; a retry's newer worker replaces the older one.
+    const knownReviewer = known.agent.task?.role === 'reviewer';
+    const reviewer = agent.task.role === 'reviewer';
+    if (
+      (knownReviewer && !reviewer) ||
+      (knownReviewer === reviewer &&
+        (Date.parse(sessionActivityAt(session)) || 0) >
+          (Date.parse(sessionActivityAt(known.session)) || 0))
+    ) {
+      known.session = session;
+      known.agent = agent;
+    }
+  }
+  const activity = (task: SidebarTask) =>
+    Date.parse(sessionActivityAt(task.session)) || 0;
+  return new Map(
+    [...tasks].map(([owner, group]) => [
+      owner,
+      [...group.values()].sort(
+        (a, b) =>
+          activity(b) - activity(a) || a.session.id.localeCompare(b.session.id),
+      ),
+    ]),
+  );
 }
 
 /** Newest sessions from every project and from no project. Archived and empty rows stay out. */

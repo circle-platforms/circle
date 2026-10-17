@@ -3,6 +3,11 @@ import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
+// A frame shows its short source; the full address is in its tooltip.
+const frameLabel = (page, line) =>
+  page
+    .locator(`.debug-source-label[title="http://localhost/fixture.js:${line}"]`)
+    .filter({ hasText: `fixture-${line} fixture.js:${line}` });
 import { join } from 'node:path';
 const output = process.env.CIRCLE_BROWSER_UI_EVIDENCE;
 if (output) await mkdir(output, { recursive: true });
@@ -29,7 +34,7 @@ try {
     await page
       .getByRole('button', { name: 'page diagnostics', exact: true })
       .click();
-    await page.getByRole('tab', { name: 'page debugger', exact: true }).click();
+    await page.getByRole('tab', { name: 'debugger', exact: true }).click();
     await page
       .locator('.browser-diagnostic-results details summary')
       .first()
@@ -58,9 +63,7 @@ try {
           .click();
         await page.getByText('page running', { exact: true }).waitFor();
         await page.evaluate(() => window.__browserFixture.paused());
-        await page
-          .getByText('fixture-3 http://localhost/fixture.js:3', { exact: true })
-          .waitFor();
+        await frameLabel(page, 3).waitFor();
         await page.getByText('count: 3', { exact: true }).waitFor();
         await page.evaluate(() => {
           window.__browserFixture.releaseStep();
@@ -112,11 +115,7 @@ try {
           .click();
         if (scenario.includes('obsolete')) {
           await page.evaluate(() => window.__browserFixture.next());
-          await page
-            .getByText('fixture-2 http://localhost/fixture.js:2', {
-              exact: true,
-            })
-            .waitFor();
+          await frameLabel(page, 2).waitFor();
           await page.evaluate(() => window.__browserFixture.release());
           assert.equal(
             await page.locator('.debug-evaluate output').innerText(),
@@ -149,30 +148,19 @@ try {
           await page.evaluate(() => window.__browserFixture.requests()),
           before,
         );
-        await page
-          .getByRole('tab', { name: 'page debugger', exact: true })
-          .click();
+        await page.getByRole('tab', { name: 'debugger', exact: true }).click();
         await page.getByText('count: 2', { exact: true }).waitFor();
       } else {
         await page.evaluate(() => window.__browserFixture.defer());
         await page.getByRole('button', { name: 'local', exact: true }).click();
         await page.evaluate(() => window.__browserFixture.next());
-        await page
-          .getByText('fixture-2 http://localhost/fixture.js:2', { exact: true })
-          .waitFor();
+        await frameLabel(page, 2).waitFor();
         await page.evaluate(() => window.__browserFixture.release());
         await page
           .getByText('count: 2', { exact: true })
           .waitFor({ timeout: 1500 });
         await page.waitForTimeout(80);
-        assert.equal(
-          await page
-            .getByText('fixture-1 http://localhost/fixture.js:1', {
-              exact: true,
-            })
-            .count(),
-          0,
-        );
+        assert.equal(await frameLabel(page, 1).count(), 0);
       }
       checks.push({ scenario, status: 'passed' });
     } catch (error) {

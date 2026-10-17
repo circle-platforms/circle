@@ -32,7 +32,18 @@ process.stdin.on('data', (chunk: Buffer) => {
     records.push(message);
     if (log) {
       writeFileSync(log + '.tmp', JSON.stringify(records));
-      renameSync(log + '.tmp', log);
+      // Windows refuses to replace a file another process is reading: the test polls
+      // this log, so wait the read out instead of crashing the server.
+      for (let attempt = 0; ; attempt++)
+        try {
+          renameSync(log + '.tmp', log);
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 200)
+            throw error;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
     }
     if (message.method === 'textDocument/didChange')
       for (const reply of heldRenames.splice(0)) reply();

@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bug, FileText, Save, X } from 'lucide-react';
+import {
+  Activity,
+  Bug,
+  ChevronUp,
+  FileText,
+  Save,
+  TriangleAlert,
+  X,
+} from 'lucide-react';
 import { Tooltip } from 'radix-ui';
 import type { IRange } from 'monaco-editor';
 import { useRuntime } from '../app/context';
@@ -19,7 +27,6 @@ import {
   editorBuffer,
   editorUri,
   pendingEditorDocuments,
-  persistBuffer,
   retainedModel,
   refreshEditorDocument,
   setEditorDocument,
@@ -138,9 +145,8 @@ const DIAGNOSTIC_SEVERITY_LABEL: Record<number, () => string> = {
   1: () => t('hint'),
 };
 const MODE_LABEL = {
-  file: () => t('file'),
+  edit: (readOnly: boolean) => (readOnly ? t('view') : t('edit')),
   diff: () => t('diff'),
-  edit: () => t('edit'),
 };
 export function FileViewer({
   path: requestedPath,
@@ -180,8 +186,10 @@ export function FileViewer({
   const projected = snapshot.files.find(
     (item) => item.path === path && item.workspaceId === workspaceId,
   );
-  const [mode, setMode] = useState<'file' | 'diff' | 'edit'>(
-    projected?.status ? 'diff' : 'file',
+  // Files open editable in place; "diff" compares with the disk or git
+  // original only when asked, as a changed file does by default.
+  const [mode, setMode] = useState<'diff' | 'edit'>(
+    projected?.status ? 'diff' : 'edit',
   );
   const [document, setDocument] = useState<EditorDocument | null>(null);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
@@ -284,15 +292,28 @@ export function FileViewer({
     : t('workspace: {name}', {
         name: sourceWorkspace?.name ?? t('workspace'),
       });
+  // The heading names the file once; its folder and owner follow, muted.
+  const shownSource = resourceOwner
+    ? sourceLabel
+    : (sourceWorkspace?.name ?? t('workspace'));
   const sourceDirectory = sourceWorkspace?.path;
+  const fileName = path.split('/').at(-1) || path;
+  const fileFolder = path.includes('/')
+    ? path.slice(0, path.lastIndexOf('/'))
+    : '';
   const sourceHeading = (
     <div className="file-view-title">
       <div className="file-view-filename">
-        <FileText size={16} />
-        <strong>{path}</strong>
+        <FileText size={15} aria-hidden />
+        <strong title={path}>{fileName}</strong>
         {projected?.status && <Status value={projected.status} />}
       </div>
       <div className="file-source-summary">
+        {fileFolder && (
+          <span className="file-source-folder" title={fileFolder}>
+            {fileFolder}
+          </span>
+        )}
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span
@@ -304,7 +325,7 @@ export function FileViewer({
                   : sourceLabel
               }
             >
-              {sourceLabel}
+              {shownSource}
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
@@ -320,7 +341,7 @@ export function FileViewer({
           </Tooltip.Portal>
         </Tooltip.Root>
         {readOnly && (
-          <span className="file-source-readonly">{t('read-only source')}</span>
+          <span className="file-source-readonly">{t('read-only')}</span>
         )}
       </div>
     </div>
@@ -338,7 +359,7 @@ export function FileViewer({
       const result = refreshEditorDocument(workspaceId, doc);
       if (result === 'conflict') {
         setConflict(doc);
-        setError(t('file changed on disk; buffer kept'));
+        setError(t('file changed on disk; your changes are kept'));
       }
       retained = editorDocuments.get(uri);
     }
@@ -405,7 +426,9 @@ export function FileViewer({
           const deleted = /ENOENT|no such file|does not exist/i.test(message);
           setMissing(deleted);
           setError(
-            deleted && prior ? t('file removed on disk; buffer kept') : message,
+            deleted && prior
+              ? t('file deleted on disk; your changes are kept')
+              : message,
           );
         })
         .finally(() => {
@@ -425,7 +448,9 @@ export function FileViewer({
     const update = () =>
       setBufferCount(pendingEditorDocuments(workspaceId).length);
     const failure = () =>
-      setError(t('buffer could not be saved locally; keep this window open'));
+      setError(
+        t('unsaved changes could not be backed up; keep this window open'),
+      );
     window.addEventListener('circle-editor-change', update);
     window.addEventListener('circle-editor-persistence-error', failure);
     update();
@@ -474,7 +499,7 @@ export function FileViewer({
             if (target !== path) continue;
             setMissing(true);
             setConflict(null);
-            setError(t('file removed on disk; buffer kept'));
+            setError(t('file deleted on disk; your changes are kept'));
             const added =
               snapshot.changes
                 ?.filter((change) => change.kind === 'added')
@@ -523,7 +548,7 @@ export function FileViewer({
                   document.content !== pending.writes.get(uri)
                 ) {
                   setConflict(document);
-                  setError(t('file changed on disk; buffer kept'));
+                  setError(t('file changed on disk; your changes are kept'));
                 }
                 return;
               }
@@ -533,7 +558,7 @@ export function FileViewer({
               setMoved(null);
               if (result === 'conflict') {
                 setConflict(document);
-                setError(t('file changed on disk; buffer kept'));
+                setError(t('file changed on disk; your changes are kept'));
               } else if (result === 'updated') {
                 setDocument(document);
                 setValue(
@@ -549,7 +574,7 @@ export function FileViewer({
               }
               return;
             }
-            throw Error(t('file changed on disk; buffer kept'));
+            throw Error(t('file changed on disk; your changes are kept'));
           };
           void readCurrent().catch((cause) => {
             if (alive && reads.get(target) === readVersion && target === path)
@@ -698,7 +723,7 @@ export function FileViewer({
         page.cursor.offset < history.cursor.offset ||
         (page.hasMore && page.cursor.seq === history.cursor.seq)
       )
-        throw Error(t('diagnostic history cursor did not advance'));
+        throw Error(t('no newer history was returned; try again'));
       appendDiagnostics(page.events);
       setDiagnosticHistory((previous) =>
         languageOwner.current !== owner
@@ -824,7 +849,7 @@ export function FileViewer({
     }
     try {
       if (!live) {
-        if (selected()) notify(t('buffer saved locally'));
+        if (selected()) notify(t('changes kept in this window'));
         completed = true;
         return;
       }
@@ -892,7 +917,7 @@ export function FileViewer({
           },
         );
         if (doc.path !== target.path)
-          throw Error(t('saved document identity changed'));
+          throw Error(t('the file changed while saving; reopen it'));
         setEditorDocument(target.workspaceId, doc);
         if (selected()) {
           setDocument(doc);
@@ -903,7 +928,7 @@ export function FileViewer({
             external.content !== doc.content
           ) {
             setConflict(external);
-            setError(t('file changed on disk; buffer kept'));
+            setError(t('file changed on disk; your changes are kept'));
           } else setConflict(null);
           setMissing(false);
           setMoved(null);
@@ -986,6 +1011,249 @@ export function FileViewer({
         <Button onClick={onClose}>{t('back to conversation')}</Button>
       </div>
     );
+  const dirty = value !== document.content;
+  const codeChecks = (live || !!projectErrors.length) && (
+    <details
+      className={`editor-project-diagnostics${projectErrors.length ? ' attention' : ''}`}
+      role={projectErrors.length ? 'alert' : undefined}
+      open={languageDetailsOpen}
+      onToggle={(event) => setLanguageDetailsOpen(event.currentTarget.open)}
+    >
+      <summary>
+        {projectErrors.length ? (
+          <TriangleAlert size={12} aria-hidden />
+        ) : (
+          <Activity size={12} aria-hidden />
+        )}
+        {!projectErrors.length
+          ? t('code checks')
+          : projectErrors.every((problem) => problem.source === 'configuration')
+            ? t('project configuration needs attention')
+            : t('code checks need attention')}
+        {projectErrors.length ? ` (${projectErrors.length})` : ''}
+        <ChevronUp size={12} aria-hidden className="disclosure" />
+      </summary>
+      <div className="editor-language-panel">
+        {live && languageViewCurrent.status && (
+          <div
+            className="editor-language-status"
+            aria-label={t('code checks status')}
+            aria-busy={!!languageViewCurrent.pending}
+          >
+            <span>
+              {languageViewCurrent.status.provider} ·{' '}
+              {LANGUAGE_STATE_LABEL[languageViewCurrent.status.state]()}
+            </span>
+            {(languageViewCurrent.status.pid !== undefined ||
+              !!languageViewCurrent.status.command ||
+              !!languageViewCurrent.status.cwd) && (
+              <details>
+                <summary>{t('process details')}</summary>
+                {languageViewCurrent.status.pid !== undefined && (
+                  <span>
+                    {t('process id')}: {languageViewCurrent.status.pid}
+                  </span>
+                )}
+                {languageViewCurrent.status.command && (
+                  <span>
+                    {t('command')}:{' '}
+                    <code>{languageViewCurrent.status.command}</code>
+                  </span>
+                )}
+                {languageViewCurrent.status.cwd && (
+                  <span>
+                    {t('working directory')}:{' '}
+                    <code>{languageViewCurrent.status.cwd}</code>
+                  </span>
+                )}
+              </details>
+            )}
+            {languageViewCurrent.status.exitCode !== undefined && (
+              <span>
+                {t('exit code')}: {languageViewCurrent.status.exitCode}
+              </span>
+            )}
+            {languageViewCurrent.status.signal && (
+              <span>
+                {t('ended by signal {signal}', {
+                  signal: languageViewCurrent.status.signal,
+                })}
+              </span>
+            )}
+            {languageViewCurrent.status.reason && (
+              <span>{languageViewCurrent.status.reason}</span>
+            )}
+            {languageViewCurrent.status.stderrTail && (
+              <pre aria-label={t('error output')}>
+                {languageViewCurrent.status.stderrTail}
+              </pre>
+            )}
+            {languageViewCurrent.status.kind === 'external' && (
+              <Button
+                disabled={
+                  readOnly ||
+                  !!languageViewCurrent.pending ||
+                  !languageViewCurrent.status.canStop
+                }
+                onClick={() => void controlLanguage('stop')}
+              >
+                {languageViewCurrent.pending === 'stop'
+                  ? t('stopping')
+                  : t('stop')}
+              </Button>
+            )}
+            <Button
+              disabled={
+                readOnly ||
+                !!languageViewCurrent.pending ||
+                !languageViewCurrent.status.canRestart
+              }
+              onClick={() => void controlLanguage('restart')}
+            >
+              {languageViewCurrent.pending === 'restart'
+                ? languageViewCurrent.status.kind === 'in-process'
+                  ? t('refreshing…')
+                  : t('restarting…')
+                : languageViewCurrent.status.kind === 'in-process'
+                  ? t('refresh')
+                  : t('restart')}
+            </Button>
+            {languageViewCurrent.status.kind === 'in-process' && (
+              <details>
+                <summary>{t('details')}</summary>
+                <span>{t('runs inside Circle')}</span>
+              </details>
+            )}
+          </div>
+        )}
+        {live && !languageViewCurrent.status && !languageViewCurrent.error && (
+          <span>{t('checking status…')}</span>
+        )}
+        {live && languageViewCurrent.error && (
+          <div>
+            <span role="alert">{t('could not update code checks')}</span>
+            <details>
+              <summary>{t('details')}</summary>
+              <pre>{languageViewCurrent.error}</pre>
+            </details>
+          </div>
+        )}
+        {live && (
+          <details
+            className="editor-diagnostic-history"
+            open={diagnosticHistoryOpen}
+            onToggle={(event) =>
+              setDiagnosticHistoryOpen(event.currentTarget.open)
+            }
+          >
+            <summary>{t('diagnostic history')}</summary>
+            {diagnosticBatches(history.events).map((batch) => (
+              <details
+                key={batch.id}
+                data-diagnostic-batch={batch.id}
+                className="editor-diagnostic-batch"
+              >
+                <summary title={batch.at}>
+                  {new Date(batch.at).toLocaleString(dateLocale())}
+                  {batch.provider && ` · ${batch.provider}`}
+                  {batch.version !== undefined &&
+                    ` · ${t('document version {version}', { version: batch.version })}`}
+                </summary>
+                {batch.complete ? (
+                  <>
+                    {!batch.diagnostics.length && (
+                      <span>{t('no problems')}</span>
+                    )}
+                    {!!batch.diagnostics.length && (
+                      <ul>
+                        {batch.diagnostics.map((problem, index) => (
+                          <li key={index}>
+                            {String(problem.source ?? batch.provider ?? '')}{' '}
+                            {typeof problem.severity === 'number' &&
+                              `${DIAGNOSTIC_SEVERITY_LABEL[problem.severity]?.() ?? t('severity {severity}', { severity: problem.severity })} · `}
+                            {typeof problem.startLineNumber === 'number' &&
+                              `${t('line {line}', { line: problem.startLineNumber })} · `}
+                            {typeof problem.message === 'string'
+                              ? problem.message
+                              : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <details>
+                      <summary>{t('original diagnostic data')}</summary>
+                      <pre>{batch.body}</pre>
+                    </details>
+                  </>
+                ) : (
+                  <span>{t('diagnostic batch incomplete; read more')}</span>
+                )}
+                <Button
+                  disabled={!batch.complete || copyingDiagnostic === owner}
+                  onClick={() => void copyDiagnostic(batch)}
+                >
+                  {t('copy complete diagnostics')}
+                </Button>
+              </details>
+            ))}
+            {history.loaded && !history.events.length && (
+              <span>
+                {history.hasMore
+                  ? t('no diagnostics in this page; continue reading')
+                  : t('no diagnostic history')}
+              </span>
+            )}
+            {history.hasMore && (
+              <Button
+                disabled={history.pending}
+                onClick={() => void readDiagnosticHistory()}
+              >
+                {history.pending
+                  ? t('reading diagnostic history')
+                  : t('read more diagnostic history')}
+              </Button>
+            )}
+            {history.error && (
+              <div>
+                <span role="alert">
+                  {history.errorTitle ?? t('could not read diagnostic history')}
+                </span>
+                <details>
+                  <summary>{t('details')}</summary>
+                  <pre>{history.error}</pre>
+                </details>
+              </div>
+            )}
+          </details>
+        )}
+        {projectErrors.map((problem, index) => (
+          <span key={index}>
+            {problem.path && (
+              <Button
+                onClick={() => {
+                  setSelection({
+                    startLineNumber: problem.startLineNumber,
+                    startColumn: problem.startColumn,
+                    endLineNumber: problem.startLineNumber,
+                    endColumn: problem.startColumn,
+                  });
+                  void navigate(problem.path!, {
+                    startLineNumber: problem.startLineNumber,
+                    startColumn: problem.startColumn,
+                    endLineNumber: problem.startLineNumber,
+                    endColumn: problem.startColumn,
+                  });
+                }}
+              >
+                {problem.path}
+              </Button>
+            )}{' '}
+            {problem.message}
+          </span>
+        ))}
+      </div>
+    </details>
+  );
   return (
     <section className="file-view">
       <header className="file-view-heading">
@@ -1004,266 +1272,46 @@ export function FileViewer({
         </IconButton>
       </header>
       <div className="file-view-toolbar">
-        <div className="segmented">
-          {(['file', 'diff', 'edit'] as const).map((item) => (
+        <div className="segmented" role="group" aria-label={t('file view')}>
+          {(['edit', 'diff'] as const).map((item) => (
             <button
               key={item}
+              type="button"
               className={mode === item ? 'active' : ''}
+              aria-pressed={mode === item}
               onClick={() => setMode(item)}
             >
-              {MODE_LABEL[item]()}
+              {MODE_LABEL[item](readOnly)}
             </button>
           ))}
         </div>
-        <span>
-          {value === document.content
-            ? t('no unsaved changes')
-            : t('unsaved buffer')}
+        <span
+          className={`file-view-state${dirty ? ' dirty' : ''}`}
+          role="status"
+        >
+          {dirty ? t('unsaved changes') : t('all changes saved')}
         </span>
-        {mode === 'edit' && (
+        {bufferCount > 1 && (
           <Button
-            onClick={() => {
-              if (persistBuffer(workspaceId, path))
-                notify(t('buffer saved locally'));
-            }}
+            disabled={readOnly || saving}
+            onClick={() => perform(() => save(true))}
           >
-            <Save size={13} />
-            {t('save buffer')}
+            {t('save all')}
           </Button>
         )}
-      </div>
-      {(live || !!projectErrors.length) && (
-        <details
-          className="editor-notice editor-project-diagnostics"
-          role={projectErrors.length ? 'alert' : undefined}
-          open={languageDetailsOpen}
-          onToggle={(event) => setLanguageDetailsOpen(event.currentTarget.open)}
+        <Button
+          className={dirty ? 'primary' : ''}
+          disabled={readOnly || saving || !!conflict || missing}
+          onClick={() => perform(() => save())}
         >
-          <summary>
-            {!projectErrors.length
-              ? t('language service')
-              : projectErrors.every(
-                    (problem) => problem.source === 'configuration',
-                  )
-                ? t('project configuration needs attention')
-                : t('language service needs attention')}{' '}
-            {projectErrors.length ? `(${projectErrors.length})` : ''}
-          </summary>
-          {live && languageViewCurrent.status && (
-            <div
-              className="editor-language-status"
-              aria-label={t('language service')}
-              aria-busy={!!languageViewCurrent.pending}
-            >
-              <span>
-                {languageViewCurrent.status.provider} ·{' '}
-                {LANGUAGE_STATE_LABEL[languageViewCurrent.status.state]()}
-              </span>
-              {languageViewCurrent.status.pid !== undefined && (
-                <span>
-                  {t('process id')}: {languageViewCurrent.status.pid}
-                </span>
-              )}
-              {languageViewCurrent.status.command && (
-                <span>
-                  {t('command')}:{' '}
-                  <code>{languageViewCurrent.status.command}</code>
-                </span>
-              )}
-              {languageViewCurrent.status.cwd && (
-                <span>
-                  {t('working directory')}:{' '}
-                  <code>{languageViewCurrent.status.cwd}</code>
-                </span>
-              )}
-              {languageViewCurrent.status.exitCode !== undefined && (
-                <span>
-                  {t('exit code')}: {languageViewCurrent.status.exitCode}
-                </span>
-              )}
-              {languageViewCurrent.status.signal && (
-                <span>
-                  {t('ended by signal {signal}', {
-                    signal: languageViewCurrent.status.signal,
-                  })}
-                </span>
-              )}
-              {languageViewCurrent.status.reason && (
-                <span>{languageViewCurrent.status.reason}</span>
-              )}
-              {languageViewCurrent.status.stderrTail && (
-                <pre aria-label={t('language service errors')}>
-                  {languageViewCurrent.status.stderrTail}
-                </pre>
-              )}
-              {languageViewCurrent.status.kind === 'external' && (
-                <Button
-                  disabled={
-                    readOnly ||
-                    !!languageViewCurrent.pending ||
-                    !languageViewCurrent.status.canStop
-                  }
-                  onClick={() => void controlLanguage('stop')}
-                >
-                  {languageViewCurrent.pending === 'stop'
-                    ? t('stopping')
-                    : t('stop')}
-                </Button>
-              )}
-              <Button
-                disabled={
-                  readOnly ||
-                  !!languageViewCurrent.pending ||
-                  !languageViewCurrent.status.canRestart
-                }
-                onClick={() => void controlLanguage('restart')}
-              >
-                {languageViewCurrent.pending === 'restart'
-                  ? languageViewCurrent.status.kind === 'in-process'
-                    ? t('refreshing…')
-                    : t('restarting…')
-                  : languageViewCurrent.status.kind === 'in-process'
-                    ? t('refresh')
-                    : t('restart')}
-              </Button>
-              {languageViewCurrent.status.kind === 'in-process' && (
-                <details>
-                  <summary>{t('details')}</summary>
-                  <span>{t('runs inside Circle')}</span>
-                </details>
-              )}
-            </div>
-          )}
-          {live &&
-            !languageViewCurrent.status &&
-            !languageViewCurrent.error && (
-              <span>{t('loading language service status')}</span>
-            )}
-          {live && languageViewCurrent.error && (
-            <div>
-              <span role="alert">{t('could not update language service')}</span>
-              <details>
-                <summary>{t('details')}</summary>
-                <pre>{languageViewCurrent.error}</pre>
-              </details>
-            </div>
-          )}
-          {live && (
-            <details
-              className="editor-diagnostic-history"
-              open={diagnosticHistoryOpen}
-              onToggle={(event) =>
-                setDiagnosticHistoryOpen(event.currentTarget.open)
-              }
-            >
-              <summary>{t('diagnostic history')}</summary>
-              {diagnosticBatches(history.events).map((batch) => (
-                <details
-                  key={batch.id}
-                  data-diagnostic-batch={batch.id}
-                  className="editor-diagnostic-batch"
-                >
-                  <summary title={batch.at}>
-                    {new Date(batch.at).toLocaleString(dateLocale())}
-                    {batch.provider && ` · ${batch.provider}`}
-                    {batch.version !== undefined &&
-                      ` · ${t('document version {version}', { version: batch.version })}`}
-                  </summary>
-                  {batch.complete ? (
-                    <>
-                      {!batch.diagnostics.length && (
-                        <span>{t('no problems')}</span>
-                      )}
-                      {!!batch.diagnostics.length && (
-                        <ul>
-                          {batch.diagnostics.map((problem, index) => (
-                            <li key={index}>
-                              {String(problem.source ?? batch.provider ?? '')}{' '}
-                              {typeof problem.severity === 'number' &&
-                                `${DIAGNOSTIC_SEVERITY_LABEL[problem.severity]?.() ?? t('severity {severity}', { severity: problem.severity })} · `}
-                              {typeof problem.startLineNumber === 'number' &&
-                                `${t('line {line}', { line: problem.startLineNumber })} · `}
-                              {typeof problem.message === 'string'
-                                ? problem.message
-                                : ''}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      <details>
-                        <summary>{t('original diagnostic data')}</summary>
-                        <pre>{batch.body}</pre>
-                      </details>
-                    </>
-                  ) : (
-                    <span>{t('diagnostic batch incomplete; read more')}</span>
-                  )}
-                  <Button
-                    disabled={!batch.complete || copyingDiagnostic === owner}
-                    onClick={() => void copyDiagnostic(batch)}
-                  >
-                    {t('copy complete diagnostics')}
-                  </Button>
-                </details>
-              ))}
-              {history.loaded && !history.events.length && (
-                <span>
-                  {history.hasMore
-                    ? t('no diagnostics in this page; continue reading')
-                    : t('no diagnostic history')}
-                </span>
-              )}
-              {history.hasMore && (
-                <Button
-                  disabled={history.pending}
-                  onClick={() => void readDiagnosticHistory()}
-                >
-                  {history.pending
-                    ? t('reading diagnostic history')
-                    : t('read more diagnostic history')}
-                </Button>
-              )}
-              {history.error && (
-                <div>
-                  <span role="alert">
-                    {history.errorTitle ??
-                      t('could not read diagnostic history')}
-                  </span>
-                  <details>
-                    <summary>{t('details')}</summary>
-                    <pre>{history.error}</pre>
-                  </details>
-                </div>
-              )}
-            </details>
-          )}
-          {projectErrors.map((problem, index) => (
-            <span key={index}>
-              {problem.path && (
-                <Button
-                  onClick={() => {
-                    setSelection({
-                      startLineNumber: problem.startLineNumber,
-                      startColumn: problem.startColumn,
-                      endLineNumber: problem.startLineNumber,
-                      endColumn: problem.startColumn,
-                    });
-                    void navigate(problem.path!, {
-                      startLineNumber: problem.startLineNumber,
-                      startColumn: problem.startColumn,
-                      endLineNumber: problem.startLineNumber,
-                      endColumn: problem.startColumn,
-                    });
-                  }}
-                >
-                  {problem.path}
-                </Button>
-              )}{' '}
-              {problem.message}
-            </span>
-          ))}
-        </details>
-      )}
+          <Save size={13} aria-hidden />
+          {saveQueued
+            ? t('save queued')
+            : saving
+              ? t('saving file')
+              : t('save')}
+        </Button>
+      </div>
       {error && (
         <div className="editor-notice" role="alert">
           <span>{error}</span>
@@ -1272,7 +1320,7 @@ export function FileViewer({
               disabled={readOnly || saving}
               onClick={() => perform(() => save(false, true))}
             >
-              {t('restore file from buffer')}
+              {t('restore file with your changes')}
             </Button>
           )}
           {moved && (
@@ -1291,7 +1339,9 @@ export function FileViewer({
                 setMode('diff');
                 setDocument(conflict);
                 setEditorDocument(workspaceId, conflict);
-                setError(t('disk changed; review the diff before saving'));
+                setError(
+                  t('file changed on disk; review the diff before saving'),
+                );
                 setConflict(null);
               }}
             >
@@ -1310,7 +1360,7 @@ export function FileViewer({
           document.content !== value ? document.content : projected?.original
         }
         language={language}
-        readOnly={mode === 'file' || readOnly}
+        readOnly={readOnly}
         diff={mode === 'diff'}
         live={live}
         selection={selection}
@@ -1325,26 +1375,7 @@ export function FileViewer({
         <span>
           {language} · {tn(value.split('\n').length, '{n} line', '{n} lines')}
         </span>
-        {bufferCount > 1 && (
-          <Button
-            disabled={readOnly || saving}
-            onClick={() => perform(() => save(true))}
-          >
-            {t('save all buffers')}
-          </Button>
-        )}
-        <Button
-          disabled={readOnly || saving || !!conflict || missing}
-          onClick={() => perform(() => save())}
-        >
-          {saveQueued
-            ? t('save queued')
-            : saving
-              ? t('saving file')
-              : live
-                ? t('save to disk')
-                : t('save buffer')}
-        </Button>
+        {codeChecks}
       </footer>
     </section>
   );

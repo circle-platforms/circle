@@ -120,7 +120,7 @@ try {
         );
         await card
           .getByRole('button', {
-            name: language === 'en' ? 'input' : '输入',
+            name: language === 'en' ? 'arguments' : '参数',
             exact: true,
           })
           .click();

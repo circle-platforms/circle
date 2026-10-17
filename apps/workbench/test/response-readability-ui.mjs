@@ -189,11 +189,10 @@ try {
             .querySelector('.file-view')
             ?.textContent.includes('visibleTasks'),
         );
-        assert.ok(
-          (await page.locator('.file-view').innerText()).includes(
-            'public/task-model.mjs',
-          ),
-        );
+        // The heading names the file and shows its folder beneath it.
+        const fileText = await page.locator('.file-view').innerText();
+        assert.ok(fileText.includes('task-model.mjs'), fileText);
+        assert.ok(fileText.includes('public'), fileText);
         await page
           .getByRole('button', {
             name: language === 'en' ? 'close file' : '关闭文件',

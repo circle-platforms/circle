@@ -4,7 +4,14 @@ import {
   DebugVariableRow,
 } from '../components/DebugRows';
 import { DebugToolbar } from '../components/DebugToolbar';
-import { Button, Status } from '../components/common';
+import { Button, IconButton, Status } from '../components/common';
+import {
+  ChevronRight,
+  ExternalLink,
+  RotateCw,
+  Smartphone,
+  X,
+} from 'lucide-react';
 import { useSources, sourceLocation } from '../components/SourceNavigation';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { desktopHost, copyText } from '../host';
@@ -36,6 +43,7 @@ export function BrowserDiagnostics({
 }) {
   const sources = useSources();
   const [open, setOpen] = useState(false);
+  const [sizing, setSizing] = useState(false);
   const [section, setSection] = useState<
     'console' | 'network' | 'storage' | 'debug'
   >('console');
@@ -430,91 +438,120 @@ export function BrowserDiagnostics({
       value,
     });
   };
+  const tabs = [
+    ['console', t('console')],
+    ['network', t('network')],
+    ['storage', t('storage')],
+    ['debug', t('debugger')],
+  ] as const;
+  const failed = !!(error || result?.state.reconnectError);
   return (
-    <section className="browser-diagnostics panel-section">
-      <Button aria-expanded={open} onClick={() => setOpen(!open)}>
-        {t('page diagnostics')}
-      </Button>
+    <section className={`browser-diagnostics${open ? ' open' : ''}`}>
+      <div className="browser-diagnostics-bar">
+        <button
+          type="button"
+          className="browser-diagnostics-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          <ChevronRight size={13} />
+          {t('page diagnostics')}
+        </button>
+        {open && !failed && (
+          <div role="status" className="browser-diagnostics-state">
+            <Status
+              value={
+                !result
+                  ? t('loading diagnostics')
+                  : result.state.owner === 'devtools'
+                    ? t('developer tools open')
+                    : result.state.debugger.paused
+                      ? t('page paused')
+                      : t('page running')
+              }
+            />
+          </div>
+        )}
+        {open && (
+          <span className="browser-diagnostics-actions">
+            <IconButton
+              label={t('viewport')}
+              aria-expanded={sizing}
+              onClick={() => setSizing(!sizing)}
+            >
+              <Smartphone size={14} />
+            </IconButton>
+            <IconButton
+              label={t('open developer tools')}
+              onClick={() => void request({ action: 'devtools' })}
+            >
+              <ExternalLink size={13} />
+            </IconButton>
+          </span>
+        )}
+      </div>
       {open && (
         <>
-          <details className="context-source browser-diagnostic-settings">
-            <summary>{t('viewport and developer tools')}</summary>
-            <div className="browser-diagnostic-tools">
-              <Button onClick={() => void request({ action: 'devtools' })}>
-                {t('hand over to devtools')}
-              </Button>
-              <label>
-                {t('viewport width')}
-                <input
-                  value={width}
-                  onChange={(e) => setWidth(e.target.value)}
-                  inputMode="numeric"
-                />
-              </label>
-              <label>
-                {t('viewport height')}
-                <input
-                  value={height}
-                  onChange={(e) => setHeight(e.target.value)}
-                  inputMode="numeric"
-                />
-              </label>
-              <Button
-                onClick={() =>
-                  void request({
-                    action: 'viewport',
-                    width: Number(width),
-                    height: Number(height),
-                    mobile: true,
-                  })
-                }
-              >
-                {t('apply viewport')}
-              </Button>
-              <Button onClick={() => void request({ action: 'viewport' })}>
-                {t('reset viewport')}
-              </Button>
-            </div>
-          </details>
-          <div className="browser-diagnostic-tabs segmented" role="tablist">
-            <button
-              role="tab"
-              aria-selected={section === 'console'}
-              className={section === 'console' ? 'active' : undefined}
-              onClick={() => setSection('console')}
-            >
-              {t('console')}
-            </button>
-            <button
-              role="tab"
-              aria-selected={section === 'network'}
-              className={section === 'network' ? 'active' : undefined}
-              onClick={() => setSection('network')}
-            >
-              {t('network')}
-            </button>
-            <button
-              role="tab"
-              aria-selected={section === 'storage'}
-              className={section === 'storage' ? 'active' : undefined}
-              onClick={() => {
-                setSection('storage');
-                storage('read');
+          {sizing && (
+            <form
+              className="browser-viewport-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void request({
+                  action: 'viewport',
+                  width: Number(width),
+                  height: Number(height),
+                  mobile: true,
+                });
               }}
             >
-              {t('storage')}
-            </button>
-            <button
-              role="tab"
-              aria-selected={section === 'debug'}
-              className={section === 'debug' ? 'active' : undefined}
-              onClick={() => setSection('debug')}
-            >
-              {t('page debugger')}
-            </button>
+              <input
+                aria-label={t('viewport width')}
+                title={t('viewport width')}
+                value={width}
+                onChange={(e) => setWidth(e.target.value)}
+                inputMode="numeric"
+                spellCheck={false}
+              />
+              <span aria-hidden="true">×</span>
+              <input
+                aria-label={t('viewport height')}
+                title={t('viewport height')}
+                value={height}
+                onChange={(e) => setHeight(e.target.value)}
+                inputMode="numeric"
+                spellCheck={false}
+              />
+              <Button type="submit" aria-label={t('apply viewport')}>
+                {t('apply')}
+              </Button>
+              <Button
+                type="button"
+                aria-label={t('reset viewport')}
+                onClick={() => void request({ action: 'viewport' })}
+              >
+                {t('reset')}
+              </Button>
+            </form>
+          )}
+          <div className="browser-diagnostic-tabs segmented" role="tablist">
+            {tabs.map(([name, label]) => (
+              <button
+                key={name}
+                role="tab"
+                aria-selected={section === name}
+                className={section === name ? 'active' : undefined}
+                onClick={() => {
+                  setSection(name);
+                  if (name === 'storage') storage('read');
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          {(error || result?.state.reconnectError) && (
-            <div role="alert">
+          {failed && (
+            <div role="alert" className="browser-diagnostic-alert">
               <p>{t('page status unavailable')}</p>
               <details className="context-source">
                 <summary>{t('error details')}</summary>
@@ -522,28 +559,16 @@ export function BrowserDiagnostics({
               </details>
             </div>
           )}
-          {!error && !result?.state.reconnectError && (
-            <div role="status">
-              <Status
-                value={
-                  !result
-                    ? t('loading diagnostics')
-                    : result.state.owner === 'devtools'
-                      ? t('page status unavailable')
-                      : result.state.debugger.paused
-                        ? t('page paused')
-                        : t('page running')
-                }
-              />
-            </div>
-          )}
           {result?.state.owner === 'devtools' && (
-            <p>{t('devtools owns this page; close it to reconnect')}</p>
+            <p className="panel-note">
+              {t('close developer tools to resume diagnostics')}
+            </p>
           )}
           {result?.source && (
             <details open className="browser-source-preview context-source">
-              <summary>
-                {t('browser source')} · {result.source.url}
+              <summary title={result.source.url}>
+                <span>{t('browser source')}</span>
+                <code>{fileName(result.source.url)}</code>
               </summary>
               <pre>{result.source.content}</pre>
             </details>
@@ -551,6 +576,7 @@ export function BrowserDiagnostics({
           <div
             className="browser-diagnostic-results"
             role="tabpanel"
+            data-section={section}
             ref={results}
             onScroll={() => {
               const node = results.current;
@@ -581,10 +607,12 @@ export function BrowserDiagnostics({
                   </Button>
                 </div>
                 {(result?.state.logError || logIncomplete) && (
-                  <p role="alert">{t('browser log is incomplete')}</p>
+                  <p role="alert" className="panel-note">
+                    {t('browser log is incomplete')}
+                  </p>
                 )}
                 {log?.domain === section && (
-                  <details className="context-source" open>
+                  <details className="context-source browser-log" open>
                     <summary>{t('saved browser log')}</summary>
                     <div className="browser-diagnostic-tools">
                       <Button
@@ -629,47 +657,94 @@ export function BrowserDiagnostics({
                 )}
                 {result?.state.console.map((entry) => (
                   <details
-                    className="context-source"
+                    className="browser-console-entry"
                     key={entry.id}
                     data-console-id={entry.id}
+                    data-level={entry.level}
                   >
-                    <summary>
-                      {entry.level} · {entry.text}
+                    <summary title={entry.text}>
+                      <ChevronRight size={12} />
+                      <span className="browser-console-level">
+                        {entry.level}
+                      </span>
+                      <span className="browser-console-text">{entry.text}</span>
                     </summary>
-                    {entry.stack.map((f, i) => (
-                      <div key={i}>
-                        <Button
-                          onClick={() => openSource(f.url, f.line, f.column)}
-                        >
-                          {f.name} {f.url}:{f.line}:{f.column}
-                        </Button>
-                      </div>
-                    ))}
+                    {entry.stack.length > 0 && (
+                      <ul className="browser-stack">
+                        {entry.stack.map((f, i) => (
+                          <li key={i}>
+                            <Button
+                              className="browser-stack-frame"
+                              title={`${f.url}:${f.line}:${f.column}`}
+                              onClick={() =>
+                                openSource(f.url, f.line, f.column)
+                              }
+                            >
+                              {f.name && (
+                                <span className="browser-stack-name">
+                                  {f.name}{' '}
+                                </span>
+                              )}
+                              <span className="browser-stack-location">
+                                {fileName(f.url)}:{f.line}:{f.column}
+                              </span>
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </details>
                 ))}
               </>
             )}
             {section === 'network' && (
               <>
-                {result?.state.network.map((n) => (
-                  <div key={n.id}>
-                    <Button
-                      onClick={() =>
-                        void request({ action: 'response', requestId: n.id })
-                      }
-                    >
-                      {n.method} {n.status ?? '…'} {n.url}
-                    </Button>
-                    <span>
-                      {n.duration === undefined
-                        ? '…'
-                        : Math.round(n.duration) + ' ms'}{' '}
-                      {n.error}
-                    </span>
-                  </div>
-                ))}
+                {result && !error && result.state.network.length === 0 && (
+                  <p className="panel-note">{t('no network requests')}</p>
+                )}
+                {!!result?.state.network.length && (
+                  <ul className="browser-network">
+                    {result.state.network.map((n) => (
+                      <li
+                        key={n.id}
+                        data-failed={
+                          n.error || (n.status ?? 0) >= 400 ? '' : undefined
+                        }
+                      >
+                        <button
+                          type="button"
+                          title={n.url}
+                          onClick={() =>
+                            void request({
+                              action: 'response',
+                              requestId: n.id,
+                            })
+                          }
+                        >
+                          <span className="browser-network-method">
+                            {n.method}
+                          </span>{' '}
+                          <span className="browser-network-status">
+                            {n.status ?? '…'}
+                          </span>{' '}
+                          <span className="browser-network-url">{n.url}</span>
+                        </button>
+                        <span
+                          className="browser-network-time"
+                          title={n.error || undefined}
+                        >
+                          {n.error
+                            ? t('failed')
+                            : n.duration === undefined
+                              ? '…'
+                              : Math.round(n.duration) + ' ms'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {result?.response && (
-                  <pre>
+                  <pre className="browser-response">
                     {result.response.base64Encoded
                       ? t('binary response (base64)')
                       : ''}
@@ -680,45 +755,82 @@ export function BrowserDiagnostics({
             )}
             {section === 'storage' && (
               <>
-                <select
-                  aria-label={t('storage kind')}
-                  value={kind}
-                  onChange={(e) => {
-                    setKind(e.target.value as 'local' | 'session');
-                    setResult(undefined);
+                <div className="browser-storage-bar">
+                  <select
+                    aria-label={t('storage kind')}
+                    value={kind}
+                    onChange={(e) => {
+                      setKind(e.target.value as 'local' | 'session');
+                      setResult(undefined);
+                    }}
+                  >
+                    <option value="local">localStorage</option>
+                    <option value="session">sessionStorage</option>
+                  </select>
+                  <IconButton
+                    label={t('refresh storage')}
+                    onClick={() => storage('read')}
+                  >
+                    <RotateCw size={13} />
+                  </IconButton>
+                </div>
+                {result?.storage && result.storage.length === 0 && (
+                  <p className="panel-note">{t('no storage items')}</p>
+                )}
+                {!!result?.storage?.length && (
+                  <ul className="browser-storage-list">
+                    {result.storage.map(([k, v]) => (
+                      <li key={k}>
+                        <button
+                          type="button"
+                          className="browser-storage-item"
+                          title={`${k}: ${v}`}
+                          aria-label={`${k}: ${v}`}
+                          onClick={() => {
+                            setKey(k);
+                            setValue(v);
+                          }}
+                        >
+                          <code className="browser-storage-key">{k}</code>
+                          <code className="browser-storage-value">{v}</code>
+                        </button>
+                        <IconButton
+                          label={t('remove storage item')}
+                          onClick={() => storage('remove', k)}
+                        >
+                          <X size={13} />
+                        </IconButton>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <form
+                  className="browser-storage-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    storage('set');
                   }}
                 >
-                  <option value="local">localStorage</option>
-                  <option value="session">sessionStorage</option>
-                </select>
-                <Button onClick={() => storage('read')}>
-                  {t('refresh storage')}
-                </Button>
-                <input
-                  aria-label={t('storage key')}
-                  placeholder={t('storage key')}
-                  value={key}
-                  onChange={(e) => setKey(e.target.value)}
-                />
-                <input
-                  aria-label={t('storage value')}
-                  placeholder={t('storage value')}
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                />
-                <Button onClick={() => storage('set')}>
-                  {t('save storage item')}
-                </Button>
-                {result?.storage?.map(([k, v]) => (
-                  <div key={k}>
-                    <code>
-                      {k}: {v}
-                    </code>
-                    <Button onClick={() => storage('remove', k)}>
-                      {t('remove storage item')}
-                    </Button>
-                  </div>
-                ))}
+                  <input
+                    aria-label={t('storage key')}
+                    placeholder={t('storage key')}
+                    value={key}
+                    spellCheck={false}
+                    autoComplete="off"
+                    onChange={(e) => setKey(e.target.value)}
+                  />
+                  <input
+                    aria-label={t('storage value')}
+                    placeholder={t('storage value')}
+                    value={value}
+                    spellCheck={false}
+                    autoComplete="off"
+                    onChange={(e) => setValue(e.target.value)}
+                  />
+                  <Button type="submit" aria-label={t('save storage item')}>
+                    {t('save')}
+                  </Button>
+                </form>
               </>
             )}
             {section === 'debug' && (
@@ -745,28 +857,36 @@ export function BrowserDiagnostics({
                     if (command) void request({ action: 'debug', command });
                   }}
                 />
-                <input
-                  aria-label={t('source URL')}
-                  value={source}
-                  onChange={(e) => setSource(e.target.value)}
-                />
-                <input
-                  aria-label={t('breakpoint line')}
-                  value={line}
-                  onChange={(e) => setLine(e.target.value)}
-                />
-                <Button
-                  onClick={() =>
+                <form
+                  className="browser-breakpoint-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
                     void request({
                       action: 'debug',
                       command: 'breakpoints',
                       url: source,
                       line: Number(line),
-                    })
-                  }
+                    });
+                  }}
                 >
-                  {t('add breakpoint')}
-                </Button>
+                  <input
+                    aria-label={t('source URL')}
+                    placeholder={t('source URL')}
+                    value={source}
+                    spellCheck={false}
+                    autoComplete="off"
+                    onChange={(e) => setSource(e.target.value)}
+                  />
+                  <input
+                    aria-label={t('breakpoint line')}
+                    title={t('breakpoint line')}
+                    value={line}
+                    inputMode="numeric"
+                    spellCheck={false}
+                    onChange={(e) => setLine(e.target.value)}
+                  />
+                  <Button type="submit">{t('add breakpoint')}</Button>
+                </form>
                 {result?.state.debugger.breakpoints.map((b) => (
                   <DebugBreakpointRow
                     key={b.id}
@@ -792,13 +912,32 @@ export function BrowserDiagnostics({
                         line={f.line}
                       />
                     </summary>
-                    <Button
-                      onClick={() =>
-                        openSource(f.source.path, f.line, f.column)
-                      }
-                    >
-                      {t('open source location')}
-                    </Button>
+                    <div className="browser-frame-tools">
+                      <Button
+                        onClick={() =>
+                          openSource(f.source.path, f.line, f.column)
+                        }
+                      >
+                        {t('open source location')}
+                      </Button>
+                      {f.scopes.map((s) => (
+                        <Button
+                          key={s.variablesReference}
+                          onClick={() => {
+                            selectedScope.current = s.name;
+                            void request({
+                              action: 'debug',
+                              command: 'variables',
+                              reference: s.variablesReference,
+                              expectedPauseEpoch:
+                                result.state.debugger.pauseEpoch,
+                            });
+                          }}
+                        >
+                          {s.name}
+                        </Button>
+                      ))}
+                    </div>
                     <form
                       className="debug-evaluate"
                       onSubmit={(event) => {
@@ -815,7 +954,10 @@ export function BrowserDiagnostics({
                     >
                       <input
                         aria-label={t('debug expression')}
+                        placeholder={t('debug expression')}
                         value={expression}
+                        spellCheck={false}
+                        autoComplete="off"
                         onChange={(event) => setExpression(event.target.value)}
                       />
                       <Button
@@ -834,23 +976,6 @@ export function BrowserDiagnostics({
                           : ''}
                       </output>
                     </form>
-                    {f.scopes.map((s) => (
-                      <Button
-                        key={s.variablesReference}
-                        onClick={() => {
-                          selectedScope.current = s.name;
-                          void request({
-                            action: 'debug',
-                            command: 'variables',
-                            reference: s.variablesReference,
-                            expectedPauseEpoch:
-                              result.state.debugger.pauseEpoch,
-                          });
-                        }}
-                      >
-                        {s.name}
-                      </Button>
-                    ))}
                   </details>
                 ))}
                 {result?.variables?.map((v) => (
@@ -867,4 +992,9 @@ export function BrowserDiagnostics({
       )}
     </section>
   );
+}
+/** The last part of a script or page address, which says which file it is. */
+function fileName(url: string) {
+  const path = url.split(/[?#]/)[0].replace(/\/+$/, '');
+  return path.slice(path.lastIndexOf('/') + 1) || url;
 }

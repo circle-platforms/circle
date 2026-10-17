@@ -25,6 +25,8 @@ import {
   Folder,
   FolderOpen,
   SlidersHorizontal,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { Tooltip } from 'radix-ui';
 import { useRuntime } from '../app/context';
@@ -39,9 +41,13 @@ import {
   recentDetails,
   recentSessions,
   sessionActivityAt,
+  sidebarTasks,
+  topLevelSessions,
   visibleSessions,
   type ActivityAge,
+  type SidebarTask,
 } from '../model/session-management';
+import { agentActivityText, agentState } from '../model/activity';
 import { selectedHomeProject } from '../features/home-selection';
 import type { DialogId, Session } from '../model/types';
 import { platformTitle } from '../plugins/labels';
@@ -150,6 +156,9 @@ export function Sidebar({
   const current = currentSession(snapshot);
   const [all, setAll] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState<string[]>([]);
+  // Task lists under a conversation, opened or closed by hand. Unset, a list
+  // is open only while one of its tasks is the open session.
+  const [taskFold, setTaskFold] = useState<Record<string, boolean>>({});
   const [roving, setRoving] = useState<string | null>(null);
   const anchors = useRef(new Map<string, HTMLAnchorElement>());
   const listRef = useRef<HTMLDivElement>(null);
@@ -305,19 +314,24 @@ export function Sidebar({
         homeRequested,
       )
     : undefined;
+  // Task and reviewer conversations fold under the conversation that started
+  // them, as Claude keeps sub-agents with their parent: they are not recent
+  // rows, and their worktrees are not folders.
+  const topSessions = topLevelSessions(snapshot.sessions, snapshot.agents);
+  const tasks = sidebarTasks(snapshot.sessions, snapshot.agents);
   const projects = projectFolders(
     snapshot.workspaces,
-    snapshot.sessions,
+    topSessions,
     aimed?.id ?? null,
   );
-  const recent = recentSessions(snapshot.sessions);
+  const recent = recentSessions(topSessions);
   const recentShown = collapsed.includes(RECENT)
     ? []
     : all.includes(RECENT)
       ? recent
       : recent.slice(0, RECENT_SHOWN);
   const groups = projects.map((workspace) => {
-    const sessions = visibleSessions(snapshot.sessions)
+    const sessions = visibleSessions(topSessions)
       .filter(
         (session) =>
           session.workspaceId === workspace.id && !session.archivedAt,
@@ -335,11 +349,24 @@ export function Sidebar({
         : sessions.slice(0, SHOWN);
     return { workspace, sessions, shown };
   });
+  const taskKey = (prefix: string, owner: string) => `${prefix}:${owner}`;
+  const tasksOpen = (prefix: string, owner: string) =>
+    taskFold[taskKey(prefix, owner)] ??
+    (tasks.get(owner) ?? []).some((task) =>
+      task.sessionIds.includes(current.id),
+    );
+  const keysFor = (sessions: Session[], prefix: string) =>
+    sessions.flatMap((session) => [
+      `${prefix}:${session.id}`,
+      ...(tasksOpen(prefix, session.id)
+        ? (tasks.get(session.id) ?? []).map(
+            (task) => `${prefix}:${session.id}/task:${task.session.id}`,
+          )
+        : []),
+    ]);
   const rowKeys = [
-    ...recentShown.map((session) => `recent:${session.id}`),
-    ...groups.flatMap((group) =>
-      group.shown.map((session) => `${group.workspace.id}:${session.id}`),
-    ),
+    ...keysFor(recentShown, RECENT),
+    ...groups.flatMap((group) => keysFor(group.shown, group.workspace.id)),
   ];
   rowKeysRef.current = rowKeys;
   const orderKey = rowKeys.join('\n');
@@ -472,60 +499,134 @@ export function Sidebar({
   );
   const toggle = (id: string, list: string[], set: (ids: string[]) => void) =>
     set(list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
+  const sessionRow = (session: Session, rowKey: string, task?: SidebarTask) => {
+    const base = recentDetails(session, snapshot.workspaces);
+    return (
+      <SessionRow
+        key={rowKey}
+        rowKey={rowKey}
+        session={session}
+        // A task row says the task's name, as the tasks panel does. Short ids
+        // that tell same-titled conversations apart are not shown for tasks.
+        label={
+          task?.agent.name.trim() ||
+          disambiguatedSessionTitle(session, snapshot.sessions)
+        }
+        tabIndex={rowKey === tabKey ? 0 : -1}
+        // A task row says its state on hover; its worktree is not a folder to name.
+        details={
+          task
+            ? {
+                ...base,
+                project: undefined,
+                state: agentActivityText(task.agent),
+              }
+            : base
+        }
+        task={task ? agentState(task.agent) : undefined}
+        renaming={renaming}
+        editing={editing === rowKey}
+        onRename={() => beginRename(rowKey)}
+        onRenameCommit={(value) =>
+          commitRename(session.id, value, session.title)
+        }
+        onRenameCancel={cancelRename}
+        attention={
+          task
+            ? task.sessionIds.some((id) => waiting.has(id))
+            : waiting.has(session.id)
+        }
+        running={session.state === 'waiting'}
+        onOpen={(id) => {
+          perform(async () => {
+            await goSession(id);
+          });
+        }}
+        onKeyDown={(event) => onRowKeyDown(rowKey, event)}
+        onFocusRow={() => {
+          setRoving(rowKey);
+          // The press that opens a row focuses it too. That focus must not
+          // bring the card back over the page the press just opened.
+          if (pointerOpening.current) return;
+          routeHold.current = false;
+          scrollClosedRef.current = false;
+          setScrollClosed(false);
+          setCardSuppressed(false);
+        }}
+        pressOutside={pressOutside}
+        pointerOpening={pointerOpening}
+        hovered={hoveredKey === rowKey}
+        hoveredKey={hoveredKey}
+        menuFocus={menuFocus}
+        scrollClosed={scrollClosed}
+        cardSuppressed={cardSuppressed}
+        listRef={listRef}
+        onPoint={(point) => pointRow(rowKey, point)}
+        onPointerLeave={() => leaveRow(rowKey)}
+        onMenuFocus={claimMenu}
+        onKeepHover={keepHover}
+        linkRef={(node) => {
+          if (node) anchors.current.set(rowKey, node);
+          else anchors.current.delete(rowKey);
+        }}
+        onDialog={onDialog}
+      />
+    );
+  };
   const sessionRows = (sessions: Session[], prefix: string) =>
     sessions.map((session) => {
       const rowKey = `${prefix}:${session.id}`;
+      const owned = tasks.get(session.id) ?? [];
+      if (!owned.length) return sessionRow(session, rowKey);
+      const open = tasksOpen(prefix, session.id);
+      const asking = owned.some((task) =>
+        task.sessionIds.some((id) => waiting.has(id)),
+      );
+      const working = owned.some((task) =>
+        ['running', 'preparing', 'queued', 'cancelling'].includes(
+          agentState(task.agent),
+        ),
+      );
       return (
-        <SessionRow
-          key={rowKey}
-          rowKey={rowKey}
-          session={session}
-          label={disambiguatedSessionTitle(session, snapshot.sessions)}
-          tabIndex={rowKey === tabKey ? 0 : -1}
-          details={recentDetails(session, snapshot.workspaces)}
-          renaming={renaming}
-          editing={editing === rowKey}
-          onRename={() => beginRename(rowKey)}
-          onRenameCommit={(value) =>
-            commitRename(session.id, value, session.title)
-          }
-          onRenameCancel={cancelRename}
-          attention={waiting.has(session.id)}
-          running={session.state === 'waiting'}
-          onOpen={(id) => {
-            perform(async () => {
-              await goSession(id);
-            });
-          }}
-          onKeyDown={(event) => onRowKeyDown(rowKey, event)}
-          onFocusRow={() => {
-            setRoving(rowKey);
-            // The press that opens a row focuses it too. That focus must not
-            // bring the card back over the page the press just opened.
-            if (pointerOpening.current) return;
-            routeHold.current = false;
-            scrollClosedRef.current = false;
-            setScrollClosed(false);
-            setCardSuppressed(false);
-          }}
-          pressOutside={pressOutside}
-          pointerOpening={pointerOpening}
-          hovered={hoveredKey === rowKey}
-          hoveredKey={hoveredKey}
-          menuFocus={menuFocus}
-          scrollClosed={scrollClosed}
-          cardSuppressed={cardSuppressed}
-          listRef={listRef}
-          onPoint={(point) => pointRow(rowKey, point)}
-          onPointerLeave={() => leaveRow(rowKey)}
-          onMenuFocus={claimMenu}
-          onKeepHover={keepHover}
-          linkRef={(node) => {
-            if (node) anchors.current.set(rowKey, node);
-            else anchors.current.delete(rowKey);
-          }}
-          onDialog={onDialog}
-        />
+        <div className="session-with-tasks" key={rowKey}>
+          {sessionRow(session, rowKey)}
+          <button
+            type="button"
+            className="session-tasks-toggle"
+            aria-expanded={open}
+            onClick={() =>
+              setTaskFold((fold) => ({
+                ...fold,
+                [taskKey(prefix, session.id)]: !open,
+              }))
+            }
+          >
+            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>{tn(owned.length, '{n} task', '{n} tasks')}</span>
+            {asking ? (
+              <i className="attention-dot" />
+            ) : working ? (
+              <i className="running-dot" />
+            ) : null}
+          </button>
+          {open && (
+            <div
+              className="session-tasks"
+              role="group"
+              aria-label={t('tasks of {name}', {
+                name: disambiguatedSessionTitle(session, snapshot.sessions),
+              })}
+            >
+              {owned.map((task) =>
+                sessionRow(
+                  task.session,
+                  `${rowKey}/task:${task.session.id}`,
+                  task,
+                ),
+              )}
+            </div>
+          )}
+        </div>
       );
     });
   const customizing = CUSTOMIZE.some(
@@ -854,6 +955,7 @@ function SessionRow({
   onRenameCancel,
   attention,
   running,
+  task,
   onOpen,
   onKeyDown,
   onFocusRow,
@@ -876,7 +978,7 @@ function SessionRow({
   session: Session;
   label: string;
   tabIndex: number;
-  details: { project?: string; age: ActivityAge; absolute?: string };
+  details: RowDetails;
   renaming: boolean;
   /** The title is being edited in place, so the row is a text field. */
   editing: boolean;
@@ -885,6 +987,8 @@ function SessionRow({
   onRenameCancel: () => void;
   attention: boolean;
   running: boolean;
+  /** The row is a task under its conversation, in this state. */
+  task?: string;
   onOpen: (id: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLAnchorElement>) => void;
   onFocusRow: () => void;
@@ -966,7 +1070,7 @@ function SessionRow({
   });
   const row = (
     <div
-      className="session-row"
+      className={task ? 'session-row task-row' : 'session-row'}
       data-row-key={rowKey}
       onPointerEnter={aim}
       onPointerMove={aim}
@@ -1041,6 +1145,8 @@ function SessionRow({
             <span>{label}</span>
             {attention ? (
               <i className="attention-dot" />
+            ) : task ? (
+              <i className="task-dot" data-state={task} />
             ) : running ? (
               <i className="running-dot" />
             ) : null}
@@ -1121,12 +1227,20 @@ function activityLabel(age: ActivityAge): string {
   return tn(age.n, '{n} day ago', '{n} days ago');
 }
 
+type RowDetails = {
+  project?: string;
+  age: ActivityAge;
+  absolute?: string;
+  /** A task's state, in words. */
+  state?: string;
+};
+
 function RecentHover({
   details,
   open,
   children,
 }: {
-  details: { project?: string; age: ActivityAge; absolute?: string };
+  details: RowDetails;
   open: boolean;
   children: ReactNode;
 }) {
@@ -1142,6 +1256,7 @@ function RecentHover({
           avoidCollisions={false}
         >
           {details.project ? <span>{details.project}</span> : null}
+          {details.state ? <span>{details.state}</span> : null}
           <span>{activityLabel(details.age)}</span>
           {details.absolute ? <span>{details.absolute}</span> : null}
         </Tooltip.Content>

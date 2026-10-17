@@ -315,7 +315,7 @@ export async function runNativeInputRecovery({
     .first()
     .click();
   const region = page.getByRole('region', {
-    name: 'recovered queued inputs',
+    name: 'unsent messages',
     exact: true,
   });
   await region.waitFor();
@@ -339,7 +339,7 @@ export async function runNativeInputRecovery({
     .locator('article')
     .filter({ hasText: 'OUTBOX_LINE_0001' });
   await longItem
-    .getByRole('button', { name: 'return input to draft', exact: true })
+    .getByRole('button', { name: 'edit in message box', exact: true })
     .click();
   await until(
     async () => (await composer().inputValue()).includes(longText),
@@ -350,27 +350,19 @@ export async function runNativeInputRecovery({
     3,
     'copying to draft retains durable recovery record',
   );
-  await longItem
-    .getByRole('button', { name: 'resume this input', exact: true })
-    .click();
+  await longItem.getByRole('button', { name: 'send now', exact: true }).click();
   const imageItem = region
     .locator('article')
     .filter({ hasText: 'OUTBOX_IMAGE_RESUME' });
   await imageItem
-    .getByRole('button', { name: 'resume this input', exact: true })
+    .getByRole('button', { name: 'send now', exact: true })
     .click();
   const plain = region
     .locator('article')
     .filter({ hasText: 'OUTBOX_PLAIN_DISCARD' });
-  await plain
-    .getByRole('checkbox', {
-      name: 'I checked this input; remove its recovery copy',
-      exact: true,
-    })
-    .check();
-  await plain
-    .getByRole('button', { name: 'discard recovered input', exact: true })
-    .click();
+  // Discarding asks first, then the confirmation removes the record.
+  await plain.getByRole('button', { name: 'discard', exact: true }).click();
+  await plain.getByRole('button', { name: 'discard', exact: true }).click();
   await until(
     async () => (await query('inputs', 'list')).items.length === 0,
     'explicit resume and discard consume only chosen durable records',

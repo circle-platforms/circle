@@ -628,7 +628,7 @@ try {
         assert.equal(snapshot.sessions[0].showThinking, false);
       else if (command.name === 'details')
         await page
-          .getByRole('heading', { name: 'raw output', exact: true })
+          .getByRole('heading', { name: 'output', exact: true })
           .first()
           .waitFor();
       else if (command.name === 'undo')

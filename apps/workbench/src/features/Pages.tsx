@@ -5,6 +5,7 @@ import {
 import { desktopHost, setDefaultWorkspace } from '../host';
 import { recordedDecision, recordedTitle } from '../model/decisions';
 import { KeybindingsEditor } from './KeybindingsEditor';
+import { TaskLimitsSettings } from './TaskLimitsSettings';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
 import {
@@ -86,6 +87,8 @@ import { SessionMenu } from '../components/SessionMenus';
 import {
   canArchiveSession,
   sessionActivityAt,
+  taskWorkspaceIds,
+  topLevelSessions,
   visibleSessions,
 } from '../model/session-management';
 import { openHome } from './home-selection';
@@ -159,7 +162,10 @@ function SessionsPage({ onSession, onDialog }: Props) {
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
   const openedOnPress = useRef(false);
-  const sessions = visibleSessions(snapshot.sessions).filter(
+  // Task conversations are reached from the conversation that started them.
+  const sessions = visibleSessions(
+    topLevelSessions(snapshot.sessions, snapshot.agents),
+  ).filter(
     (session) =>
       (all || session.workspaceId === current.workspaceId) &&
       Boolean(session.archivedAt) === archived &&
@@ -1476,11 +1482,22 @@ function ExtensionsPage() {
                         )
                       : enabled.includes(plugin.id)
                   }
-                  onChange={(value) =>
-                    plugin.runtimeExtension
-                      ? void setExtension(plugin.runtimeExtension, value)
-                      : toggle(plugin.id, value)
-                  }
+                  onChange={(value) => {
+                    if (!plugin.runtimeExtension)
+                      return toggle(plugin.id, value);
+                    // The interface's own page comes and goes with this switch; the
+                    // runtime extension follows through its usual save and reload.
+                    runtime.change((state) => {
+                      state.uiPlugins = registry.change(
+                        state.uiPlugins.filter((id) =>
+                          registry.plugins.some((item) => item.id === id),
+                        ),
+                        plugin.id,
+                        value,
+                      );
+                    });
+                    void setExtension(plugin.runtimeExtension, value);
+                  }}
                 />
               </div>
               {plugin.detail && (
@@ -1673,6 +1690,7 @@ const THEME_LABELS: Record<'auto' | 'light' | 'dark', () => string> = {
 function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const terminalAccessibility = useTerminalAccessibilityChoice();
   const { snapshot, runtime, perform, notify } = useRuntime();
+  const taskFolders = taskWorkspaceIds(snapshot.sessions, snapshot.agents);
   const settings = snapshot.settings;
   const navigate = useNavigate();
   const extensionSwitch = useExtensionEnabled();
@@ -1843,6 +1861,9 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           </div>
         </div>
       </section>
+      {runtime.mode === 'live' && desktopHost() && snapshot.activeSessionId && (
+        <TaskLimitsSettings sessionId={snapshot.activeSessionId} />
+      )}
       <section className="settings-block">
         <h2>{t('default workspace')}</h2>
         <div className="setting-row">
@@ -1879,18 +1900,20 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
       </section>
       <section className="settings-block">
         <h2>{t('workspace trust')}</h2>
-        {snapshot.workspaces.map((workspace) => (
-          <div className="setting-row" key={workspace.id}>
-            <span>
-              {workspaceLabel(workspace)}
-              <small>{workspace.path}</small>
-            </span>
-            <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
-            <Button onClick={() => onDialog('trust', workspace.id)}>
-              {t('review')}
-            </Button>
-          </div>
-        ))}
+        {snapshot.workspaces
+          .filter((workspace) => !taskFolders.has(workspace.id))
+          .map((workspace) => (
+            <div className="setting-row" key={workspace.id}>
+              <span>
+                {workspaceLabel(workspace)}
+                <small>{workspace.path}</small>
+              </span>
+              <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
+              <Button onClick={() => onDialog('trust', workspace.id)}>
+                {t('review')}
+              </Button>
+            </div>
+          ))}
       </section>
       <section className="settings-block">
         <h2>{t('protected files')}</h2>

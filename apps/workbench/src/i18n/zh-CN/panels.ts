@@ -92,8 +92,6 @@ export const panels: Record<string, string> = {
   diff: '差异',
   edit: '编辑',
   'local file · disk unchanged': '本地文件 · 磁盘未改动',
-  'buffer saved locally': '缓冲区已在本地保存',
-  'save buffer': '保存缓冲区',
   'file buffer': '文件缓冲区',
   original: '原始版本',
   proposed: '提议版本',
@@ -101,7 +99,6 @@ export const panels: Record<string, string> = {
   '{n} lines': '{n} 行',
   'preview truncated': '预览已截断',
   'file saved': '文件已保存',
-  'save to disk': '保存到磁盘',
   // the native browser
   'navigation failed': '打开页面失败',
   'invalid address': '地址无效，请输入完整网址',

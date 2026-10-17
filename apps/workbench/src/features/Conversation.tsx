@@ -1048,7 +1048,8 @@ export function Conversation({
           )}
           {pending.length > 0 && (
             <button className="interaction-summary" onClick={showRequest}>
-              <Status value="waiting" />
+              {/* The line already says it waits; a second "waiting" word repeated it. */}
+              <i className="attention-dot" />
               <span>
                 {tn(
                   pending.length,
@@ -1550,8 +1551,8 @@ export function Conversation({
                   key={job.id}
                   onClick={() => onPanel('activity', job.id)}
                 >
+                  {/* The job's internal id is not shown; its title says what runs. */}
                   <Status value={job.state} />
-                  <strong>{job.id}</strong>
                   <span>{job.title}</span>
                   <small>{job.elapsed}</small>
                 </button>

@@ -164,7 +164,7 @@ try {
   await page.waitForFunction(() =>
     document.querySelector('.view-lines')?.textContent.endsWith('x'),
   );
-  await page.getByText('unsaved buffer', { exact: true }).waitFor();
+  await page.getByText('unsaved changes', { exact: true }).waitFor();
   await page.keyboard.press('ControlOrMeta+s');
   const until = async (fn) => {
     const end = Date.now() + 8000;
@@ -200,9 +200,7 @@ try {
   const rename = page.locator('input.rename-input');
   await rename.fill('total');
   await rename.press('Enter');
-  await page
-    .getByRole('button', { name: 'save all buffers', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'save all', exact: true }).click();
   await until(
     async () =>
       (await readFile(join(child, 'lib.ts'), 'utf8')).includes(
@@ -223,9 +221,7 @@ try {
   assert(!(await lines.textContent()).includes('PARENT'));
   await page.getByRole('button', { name: 'read only', exact: true }).click();
   assert.equal(
-    await page
-      .getByRole('button', { name: 'save to disk', exact: true })
-      .isDisabled(),
+    await page.getByRole('button', { name: 'save', exact: true }).isDisabled(),
     true,
   );
   await input.focus();
@@ -250,9 +246,7 @@ try {
       .includes('CHILD PLAN'),
   );
   assert.equal(
-    await page
-      .getByRole('button', { name: 'save to disk', exact: true })
-      .isDisabled(),
+    await page.getByRole('button', { name: 'save', exact: true }).isDisabled(),
     true,
     'child readonly ownership does not inherit parent plan editing exemption',
   );

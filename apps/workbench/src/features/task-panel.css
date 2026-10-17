@@ -29,19 +29,6 @@
   min-height: 58px;
   resize: vertical;
 }
-.task-panel .tasks-limits {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.task-panel .tasks-limits label {
-  flex-direction: row;
-  align-items: center;
-}
-.task-panel .tasks-limits input {
-  width: 60px;
-}
 .task-panel .tasks-list dl {
   display: grid;
   grid-template-columns: 90px minmax(0, 1fr);
@@ -118,10 +105,6 @@
 .task-technical code,
 .task-technical dd {
   overflow-wrap: anywhere;
-}
-.task-panel .task-settings {
-  margin-top: 16px;
-  padding-top: 10px;
 }
 .task-review h4 {
   font-size: var(--ui-small);
@@ -230,4 +213,64 @@
 .task-recovery [role='alert'],
 .task-operations [role='alert'] {
   color: var(--negative);
+}
+.task-panel .tasks-settings-alert {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 0;
+  white-space: normal;
+}
+.tasks-settings-alert p {
+  margin: 0;
+  line-height: 1.6;
+}
+.tasks-settings-alert small,
+.task-limits-problem small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  overflow-wrap: anywhere;
+}
+.tasks-settings-alert .button {
+  flex-shrink: 0;
+}
+.task-panel .tasks-empty {
+  color: var(--muted);
+  margin: 12px 0;
+}
+.task-section-heading .count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--secondary);
+  font-size: var(--ui-tiny);
+}
+.task-limits-settings .task-limits-input {
+  flex: 0 0 76px;
+  width: 76px;
+  padding: 6px 8px;
+}
+.settings-block > p.task-limits-problem {
+  margin-top: 12px;
+  color: var(--negative);
+  font-size: var(--ui-small);
+  line-height: 1.6;
+}
+/* Actions waiting on the person come before the task list, as one bordered group. */
+.task-panel .task-operations.panel-section {
+  margin: 4px 0 12px;
+  padding: 10px 12px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.task-operations .panel-note {
+  margin: 6px 0 0;
+}
+.task-operations .task-operation:last-of-type {
+  border-bottom: 0;
 }

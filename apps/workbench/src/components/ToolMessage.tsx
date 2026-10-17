@@ -161,6 +161,16 @@ export function ToolMessage({
         : tool.diff || tool.before !== undefined
           ? FileDiff
           : FileText;
+  const isCommand = ['execute', '!', '!!'].includes(tool.name);
+  // What the call was given, in plain words: a command reads as its command
+  // line, other tools as their arguments.
+  const commandLine =
+    isCommand && typeof tool.input.command === 'string'
+      ? tool.input.command
+      : undefined;
+  const inputLabel = isCommand ? t('command') : t('arguments');
+  const shownOutput = shownToolOutput(tool.output);
+  const live = ['running', 'waiting'].includes(tool.status);
   // A file change that happened shows its diff under the call; a waiting one shows it in
   // the request below, and one that failed changed nothing.
   const diff = tool.diff && tool.status === 'success' ? tool.diff : undefined;
@@ -227,7 +237,7 @@ export function ToolMessage({
                   className={tab === 'input' ? 'active' : ''}
                   onClick={() => setTab('input')}
                 >
-                  {t('input')}
+                  {inputLabel}
                 </button>
               )}
             </div>
@@ -261,8 +271,8 @@ export function ToolMessage({
                   }
                 }}
               >
+                <Terminal size={12} />
                 {terminalBusy ? t('opening terminal…') : t('open in terminal')}
-                <ArrowUpRight size={12} />
               </button>
             )}
             {tool.filePath && (
@@ -292,8 +302,8 @@ export function ToolMessage({
               onClick={() =>
                 copyText(
                   tab === 'input'
-                    ? JSON.stringify(tool.input, null, 2)
-                    : shownToolOutput(tool.output),
+                    ? (commandLine ?? JSON.stringify(tool.input, null, 2))
+                    : shownOutput,
                 ).then(
                   () => notify(t('copied')),
                   () => notify(t('clipboard unavailable')),
@@ -308,29 +318,26 @@ export function ToolMessage({
             <>
               <div className="tool-text-preview">
                 <DataBlock
-                  title={t('text output')}
+                  title={t('output')}
                   value={textOutput.preview}
                   tabIndex={0}
                   wrap={false}
                 />
               </div>
+              {/* The response as the tool returned it, folded: the text above is what it says. */}
               <details className="context-source">
-                <summary>{t('raw output')}</summary>
-                <DataBlock
-                  title={t('raw output')}
-                  value={shownToolOutput(tool.output)}
-                />
+                <summary>{t('full response')}</summary>
+                <DataBlock title={t('full response')} value={shownOutput} />
               </details>
             </>
+          ) : tab === 'input' && hasToolInput(tool.input) ? (
+            <DataBlock title={inputLabel} value={commandLine ?? tool.input} />
+          ) : shownOutput.trim() ? (
+            <DataBlock title={t('output')} value={shownOutput} />
           ) : (
-            (tab === 'output' || hasToolInput(tool.input)) && (
-              <DataBlock
-                title={tab === 'input' ? t('raw input') : t('raw output')}
-                value={
-                  tab === 'input' ? tool.input : shownToolOutput(tool.output)
-                }
-              />
-            )
+            <p className="tool-empty">
+              {live ? t('no output yet') : t('no output')}
+            </p>
           )}
           {attachments.length > 0 && (
             <div className="message-attachments">

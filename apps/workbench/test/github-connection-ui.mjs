@@ -94,7 +94,8 @@ try {
           0,
           'new successful command clears old local error',
         );
-        assert.match(await card.innerText(), /GitHub CLI/);
+        // Which program signs in is an internal detail and stays off the card.
+        assert.doesNotMatch(await card.innerText(), /GitHub CLI/);
         const code = card.locator('code').filter({ hasText: 'CODE-TEST' });
         assert.equal(
           await code.evaluate((el) => {

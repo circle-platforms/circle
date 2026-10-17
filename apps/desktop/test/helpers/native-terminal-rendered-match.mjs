@@ -8,6 +8,10 @@ export async function assertRenderedTerminalMatch({
   text,
   until,
 }) {
+  // Find opens on demand from the terminal bar.
+  await panel
+    .getByRole('button', { name: 'find in terminal', exact: true })
+    .click();
   const find = panel.getByRole('textbox', {
     name: 'find in terminal',
     exact: true,

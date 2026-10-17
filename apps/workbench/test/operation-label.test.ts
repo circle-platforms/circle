@@ -12,14 +12,14 @@ test('operation summaries describe user actions and contain unknown protocol nam
   assert.equal(operationLabel('git', 'push'), 'git · push commits');
   assert.equal(
     operationLabel('internal_secret_service', 'opaque_method'),
-    'workspace operation · review effects',
+    'action · check the result',
   );
   setLanguage('zh-CN');
   assert.equal(operationLabel('documents', 'save'), '文件 · 保存文件');
   assert.equal(operationLabel('terminal', 'write'), '终端 · 发送终端输入');
   assert.equal(
     operationLabel('internal_secret_service', 'opaque_method'),
-    '工作区操作 · 核对实际结果',
+    '操作 · 核对结果',
   );
   setLanguage('en');
 });

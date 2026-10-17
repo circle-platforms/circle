@@ -318,7 +318,7 @@ test('file feedback targets the unique visible expected file and workspace, igno
 test('file save feedback cannot use a hidden matched toolbar while visible buffer remains unsaved', async () => {
   const r = renderer();
   const toolbar = {
-    textContent: 'unsaved buffer',
+    textContent: 'unsaved changes',
     closest: () => null,
     getBoundingClientRect: () => ({ width: 500, height: 40 }),
   };
@@ -330,7 +330,7 @@ test('file save feedback cannot use a hidden matched toolbar while visible buffe
         ? { textContent: 'README.md' }
         : { getAttribute: () => 'workspace source: workspace: /actual-owner' },
     querySelectorAll: () => [
-      { ...toolbar, textContent: 'no unsaved changes', closest: () => ({}) },
+      { ...toolbar, textContent: 'all changes saved', closest: () => ({}) },
       toolbar,
     ],
   };
@@ -338,7 +338,7 @@ test('file save feedback cannot use a hidden matched toolbar while visible buffe
   r.install({
     selector: '.file-view-toolbar',
     file: { path: 'README.md', sourceDirectory: '/actual-owner' },
-    text: 'no unsaved changes',
+    text: 'all changes saved',
   });
   let finished = false;
   r.window.__circleNativePerfPending.then(() => (finished = true));
@@ -347,7 +347,7 @@ test('file save feedback cannot use a hidden matched toolbar while visible buffe
   r.frame();
   await Promise.resolve();
   assert.equal(finished, false);
-  toolbar.textContent = 'no unsaved changes';
+  toolbar.textContent = 'all changes saved';
   r.frame();
   r.frame();
   await Promise.resolve();

@@ -19,6 +19,7 @@ import {
   Plus,
   Play,
   RotateCcw,
+  Search,
   Square,
   X,
 } from 'lucide-react';
@@ -122,7 +123,7 @@ function status(snapshot: TerminalSnapshot): string {
     if (root)
       return root.signal
         ? t('ended by signal {signal}', { signal: root.signal })
-        : t('exit {code}', { code: root.exitCode });
+        : t('exited (code {code})', { code: root.exitCode });
     if (!['running', 'stopping'].includes(snapshot.status))
       return t('terminal closed');
   }
@@ -143,12 +144,55 @@ function status(snapshot: TerminalSnapshot): string {
     case 'exited':
       return snapshot.signal
         ? t('ended by signal {signal}', { signal: snapshot.signal })
-        : t('exit {code}', { code: snapshot.exitCode ?? 0 });
+        : t('exited (code {code})', { code: snapshot.exitCode ?? 0 });
     case 'failed':
       return t('failed');
     case 'interrupted':
       return t('interrupted');
   }
+}
+
+/** The exit reason adds nothing when it only restates the status line. */
+function extraExitReason(snapshot: TerminalSnapshot) {
+  const reason = snapshot.exitReason;
+  if (!reason || snapshot.managedCommand) return '';
+  const code = snapshot.exitCode ?? 0;
+  const same = [
+    status(snapshot),
+    `exit ${code}`,
+    snapshot.signal ? `signal ${snapshot.signal}` : '',
+    snapshot.signal ?? '',
+  ];
+  return same.includes(reason) ? '' : reason;
+}
+
+/** The folder a terminal runs in, by name; the full path is in its tooltip. */
+function folderName(path: string) {
+  const trimmed = path.replace(/[\\/]+$/, '');
+  return trimmed.split(/[\\/]/).at(-1) || path;
+}
+
+/** Process ids are for developers: they stay in the status tooltip. */
+function processDetails(snapshot: TerminalSnapshot) {
+  const ids = snapshot.managedCommand
+    ? [
+        snapshot.managedCommand.commandPid !== undefined
+          ? t('command pid {pid}', {
+              pid: snapshot.managedCommand.commandPid,
+            })
+          : '',
+        snapshot.pid !== undefined
+          ? t('pty pid {pid}', { pid: snapshot.pid })
+          : '',
+      ]
+    : [
+        snapshot.pid !== undefined
+          ? t('process pid {pid}', { pid: snapshot.pid })
+          : '',
+      ];
+  return [snapshot.cwd, ids.filter(Boolean).join(' · ')]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /** Keep mounted while the Inspector is hidden. Its PTYs and reading position persist. */
@@ -245,6 +289,8 @@ export function NativeTerminal({
   const [opened, setOpened] = useState<string[]>([]);
   const [query, setQuery] = useState('');
   const [found, setFound] = useState(true);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const focusSearch = useRef(false);
   const searchRequest = useRef(0);
   const currentSearch = useRef({ sessionId, query, selectedId: '' });
   const [reload, setReload] = useState(0);
@@ -571,6 +617,23 @@ export function NativeTerminal({
     }
   };
 
+  const openSearch = () => {
+    if (searchInput.current) {
+      searchInput.current.focus();
+      searchInput.current.select();
+      return;
+    }
+    focusSearch.current = true;
+    setSearchOpen(true);
+  };
+  const closeSearch = () => {
+    searchRequest.current++;
+    setSearchOpen(false);
+    setQuery('');
+    setFound(true);
+    if (selected) controls.current.get(selected.id)?.focus();
+  };
+
   return (
     <section
       className={`native-terminal${embedded ? ' embedded' : ''}`}
@@ -582,7 +645,7 @@ export function NativeTerminal({
         ) {
           event.preventDefault();
           event.stopPropagation();
-          searchInput.current?.focus();
+          openSearch();
         }
       }}
     >
@@ -758,12 +821,21 @@ export function NativeTerminal({
           ))}
       </div>
       <div className="native-terminal-bar">
-        {selected && (
+        {selected && searchOpen ? (
           <div className="native-terminal-search find-bar">
             <input
-              ref={searchInput}
+              ref={(node) => {
+                searchInput.current = node;
+                if (node && focusSearch.current) {
+                  focusSearch.current = false;
+                  node.focus();
+                }
+              }}
               aria-label={t('find in terminal')}
               placeholder={t('find in terminal')}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
               value={query}
               onChange={(event) => {
                 searchRequest.current++;
@@ -778,10 +850,11 @@ export function NativeTerminal({
                 }
                 if (event.key === 'Escape') {
                   event.preventDefault();
-                  controls.current.get(selected.id)?.focus();
+                  closeSearch();
                 }
               }}
             />
+            {!found && <span role="status">{t('no matches')}</span>}
             <IconButton
               label={t('previous match')}
               disabled={!query}
@@ -800,10 +873,40 @@ export function NativeTerminal({
             >
               <ArrowDown size={14} />
             </IconButton>
-            {!found && <span role="status">{t('no matches')}</span>}
+            <IconButton label={t('close search')} onClick={closeSearch}>
+              <X size={14} />
+            </IconButton>
           </div>
+        ) : (
+          selected && (
+            <div className="native-terminal-status" role="status">
+              <span
+                className="native-terminal-folder"
+                title={processDetails(selected)}
+              >
+                {folderName(selected.cwd)}
+              </span>
+              <span title={selected.exitReason}>
+                <Status value={status(selected)} />
+                {extraExitReason(selected)
+                  ? ` · ${extraExitReason(selected)}`
+                  : ''}
+              </span>
+              {notice && (
+                <span className="native-terminal-notice">{notice}</span>
+              )}
+            </div>
+          )
         )}
         <div className="native-terminal-actions">
+          <IconButton
+            label={t('find in terminal')}
+            disabled={!selected}
+            aria-expanded={searchOpen}
+            onClick={openSearch}
+          >
+            <Search size={14} />
+          </IconButton>
           <IconButton
             label={t('start service')}
             disabled={busy || !sessionId || !!commandTerminal}
@@ -927,6 +1030,9 @@ export function NativeTerminal({
                 value={serviceFile}
                 onChange={(event) => setServiceFile(event.target.value)}
                 placeholder="npm"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
               />
             </label>
             <label>
@@ -936,6 +1042,9 @@ export function NativeTerminal({
                 value={serviceCwd}
                 onChange={(event) => setServiceCwd(event.target.value)}
                 placeholder="."
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
               />
             </label>
             <fieldset>
@@ -949,6 +1058,9 @@ export function NativeTerminal({
                 <div className="native-service-argument" key={index}>
                   <input
                     aria-label={t('service argument {n}', { n: index + 1 })}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     value={arg}
                     onChange={(event) =>
                       setServiceArgs((previous) =>
@@ -997,6 +1109,9 @@ export function NativeTerminal({
                 onChange={(event) => setServicePattern(event.target.value)}
                 maxLength={512}
                 placeholder={t('optional')}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
               />
             </label>
             <p>
@@ -1020,36 +1135,6 @@ export function NativeTerminal({
           </div>
         </form>
       </Modal>
-      {selected && (
-        <div className="native-terminal-status" role="status">
-          <span title={selected.cwd}>{selected.cwd}</span>
-          {selected.managedCommand ? (
-            <>
-              {selected.managedCommand.commandPid !== undefined && (
-                <span>
-                  {t('command pid {pid}', {
-                    pid: selected.managedCommand.commandPid,
-                  })}
-                </span>
-              )}
-              {selected.pid !== undefined && (
-                <span>{t('pty pid {pid}', { pid: selected.pid })}</span>
-              )}
-            </>
-          ) : selected.pid !== undefined ? (
-            <span>{t('process pid {pid}', { pid: selected.pid })}</span>
-          ) : null}
-          <span title={selected.exitReason}>
-            <Status value={status(selected)} />
-            {!selected.managedCommand &&
-            selected.exitReason &&
-            selected.exitReason !== status(selected)
-              ? ` · ${selected.exitReason}`
-              : ''}
-          </span>
-          {notice && <span>{notice}</span>}
-        </div>
-      )}
     </section>
   );
 }

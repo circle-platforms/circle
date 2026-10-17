@@ -146,16 +146,18 @@ export function DeliveryPanel({
           )}
         </p>
       )}
-      <p>{auth ? t('GitHub connected') : t('GitHub login required')}</p>
-      <NavLink to="/page/extensions?plugin=github">
-        {t('manage GitHub plugin')}
-      </NavLink>
-      <Button
-        disabled={busy}
-        onClick={() => refresh().catch((e) => setError(String(e)))}
-      >
-        {t('connection and PR status')}
-      </Button>
+      <div className="native-delivery-connection">
+        <span>{auth ? t('GitHub connected') : t('GitHub login required')}</span>
+        <NavLink to="/page/extensions?plugin=github">
+          {t('manage GitHub plugin')}
+        </NavLink>
+        <Button
+          disabled={busy}
+          onClick={() => refresh().catch((e) => setError(String(e)))}
+        >
+          {t('refresh status')}
+        </Button>
+      </div>
       {pr && (
         <p>
           <Button disabled={!onOpenExternal} onClick={() => open(pr.url)}>

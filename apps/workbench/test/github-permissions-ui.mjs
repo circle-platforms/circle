@@ -77,7 +77,8 @@ try {
           )
           .waitFor();
         assert.match(await details.innerText(), /repo, workflow/);
-        assert.match(await card.innerText(), /GitHub CLI/);
+        // Which program signs in is an internal detail and stays off the card.
+        assert.doesNotMatch(await card.innerText(), /GitHub CLI/);
         await page.screenshot({
           path: `${out}/${language}-${theme}-${width}-reported.png`,
         });
@@ -91,8 +92,8 @@ try {
         await details
           .getByText(
             label(
-              'GitHub reported no OAuth scopes.',
-              'GitHub 实际回报没有 OAuth 权限范围。',
+              'GitHub reported no permissions.',
+              'GitHub 没有回报任何权限。',
             ),
             { exact: false },
           )

@@ -17,14 +17,18 @@ export function workspaceLabel(
       !!agent.task,
   );
   if (!owners.length) return workspace.name;
+  // The worker names the copy; a reviewer only reads it.
+  const workers = owners.filter((agent) => agent.task?.role !== 'reviewer');
   const names = [
     ...new Set(
-      owners
+      (workers.length ? workers : owners)
         .map((agent) => agent.name.trim())
         .filter((name) => !!name && !GENERATED_TASK_DIRECTORY.test(name)),
     ),
   ];
+  // The generated folder name and the worktree are internals: say whose
+  // isolated copy of the project this is.
   return names.length
-    ? t('agent workspace: {name}', { name: names.join(', ') })
-    : t('agent workspace');
+    ? t('isolated copy for {name}', { name: names.join(', ') })
+    : t('isolated task copy');
 }

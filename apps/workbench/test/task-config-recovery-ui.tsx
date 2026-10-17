@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { TasksPanel } from '../src/features/TasksPanel';
+import { TaskLimitsSettings } from '../src/features/TaskLimitsSettings';
 import { setLanguage } from '../src/i18n';
 import { applyTheme } from '../src/theme';
 import '../src/styles/app.css';
@@ -74,6 +75,12 @@ Object.assign(window, {
     },
   },
 });
+// The panel and the settings page section, as the app shows them on two screens.
 createRoot(document.getElementById('root')!).render(
-  <TasksPanel sessionId="synthetic-parent" onSession={() => {}} />,
+  <>
+    <TasksPanel sessionId="synthetic-parent" onSession={() => {}} />
+    <div className="page settings-page">
+      <TaskLimitsSettings sessionId="synthetic-parent" />
+    </div>
+  </>,
 );

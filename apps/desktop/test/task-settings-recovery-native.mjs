@@ -228,7 +228,7 @@ try {
   await openHistoryAndTasks();
   const panel = page.locator('.tasks-panel:visible');
   await panel
-    .getByText('fix collaboration limits in settings before starting tasks', {
+    .getByText('the task limit needs fixing in settings', {
       exact: false,
     })
     .waitFor();
@@ -272,10 +272,22 @@ try {
   receipt.checks.push(
     'malformed configuration preserves original window and stored history; queued task does not run',
   );
-  await panel.locator('.task-settings summary').click();
-  await panel.getByLabel('active agents', { exact: true }).fill('2');
-  await panel.getByRole('button', { name: 'save limits', exact: true }).click();
+  // The panel sends the person to the settings page, where the limit is kept.
   await panel
+    .getByRole('button', { name: 'open settings', exact: true })
+    .click();
+  const limitsSection = page.getByRole('region', {
+    name: 'parallel tasks',
+    exact: true,
+  });
+  await limitsSection.getByLabel('agents at once').fill('2');
+  await limitsSection
+    .getByRole('button', { name: 'save', exact: true })
+    .click();
+  await limitsSection.getByText('saved', { exact: true }).waitFor();
+  await openHistoryAndTasks();
+  await page
+    .locator('.tasks-panel:visible')
     .getByText('limits repaired; start queued tasks when ready', {
       exact: true,
     })

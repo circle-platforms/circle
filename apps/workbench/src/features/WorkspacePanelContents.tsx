@@ -57,7 +57,13 @@ export function WorkspacePanelContents({
   onSession: (id: string) => void;
   onTask: (id: string) => void;
 }) {
-  const { runtime, notify } = useRuntime();
+  const { runtime, snapshot, notify } = useRuntime();
+  const workspaceRoot = snapshot.workspaces.find(
+    (workspace) =>
+      workspace.id ===
+      snapshot.sessions.find((session) => session.id === sessionId)
+        ?.workspaceId,
+  )?.path;
   const initial = kind === 'terminal' ? 'terminal' : 'original';
   const [tab, setTab] = useState(initial);
   const [visited, setVisited] = useState<Set<string>>(() => new Set([initial]));
@@ -77,17 +83,17 @@ export function WorkspacePanelContents({
     kind === 'terminal'
       ? [
           { id: 'terminal', label: t('terminal') },
-          { id: 'original', label: t('history') },
+          { id: 'original', label: t('command history') },
         ]
       : kind === 'changes'
         ? [
             { id: 'original', label: t('session changes') },
-            { id: 'git', label: t('git workspace') },
+            { id: 'git', label: t('git') },
             { id: 'delivery', label: t('automatic delivery') },
           ]
         : [
             { id: 'original', label: t('activity') },
-            { id: 'tasks', label: t('collaboration tasks') },
+            { id: 'tasks', label: t('tasks') },
             { id: 'debug', label: t('debug') },
           ];
   const openExternal = (url: string) => {
@@ -232,6 +238,7 @@ export function WorkspacePanelContents({
                   ) : item.id === 'debug' ? (
                     <DebugPanel
                       sourceRequest={debugSourceRequest}
+                      workspaceRoot={workspaceRoot}
                       onOpenTerminal={onOpenTerminal}
                       sessionId={sessionId}
                       embedded

@@ -75,27 +75,18 @@ export function TaskReviewForm({
           .finally(() => setBusy(false));
       }}
     >
-      <h4>{t('independent human review')}</h4>
+      <h4>{t('your review')}</h4>
       <p>
         {t(
-          'confirm each criterion using observed evidence; this records your review without claiming an automatic test passed',
+          'tick each criterion and say what you saw. this records your review; it does not run tests.',
         )}
       </p>
-      {identity ? (
-        <details className="task-technical">
-          <summary>{t('patch identity')}</summary>
-          <p>
-            <code>{identity.head}</code>
-            <br />
-            <code>{identity.sha256}</code>
-          </p>
-        </details>
-      ) : (
-        <p role="status">{t('review requires the recorded patch identity')}</p>
+      {!identity && (
+        <p role="status">{t('the changes are not ready to review yet')}</p>
       )}
       {stale && (
         <p role="alert">
-          {t('the task changed; reopen its current result before reviewing')}
+          {t('the task changed since you opened it')}
           <Button
             disabled={!identity}
             onClick={() => {
@@ -110,7 +101,7 @@ export function TaskReviewForm({
               );
             }}
           >
-            {t('load current patch and recheck criteria')}
+            {t('load the latest changes')}
           </Button>
         </p>
       )}

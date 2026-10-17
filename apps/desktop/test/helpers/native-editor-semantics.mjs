@@ -104,7 +104,7 @@ export async function runNativeEditorSemantics({
           .includes('value=2'),
       'range replacement must update selected digit',
     );
-    await page.getByText('unsaved buffer', { exact: true }).waitFor();
+    await page.getByText('unsaved changes', { exact: true }).waitFor();
     assert.equal(
       await disk(),
       initial,

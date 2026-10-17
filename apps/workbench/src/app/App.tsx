@@ -52,7 +52,11 @@ import {
 } from 'lucide-react';
 import { useRuntime } from './context';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
-import { historyMessages, visibleSessions } from '../model/session-management';
+import {
+  historyMessages,
+  taskWorkspaceIds,
+  visibleSessions,
+} from '../model/session-management';
 import { workspaceLabel } from '../model/workspace-label';
 import type {
   Attachment,
@@ -1257,7 +1261,16 @@ export function App() {
                   </DropdownMenu.Root>
                 )}
                 {!home && (
-                  <span className="project-chip" title={workspace.path}>
+                  <span
+                    className="project-chip"
+                    title={
+                      taskWorkspaceIds(snapshot.sessions, snapshot.agents).has(
+                        workspace.id,
+                      )
+                        ? undefined
+                        : workspace.path
+                    }
+                  >
                     <Folder size={12} />
                     {workspaceLabel(workspace, snapshot.agents)}
                     {workspace.branch && (

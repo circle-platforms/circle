@@ -1,3 +1,4 @@
+import { taskWorkspaceIds } from '../model/session-management';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -185,7 +186,10 @@ export function Home({
     };
     rememberHomeComposer(remembered.current);
   }, [draft, attachments, model, effort, mode, project?.id, requestedId]);
-  const projects = homeProjects(snapshot.workspaces).filter((item) =>
+  const taskFolders = taskWorkspaceIds(snapshot.sessions, snapshot.agents);
+  const projects = homeProjects(
+    snapshot.workspaces.filter((item) => !taskFolders.has(item.id)),
+  ).filter((item) =>
     (item.name + ' ' + item.path)
       .toLowerCase()
       .includes(query.trim().toLowerCase()),

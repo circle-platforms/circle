@@ -1825,7 +1825,7 @@ try {
         await page.keyboard.press(`${modifier}+v`);
         await page
           .locator('.file-view')
-          .getByText('unsaved buffer', { exact: true })
+          .getByText('unsaved changes', { exact: true })
           .waitFor();
         await page.keyboard.press(`${modifier}+s`);
         await waitFor(

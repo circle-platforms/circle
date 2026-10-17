@@ -225,7 +225,9 @@ try {
       await page
         .locator('#inspector-terminal-terminal')
         .waitFor({ state: 'visible' });
-      await page.getByRole('tab', { name: 'history', exact: true }).click();
+      await page
+        .getByRole('tab', { name: 'command history', exact: true })
+        .click();
       assert.equal(
         await page.locator('#inspector-terminal-terminal').count(),
         1,
@@ -285,9 +287,7 @@ try {
       await page
         .getByRole('button', { name: 'changes panel', exact: true })
         .click();
-      await page
-        .getByRole('tab', { name: 'git workspace', exact: true })
-        .click();
+      await page.getByRole('tab', { name: 'git', exact: true }).click();
       await page
         .locator('#inspector-changes-git')
         .waitFor({ state: 'visible' });

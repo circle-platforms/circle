@@ -180,9 +180,6 @@ export async function runNativeGitHubSettingsJourney({
       true,
     );
     card = await openPlugin();
-    await card
-      .getByText('authorization application: GitHub CLI', { exact: true })
-      .waitFor();
     await card.getByText('GitHub login required', { exact: true }).waitFor();
     await card
       .getByRole('heading', { name: 'GitHub account', exact: true })
@@ -192,7 +189,7 @@ export async function runNativeGitHubSettingsJourney({
       exact: true,
     });
     assert.equal(await repositories.inputValue(), '');
-    await expand(card, 'credential storage');
+    await expand(card, 'sign-in');
     const storage = card.locator('select');
     assert.equal(await storage.count(), 1);
     assert.deepEqual(
@@ -203,8 +200,8 @@ export async function runNativeGitHubSettingsJourney({
         })),
       ),
       [
-        { value: 'encrypted', text: 'secure storage' },
-        { value: 'session', text: 'this session only' },
+        { value: 'encrypted', text: 'stay signed in on this computer' },
+        { value: 'session', text: 'sign out when Circle closes' },
       ],
     );
     await storage.selectOption('session');

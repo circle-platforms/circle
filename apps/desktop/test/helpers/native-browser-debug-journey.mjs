@@ -43,9 +43,7 @@ export async function runNativeBrowserDebugJourney({
     );
   const observed = { checks: [] };
   try {
-    await panel
-      .getByRole('tab', { name: 'page debugger', exact: true })
-      .click();
+    await panel.getByRole('tab', { name: 'debugger', exact: true }).click();
     await panel.getByLabel('source URL', { exact: true }).fill(sourceURL);
     await panel
       .getByLabel('breakpoint line', { exact: true })
@@ -148,9 +146,7 @@ export async function runNativeBrowserDebugJourney({
     });
     if ((await diagnosticsToggle.getAttribute('aria-expanded')) !== 'true')
       await diagnosticsToggle.click();
-    await panel
-      .getByRole('tab', { name: 'page debugger', exact: true })
-      .click();
+    await panel.getByRole('tab', { name: 'debugger', exact: true }).click();
     await panel.getByRole('button', { name: 'resume', exact: true }).click();
     await until(
       async () =>

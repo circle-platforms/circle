@@ -55,18 +55,26 @@ try {
             await origin.textContent(),
             source === 'child' ? /Login agent/ : /parent-project/,
           );
+          // A child source says it is an agent's; the parent shows its workspace
+          // by name, and both keep the full owner and folder for assistive tech.
+          if (source === 'child')
+            assert.match(
+              await origin.textContent(),
+              lang === 'en' ? /agent source:/ : /Agent 来源/,
+            );
+          else assert.equal(await origin.textContent(), 'parent-project');
           assert.match(
-            await origin.textContent(),
+            await origin.getAttribute('aria-label'),
             source === 'child'
               ? lang === 'en'
-                ? /agent source:/
-                : /Agent 来源/
+                ? /^agent source: .*: \/isolated\//
+                : /^Agent 来源：.*: \/isolated\//
               : lang === 'en'
-                ? /workspace:/
-                : /工作区/,
+                ? /^workspace: parent-project: \/isolated\/parent-project$/
+                : /^工作区：parent-project: \/isolated\/parent-project$/,
           );
           await heading
-            .getByText(lang === 'en' ? 'read-only source' : '只读来源', {
+            .getByText(lang === 'en' ? 'read-only' : '只读', {
               exact: true,
             })
             .waitFor();
@@ -82,7 +90,7 @@ try {
           assert(
             await page
               .getByRole('button', {
-                name: lang === 'en' ? 'save buffer' : '保存缓冲区',
+                name: lang === 'en' ? 'save' : '保存',
                 exact: true,
               })
               .last()
@@ -173,7 +181,7 @@ try {
     assert.equal(await page.locator('.file-source-readonly').count(), 0);
     assert.equal(
       await page
-        .getByRole('button', { name: 'save buffer', exact: true })
+        .getByRole('button', { name: 'save', exact: true })
         .last()
         .isDisabled(),
       false,

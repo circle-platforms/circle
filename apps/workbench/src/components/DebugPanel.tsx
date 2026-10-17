@@ -2,9 +2,10 @@ import {
   DebugSourceLabel,
   DebugBreakpointRow,
   DebugVariableRow,
+  internalFrame,
 } from './DebugRows';
 import { useEffect, useState, useRef } from 'react';
-import { t } from '../i18n';
+import { t, tn } from '../i18n';
 import { copyText } from '../host';
 import { Button, Status } from './common';
 import { DebugToolbar } from './DebugToolbar';
@@ -26,8 +27,11 @@ export function DebugPanel({
   embedded = false,
   sourceRequest,
   onOpenTerminal,
+  workspaceRoot,
 }: {
   sessionId: string;
+  /** Sources inside it are shown relative to it. */
+  workspaceRoot?: string;
   sourceRequest?: { id: string; path: string; line?: number };
   embedded?: boolean;
   onOpenTerminal?: (target: { id: string; epoch: string }) => void;
@@ -91,6 +95,7 @@ export function DebugPanel({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [showInternal, setShowInternal] = useState(false);
   const copyOutput = async () => {
     const current = ticket('session');
     setCopying(true);
@@ -294,9 +299,9 @@ export function DebugPanel({
                 : (statuses[state.status] ?? state.status)
             }
           />
-          {state.status === 'paused' &&
-            state.reason &&
-            state.reason !== 'pause' && <small>{state.reason}</small>}
+          {state.status === 'paused' && pauseReason(state.reason) && (
+            <small>{pauseReason(state.reason)}</small>
+          )}
         </span>
       </div>
       <DebugToolbar
@@ -367,10 +372,12 @@ export function DebugPanel({
           </label>
         </details>
         <details className="debug-attach">
-          <summary>{t('attach')}</summary>
+          <summary>{t('attach to a running process')}</summary>
           <div className="debug-controls">
             <input
               aria-label={t('inspector port')}
+              placeholder={t('inspector port')}
+              title={t('the port given to node --inspect')}
               type="number"
               min="1"
               max="65535"
@@ -415,6 +422,7 @@ export function DebugPanel({
           rows.map((row, i) => (
             <DebugBreakpointRow
               key={`${file}:${i}`}
+              root={workspaceRoot}
               path={file}
               line={row.line}
               verified={row.verified}
@@ -435,24 +443,55 @@ export function DebugPanel({
       <div className="debug-inspection">
         <section className="panel-section">
           <h3>{t('call stack')}</h3>
+          {!frames.length && (
+            <p className="debug-empty">
+              {state.status === 'paused' ? t('loading…') : t('not paused')}
+            </p>
+          )}
           <div className="debug-frames">
-            {frames.map((f) => (
-              <button
-                className="activity-row"
-                key={f.id}
-                onClick={() => void inspect(f)}
-              >
-                <DebugSourceLabel
-                  name={f.name}
-                  path={f.source?.name ?? f.source?.path ?? ''}
-                  line={f.line}
-                />
-              </button>
-            ))}
+            {frames
+              .filter((f) => showInternal || !frameInternal(f))
+              .map((f) => (
+                <button
+                  className={`activity-row${frameInternal(f) ? ' debug-frame-internal' : ''}`}
+                  key={f.id}
+                  onClick={() => void inspect(f)}
+                >
+                  <DebugSourceLabel
+                    name={f.name}
+                    path={framePath(f)}
+                    root={workspaceRoot}
+                    line={f.line}
+                  />
+                </button>
+              ))}
           </div>
+          {frames.some((f) => frameInternal(f)) && (
+            <button
+              type="button"
+              className="debug-internal-toggle"
+              aria-expanded={showInternal}
+              onClick={() => setShowInternal((value) => !value)}
+            >
+              {showInternal
+                ? t('hide runtime frames')
+                : tn(
+                    frames.filter((f) => frameInternal(f)).length,
+                    'show {n} runtime frame',
+                    'show {n} runtime frames',
+                  )}
+            </button>
+          )}
         </section>
         <section className="panel-section">
           <h3>{t('variables')}</h3>
+          {!scopeList.length && !variables.length && (
+            <p className="debug-empty">
+              {state.status === 'paused'
+                ? t('choose a frame to see its variables')
+                : t('not paused')}
+            </p>
+          )}
           {scopeList.map((scope) => (
             <Button
               key={scope.variablesReference}
@@ -484,6 +523,11 @@ export function DebugPanel({
       >
         <input
           aria-label={t('debug expression')}
+          placeholder={
+            state.status === 'paused'
+              ? t('expression to evaluate')
+              : t('pause to evaluate an expression')
+          }
           value={expression}
           onChange={(e) => setExpression(e.target.value)}
         />
@@ -495,18 +539,14 @@ export function DebugPanel({
         <Button disabled={copying} onClick={() => void copyOutput()}>
           {t('copy complete debug output')}
         </Button>
-        {state.adapterPid && (
-          <p className="panel-note">
-            {t('debug adapter process: {pid}', { pid: state.adapterPid })}
-          </p>
-        )}
-        {state.debugTerminals?.map((terminal) => (
+        {state.debugTerminals?.map((terminal, index, all) => (
           <Button
             key={terminal.id}
             disabled={!onOpenTerminal}
             onClick={() => onOpenTerminal?.(terminal)}
           >
-            {t('open debug terminal')} <code>{terminal.id.slice(0, 8)}</code>
+            {t('open debug terminal')}
+            {all.length > 1 ? ` ${index + 1}` : ''}
           </Button>
         ))}
         <pre className="debug-output" aria-label={t('debug output')}>
@@ -515,4 +555,28 @@ export function DebugPanel({
       </section>
     </section>
   );
+}
+function framePath(frame: any): string {
+  return frame.source?.path ?? frame.source?.name ?? '';
+}
+function frameInternal(frame: any): boolean {
+  return (
+    internalFrame(frame.source?.path ?? '') ||
+    internalFrame(frame.source?.name ?? '')
+  );
+}
+/** Why the program stopped, in words; reasons people do not act on stay out. */
+function pauseReason(reason?: string): string {
+  switch (reason) {
+    case 'breakpoint':
+      return t('at a breakpoint');
+    case 'step':
+      return t('after a step');
+    case 'exception':
+      return t('on an exception');
+    case 'entry':
+      return t('at entry');
+    default:
+      return '';
+  }
 }

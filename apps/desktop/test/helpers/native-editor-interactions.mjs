@@ -89,7 +89,7 @@ export async function runNativeEditorInteractions({ page, workspace, output }) {
       async () => (await text()).includes('object.uni'),
       'actual unsaved completion prefix must reach Monaco',
     );
-    await page.getByText('unsaved buffer', { exact: true }).waitFor();
+    await page.getByText('unsaved changes', { exact: true }).waitFor();
     await page.keyboard.press('Control+Space');
     const suggestion = page
       .locator('.suggest-widget.visible .monaco-list-row')

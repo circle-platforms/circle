@@ -998,18 +998,18 @@ try {
         await page
           .locator('.file-view:visible .file-view-toolbar')
           .textContent()
-          .then((text) => text.includes('unsaved buffer')),
+          .then((text) => text.includes('unsaved changes')),
       'unsaved editor buffer',
     );
     const save = activeFile.getByRole('button', {
-      name: 'save to disk',
+      name: 'save',
       exact: true,
     });
     await save.evaluate((node) => (node.dataset.perfTarget = 'save'));
     await arm('click', '[data-perf-target="save"]', {
       selector: '.file-view-toolbar',
       file: { path: 'README.md', sourceDirectory },
-      text: 'no unsaved changes',
+      text: 'all changes saved',
     });
     await save.click();
     await finish('save');

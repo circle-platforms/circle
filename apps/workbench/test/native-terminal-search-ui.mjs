@@ -73,6 +73,10 @@ try {
             'true',
           );
         }
+        // Find opens on demand from the terminal bar.
+        await page
+          .getByRole('button', { name: 'find in terminal', exact: true })
+          .click();
         const find = page.getByRole('textbox', {
           name: 'find in terminal',
           exact: true,
@@ -282,7 +286,7 @@ try {
     await footer.waitFor();
     assert.equal(
       await footer.textContent(),
-      reason === 'exit 1' ? 'exit 1' : 'exit 1 · ' + reason,
+      reason === 'exit 1' ? 'exited (code 1)' : 'exited (code 1) · ' + reason,
       'identical terminal exit reasons appear once while distinct details remain visible',
     );
     assert.equal(
@@ -326,6 +330,10 @@ try {
     'an already requested replay may finish while its actual view is hidden',
   );
   await openNativeTerminalInspector(page);
+  // Find opens on demand from the terminal bar.
+  await page
+    .getByRole('button', { name: 'find in terminal', exact: true })
+    .click();
   const find = page.getByRole('textbox', {
     name: 'find in terminal',
     exact: true,

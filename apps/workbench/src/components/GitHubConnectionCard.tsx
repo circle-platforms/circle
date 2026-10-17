@@ -123,9 +123,6 @@ export function GitHubConnectionCard({
         </>
       ) : (
         <>
-          <p className="panel-note">
-            {t('authorization application')}: GitHub CLI
-          </p>
           <p role="status">
             {view.state === 'connected' && view.account
               ? t('connected as {account}', { account: view.account.login })
@@ -160,7 +157,7 @@ export function GitHubConnectionCard({
                 ? t('GitHub has not reported granted permissions.')
                 : permissions.granted.length
                   ? permissions.granted.join(', ')
-                  : t('GitHub reported no OAuth scopes.')}
+                  : t('GitHub reported no permissions.')}
             </p>
           </details>
           {view.repositories.length === 0 && (
@@ -172,7 +169,7 @@ export function GitHubConnectionCard({
           )}
           {view.repositories.length > 0 && (
             <p>
-              {t('Circle allowed repositories')}: {view.repositories.join(', ')}
+              {t('repositories Circle may use')}: {view.repositories.join(', ')}
             </p>
           )}
           {view.storage === 'session' && (
@@ -187,7 +184,7 @@ export function GitHubConnectionCard({
             >
               <summary>{t('connection options')}</summary>
               <label className="field-label">
-                {t('Circle allowed repositories (optional)')}
+                {t('repositories Circle may use (optional)')}
                 <textarea
                   className="input"
                   value={repositories}
@@ -201,7 +198,7 @@ export function GitHubConnectionCard({
               </label>
               <p className="panel-note">
                 {t(
-                  'One owner/repository per line. This Circle allowlist does not change GitHub authorization scopes.',
+                  'One owner/repository per line. This does not change what your GitHub account allows.',
                 )}
               </p>
               {view.state === 'connected' && (
@@ -241,17 +238,21 @@ export function GitHubConnectionCard({
                 className="context-source"
                 open={embedded ? undefined : true}
               >
-                <summary>{t('credential storage')}</summary>
+                <summary>{t('sign-in')}</summary>
                 <label className="field-label">
-                  {t('credential storage')}
+                  {t('remember sign-in')}
                   <select
                     value={storage}
                     onChange={(event) =>
                       setStorage(event.target.value as typeof storage)
                     }
                   >
-                    <option value="encrypted">{t('secure storage')}</option>
-                    <option value="session">{t('this session only')}</option>
+                    <option value="encrypted">
+                      {t('stay signed in on this computer')}
+                    </option>
+                    <option value="session">
+                      {t('sign out when Circle closes')}
+                    </option>
                   </select>
                 </label>
               </details>
@@ -368,7 +369,7 @@ export function GitHubConnectionCard({
           <p className="panel-note">
             {storageUnavailable
               ? t(
-                  'Choose this session only if you want to continue without saving credentials, then start authorization again.',
+                  'To continue without saving your sign-in, choose sign out when Circle closes, then start again.',
                 )
               : expired
                 ? t('Reconnect this GitHub account here. Your edits are kept.')

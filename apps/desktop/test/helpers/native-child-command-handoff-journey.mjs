@@ -450,9 +450,7 @@ export async function runNativeChildCommandHandoffJourney({
     const file = page.locator('.file-view:visible');
     await file.locator('.file-source-readonly').waitFor();
     assert.equal(
-      await file
-        .getByRole('button', { name: 'save to disk', exact: true })
-        .isEnabled(),
+      await file.getByRole('button', { name: 'save', exact: true }).isEnabled(),
       false,
     );
     const doc = await call(page, reviewer.sessionId, 'documents', 'read', {

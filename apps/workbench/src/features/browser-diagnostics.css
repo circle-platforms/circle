@@ -1,42 +1,453 @@
+/* Page diagnostics: one folded row under the page. Open, it is a tab strip with
+   the selected tab's content under it, all inside the panel's width. */
 .browser-diagnostics {
   border-top: 1px solid var(--border);
-  padding: 12px 16px;
+  padding: 0 10px;
   flex-shrink: 0;
   min-width: 0;
+  font-size: var(--ui-small);
 }
-.browser-diagnostic-tools,
+.browser-diagnostics.open {
+  padding-bottom: 10px;
+}
+.browser-diagnostics-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 34px;
+}
+.browser-diagnostics-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 26px;
+  margin-left: -4px;
+  padding: 0 6px 0 4px;
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  white-space: nowrap;
+}
+.browser-diagnostics-toggle:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.browser-diagnostics-toggle svg {
+  color: var(--muted);
+  transition: transform 0.12s ease;
+}
+.browser-diagnostics-toggle[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+.browser-diagnostics-state {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+.browser-diagnostics-state .status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.browser-diagnostics-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.browser-diagnostics-actions .icon-button,
+.browser-storage-bar .icon-button,
+.browser-storage-list .icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.browser-diagnostics-actions .icon-button[aria-expanded='true'] {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/* Small controls, one height */
+.browser-diagnostics .button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--ui-small);
+}
+.browser-diagnostics input,
+.browser-diagnostics select {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: var(--ui-small);
+}
+.browser-diagnostics input:focus-visible,
+.browser-diagnostics select:focus-visible {
+  outline-offset: 0;
+}
+
+.browser-viewport-form,
+.browser-storage-form,
+.browser-breakpoint-form,
+.browser-storage-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.browser-viewport-form {
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+.browser-viewport-form input {
+  width: 64px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.browser-viewport-form .button:first-of-type {
+  margin-left: auto;
+}
+
 .browser-diagnostic-tabs {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  margin-block: 8px;
+  width: 100%;
+  max-width: 440px;
+  margin-bottom: 8px;
 }
-.browser-diagnostic-tools input {
-  width: 62px;
-  margin-inline-start: 4px;
+.browser-diagnostic-tabs button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+.browser-diagnostic-alert {
+  margin-bottom: 8px;
+  color: var(--negative);
+}
+.browser-diagnostic-alert .context-source {
+  margin: 6px 0 0;
+  padding: 8px;
+  color: var(--fg);
+}
+.browser-diagnostics > .panel-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
 .browser-diagnostic-results {
   max-height: 230px;
+  min-width: 0;
   overflow: auto;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--ui-small);
+}
+.browser-diagnostic-results .panel-note {
+  margin: 6px 0;
+  color: var(--muted);
 }
 .browser-diagnostic-results pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  font-size: var(--code-size);
 }
-.browser-diagnostic-results > div {
-  padding-block: 4px;
+.browser-diagnostic-tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.browser-diagnostic-results .browser-log {
+  margin: 0 0 8px;
+  padding: 8px;
+}
+.browser-log .browser-diagnostic-tools {
+  margin: 8px 0;
+}
+.browser-log pre {
+  max-height: 160px;
+}
+
+/* Console: one line each; opened, the whole message and its stack */
+.browser-console-entry {
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.browser-console-entry summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 2px;
+  cursor: pointer;
+  list-style: none;
+}
+.browser-console-entry summary::-webkit-details-marker {
+  display: none;
+}
+.browser-console-entry summary svg {
+  color: var(--muted);
+  transition: transform 0.12s ease;
+}
+.browser-console-entry[open] summary svg {
+  transform: rotate(90deg);
+}
+.browser-console-level {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--ui-tiny);
+}
+.browser-console-entry[data-level='warning'] .browser-console-level,
+.browser-console-entry[data-level='warn'] .browser-console-level {
+  color: var(--attention);
+}
+.browser-console-entry[data-level='error'] .browser-console-level {
+  color: var(--negative);
+}
+.browser-console-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  font-size: var(--code-size);
+}
+.browser-console-entry[open] summary {
+  align-items: baseline;
+}
+.browser-console-entry[open] .browser-console-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.browser-stack {
+  margin: 0 0 6px 20px;
+  padding: 0;
+  list-style: none;
+}
+.browser-diagnostics .browser-stack-frame {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: var(--code-size);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.browser-diagnostics .browser-stack-frame:hover {
+  background: none;
+  text-decoration: underline;
+}
+.browser-stack-name {
+  color: var(--secondary);
+}
+
+/* Network: method, status, address and time on one line */
+.browser-network,
+.browser-storage-list {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.browser-network li,
+.browser-storage-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+}
+.browser-network li:last-child,
+.browser-storage-list li:last-child {
+  border-bottom: 1px solid var(--border);
+}
+.browser-network button {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 2px;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: var(--code-size);
+  white-space: nowrap;
+}
+.browser-network button:hover .browser-network-url {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.browser-network-method {
+  flex: none;
+  color: var(--muted);
+}
+.browser-network-status {
+  flex: none;
+  color: var(--fg);
+}
+.browser-network li[data-failed] .browser-network-status,
+.browser-network li[data-failed] .browser-network-time {
+  color: var(--negative);
+}
+.browser-network-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--secondary);
+}
+.browser-network-time {
+  flex: none;
+  padding-right: 2px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  font-variant-numeric: tabular-nums;
+}
+.browser-response {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  max-height: 160px;
+  overflow: auto;
+}
+
+/* Storage: kind and refresh, the items, then a row to add or change one */
+.browser-storage-bar {
+  margin-bottom: 6px;
+}
+.browser-storage-bar select {
+  flex: 0 1 180px;
+  min-width: 0;
+}
+.browser-storage-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 2px;
+  text-align: left;
+}
+.browser-storage-item:hover .browser-storage-key {
+  text-decoration: underline;
+}
+.browser-storage-key,
+.browser-storage-value {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--code-size);
+}
+.browser-storage-key {
+  flex: 0 1 40%;
+  color: var(--fg);
+}
+.browser-storage-value {
+  flex: 1;
+  color: var(--secondary);
+}
+.browser-storage-form {
+  flex-wrap: wrap;
+}
+.browser-storage-form input {
+  flex: 1 1 100px;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--code-size);
+}
+
+/* Debugger */
+.browser-diagnostic-results .debug-toolbar {
+  padding: 0 0 8px;
+}
+.browser-breakpoint-form {
+  margin-bottom: 8px;
+}
+.browser-breakpoint-form input {
+  font-family: var(--mono);
+  font-size: var(--code-size);
+}
+.browser-breakpoint-form input:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.browser-breakpoint-form input:nth-child(2) {
+  flex: none;
+  width: 56px;
+  text-align: center;
+}
+.browser-diagnostic-results .context-source {
+  margin: 6px 0;
+  padding: 8px;
+}
+.browser-diagnostic-results .context-source summary {
+  min-width: 0;
+}
+.browser-diagnostic-results .context-source summary .debug-source-label {
+  min-width: 0;
+  margin-left: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg);
+  font-size: var(--ui-small);
+}
+.browser-diagnostic-results .context-source summary .debug-source-label small {
+  margin-left: 0;
+}
+.browser-frame-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.browser-diagnostic-results .debug-evaluate {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.browser-diagnostic-results .debug-evaluate input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--code-size);
+}
+.browser-diagnostic-results .debug-evaluate output {
+  font-family: var(--mono);
+  font-size: var(--code-size);
 }
 .browser-source-preview {
   max-height: 220px;
   overflow: auto;
+  margin: 0 0 8px;
+}
+.browser-source-preview summary {
+  min-width: 0;
+}
+.browser-source-preview summary code {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .browser-source-preview pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
 /* Keep page controls and live diagnostics inside the inspector's available
    height. The native guest may shrink; logs must not extend below the window. */
 .native-browser:has(.browser-diagnostics) {
@@ -56,13 +467,10 @@
   max-height: 60%;
   overflow: auto;
 }
-.browser-diagnostics > button,
-.browser-diagnostic-tools,
-.browser-diagnostic-tabs,
-.browser-diagnostics > p {
+.browser-diagnostics > * {
   flex-shrink: 0;
 }
-.browser-diagnostic-results {
+.browser-diagnostics > .browser-diagnostic-results {
   flex: 1 1 180px;
   min-height: 90px;
 }
@@ -71,8 +479,4 @@
   min-height: 24px;
   max-height: 25%;
   overflow: auto;
-}
-
-.browser-diagnostic-settings {
-  flex-shrink: 0;
 }

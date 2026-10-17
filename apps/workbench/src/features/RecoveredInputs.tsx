@@ -6,6 +6,7 @@ import { useRuntime } from '../app/context';
 import { Button } from '../components/common';
 import { t, tn, dateLocale } from '../i18n';
 import './task-panel.css';
+import './recovered-inputs.css';
 interface Recovery {
   version: number;
   items: RecoveredInput[];
@@ -22,7 +23,7 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string[]>([]);
   const [memoryOnly, setMemoryOnly] = useState<string[]>([]);
-  const [confirmed, setConfirmed] = useState<string[]>([]);
+  const [discarding, setDiscarding] = useState<string | null>(null);
   const generation = useRef(0);
   async function refresh(epoch = generation.current) {
     try {
@@ -44,7 +45,7 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
     setRecovery(null);
     setCopied([]);
     setMemoryOnly([]);
-    setConfirmed([]);
+    setDiscarding(null);
     setError('');
     setNotice('');
     setBusy(false);
@@ -79,15 +80,12 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
       await refresh(epoch);
       if (action === 'returnToDraft') {
         const payload = result.items.find((item) => item.id === input.id);
-        if (!payload)
-          throw Error(
-            t('recovered input payload is unavailable; recovery copy retained'),
-          );
+        if (!payload) throw Error(t('this message can no longer be restored'));
         const current = runtime
           .getSnapshot()
           .sessions.find((item) => item.id === sessionId);
         if (!current || current.lifecycle === 'deleting')
-          throw Error(t('conversation unavailable; recovery copy retained'));
+          throw Error(t('this conversation is closed; the message is kept'));
         const patch = recoveredDraft(
           payload,
           current.draft,
@@ -97,23 +95,17 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
         setCopied((current) => [...current, input.id]);
         if (!persisted) {
           setMemoryOnly((current) => [...current, input.id]);
-          setError(
-            t(
-              'draft is available only in memory; saving failed and the recovery copy is retained',
-            ),
-          );
+          setError(t('added to the message box, but it could not be saved'));
         } else
           setNotice(
             t(
-              'copied to draft without sending; recovery copy retained until you explicitly remove it',
+              'added to the message box. this copy stays until you discard it.',
             ),
           );
-      } else
-        setNotice(
-          action === 'resume'
-            ? t('input explicitly resumed')
-            : t('recovery copy explicitly removed'),
-        );
+      } else {
+        setDiscarding(null);
+        setNotice(action === 'resume' ? t('sent') : t('discarded'));
+      }
     } catch (err) {
       if (epoch === generation.current) {
         // A failed version check must not silently retry or target a newer input.
@@ -137,120 +129,110 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
     ) {
       setMemoryOnly([]);
       setError('');
-      setNotice(
-        t('draft saved; recovery copy retained until you explicitly remove it'),
-      );
-    } else
-      setError(
-        t(
-          'draft is available only in memory; saving failed and the recovery copy is retained',
-        ),
-      );
+      setNotice(t('message box saved'));
+    } else setError(t('added to the message box, but it could not be saved'));
   }
   if (recovery?.items.length === 0 && !error && !notice) return null;
   return (
     <section
       className="recovered-inputs task-recovery"
-      aria-label={t('recovered queued inputs')}
+      aria-label={t('unsent messages')}
     >
       <header className="task-section-heading">
-        <strong>{t('recovered queued inputs')}</strong>
-        <Button disabled={busy} onClick={() => void refresh()}>
-          {t('refresh')}
-        </Button>
+        <strong>{t('unsent messages')}</strong>
       </header>
-      <p className="panel-note">{t('nothing is sent automatically')}</p>
+      <p className="panel-note">
+        {t(
+          'these were waiting when Circle closed. nothing is sent until you choose.',
+        )}
+      </p>
       {error && (
         <div role="alert">
-          <p>{t('input recovery unavailable')}</p>
+          <p>
+            {error.includes(
+              t('added to the message box, but it could not be saved'),
+            )
+              ? error
+              : t('could not restore unsent messages')}
+          </p>
           <details className="task-technical">
-            <summary>{t('error details')}</summary>
+            <summary>{t('details')}</summary>
             <pre>{error}</pre>
           </details>
         </div>
       )}
       {notice && <p role="status">{notice}</p>}
       {memoryOnly.length > 0 && (
-        <Button onClick={retrySaving}>
-          {t('retry saving recovered draft')}
-        </Button>
+        <Button onClick={retrySaving}>{t('try saving again')}</Button>
       )}
-      {recovery?.items.map((input) => (
-        <article key={input.id}>
-          <div className="task-recovery-title">
-            <strong>
-              {input.kind === 'steer'
-                ? t('steering input')
-                : t('follow-up input')}
-            </strong>
-            <small>
-              {new Date(input.createdAt).toLocaleString(dateLocale())} ·{' '}
-              {tn(
-                input.payload.attachments?.length ?? 0,
-                '{n} media attachment',
-                '{n} media attachments',
-              )}
-            </small>
-          </div>
-          <details className="task-technical">
-            <summary>{t('inspect full recovered input')}</summary>
-            <pre>{input.payload.text}</pre>
-            <p>{t('original display')}</p>
-            <pre>{input.payload.display}</pre>
-            {Object.entries(input.payload.pastes ?? {}).map(([id, text]) => (
-              <details key={id}>
-                <summary>
-                  {t('pasted text')} {id}
-                </summary>
-                <pre>{text}</pre>
-              </details>
-            ))}
-            {input.payload.attachments?.map((media, index) => (
-              <p key={index}>
-                {media.filename} · {media.mime_type}
-              </p>
-            ))}
-          </details>
-          <div className="tasks-actions">
-            <Button
-              disabled={busy}
-              onClick={() => void resolve(input, 'resume')}
-            >
-              {t('resume this input')}
-            </Button>
-            <Button
-              disabled={busy || copied.includes(input.id)}
-              onClick={() => void resolve(input, 'returnToDraft')}
-            >
-              {memoryOnly.includes(input.id)
-                ? t('copied in memory; not saved')
-                : copied.includes(input.id)
-                  ? t('copied to draft')
-                  : t('return input to draft')}
-            </Button>
-          </div>
-          <label className="task-check">
-            <input
-              type="checkbox"
-              checked={confirmed.includes(input.id)}
-              onChange={(event) =>
-                setConfirmed((current) =>
-                  event.target.checked
-                    ? [...current, input.id]
-                    : current.filter((id) => id !== input.id),
-                )
-              }
-            />
-            {t('I checked this input; remove its recovery copy')}
-          </label>
-          <Button
-            disabled={busy || !confirmed.includes(input.id)}
-            onClick={() => void resolve(input, 'discard')}
-          >
-            {t('discard recovered input')}
-          </Button>
-        </article>
-      ))}
+      {recovery?.items.map((input) => {
+        // The message itself, not the folded form with paste placeholders.
+        const shown = (input.payload.text || input.payload.display).trim();
+        const attachments = input.payload.attachments?.length ?? 0;
+        return (
+          <article key={input.id}>
+            <div className="task-recovery-title">
+              <strong className="recovered-input-text" title={shown}>
+                {shown.split('\n')[0]}
+              </strong>
+              <small>
+                {new Date(input.createdAt).toLocaleString(dateLocale())}
+                {attachments > 0 &&
+                  ' · ' + tn(attachments, '{n} attachment', '{n} attachments')}
+              </small>
+            </div>
+            <details className="task-technical">
+              <summary>{t('show full message')}</summary>
+              <pre>{input.payload.text}</pre>
+              {Object.entries(input.payload.pastes ?? {}).map(([id, text]) => (
+                <details key={id}>
+                  <summary>{t('pasted text')}</summary>
+                  <pre>{text}</pre>
+                </details>
+              ))}
+              {input.payload.attachments?.map((media, index) => (
+                <p key={index}>{media.filename}</p>
+              ))}
+            </details>
+            {discarding === input.id ? (
+              <div className="tasks-actions recovered-input-confirm">
+                <span>{t('discard this message?')}</span>
+                <Button
+                  className="danger"
+                  disabled={busy}
+                  onClick={() => void resolve(input, 'discard')}
+                >
+                  {t('discard')}
+                </Button>
+                <Button disabled={busy} onClick={() => setDiscarding(null)}>
+                  {t('keep')}
+                </Button>
+              </div>
+            ) : (
+              <div className="tasks-actions">
+                <Button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => void resolve(input, 'resume')}
+                >
+                  {t('send now')}
+                </Button>
+                <Button
+                  disabled={busy || copied.includes(input.id)}
+                  onClick={() => void resolve(input, 'returnToDraft')}
+                >
+                  {copied.includes(input.id)
+                    ? t('added to the message box')
+                    : t('edit in message box')}
+                </Button>
+                <Button disabled={busy} onClick={() => setDiscarding(input.id)}>
+                  {t('discard')}
+                </Button>
+              </div>
+            )}
+          </article>
+        );
+      })}
     </section>
   );
 }

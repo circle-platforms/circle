@@ -449,6 +449,23 @@ for (const file of [
       .digest('hex');
   } catch {}
 }
+// A task's conversation is folded under the conversation that started it.
+// Open that list when it is closed, then return the task's row.
+const taskRow = async (ownerId, childId) => {
+  const link = page
+    .locator(`.sidebar .session-link[href="#/session/${childId}"]`)
+    .first();
+  if (await link.isVisible()) return link;
+  const toggle = page
+    .locator(
+      `.sidebar .session-row:has(> .session-link[href="#/session/${ownerId}"]) + .session-tasks-toggle`,
+    )
+    .first();
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true')
+    await toggle.click();
+  await link.waitFor();
+  return link;
+};
 const screenshot = async (name) => {
   const navigation = await page.evaluate(async () => {
     const { snapshot } = await window.circleDesktop.runtimeState();
@@ -930,9 +947,7 @@ try {
         ),
       'actual index hunk staged',
     );
-    await panel
-      .getByRole('button', { name: 'staged changes', exact: true })
-      .click();
+    await panel.getByRole('button', { name: 'staged', exact: true }).click();
     await panel
       .getByRole('button', { name: 'git-probe.txt', exact: true })
       .click();
@@ -1146,13 +1161,17 @@ try {
     await panel.getByRole('button', { name: /GET 200.*api\/data/ }).click();
     await panel.getByText('JOURNEY_NETWORK_OK', { exact: true }).waitFor();
     await panel.getByRole('tab', { name: 'storage', exact: true }).click();
-    await panel.getByText('journey: before', { exact: true }).waitFor();
+    await panel
+      .getByRole('button', { name: 'journey: before', exact: true })
+      .waitFor();
     await panel.getByLabel('storage key', { exact: true }).fill('journey');
     await panel.getByLabel('storage value', { exact: true }).fill('after');
     await panel
       .getByRole('button', { name: 'save storage item', exact: true })
       .click();
-    await panel.getByText('journey: after', { exact: true }).waitFor();
+    await panel
+      .getByRole('button', { name: 'journey: after', exact: true })
+      .waitFor();
     // Read back via the native page debugger, not the renderer origin.
     const actual = await page.evaluate(
       ({ sessionId, origin }) =>
@@ -1170,7 +1189,9 @@ try {
     await panel
       .getByRole('button', { name: 'save storage item', exact: true })
       .click();
-    await panel.getByText('journey: before', { exact: true }).waitFor();
+    await panel
+      .getByRole('button', { name: 'journey: before', exact: true })
+      .waitFor();
     const restored = await page.evaluate(
       ({ sessionId, origin }) =>
         window.circleDesktop.browserDiagnostics(sessionId, {
@@ -1186,11 +1207,12 @@ try {
       'test-modified browser data is restored on the real page',
     );
 
-    const viewportSettings = panel.locator('details').filter({
-      has: page.locator('summary', { hasText: 'viewport and developer tools' }),
+    const viewportSettings = panel.getByRole('button', {
+      name: 'viewport',
+      exact: true,
     });
-    if (!(await viewportSettings.evaluate((node) => node.open)))
-      await viewportSettings.locator('summary').click();
+    if ((await viewportSettings.getAttribute('aria-expanded')) !== 'true')
+      await viewportSettings.click();
     await panel.getByLabel('viewport width', { exact: true }).fill('375');
     await panel.getByLabel('viewport height', { exact: true }).fill('812');
     await panel
@@ -1356,12 +1378,7 @@ try {
           );
           if (pending.command?.includes('git status'))
             gitApprovalObserved = true;
-          await page
-            .locator(
-              `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
-            )
-            .first()
-            .click();
+          await (await taskRow(sessionId, record.runtimeSessionId)).click();
           await page
             .getByRole('button', { name: 'allow once', exact: true })
             .first()
@@ -1385,12 +1402,7 @@ try {
               '-' +
               iteration,
           );
-          await page
-            .locator(
-              `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
-            )
-            .first()
-            .click();
+          await (await taskRow(sessionId, record.runtimeSessionId)).click();
           await page
             .getByRole('button', { name: 'allow once', exact: true })
             .first()

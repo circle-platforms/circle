@@ -118,7 +118,7 @@ try {
           .selectOption('readonly');
         await page
           .getByRole('combobox', {
-            name: language === 'en' ? 'execution resource' : '执行资源',
+            name: language === 'en' ? 'kind of work' : '工作类型',
             exact: true,
           })
           .selectOption('build');
@@ -304,7 +304,7 @@ try {
     'technical patch identifiers stay folded until explicitly inspected',
   );
   await review
-    .getByRole('button', { name: 'inspect task artifacts', exact: true })
+    .getByRole('button', { name: 'view results', exact: true })
     .click();
   await review
     .locator('.task-artifacts')

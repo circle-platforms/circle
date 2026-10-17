@@ -890,6 +890,12 @@ pre {
   font-size: var(--ui-tiny);
   margin-top: 9px;
 }
+/* A call with nothing to show says so in one muted line, not an empty box. */
+.tool-empty {
+  color: var(--muted);
+  font-size: var(--ui-small);
+  margin: 4px 0 2px;
+}
 .data-block h4 {
   font-size: var(--ui-tiny);
   font-weight: 500;
@@ -2700,21 +2706,28 @@ pre {
   position: fixed;
   bottom: 25px;
 }
+/* Brief notices sit in the empty middle of the top bar, clear of every
+   panel's header, close button and toolbar. */
 .toast {
   position: fixed;
-  top: 72px;
-  right: 20px;
+  top: 9px;
+  left: 50%;
+  right: auto;
   bottom: auto;
+  transform: translateX(-50%);
   z-index: 120;
-  max-width: calc(100vw - 40px);
+  width: max-content;
+  max-width: min(440px, calc(100vw - 32px));
   background: var(--surface);
   border: 1px solid var(--border);
-  box-shadow: 0 6px 24px color-mix(in srgb, var(--fg) 12%, transparent);
-  padding: 12px 18px;
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--fg) 10%, transparent);
+  padding: 6px 14px;
   border-radius: 8px;
   font-size: var(--ui-small);
-  line-height: 1.7;
+  line-height: 1.5;
   color: var(--fg);
+  text-align: center;
+  overflow-wrap: anywhere;
   pointer-events: none;
 }
 .search-results {
@@ -3401,6 +3414,20 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--ui-tiny);
+}
+.native-browser-footer > .status {
+  flex: none;
+}
+.native-browser-footer > .browser-page-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.native-browser-footer > .status + .browser-page-title::before {
+  content: '·';
+  margin-right: 7px;
 }
 .browser-insecure,
 .browser-operating {
@@ -4456,7 +4483,8 @@ pre {
   color: var(--negative);
   font-size: var(--ui-small);
 }
-.tool-running {
+/* Only the folded line's command. A running card is .tool-call.tool-running and keeps its width. */
+.tool-summary .tool-running {
   max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;

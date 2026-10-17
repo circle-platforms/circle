@@ -74,4 +74,6 @@ export const terminal: Record<string, string> = {
     '同时设置两项检查时，两项都通过后才会显示服务就绪',
   'keep a development service with its logs, readiness checks and restart action':
     '统一查看开发服务的日志、就绪状态，并随时停止或重启',
+  'exited (code {code})': '已退出（代码 {code}）',
+  'close search': '关闭查找',
 };

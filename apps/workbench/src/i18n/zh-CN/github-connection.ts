@@ -41,7 +41,7 @@ export const githubConnection: Record<string, string> = {
   'permissions reported by GitHub': 'GitHub 实际回报的权限',
   'GitHub has not reported granted permissions.':
     'GitHub 尚未回报已授予的权限。',
-  'GitHub reported no OAuth scopes.': 'GitHub 实际回报没有 OAuth 权限范围。',
+  'GitHub reported no permissions.': 'GitHub 没有回报任何权限。',
 
   'the draft changed; review it before trying the example again':
     '草稿已变化，请检查后再试用示例',
@@ -83,8 +83,8 @@ export const githubConnection: Record<string, string> = {
   'GitHub integration could not be loaded.': '无法加载 GitHub 集成。',
   'Secure credential storage is unavailable.': '安全凭据存储暂不可用。',
   'GitHub action could not be completed.': '未能完成 GitHub 操作。',
-  'Choose this session only if you want to continue without saving credentials, then start authorization again.':
-    '如需继续且不保存凭据，请自行选择“仅本次会话”，再开始授权。',
+  'To continue without saving your sign-in, choose sign out when Circle closes, then start again.':
+    '如果不想保存登录，请选择“Circle 关闭时退出登录”，然后重新开始。',
   'Review the connection and try the action again. Your edits are kept.':
     '请检查连接后重试，已保留你的编辑内容。',
 
@@ -92,8 +92,7 @@ export const githubConnection: Record<string, string> = {
   'No repositories selected; repository actions are unavailable.':
     '尚未选择仓库，暂不能执行仓库操作。',
   'save allowed repositories': '保存允许访问的仓库',
-  'authorization application': '授权应用',
-  'Circle allowed repositories (optional)': 'Circle 允许访问的仓库（可选）',
+  'repositories Circle may use (optional)': 'Circle 可以使用的仓库（可选）',
   'start GitHub authorization': '开始 GitHub 授权',
   'copy authorization code': '复制授权码',
   'GitHub connection': 'GitHub 连接',
@@ -103,16 +102,17 @@ export const githubConnection: Record<string, string> = {
     'GitHub 连接不可用；请在 Circle 桌面版启用内置 GitHub 扩展。',
   'connected as {account}': '已连接账户 {account}',
   'waiting for GitHub authorization': '等待 GitHub 授权',
-  'Circle allowed repositories': 'Circle 允许访问的仓库',
+  'repositories Circle may use': 'Circle 可以使用的仓库',
   'GitHub connection lasts only for this Circle session.':
     'GitHub 连接仅在本次 Circle 会话中有效。',
-  'One owner/repository per line. This Circle allowlist does not change GitHub authorization scopes.':
-    '每行填写一个 owner/repository。此 Circle 允许列表不会改变 GitHub 授权范围。',
-  'credential storage': '凭据保存方式',
-  'secure storage': '安全存储',
-  'this session only': '仅本次会话',
+  'One owner/repository per line. This does not change what your GitHub account allows.':
+    '每行一个 owner/repository。这不会改变你的 GitHub 账号权限。',
+  'sign-in': '登录方式',
+  'stay signed in on this computer': '在这台电脑上保持登录',
+  'sign out when Circle closes': 'Circle 关闭时退出登录',
   'disconnect GitHub': '断开 GitHub 连接',
   'Disconnected from Circle. GitHub authorization revocation is not confirmed.':
     '已从 Circle 断开连接。尚未确认 GitHub 授权已撤销。',
   'manage GitHub connection in settings': '在设置中管理 GitHub 连接',
+  'remember sign-in': '记住登录',
 };

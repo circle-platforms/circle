@@ -1,0 +1,13 @@
+.recovered-inputs .recovered-input-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recovered-inputs .recovered-input-confirm {
+  align-items: center;
+}
+.recovered-inputs .recovered-input-confirm > span {
+  color: var(--secondary);
+}

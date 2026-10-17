@@ -6,6 +6,7 @@ import {
   ArrowUpFromLine,
   Square,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { IconButton } from './common';
 import { t } from '../i18n';
 import './debug-panel.css';
@@ -25,32 +26,40 @@ export function DebugToolbar({
   stop?: boolean;
   continueLabel?: string;
 }) {
+  // Run, step and end, grouped as debuggers usually lay them out.
+  const groups: [DebugAction, string, LucideIcon][][] = [
+    [
+      ['continue', continueLabel ?? t('continue'), Play],
+      ['pause', t('pause'), Pause],
+    ],
+    [
+      ['next', t('step over'), StepForward],
+      ['stepIn', t('step into'), ArrowDownToLine],
+      ['stepOut', t('step out'), ArrowUpFromLine],
+    ],
+    stop ? [['stop', t('stop'), Square]] : [],
+  ];
   return (
     <div
       className="debug-toolbar"
       role="toolbar"
-      aria-label={t('project debug')}
+      aria-label={t('debug controls')}
     >
-      {(
-        [
-          ['continue', continueLabel ?? t('continue'), Play],
-          ['pause', t('pause'), Pause],
-          ['next', t('step over'), StepForward],
-          ['stepIn', t('step into'), ArrowDownToLine],
-          ['stepOut', t('step out'), ArrowUpFromLine],
-          ['stop', t('stop'), Square],
-        ] as const
-      )
-        .filter(([action]) => stop || action !== 'stop')
-        .map(([action, label, Icon]) => (
-          <IconButton
-            key={action}
-            label={label}
-            disabled={busy || !enabled(action)}
-            onClick={() => onAction(action)}
-          >
-            <Icon size={16} />
-          </IconButton>
+      {groups
+        .filter((group) => group.length)
+        .map((group, index) => (
+          <span className="debug-toolbar-group" key={index}>
+            {group.map(([action, label, Icon]) => (
+              <IconButton
+                key={action}
+                label={label}
+                disabled={busy || !enabled(action)}
+                onClick={() => onAction(action)}
+              >
+                <Icon size={15} aria-hidden="true" />
+              </IconButton>
+            ))}
+          </span>
         ))}
     </div>
   );

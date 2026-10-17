@@ -283,7 +283,7 @@ export async function runNativeGitJourney({
         .getByRole('button', { name: names.hunks, exact: true })
         .click();
     };
-    await showHunks('working tree');
+    await showHunks('unstaged');
     await panel
       .locator('.native-git-hunk')
       .filter({ hasText: 'KEEP_STAGED' })
@@ -299,7 +299,7 @@ export async function runNativeGitJourney({
     const preservedIndex = await git('diff', '--cached', '--binary');
     assert.ok(!preservedIndex.includes('DISCARD_WORKING'));
     assert.match(preservedIndex, /MANUAL_FIRST/);
-    await showHunks('working tree');
+    await showHunks('unstaged');
     page.once('dialog', (dialog) => dialog.accept());
     await panel
       .locator('.native-git-hunk')
@@ -316,7 +316,7 @@ export async function runNativeGitJourney({
       'UNSELECTED_MUST_NOT_COMMIT\n',
     );
     await snapshot('git-native-hunk-discard-preserves-index');
-    await showHunks('staged changes');
+    await showHunks('staged');
     await panel
       .locator('.native-git-hunk')
       .filter({ hasText: 'KEEP_STAGED' })
@@ -327,7 +327,7 @@ export async function runNativeGitJourney({
       'real hunk unstage',
     );
     const firstOnlyIndex = await git('diff', '--cached', '--binary');
-    await showHunks('working tree');
+    await showHunks('unstaged');
     page.once('dialog', (dialog) => dialog.accept());
     await panel
       .locator('.native-git-hunk')
@@ -410,10 +410,8 @@ export async function runNativeGitJourney({
       .click({ position: { x: 80, y: 10 } });
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.insertText('FEATURE\nSIDE\n');
-    await viewer.getByText('unsaved buffer', { exact: true }).waitFor();
-    await viewer
-      .getByRole('button', { name: 'save to disk', exact: true })
-      .click();
+    await viewer.getByText('unsaved changes', { exact: true }).waitFor();
+    await viewer.getByRole('button', { name: 'save', exact: true }).click();
     await until(
       async () =>
         (await readFile(path.join(root, names.conflict), 'utf8')) ===

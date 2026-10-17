@@ -461,7 +461,7 @@ try {
       ?.textContent.includes('console.log'),
   );
   await historyPage
-    .getByText('no unsaved changes', { exact: true })
+    .getByText('all changes saved', { exact: true })
     .waitFor({ state: 'attached' });
   await historyPage.locator('.editor-project-diagnostics > summary').click();
   await historyPage.getByText('diagnostic history', { exact: true }).click();
@@ -1011,7 +1011,7 @@ try {
     await switched.locator('.native-code-editor .view-lines').first().click();
     await switched.keyboard.press(`${modifier}+a`);
     await switched.keyboard.insertText(text);
-    await switched.getByText('unsaved buffer', { exact: true }).waitFor();
+    await switched.getByText('unsaved changes', { exact: true }).waitFor();
   };
   const settle = async (predicate, label) => {
     const deadline = Date.now() + 10000;
@@ -1035,9 +1035,7 @@ try {
       'real pre-save document read is held',
     );
     await replaceDraft(initial + '// first owned save\n');
-    await switched
-      .getByRole('button', { name: 'save to disk', exact: true })
-      .click();
+    await switched.getByRole('button', { name: 'save', exact: true }).click();
     if (pendingReply) {
       await diskUntil(
         'main.ts',
@@ -1050,7 +1048,7 @@ try {
         fetch('/__editor_workspace?release-read=1', { method: 'POST' }),
       );
     }
-    await switched.getByText('no unsaved changes', { exact: true }).waitFor();
+    await switched.getByText('all changes saved', { exact: true }).waitFor();
     assert.equal(
       readFileSync(join(workspace, 'main.ts'), 'utf8'),
       initial + '// first owned save\n',
@@ -1077,7 +1075,7 @@ try {
         .waitFor();
       assert(
         await switched
-          .getByRole('button', { name: 'save to disk', exact: true })
+          .getByRole('button', { name: 'save', exact: true })
           .isDisabled(),
       );
       assert.equal(
@@ -1091,7 +1089,7 @@ try {
       await settle(
         async () =>
           await switched
-            .getByRole('button', { name: 'save to disk', exact: true })
+            .getByRole('button', { name: 'save', exact: true })
             .isEnabled(),
         'old own snapshot must not create a conflict',
       );
@@ -1102,10 +1100,8 @@ try {
         0,
       );
     }
-    await switched
-      .getByRole('button', { name: 'save to disk', exact: true })
-      .click();
-    await switched.getByText('no unsaved changes', { exact: true }).waitFor();
+    await switched.getByRole('button', { name: 'save', exact: true }).click();
+    await switched.getByText('all changes saved', { exact: true }).waitFor();
     assert.equal(
       readFileSync(join(workspace, 'main.ts'), 'utf8'),
       initial + '// next manual draft\n',
@@ -1115,10 +1111,8 @@ try {
     );
     await switched.getByRole('button', { name: 'edit', exact: true }).click();
     await replaceDraft(initial);
-    await switched
-      .getByRole('button', { name: 'save to disk', exact: true })
-      .click();
-    await switched.getByText('no unsaved changes', { exact: true }).waitFor();
+    await switched.getByRole('button', { name: 'save', exact: true }).click();
+    await switched.getByText('all changes saved', { exact: true }).waitFor();
     assert.equal(readFileSync(join(workspace, 'main.ts'), 'utf8'), initial);
   }
   console.log(
@@ -1129,7 +1123,7 @@ try {
     fetch('/__editor_workspace?touch=1', { method: 'POST' }),
   );
   await switched
-    .getByText('no unsaved changes', { exact: true })
+    .getByText('all changes saved', { exact: true })
     .waitFor({ state: 'hidden' });
   await switched.waitForFunction(
     () =>
@@ -1184,7 +1178,7 @@ try {
   );
   await switched.keyboard.press(`${modifier}+s`);
   await diskUntil('main.ts', (text) => text.includes('dirty file A'));
-  await switched.getByText('no unsaved changes', { exact: true }).waitFor();
+  await switched.getByText('all changes saved', { exact: true }).waitFor();
   assert.doesNotMatch(
     readFileSync(join(workspace, 'main.ts'), 'utf8'),
     /isolated project instructions|rules B saved/,
@@ -1234,13 +1228,13 @@ try {
       .getByText('main.ts', { exact: true })
       .waitFor();
     await batch
-      .getByText(zh ? '缓冲区尚未保存' : 'unsaved buffer', { exact: true })
+      .getByText(zh ? '未保存的修改' : 'unsaved changes', { exact: true })
       .waitFor();
     batchCalls.length = 0;
     batchCommitCounts.clear();
     interruptNextBatch = true;
     const saveAll = batch.getByRole('button', {
-      name: zh ? '保存所有缓冲区' : 'save all buffers',
+      name: zh ? '全部保存' : 'save all',
       exact: true,
     });
     await saveAll.click();
@@ -1270,7 +1264,7 @@ try {
     assert.equal(
       await batch
         .getByRole('button', {
-          name: zh ? '保存到磁盘' : 'save to disk',
+          name: zh ? '保存' : 'save',
           exact: true,
         })
         .isDisabled(),
@@ -1300,7 +1294,7 @@ try {
     await saveAll.click();
     await saveAll.waitFor({ state: 'hidden' });
     await batch
-      .getByText(zh ? '没有未保存的修改' : 'no unsaved changes', {
+      .getByText(zh ? '所有修改已保存' : 'all changes saved', {
         exact: true,
       })
       .waitFor();
@@ -1371,7 +1365,7 @@ try {
       ?.textContent.replaceAll('\u00a0', ' ')
       .includes('external write 1'),
   );
-  await viewer.getByText('no unsaved changes', { exact: true }).waitFor();
+  await viewer.getByText('all changes saved', { exact: true }).waitFor();
   await viewer.locator('.view-lines').first().click();
   await viewer.keyboard.press(`${modifier}+End`);
   await viewer.keyboard.type('// human draft');
@@ -1379,7 +1373,7 @@ try {
     .getByRole('button', { name: 'external write', exact: true })
     .click();
   await viewer
-    .getByText('file changed on disk; buffer kept', { exact: true })
+    .getByText('file changed on disk; your changes are kept', { exact: true })
     .waitFor();
   await viewer
     .getByRole('button', { name: 'review disk changes', exact: true })
@@ -1402,10 +1396,8 @@ try {
     .getByRole('button', { name: 'review disk changes', exact: true })
     .click();
   await viewer.locator('.monaco-diff-editor').waitFor();
-  await viewer
-    .getByRole('button', { name: 'save to disk', exact: true })
-    .click();
-  await viewer.getByText('no unsaved changes', { exact: true }).waitFor();
+  await viewer.getByRole('button', { name: 'save', exact: true }).click();
+  await viewer.getByText('all changes saved', { exact: true }).waitFor();
   assert.match(readFileSync(join(workspace, 'main.ts'), 'utf8'), /human draft/);
   await viewer
     .getByRole('button', { name: 'external rename', exact: true })
@@ -1428,13 +1420,16 @@ try {
     .getByRole('button', { name: 'external delete', exact: true })
     .click();
   await viewer
-    .getByText('file removed on disk; buffer kept', { exact: true })
+    .getByText('file deleted on disk; your changes are kept', { exact: true })
     .waitFor();
   assert.equal(existsSync(join(workspace, 'moved.ts')), false);
   await viewer
-    .getByRole('button', { name: 'restore file from buffer', exact: true })
+    .getByRole('button', {
+      name: 'restore file with your changes',
+      exact: true,
+    })
     .click();
-  await viewer.getByText('no unsaved changes', { exact: true }).waitFor();
+  await viewer.getByText('all changes saved', { exact: true }).waitFor();
   assert.match(
     readFileSync(join(workspace, 'moved.ts'), 'utf8'),
     /recovered deleted draft/,
@@ -1468,7 +1463,7 @@ try {
     .click();
   await viewer
     .locator('.editor-project-diagnostics > summary')
-    .getByText('language service', { exact: true })
+    .getByText('code checks', { exact: true })
     .waitFor();
   assert.equal(
     await viewer.locator('.editor-project-diagnostics').getAttribute('role'),
@@ -1488,7 +1483,7 @@ try {
     () =>
       document
         .querySelector(
-          '.editor-project-diagnostics [aria-label="language service"]',
+          '.editor-project-diagnostics [aria-label="code checks status"]',
         )
         ?.getAttribute('aria-busy') === 'false',
   );

@@ -144,6 +144,10 @@ export async function runNativeTerminalContextJourney({
     nodePid = Number(actualOutput.match(/CONTINUITY_NODE_PID\s+(\d+)/)?.[1]);
     assert(Number.isSafeInteger(nodePid) && nodePid > 0);
     process.kill(nodePid, 0);
+    // Find opens on demand from the terminal bar.
+    await panel
+      .getByRole('button', { name: 'find in terminal', exact: true })
+      .click();
     const find = panel.getByRole('textbox', {
       name: 'find in terminal',
       exact: true,
@@ -279,6 +283,10 @@ export async function runNativeTerminalContextJourney({
     assert.equal(reopened.status, 'running');
     // AUTO accessibility may intentionally omit the auxiliary DOM tree.
     // Search the actual parsed VT buffer and copy its real selection instead.
+    // Find opens on demand from the terminal bar.
+    await reopenedPanel
+      .getByRole('button', { name: 'find in terminal', exact: true })
+      .click();
     const reopenedFind = reopenedPanel.getByRole('textbox', {
       name: 'find in terminal',
       exact: true,

@@ -25,8 +25,8 @@ function fixture() {
 test('verified generated task workspaces use the actual agent name in both languages', () => {
   const { workspace, owner } = fixture();
   for (const [lang, expected] of [
-    ['en', 'agent workspace: Implement login'],
-    ['zh-CN', 'Agent 工作区：Implement login'],
+    ['en', 'isolated copy for Implement login'],
+    ['zh-CN', 'Implement login 的隔离副本'],
   ] as const) {
     setLanguage(lang);
     assert.equal(workspaceLabel(workspace, [owner]), expected);
@@ -38,7 +38,21 @@ test('verified generated task workspaces use the actual agent name in both langu
   );
   assert.equal(
     workspaceLabel(workspace, [{ ...owner, name: generated }]),
-    'agent workspace',
+    'isolated task copy',
+  );
+  // A reviewer reads the worker's copy; the worker names it.
+  assert.equal(
+    workspaceLabel(workspace, [
+      owner,
+      {
+        ...owner,
+        id: 'review-child',
+        resourceSessionId: 'review-child',
+        name: 'review: Implement login',
+        task: { ...owner.task, role: 'reviewer' as const },
+      },
+    ]),
+    'isolated copy for Implement login',
   );
 });
 test('a folder-shaped name never invents ownership, roles or navigation changes', () => {

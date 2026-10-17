@@ -86,15 +86,8 @@ export async function runActualBridgeDevToolsHandoff({
     )?.variablesReference;
     assert(reference, 'the real old paused local scope must exist');
     evidence.previousPauseEpoch = paused.pauseEpoch;
-    const details = panel.locator('details').filter({
-      has: page
-        .locator('summary')
-        .filter({ hasText: /^viewport and developer tools$/ }),
-    });
-    if (!(await details.evaluate((node) => node.open)))
-      await details.locator(':scope > summary').click();
     await panel
-      .getByRole('button', { name: 'hand over to devtools', exact: true })
+      .getByRole('button', { name: 'open developer tools', exact: true })
       .click();
     await until(
       async () => (await read()).state.owner === 'devtools',

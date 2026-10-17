@@ -24,12 +24,25 @@
 .debug-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 0 0 16px;
 }
+.debug-toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
 .debug-toolbar .icon-button {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
+}
+.debug-toolbar .icon-button:disabled:hover {
+  background: none;
+  color: var(--secondary);
 }
 .debug-run > .debug-controls {
   margin-top: 12px;
@@ -80,8 +93,7 @@
   text-align: left;
 }
 .debug-inspection code,
-.debug-output,
-.debug-breakpoint {
+.debug-output {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -104,8 +116,7 @@
   margin: 8px 0;
 }
 .debug-argument,
-.debug-entry-option,
-.debug-breakpoint {
+.debug-entry-option {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -120,12 +131,71 @@
   flex-basis: 100%;
   overflow-wrap: anywhere;
 }
-.debug-breakpoint > .button:first-child {
+.debug-breakpoint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  padding: 2px 0;
+  font-size: var(--ui-small);
+}
+.debug-breakpoint:first-of-type {
+  margin-top: 8px;
+}
+.debug-breakpoint-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--negative);
+}
+.debug-breakpoint[data-verified='false'] .debug-breakpoint-dot {
+  background: transparent;
+  border: 1px solid var(--muted);
+}
+.debug-breakpoint-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-align: left;
+  font-family: var(--mono);
+  font-size: var(--ui-small);
+  color: var(--fg);
+  padding: 4px 0;
+}
+.debug-breakpoint-open:hover {
+  color: var(--accent);
+}
+.debug-breakpoint small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.debug-breakpoint .icon-button {
+  width: 24px;
+  height: 24px;
+  opacity: 0.7;
+}
+.debug-breakpoint .icon-button:hover {
+  opacity: 1;
+}
+.debug-empty {
+  color: var(--muted);
+  font-size: var(--ui-small);
+  margin: 6px 0 10px;
+}
+.debug-frame-internal {
+  opacity: 0.6;
+}
+.debug-internal-toggle {
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.debug-internal-toggle:hover {
+  color: var(--fg);
 }
 
 .debug-source-label {
@@ -141,4 +211,8 @@
 }
 .debug-variable-row {
   min-width: 0;
+}
+.debug-variable-row .button:disabled {
+  opacity: 1;
+  cursor: default;
 }

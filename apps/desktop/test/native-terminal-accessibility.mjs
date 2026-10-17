@@ -165,6 +165,10 @@ try {
     axRows.some((n) => rowText(n).includes('AX_LINE_')),
     'actual AX row text is exposed through its text descendants',
   );
+  // Find opens on demand from the terminal bar.
+  await panel
+    .getByRole('button', { name: 'find in terminal', exact: true })
+    .click();
   const find = panel.getByRole('textbox', {
     name: 'find in terminal',
     exact: true,

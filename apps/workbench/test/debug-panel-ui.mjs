@@ -165,9 +165,12 @@ try {
     0,
     'source navigation only prepares debugging; the user still chooses launch',
   );
-  await page
-    .getByText('debug adapter process: 4242', { exact: true })
-    .waitFor();
+  await page.getByRole('button', { name: /^open debug terminal/ }).waitFor();
+  assert.equal(
+    (await page.locator('.debug-panel').innerText()).includes('4242'),
+    false,
+    'the debug adapter process id stays out of the panel',
+  );
   const callsBeforeTerminalLink = await page.evaluate(
     () =>
       window.debugFixture

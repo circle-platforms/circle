@@ -34,8 +34,7 @@ try {
         );
         await surface
           .getByRole('button', {
-            name:
-              language === 'en' ? 'return input to draft' : '复制输入到草稿',
+            name: language === 'en' ? 'edit in message box' : '放入输入框编辑',
             exact: true,
           })
           .waitFor();
@@ -66,11 +65,11 @@ try {
         assert(
           (
             await recovery.locator('.task-recovery-title small').textContent()
-          ).endsWith(language === 'en' ? '1 media attachment' : '1 个媒体附件'),
+          ).endsWith(language === 'en' ? '1 attachment' : '1 个附件'),
           'a single recovered attachment has the correct localized count',
         );
         const discard = recovery.getByRole('button', {
-          name: language === 'en' ? 'discard recovered input' : '移除恢复副本',
+          name: language === 'en' ? 'discard' : '丢弃',
           exact: true,
         });
         const assertActionVisible = async () => {
@@ -108,7 +107,14 @@ try {
           await recovery.evaluate((node) => node.scrollTop > 0),
           'expanded long content scrolls within the recovery area',
         );
-        await recovery.getByRole('checkbox').check();
+        // Discarding asks first; the confirmation keeps its action in view too.
+        await discard.click();
+        await recovery
+          .getByRole('button', {
+            name: language === 'en' ? 'keep' : '保留',
+            exact: true,
+          })
+          .waitFor();
         assert.equal(await discard.isEnabled(), true);
         await assertActionVisible();
         await surface.screenshot({
@@ -125,7 +131,7 @@ try {
     `${server.resolvedUrls.local[0]}test/recovered-input-ui.html`,
   );
   const copy = page.getByRole('button', {
-    name: 'return input to draft',
+    name: 'edit in message box',
     exact: true,
   });
   await copy.waitFor();
@@ -138,7 +144,7 @@ try {
   await copy.click();
   await page
     .getByText(
-      'copied to draft without sending; recovery copy retained until you explicitly remove it',
+      'added to the message box. this copy stays until you discard it.',
       { exact: true },
     )
     .waitFor();
@@ -151,16 +157,19 @@ try {
     await page.getByRole('status', { name: 'restored media' }).textContent(),
     'data:image/png;base64,AAEC',
   );
-  const discard = page.getByRole('button', {
-    name: 'discard recovered input',
-    exact: true,
-  });
-  assert.equal(await discard.isDisabled(), true);
-  await page.getByRole('checkbox').check();
+  const discard = page.getByRole('button', { name: 'discard', exact: true });
+  // The first click only asks; nothing is resolved until it is confirmed.
   await discard.click();
-  await page
-    .getByText('recovery copy explicitly removed', { exact: true })
-    .waitFor();
+  await page.getByText('discard this message?', { exact: true }).waitFor();
+  assert.equal(
+    (await page.evaluate(() => window.calls)).filter(
+      (c) =>
+        c.payload.method === 'resolve' && c.payload.params.action === 'discard',
+    ).length,
+    0,
+  );
+  await discard.click();
+  await page.getByText('discarded', { exact: true }).waitFor();
   const actions = (await page.evaluate(() => window.calls))
     .filter((c) => c.payload.method === 'resolve')
     .map((c) => c.payload.params.action);
@@ -170,16 +179,16 @@ try {
     `${server.resolvedUrls.local[0]}test/recovered-input-ui.html?storageFailure=1`,
   );
   await failurePage
-    .getByRole('button', { name: 'return input to draft', exact: true })
+    .getByRole('button', { name: 'edit in message box', exact: true })
     .click();
   await failurePage
     .getByRole('alert')
-    .filter({ hasText: 'draft is available only in memory' })
+    .filter({ hasText: 'added to the message box, but it could not be saved' })
     .waitFor();
   assert.equal(
     await failurePage
       .getByText(
-        'copied to draft without sending; recovery copy retained until you explicitly remove it',
+        'added to the message box. this copy stays until you discard it.',
         { exact: true },
       )
       .count(),
@@ -196,20 +205,15 @@ try {
   );
   assert.equal(
     await failurePage
-      .getByRole('button', { name: 'copied in memory; not saved', exact: true })
+      .getByRole('button', { name: 'added to the message box', exact: true })
       .isDisabled(),
     true,
   );
   await failurePage.evaluate(() => window.allowRecoveryStorage());
   await failurePage
-    .getByRole('button', { name: 'retry saving recovered draft', exact: true })
+    .getByRole('button', { name: 'try saving again', exact: true })
     .click();
-  await failurePage
-    .getByText(
-      'draft saved; recovery copy retained until you explicitly remove it',
-      { exact: true },
-    )
-    .waitFor();
+  await failurePage.getByText('message box saved', { exact: true }).waitFor();
   assert.equal(
     await failurePage
       .getByRole('textbox', { name: 'restored draft' })

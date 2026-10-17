@@ -251,7 +251,27 @@ export const developer: Record<string, string> = {
   'next page': '下一页',
   'browser log could not be saved': '浏览器日志未能保存',
   'browser log is unavailable': '浏览器日志不可用',
-  'diagnostic history cursor did not advance': '诊断记录的读取位置没有前进',
-  'saved document identity changed': '已保存文件的身份发生了变化',
   'debug output cursor did not advance': '调试输出的读取位置没有前进',
+  'unsent messages': '未发送的消息',
+  'these were waiting when Circle closed. nothing is sent until you choose.':
+    'Circle 关闭时这些消息还在排队。你选择之前不会发送。',
+  'could not restore unsent messages': '无法恢复未发送的消息',
+  'try saving again': '重新保存',
+  '{n} attachment': '{n} 个附件',
+  '{n} attachments': '{n} 个附件',
+  'show full message': '查看完整消息',
+  'discard this message?': '丢弃这条消息？',
+  'send now': '立即发送',
+  'added to the message box': '已放入输入框',
+  'edit in message box': '放入输入框编辑',
+  'this message can no longer be restored': '这条消息已无法恢复',
+  'this conversation is closed; the message is kept':
+    '这个会话已关闭，消息仍会保留',
+  'added to the message box, but it could not be saved':
+    '已放入输入框，但未能保存',
+  'added to the message box. this copy stays until you discard it.':
+    '已放入输入框。丢弃之前，这份副本会一直保留。',
+  sent: '已发送',
+  discarded: '已丢弃',
+  'message box saved': '输入框已保存',
 };

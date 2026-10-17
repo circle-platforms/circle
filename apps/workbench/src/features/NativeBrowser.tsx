@@ -423,7 +423,11 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
         ) : (
           <Status value={opened ? 'native browser' : 'not opened'} />
         )}
-        {state?.title ? <span>{state.title}</span> : null}
+        {state?.title ? (
+          <span className="browser-page-title" title={state.title}>
+            {state.title}
+          </span>
+        ) : null}
       </div>
       {opened && (
         <BrowserDiagnostics

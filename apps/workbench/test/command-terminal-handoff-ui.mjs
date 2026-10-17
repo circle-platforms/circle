@@ -516,6 +516,9 @@ fs.writeFileSync('human-pid', String(process.pid));
           true,
         );
         await terminal
+          .getByRole('button', { name: 'find in terminal', exact: true })
+          .click();
+        await terminal
           .getByRole('textbox', { name: 'find in terminal', exact: true })
           .fill('READY');
         await terminal

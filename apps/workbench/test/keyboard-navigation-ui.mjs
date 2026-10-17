@@ -104,7 +104,7 @@ try {
       .querySelector('.native-code-editor .view-lines')
       ?.textContent.includes('ξ'),
   );
-  await page.getByText('unsaved buffer', { exact: true }).waitFor();
+  await page.getByText('unsaved changes', { exact: true }).waitFor();
   await page.keyboard.press('Shift+ArrowLeft');
   const sourceSelection = () =>
     sourceInput.evaluate((node) =>

@@ -456,7 +456,7 @@ try {
   await page.locator('.tool-head').click();
   await page
     .locator('.tool-toolbar')
-    .getByRole('button', { name: 'input', exact: true })
+    .getByRole('button', { name: 'arguments', exact: true })
     .click();
   await select(a);
   await select(b);
@@ -470,7 +470,7 @@ try {
   );
   assert.equal(
     await page.locator('.tool-toolbar button.active').innerText(),
-    'input',
+    'arguments',
   );
   checks.push('individual tool folds and tool input tabs are per session');
   await setViewport(app, page, {

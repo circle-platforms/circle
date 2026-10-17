@@ -316,7 +316,7 @@ try {
   await select('a');
   holdStatus = true;
   await delivery
-    .getByRole('button', { name: 'connection and PR status', exact: true })
+    .getByRole('button', { name: 'refresh status', exact: true })
     .click();
   const statusDeadline = Date.now() + 8000;
   while (!releaseStatus) {

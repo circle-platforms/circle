@@ -22,11 +22,11 @@ function artifactLabel(kind: string): string {
     case 'acceptance':
       return t('acceptance report');
     case 'transcript':
-      return t('task transcript');
+      return t('conversation');
     case 'runtime-events':
-      return t('runtime event log');
+      return t('activity log');
     case 'verification':
-      return t('verification evidence');
+      return t('verification');
     default:
       return kind;
   }
@@ -93,7 +93,7 @@ export function TaskArtifacts({
           }
         }}
       >
-        {t('inspect task artifacts')}
+        {open ? t('hide results') : t('view results')}
       </Button>
       {open && (
         <div>
@@ -110,22 +110,13 @@ export function TaskArtifacts({
           </div>
           {value && (
             <>
-              <details className="task-technical">
-                <summary>{t('artifact details')}</summary>
-                <p>
-                  {value.kind} · {t('{n} bytes', { n: value.byteLength })}
-                </p>
-                <code>{value.sha256}</code>
-              </details>
               <DataBlock
                 title={artifactLabel(value.kind)}
                 value={value.content}
               />
               {value.truncated && (
                 <p role="status">
-                  {t(
-                    'partial artifact · read the remaining content before reviewing',
-                  )}
+                  {t('only part is shown; load the rest before you review')}
                 </p>
               )}
               <div className="tasks-actions">
@@ -134,7 +125,7 @@ export function TaskArtifacts({
                     disabled={busy}
                     onClick={() => void load(value.id, value.nextOffset)}
                   >
-                    {t('read remaining artifact')}
+                    {t('load the rest')}
                   </Button>
                 )}
                 <Button
@@ -145,9 +136,7 @@ export function TaskArtifacts({
                     )
                   }
                 >
-                  {value.truncated
-                    ? t('copy shown content')
-                    : t('copy complete artifact')}
+                  {value.truncated ? t('copy shown part') : t('copy')}
                 </Button>
               </div>
             </>

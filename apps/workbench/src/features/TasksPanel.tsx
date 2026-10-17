@@ -10,10 +10,11 @@ import { ChevronRight, Users } from 'lucide-react';
 import type { TaskRecord } from '../../../desktop/src/workspace/task-store';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import { Button, DataBlock, Status } from '../components/common';
+import { TASK_LIMITS_CHANGED } from './TaskLimitsSettings';
 import { PendingOperations } from './PendingOperations';
 import { TaskArtifacts } from './TaskArtifacts';
 import { TaskReviewForm } from './TaskReviewForm';
-import { t } from '../i18n';
+import { t, tn } from '../i18n';
 import './task-panel.css';
 
 interface Limits {
@@ -37,7 +38,6 @@ export function TasksPanel({
     (TaskRecord & { runtimeSessionId?: string })[]
   >([]);
   const [limits, setLimits] = useState<Limits | null>(null);
-  const [agents, setAgents] = useState('8');
   // Drafts belong to their session: one typed in another session is never submitted here.
   const [prompt, setPrompt] = useOwnerState(sessionId, '');
   const [criteria, setCriteria] = useOwnerState(sessionId, '');
@@ -55,6 +55,7 @@ export function TasksPanel({
   const [requiresStart, setRequiresStart] = useState(false);
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [manualRefresh, setManualRefresh] = useState(0);
   const instruction = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     if (createOpen) instruction.current?.focus();
@@ -115,20 +116,23 @@ export function TasksPanel({
     setError('');
     void refresh();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribe = subscribeWorkspace((event) => {
-      if (event.sessionId !== sessionId || event.service !== 'tasks') return;
+    const later = () => {
       clearTimeout(timer);
       timer = setTimeout(() => void refresh(), 80);
+    };
+    const unsubscribe = subscribeWorkspace((event) => {
+      if (event.sessionId !== sessionId || event.service !== 'tasks') return;
+      later();
     });
+    // The limits are edited on the settings page.
+    window.addEventListener(TASK_LIMITS_CHANGED, later);
     return () => {
       generation.current++;
       clearTimeout(timer);
       unsubscribe();
+      window.removeEventListener(TASK_LIMITS_CHANGED, later);
     };
   }, [sessionId, refresh]);
-  useEffect(() => {
-    if (limits) setAgents(String(limits.agents));
-  }, [limits?.agents]);
   const run = async (action: () => Promise<unknown>) => {
     const epoch = generation.current;
     setBusy(true);
@@ -145,10 +149,10 @@ export function TasksPanel({
   return (
     <section
       className={`tasks-panel task-panel${embedded ? ' task-panel-embedded' : ''}`}
-      aria-label={t('collaboration tasks')}
+      aria-label={t('tasks')}
     >
       <header className="task-panel-toolbar">
-        {!embedded && <strong>{t('collaboration tasks')}</strong>}
+        {!embedded && <strong>{t('tasks')}</strong>}
         <Button
           type="button"
           aria-expanded={createOpen}
@@ -159,7 +163,14 @@ export function TasksPanel({
         >
           {createOpen ? t('close task form') : t('new task')}
         </Button>
-        <Button onClick={() => void refresh()}>{t('refresh')}</Button>
+        <Button
+          onClick={() => {
+            setManualRefresh((value) => value + 1);
+            void refresh();
+          }}
+        >
+          {t('refresh')}
+        </Button>
         <Button
           type="button"
           disabled={
@@ -232,12 +243,12 @@ export function TasksPanel({
                 setAccess(event.target.value as 'write' | 'readonly')
               }
             >
-              <option value="write">{t('isolated write worktree')}</option>
-              <option value="readonly">{t('read-only baseline')}</option>
+              <option value="write">{t('can edit, in its own copy')}</option>
+              <option value="readonly">{t('read only')}</option>
             </select>
           </label>
           <label>
-            {t('execution resource')}
+            {t('kind of work')}
             <select
               value={resource}
               onChange={(event) =>
@@ -247,7 +258,7 @@ export function TasksPanel({
               <option value="agent">{t('agent')}</option>
               <option value="build">{t('build')}</option>
               <option value="browser">{t('browser')}</option>
-              <option value="ui">{t('foreground interface')}</option>
+              <option value="ui">{t('app interface')}</option>
             </select>
           </label>
           {tasks.length > 0 && (
@@ -267,7 +278,7 @@ export function TasksPanel({
               >
                 {tasks.map((task) => (
                   <option key={task.spec.id} value={task.spec.id}>
-                    {task.spec.prompt.slice(0, 80)}
+                    {firstLine(task.spec.prompt).slice(0, 80)}
                   </option>
                 ))}
               </select>
@@ -296,17 +307,34 @@ export function TasksPanel({
         </p>
       )}
       {configurationError && (
-        <p role="alert" className="tasks-error">
-          {t('fix collaboration limits in settings before starting tasks')}{' '}
-          {configurationError}
-        </p>
+        <div role="alert" className="tasks-error tasks-settings-alert">
+          <p>
+            {t('the task limit needs fixing in settings')}
+            <small>{configurationError}</small>
+          </p>
+          <Button
+            type="button"
+            onClick={() => {
+              window.location.hash = '#/page/settings';
+            }}
+          >
+            {t('open settings')}
+          </Button>
+        </div>
       )}
       {error && !configurationError && (
         <p role="alert" className="tasks-error">
           {error}
         </p>
       )}
-      {!tasks.length && !error && <p>{t('no collaboration tasks')}</p>}
+      <PendingOperations
+        key={sessionId}
+        sessionId={sessionId}
+        refreshKey={manualRefresh}
+      />
+      {!tasks.length && !error && (
+        <p className="tasks-empty">{t('no tasks yet')}</p>
+      )}
       <div className="tasks-list panel-section first">
         {tasks.map((task) => (
           <article
@@ -319,12 +347,16 @@ export function TasksPanel({
               <summary className="activity-row task-row">
                 <Users size={15} aria-hidden="true" />
                 <span>
-                  <strong>
-                    {task.spec.prompt
-                      .split(/\r?\n/)
-                      .find((line) => line.trim()) ?? task.spec.prompt}
-                  </strong>
-                  <small>{t('attempt {n}', { n: task.attempt })}</small>
+                  <strong>{firstLine(task.spec.prompt)}</strong>
+                  {task.attempt > 1 && (
+                    <small>
+                      {tn(
+                        task.attempt - 1,
+                        'retried once',
+                        'retried {n} times',
+                      )}
+                    </small>
+                  )}
                 </span>
                 <Status value={task.state} />
                 <ChevronRight
@@ -335,35 +367,24 @@ export function TasksPanel({
               </summary>
               <div className="task-detail">
                 <p className="task-instruction">{task.spec.prompt}</p>
-                <details className="task-technical">
-                  <summary>{t('task details and acceptance')}</summary>
-                  <code>{task.spec.id}</code>
-                  <dl>
-                    <dt>{t('baseline')}</dt>
-                    <dd>
-                      <code>{task.spec.baseline}</code>
-                    </dd>
-                    <dt>{t('workspace')}</dt>
-                    <dd>{task.worktree ?? task.spec.workspace}</dd>
-                    {task.branch && (
-                      <>
-                        <dt>{t('branch')}</dt>
-                        <dd>{task.branch}</dd>
-                      </>
-                    )}
+                {task.spec.acceptanceCriteria.length > 0 && (
+                  <details className="task-technical">
+                    <summary>{t('acceptance criteria')}</summary>
+                    <ul>
+                      {task.spec.acceptanceCriteria.map((criterion, index) => (
+                        <li key={index}>{criterion}</li>
+                      ))}
+                    </ul>
                     {task.spec.dependencies.length > 0 && (
-                      <>
-                        <dt>{t('dependencies')}</dt>
-                        <dd>{task.spec.dependencies.join(', ')}</dd>
-                      </>
+                      <p>
+                        {t('starts after')}{' '}
+                        {task.spec.dependencies
+                          .map((id) => taskTitle(tasks, id))
+                          .join(', ')}
+                      </p>
                     )}
-                  </dl>
-                  <ul>
-                    {task.spec.acceptanceCriteria.map((criterion, index) => (
-                      <li key={index}>{criterion}</li>
-                    ))}
-                  </ul>
-                </details>
+                  </details>
+                )}
                 {task.reason && <p role="status">{task.reason}</p>}
                 {task.result !== undefined && (
                   <>
@@ -373,10 +394,9 @@ export function TasksPanel({
                       taskId={task.spec.id}
                       attempt={task.attempt}
                     />
-                    <details>
-                      <summary>{t('result')}</summary>
+                    {typeof task.result === 'string' && task.result.trim() && (
                       <DataBlock title={t('result')} value={task.result} />
-                    </details>
+                    )}
                   </>
                 )}
                 {String(task.state) === 'needs_review' && (
@@ -391,7 +411,7 @@ export function TasksPanel({
                   {task.runtimeSessionId && (
                     <Button onClick={() => onSession(task.runtimeSessionId!)}>
                       {task.state === 'waiting'
-                        ? t('review pending requests')
+                        ? t('review requests')
                         : t('open task conversation')}
                     </Button>
                   )}
@@ -432,7 +452,7 @@ export function TasksPanel({
                         )
                       }
                     >
-                      {t('reviewed effects · retry task')}
+                      {t('retry task')}
                     </Button>
                   )}
                 </div>
@@ -441,53 +461,13 @@ export function TasksPanel({
           </article>
         ))}
       </div>
-      <details className="panel-section task-settings task-technical">
-        <summary>{t('collaboration settings')}</summary>
-        <div className="tasks-limits">
-          <label>
-            {t('active agents')}{' '}
-            <input
-              type="number"
-              min={1}
-              max={32}
-              value={agents}
-              onChange={(event) => setAgents(event.target.value)}
-            />
-          </label>
-          <Button
-            disabled={
-              busy ||
-              !limits ||
-              !Number.isInteger(Number(agents)) ||
-              Number(agents) < 1 ||
-              Number(agents) > 32
-            }
-            onClick={() =>
-              void run(() =>
-                workspaceCall(sessionId, 'tasks', 'settings', {
-                  limits: {
-                    agents: Number(agents),
-                    builds: limits!.builds,
-                    ui: limits!.ui,
-                    browsers: limits!.browsers,
-                  },
-                }),
-              )
-            }
-          >
-            {t('save limits')}
-          </Button>
-          {limits && (
-            <small>
-              {t(
-                'builds {builds} · browsers {browsers} · foreground {ui}',
-                limits as unknown as Record<string, string | number>,
-              )}
-            </small>
-          )}
-        </div>
-      </details>
-      <PendingOperations key={sessionId} sessionId={sessionId} />
     </section>
   );
+}
+function firstLine(text: string): string {
+  return text.split(/\r?\n/).find((line) => line.trim()) ?? text;
+}
+function taskTitle(tasks: TaskRecord[], id: string): string {
+  const task = tasks.find((item) => item.spec.id === id);
+  return task ? firstLine(task.spec.prompt) : t('another task');
 }
