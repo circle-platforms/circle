@@ -1181,6 +1181,34 @@ try {
   await switched.keyboard.press(`${modifier}+z`);
   await switched.keyboard.press(`${modifier}+s`);
   await diskUntil('main.ts', (text) => text === initial);
+  // Another program writes the moment the second save reaches the disk.
+  const mainText = () =>
+    switched
+      .locator('.native-code-editor .view-lines')
+      .first()
+      .evaluate((node) => node.textContent.replaceAll('\u00a0', ' '));
+  // This fixture has no file watcher: announce writes made here.
+  writeFileSync(join(workspace, 'main.ts'), initial + '// external clean\n');
+  await changed([['changed', 'main.ts']]);
+  await settle(
+    async () => (await mainText()).includes('external clean'),
+    'a clean buffer refreshes to a write made just after its save',
+  );
+  await switched.getByText('all changes saved', { exact: true }).waitFor();
+  assert.equal(
+    await switched
+      .getByText('file changed on disk; your changes are kept')
+      .count(),
+    0,
+    'no conflict is left showing once the buffer took the change',
+  );
+  writeFileSync(join(workspace, 'main.ts'), initial);
+  await changed([['changed', 'main.ts']]);
+  await settle(
+    async () => !(await mainText()).includes('external clean'),
+    'and to the next one',
+  );
+  await switched.getByText('all changes saved', { exact: true }).waitFor();
   await appendTo('// dirty file A\n');
   await switched
     .getByRole('button', { name: 'open rules', exact: true })

@@ -756,3 +756,39 @@ test('a read torn by a concurrent write is read again, and only a file that keep
   );
   assert.equal(reads, 5);
 });
+
+test('a write landing just after a save is not reported as the save, so the next save meets a conflict', async (t) => {
+  const { root, documents } = await fixture(t);
+  await writeFile(join(root, 'main.ts'), 'original\n');
+  const first = await documents.read('main.ts');
+  const service = documents as unknown as {
+    readTarget: (...args: unknown[]) => Promise<WorkspaceDocument>;
+  };
+  const readTarget = service.readTarget.bind(documents);
+  let interfere = true;
+  // Another program writes between our rename and the read that reports it:
+  // the first read that finds our content on disk.
+  service.readTarget = async (...args) => {
+    if (
+      interfere &&
+      (await readFile(join(root, 'main.ts'), 'utf8')) === 'ours\n'
+    ) {
+      interfere = false;
+      await writeFile(join(root, 'main.ts'), 'external\n');
+    }
+    return readTarget(...args);
+  };
+  const saved = await documents.save('main.ts', 'ours\n', first.revision);
+  assert.equal(saved.content, 'ours\n');
+  const disk = await documents.read('main.ts');
+  assert.equal(disk.content, 'external\n');
+  assert.notEqual(saved.revision, disk.revision);
+  await assert.rejects(
+    documents.save('main.ts', 'ours again\n', saved.revision),
+    DocumentConflictError,
+  );
+  assert.equal(await readFile(join(root, 'main.ts'), 'utf8'), 'external\n');
+  // A save with nothing in between still reports the file as read back.
+  const next = await documents.save('main.ts', 'ours\n', disk.revision);
+  assert.equal(next.revision, (await documents.read('main.ts')).revision);
+});

@@ -936,6 +936,9 @@ export function FileViewer({
             setConflict(external!);
             setError(t('file changed on disk; your changes are kept'));
           } else {
+            // A change seen during the save was shown as a conflict until
+            // now; the buffer took it or never differed from it.
+            setError('');
             if (result === 'updated') {
               setDocument(external!);
               setValue(
