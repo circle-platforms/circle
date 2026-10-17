@@ -119,7 +119,7 @@ try {
     env,
   });
   page = await app.firstWindow();
-  page.setDefaultTimeout(12000);
+  page.setDefaultTimeout(patience(12000));
   page.on('pageerror', (error) => errors.push(String(error)));
   const state = async () => {
     lastState = await page.evaluate(

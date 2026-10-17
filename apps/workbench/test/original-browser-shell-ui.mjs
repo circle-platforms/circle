@@ -211,13 +211,9 @@ try {
               await toggleFromMenu();
               await dock.waitFor();
             } else if (!expanded && mounted) {
-              const close = page.locator(SHOWN_BROWSER).getByRole('button', {
-                name:
-                  language === 'en' ? 'close developer tools' : '关闭开发工具',
-                exact: true,
-              });
-              if (await close.isVisible()) await close.click();
-              else await toggleFromMenu();
+              // The dock's own close button can be squeezed out of view at
+              // some sizes; the ⋮ menu item toggles it the same way.
+              await toggleFromMenu();
               await dock.waitFor({ state: 'detached' });
             }
             // Locale changes may load CJK fonts after React commits. Capture the

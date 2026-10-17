@@ -146,7 +146,7 @@ try {
     timeout: 45000,
   });
   const page = await application.firstWindow();
-  page.setDefaultTimeout(12000);
+  page.setDefaultTimeout(patience(12000));
   page.on('pageerror', (error) => errors.push(String(error)));
   const info = await page.evaluate(() => window.circleDesktop.info());
   assert.equal(info.frontendOnly, false);

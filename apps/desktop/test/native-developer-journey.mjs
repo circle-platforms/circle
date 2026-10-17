@@ -560,7 +560,7 @@ try {
     ),
   );
   page = await app.firstWindow();
-  page.setDefaultTimeout(15000);
+  page.setDefaultTimeout(patience(15000));
   page.on('pageerror', (e) =>
     errors.push({ phase, error: String(e), stack: e.stack }),
   );
@@ -1617,7 +1617,7 @@ try {
           env,
         });
         page = await app.firstWindow();
-        page.setDefaultTimeout(15000);
+        page.setDefaultTimeout(patience(15000));
         page.on('pageerror', (error) =>
           errors.push({ phase, error: String(error), stack: error.stack }),
         );

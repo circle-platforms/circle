@@ -182,7 +182,7 @@ try {
     cwd: root,
   });
   const page = await app.firstWindow();
-  page.setDefaultTimeout(15000);
+  page.setDefaultTimeout(patience(15000));
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
   const state = () =>

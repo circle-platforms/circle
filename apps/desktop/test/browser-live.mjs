@@ -534,7 +534,7 @@ async function launch() {
   // Playwright answers a page's dialogs itself unless something listens: let Circle do it
   app.context().on('page', (nativePage) => nativePage.on('dialog', () => {}));
   page = await app.firstWindow();
-  page.setDefaultTimeout(20_000);
+  page.setDefaultTimeout(patience(20_000));
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   // Wide enough for the panel beside the conversation, as a window made on a small

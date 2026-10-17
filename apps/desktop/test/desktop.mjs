@@ -559,7 +559,7 @@ try {
   page = await app.firstWindow();
   // Starting the application, from its first window to one that renders, has one budget
   const renderDeadline = Date.now() + 30000;
-  page.setDefaultTimeout(10000);
+  page.setDefaultTimeout(patience(10000));
   observePage(page, errors);
   await page
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })

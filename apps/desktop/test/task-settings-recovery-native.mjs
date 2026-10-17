@@ -143,7 +143,7 @@ const launch = async () => {
     env,
   });
   page = await app.firstWindow();
-  page.setDefaultTimeout(15000);
+  page.setDefaultTimeout(patience(15000));
   page.on('pageerror', (error) => receipt.rendererErrors.push(String(error)));
   await setViewport(app, page, { width: 1400, height: 900 });
   const actual = await page.evaluate(() => window.circleDesktop.info());

@@ -242,7 +242,7 @@ const launch = () =>
 try {
   app = await launch();
   const page = await app.firstWindow();
-  page.setDefaultTimeout(12000);
+  page.setDefaultTimeout(patience(12000));
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const info = await page.evaluate(() => window.circleDesktop.info());
@@ -647,7 +647,7 @@ try {
   await app.close();
   app = await launch();
   const reopened = await app.firstWindow();
-  reopened.setDefaultTimeout(12000);
+  reopened.setDefaultTimeout(patience(12000));
   reopened.on('pageerror', (error) => errors.push(String(error)));
   await reopened
     .locator('.transcript-notice')

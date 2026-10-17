@@ -80,7 +80,7 @@ try {
     chromiumSandbox: true,
   });
   page = await app.firstWindow();
-  page.setDefaultTimeout(15000);
+  page.setDefaultTimeout(patience(15000));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   clipboard = await preserveNativeClipboard(app);
   const query = (service, method, params = {}) =>

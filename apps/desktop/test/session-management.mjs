@@ -128,7 +128,7 @@ try {
     }).observe(document, { childList: true, subtree: true });
   });
   let page = await app.firstWindow();
-  page.setDefaultTimeout(12000);
+  page.setDefaultTimeout(patience(12000));
   page.on('pageerror', (error) => errors.push(String(error)));
   const state = () =>
     page.evaluate(
@@ -530,7 +530,7 @@ try {
     env,
   });
   page = await app.firstWindow();
-  page.setDefaultTimeout(12000);
+  page.setDefaultTimeout(patience(12000));
   page.on('pageerror', (error) => errors.push(String(error)));
   await page
     .getByRole('button', { name: 'restore conversation', exact: true })
