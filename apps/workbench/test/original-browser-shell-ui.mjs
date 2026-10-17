@@ -4,10 +4,6 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 const root = fileURLToPath(new URL('..', import.meta.url));
-// Every session keeps its own browser view, hidden while another is shown;
-// look only in the one on screen.
-const SHOWN_BROWSER =
-  '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])';
 const out =
   process.env.CIRCLE_BROWSER_SHELL_EVIDENCE ||
   '/tmp/circle-original-browser-shell-ui';
@@ -118,6 +114,8 @@ try {
     );
   });
   await page.clock.setFixedTime(new Date('2026-10-16T00:00:00Z'));
+  // The page opens 1400 px wide.
+  let previousWidth = 1400;
   for (const language of ['en', 'zh-CN'])
     for (const theme of ['dark', 'light'])
       for (const width of [1400, 760, 290])
@@ -139,6 +137,27 @@ try {
             { language, theme },
           );
           await page.evaluate(() => document.fonts.ready);
+          // At most 1050 px wide the app closes the side panel (useNarrow in
+          // App.tsx). The close is a render after the narrow layout's, and a
+          // slow runner reports the new width to the page late, so the panel
+          // can read as open here and close a moment later. Wait for this
+          // width's layout and, after crossing into narrow, for that close,
+          // before reading or opening the panel.
+          const narrow = width <= 1050;
+          await page.waitForFunction(
+            (narrow) =>
+              document
+                .querySelector(
+                  '#workbench-columns > #inspector .inspector-column',
+                )
+                ?.classList.contains('inspector-overlay') === narrow,
+            narrow,
+          );
+          if (narrow && previousWidth > 1050)
+            await page
+              .locator("#workbench-columns[data-inspector-mode='closed']")
+              .waitFor({ state: 'attached' });
+          previousWidth = width;
           const browserPanel = page.getByRole('button', {
             name: language === 'en' ? 'browser panel' : '浏览器面板',
             exact: true,
@@ -154,13 +173,7 @@ try {
           // Developer tools take no room until asked for, as in Chrome. They
           // stay open across the loop's in-page route changes.
           if (!sawClosedTools) {
-            assert.equal(
-              await page
-                .locator(SHOWN_BROWSER)
-                .locator('.browser-diagnostics')
-                .count(),
-              0,
-            );
+            assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             sawClosedTools = true;
           }
           assert.equal(
@@ -188,12 +201,9 @@ try {
             );
           for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
           for (const expanded of [false, true]) {
-            // Decide by whether the dock is mounted, not by whether it shows:
-            // a squeezed dock can be mounted with no visible close button.
-            const dock = page
-              .locator(SHOWN_BROWSER)
-              .locator('.browser-diagnostics');
-            const toggleFromMenu = async () => {
+            const shown =
+              (await page.locator('.browser-diagnostics').count()) > 0;
+            if (expanded && !shown) {
               await page
                 .getByRole('button', {
                   name: language === 'en' ? 'browser menu' : '浏览器菜单',
@@ -205,17 +215,17 @@ try {
                   name: language === 'en' ? 'developer tools' : '开发工具',
                 })
                 .click();
-            };
-            const mounted = (await dock.count()) > 0;
-            if (expanded && !mounted) {
-              await toggleFromMenu();
-              await dock.waitFor();
-            } else if (!expanded && mounted) {
-              // The dock's own close button can be squeezed out of view at
-              // some sizes; the ⋮ menu item toggles it the same way.
-              await toggleFromMenu();
-              await dock.waitFor({ state: 'detached' });
-            }
+              await page.locator('.browser-diagnostics').waitFor();
+            } else if (!expanded && shown)
+              await page
+                .getByRole('button', {
+                  name:
+                    language === 'en'
+                      ? 'close developer tools'
+                      : '关闭开发工具',
+                  exact: true,
+                })
+                .click();
             // Locale changes may load CJK fonts after React commits. Capture the
             // browser beside a settled conversation at its explicit end position.
             await page.evaluate(async () => {
@@ -227,15 +237,13 @@ try {
               );
             });
             const geometry = await page.evaluate(() => {
-              const shownView =
-                '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])';
               const selectors = [
                 '.inspector-body',
                 '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])',
-                `${shownView} .native-browser`,
-                `${shownView} .native-browser-viewport`,
-                `${shownView} .native-browser-footer`,
-                `${shownView} .browser-diagnostics`,
+                '.native-browser',
+                '.native-browser-viewport',
+                '.native-browser-footer',
+                '.browser-diagnostics',
               ];
               return selectors.map((selector) => {
                 const node = document.querySelector(selector);
