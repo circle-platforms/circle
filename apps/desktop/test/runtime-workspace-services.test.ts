@@ -30,6 +30,20 @@ import {
   saveSettingsChange,
 } from '../../../src/settings.ts';
 import type { WorkspaceServiceEvent } from '../src/workspace-protocol.ts';
+
+// Windows refuses to rename a folder while anything holds a handle in it, such
+// as a watcher that is closing or a virus scan, so retry for a short while.
+async function moveAside(folder: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await rename(folder, folder + '.old');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 50 || (code !== 'EBUSY' && code !== 'EPERM')) throw error;
+      await delay(100);
+    }
+  }
+}
 const assistant = (content: string, calls?: any[]) => ({
   id: randomUUID(),
   role: 'assistant' as const,
@@ -712,7 +726,7 @@ test('a replaced trusted root cannot redirect an existing session into another t
   );
   assert.equal(initial.ok, true);
   const revision = (initial.data as any).revision;
-  await rename(f.workspace, f.workspace + '.old');
+  await moveAside(f.workspace);
   await symlink(other, f.workspace, 'dir');
   for (const [service, method, params] of [
     ['documents', 'read', { path: 'marker.txt' }],
@@ -766,7 +780,7 @@ test('a replaced trusted root cannot redirect an existing session into another t
   );
   assert.equal(independent.ok, true, independent.error);
   assert.equal((independent.data as any).content, 'B');
-  await rename(other, other + '.old');
+  await moveAside(other);
   await mkdir(other);
   await writeFile(join(other, 'marker.txt'), 'replacement inode');
   const replaced = await f.service(
