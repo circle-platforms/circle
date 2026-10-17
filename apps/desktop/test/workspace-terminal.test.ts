@@ -90,6 +90,8 @@ async function shell(
   await wait(
     () => log.some((event) => event.data?.includes('__ECHO_OFF__\r\n')),
     'disable command echo',
+    // A shell starts slowly while the whole desktop suite runs on CI.
+    20000,
   );
   return terminal;
 }
