@@ -261,12 +261,37 @@ export async function runNativeEditorJourney({
     'the actual erroneous buffer stays off disk',
   );
   await page.locator('.native-code-editor .squiggly-error').first().waitFor();
-  await page.keyboard.press('F8');
   const problem = page.locator('.marker-widget .message[role="alert"]');
-  await until(
-    async () => (await problem.textContent())?.includes('not assignable'),
-    'F8 exposes the real language problem for the manually edited buffer',
-  );
+  // F8 goes to the next problem in the file and only from a focused editor; a
+  // loaded runner can drop the key or start from another problem. Press until
+  // this one shows.
+  const problemDeadline = Date.now() + patience(15000);
+  for (;;) {
+    if (
+      !(await page
+        .locator('.native-code-editor')
+        .first()
+        .evaluate((node) => node.contains(document.activeElement)))
+    )
+      await lines.click();
+    await page.keyboard.press('F8');
+    const shown = Date.now() + patience(1500);
+    let found = false;
+    while (!found && Date.now() < shown) {
+      found = !!(
+        await problem
+          .first()
+          .textContent({ timeout: 200 })
+          .catch(() => null)
+      )?.includes('not assignable');
+      if (!found) await page.waitForTimeout(50);
+    }
+    if (found) break;
+    assert(
+      Date.now() < problemDeadline,
+      'F8 exposes the real language problem for the manually edited buffer',
+    );
+  }
   const problemLocation = await problem.getAttribute('aria-label');
   assert(
     problemLocation.includes(`${errorLine}:7`),

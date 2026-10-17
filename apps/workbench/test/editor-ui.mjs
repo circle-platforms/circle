@@ -46,6 +46,8 @@ const streams = new Set();
 const journal = [];
 let pauseEvents = false;
 let holdNextRead = false;
+// Text another program writes while the next save is still in flight.
+let externalDuringSave;
 let releaseHeldRead;
 let mainReads = 0;
 let interruptNextBatch = false;
@@ -178,6 +180,11 @@ const server = await createServer({
               }
               if (request.url.includes('history-pending=1')) {
                 response.end(JSON.stringify({ heldHistory }));
+                return;
+              }
+              if (request.url.includes('external-during-save=1')) {
+                externalDuringSave = '// written during the save\n';
+                response.end('{}');
                 return;
               }
               if (request.url.includes('hold-read=1')) {
@@ -369,6 +376,14 @@ const server = await createServer({
                   data = readDocument(params.path);
                 }
                 await changed([['changed', params.path]]);
+                if (externalDuringSave !== undefined) {
+                  writeFileSync(
+                    join(workspace, params.path),
+                    params.content + externalDuringSave,
+                  );
+                  externalDuringSave = undefined;
+                  await changed([['changed', params.path]]);
+                }
                 await new Promise((resolve) => setTimeout(resolve, 400));
               } else throw Error('unsupported fixture operation');
               response.setHeader('Content-Type', 'application/json');
@@ -1118,6 +1133,37 @@ try {
   console.log(
     'Delayed pre-save snapshots re-read current disk; external bytes still conflict and manual drafts survive',
   );
+  // A clean buffer takes a change written while its save was in flight.
+  await replaceDraft(initial + '// saved first\n');
+  await switched.evaluate(() =>
+    fetch('/__editor_workspace?external-during-save=1', { method: 'POST' }),
+  );
+  await switched.getByRole('button', { name: 'save', exact: true }).click();
+  await settle(
+    async () =>
+      (
+        await switched
+          .locator('.native-code-editor .view-lines')
+          .first()
+          .textContent()
+      )
+        .replaceAll('\u00a0', ' ')
+        .includes('written during the save'),
+    'a clean buffer refreshes to a write made during its save',
+  );
+  await switched.getByText('all changes saved', { exact: true }).waitFor();
+  assert.equal(
+    await switched
+      .getByRole('button', { name: 'review disk changes', exact: true })
+      .count(),
+    0,
+  );
+  await switched.getByRole('button', { name: 'edit', exact: true }).click();
+  await replaceDraft(initial);
+  await switched.getByRole('button', { name: 'save', exact: true }).click();
+  await switched.getByText('all changes saved', { exact: true }).waitFor();
+  assert.equal(readFileSync(join(workspace, 'main.ts'), 'utf8'), initial);
+  console.log('A clean buffer refreshes to a write made during its own save');
   await appendTo('x');
   await switched.evaluate(() =>
     fetch('/__editor_workspace?touch=1', { method: 'POST' }),

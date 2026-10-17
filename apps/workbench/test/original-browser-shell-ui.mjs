@@ -188,13 +188,12 @@ try {
             );
           for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
           for (const expanded of [false, true]) {
-            // Visible, not merely mounted: a closing dock can stay in the
-            // DOM for a moment without its close button showing.
-            const shown = await page
+            // Decide by whether the dock is mounted, not by whether it shows:
+            // a squeezed dock can be mounted with no visible close button.
+            const dock = page
               .locator(SHOWN_BROWSER)
-              .locator('.browser-diagnostics')
-              .isVisible();
-            if (expanded && !shown) {
+              .locator('.browser-diagnostics');
+            const toggleFromMenu = async () => {
               await page
                 .getByRole('button', {
                   name: language === 'en' ? 'browser menu' : '浏览器菜单',
@@ -206,21 +205,21 @@ try {
                   name: language === 'en' ? 'developer tools' : '开发工具',
                 })
                 .click();
-              await page
-                .locator(SHOWN_BROWSER)
-                .locator('.browser-diagnostics')
-                .waitFor();
-            } else if (!expanded && shown)
-              await page
-                .locator(SHOWN_BROWSER)
-                .getByRole('button', {
-                  name:
-                    language === 'en'
-                      ? 'close developer tools'
-                      : '关闭开发工具',
-                  exact: true,
-                })
-                .click();
+            };
+            const mounted = (await dock.count()) > 0;
+            if (expanded && !mounted) {
+              await toggleFromMenu();
+              await dock.waitFor();
+            } else if (!expanded && mounted) {
+              const close = page.locator(SHOWN_BROWSER).getByRole('button', {
+                name:
+                  language === 'en' ? 'close developer tools' : '关闭开发工具',
+                exact: true,
+              });
+              if (await close.isVisible()) await close.click();
+              else await toggleFromMenu();
+              await dock.waitFor({ state: 'detached' });
+            }
             // Locale changes may load CJK fonts after React commits. Capture the
             // browser beside a settled conversation at its explicit end position.
             await page.evaluate(async () => {
