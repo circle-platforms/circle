@@ -232,3 +232,48 @@ test('targeted enable shares existing tool and command reservations and disable 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('a bundled extension compiled to extension.js, as the desktop ships it, turns on and is trusted', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-github-compiled-'));
+  const bundled = path.join(root, 'bundled');
+  const workspace = path.join(root, 'workspace');
+  await mkdir(path.join(bundled, 'github'), { recursive: true });
+  await mkdir(workspace);
+  await writeFile(
+    path.join(bundled, 'github', 'extension.js'),
+    `export function register(api) {
+      api.registerTool(
+        'github_probe',
+        'probe',
+        { type: 'object', properties: {} },
+        async () => String(Boolean(api.githubConnection)),
+        { readOnly: true },
+      );
+    }\n`,
+  );
+  const host = new ExtensionHost({
+    home: path.join(root, 'home'),
+    workspace,
+    trusted: true,
+    bundledRoot: bundled,
+    settings: { github: { enabled: false } },
+    githubConnection: {} as GitHubConnectionBackend,
+  });
+  try {
+    await host.load();
+    await host.enableBundled('github');
+    const github = host.extensions.find((e) => e.name === 'github')!;
+    assert.equal(github.enabled, true);
+    assert.equal(github.error, '');
+    assert.equal(
+      await host
+        .tools()
+        .find((t) => t.name === 'github_probe')!
+        .run({}, { signal: new AbortController().signal, sessionId: 'x' }),
+      'true',
+    );
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

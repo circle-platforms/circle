@@ -562,6 +562,17 @@ export interface ExtensionHostOptions {
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => JobOwner;
 }
+/**
+ * The entry Circle shipped for a bundled extension, not a link to something else. The
+ * terminal ships extension.ts; the desktop build compiles it to extension.js.
+ */
+function bundledEntry(path: string, root: string, name: string): boolean {
+  if (lstatSync(path).isSymbolicLink()) return false;
+  const actual = realpathSync.native(path);
+  return ['extension.ts', 'extension.mjs', 'extension.js'].some(
+    (entry) => actual === join(realpathSync.native(root), name, entry),
+  );
+}
 function isEnotdir(error: unknown): boolean {
   return (
     !!error &&
@@ -708,9 +719,7 @@ export class ExtensionHost {
       scope.trustedBundled =
         ext.source === 'bundled' &&
         !!bundledRoot &&
-        !lstatSync(ext.path).isSymbolicLink() &&
-        realpathSync.native(ext.path) ===
-          join(realpathSync.native(bundledRoot), ext.name, 'extension.ts');
+        bundledEntry(ext.path, bundledRoot, ext.name);
       const module: unknown = await import(
         pathToFileURL(ext.path).href + '?reload=' + randomUUID()
       );
@@ -731,15 +740,8 @@ export class ExtensionHost {
             ext.source === 'bundled' &&
             ext.name === 'github' &&
             this.options.bundledRoot !== false &&
-            !lstatSync(ext.path).isSymbolicLink() &&
-            realpathSync.native(ext.path) ===
-              join(
-                realpathSync.native(
-                  this.options.bundledRoot ?? bundledExtensionsRoot(),
-                ),
-                'github',
-                'extension.ts',
-              )
+            !!bundledRoot &&
+            bundledEntry(ext.path, bundledRoot, 'github')
               ? this.options.githubConnection
               : undefined,
           secret: this.options.secret,
@@ -799,13 +801,7 @@ export class ExtensionHost {
       (ext) => ext.name === name && ext.source === 'bundled',
     );
     const root = this.options.bundledRoot ?? bundledExtensionsRoot();
-    if (
-      !discovered ||
-      !root ||
-      lstatSync(discovered.path).isSymbolicLink() ||
-      realpathSync.native(discovered.path) !==
-        join(realpathSync.native(root), name, 'extension.ts')
-    )
+    if (!discovered || !root || !bundledEntry(discovered.path, root, name))
       throw new ExtensionError('bundled extension is unavailable');
     const ext: Extension = {
       ...discovered,

@@ -29,7 +29,7 @@ import type {
   BrowserCapture,
   BrowserPermission,
 } from '../../../desktop/src/contracts';
-import { Button, IconButton } from '../components/common';
+import { Button, IconButton, Status } from '../components/common';
 import { BrowserDialogPanel, CertificateChoicePanel } from './BrowserDialog';
 import { t } from '../i18n';
 
@@ -420,7 +420,10 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
               {t('take over')}
             </Button>
           </span>
-        ) : null}
+        ) : (
+          <Status value={opened ? 'native browser' : 'not opened'} />
+        )}
+        {state?.title ? <span>{state.title}</span> : null}
       </div>
       {opened && (
         <BrowserDiagnostics

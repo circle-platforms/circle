@@ -13,7 +13,7 @@ const changedOther = 'native continuity manual saved independently\n';
 export async function createNativeContinuityFixture(workspace) {
   await writeFile(
     join(workspace, terminalFile),
-    `console.log(${JSON.stringify(selectedText)});console.log('CONTINUITY_NODE_PID',process.pid);setInterval(()=>{},1000);\n`,
+    `console.log(${JSON.stringify(selectedText)});console.log('CONTINUITY_NODE_PID '+process.pid);setInterval(()=>{},1000);\n`,
     { flag: 'wx' },
   );
   await writeFile(join(workspace, otherFile), originalOther, { flag: 'wx' });

@@ -547,17 +547,18 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
+  // Each switch is named by the interface's shown title.
   const expectedInterfaces = [
-    'github',
-    'files',
-    'activity',
-    'browser',
+    'GitHub',
+    'file and diff inspector',
+    'activity inspector',
+    'browser pane',
     'hub',
     'knowledge',
-    'work',
-    'execution',
+    'long-running work',
+    'execution resources',
     'methods',
-  ].map((id) => `enable ${id} interface`);
+  ].map((title) => `enable ${title} interface`);
   assert.equal(
     await page.getByRole('checkbox').count(),
     expectedInterfaces.length,
@@ -568,7 +569,12 @@ try {
       1,
       `the interface list contains exactly one ${name} checkbox`,
     );
-  for (const id of ['knowledge', 'work', 'execution', 'methods'])
+  for (const id of [
+    'knowledge',
+    'long-running work',
+    'execution resources',
+    'methods',
+  ])
     assert.equal(
       await page
         .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
@@ -592,7 +598,12 @@ try {
   await pairedNotes.first().waitFor();
   // hub and the four platform objects share one runtime extension.
   assert.equal(await pairedNotes.count(), 5);
-  for (const id of ['knowledge', 'work', 'execution', 'methods'])
+  for (const id of [
+    'knowledge',
+    'long-running work',
+    'execution resources',
+    'methods',
+  ])
     assert.equal(
       await page.getByRole('link', { name: id, exact: true }).count(),
       0,

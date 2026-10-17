@@ -805,7 +805,14 @@ try {
   // Three plain components, GitHub, and the hub interface with the four platform
   // objects, all paired with a runtime extension the preview does not have, so off.
   assert.equal(await page.getByRole('checkbox').count(), 9);
-  for (const id of ['github', 'knowledge', 'work', 'execution', 'methods'])
+  // Each switch is named by the interface's shown title.
+  for (const id of [
+    'GitHub',
+    'knowledge',
+    'long-running work',
+    'execution resources',
+    'methods',
+  ])
     assert.equal(
       await page
         .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })

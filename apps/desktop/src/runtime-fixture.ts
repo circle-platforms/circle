@@ -14,9 +14,7 @@ export interface RuntimeFixtureReply {
   waitForAbort?: boolean;
   // `waitForFile` keeps the stream open until a check has seen it and creates the file.
   chunks?: (
-    | string
-    | { text: string; thinking?: boolean }
-    | { waitForFile: string }
+    string | { text: string; thinking?: boolean } | { waitForFile: string }
   )[];
   usage?: ModelResponse['usage'];
   /** Reject this request with the message, after it is journaled. */
