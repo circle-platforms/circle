@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { patience } from './helpers/patience.mjs';
+import { patience } from './patience.mjs';
 export const nativeEditorFormatShortcut = (platform = process.platform) =>
   platform === 'linux' ? 'Control+Shift+i' : 'Alt+Shift+f';
 const file = 'editor-supplement.ts';

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { patience } from './helpers/patience.mjs';
+import { patience } from './patience.mjs';
 export const interactionFile = 'editor-keyboard-interactions.ts';
 export const interactionSource =
   'const referenceTarget = 1;\nconsole.log(referenceTarget);\nexport {};\n';

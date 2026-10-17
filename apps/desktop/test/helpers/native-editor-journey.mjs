@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { patience } from './helpers/patience.mjs';
+import { patience } from './patience.mjs';
 const main = 'editor-main.ts',
   library = 'editor-lib.ts';
 const source =

@@ -5,7 +5,7 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
-import { patience } from './helpers/patience.mjs';
+import { patience } from './patience.mjs';
 const marker = '.circle-terminal-journey.json';
 const outputFile = 'terminal-output-fixture.cjs';
 const serviceFile = 'terminal-service-fixture.cjs';

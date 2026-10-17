@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { patience } from './helpers/patience.mjs';
+import { patience } from './patience.mjs';
 
 const files = {
   'isolation-a.ts': 'export const DOCUMENT_A_ONLY = "alpha";\n',

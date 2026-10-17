@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createConnection } from 'node:net';
-import { patience } from './helpers/patience.mjs';
+import { patience } from './patience.mjs';
 const program = 'native-debug-interaction.cjs';
 const marker = '.circle-native-debug-interaction.json';
 const source = [

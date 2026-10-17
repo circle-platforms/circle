@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFile, readFile, realpath, mkdir, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { patience } from './helpers/patience.mjs';
+import { patience } from './patience.mjs';
 const exec = promisify(execFile);
 const marker = '.circle-native-git-journey.json';
 // filter.has is evaluated relative to each row; do not repeat its panel ancestor.
