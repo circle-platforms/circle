@@ -289,6 +289,7 @@ export async function runNativeGitHubSettingsJourney({
     });
     await page
       .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+      .first()
       .click();
     await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
     assert.equal(

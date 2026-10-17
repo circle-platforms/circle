@@ -617,6 +617,7 @@ export function NativeTerminal({
     }
   };
 
+  const openSearchRef = useRef(() => {});
   const openSearch = () => {
     if (searchInput.current) {
       searchInput.current.focus();
@@ -626,6 +627,7 @@ export function NativeTerminal({
     focusSearch.current = true;
     setSearchOpen(true);
   };
+  openSearchRef.current = openSearch;
   const closeSearch = () => {
     searchRequest.current++;
     setSearchOpen(false);
@@ -784,6 +786,7 @@ export function NativeTerminal({
           .map((item) => (
             <TerminalSurface
               key={item.id}
+              onFind={() => openSearchRef.current()}
               snapshot={item}
               request={
                 commandTerminal &&
@@ -1148,6 +1151,7 @@ function TerminalSurface({
   adopt,
   register,
   onSelectionChange,
+  onFind,
 }: {
   snapshot: TerminalSnapshot;
   request?: TerminalRequest;
@@ -1157,8 +1161,11 @@ function TerminalSurface({
   adopt: (snapshot: TerminalSnapshot) => void;
   register: (controls?: Controls) => void;
   onSelectionChange: (selected: boolean) => void;
+  onFind: () => void;
 }) {
   const language = useLocale();
+  const onFindRef = useRef(onFind);
+  onFindRef.current = onFind;
   const container = useRef<HTMLDivElement>(null);
   const screenReaderMode = useTerminalScreenReader();
   const instance = useRef<{ terminal: Terminal; fit: FitAddon } | null>(null);
@@ -1487,8 +1494,14 @@ function TerminalSurface({
           void copyText(terminal.getSelection()).catch(showError);
         return false;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f')
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+        // Opened here as well: the native window does not always pass this key on.
+        if (event.type === 'keydown') {
+          event.preventDefault();
+          onFindRef.current();
+        }
         return false;
+      }
       return true;
     });
     let fitFrame: number | undefined;

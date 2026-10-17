@@ -243,6 +243,10 @@ export async function runNativeTerminalJourney({
       async () => (await clipboard.readText()).trim() === line(1),
       'search result copies exact selected match',
     );
+    // Escape closed the search and returned to the terminal; the shortcut opens it again.
+    await page.keyboard.press(
+      process.platform === 'darwin' ? 'Meta+f' : 'Control+f',
+    );
     await find.fill('CIRCLE_NO_SUCH_TERMINAL_MATCH');
     await find.press('Enter');
     await panel.getByText('no matches', { exact: true }).waitFor();

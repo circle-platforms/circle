@@ -2706,11 +2706,11 @@ pre {
   position: fixed;
   bottom: 25px;
 }
-/* Brief notices sit in the empty middle of the top bar, clear of every
-   panel's header, close button and toolbar. */
+/* Brief notices sit just under the top bar, in the middle of the window: clear
+   of the title, the folder chip, the panel buttons and every panel's header. */
 .toast {
   position: fixed;
-  top: 9px;
+  top: 60px;
   left: 50%;
   right: auto;
   bottom: auto;
@@ -3405,6 +3405,8 @@ pre {
   align-items: center;
   gap: 7px;
   font-size: var(--ui-tiny);
+  /* One height for every state ("take over" is a button), so the page never resizes. */
+  height: 28px;
   margin: 10px 0;
   color: var(--muted);
 }

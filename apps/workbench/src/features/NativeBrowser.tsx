@@ -429,12 +429,17 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
           </span>
         ) : null}
       </div>
-      {opened && (
+      {opened ? (
         <BrowserDiagnostics
           sessionId={id}
           tab={state?.tab}
           url={state?.url ?? url}
         />
+      ) : (
+        // Holds the diagnostics row's place, so opening a page never resizes it.
+        <div className="browser-diagnostics" aria-hidden="true">
+          <div className="browser-diagnostics-bar" />
+        </div>
       )}
       {!!state?.downloads?.length && (
         <ul className="browser-downloads" data-testid="browser-downloads">

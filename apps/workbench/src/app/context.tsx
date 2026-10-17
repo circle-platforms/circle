@@ -54,7 +54,7 @@ export function RuntimeProvider({
       if (shownNotice.current !== shown) return;
       shownNotice.current = undefined;
       setNotice('');
-    }, 1800);
+    }, 4200);
   };
   const notify = (message: string) => showNotice(message);
   useEffect(() => {

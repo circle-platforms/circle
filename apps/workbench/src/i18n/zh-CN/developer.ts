@@ -1,7 +1,7 @@
 export const developer: Record<string, string> = {
   'response table': '回答表格',
-  'review completed actions before trying again':
-    '请先核对已执行的操作，再决定是否重试。',
+  'steps that finished before the error stay done; check them before you retry.':
+    '出错前已完成的步骤不会撤销，重试前请先检查。',
   'error details': '错误详情',
   'return to message': '返回输入框',
   'review connection': '检查连接配置',

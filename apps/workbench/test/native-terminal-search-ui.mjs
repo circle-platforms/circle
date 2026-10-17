@@ -330,14 +330,19 @@ try {
     'an already requested replay may finish while its actual view is hidden',
   );
   await openNativeTerminalInspector(page);
-  // Find opens on demand from the terminal bar.
-  await page
-    .getByRole('button', { name: 'find in terminal', exact: true })
-    .click();
+  // Find opens on demand with the find shortcut from inside the terminal.
+  await page.locator('.xterm-helper-textarea:visible').first().focus();
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+f' : 'Control+f',
+  );
   const find = page.getByRole('textbox', {
     name: 'find in terminal',
     exact: true,
   });
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute('aria-label') === 'find in terminal',
+  );
   await find.fill('CIRCLE_TERMINAL_LINE_0001_中文');
   await find.press('Enter');
   await page.waitForFunction(

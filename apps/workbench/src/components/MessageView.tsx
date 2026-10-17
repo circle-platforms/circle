@@ -183,11 +183,19 @@ export function RuntimeNotice({
       aria-label={t('action failed')}
     >
       <strong>{t('action failed')}</strong>
-      <p>{t('review completed actions before trying again')}</p>
-      <details>
-        <summary>{t('error details')}</summary>
-        <pre>{message.text}</pre>
-      </details>
+      {/* The cause in the runtime's own words; the whole text stays folded below. */}
+      <p className="runtime-failure-cause">{message.text.split('\n')[0]}</p>
+      <p className="panel-note">
+        {t(
+          'steps that finished before the error stay done; check them before you retry.',
+        )}
+      </p>
+      {message.text.trim().includes('\n') && (
+        <details>
+          <summary>{t('error details')}</summary>
+          <pre>{message.text}</pre>
+        </details>
+      )}
       <div className="runtime-failure-actions">
         <Button onClick={onMessage}>{t('return to message')}</Button>
         <Button onClick={onConnection}>{t('review connection')}</Button>

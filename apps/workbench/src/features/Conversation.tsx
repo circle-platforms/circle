@@ -852,14 +852,10 @@ export function Conversation({
                   >
                     {item.message.role === 'notice' ? (
                       <RuntimeNotice
-                        message={
-                          item.message.id.startsWith('failure-')
-                            ? item.message
-                            : {
-                                ...item.message,
-                                text: completionNoticeText(item.message),
-                              }
-                        }
+                        message={{
+                          ...item.message,
+                          text: completionNoticeText(item.message),
+                        }}
                         onConnection={() => onDialog('connect')}
                         onMessage={() => input.current?.focus()}
                       />

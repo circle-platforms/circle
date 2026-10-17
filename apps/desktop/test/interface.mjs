@@ -540,6 +540,9 @@ try {
     .locator('a.session-link')
     .focus();
   await expectCard(projectRow('orbit-api', 'Fix the reconnect race'));
+  // A keyboard-only step: the pointer rests away from the rows, or the row under
+  // it keeps its hover card open, as it should.
+  await page.mouse.move(700, 400);
   await recentRows.nth(0).locator('a.session-link').focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForFunction(() => {
