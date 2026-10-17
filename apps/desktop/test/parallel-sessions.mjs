@@ -389,15 +389,25 @@ try {
   const sessionLink = page
     .locator(`.sidebar .session-link[href="#/session/${b}"]`)
     .first();
+  // Move onto the row in steps, as a hand does: a single jump after the
+  // resize can land where the sidebar still counts as just scrolled.
+  const row = await sessionLink.boundingBox();
+  await page.mouse.move(row.x + row.width / 2, row.y - 40);
+  await page.mouse.move(row.x + row.width / 2, row.y + row.height / 2, {
+    steps: 8,
+  });
   await sessionLink.hover();
   // Focus opens the same card; Windows runners do not always report the hover.
   await sessionLink.focus();
   // Bring the tool row under the hover card: where they meet depends on each
   // platform's fonts, and the check below needs them to overlap.
-  await page.waitForFunction(() =>
-    document
-      .querySelector('.session-hover')
-      ?.closest('[data-radix-popper-content-wrapper]'),
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('.session-hover')
+        ?.closest('[data-radix-popper-content-wrapper]'),
+    undefined,
+    { timeout: 30000 },
   );
   await page.evaluate(() => {
     const button = document.querySelector('.tool-summary');

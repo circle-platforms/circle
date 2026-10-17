@@ -461,7 +461,7 @@ export async function runNativeChildCommandHandoffJourney({
     const doc = await call(page, reviewer.sessionId, 'documents', 'read', {
       path: fixture.paths.source,
     });
-    assert.equal(doc.content, fixture.source);
+    assert.equal(doc.content.replace(/\r\n/g, '\n'), fixture.source);
     const denied = await call(
       page,
       reviewer.sessionId,
