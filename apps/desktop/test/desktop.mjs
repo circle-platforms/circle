@@ -302,6 +302,9 @@ async function chromeControls() {
   checks.push("the page's right-click menu is Chrome's and does what it says");
 
   // Shortcuts pressed in the page
+  // The page's device pixel ratio includes its zoom, so it shows when the
+  // page itself, not only the browser, has a new zoom.
+  const unzoomedRatio = await inPage('window.devicePixelRatio');
   await key('=', [command]);
   await until(async () => (await state()).zoom === 110, 'zoom in to 110%');
   await page.getByRole('button', { name: 'zoom 110%', exact: true }).waitFor();
@@ -321,6 +324,15 @@ async function chromeControls() {
   // a click at a field's CSS centre still lands on it at 125%
   await key('=', [command]);
   await until(async () => (await state()).zoom === 125, 'zoom in to 125%');
+  // The browser reports the zoom before the page renders with it, and a click
+  // sent in between is placed with the old zoom: wait for the page.
+  await until(
+    async () =>
+      Math.abs(
+        (await inPage('window.devicePixelRatio')) - unzoomedRatio * 1.25,
+      ) < 0.01,
+    'the page renders at 125%',
+  );
   const target = await inPage(
     `(() => { document.activeElement?.blur(); const r = document.querySelector('#field').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
   );
