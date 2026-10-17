@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
 import { createRequire } from 'node:module';
+import { patience } from './helpers/patience.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -167,7 +168,7 @@ try {
       { name, payload },
     );
   const until = async (check, label) => {
-    const deadline = Date.now() + 12000;
+    const deadline = Date.now() + patience(12000);
     while (!(await check())) {
       assert(Date.now() < deadline, label);
       await new Promise((resolve) => setTimeout(resolve, 20));

@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { patience } from './helpers/patience.mjs';
 export const nativeEditorFormatShortcut = (platform = process.platform) =>
   platform === 'linux' ? 'Control+Shift+i' : 'Alt+Shift+f';
 const file = 'editor-supplement.ts';
@@ -43,7 +44,7 @@ export async function runNativeEditorSemantics({
       { sessionId, method, params },
     );
   const until = async (condition, label) => {
-    const end = Date.now() + 15000;
+    const end = Date.now() + patience(15000);
     while (Date.now() < end) {
       if (await condition()) return;
       await page.waitForTimeout(30);

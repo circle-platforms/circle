@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
+import { patience } from './helpers/patience.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const require = createRequire(import.meta.url);
@@ -563,7 +564,7 @@ try {
   // DOM readiness does not prove the initially hidden native window was shown.
   // This harness owns the window; disclose any intervention instead of treating
   // it as evidence that production's ready-to-show lifecycle worked.
-  const startupDeadline = Date.now() + 10000;
+  const startupDeadline = Date.now() + patience(10000);
   const initialWindow = (
     await waitDesktopReady(nativeState, () => true, {
       label: 'initial native window',
@@ -645,7 +646,7 @@ try {
   checks.push(
     'native application origin, isolated data and restricted renderer',
   );
-  const panelDeadline = Date.now() + 10000;
+  const panelDeadline = Date.now() + patience(10000);
   browserPanelReadiness = await waitDesktopReady(
     panelState,
     ({ native, renderer }) =>

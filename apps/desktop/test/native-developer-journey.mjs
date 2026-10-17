@@ -78,6 +78,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { setViewport } from './helpers/viewport.mjs';
+import { patience } from './helpers/patience.mjs';
 const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packaged = !!process.env.CIRCLE_DESKTOP_EXECUTABLE;
@@ -265,7 +266,7 @@ let phase = 'launch';
 let sessionId;
 let receipt;
 const until = async (predicate, label) => {
-  const deadline = Date.now() + 20000;
+  const deadline = Date.now() + patience(20000);
   while (!(await predicate().catch(() => false))) {
     assert(Date.now() < deadline, label);
     await new Promise((done) => setTimeout(done, 40));

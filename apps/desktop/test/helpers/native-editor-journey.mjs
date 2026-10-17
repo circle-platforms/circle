@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
+import { patience } from './helpers/patience.mjs';
 const main = 'editor-main.ts',
   library = 'editor-lib.ts';
 const source =
@@ -52,7 +53,7 @@ export async function runNativeEditorJourney({
       { sessionId, service, method, params },
     );
   const until = async (predicate, label) => {
-    const deadline = Date.now() + 15000;
+    const deadline = Date.now() + patience(15000);
     while (Date.now() < deadline) {
       if (await predicate()) return;
       await page.waitForTimeout(50);

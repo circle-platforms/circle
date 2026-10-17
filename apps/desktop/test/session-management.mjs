@@ -12,6 +12,7 @@ import {
   captureSessionFailure,
   cleanupSessionTest,
 } from './helpers/session-failure.mjs';
+import { patience } from './helpers/patience.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-session-management-'));
@@ -147,7 +148,7 @@ try {
       { name, payload },
     );
   const until = async (predicate, label) => {
-    const end = Date.now() + 12000;
+    const end = Date.now() + patience(12000);
     while (!(await predicate())) {
       assert(Date.now() < end, label);
       await new Promise((done) => setTimeout(done, 20));

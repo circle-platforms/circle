@@ -15,6 +15,7 @@ import {
   preserveNativeClipboard,
   restoreNativeClipboardWithRecovery,
 } from './helpers/native-clipboard.mjs';
+import { patience } from './helpers/patience.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const temp = await mkdtemp(
   join(tmpdir(), 'circle-native-terminal-accessibility-'),
@@ -63,7 +64,7 @@ delete env.ELECTRON_RUN_AS_NODE;
 const report = { checks: [] };
 let app, page, clipboard, terminalId;
 const until = async (predicate, label) => {
-  const end = Date.now() + 15000;
+  const end = Date.now() + patience(15000);
   while (Date.now() < end) {
     if (await predicate()) return;
     await new Promise((r) => setTimeout(r, 30));

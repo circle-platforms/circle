@@ -23,6 +23,7 @@ import {
 import { TaskService } from '../src/workspace/task-service.ts';
 import { readModelRequests } from './helpers/model-requests.mjs';
 import { setViewport } from './helpers/viewport.mjs';
+import { patience } from './helpers/patience.mjs';
 const require = createRequire(import.meta.url);
 const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const temp = await realpath(
@@ -106,7 +107,7 @@ const receipt = {
   rendererErrors: [],
 };
 const until = async (predicate, label) => {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + patience(15000);
   while (!(await predicate())) {
     assert(Date.now() < deadline, label);
     await new Promise((done) => setTimeout(done, 25));

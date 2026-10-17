@@ -21,6 +21,7 @@ import {
   parseModelRequestFrames,
   readModelRequests,
 } from './helpers/model-requests.mjs';
+import { patience } from './helpers/patience.mjs';
 
 // The conversation's browser, driven by a scripted model and by the person, against local
 // HTTPS sites with a self-signed certificate: everything a page asks for reaches both.
@@ -465,7 +466,7 @@ const state = async () =>
 const browserState = (sessionId) =>
   page.evaluate((id) => window.circleDesktop.browserState(id), sessionId);
 async function waitFor(check, name) {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + patience(20_000);
   while (!(await check())) {
     if (Date.now() > deadline) throw Error(`timed out: ${name}`);
     await new Promise((resolve) => setTimeout(resolve, 25));

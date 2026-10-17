@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { readModelRequests } from './helpers/model-requests.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
+import { patience } from './helpers/patience.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-parallel-sessions-'));
@@ -127,7 +128,7 @@ try {
     return lastState;
   };
   const until = async (predicate, label) => {
-    const deadline = Date.now() + 12000;
+    const deadline = Date.now() + patience(12000);
     while (!(await predicate())) {
       assert(Date.now() < deadline, label);
       await new Promise((done) => setTimeout(done, 20));

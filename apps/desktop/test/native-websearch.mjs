@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
 import { tlsCertificates } from '../../../tests/tls-certificates.mjs';
+import { patience } from './helpers/patience.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
@@ -353,7 +354,7 @@ try {
       { name, payload },
     );
   const waitFor = async (condition) => {
-    const deadline = Date.now() + 15000;
+    const deadline = Date.now() + patience(15000);
     while (!(await condition())) {
       assert(
         Date.now() < deadline,

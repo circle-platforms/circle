@@ -5,6 +5,7 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
+import { patience } from './helpers/patience.mjs';
 const marker = '.circle-terminal-journey.json';
 const outputFile = 'terminal-output-fixture.cjs';
 const serviceFile = 'terminal-service-fixture.cjs';
@@ -121,7 +122,7 @@ export async function runNativeTerminalJourney({
   const until =
     injectedUntil ??
     (async (predicate, label) => {
-      const deadline = Date.now() + 20000;
+      const deadline = Date.now() + patience(20000);
       while (Date.now() < deadline) {
         if (await predicate()) return;
         await page.waitForTimeout(40);
@@ -190,7 +191,7 @@ export async function runNativeTerminalJourney({
     // which keeps the button disabled; otherwise wait for that create.
     for (let attempt = 0; attempt < 3 && !terminal; attempt++) {
       await button.click();
-      const deadline = Date.now() + 8000;
+      const deadline = Date.now() + patience(8000);
       while (Date.now() < deadline && !(await appeared()))
         await page.waitForTimeout(40);
       if (!terminal && !(await button.isEnabled()))
