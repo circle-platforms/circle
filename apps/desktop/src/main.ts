@@ -446,6 +446,15 @@ async function createWindow() {
     },
     join(dataPath, 'browser-diagnostics'),
   );
+  browsers.sendKey = (event) => {
+    if (window && !window.isDestroyed())
+      window.webContents.send('circle:browser-key', event);
+  };
+  // The system's menu takes some of the browser's keys (⌘W closes the window) before
+  // the window sees them: while the browser panel has the keyboard, they are its.
+  window.webContents.on('before-input-event', (event, input) =>
+    browsers?.windowKey(event, input),
+  );
   window.webContents.on('did-start-loading', () =>
     browsers?.clearDiagnosticSubscriptions(),
   );
@@ -842,6 +851,10 @@ app
     handle('circle:browser-control', (id, action) => {
       if (!browsers) throw Error('window not ready');
       return browsers.control(id, action);
+    });
+    handle('circle:browser-page', (id, action, value) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.page(id, action, value);
     });
     handle('circle:browser-reveal', (id, download) => {
       if (!browsers) throw Error('window not ready');

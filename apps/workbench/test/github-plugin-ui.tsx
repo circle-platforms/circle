@@ -61,6 +61,7 @@ const host = {
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   setTheme: async () => {},
+  openExternal: async () => {},
   browserState: async () => ({ sessionId: 'none' }),
   runtimeCommand: async (command: RuntimeCommand) => {
     commands.push(command);
@@ -141,6 +142,42 @@ Object.assign(window, {
         'github_retry',
         'github_publish',
       ];
+      emit();
+    },
+    // The device-code step and a failed view, for the layout checks only.
+    authorizing: () => {
+      const extension = snapshot.extensions[0];
+      extension.view = {
+        provider: 'github',
+        client: 'GitHub CLI',
+        epoch: 3,
+        state: 'authorizing',
+        authorizationPhase: 'waiting-for-user',
+        authorization: {
+          id: 'fixture-authorization',
+          code: 'WDJB-MJHT',
+          url: 'https://github.com/login/device',
+          status: 'waiting',
+        },
+        repositories: [],
+        storage: 'encrypted',
+        remoteRevocation: 'not-requested',
+      };
+      extension.tools = ['github_connection'];
+      emit();
+    },
+    failed: () => {
+      const extension = snapshot.extensions[0];
+      extension.view = {
+        provider: 'github',
+        client: 'GitHub CLI',
+        epoch: 4,
+        state: 'disconnected',
+        repositories: ['owner/repository'],
+        error: 'GitHub authorization expired; reconnect in GitHub plugin',
+        remoteRevocation: 'not-requested',
+      };
+      extension.tools = ['github_connection'];
       emit();
     },
     labels: {

@@ -3543,6 +3543,67 @@ pre {
   border: 0;
   color: var(--fg);
 }
+.browser-tab-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.browser-tab-icon > img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+}
+.browser-tab-spinner {
+  animation: spin 1s linear infinite;
+}
+.browser-tab-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-secure,
+.browser-not-secure {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+}
+/* The browser panel's menu, as Chrome's: items with their keys, and the zoom row */
+.dropdown.browser-menu {
+  min-width: 230px;
+}
+.browser-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 2px 2px 10px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.browser-zoom-label {
+  flex: 1;
+  margin-right: 12px;
+}
+.dropdown .browser-zoom-row [role='menuitem'] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 28px;
+  padding: 0 6px;
+}
+.dropdown .browser-zoom-row .browser-zoom-value {
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
+}
 .browser-tab-alert {
   flex: none;
   width: 6px;

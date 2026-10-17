@@ -36,13 +36,19 @@ export function BrowserDiagnostics({
   sessionId,
   tab,
   url,
+  onClose,
 }: {
   sessionId: string;
   tab?: string;
   url: string;
+  /**
+   * Docked under the page as Chrome's developer tools: open from the start, with a
+   * close button instead of the fold.
+   */
+  onClose?: () => void;
 }) {
   const sources = useSources();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!onClose);
   const [sizing, setSizing] = useState(false);
   const [section, setSection] = useState<
     'console' | 'network' | 'storage' | 'debug'
@@ -448,15 +454,19 @@ export function BrowserDiagnostics({
   return (
     <section className={`browser-diagnostics${open ? ' open' : ''}`}>
       <div className="browser-diagnostics-bar">
-        <button
-          type="button"
-          className="browser-diagnostics-toggle"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-        >
-          <ChevronRight size={13} />
-          {t('page diagnostics')}
-        </button>
+        {onClose ? (
+          <h3 className="browser-diagnostics-title">{t('developer tools')}</h3>
+        ) : (
+          <button
+            type="button"
+            className="browser-diagnostics-toggle"
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+          >
+            <ChevronRight size={13} />
+            {t('page diagnostics')}
+          </button>
+        )}
         {open && !failed && (
           <div role="status" className="browser-diagnostics-state">
             <Status
@@ -487,6 +497,11 @@ export function BrowserDiagnostics({
             >
               <ExternalLink size={13} />
             </IconButton>
+            {onClose && (
+              <IconButton label={t('close developer tools')} onClick={onClose}>
+                <X size={14} />
+              </IconButton>
+            )}
           </span>
         )}
       </div>

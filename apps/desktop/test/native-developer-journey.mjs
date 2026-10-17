@@ -1112,11 +1112,16 @@ try {
       .getByRole('textbox', { name: 'browser address', exact: true })
       .fill(origin);
     await page
-      .getByRole('button', { name: 'navigate browser', exact: true })
-      .click();
-    await page
-      .getByRole('button', { name: 'page diagnostics', exact: true })
-      .click();
+      .getByRole('textbox', { name: 'browser address', exact: true })
+      .press('Enter');
+    // Developer tools open from the browser's ⋮ menu, as in Chrome
+    if (!(await page.locator('.browser-diagnostics').count())) {
+      await page
+        .getByRole('button', { name: 'browser menu', exact: true })
+        .click();
+      await page.getByRole('menuitem', { name: 'developer tools' }).click();
+      await page.locator('.browser-diagnostics').waitFor();
+    }
     const panel = page.locator('.browser-diagnostics');
     const entry = panel
       .locator('details')
@@ -1151,12 +1156,14 @@ try {
     });
     if ((await browserToggle.getAttribute('aria-pressed')) !== 'true')
       await browserToggle.click();
-    const diagnosticsToggle = page.getByRole('button', {
-      name: 'page diagnostics',
-      exact: true,
-    });
-    if ((await diagnosticsToggle.getAttribute('aria-expanded')) !== 'true')
-      await diagnosticsToggle.click();
+    // Developer tools open from the browser's ⋮ menu, as in Chrome
+    if (!(await page.locator('.browser-diagnostics').count())) {
+      await page
+        .getByRole('button', { name: 'browser menu', exact: true })
+        .click();
+      await page.getByRole('menuitem', { name: 'developer tools' }).click();
+      await page.locator('.browser-diagnostics').waitFor();
+    }
     await panel.getByRole('tab', { name: 'network', exact: true }).click();
     await panel.getByRole('button', { name: /GET 200.*api\/data/ }).click();
     await panel.getByText('JOURNEY_NETWORK_OK', { exact: true }).waitFor();
@@ -1219,7 +1226,10 @@ try {
       .getByRole('button', { name: 'apply viewport', exact: true })
       .click();
     await page
-      .getByRole('button', { name: 'capture browser', exact: true })
+      .getByRole('button', { name: 'browser menu', exact: true })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'take screenshot', exact: true })
       .click();
     await page.getByText('captured observation', { exact: true }).click();
     const capture = await page
@@ -1640,14 +1650,16 @@ try {
           .getByRole('textbox', { name: 'browser address', exact: true })
           .fill(origin);
         await page
-          .getByRole('button', { name: 'navigate browser', exact: true })
-          .click();
-        const diagnostics = page.getByRole('button', {
-          name: 'page diagnostics',
-          exact: true,
-        });
-        if ((await diagnostics.getAttribute('aria-expanded')) !== 'true')
-          await diagnostics.click();
+          .getByRole('textbox', { name: 'browser address', exact: true })
+          .press('Enter');
+        // Developer tools open from the browser's ⋮ menu, as in Chrome
+        if (!(await page.locator('.browser-diagnostics').count())) {
+          await page
+            .getByRole('button', { name: 'browser menu', exact: true })
+            .click();
+          await page.getByRole('menuitem', { name: 'developer tools' }).click();
+          await page.locator('.browser-diagnostics').waitFor();
+        }
         await until(
           async () => browserStreams.size > 0,
           'actual web debug fixture stream connected',
@@ -1801,12 +1813,21 @@ try {
               await address.fill(origin);
               await address.press('Enter');
             }
-            const diagnostics = page.getByRole('button', {
-              name: zh ? '页面诊断' : 'page diagnostics',
-              exact: true,
-            });
-            if ((await diagnostics.getAttribute('aria-expanded')) !== 'true')
-              await diagnostics.click();
+            // Developer tools open from the browser's ⋮ menu, as in Chrome
+            if (!(await page.locator('.browser-diagnostics').count())) {
+              await page
+                .getByRole('button', {
+                  name: zh ? '浏览器菜单' : 'browser menu',
+                  exact: true,
+                })
+                .click();
+              await page
+                .getByRole('menuitem', {
+                  name: zh ? '开发工具' : 'developer tools',
+                })
+                .click();
+              await page.locator('.browser-diagnostics').waitFor();
+            }
             await page
               .locator('.browser-diagnostics')
               .getByRole('tab', { name: zh ? '存储' : 'storage', exact: true })

@@ -41,11 +41,51 @@ try {
         await card.waitFor();
         const button = (en, zh) =>
           card.getByRole('button', { name: label(en, zh), exact: true });
-        const connect = button(
-          'start GitHub authorization',
-          '开始 GitHub 授权',
-        );
-        assert.equal(await card.locator('select').inputValue(), 'encrypted');
+        const connect = button('connect GitHub', '连接 GitHub');
+        const stay = card.getByRole('radio', {
+          name: label(
+            'stay signed in on this computer',
+            '在这台电脑上保持登录',
+          ),
+          exact: true,
+        });
+        const sessionOnly = card.getByRole('radio', {
+          name: label('sign out when Circle closes', 'Circle 关闭时退出登录'),
+          exact: true,
+        });
+        const addField = card.getByRole('textbox', {
+          name: label('add repository', '添加仓库'),
+          exact: true,
+        });
+        const listed = () =>
+          card.locator('.github-repositories li > span').allInnerTexts();
+        const primaries = () =>
+          card
+            .locator('.github-summary button.primary')
+            .evaluateAll((nodes) => nodes.map((node) => node.textContent));
+        const overflow = () =>
+          page.evaluate(() => {
+            const card = document.querySelector('#github-connection');
+            return {
+              page: document.documentElement.scrollWidth - innerWidth,
+              card: card.scrollWidth - card.clientWidth,
+            };
+          });
+        assert.equal(await stay.isChecked(), true);
+        assert.equal(await sessionOnly.isChecked(), false);
+        // One primary action per state: connect while signed out.
+        assert.deepEqual(await primaries(), [
+          label('connect GitHub', '连接 GitHub'),
+        ]);
+        assert.deepEqual(await overflow(), { page: 0, card: 0 });
+        // A repository that is not owner/repository blocks both adding and connecting.
+        await addField.fill('not a repository');
+        assert.equal(await button('add', '添加').isDisabled(), true);
+        assert.equal(await connect.isDisabled(), true);
+        await card.locator('.github-field-error').waitFor();
+        await addField.fill('');
+        assert.equal(await connect.isEnabled(), true);
+        assert.equal(await card.locator('.github-field-error').count(), 0);
         assert.deepEqual(
           await page.evaluate(() => window.githubFixture.calls),
           [],
@@ -69,8 +109,8 @@ try {
           false,
         );
         assert.equal(
-          await card.locator('select').inputValue(),
-          'encrypted',
+          await stay.isChecked(),
+          true,
           'no automatic session downgrade',
         );
         await page.screenshot({
@@ -86,7 +126,8 @@ try {
           (await page.evaluate(() => window.githubFixture.copies))[0],
           'Error: secure credential storage is unavailable\noriginal detail retained',
         );
-        await card.locator('select').selectOption('session');
+        await sessionOnly.check();
+        assert.equal(await stay.isChecked(), false);
         await connect.click();
         await card.getByText('CODE-TEST', { exact: true }).waitFor();
         assert.equal(
@@ -106,8 +147,12 @@ try {
           1,
           'authorization code stays on one line',
         );
-        await button('copy authorization code', '复制授权码').click();
-        await button('open GitHub authorization', '打开 GitHub 授权页').click();
+        assert.deepEqual(await primaries(), [
+          label('open GitHub', '打开 GitHub'),
+        ]);
+        assert.deepEqual(await overflow(), { page: 0, card: 0 });
+        await button('copy code', '复制代码').click();
+        await button('open GitHub', '打开 GitHub').click();
         assert.deepEqual(
           await page.evaluate(() => window.githubFixture.opened),
           ['https://github.com/login/device'],
@@ -122,7 +167,7 @@ try {
         const cancelEpoch = await page.evaluate(
           () => window.githubFixture.state().epoch,
         );
-        await button('cancel login', '取消登录').click();
+        await button('cancel', '取消').click();
         await connect.waitFor();
         assert.equal(
           (await page.evaluate(() => window.githubFixture.calls)).at(-1).args,
@@ -138,7 +183,7 @@ try {
         await page.evaluate(() => window.githubFixture.completeAuthorization());
         await card
           .getByText(
-            label('connected as fixture-account', '已连接账户 fixture-account'),
+            label('connected as fixture-account', '已连接：fixture-account'),
             { exact: true },
           )
           .waitFor();
@@ -152,15 +197,24 @@ try {
           )
           .waitFor();
         assert.equal(await card.getByRole('alert').count(), 0);
-        const save = button('save allowed repositories', '保存允许访问的仓库');
-        await card.locator('textarea').fill('circle-platforms/circle');
+        // Connected: no primary in the summary, disconnect is the danger action.
+        assert.deepEqual(await primaries(), []);
+        assert.equal(
+          await button('disconnect', '断开连接').evaluate((node) =>
+            node.classList.contains('danger'),
+          ),
+          true,
+        );
+        const save = button('save', '保存');
+        assert.equal(await save.isDisabled(), true);
+        await addField.fill('circle-platforms/circle');
+        await addField.press('Enter');
+        assert.deepEqual(await listed(), ['circle-platforms/circle']);
+        assert.equal(await addField.inputValue(), '');
         await page.evaluate(() => window.githubFixture.failNextConfigure());
         await save.click();
         await alert.waitFor();
-        assert.equal(
-          await card.locator('textarea').inputValue(),
-          'circle-platforms/circle',
-        );
+        assert.deepEqual(await listed(), ['circle-platforms/circle']);
         assert.match(
           await alert.innerText(),
           language === 'en'
@@ -179,8 +233,13 @@ try {
         );
         await page.waitForFunction(
           () =>
-            document.querySelector('#github-connection textarea').value ===
-            'circle-platforms/circle',
+            [
+              ...document.querySelectorAll(
+                '#github-connection .github-repositories li > span',
+              ),
+            ]
+              .map((node) => node.textContent)
+              .join() === 'circle-platforms/circle',
         );
         assert.equal(await card.getByRole('alert').count(), 0);
         assert.equal(
@@ -188,13 +247,24 @@ try {
           true,
           'actual successful epoch clears dirty form',
         );
+        assert.deepEqual(await overflow(), { page: 0, card: 0 });
         await page.screenshot({
           path: `${out}/${language}-${theme}-${width}-connected.png`,
         });
         const editEpoch = await page.evaluate(
           () => window.githubFixture.state().epoch,
         );
-        await card.locator('textarea').fill('circle-platforms/other');
+        await card
+          .getByRole('button', {
+            name: label(
+              'remove circle-platforms/circle',
+              '移除 circle-platforms/circle',
+            ),
+            exact: true,
+          })
+          .click();
+        await addField.fill('circle-platforms/other');
+        await button('add', '添加').click();
         await page.evaluate(() => window.githubFixture.advanceEpoch());
         await save.click();
         await alert.waitFor();
@@ -202,19 +272,13 @@ try {
           (await page.evaluate(() => window.githubFixture.calls)).at(-1).args,
           `configure {"epoch":${editEpoch},"repositories":["circle-platforms/other"]}`,
         );
-        assert.equal(
-          await card.locator('textarea').inputValue(),
-          'circle-platforms/other',
-        );
-        await button('reset repository edits', '还原仓库编辑').click();
-        assert.equal(
-          await card.locator('textarea').inputValue(),
-          'circle-platforms/circle',
-        );
+        assert.deepEqual(await listed(), ['circle-platforms/other']);
+        await button('reset', '重置').click();
+        assert.deepEqual(await listed(), ['circle-platforms/circle']);
         const disconnectEpoch = await page.evaluate(
           () => window.githubFixture.state().epoch,
         );
-        await button('disconnect GitHub', '断开 GitHub 连接').click();
+        await button('disconnect', '断开连接').click();
         await connect.waitFor();
         assert.equal(
           (await page.evaluate(() => window.githubFixture.calls)).at(-1).args,
@@ -236,7 +300,7 @@ try {
         assert.equal(
           await delivery
             .getByRole('button', {
-              name: label('start GitHub authorization', '开始 GitHub 授权'),
+              name: label('connect GitHub', '连接 GitHub'),
               exact: true,
             })
             .count(),

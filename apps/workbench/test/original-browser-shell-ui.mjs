@@ -25,6 +25,7 @@ page.setDefaultTimeout(5000);
 const errors = [],
   checks = [];
 page.on('pageerror', (e) => errors.push(String(e)));
+let sawClosedTools = false;
 try {
   await page.addInitScript(() => {
     localStorage.setItem('circle.workbench.language', 'en');
@@ -142,10 +143,25 @@ try {
             await browserPanel.click();
           await page
             .getByRole('button', {
-              name: language === 'en' ? 'page diagnostics' : '页面诊断',
+              name: language === 'en' ? 'browser menu' : '浏览器菜单',
               exact: true,
             })
             .waitFor();
+          // Developer tools take no room until asked for, as in Chrome. They
+          // stay open across the loop's in-page route changes.
+          if (!sawClosedTools) {
+            assert.equal(await page.locator('.browser-diagnostics').count(), 0);
+            sawClosedTools = true;
+          }
+          assert.equal(
+            await page
+              .getByRole('button', {
+                name: language === 'en' ? 'page diagnostics' : '页面诊断',
+                exact: true,
+              })
+              .count(),
+            0,
+          );
           const iconSizes = await page
             .locator('.native-browser .icon-button')
             .evaluateAll((buttons) =>
@@ -162,15 +178,31 @@ try {
             );
           for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
           for (const expanded of [false, true]) {
-            const diagnosticToggle = page.getByRole('button', {
-              name: language === 'en' ? 'page diagnostics' : '页面诊断',
-              exact: true,
-            });
-            if (
-              (await diagnosticToggle.getAttribute('aria-expanded')) !==
-              String(expanded)
-            )
-              await diagnosticToggle.click();
+            const shown =
+              (await page.locator('.browser-diagnostics').count()) > 0;
+            if (expanded && !shown) {
+              await page
+                .getByRole('button', {
+                  name: language === 'en' ? 'browser menu' : '浏览器菜单',
+                  exact: true,
+                })
+                .click();
+              await page
+                .getByRole('menuitem', {
+                  name: language === 'en' ? 'developer tools' : '开发工具',
+                })
+                .click();
+              await page.locator('.browser-diagnostics').waitFor();
+            } else if (!expanded && shown)
+              await page
+                .getByRole('button', {
+                  name:
+                    language === 'en'
+                      ? 'close developer tools'
+                      : '关闭开发工具',
+                  exact: true,
+                })
+                .click();
             // Locale changes may load CJK fonts after React commits. Capture the
             // browser beside a settled conversation at its explicit end position.
             await page.evaluate(async () => {
@@ -218,8 +250,10 @@ try {
                 out +
                 `/${language}-${theme}-${width}-${height}-${expanded ? 'expanded' : 'closed'}.png`,
             });
-            const [body, wrapper, native, viewport, footer, diagnostics] =
-              geometry;
+            const [body, wrapper, native, viewport, footer, docked] = geometry;
+            // Closed, the footer is the last row; open, the developer tools are
+            assert.equal(!!docked.missing, !expanded);
+            const diagnostics = docked.missing ? footer : docked;
             assert.equal(
               body.paddingBottom,
               0,
@@ -272,14 +306,22 @@ try {
     if ((await toggle.getAttribute('aria-pressed')) !== 'true')
       await toggle.click();
     await page
-      .getByRole('button', { name: 'capture browser', exact: true })
+      .getByRole('button', { name: 'browser menu', exact: true })
       .waitFor();
   };
   await openBrowser();
-  const capture = page.getByRole('button', {
-    name: 'capture browser',
-    exact: true,
-  });
+  // Take screenshot lives in the browser's ⋮ menu, as Chrome keeps its tools there
+  const capture = {
+    click: async () => {
+      await page
+        .getByRole('button', { name: 'browser menu', exact: true })
+        .click();
+      await page
+        .getByRole('menuitem', { name: 'take screenshot', exact: true })
+        .click();
+      await page.getByRole('menu').waitFor({ state: 'detached' });
+    },
+  };
   const waitCaptureCount = async (count) =>
     page.waitForFunction(
       (count) => window.__browserCaptureFixture.count() === count,
@@ -298,8 +340,8 @@ try {
     .getByRole('textbox', { name: 'browser address', exact: true })
     .fill('http://localhost/new-page');
   await page
-    .getByRole('button', { name: 'navigate browser', exact: true })
-    .click();
+    .getByRole('textbox', { name: 'browser address', exact: true })
+    .press('Enter');
   await page.evaluate(() =>
     window.__browserCaptureFixture.resolve(0, 'old-navigation'),
   );
@@ -376,8 +418,8 @@ try {
     .getByRole('textbox', { name: 'browser address', exact: true })
     .fill('http://localhost/last');
   await page
-    .getByRole('button', { name: 'navigate browser', exact: true })
-    .click();
+    .getByRole('textbox', { name: 'browser address', exact: true })
+    .press('Enter');
   await page.evaluate(() => window.__browserCaptureFixture.reject(5));
   await settle();
   assert.equal(

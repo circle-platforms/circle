@@ -47,16 +47,33 @@ try {
           () => getComputedStyle(document.documentElement).backgroundColor,
         );
         assert.notEqual(palette, 'rgba(0, 0, 0, 0)');
-        const manage = detail
-          .locator('summary')
-          .filter({ hasText: new RegExp('^' + label('manage', '管理') + '$') });
-        await manage.click();
-        const toggle = detail.getByRole('checkbox', { name: 'enable github' });
+        const turnOn = label(
+          'Turn on GitHub to connect your account.',
+          '开启 GitHub 后即可连接你的账户。',
+        );
+        const tryName = label('try in a conversation', '在对话中试用');
+        const overflow = () =>
+          page.evaluate(() => {
+            const card = document.querySelector('#github-connection');
+            return {
+              page:
+                document.querySelector('.page').scrollWidth -
+                document.querySelector('.page').clientWidth,
+              card: card.scrollWidth - card.clientWidth,
+            };
+          });
+        const primaries = () =>
+          detail
+            .locator('button.primary')
+            .evaluateAll((nodes) => nodes.map((node) => node.textContent));
+        // The switch sits in the summary itself, not behind a fold.
+        await detail.getByText(turnOn, { exact: true }).waitFor();
+        const toggle = detail.getByRole('checkbox', { name: 'enable GitHub' });
         // Switch accessibility label is translated while the plugin id remains literal.
         const control =
           language === 'en'
             ? toggle
-            : detail.getByRole('checkbox', { name: /github/ });
+            : detail.getByRole('checkbox', { name: /GitHub/ });
         assert.equal(await control.isChecked(), false);
         await control.focus();
         await page.keyboard.press('Space');
@@ -65,12 +82,10 @@ try {
         );
         assert.equal(
           await detail
-            .getByRole('button', {
-              name: label('try now', '立即试用'),
-              exact: true,
-            })
-            .isEnabled(),
-          false,
+            .getByRole('button', { name: tryName, exact: true })
+            .count(),
+          0,
+          'nothing to try before an account is connected',
         );
         await page.evaluate(() => window.githubPluginFixture.reply(0));
         await detail
@@ -80,15 +95,7 @@ try {
           )
           .waitFor();
         assert.equal(
-          await detail
-            .getByText(
-              label(
-                'Enable the plugin to see its available tools.',
-                '启用插件后可查看可用工具。',
-              ),
-              { exact: true },
-            )
-            .count(),
+          await detail.getByText(turnOn, { exact: true }).count(),
           0,
           'enabled loading must not ask to enable again',
         );
@@ -104,22 +111,12 @@ try {
           .first()
           .waitFor();
         assert.equal(
-          await detail
-            .getByText(
-              label(
-                'Enable the plugin to see its available tools.',
-                '启用插件后可查看可用工具。',
-              ),
-              { exact: true },
-            )
-            .count(),
+          await detail.getByText(turnOn, { exact: true }).count(),
           0,
         );
         await page.evaluate(() => window.githubPluginFixture.load());
         await detail
-          .getByText(label('GitHub login required', '需要登录 GitHub'), {
-            exact: true,
-          })
+          .getByText(label('not connected', '未连接'), { exact: true })
           .waitFor();
         assert.equal(
           await detail
@@ -136,21 +133,17 @@ try {
           })
           .waitFor();
         const tryButton = detail.getByRole('button', {
-          name: label('try now', '立即试用'),
+          name: tryName,
           exact: true,
         });
-        await tryButton.waitFor();
-        assert.equal(await tryButton.isEnabled(), true);
         assert.equal(
-          await tryButton.evaluate((button) =>
-            button.classList.contains('primary'),
-          ),
-          false,
-          'disconnected example is secondary to authorization',
+          await tryButton.count(),
+          0,
+          'the example waits for a connected account',
         );
-        assert.equal(
-          await detail.locator('button.primary').count(),
-          1,
+        assert.deepEqual(
+          await primaries(),
+          [label('connect GitHub', '连接 GitHub')],
           'authorization is the only primary action before connection',
         );
         for (const summary of await detail
@@ -169,38 +162,85 @@ try {
           ),
           ['save-settings'],
         );
+        const addField = detail.getByRole('textbox', {
+          name: label('add repository', '添加仓库'),
+          exact: true,
+        });
+        assert.equal(await addField.inputValue(), '');
         assert.equal(
-          await detail.locator('#github-connection textarea').isVisible(),
-          false,
-          'optional repositories folded',
+          await detail
+            .getByRole('button', {
+              name: label('connect GitHub', '连接 GitHub'),
+              exact: true,
+            })
+            .isEnabled(),
+          true,
+          'repositories are optional before connecting',
         );
+        assert.deepEqual(await overflow(), { page: 0, card: 0 });
         await detail.locator('#github-connection h2').click();
         await page.screenshot({
           animations: 'disabled',
           path: `${output}/${language}-${theme}-${width}-plugin-ready.png`,
         });
-        await page.evaluate(() => window.githubPluginFixture.connected());
-        await detail
+        // The device code: open GitHub is the one primary action.
+        await page.evaluate(() => window.githubPluginFixture.authorizing());
+        await detail.getByText('WDJB-MJHT', { exact: true }).waitFor();
+        assert.deepEqual(await primaries(), [
+          label('open GitHub', '打开 GitHub'),
+        ]);
+        assert.equal(await addField.count(), 0);
+        assert.deepEqual(await overflow(), { page: 0, card: 0 });
+        // A failure says what happened and what to do; the raw text is folded.
+        await page.evaluate(() => window.githubPluginFixture.failed());
+        const failure = detail.getByRole('alert');
+        await failure
           .getByText(
-            label('connected as fixture-account', '已连接账户 fixture-account'),
+            label('GitHub authorization has expired.', 'GitHub 授权已失效。'),
             { exact: true },
           )
           .waitFor();
+        await detail
+          .getByText(label('needs attention', '需要处理'), { exact: true })
+          .waitFor();
+        assert.equal(
+          await failure.locator('details').evaluate((node) => node.open),
+          false,
+        );
+        assert.deepEqual(await primaries(), [
+          label('connect GitHub', '连接 GitHub'),
+        ]);
+        assert.deepEqual(await overflow(), { page: 0, card: 0 });
+        await page.evaluate(() => window.githubPluginFixture.connected());
+        await detail
+          .getByText(
+            label('connected as fixture-account', '已连接：fixture-account'),
+            { exact: true },
+          )
+          .waitFor();
+        assert.equal(await tryButton.isEnabled(), true);
         assert.equal(
           await tryButton.evaluate((button) =>
             button.classList.contains('primary'),
           ),
+          false,
+          'the example is a secondary action',
+        );
+        assert.equal(
+          await detail.locator('.github-summary button.primary').count(),
+          0,
+          'connected: nothing in the summary competes as a primary action',
+        );
+        assert.equal(
+          await detail
+            .getByRole('button', {
+              name: label('disconnect', '断开连接'),
+              exact: true,
+            })
+            .evaluate((button) => button.classList.contains('danger')),
           true,
-          'connected example is the primary action',
         );
-        assert.equal(await detail.locator('button.primary').count(), 1);
-        const capabilities = detail.getByText(
-          label('capabilities', '能力介绍'),
-          {
-            exact: true,
-          },
-        );
-        await capabilities.click();
+        // What Circle can do is listed in plain words, not folded.
         await detail
           .getByText(
             label('read pull request checks', '读取拉取请求检查结果'),
@@ -216,7 +256,12 @@ try {
             { exact: true },
           )
           .waitFor();
-        await capabilities.click();
+        assert.doesNotMatch(
+          await detail.innerText(),
+          /github_(?:connection|candidate|checks|logs|retry|publish)/,
+          'tool names stay internal',
+        );
+        assert.deepEqual(await overflow(), { page: 0, card: 0 });
         await detail.locator('#github-connection h2').click();
         await page.screenshot({
           animations: 'disabled',
@@ -285,11 +330,7 @@ try {
           .first()
           .click();
         await detail.waitFor();
-        await detail
-          .locator('summary')
-          .filter({ hasText: new RegExp('^' + label('manage', '管理') + '$') })
-          .click();
-        const off = detail.getByRole('checkbox', { name: /github/ });
+        const off = detail.getByRole('checkbox', { name: /GitHub/ });
         await off.uncheck();
         const offIndex = await page.evaluate(
           () => window.githubPluginFixture.commands.length - 1,
@@ -298,23 +339,15 @@ try {
           (index) => window.githubPluginFixture.reply(index),
           offIndex,
         );
+        await detail.getByText(turnOn, { exact: true }).waitFor();
         await detail
-          .getByText(
-            label(
-              'GitHub connection is unavailable; enable the bundled GitHub extension in Circle desktop.',
-              'GitHub 连接不可用；请在 Circle 桌面版启用内置 GitHub 扩展。',
-            ),
-            { exact: true },
-          )
+          .getByText(label('turned off', '已关闭'), { exact: true })
           .waitFor();
         assert.equal(
           await detail
-            .getByRole('button', {
-              name: label('try now', '立即试用'),
-              exact: true,
-            })
-            .isEnabled(),
-          false,
+            .getByRole('button', { name: tryName, exact: true })
+            .count(),
+          0,
         );
         assert.deepEqual(errors, []);
         receipts.push({

@@ -33,6 +33,7 @@ import {
   Pin,
   RotateCcw,
   Eye,
+  ChevronLeft,
   ChevronRight,
   Command,
   BookOpen,
@@ -1264,7 +1265,7 @@ function ExtensionsPage() {
                         ? t('extension enabled')
                         : t('extension disabled')}
         </p>
-        {action.error && (
+        {failed && action.error && (
           <details className="context-source">
             <summary>{t('technical details')}</summary>
             <pre>{action.error}</pre>
@@ -1309,8 +1310,10 @@ function ExtensionsPage() {
       <Page
         title={detailPlugin.title}
         description={detailPlugin.description}
+        className="plugin-detail-page"
         action={
           <Button onClick={() => navigate('/page/extensions')}>
+            <ChevronLeft size={14} />
             {t('back to plugins')}
           </Button>
         }
@@ -1331,7 +1334,12 @@ function ExtensionsPage() {
               ? void setExtension(name, value)
               : toggle(detailPlugin.id, value)
           }
-          feedback={name ? feedback(name) : undefined}
+          // Once the switch has settled, the page's own state says the rest.
+          feedback={
+            name && actions[name]?.phase !== 'complete'
+              ? feedback(name)
+              : undefined
+          }
         />
       </Page>
     );

@@ -288,16 +288,20 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  right: calc(var(--header-end) + 34px);
+  right: calc(var(--header-end) + 6px);
   height: 28px;
   margin: 0;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
+/* Chrome's tabs: icon, title and close, all as wide as there is room for, up to a
+   limit; the full title is the tooltip. */
 .inspector .native-browser > .browser-tabs .browser-tab {
+  flex: 0 1 200px;
+  min-width: 64px;
   height: 28px;
-  max-width: 170px;
+  max-width: 200px;
   border: 0;
   border-radius: 6px;
   background: none;
@@ -306,23 +310,39 @@
 .inspector .native-browser > .browser-tabs .browser-tab.active {
   background: var(--hover);
 }
-.inspector .native-browser > .browser-tabs .browser-tab.active:only-of-type {
-  background: none;
-}
 .inspector .native-browser > .browser-tabs .browser-tab-title {
-  padding: 0 6px;
-  color: var(--fg);
+  flex: 1;
+  height: 100%;
+  padding: 0 2px 0 8px;
+  gap: 6px;
+  color: var(--secondary);
   font-size: calc(var(--ui-size) - 0.5px);
   font-weight: 500;
+  cursor: default;
+}
+.inspector
+  .native-browser
+  > .browser-tabs
+  .browser-tab.active
+  .browser-tab-title {
+  color: var(--fg);
 }
 .inspector .native-browser > .browser-tabs .browser-tab .icon-button {
+  flex: none;
   width: 26px;
   height: 26px;
   border-radius: 6px;
   color: var(--muted);
-  margin-right: 3px;
+  margin-right: 1px;
+}
+.inspector .native-browser > .browser-tabs .browser-tab .icon-button:hover {
+  color: var(--fg);
+}
+.inspector .native-browser > .browser-tabs > .icon-button {
+  flex: none;
 }
 .inspector .native-browser .browser-address {
+  position: relative;
   gap: 2px;
   margin: 0;
   padding: 0 8px 7px;
@@ -342,6 +362,7 @@
   opacity: 0.4;
 }
 .inspector .browser-url {
+  position: relative;
   display: flex;
   align-items: center;
   flex: 1;
@@ -357,6 +378,14 @@
 .inspector .browser-url:focus-within {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
 }
+.inspector .browser-url-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
 .inspector .browser-url input {
   flex: 1;
   min-width: 0;
@@ -370,16 +399,106 @@
 .inspector .browser-url input::placeholder {
   color: var(--muted);
 }
+/* While you are not typing, the address as Chrome shows it: the host in the text
+   colour, the rest quieter, drawn over the field's own (hidden) text. */
+.inspector .browser-url-field.display input {
+  color: transparent;
+}
+.inspector .browser-url-display {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  white-space: pre;
+  pointer-events: none;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  text-overflow: ellipsis;
+}
+.inspector .browser-url-display > b {
+  flex: none;
+  color: var(--fg);
+  font-weight: 400;
+}
+.inspector .browser-url-display > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .inspector .browser-url .icon-button {
+  flex: none;
   width: 26px;
   height: 26px;
   border-radius: 6px;
   color: var(--muted);
-  opacity: 0;
 }
-.inspector .browser-url:focus-within .icon-button,
-.inspector .browser-url:hover .icon-button {
-  opacity: 1;
+.inspector .browser-url .icon-button:hover {
+  color: var(--fg);
+}
+/* Chrome's find bar hangs over the end of the address bar, so the page keeps its
+   size; it covers the address, never the buttons, and only where it has to. */
+.inspector .browser-find {
+  position: absolute;
+  z-index: 2;
+  top: -1px;
+  right: -1px;
+  bottom: -1px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: min(330px, calc(100% + 2px));
+  padding: 0 1px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.inspector .browser-find:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+.inspector .browser-find input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font-size: var(--ui-small);
+  outline: none;
+}
+.inspector .browser-find input::placeholder {
+  color: var(--muted);
+}
+.inspector .browser-find-count {
+  flex: none;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  font-variant-numeric: tabular-nums;
+}
+.inspector .browser-find .icon-button {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.inspector .browser-find .icon-button:hover:not(:disabled) {
+  color: var(--fg);
+}
+.inspector .browser-find .icon-button:disabled {
+  opacity: 0.4;
+}
+/* The page's picture while a menu is open over it */
+.inspector .browser-frozen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: left top;
+  pointer-events: none;
 }
 .inspector .native-browser-viewport {
   flex: 1 0 200px;

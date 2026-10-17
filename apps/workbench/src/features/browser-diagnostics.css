@@ -17,6 +17,12 @@
   min-width: 0;
   min-height: 34px;
 }
+.browser-diagnostics-title {
+  color: var(--fg);
+  font-size: var(--ui-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
 .browser-diagnostics-toggle {
   display: inline-flex;
   align-items: center;
@@ -448,14 +454,16 @@
   overflow-wrap: anywhere;
 }
 
-/* Keep page controls and live diagnostics inside the inspector's available
-   height. The native guest may shrink; logs must not extend below the window. */
-.native-browser:has(.browser-diagnostics) {
+/* Keep page controls and the developer tools inside the inspector's available
+   height. The native guest shrinks while they are open, as Chrome's page does
+   above its docked developer tools; logs must not extend below the window. */
+.native-browser {
   height: 100%;
   min-height: 0;
   overflow: hidden;
 }
-.native-browser:has(.browser-diagnostics) .native-browser-viewport {
+.native-browser .native-browser-viewport,
+.inspector .native-browser .native-browser-viewport {
   flex: 1 1 180px;
   min-height: 80px;
 }

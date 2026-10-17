@@ -335,7 +335,14 @@ export function App() {
         event.altKey
       )
         return;
-      if (document.querySelector('[role="dialog"]')) return;
+      // A dialog or a menu takes Escape itself, and so do the browser's address and
+      // find fields
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.native-browser input')
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
       setFullView(false);

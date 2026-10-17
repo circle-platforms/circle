@@ -738,9 +738,7 @@ export function ActivityPanel({
           <button className="text-button" onClick={() => setSelected('')}>
             ← {t('jobs')}
           </button>
-          <h3>
-            {job.id} · {job.title}
-          </h3>
+          <h3>{job.title}</h3>
           <Status value={job.state} />
           <Facts
             values={{
@@ -867,9 +865,21 @@ export function ActivityPanel({
     </>
   );
 }
-export function BrowserPanel({ selection }: { selection?: string } = {}) {
+export function BrowserPanel({
+  selection,
+  whole,
+  canBeWhole,
+  onWhole,
+}: Partial<
+  Pick<Props, 'selection' | 'whole' | 'canBeWhole' | 'onWhole'>
+> = {}) {
   return desktopHost() ? (
-    <NativeBrowser target={selection} />
+    <NativeBrowser
+      target={selection}
+      whole={whole}
+      canBeWhole={canBeWhole}
+      onWhole={onWhole}
+    />
   ) : (
     <BrowserPlaceholder />
   );

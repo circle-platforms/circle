@@ -20,8 +20,6 @@ export const githubConnection: Record<string, string> = {
 
   'preparing GitHub authorization code': '正在准备 GitHub 授权码…',
   'GitHub account': 'GitHub 账户',
-  'GitHub tools are loading or unavailable. Review the integration status above.':
-    'GitHub 工具正在加载或暂不可用，请查看上方集成状态。',
   'GitHub authorization has expired.': 'GitHub 授权已失效。',
   'GitHub denied access to this repository.': 'GitHub 拒绝访问此仓库。',
   'GitHub could not be reached or the request failed.':
@@ -33,7 +31,6 @@ export const githubConnection: Record<string, string> = {
   'Check your network and retry the read when ready. Your edits are kept.':
     '请检查网络，准备好后再重试读取，已保留你的编辑内容。',
 
-  'authorization permissions': '授权权限',
   'additional requested permissions': '额外申请的权限',
   'not reported': '尚未回报',
   'workflow allows creating or updating GitHub Actions workflow files.':
@@ -48,11 +45,7 @@ export const githubConnection: Record<string, string> = {
   'back to plugins': '返回插件',
   'plugin details': '插件详情',
   'manage GitHub plugin': '管理 GitHub 插件',
-  'connected account': '已连接账户',
   'GitHub plugin': 'GitHub 插件',
-  manage: '管理',
-  'try now': '立即试用',
-  capabilities: '能力介绍',
   'the original conversation changed; return to it before trying the plugin':
     '原会话已变化，请返回该会话后再试用插件',
   'the example could not be saved; retry to keep it in the same draft':
@@ -69,14 +62,12 @@ export const githubConnection: Record<string, string> = {
   'publish a reviewed draft PR after approval': '经审批后发布已审阅的草稿 PR',
   'Use GitHub connection status, draft pull requests and CI results in your Circle conversation.':
     '在 Circle 对话中使用 GitHub 连接状态、草稿 PR 和 CI 结果。',
-  'Enable the plugin to see its available tools.': '启用插件后可查看可用工具。',
   'Repository tools appear after connecting an account and allowing specific repositories. Writes require approval; merging remains your decision.':
     '连接账户并允许具体仓库后，仓库工具才会出现。写入操作需要审批，是否合并仍由你决定。',
   'Try now prepares a read-only connection example. Nothing is sent automatically.':
     '立即试用会准备一个只读连接检查示例，不会自动发送。',
   'GitHub connection, reviewed pull requests and CI in your conversation.':
     '在对话中管理 GitHub 连接、已审阅的拉取请求和 CI。',
-  'connection options': '连接选项',
 
   'GitHub connection error': 'GitHub 连接出错',
   'loading GitHub integration': '正在加载 GitHub 集成…',
@@ -88,31 +79,47 @@ export const githubConnection: Record<string, string> = {
   'Review the connection and try the action again. Your edits are kept.':
     '请检查连接后重试，已保留你的编辑内容。',
 
-  'reset repository edits': '还原仓库编辑',
   'No repositories selected; repository actions are unavailable.':
     '尚未选择仓库，暂不能执行仓库操作。',
-  'save allowed repositories': '保存允许访问的仓库',
-  'repositories Circle may use (optional)': 'Circle 可以使用的仓库（可选）',
-  'start GitHub authorization': '开始 GitHub 授权',
-  'copy authorization code': '复制授权码',
   'GitHub connection': 'GitHub 连接',
   'Connect GitHub in settings for repository delivery.':
     '在设置中连接 GitHub，以交付仓库更改。',
   'GitHub connection is unavailable; enable the bundled GitHub extension in Circle desktop.':
     'GitHub 连接不可用；请在 Circle 桌面版启用内置 GitHub 扩展。',
-  'connected as {account}': '已连接账户 {account}',
+  'connected as {account}': '已连接：{account}',
   'waiting for GitHub authorization': '等待 GitHub 授权',
-  'repositories Circle may use': 'Circle 可以使用的仓库',
   'GitHub connection lasts only for this Circle session.':
     'GitHub 连接仅在本次 Circle 会话中有效。',
-  'One owner/repository per line. This does not change what your GitHub account allows.':
-    '每行一个 owner/repository。这不会改变你的 GitHub 账号权限。',
   'sign-in': '登录方式',
   'stay signed in on this computer': '在这台电脑上保持登录',
   'sign out when Circle closes': 'Circle 关闭时退出登录',
-  'disconnect GitHub': '断开 GitHub 连接',
   'Disconnected from Circle. GitHub authorization revocation is not confirmed.':
     '已从 Circle 断开连接。尚未确认 GitHub 授权已撤销。',
   'manage GitHub connection in settings': '在设置中管理 GitHub 连接',
-  'remember sign-in': '记住登录',
+  'turned off': '已关闭',
+  'not available': '不可用',
+  'needs attention': '需要处理',
+  'connecting…': '正在连接…',
+  'Turn on GitHub to connect your account.': '开启 GitHub 后即可连接你的账户。',
+  'Circle uses this account only for the repositories you allow.':
+    'Circle 只会在你允许的仓库中使用此账户。',
+  'Connect your GitHub account to read pull request checks and CI, and to publish reviewed changes after your approval.':
+    '连接 GitHub 账户后，可读取拉取请求检查和 CI 结果，并在你批准后发布已审阅的修改。',
+  'open GitHub': '打开 GitHub',
+  'copy code': '复制代码',
+  'try in a conversation': '在对话中试用',
+  disconnect: '断开连接',
+  'connect GitHub': '连接 GitHub',
+  repositories: '仓库',
+  'Circle works only with the repositories listed here. This does not change what your GitHub account allows.':
+    'Circle 只会使用这里列出的仓库。这不会改变你的 GitHub 账户权限。',
+  'add repository': '添加仓库',
+  add: '添加',
+  'Write it as owner/repository, for example octo-org/app.':
+    '请写成 owner/repository 格式，例如 octo-org/app。',
+  'Your sign-in is kept in secure storage.': '登录信息保存在安全存储中。',
+  'You sign in again the next time.': '下次使用时需要重新登录。',
+  permissions: '权限',
+  'what Circle can do': 'Circle 可以做的事',
+  'permission details': '权限详情',
 };

@@ -51,6 +51,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'reading-live-pressure-ui.mjs',
   'fullview-resource-ui.mjs',
   'fullview-browser-shell-ui.mjs',
+  'browser-chrome-ui.mjs',
   'github-authorization-phase-ui.mjs',
   'terminal-accessibility-ui.mjs',
 ]);

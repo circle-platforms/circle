@@ -94,6 +94,7 @@ test('the component gate preserves prior journeys and includes each native regre
           'reading-live-pressure-ui.mjs',
           'fullview-resource-ui.mjs',
           'fullview-browser-shell-ui.mjs',
+          'browser-chrome-ui.mjs',
           'github-authorization-phase-ui.mjs',
           'terminal-accessibility-ui.mjs',
           'git-owner-ui.mjs',
@@ -147,13 +148,14 @@ test('the component gate preserves prior journeys and includes each native regre
     'reading-live-pressure-ui.mjs',
     'fullview-resource-ui.mjs',
     'fullview-browser-shell-ui.mjs',
+    'browser-chrome-ui.mjs',
     'github-authorization-phase-ui.mjs',
     'terminal-accessibility-ui.mjs',
     'git-owner-ui.mjs',
     'tool-text-output-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 47);
+  assert.equal(new Set(COMPONENT_SUITES).size, 48);
 });
 
 test('task configuration recovery remains a required component journey', () => {

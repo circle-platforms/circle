@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-const unavailable =
-  'GitHub connection is unavailable; enable the bundled GitHub extension in Circle desktop.';
+const unavailable = 'Turn on GitHub to connect your account.';
 const extension = (snapshot) =>
   snapshot.extensions.find(
     (item) => item.name === 'github' && item.scope === 'bundled',
@@ -76,25 +75,14 @@ export async function runNativeGitHubSettingsJourney({
       .waitFor();
     return detail.locator('#github-connection');
   };
-  const expand = async (container, name) => {
-    const details = container.locator('details').filter({
-      has: page
-        .locator('summary')
-        .filter({ hasText: new RegExp('^' + name + '$') }),
-    });
-    assert.equal(await details.count(), 1);
-    if (!(await details.evaluate((node) => node.open)))
-      await details.locator(':scope > summary').click();
-    return details;
-  };
   const openExtensions = async () => {
     const detail = page.getByRole('region', {
       name: 'GitHub plugin',
       exact: true,
     });
     if (!(await detail.isVisible())) await openPlugin();
-    await expand(detail, 'manage');
-    return detail.getByRole('checkbox', { name: 'enable github', exact: true });
+    // The switch is in the connection summary itself, not behind a fold.
+    return detail.getByRole('checkbox', { name: 'enable GitHub', exact: true });
   };
   const verifyDisabled = (snapshot) => {
     const item = extension(snapshot);
@@ -180,34 +168,45 @@ export async function runNativeGitHubSettingsJourney({
       true,
     );
     card = await openPlugin();
-    await card.getByText('GitHub login required', { exact: true }).waitFor();
+    await card.getByText('not connected', { exact: true }).waitFor();
     await card
       .getByRole('heading', { name: 'GitHub account', exact: true })
       .waitFor();
-    await expand(card, 'connection options');
     const repositories = card.getByPlaceholder('owner/repository', {
       exact: true,
     });
     assert.equal(await repositories.inputValue(), '');
-    await expand(card, 'sign-in');
-    const storage = card.locator('select');
-    assert.equal(await storage.count(), 1);
+    const storage = card.getByRole('radio');
+    assert.equal(await storage.count(), 2);
     assert.deepEqual(
-      await storage.locator('option').evaluateAll((options) =>
+      await storage.evaluateAll((options) =>
         options.map((option) => ({
           value: option.value,
-          text: option.textContent,
+          text: option.getAttribute('aria-label'),
+          checked: option.checked,
         })),
       ),
       [
-        { value: 'encrypted', text: 'stay signed in on this computer' },
-        { value: 'session', text: 'sign out when Circle closes' },
+        {
+          value: 'encrypted',
+          text: 'stay signed in on this computer',
+          checked: true,
+        },
+        {
+          value: 'session',
+          text: 'sign out when Circle closes',
+          checked: false,
+        },
       ],
     );
-    await storage.selectOption('session');
-    assert.equal(await storage.inputValue(), 'session');
+    const sessionOnly = card.getByRole('radio', {
+      name: 'sign out when Circle closes',
+      exact: true,
+    });
+    await sessionOnly.check();
+    assert.equal(await sessionOnly.isChecked(), true);
     const authorize = card.getByRole('button', {
-      name: 'start GitHub authorization',
+      name: 'connect GitHub',
       exact: true,
     });
     assert.equal(
@@ -215,7 +214,13 @@ export async function runNativeGitHubSettingsJourney({
       true,
       'an empty optional allowlist does not block the original authorization control',
     );
-    await storage.selectOption('encrypted');
+    await card
+      .getByRole('radio', {
+        name: 'stay signed in on this computer',
+        exact: true,
+      })
+      .check();
+    assert.equal(await sessionOnly.isChecked(), false);
     assert.equal(await authorize.isEnabled(), true);
     assert.equal(
       extension(await state()).view.state,
@@ -278,7 +283,7 @@ export async function runNativeGitHubSettingsJourney({
     assert.equal(
       await card
         .getByRole('button', {
-          name: 'start GitHub authorization',
+          name: 'connect GitHub',
           exact: true,
         })
         .count(),
@@ -347,7 +352,7 @@ export async function runNativeGitHubSettingsJourney({
       }))
       .catch((error) => ({ error: String(error) }));
     const failedToggle = page.getByRole('checkbox', {
-      name: 'enable github',
+      name: 'enable GitHub',
       exact: true,
     });
     receipt.uiSwitch = (await failedToggle.count())

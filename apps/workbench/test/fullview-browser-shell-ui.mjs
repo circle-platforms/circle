@@ -25,6 +25,7 @@ page.setDefaultTimeout(5000);
 const errors = [],
   checks = [];
 page.on('pageerror', (e) => errors.push(String(e)));
+let sawClosedTools = false;
 try {
   await page.addInitScript(() => {
     localStorage.setItem('circle.workbench.language', 'en');
@@ -105,8 +106,14 @@ try {
           if ((await browserPanel.getAttribute('aria-pressed')) !== 'true')
             await browserPanel.click();
           await page
-            .getByRole('button', { name: 'page diagnostics', exact: true })
+            .getByRole('button', { name: 'browser menu', exact: true })
             .waitFor();
+          // Developer tools take no room until asked for, as in Chrome. They
+          // stay open across the loop's in-page route changes.
+          if (!sawClosedTools) {
+            assert.equal(await page.locator('.browser-diagnostics').count(), 0);
+            sawClosedTools = true;
+          }
           if (mode === 'full') {
             await page
               .getByRole('button', { name: 'full view', exact: true })
@@ -114,15 +121,23 @@ try {
             await page.locator('.inspector-full .inspector').waitFor();
           }
           for (const expanded of [false, true]) {
-            const diagnosticToggle = page.getByRole('button', {
-              name: 'page diagnostics',
-              exact: true,
-            });
-            if (
-              (await diagnosticToggle.getAttribute('aria-expanded')) !==
-              String(expanded)
-            )
-              await diagnosticToggle.click();
+            const shown =
+              (await page.locator('.browser-diagnostics').count()) > 0;
+            if (expanded && !shown) {
+              await page
+                .getByRole('button', { name: 'browser menu', exact: true })
+                .click();
+              await page
+                .getByRole('menuitem', { name: 'developer tools' })
+                .click();
+              await page.locator('.browser-diagnostics').waitFor();
+            } else if (!expanded && shown)
+              await page
+                .getByRole('button', {
+                  name: 'close developer tools',
+                  exact: true,
+                })
+                .click();
             await page.evaluate(
               () =>
                 new Promise((r) =>
@@ -249,8 +264,10 @@ try {
                 out +
                 `/${platform}-${width}-${height}-${mode}-${expanded ? 'expanded' : 'closed'}.png`,
             });
-            const [body, wrapper, native, viewport, footer, diagnostics] =
-              geometry;
+            const [body, wrapper, native, viewport, footer, docked] = geometry;
+            // Closed, the footer is the last row; open, the developer tools are
+            assert.equal(!!docked.missing, !expanded);
+            const diagnostics = docked.missing ? footer : docked;
             assert.equal(
               body.paddingBottom,
               0,

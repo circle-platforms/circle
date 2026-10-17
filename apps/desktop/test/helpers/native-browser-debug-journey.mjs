@@ -140,12 +140,14 @@ export async function runNativeBrowserDebugJourney({
     });
     if ((await browserToggle.getAttribute('aria-pressed')) !== 'true')
       await browserToggle.click();
-    const diagnosticsToggle = page.getByRole('button', {
-      name: 'page diagnostics',
-      exact: true,
-    });
-    if ((await diagnosticsToggle.getAttribute('aria-expanded')) !== 'true')
-      await diagnosticsToggle.click();
+    // Developer tools open from the browser's ⋮ menu, as in Chrome
+    if (!(await page.locator('.browser-diagnostics').count())) {
+      await page
+        .getByRole('button', { name: 'browser menu', exact: true })
+        .click();
+      await page.getByRole('menuitem', { name: 'developer tools' }).click();
+      await page.locator('.browser-diagnostics').waitFor();
+    }
     await panel.getByRole('tab', { name: 'debugger', exact: true }).click();
     await panel.getByRole('button', { name: 'resume', exact: true }).click();
     await until(

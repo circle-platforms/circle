@@ -738,7 +738,7 @@ try {
     for (const height of [tallest, 900]) {
       const panel = await blankBelow(height);
       await page
-        .getByRole('button', { name: 'page diagnostics', exact: true })
+        .getByRole('button', { name: 'browser menu', exact: true })
         .waitFor({ state: 'visible' });
       assert(
         panel.contentBottom <= panel.containerBottom + 2,

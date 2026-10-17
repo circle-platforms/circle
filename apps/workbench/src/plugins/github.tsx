@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import { Blocks } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { GitHubConnectionCard } from '../components/GitHubConnectionCard';
-import { Button, Switch } from '../components/common';
 import {
   prepareGitHubExample,
   type PreparedGitHubExample,
@@ -75,65 +74,14 @@ export function GitHubPluginDetails({
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   }
-  const capabilities = [
-    [
-      'github_connection',
-      () => t('check the connection and Circle repository access'),
-    ],
-    [
-      'github_candidate',
-      () => t('inspect the exact commit and files before publishing'),
-    ],
-    ['github_checks', () => t('read pull request checks')],
-    ['github_logs', () => t('read failed CI logs')],
-    ['github_retry', () => t('retry failed CI jobs after approval')],
-    ['github_publish', () => t('publish a reviewed draft PR after approval')],
-  ] as const;
-  const available = capabilities.filter(
-    ([tool]) => ready && extension?.tools.includes(tool),
-  );
   return (
     <section className="github-plugin" aria-label={t('GitHub plugin')}>
-      <div className="inline-actions">
-        <details className="context-source">
-          <summary>{t('manage')}</summary>
-          <Switch
-            label={t('enable {name}', { name: 'github' })}
-            checked={enabled}
-            onChange={onToggle}
-          />
-        </details>
-        <Button
-          className={connected ? 'primary' : undefined}
-          disabled={!ready}
-          onClick={tryExample}
-        >
-          {t('try now')}
-        </Button>
-      </div>
-      {feedback}
-      {error && <p role="alert">{error}</p>}
-      <GitHubConnectionCard embedded />
-      <details className="panel-section">
-        <summary>{t('capabilities')}</summary>
-        {available.length ? (
-          <ul>
-            {available.map(([tool, label]) => (
-              <li key={tool}>{label()}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="panel-note">
-            {!enabled
-              ? t('Enable the plugin to see its available tools.')
-              : extension?.error
-                ? t('GitHub integration could not be loaded.')
-                : t(
-                    'GitHub tools are loading or unavailable. Review the integration status above.',
-                  )}
-          </p>
-        )}
-      </details>
+      <GitHubConnectionCard
+        embedded
+        integration={{ enabled, onToggle, feedback }}
+        onTry={connected ? tryExample : undefined}
+        tryError={error}
+      />
     </section>
   );
 }

@@ -19,11 +19,15 @@ import {
 } from '../../../src/browser/navigation.js';
 import {
   BrowserWindow,
+  Menu,
   WebContentsView,
+  clipboard,
   dialog as systemDialog,
   nativeTheme,
   nativeImage,
   type Certificate,
+  type ContextMenuParams,
+  type Input,
   type Rectangle,
   type Session,
   webContents as allContents,
@@ -49,6 +53,7 @@ import type {
   BrowserDialog,
   BrowserDownload,
   BrowserPermission,
+  BrowserKeyEvent,
   BrowserState,
 } from './contracts';
 import {
@@ -92,6 +97,14 @@ import {
 } from '../../../src/browser/files.js';
 import { privateHost, WARNING_SCHEME, warningPage } from './browser-warning';
 import { nativeText, type NativeLocale } from './native-text';
+import {
+  browserContextMenu,
+  browserShortcut,
+  nextZoom,
+  zoomPercent,
+  type BrowserContextCommand,
+  type BrowserKeyAction,
+} from './browser-controls';
 import {
   buildPalette,
   palette,
@@ -216,6 +229,12 @@ interface Tab {
   upload?: { token: string; key: string };
   // The site asks for a client certificate: the page waits for the person's choice
   choice?: Choice;
+  // The page's icon as a data URL, for its tab
+  favicon?: string;
+  // When the person stopped the page loading: what that cut short is no failure
+  stopped?: number;
+  // What the person seeks in the page with find, and what the page last answered
+  find?: { text: string; active: number; matches: number };
 }
 interface Conversation {
   id: string;
@@ -339,6 +358,10 @@ export class BrowserSessions {
   private diagnosticCloseError?: unknown;
   // The window's theme, which Circle's own pages and the pointer follow
   private dark = nativeTheme.shouldUseDarkColors;
+  /** Hands a browser shortcut to the window, which does it as its panel's buttons do. */
+  sendKey: (event: BrowserKeyEvent) => void = () => {};
+  // The conversation whose browser panel has the window's keyboard
+  private keyTarget?: string;
   constructor(
     private window: BrowserWindow,
     private emit: (state: BrowserState) => void = () => {},
@@ -1019,7 +1042,7 @@ export class BrowserSessions {
       },
     );
     contents.on('did-fail-load', (_event, code, description, url, main) => {
-      if (!main || code === -3 || tab.warning) return;
+      if (!main || code === -3 || tab.warning || this.stoppedNow(tab)) return;
       tab.failure = { url: url || tab.requestedUrl, error: description };
       this.visibility(conversation);
       this.publish(id);
@@ -1050,6 +1073,36 @@ export class BrowserSessions {
       if (conversation.control === 'user')
         conversation.personInput = Date.now();
     });
+    // The browser's shortcuts, as Chrome has them, while the page has the keyboard. Keys
+    // of Circle's own actions are the page's: nothing here acts while Circle does.
+    contents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || this.circleActs(conversation)) return;
+      const action = browserShortcut(input, process.platform);
+      if (!action || (action === 'stop' && !contents.isLoading())) return;
+      event.preventDefault();
+      // The address bar and the find field are the window's
+      if (action === 'address' || action === 'find')
+        this.window.webContents.focus();
+      this.sendKey({ sessionId: 'browser:' + id, action, tab: tab.id });
+    });
+    contents.on('context-menu', (_event, params) =>
+      this.contextMenu(conversation, tab, params),
+    );
+    // Ctrl and the mouse wheel zoom as in Chrome
+    contents.on('zoom-changed', (_event, direction) => {
+      if (!this.circleActs(conversation))
+        this.zoom(conversation, tab, direction);
+    });
+    contents.on('found-in-page', (_event, result) => {
+      if (!tab.find) return;
+      tab.find.matches = result.matches;
+      if (result.activeMatchOrdinal)
+        tab.find.active = result.activeMatchOrdinal;
+      this.publish(id);
+    });
+    contents.on('page-favicon-updated', (_event, favicons) => {
+      void this.favicon(conversation, tab, favicons).catch(() => {});
+    });
     contents.on('did-navigate', (_event, url) => {
       if (url.startsWith(WARNING_SCHEME + ':')) {
         this.dropStaleWarnings(tab);
@@ -1058,6 +1111,8 @@ export class BrowserSessions {
       tab.requestedUrl = url;
       tab.warning = undefined;
       tab.failure = undefined;
+      tab.favicon = undefined;
+      tab.find = undefined;
       if (
         safeExternalUrl(url) &&
         !(
@@ -1485,6 +1540,8 @@ export class BrowserSessions {
       control: conversation?.control ?? 'shared',
       ...(conversation?.waiting ? { waiting: true } : {}),
       ...(conversation?.handoff ? { handoff: conversation.handoff } : {}),
+      zoom: contents ? zoomPercent(contents.getZoomFactor()) : 100,
+      ...(tab?.find ? { find: { ...tab.find } } : {}),
       tab: tab?.id,
       tabs: conversation
         ? [...conversation.tabs.values()]
@@ -1500,6 +1557,9 @@ export class BrowserSessions {
                 entry.contents.getURL(),
               loading: entry.contents.isLoading(),
               active: entry.id === conversation.active,
+              ...(entry.favicon && !entry.warning
+                ? { favicon: entry.favicon }
+                : {}),
             }))
         : [],
       dialogs: conversation
@@ -1606,6 +1666,239 @@ export class BrowserSessions {
     this.visibility(conversation);
     return this.state(id);
   }
+  /** The person stopped this page a moment ago, as Chrome's stop button does. */
+  private stoppedNow(tab: Tab) {
+    return !!tab.stopped && Date.now() - tab.stopped < 2000;
+  }
+  /** Circle acts in the browser: the person's keys and menus wait meanwhile. */
+  private circleActs(conversation: Conversation) {
+    return (
+      conversation.operating ||
+      conversation.control === 'agent' ||
+      conversation.control === 'user_pending'
+    );
+  }
+  /**
+   * A key the window is about to get. While the browser panel has the keyboard, the
+   * browser's shortcuts are its own, before the menu's (⌘W would close the window).
+   * Escape stays the field's.
+   */
+  windowKey(event: { preventDefault: () => void }, input: Input) {
+    if (input.type !== 'keyDown' || !this.keyTarget) return;
+    const conversation = this.conversations.get(this.keyTarget);
+    if (!conversation) return;
+    const action = browserShortcut(input, process.platform);
+    if (!action || action === 'stop') return;
+    event.preventDefault();
+    this.sendKey({ sessionId: 'browser:' + conversation.id, action });
+  }
+  /** What the person does to the shown page from the panel; see DesktopBridge.browserPage. */
+  async page(idValue: unknown, action: unknown, value: unknown) {
+    const id = this.validId(idValue);
+    if (action === 'keys') {
+      if (value === true) this.keyTarget = id;
+      else if (this.keyTarget === id) this.keyTarget = undefined;
+      return null;
+    }
+    const conversation = this.conversations.get(id);
+    const tab = conversation?.active
+      ? conversation.tabs.get(conversation.active)
+      : undefined;
+    if (action === 'snapshot') {
+      if (!tab || tab.closed || !tab.view.getVisible()) return null;
+      const image = await this.limit(
+        tab.contents.capturePage(),
+        undefined,
+        2000,
+      ).catch(() => undefined);
+      return image && !image.isEmpty()
+        ? 'data:image/jpeg;base64,' + image.toJPEG(85).toString('base64')
+        : null;
+    }
+    if (!conversation || !tab || tab.closed) throw Error('no browser page');
+    if (action === 'stop') {
+      if (tab.contents.isLoading()) {
+        tab.stopped = Date.now();
+        tab.contents.stop();
+        conversation.events.push(`the user stopped loading tab ${tab.id}`);
+        // A page stopped before it answered sends no stop event: say it a moment later
+        setTimeout(() => this.publish(id), 100);
+      }
+    } else if (action === 'zoom') {
+      if (value !== 'in' && value !== 'out' && value !== 'reset')
+        throw Error('invalid zoom');
+      this.zoom(conversation, tab, value);
+    } else if (action === 'find') {
+      const request = (value ?? {}) as {
+        text?: unknown;
+        forward?: unknown;
+      };
+      if (typeof request.text !== 'string' || request.text.length > 1000)
+        throw Error('invalid find');
+      if (!request.text) {
+        tab.find = undefined;
+        tab.contents.stopFindInPage('clearSelection');
+      } else {
+        const fresh = tab.find?.text !== request.text;
+        if (fresh) tab.find = { text: request.text, active: 0, matches: 0 };
+        tab.contents.findInPage(request.text, {
+          forward: request.forward !== false,
+          findNext: fresh,
+        });
+      }
+    } else if (action === 'find-stop') {
+      tab.find = undefined;
+      tab.contents.stopFindInPage('keepSelection');
+    } else if (action === 'tab') {
+      if (value !== 'next' && value !== 'previous')
+        throw Error('invalid tab step');
+      const open = [...conversation.tabs.values()].filter(
+        (entry) => !entry.closed,
+      );
+      const index = open.indexOf(tab);
+      const next =
+        open[(index + (value === 'next' ? 1 : -1) + open.length) % open.length];
+      if (next && next !== tab) return this.tabs(id, 'select', next.id);
+    } else throw Error('invalid browser page action');
+    this.publish(id);
+    return this.state(id);
+  }
+  /** The person zooms a page in or out a step, or back to 100%, as Chrome does. */
+  private zoom(
+    conversation: Conversation,
+    tab: Tab,
+    which: 'in' | 'out' | 'reset',
+  ) {
+    const current = zoomPercent(tab.contents.getZoomFactor());
+    const next = which === 'reset' ? 100 : nextZoom(current, which);
+    if (next === current) return;
+    tab.contents.setZoomFactor(next / 100);
+    tab.screenshot = undefined;
+    conversation.events.push(
+      `the user zoomed tab ${tab.id} to ${next}%; take a new browser_screenshot before using coordinates`,
+    );
+    this.publish(conversation.id);
+  }
+  /** The page's own menu on a right-click, as Chrome shows it. */
+  private contextMenu(
+    conversation: Conversation,
+    tab: Tab,
+    params: ContextMenuParams,
+  ) {
+    if (this.circleActs(conversation) || tab.closed) return;
+    const history = tab.contents.navigationHistory;
+    const items = browserContextMenu(
+      params,
+      {
+        canGoBack: history.canGoBack(),
+        canGoForward: history.canGoForward(),
+        canInspect: !this.circleActs(conversation),
+      },
+      (url) => !!safeExternalUrl(url),
+    );
+    Menu.buildFromTemplate(
+      items.map((item) =>
+        item === 'separator'
+          ? { type: 'separator' as const }
+          : {
+              label: this.text(item.label),
+              enabled: item.enabled,
+              click: () =>
+                this.contextCommand(conversation, tab, item.command, params),
+            },
+      ),
+    ).popup({ window: this.window });
+  }
+  private contextCommand(
+    conversation: Conversation,
+    tab: Tab,
+    command: BrowserContextCommand,
+    params: ContextMenuParams,
+  ) {
+    if (tab.closed || tab.contents.isDestroyed()) return;
+    const contents = tab.contents;
+    // A link or an image the person opens goes to a tab of its own, behind this one
+    const open = (target: string) => {
+      const url = safeExternalUrl(target);
+      if (!url) return;
+      const opened = this.createTab(conversation, { activate: false });
+      conversation.events.push(
+        `the user opened ${url} in tab ${opened.id} from tab ${tab.id}`,
+      );
+      void this.load(conversation, opened, url).catch(() => {});
+    };
+    if (command === 'back' || command === 'forward' || command === 'reload')
+      void this.history(conversation, tab, command).catch(() => {});
+    else if (command === 'open-link') open(params.linkURL);
+    else if (command === 'open-image') open(params.srcURL);
+    else if (command === 'copy-link') clipboard.writeText(params.linkURL);
+    else if (command === 'copy-image-address')
+      clipboard.writeText(params.srcURL);
+    else if (command === 'copy-image') contents.copyImageAt(params.x, params.y);
+    else if (command === 'copy') contents.copy();
+    else if (command === 'cut') contents.cut();
+    else if (command === 'paste') contents.paste();
+    else if (command === 'undo') contents.undo();
+    else if (command === 'redo') contents.redo();
+    else if (command === 'select-all') contents.selectAll();
+    else if (command === 'inspect') {
+      // The panel's developer tools open under the page, as Chrome docks its own
+      if (conversation.active !== tab.id) return;
+      this.window.webContents.focus();
+      this.sendKey({
+        sessionId: 'browser:' + conversation.id,
+        action: 'inspect',
+        tab: tab.id,
+      });
+    }
+  }
+  /**
+   * The icon a page names for its tab, read once as a data URL. A page that names
+   * none is not asked for /favicon.ico: Circle makes no request the page did not.
+   */
+  private async favicon(
+    conversation: Conversation,
+    tab: Tab,
+    candidates: string[],
+  ) {
+    const url = candidates.find(
+      (candidate) =>
+        /^data:image\//i.test(candidate) || !!safeExternalUrl(candidate),
+    );
+    if (!url) return;
+    const page = tab.contents.getURL();
+    let data: string | undefined;
+    if (url.startsWith('data:')) data = url.length <= 200_000 ? url : undefined;
+    else {
+      const parsed = new URL(url);
+      if (
+        candidates.length === 1 &&
+        parsed.pathname === '/favicon.ico' &&
+        !parsed.search
+      )
+        return;
+      const response = await tab.contents.session.fetch(url, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const type = (response.headers.get('content-type') ?? '')
+        .split(';')[0]!
+        .trim()
+        .toLowerCase();
+      if (!response.ok || !/^image\/[a-z0-9.+-]+$/.test(type)) return;
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (!bytes.length || bytes.length > 100_000) return;
+      data = `data:${type};base64,${bytes.toString('base64')}`;
+    }
+    if (
+      !data ||
+      tab.closed ||
+      tab.contents.isDestroyed() ||
+      tab.contents.getURL() !== page
+    )
+      return;
+    tab.favicon = data;
+    this.publish(conversation.id);
+  }
   clearDiagnosticSubscriptions() {
     for (const conversation of this.conversations.values())
       for (const tab of conversation.tabs.values())
@@ -1696,9 +1989,12 @@ export class BrowserSessions {
         conversation.events.push(`the user switched to tab ${tab.id}`);
         this.visibility(conversation);
         this.publish(id);
-      } else if (action === 'close')
+      } else if (action === 'close') {
         this.closeTab(conversation, tab, 'closed by the user');
-      else throw Error('invalid browser tab action');
+        // As in Chrome, the last tab closed leaves a new, empty one
+        if (!conversation.tabs.size)
+          this.createTab(conversation, { activate: true });
+      } else throw Error('invalid browser tab action');
     }
     return this.state(id);
   }
@@ -1953,7 +2249,7 @@ export class BrowserSessions {
           error instanceof Error
             ? error.message.match(/ERR_[A-Z_]+/)?.[0]
             : undefined;
-        if (code === 'ERR_ABORTED') outcome = 'aborted';
+        if (code === 'ERR_ABORTED' || this.stoppedNow(tab)) outcome = 'aborted';
         else {
           tab.failure = { url, error: code ?? 'ERR_TIMED_OUT' };
           contents.stop();

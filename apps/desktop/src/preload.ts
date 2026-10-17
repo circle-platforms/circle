@@ -116,6 +116,14 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-reveal', id, download),
   browserControl: (id, action) =>
     ipcRenderer.invoke('circle:browser-control', id, action),
+  browserPage: (id, action, value) =>
+    ipcRenderer.invoke('circle:browser-page', id, action, value),
+  onBrowserKey: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:browser-key', handler);
+    return () => ipcRenderer.removeListener('circle:browser-key', handler);
+  },
   onBrowserEvent: (listener) => {
     const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>
       listener(state);

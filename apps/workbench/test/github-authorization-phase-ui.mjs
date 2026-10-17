@@ -69,7 +69,7 @@ try {
               .getByText(
                 label(
                   'connected as fixture-account',
-                  '已连接账户 fixture-account',
+                  '已连接：fixture-account',
                 ),
                 { exact: true },
               )
@@ -114,7 +114,7 @@ try {
           assert.equal(
             await card
               .getByRole('button', {
-                name: label('copy authorization code', '复制授权码'),
+                name: label('copy code', '复制代码'),
                 exact: true,
               })
               .count(),
@@ -123,7 +123,7 @@ try {
           assert.equal(
             await card
               .getByRole('button', {
-                name: label('open GitHub authorization', '打开 GitHub 授权页'),
+                name: label('open GitHub', '打开 GitHub'),
                 exact: true,
               })
               .count(),
@@ -132,7 +132,7 @@ try {
           assert.equal(
             await card
               .getByRole('button', {
-                name: label('cancel login', '取消登录'),
+                name: label('cancel', '取消'),
                 exact: true,
               })
               .isEnabled(),
@@ -152,13 +152,13 @@ try {
         assert.equal(await card.locator('code').innerText(), 'CODE-TEST');
         await card
           .getByRole('button', {
-            name: label('copy authorization code', '复制授权码'),
+            name: label('copy code', '复制代码'),
             exact: true,
           })
           .click();
         await card
           .getByRole('button', {
-            name: label('open GitHub authorization', '打开 GitHub 授权页'),
+            name: label('open GitHub', '打开 GitHub'),
             exact: true,
           })
           .click();
@@ -199,7 +199,7 @@ try {
         assert.equal(
           await card
             .getByRole('button', {
-              name: label('copy authorization code', '复制授权码'),
+              name: label('copy code', '复制代码'),
               exact: true,
             })
             .count(),
@@ -207,7 +207,7 @@ try {
         );
         await card
           .getByRole('button', {
-            name: label('cancel login', '取消登录'),
+            name: label('cancel', '取消'),
             exact: true,
           })
           .click();
@@ -220,7 +220,7 @@ try {
         await page.evaluate(() => window.githubFixture.holdNextConnect());
         await card
           .getByRole('button', {
-            name: label('start GitHub authorization', '开始 GitHub 授权'),
+            name: label('connect GitHub', '连接 GitHub'),
             exact: true,
           })
           .click();
@@ -234,7 +234,7 @@ try {
           )
           .waitFor();
         const cancel = card.getByRole('button', {
-          name: label('cancel login', '取消登录'),
+          name: label('cancel', '取消'),
           exact: true,
         });
         assert.equal(
