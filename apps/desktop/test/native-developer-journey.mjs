@@ -63,6 +63,7 @@ import {
   journeyShellInput,
   isolatedJourneyPath,
   assertBundledJourneyNode,
+  journeyBundledNodeFromApp,
 } from './helpers/native-journey-platform.mjs';
 // Real renderer interactions; RPC is limited to fixture preparation and effect queries.
 import { _electron as electron } from 'playwright';
@@ -72,7 +73,7 @@ import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -130,13 +131,21 @@ const terminalFixture = await createNativeTerminalFixture(repo);
 const terminalShortcutsFixture =
   await createNativeTerminalShortcutsFixture(repo);
 const continuityFixture = await createNativeContinuityFixture(repo);
+// CIRCLE_DESKTOP_APP_PATH may name app.asar, a macOS .app or a Linux/Windows package folder.
+const packagedResources = !process.env.CIRCLE_DESKTOP_APP_PATH
+  ? undefined
+  : /[\\/]app\.asar$/.test(launchRoot)
+    ? dirname(launchRoot)
+    : launchRoot.endsWith('.app')
+      ? join(launchRoot, 'Contents/Resources')
+      : join(launchRoot, 'resources');
 const commandHandoffFixture = await createNativeCommandHandoffFixture(
   repo,
-  join(
-    launchRoot.replace(/([\\/])app\.asar$/, '$1app.asar.unpacked'),
-    'dist/tools/node/bin',
-    process.platform === 'win32' ? 'node.exe' : 'node',
-  ),
+  journeyBundledNodeFromApp({
+    isPackaged: !!packagedResources,
+    resourcesPath: packagedResources,
+    appPath: launchRoot,
+  }),
 );
 const debugFixture = await createNativeDebugFixture(repo);
 const childCommandFixture = await createNativeChildCommandHandoffFixture(
