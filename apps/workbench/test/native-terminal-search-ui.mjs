@@ -24,7 +24,8 @@ try {
   const page = await browser.newPage({
     viewport: { width: 1200, height: 800 },
   });
-  page.setDefaultTimeout(3000);
+  // Every wait here is for a condition; a loaded machine needs more than 3 s.
+  page.setDefaultTimeout(10_000);
   const errors = [];
   await page.addInitScript(() => {
     window.__terminalErrors = [];
