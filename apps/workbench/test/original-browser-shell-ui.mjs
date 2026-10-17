@@ -4,6 +4,10 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 const root = fileURLToPath(new URL('..', import.meta.url));
+// Every session keeps its own browser view, hidden while another is shown;
+// look only in the one on screen.
+const SHOWN_BROWSER =
+  '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])';
 const out =
   process.env.CIRCLE_BROWSER_SHELL_EVIDENCE ||
   '/tmp/circle-original-browser-shell-ui';
@@ -150,7 +154,13 @@ try {
           // Developer tools take no room until asked for, as in Chrome. They
           // stay open across the loop's in-page route changes.
           if (!sawClosedTools) {
-            assert.equal(await page.locator('.browser-diagnostics').count(), 0);
+            assert.equal(
+              await page
+                .locator(SHOWN_BROWSER)
+                .locator('.browser-diagnostics')
+                .count(),
+              0,
+            );
             sawClosedTools = true;
           }
           assert.equal(
@@ -181,8 +191,8 @@ try {
             // Visible, not merely mounted: a closing dock can stay in the
             // DOM for a moment without its close button showing.
             const shown = await page
+              .locator(SHOWN_BROWSER)
               .locator('.browser-diagnostics')
-              .first()
               .isVisible();
             if (expanded && !shown) {
               await page
@@ -196,9 +206,13 @@ try {
                   name: language === 'en' ? 'developer tools' : '开发工具',
                 })
                 .click();
-              await page.locator('.browser-diagnostics').waitFor();
+              await page
+                .locator(SHOWN_BROWSER)
+                .locator('.browser-diagnostics')
+                .waitFor();
             } else if (!expanded && shown)
               await page
+                .locator(SHOWN_BROWSER)
                 .getByRole('button', {
                   name:
                     language === 'en'
@@ -218,13 +232,15 @@ try {
               );
             });
             const geometry = await page.evaluate(() => {
+              const shownView =
+                '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])';
               const selectors = [
                 '.inspector-body',
                 '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])',
-                '.native-browser',
-                '.native-browser-viewport',
-                '.native-browser-footer',
-                '.browser-diagnostics',
+                `${shownView} .native-browser`,
+                `${shownView} .native-browser-viewport`,
+                `${shownView} .native-browser-footer`,
+                `${shownView} .browser-diagnostics`,
               ];
               return selectors.map((selector) => {
                 const node = document.querySelector(selector);

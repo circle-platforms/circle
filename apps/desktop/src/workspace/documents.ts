@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   constants,
   realpathSync,
@@ -100,6 +101,10 @@ export interface WorkspaceDocumentsOptions {
   maxDepth?: number;
   ignoredDirectories?: string[];
 }
+
+const TORN_READ_ATTEMPTS = 5;
+const TORN_READ_PAUSE_MS = 20;
+export class TornReadError extends Error {}
 
 export class DocumentConflictError extends Error {
   readonly code = 'DOCUMENT_CONFLICT';
@@ -293,7 +298,26 @@ export class WorkspaceDocuments {
     return id;
   }
 
+  // A file written while it is read (by the agent, a formatter or Git) gives a
+  // torn read. Read it again a few times before telling the person, since the
+  // next read normally sees the whole new file.
   private async readTarget(
+    full: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocument> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.readTargetOnce(full, path, signal);
+      } catch (error) {
+        if (!(error instanceof TornReadError) || attempt >= TORN_READ_ATTEMPTS)
+          throw error;
+        await delay(TORN_READ_PAUSE_MS * attempt, undefined, { signal });
+      }
+    }
+  }
+
+  private async readTargetOnce(
     full: string,
     path: string,
     signal?: AbortSignal,
@@ -319,7 +343,9 @@ export class WorkspaceDocuments {
         before.ctimeNs !== after.ctimeNs ||
         before.size !== after.size
       )
-        throw Error(`file changed while reading: ${path}; read it again`);
+        throw new TornReadError(
+          `file changed while reading: ${path}; read it again`,
+        );
       const content = decode.decode(bytes);
       if (content.includes('\0'))
         throw Error('binary files cannot be edited as text');

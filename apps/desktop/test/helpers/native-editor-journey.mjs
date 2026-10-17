@@ -201,13 +201,38 @@ export async function runNativeEditorJourney({
   const rename = page.locator('input.rename-input');
   await rename.fill('total');
   await rename.press('Enter');
-  await page.getByRole('button', { name: 'save all', exact: true }).click();
+  // The language server applies the rename after Enter; on a loaded runner a
+  // save straight away saved the buffers before it arrived.
   await until(
-    async () =>
-      /export const total/.test(await disk(library)) &&
-      /import \{ total \}/.test(await disk(main)),
-    'semantic multi-file rename disk effect',
+    () =>
+      page
+        .locator('.native-code-editor .view-lines')
+        .first()
+        .evaluate((node) =>
+          node.textContent
+            .replaceAll('\u00a0', ' ')
+            .includes('export const total'),
+        ),
+    'semantic rename reaches the open buffer',
   );
+  const saveAll = page.getByRole('button', { name: 'save all', exact: true });
+  const renamedOnDisk = async () =>
+    /export const total/.test(await disk(library)) &&
+    /import \{ total \}/.test(await disk(main));
+  const renameDeadline = Date.now() + patience(15000);
+  // Click again only while nothing is saving and the edit is still unsaved.
+  while (!(await renamedOnDisk())) {
+    assert(
+      Date.now() < renameDeadline,
+      'semantic multi-file rename disk effect',
+    );
+    if (
+      (await saveAll.isEnabled()) &&
+      (await page.getByText('unsaved changes', { exact: true }).isVisible())
+    )
+      await saveAll.click();
+    await page.waitForTimeout(patience(1000));
+  }
   assert.match(await disk(main), /const label = "amount"/);
   checks.push(
     'native semantic definition and multi-file rename preserves string literals',
