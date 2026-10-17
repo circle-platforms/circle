@@ -414,8 +414,11 @@ export async function runNativeGitJourney({
     await viewer.getByRole('button', { name: 'save', exact: true }).click();
     await until(
       async () =>
-        (await readFile(path.join(root, names.conflict), 'utf8')) ===
-        'FEATURE\nSIDE\n',
+        // The editor keeps the file's line endings: CRLF where Git wrote it so (Windows).
+        (await readFile(path.join(root, names.conflict), 'utf8')).replace(
+          /\r\n/g,
+          '\n',
+        ) === 'FEATURE\nSIDE\n',
       'Monaco conflict save actual disk',
     );
     assert.notEqual(
@@ -453,7 +456,11 @@ export async function runNativeGitJourney({
       3,
     );
     assert.equal(
-      await readFile(path.join(root, names.conflict), 'utf8'),
+      // Git writes CRLF on Windows (core.autocrlf); the content is what matters.
+      (await readFile(path.join(root, names.conflict), 'utf8')).replace(
+        /\r\n/g,
+        '\n',
+      ),
       'FEATURE\nSIDE\n',
     );
     checks.push(
@@ -486,7 +493,11 @@ export async function runNativeGitJourney({
     await waitForNativeIdle();
     assert.equal((await git('rev-parse', 'HEAD')).trim(), beforeAbort);
     assert.equal(
-      await readFile(path.join(root, names.conflict), 'utf8'),
+      // Git writes CRLF on Windows (core.autocrlf); the content is what matters.
+      (await readFile(path.join(root, names.conflict), 'utf8')).replace(
+        /\r\n/g,
+        '\n',
+      ),
       'ABORT_FEATURE\n',
     );
     assert.match(

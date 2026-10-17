@@ -1,3 +1,4 @@
+import { runsUnder } from './process-tree.mjs';
 import assert from 'node:assert/strict';
 import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -372,7 +373,11 @@ export async function runNativeChildCommandHandoffJourney({
     });
     assert.equal(listing.available, true);
     assert.equal(listing.value.length, 1);
-    assert.equal(listing.value[0].managedCommand.commandPid, pid);
+    // The card's process is the command's root; the program runs as it or under it.
+    assert.ok(
+      await runsUnder(pid, listing.value[0].managedCommand.commandPid),
+      `${pid} runs under command root ${listing.value[0].managedCommand.commandPid}`,
+    );
     assert.equal(listing.value[0].id, target.terminal.id);
     assert.equal(listing.capabilities.input, true);
     await surface.locator('.xterm-helper-textarea').focus();

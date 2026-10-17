@@ -466,6 +466,27 @@ export function NativeTerminal({
     [adopt, commandKey, sessionId],
   );
 
+  // Stopping waits for the shell's console to close, which takes seconds on
+  // Windows; only the terminal being stopped waits, not the rest of the panel.
+  const [stopping, setStopping] = useState<string[]>([]);
+  const stopTerminal = async (id: string) => {
+    if (stopping.includes(id)) return;
+    const target = sessionId;
+    setStopping((previous) => [...previous, id]);
+    try {
+      adopt(await terminalRequest<TerminalSnapshot>('close', { id }));
+    } catch (reason) {
+      setOperations((previous) => ({
+        ...previous,
+        [target]: {
+          ...previous[target],
+          error: reason instanceof Error ? reason.message : String(reason),
+        },
+      }));
+    } finally {
+      setStopping((previous) => previous.filter((item) => item !== id));
+    }
+  };
   const run = async (action: () => Promise<void>) => {
     if (busy) return;
     const target = sessionId;
@@ -962,21 +983,14 @@ export function NativeTerminal({
                 : t('stop terminal')
             }
             disabled={
-              busy ||
               !selected ||
+              stopping.includes(selected.id) ||
               !['running', 'stopping'].includes(selected.status) ||
               (!!commandTerminal && !capabilities?.stop)
             }
-            onClick={() =>
-              run(async () => {
-                if (selected)
-                  adopt(
-                    await terminalRequest<TerminalSnapshot>('close', {
-                      id: selected.id,
-                    }),
-                  );
-              })
-            }
+            onClick={() => {
+              if (selected) void stopTerminal(selected.id);
+            }}
           >
             <X size={15} />
           </IconButton>

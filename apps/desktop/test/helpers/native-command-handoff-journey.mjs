@@ -1,3 +1,4 @@
+import { runsUnder } from './process-tree.mjs';
 import assert from 'node:assert/strict';
 import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -194,7 +195,11 @@ export async function runNativeCommandHandoffJourney({
     };
     const before = await observed();
     assert.equal(before.id, target.terminal.id);
-    assert.equal(before.managedCommand.commandPid, pid);
+    // The card's process is the command's root; the program runs as it or under it.
+    assert.ok(
+      await runsUnder(pid, before.managedCommand.commandPid),
+      `${pid} runs under command root ${before.managedCommand.commandPid}`,
+    );
     assert.equal(
       await readFile(join(workspace, 'native-command-starts'), 'utf8'),
       'once\n',
