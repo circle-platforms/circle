@@ -390,6 +390,24 @@ try {
     .locator(`.sidebar .session-link[href="#/session/${b}"]`)
     .first()
     .hover();
+  // Bring the tool row under the hover card: where they meet depends on each
+  // platform's fonts, and the check below needs them to overlap.
+  await page.waitForFunction(() =>
+    document
+      .querySelector('.session-hover')
+      ?.closest('[data-radix-popper-content-wrapper]'),
+  );
+  await page.evaluate(() => {
+    const button = document.querySelector('.tool-summary');
+    const card = document
+      .querySelector('.session-hover')
+      .closest('[data-radix-popper-content-wrapper]')
+      .getBoundingClientRect();
+    const transcript = button.closest('.transcript');
+    const tool = button.getBoundingClientRect();
+    transcript.scrollTop +=
+      tool.top - (card.top + card.height / 2 - tool.height / 2);
+  });
   await page.waitForFunction(() => {
     const button = document.querySelector('.tool-summary');
     const tooltip = document.querySelector('.session-hover');
