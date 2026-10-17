@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer, type ServerResponse } from 'node:http';
 import { GatewayModel } from '../src/model.js';
+import { CheckpointStore } from '../src/checkpoint_store.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import type { ModelRequest, ModelNotice } from '../src/types.js';
 import { cleanup, scratch } from './helpers.js';
@@ -829,4 +830,83 @@ test('Anthropic signature deltas replace prior signatures and replay unchanged',
     bodies[1]!.messages[1].content,
     first.message.provider_content,
   );
+});
+
+test('OpenAI resumed history omits thinking-only assistant turns but retains tool batches', async (t) => {
+  const messages: import('../src/types.js').Message[] = [
+    { id: 'u1', role: 'user', content: 'inspect synthetic workspace' },
+    {
+      id: 'a1',
+      role: 'assistant',
+      content: '',
+      thinking: 'private reasoning',
+      tool_calls: [
+        { id: 'call1', name: 'execute', args: { command: 'false' } },
+      ],
+    },
+    {
+      id: 't1',
+      role: 'tool',
+      content: 'synthetic command failed',
+      tool_call_id: 'call1',
+    },
+    {
+      id: 'a2',
+      role: 'assistant',
+      content: '',
+      thinking: 'unfinished private reasoning',
+    },
+    { id: 'u2', role: 'user', content: 'continue after restarting' },
+  ];
+  const original = structuredClone(messages);
+  const historyHome = scratch(t);
+  const store = new CheckpointStore(historyHome);
+  const session = store.create(historyHome, 'synthetic-chat');
+  store.append(session.id, messages);
+  store.close();
+  const restored = new CheckpointStore(historyHome);
+  cleanup(t, () => restored.close());
+  const resumed = restored.messages(session.id);
+  assert.deepEqual(resumed, messages);
+  let received: Record<string, any> | undefined;
+  const base = await gateway(t, (body, response) => {
+    received = body;
+    const invalid = body.messages.some(
+      (item: any) =>
+        item.role === 'assistant' &&
+        item.content == null &&
+        !item.tool_calls?.length,
+    );
+    if (invalid) {
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          error: {
+            message: 'content field required',
+            type: 'invalid_request_error',
+          },
+        }),
+      );
+    } else openai(response, 'stop', { content: 'continued' });
+  });
+  const result = await model(t, base, 'openai', 'synthetic-chat').complete({
+    ...request(),
+    messages: resumed,
+  });
+  assert.equal(result.message.content, 'continued');
+  assert.deepEqual(messages, original, 'history and thinking remain intact');
+  assert.deepEqual(
+    restored.messages(session.id),
+    original,
+    'request projection never mutates stored history',
+  );
+  assert.deepEqual(
+    received?.messages.map((item: any) => item.role),
+    ['system', 'user', 'assistant', 'tool', 'user'],
+  );
+  assert.equal(received?.messages[2].content, null);
+  assert.equal(received?.messages[2].tool_calls[0].id, 'call1');
+  assert.equal(received?.messages[3].tool_call_id, 'call1');
+  assert.equal(received?.messages[3].content, 'synthetic command failed');
+  assert.ok(!JSON.stringify(received).includes('private reasoning'));
 });

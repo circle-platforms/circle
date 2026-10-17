@@ -132,8 +132,22 @@ try {
   await pairedNotes.first().waitFor();
   // hub and the four platform objects share one runtime extension.
   assert.equal(await pairedNotes.count(), 5);
-  // The switch follows the runtime: it flips once the extension is saved and reloaded.
+  // Generic extensions save first and require the existing explicit reload action.
+  // GitHub alone supports scoped hot loading; do not confuse a checked preference
+  // with an extension that has actually registered.
   await toggle.click();
+  await page
+    .getByText('extension setting saved; reload required', { exact: true })
+    .first()
+    .waitFor();
+  assert.equal((await row('hub')).enabled, false);
+  assert.equal(
+    JSON.parse(
+      await readFile(join(data, 'runtime-home', 'settings.json'), 'utf8'),
+    ).extensions.hub.enabled,
+    true,
+  );
+  await page.getByRole('button', { name: 'reload', exact: true }).click();
   await waitFor(
     async () => (await row('hub'))?.enabled === true,
     'runtime extension on',
@@ -204,6 +218,19 @@ try {
       exact: true,
     })
     .click();
+  // Disabling this generic extension also becomes effective on explicit reload.
+  await page
+    .getByText('disabling extension', { exact: true })
+    .first()
+    .waitFor();
+  assert.equal((await row('hub')).enabled, true);
+  assert.equal(
+    JSON.parse(
+      await readFile(join(data, 'runtime-home', 'settings.json'), 'utf8'),
+    ).extensions.hub.enabled,
+    false,
+  );
+  await page.getByRole('button', { name: 'reload', exact: true }).click();
   await waitFor(
     async () => (await row('hub'))?.enabled === false,
     'runtime extension off',

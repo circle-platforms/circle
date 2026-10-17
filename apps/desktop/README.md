@@ -61,7 +61,6 @@ Quitting waits for Circle to cancel and close its owned jobs, then waits for its
 
 Rejected address input shows `invalid address` and keeps the loaded page. Other navigation errors remain separate from address validation, including when Electron wraps the native error before it reaches the renderer.
 
-
 `test:mode-tools` exercises the real native runtime with local Anthropic and
 OpenAI fixtures. It covers plan transitions inside a three-call tool batch,
 plan-to-manual/auto changes and restart, and checks original checkpoint JSON.
@@ -102,3 +101,11 @@ local Anthropic fixture with isolated settings and checkpoint history. It checks
 API switching, legacy signature recovery, unchanged original checkpoints and
 restart. Set `CIRCLE_DESKTOP_EXECUTABLE` to a packaged executable to run the same
 check on the packaged app; no real API or user data is used.
+
+The native performance check uses twenty real system clipboard pastes of a
+600-line original and twenty keyboard clears, reported separately with the same
+100 ms feedback budget. It checks trusted paste bytes, the complete attachment
+through the existing UI, and restores the original clipboard formats. Earlier
+CDP `.fill()` bulk-insert failures remain engineering diagnostics: replacing
+that action corrects the paste simulation and does not prove that every raw
+multiline insertion meets the event feedback budget.

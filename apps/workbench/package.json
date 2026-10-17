@@ -9,12 +9,25 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4202 --strictPort",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/state.test.ts test/coverage.test.ts test/i18n.test.ts test/format.test.ts test/pairing.test.ts test/tool-summary.test.ts test/highlight.test.ts test/layout.test.ts test/turn-line.test.ts test/workspace-label.test.ts test/decisions.test.ts test/composer-pin.test.ts test/composer-focus.test.ts test/update-actions.test.ts test/preview-port.test.ts test/session-row.test.ts && node ../../node_modules/tsx/dist/cli.mjs --test test/live-runtime.test.ts test/hub-page.test.ts",
-    "format:check": "prettier --check src test package.json tsconfig.json vite.config.ts index.html",
-    "test:ui": "npm --prefix ../desktop run test:interface"
+    "test": "node ../../node_modules/tsx/dist/cli.mjs --import ./test/helpers/ignore-css.mjs --test test/*.test.ts",
+    "format:check": "prettier --check src test scripts package.json tsconfig.json vite.config.ts index.html",
+    "test:ui": "npm --prefix ../desktop run test:interface",
+    "test:editor": "node ../../node_modules/tsx/dist/cli.mjs test/editor-ui.mjs",
+    "test:components": "node test/component-suites.mjs",
+    "test:visual": "playwright test --config test/visual/playwright.config.mjs",
+    "postinstall": "node scripts/prepare-monaco.mjs",
+    "predev": "node scripts/prepare-monaco.mjs",
+    "prebuild": "node scripts/prepare-monaco.mjs",
+    "pretest": "node scripts/prepare-monaco.mjs",
+    "pretest:components": "node scripts/prepare-monaco.mjs",
+    "pretest:editor": "node scripts/prepare-monaco.mjs"
   },
   "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-search": "0.16.0",
+    "@xterm/xterm": "6.0.0",
     "lucide-react": "1.55.0",
+    "monaco-editor": "0.57.0",
     "radix-ui": "1.7.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -35,5 +48,8 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "allowScripts": {
+    "fsevents": true
   }
 }

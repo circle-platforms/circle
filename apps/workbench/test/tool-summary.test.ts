@@ -127,3 +127,83 @@ test('an edit says whether it is waiting, rejected or failed', () => {
     'rejected edits to 2 files',
   );
 });
+
+function statusRow(status: string): Message {
+  return {
+    id: 'm1',
+    parentId: null,
+    role: 'tool',
+    text: '',
+    at: 'now',
+    tool: {
+      id: 'call1',
+      name: 'execute',
+      input: { command: 'node -v' },
+      output: '',
+      status: status as ToolCall['status'],
+    },
+  };
+}
+
+test('an unapproved command is described as waiting rather than already executed', () => {
+  assert.match(toolSummary([statusRow('waiting')]).text, /waiting/);
+  assert.doesNotMatch(toolSummary([statusRow('waiting')]).text, /ran/);
+});
+test('cancelled, rejected and unknown calls do not claim command execution', () => {
+  for (const status of ['cancelled', 'rejected', 'unknown'])
+    assert.doesNotMatch(
+      toolSummary([statusRow(status)]).text,
+      /ran|edited|read a file/,
+    );
+  assert.match(toolSummary([statusRow('success')]).text, /ran a command/);
+});
+
+test('native scheduling summaries retain real successful effects without claiming pending scheduling completed', () => {
+  assert.equal(
+    toolSummary([row('native_tasks_enqueue')]).text,
+    'scheduled agents',
+  );
+  assert.equal(
+    toolSummary([row('native_tasks_list')]).text,
+    'checked agent progress',
+  );
+  assert.equal(
+    toolSummary([row('native_tasks_cancel')]).text,
+    'updated agent scheduling',
+  );
+  assert.doesNotMatch(
+    toolSummary([call('native_tasks_enqueue', 'waiting')]).text,
+    /scheduled agents/,
+  );
+  assert.match(
+    toolSummary([call('native_tasks_enqueue', 'waiting')]).text,
+    /waiting for approval/,
+  );
+});
+
+test('follow-up proposals are informational while only successful adoption schedules agents', () => {
+  assert.equal(
+    toolSummary([row('native_tasks_propose')]).text,
+    'proposed follow-up tasks',
+  );
+  assert.doesNotMatch(
+    toolSummary([row('native_tasks_propose')]).text,
+    /scheduled|created|completed|ran/,
+  );
+  assert.equal(
+    toolSummary([row('native_tasks_adopt_proposal')]).text,
+    'scheduled agents',
+  );
+  for (const name of ['native_tasks_propose', 'native_tasks_adopt_proposal'])
+    for (const status of [
+      'waiting',
+      'running',
+      'error',
+      'rejected',
+      'cancelled',
+    ] as const)
+      assert.doesNotMatch(
+        toolSummary([call(name, status)]).text,
+        /scheduled agents|proposed follow-up tasks/,
+      );
+});

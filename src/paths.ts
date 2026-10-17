@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 export function expandUser(path: string): string {
   return path === '~'
@@ -10,29 +10,40 @@ export function expandUser(path: string): string {
       ? join(homedir(), path.slice(2))
       : path;
 }
-export function normalizeWorkspace(path: string): string {
-  const absolute = resolve(expandUser(path));
-  return existsSync(absolute) ? realpathSync(absolute) : absolute;
-}
-/** The spelling used before comparing paths. An existing path uses the
- * operating system's realpath, so a macOS temporary folder is `/private/var/…`
- * from either `/var/…` or `/private/var/…`. A missing path keeps its last
- * part and takes the realpath of its parent. */
+/** Match fs/promises.realpath, including Windows short-name expansion, for missing file tails too. */
 export function canonicalPath(path: string): string {
   const absolute = resolve(expandUser(path));
   try {
-    if (existsSync(absolute)) return realpathSync.native(absolute);
-  } catch {
+    return realpathSync.native(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // A dangling link cannot become a granted lexical file just because its
+    // target is missing. Nested missing paths encounter this check at the link.
     try {
-      if (existsSync(absolute)) return realpathSync(absolute);
-    } catch {
-      return absolute;
+      if (lstatSync(absolute).isSymbolicLink()) throw error;
+    } catch (entryError) {
+      if (
+        entryError === error ||
+        (entryError as NodeJS.ErrnoException).code !== 'ENOENT'
+      )
+        throw entryError;
     }
+    const parent = dirname(absolute);
+    return parent === absolute
+      ? absolute
+      : join(canonicalPath(parent), basename(absolute));
   }
-  const parent = dirname(absolute);
-  if (parent === absolute) return absolute;
-  const tail = absolute.slice(parent.length + (parent.endsWith(sep) ? 0 : 1));
-  return join(canonicalPath(parent), tail);
+}
+export function normalizeWorkspace(path: string): string {
+  const absolute = resolve(expandUser(path));
+  try {
+    return realpathSync.native(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // Workspace names may be recorded before their directory exists. Keep that
+    // stable lexical identity; file targets use canonicalPath's existing parent.
+    return absolute;
+  }
 }
 export function circleHome(override?: string): string {
   return normalizeWorkspace(

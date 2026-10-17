@@ -455,11 +455,11 @@ test('/jobs lists running jobs first; ctrl+k stops one after asking in the list 
     writeFileSync(join(workspace, name), code);
     return `"${process.execPath}" "${join(workspace, name)}"`;
   };
-  const ended = runtime.jobs.startShell(script('quick.cjs', ''), {
+  const ended = await runtime.jobs.startShell(script('quick.cjs', ''), {
     sessionId: runtime.session.id,
   });
   await runtime.jobs.wait([ended.id], 5, new AbortController().signal);
-  const running = runtime.jobs.startShell(
+  const running = await runtime.jobs.startShell(
     script('slow.cjs', 'setTimeout(()=>{},30000)'),
     { sessionId: 'another' },
   );

@@ -171,7 +171,7 @@ test('grep shows paths outside the folder as they are and does not follow links 
     assert.equal(await run({ pattern: 'needle' }), 'No matches found');
   assert.equal(
     await run({ pattern: 'needle', path: outside, output_mode: 'content' }),
-    `${join(outside, 'far.txt').split(sep).join('/')}:\n  1: needle far away`,
+    `${realpathSync.native(join(outside, 'far.txt')).split(sep).join('/')}:\n  1: needle far away`,
   );
 });
 

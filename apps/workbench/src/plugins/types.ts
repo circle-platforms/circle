@@ -29,6 +29,12 @@ export interface PluginWidget {
   id: string;
   component: ComponentType<PluginViewProps>;
 }
+/** Optional management content inside the existing extensions page, also while off. */
+export interface PluginDetailProps {
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+  feedback?: ReactNode;
+}
 /** A bundled UI extension. Runtime extensions and services retain their own APIs. */
 export interface WorkbenchPlugin {
   id: string;
@@ -45,6 +51,7 @@ export interface WorkbenchPlugin {
    * it off turns the extension off only when no other page of that extension stays on.
    */
   runtimeExtension?: string;
+  detail?: ComponentType<PluginDetailProps>;
   pages?: PluginPage[];
   widgets?: PluginWidget[];
   composerActions?: PluginWidget[];

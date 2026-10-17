@@ -77,3 +77,35 @@ export function downloadProgress(download: {
     return `${Math.floor((download.received * 100) / download.total)}%`;
   return size(download.received);
 }
+/**
+ * An address as Chrome's address bar shows it while you are not typing: without
+ * http:// or https://, with the host to emphasise. Anything else is shown whole.
+ */
+export function addressParts(url: string): {
+  host: string;
+  rest: string;
+} {
+  const match = /^https?:\/\/([^/?#]*)(.*)$/i.exec(url);
+  if (!match) return { host: '', rest: url };
+  // A host's own credentials never show; the browser refuses them anyway
+  const host = match[1]!.replace(/^[^@]*@/, '');
+  const rest = match[2] === '/' ? '' : match[2]!;
+  return { host, rest };
+}
+/** How the address bar names the page's connection. */
+export function connectionKind(
+  state?: {
+    url?: string;
+    warning?: unknown;
+    insecure?: boolean;
+    failure?: { url: string };
+  } | null,
+): 'warning' | 'insecure' | 'http' | 'https' | 'none' {
+  if (!state) return 'none';
+  if (state.warning) return 'warning';
+  if (state.insecure) return 'insecure';
+  const url = state.failure?.url ?? state.url ?? '';
+  if (/^https:/i.test(url)) return 'https';
+  if (/^http:/i.test(url)) return 'http';
+  return 'none';
+}

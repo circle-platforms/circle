@@ -1,0 +1,23 @@
+.runtime-failure {
+  color: var(--fg);
+}
+.runtime-failure > strong {
+  color: var(--negative);
+}
+.runtime-failure p {
+  margin: 4px 0;
+  color: var(--secondary);
+}
+.runtime-failure pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+.runtime-failure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}

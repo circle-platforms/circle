@@ -1,4 +1,24 @@
 import {
+  githubStatusNotice,
+  storedGitHubStatusNotice,
+} from '../../../src/runtime_notice.js';
+import { commandExecutionReceipt } from '../../../src/command_process.js';
+import { canonicalPath } from '../../../src/paths.js';
+import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
+import { spawnPty } from './workspace/native-pty.js';
+import { createTerminalCommandLauncher } from './workspace/command-terminal.js';
+import {
+  resolveCommandTerminal,
+  commandTerminalAction,
+  type CommandTerminalSource,
+} from './workspace/command-handoff.js';
+import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
+import { GitWorkspaceService } from './workspace/git.js';
+import { DeliveryService } from './workspace/delivery.js';
+import { NativeGitHubConnection } from './workspace/github-connection.js';
+import { githubWorkspaceBackend } from './workspace/github-backend.js';
+import type { GitHubConnectionBackend } from '../../../src/github_connection.js';
+import {
   connectionModels,
   connectionSummary,
 } from '../../../src/connection_models.js';
@@ -16,6 +36,7 @@ import {
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
+import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
 import {
@@ -53,7 +74,6 @@ import {
 import {
   discoverCustomCommands,
   substituteArguments,
-  splitArguments,
 } from '../../../src/commands.js';
 import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
@@ -97,6 +117,38 @@ import { cacheRateLabel, formatCosts } from '../../../src/pricing.js';
 import { TurnStatus } from '../../../src/tui/turn_status.js';
 import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
+import { WorkspaceServices } from './workspace/workspace-services';
+import { OperationLedger } from './workspace/operation-ledger';
+import {
+  TaskService,
+  readTaskLimits,
+  readTaskSettingsRecovery,
+  type TaskSettingsWorkspace,
+  writeTaskLimits,
+} from './workspace/task-service';
+import {
+  readArchivedTaskAttempts,
+  taskToolAgentIds,
+  taskNeedsReconciliation,
+  assertReadonlyTaskRequest,
+} from './workspace/task-agent-projection';
+import { createTaskVerifier } from './workspace/task-verification';
+import {
+  CollaborationResources,
+  bindToolResource,
+} from './workspace/collaboration';
+import { TASK_RESOURCES } from './workspace/task-store';
+import { createCollaborationTools } from './workspace/collaboration-tools';
+import type { TaskRecord } from './workspace/task-store';
+import type { FileMutations } from '../../../src/file_mutations.js';
+import { wrapModelCompletion } from '../../../src/model_wrapper.js';
+import type { RuntimeCredentialStore } from './runtime-private-channel';
+import {
+  validateWorkspaceRequest,
+  type WorkspaceServiceEvent,
+  type WorkspaceServiceRequest,
+} from './workspace-protocol';
+import { formatMcpArguments, parseMcpArguments } from './mcp-arguments';
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
 import { nextAgentActivity } from '../../../src/session_activity.js';
 import {
@@ -129,12 +181,14 @@ import type {
   Interaction,
   Effort,
   DiffView,
+  AgentRecord,
 } from '../../workbench/src/model/types';
 import {
   validateRuntimeCommand,
   type RuntimeCommand,
   type RuntimeReply,
   type RuntimeUpdate,
+  type RuntimeTokenDelta,
 } from './runtime-protocol';
 
 const identity = (path: string) =>
@@ -170,6 +224,22 @@ const FILE_TOOLS = [
   'delete',
   'browser_record',
 ];
+const TASK_STATUS_EVENTS = new Set([
+  'task.queued',
+  'task.preparing',
+  'task.running',
+  'task.waiting',
+  'task.cancelling',
+  'task.succeeded',
+  'task.failed',
+  'task.blocked',
+  'task.cancelled',
+  'task.interrupted',
+  'task.needs_review',
+  'task.session',
+  'task.runtime-state',
+  'task.reviewer',
+]);
 const diffView = (lines: CardLine[]): DiffView | undefined =>
   lines.length
     ? {
@@ -217,6 +287,17 @@ interface Streaming {
 }
 export interface ControllerOptions {
   home: string;
+  emitWorkspaceEvent?: (event: WorkspaceServiceEvent) => void;
+  emitTokenDelta?: (delta: RuntimeTokenDelta) => void;
+  credentialStore?: RuntimeCredentialStore;
+  workspaceTools?: {
+    nodeExecutable: string;
+    runtimeExecutable: string;
+    adapterPath: string;
+    ghPath: string;
+    /** Bundled static supervisor; no source-directory or PATH fallback. */
+    commandSupervisorPath?: string;
+  };
   /** The application's data folder, which holds home beside the updates and Chromium's
    * own files: the default workspace may not be in it. Home when not given. */
   dataFolder?: string;
@@ -262,6 +343,8 @@ export class RuntimeController {
   private pendingTrustReloads = new Set<AgentRuntime>();
   private previous: string | null = null;
   private sequence = 0;
+  private tokenEpoch = randomUUID();
+  private tokenSequence = 0;
   private pending = new Map<string, Pending>();
   private history: Interaction[] = [];
   private streams = new Map<string, Streaming>();
@@ -300,6 +383,40 @@ export class RuntimeController {
   private closing = false;
   private closePromise?: Promise<void>;
   private mutation = Promise.resolve();
+  private workspaceServices = new Map<string, WorkspaceServices>();
+  private taskServices = new Map<string, TaskService>();
+  private archivedTaskAttempts = new Map<string, readonly TaskRecord[]>();
+  private taskProjectionErrors = new Map<
+    string,
+    {
+      message: string;
+      workspace: string;
+      worktrees: string;
+    }
+  >();
+  private taskProjectionPending = false;
+  private readonly taskResources: CollaborationResources;
+  private readonly taskSettingsPath: string;
+  private readonly taskSettingsRecoveryPath: string;
+  private taskSettingsError?: string;
+  private taskQueuesPausedForSettings = false;
+  private taskQueuesStarted = new Map<string, TaskSettingsWorkspace>();
+  private taskVerifiers = new Map<
+    string,
+    ReturnType<typeof createTaskVerifier>
+  >();
+  private taskWorkspaces = new Map<string, string>();
+  private workspaceRoots = new Map<
+    string,
+    { canonical: string; dev: number; ino: number }
+  >();
+  private taskRuntimes = new Map<string, AgentRuntime>();
+  private workspaceEventPending = new Set<Promise<unknown>>();
+  private workspaceStreamFailures = new Map<string, string>();
+  private workspaceEpoch = randomUUID();
+  private workspaceSeq = 0;
+  private stoppedJobs = new Set<string>();
+  private operationLedger?: Promise<OperationLedger>;
   private accepted = new Map<
     string,
     { signature: string; reply: Promise<RuntimeReply> }
@@ -334,9 +451,45 @@ export class RuntimeController {
   constructor(readonly options: ControllerOptions) {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
+    this.taskSettingsPath = join(
+      options.dataFolder ?? this.home,
+      'workspace-services',
+      'task-settings.json',
+    );
+    this.taskSettingsRecoveryPath = join(
+      options.dataFolder ?? this.home,
+      'workspace-services',
+      'task-settings-recovery.json',
+    );
+    // Ordinary parents use this pool before any task service exists.
+    let initialLimits = { agents: 1, builds: 1, ui: 1, browsers: 1 };
+    try {
+      initialLimits = readTaskLimits(this.taskSettingsPath);
+      const recovery = readTaskSettingsRecovery(this.taskSettingsRecoveryPath);
+      if (recovery) {
+        this.taskQueuesPausedForSettings = true;
+        this.taskQueuesStarted = new Map(
+          recovery.map((row) => [row.canonical, row]),
+        );
+      }
+    } catch (error) {
+      // Keep history and original settings reachable, but never run with a
+      // silently increased cap when the saved limits cannot be read.
+      initialLimits = { agents: 1, builds: 1, ui: 1, browsers: 1 };
+      this.taskSettingsError = (error as Error).message;
+      this.taskQueuesPausedForSettings = true;
+    }
+    this.taskResources = new CollaborationResources(initialLimits);
     this.metadata = new SessionMetadata(this.home);
     this.store = new CheckpointStore(this.home);
     this.store.repairStaleTitles();
+    for (const session of this.store.list(undefined, true)) {
+      try {
+        this.bindWorkspace(session.workspace);
+      } catch {
+        /* Deleted histories require explicitly reopening an existing folder. */
+      }
+    }
     this.whatsNew = pendingWhatsNew(this.home);
     const saved = this.savedLocation();
     const settings = loadSettings(this.home);
@@ -394,7 +547,7 @@ export class RuntimeController {
     const scratch = this.scratchPath();
     if (target === scratch) return true;
     try {
-      return target === realpathSync(scratch);
+      return target === realpathSync.native(scratch);
     } catch {
       return false;
     }
@@ -408,7 +561,7 @@ export class RuntimeController {
     if (this.isScratch(target)) return true;
     let data = this.options.dataFolder ?? this.home;
     try {
-      data = realpathSync(data);
+      data = realpathSync.native(data);
     } catch {
       /* Keep the spelling we were given. */
     }
@@ -420,7 +573,7 @@ export class RuntimeController {
   private configuredWorkspace(settings: CircleSettings): string | undefined {
     if (!settings.workspace_folder) return undefined;
     try {
-      const target = realpathSync(settings.workspace_folder);
+      const target = realpathSync.native(settings.workspace_folder);
       if (!statSync(target).isDirectory() || this.isScratch(target))
         return undefined;
       return this.acceptableDefaultFolder(target) ? target : undefined;
@@ -469,7 +622,7 @@ export class RuntimeController {
     return undefined;
   }
   private runtime(workspace: string, sessionId?: string): AgentRuntime {
-    workspace = realpathSync(workspace);
+    workspace = realpathSync.native(workspace);
     const remembered = sessionId ?? this.workspaceSessions.get(workspace);
     const owner = remembered ? this.runtimes.get(remembered) : undefined;
     if (owner && this.runtimes.lifecycle(owner.session.id) === 'open')
@@ -525,6 +678,36 @@ export class RuntimeController {
     }
   }
   private synchronizeSharedSettings(settings: CircleSettings): void {
+    if (settings.extensions.github?.enabled !== true) {
+      this.githubLeases.clear();
+      this.githubProviderLifetime.abort();
+      for (const owner of this.runtimes.values()) {
+        owner.options.settings.extensions.github = {
+          ...owner.options.settings.extensions.github,
+          enabled: false,
+        };
+        void owner.setBundledExtensionEnabled('github', false).catch(() => {});
+      }
+      for (const owner of this.taskRuntimes.values()) {
+        owner.options.settings.extensions.github = {
+          ...owner.options.settings.extensions.github,
+          enabled: false,
+        };
+        void owner.setBundledExtensionEnabled('github', false).catch(() => {});
+      }
+    }
+    if (settings.extensions.github?.enabled === true) {
+      for (const owner of [
+        ...this.runtimes.values(),
+        ...this.taskRuntimes.values(),
+      ]) {
+        owner.options.settings.extensions.github = {
+          ...owner.options.settings.extensions.github,
+          enabled: true,
+        };
+        void owner.setBundledExtensionEnabled('github', true).catch(() => {});
+      }
+    }
     for (const owner of this.runtimes.values()) {
       if (
         !owner.options.localContext &&
@@ -546,55 +729,1257 @@ export class RuntimeController {
       });
     }
   }
-  private createRuntime(workspace: string, sessionId?: string): AgentRuntime {
+  private async releaseSessionResources(
+    sessionId: string,
+    workspace: string,
+  ): Promise<void> {
+    const owned = new Map<string, string>();
+    owned.set(sessionId, workspace);
+    for (const service of this.taskServices.values())
+      for (const child of service.ownedRuntimeSessions(sessionId))
+        owned.set(child.sessionId, child.worktree ?? workspace);
+    const results = await Promise.allSettled(
+      [...this.taskServices.values()].map((service) =>
+        service.cancelSession(sessionId),
+      ),
+    );
+    const errors = results
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (errors.length)
+      throw new AggregateError(errors, 'session task cleanup failed');
+    for (const [id, root] of owned) {
+      await this.workspaceServices
+        .get(this.workspaceRoots.get(root)?.canonical ?? root)
+        ?.releaseSession(id);
+      if (id !== sessionId) await this.options.beforeDelete?.(id);
+    }
+  }
+
+  private async nativeSessionActive(
+    sessionId: string,
+    workspace: string,
+  ): Promise<boolean> {
+    return (
+      [...this.taskServices.values()].some((service) =>
+        service.hasActiveSession(sessionId),
+      ) ||
+      (await this.workspaceServices
+        .get(workspace)
+        ?.hasActiveSession(sessionId)) === true
+    );
+  }
+  private workspaceEvent(
+    workspace: string,
+    event: WorkspaceServiceEvent,
+  ): void {
+    if (this.workspaceStreamFailures.has(workspace)) return;
+    const failure = (error: unknown) => this.workspaceFailure(workspace, error);
+    try {
+      const services = this.closing
+        ? this.workspaceServices.get(workspace)
+        : this.services(workspace);
+      if (!services) return;
+      const pending = services.publishSource(event);
+      this.workspaceEventPending.add(pending);
+      void pending
+        .catch(failure)
+        .finally(() => this.workspaceEventPending.delete(pending));
+    } catch (error) {
+      failure(error);
+    }
+  }
+
+  private workspaceFailure(workspace: string, error: unknown): void {
+    if ((error as { code?: string })?.code === 'WORKSPACE_SERVICES_CLOSED')
+      return;
+    if (this.workspaceStreamFailures.has(workspace)) return;
+    const message = `workspace event persistence failed: ${String(error)}`;
+    this.workspaceStreamFailures.set(workspace, message);
+    this.error = message;
+    const origin = this.taskWorkspaces.get(workspace) ?? workspace;
+    void this.taskServices
+      .get(origin)
+      ?.close()
+      .catch(() => {});
+    for (const runtime of [
+      ...this.runtimes.values(),
+      ...this.taskRuntimes.values(),
+    ])
+      if (
+        (this.taskWorkspaces.get(runtime.options.workspace) ??
+          runtime.options.workspace) === origin
+      )
+        void runtime.cancel({ keepQueue: false }).catch(() => {});
+    if (!this.closing) this.publish();
+  }
+  private bindWorkspace(workspace: string): void {
+    const canonical = realpathSync.native(workspace);
+    const directory = statSync(canonical);
+    if (!directory.isDirectory()) throw Error('workspace must be a directory');
+    const previous = this.workspaceRoots.get(workspace);
+    if (
+      previous &&
+      (previous.canonical !== canonical ||
+        previous.dev !== directory.dev ||
+        previous.ino !== directory.ino)
+    )
+      throw Error('workspace root changed; reopen and authorize the folder');
+    const canonicalBinding = this.workspaceRoots.get(canonical);
+    if (
+      canonicalBinding &&
+      (canonicalBinding.dev !== directory.dev ||
+        canonicalBinding.ino !== directory.ino)
+    )
+      throw Error('workspace root changed; reopen and authorize the folder');
+    const binding = { canonical, dev: directory.dev, ino: directory.ino };
+    if (!previous) this.workspaceRoots.set(workspace, binding);
+    if (!canonicalBinding) this.workspaceRoots.set(canonical, binding);
+  }
+  private workspaceRoot(workspace: string): string {
+    const bound = this.workspaceRoots.get(workspace);
+    if (!bound)
+      throw Error('workspace authorization is missing; reopen the folder');
+    const canonical = realpathSync.native(workspace);
+    const directory = statSync(canonical);
+    if (
+      canonical !== bound.canonical ||
+      directory.dev !== bound.dev ||
+      directory.ino !== bound.ino
+    )
+      throw Error('workspace root changed; reopen and authorize the folder');
+    return bound.canonical;
+  }
+  private trustedWorkspace(workspace: string): string {
+    const canonical = this.workspaceRoot(workspace);
+    const origin = this.taskWorkspaces.get(canonical) ?? canonical;
+    if (origin !== canonical) this.trustedWorkspace(origin);
+    if (!isFolderTrusted(loadSettings(this.home), origin))
+      throw Error('trust this workspace first');
+    return canonical;
+  }
+  private validWorkspaceRoot(workspace: string): boolean {
+    try {
+      this.workspaceRoot(workspace);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  private githubProfile?: NativeGitHubConnection;
+  private githubLeases = new Map<string, number>();
+  private githubProviderLifetime = new AbortController();
+  private githubAvailable(id: string): boolean {
+    if (loadSettings(this.home).extensions.github?.enabled !== true) {
+      this.githubLeases.clear();
+      this.githubProviderLifetime.abort();
+      return false;
+    }
+    return (this.githubLeases.get(id) ?? 0) > 0;
+  }
+  private githubInvocation(id: string) {
+    const lifetime = this.githubProviderLifetime;
+    return {
+      signal: lifetime.signal,
+      assertActive: () => {
+        lifetime.signal.throwIfAborted();
+        if (
+          lifetime !== this.githubProviderLifetime ||
+          !this.githubAvailable(id)
+        )
+          throw Error('GitHub extension is disabled');
+      },
+    };
+  }
+  private githubConnection(): NativeGitHubConnection | undefined {
+    if (!this.options.workspaceTools?.ghPath) return undefined;
+    return (this.githubProfile ??= new NativeGitHubConnection({
+      dataDir: join(this.options.dataFolder ?? this.home, 'github-connection'),
+      ghPath: this.options.workspaceTools.ghPath,
+      nodePath: this.options.workspaceTools.runtimeExecutable,
+      spawn: (file, args, options) => spawnPty(file, args, options),
+      credentialStore: this.options.credentialStore
+        ? {
+            get: () => this.options.credentialStore!.get('github.com'),
+            put: (token) =>
+              this.options.credentialStore!.put('github.com', token),
+            delete: () => this.options.credentialStore!.delete('github.com'),
+          }
+        : undefined,
+    }));
+  }
+  private githubBackend(
+    workspace: string,
+    owner: () => string,
+  ): GitHubConnectionBackend | undefined {
+    const connection = this.githubConnection();
+    if (!connection) return undefined;
+    return githubWorkspaceBackend({
+      connection,
+      assertEnabled: () => {
+        if (!this.githubAvailable(owner()))
+          throw Error('GitHub extension is disabled');
+      },
+      providerSignal: () => this.githubProviderLifetime.signal,
+      delivery: () => this.services(workspace).deliveryAdapter(),
+      runWrite: async (method, params, callId, action) => {
+        const sessionId = owner();
+        const root = this.trustedWorkspace(workspace);
+        return (await this.ledger()).run(
+          {
+            id: createHash('sha256')
+              .update(JSON.stringify(['github', sessionId, callId]))
+              .digest('hex'),
+            sessionId,
+            service: 'github',
+            method,
+            paramsHash: createHash('sha256')
+              .update(JSON.stringify({ workspace: root, params }))
+              .digest('hex'),
+          },
+          action,
+        );
+      },
+      acquireLease: () => {
+        const id = owner();
+        if (loadSettings(this.home).extensions.github?.enabled !== true)
+          throw Error('GitHub extension is disabled');
+        if (this.githubProviderLifetime.signal.aborted)
+          this.githubProviderLifetime = new AbortController();
+        const lifetime = this.githubProviderLifetime;
+        this.githubLeases.set(id, (this.githubLeases.get(id) ?? 0) + 1);
+        return () => {
+          if (
+            lifetime !== this.githubProviderLifetime ||
+            lifetime.signal.aborted
+          )
+            return;
+          const next = (this.githubLeases.get(id) ?? 0) - 1;
+          if (next > 0) this.githubLeases.set(id, next);
+          else this.githubLeases.delete(id);
+        };
+      },
+    });
+  }
+  private services(workspace: string): WorkspaceServices {
+    const root = this.trustedWorkspace(workspace);
+    let services = this.workspaceServices.get(root);
+    if (!services) {
+      const tools = this.options.workspaceTools ?? {
+        nodeExecutable: process.execPath,
+        runtimeExecutable: process.execPath,
+        adapterPath: join(
+          this.home,
+          'tools',
+          'js-debug',
+          'src',
+          'dapDebugServer.js',
+        ),
+        ghPath: 'gh',
+      };
+      services = new WorkspaceServices({
+        workspaceRoot: root,
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'workspace-services',
+        ),
+        ...tools,
+        githubConnection: this.githubConnection(),
+        enforceGitHubConnection: true,
+        githubEnabled: (id) => this.githubAvailable(id),
+        githubInvocation: (id) => this.githubInvocation(id),
+        credentialStore: this.options.credentialStore
+          ? {
+              get: () => this.options.credentialStore!.get('github.com'),
+              put: (token) =>
+                this.options.credentialStore!.put('github.com', token),
+              delete: () => this.options.credentialStore!.delete('github.com'),
+            }
+          : undefined,
+        cyclePorts: async (sessionId) => {
+          const ownerRuntime =
+            this.runtimes.get(sessionId) ?? this.taskRuntimes.get(sessionId);
+          if (
+            ownerRuntime &&
+            loadSettings(this.home).extensions.github?.enabled === true
+          )
+            await ownerRuntime.setBundledExtensionEnabled('github', true);
+          const githubInvocation = this.githubInvocation(sessionId);
+          const githubConnection = this.githubConnection();
+          const githubEpoch = githubConnection?.snapshot().epoch;
+          const cycleScopes = new Map<
+            string,
+            {
+              invocation: ReturnType<RuntimeController['githubInvocation']>;
+              epoch: number | undefined;
+            }
+          >();
+          const scopeFor = (cycle: { id: string }) => {
+            const scope = cycleScopes.get(cycle.id);
+            if (!scope) throw Error('cycle authorization scope is missing');
+            return scope;
+          };
+          const git = new GitWorkspaceService(root);
+          const [name, email] = await Promise.all([
+            git.git(['config', '--get', 'user.name']),
+            git.git(['config', '--get', 'user.email']),
+          ]);
+          return createWorkspaceCyclePorts({
+            workspace: root,
+            sessionId,
+            bindCycle: (cycle, mode) => {
+              if (!cycleScopes.has(cycle.id))
+                cycleScopes.set(cycle.id, {
+                  invocation:
+                    mode === 'created'
+                      ? this.githubInvocation(sessionId)
+                      : githubInvocation,
+                  epoch:
+                    mode === 'created'
+                      ? githubConnection?.snapshot().epoch
+                      : githubEpoch,
+                });
+            },
+            invocation: (cycle) => {
+              const scope = scopeFor(cycle);
+              return {
+                signal: scope.invocation.signal,
+                assertActive: () => {
+                  scope.invocation.assertActive();
+                  if (!githubConnection || scope.epoch === undefined)
+                    throw Error('connect GitHub in the GitHub plugin details');
+                  githubConnection.assertEpoch(scope.epoch);
+                },
+              };
+            },
+            dataDir: join(
+              this.options.dataFolder ?? this.home,
+              'cycle-adapters',
+              identity(root),
+            ),
+            identity: { name: name.trim(), email: email.trim() },
+            getTaskService: () => this.collaboration(root, sessionId),
+            verify: (task, context) =>
+              this.taskVerifier(root, task.spec.baseline)(task, context),
+            withResource: (resource, run) =>
+              this.taskResources.withResource(resource, run),
+            pushAuthentication: async (ownedPath, cycle) => {
+              const scope = scopeFor(cycle);
+              scope.invocation.assertActive();
+              const remote = (
+                await new GitWorkspaceService(ownedPath).git([
+                  'remote',
+                  'get-url',
+                  '--push',
+                  '--all',
+                  'origin',
+                ])
+              ).trim();
+              scope.invocation.assertActive();
+              const match =
+                /^https:\/\/github\.com\/([-\w.]+\/[-\w.]+?)(?:\.git)?$/.exec(
+                  remote,
+                );
+              if (!match)
+                throw Error(
+                  'select an authorized GitHub HTTPS push destination',
+                );
+              return githubConnection?.gitPushAuthentication(
+                scope.epoch!,
+                match[1]!,
+                scope.invocation.signal,
+                scope.invocation.assertActive,
+              );
+            },
+            createDelivery: (ownedPath, cycle) =>
+              new DeliveryService(ownedPath, tools.ghPath, {
+                spawn: (file, args, options) => spawnPty(file, args, options),
+                connection: githubConnection,
+                epoch: scopeFor(cycle).epoch,
+                ...scopeFor(cycle).invocation,
+                credentialStore: this.options.credentialStore
+                  ? {
+                      get: () =>
+                        this.options.credentialStore!.get('github.com'),
+                      put: (token) =>
+                        this.options.credentialStore!.put('github.com', token),
+                    }
+                  : undefined,
+              }),
+            redact: (value) =>
+              this.runtimes.get(sessionId)?.redact(value) ?? value,
+          });
+        },
+        workspaceId: identity(root),
+        credentialFiles: settingsForRun(this.home, root).settings
+          .credential_files,
+        emit: (event) => this.options.emitWorkspaceEvent?.(event),
+        onPersistenceError: (error) => this.workspaceFailure(root, error),
+      });
+      this.workspaceServices.set(root, services);
+    }
+    services.setCredentialFiles(
+      settingsForRun(this.home, root).settings.credential_files,
+    );
+    return services;
+  }
+  private fileMutations(workspace: string): FileMutations {
+    return {
+      read: async (path, signal) => {
+        const documents = this.services(workspace).documents;
+        const document = await documents.snapshot(
+          relative(documents.root, canonicalPath(path)).split(sep).join('/'),
+          { signal },
+        );
+        return {
+          path,
+          content: document?.content ?? null,
+          revision: document?.revision ?? null,
+        };
+      },
+      apply: async (changes, signal) => {
+        const documents = this.services(workspace).documents;
+        const result = await documents.applyChanges(
+          changes.map((change) => ({
+            ...change,
+            path: relative(documents.root, canonicalPath(change.path))
+              .split(sep)
+              .join('/'),
+          })),
+          { signal },
+        );
+        if (result.status !== 'applied')
+          throw Object.assign(
+            Error(
+              `committed paths: ${result.committedPaths.length ? result.committedPaths.join(', ') : '(none)'}; failures: ${result.failures.map((f) => `${f.path}: ${f.message}`).join('; ')}`,
+            ),
+            { committedPaths: result.committedPaths },
+          );
+      },
+    };
+  }
+  private taskVerifier(
+    workspace: string,
+    baseline: string,
+  ): ReturnType<typeof createTaskVerifier> {
+    const root = this.trustedWorkspace(workspace);
+    const key = `${root}\0${baseline}`;
+    let verifier = this.taskVerifiers.get(key);
+    if (!verifier) {
+      verifier = createTaskVerifier({
+        workspace: root,
+        baseline,
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'verification',
+          identity(root),
+          baseline,
+        ),
+        runtimeExecutable:
+          this.options.workspaceTools?.runtimeExecutable ?? process.execPath,
+        withBuildResource: (run, _signal, context) =>
+          context.withResource('build', run),
+        createReviewer: (task, context) =>
+          this.createRuntime(context.worktree, undefined, task, 'reviewer'),
+      });
+      this.taskVerifiers.set(key, verifier);
+    }
+    return verifier;
+  }
+  private assertTaskSettings(): void {
+    if (this.taskSettingsError) throw Error(this.taskSettingsError);
+  }
+  private taskStartRequired(workspace: string): boolean {
+    const root = this.taskWorkspaces.get(workspace) ?? workspace;
+    if (!this.taskQueuesPausedForSettings) return false;
+    const binding = this.workspaceRoots.get(root);
+    const started = binding && this.taskQueuesStarted.get(binding.canonical);
+    return (
+      !started || started.dev !== binding!.dev || started.ino !== binding!.ino
+    );
+  }
+  private persistTaskRecovery(workspace?: string): void {
+    const started = this.taskSettingsError
+      ? new Map<string, TaskSettingsWorkspace>()
+      : new Map(this.taskQueuesStarted);
+    if (workspace) {
+      this.assertTaskSettings();
+      const granted = this.trustedWorkspace(workspace);
+      const root = this.trustedWorkspace(
+        this.taskWorkspaces.get(granted) ?? granted,
+      );
+      const binding = this.workspaceRoots.get(root)!;
+      started.set(root, { ...binding });
+    }
+    mkdirSync(
+      join(this.options.dataFolder ?? this.home, 'workspace-services'),
+      {
+        recursive: true,
+        mode: 0o700,
+      },
+    );
+    writePrivateJson(this.taskSettingsRecoveryPath, {
+      version: 1,
+      startedWorkspaces: [...started.values()],
+    });
+    this.taskQueuesPausedForSettings = true;
+    this.taskQueuesStarted = started;
+  }
+  private collaboration(
+    workspace: string,
+    ownerSessionId: string,
+  ): TaskService {
+    this.assertTaskSettings();
+    const granted = this.trustedWorkspace(workspace);
+    const root = this.taskWorkspaces.get(granted) ?? granted;
+    let service = this.taskServices.get(root);
+    if (!service) {
+      service = new TaskService({
+        workspace: root,
+        resources: this.taskResources,
+        settingsPath: this.taskSettingsPath,
+        autoStart: !this.taskStartRequired(root),
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'collaboration',
+          identity(root),
+        ),
+        createRuntime: (task, context) => {
+          this.taskWorkspaces.set(realpathSync.native(context.worktree), root);
+          this.taskVerifier(root, task.spec.baseline);
+          return this.createRuntime(context.worktree, undefined, task);
+        },
+        verify: (task, context) =>
+          this.taskVerifier(root, task.spec.baseline)(task, context),
+        onRuntimeCreated: (task, runtime) => {
+          this.taskRuntimes.set(task.spec.id, runtime);
+          this.activeRuns.add(runtime.session.id);
+        },
+        onRuntimeClosed: (task, runtime) => {
+          this.taskRuntimes.delete(task.spec.id);
+          this.activeRuns.delete(runtime.session.id);
+          if (this.active === runtime) {
+            this.viewedSessionId = runtime.session.id;
+            const parent = task.spec.sessionId
+              ? this.runtimes.get(task.spec.sessionId)
+              : undefined;
+            this.active = parent ?? [...this.runtimes.values()][0] ?? runtime;
+          }
+        },
+        emit: (event) => {
+          const task = event.taskId
+            ? service?.getTask(event.taskId)
+            : undefined;
+          this.workspaceEvent(root, {
+            workspaceId: identity(root),
+            sessionId: task?.spec.sessionId ?? ownerSessionId,
+            service: 'tasks',
+            resourceId: event.taskId ?? 'collaboration',
+            epoch: event.epoch,
+            seq: event.seq,
+            at: new Date(event.createdAt).toISOString(),
+            data: { ...event },
+          });
+          if (TASK_STATUS_EVENTS.has(event.type)) this.queueTaskProjection();
+        },
+      });
+      this.taskServices.set(root, service);
+    }
+    return service;
+  }
+  private queueTaskProjection(): void {
+    if (this.closing || this.taskProjectionPending) return;
+    this.taskProjectionPending = true;
+    queueMicrotask(() => {
+      this.taskProjectionPending = false;
+      if (!this.closing) this.publish();
+    });
+  }
+  private taskAgentAttempts(ownerSessionId: string): {
+    records: readonly TaskRecord[];
+    archived: boolean;
+  } {
+    const owner = this.store.get(ownerSessionId);
+    if (!owner) return { records: [], archived: true };
+    const root = this.taskWorkspaces.get(owner.workspace) ?? owner.workspace;
+    const live = this.taskServices.get(root);
+    if (live) {
+      this.taskProjectionErrors.delete(`${root}:${ownerSessionId}`);
+      return { records: live.taskAttempts(ownerSessionId), archived: false };
+    }
+    const key = `${root}:${ownerSessionId}`;
+    if (this.archivedTaskAttempts.has(key))
+      return { records: this.archivedTaskAttempts.get(key)!, archived: true };
+    try {
+      const records = readArchivedTaskAttempts({
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'collaboration',
+          identity(root),
+        ),
+        workspace: root,
+        ownerSessionId,
+      });
+      this.archivedTaskAttempts.set(key, records);
+      this.taskProjectionErrors.delete(key);
+      return { records, archived: true };
+    } catch (error) {
+      this.taskProjectionErrors.set(key, {
+        message: `could not read agent task history: ${(error as Error).message}`,
+        workspace: root,
+        worktrees: join(
+          this.options.dataFolder ?? this.home,
+          'collaboration',
+          identity(root),
+          'worktrees',
+        ),
+      });
+      return { records: [], archived: true };
+    }
+  }
+  private nativeTaskAgents(runtime: AgentRuntime): AgentRecord[] {
+    const agents = new Map<string, AgentRecord>();
+    for (const owner of this.store.list(undefined, true)) {
+      const { records, archived } = this.taskAgentAttempts(owner.id);
+      for (const task of records) {
+        const sources = [
+          {
+            sessionId: task.runtimeSessionId,
+            workspace: task.worktree,
+            role: 'worker' as const,
+            access: task.spec.access,
+            state: task.runtimeState ?? task.state,
+          },
+          ...(task.reviewers ?? []).map((reviewer) => ({
+            sessionId: reviewer.sessionId,
+            workspace: reviewer.workspace,
+            role: 'reviewer' as const,
+            access: 'readonly' as const,
+            state: reviewer.state,
+          })),
+        ];
+        for (const source of sources) {
+          if (!source.sessionId || !source.workspace) continue;
+          const child = this.store.get(source.sessionId);
+          if (!child || child.workspace !== canonicalPath(source.workspace))
+            continue;
+          // Native tasks intentionally retain their own top-level session row. The
+          // durable task ledger supplies parent identity without altering approvals.
+          const recovery =
+            archived && taskNeedsReconciliation({ state: source.state });
+          this.taskWorkspaces.set(child.workspace, task.spec.workspace);
+          agents.set(child.id, {
+            id: child.id,
+            sessionId: owner.id,
+            name:
+              child.title ||
+              task.spec.prompt.split(/\r\n|\r|\n/u)[0] ||
+              'agent',
+            description: task.spec.prompt,
+            activity: this.activities.get(child.id),
+            status:
+              recovery ||
+              ['waiting', 'blocked', 'needs_review'].includes(source.state)
+                ? 'waiting'
+                : ['queued', 'preparing', 'running', 'cancelling'].includes(
+                      source.state,
+                    )
+                  ? 'running'
+                  : 'completed',
+            model: child.model,
+            tokens: 0,
+            messages: this.projectMessages(runtime, child.id),
+            workspaceId: identity(child.workspace),
+            resourceSessionId: child.id,
+            readOnly: source.access === 'readonly',
+            task: {
+              id: task.spec.id,
+              role: source.role,
+              attempt: task.attempt,
+              state: task.state,
+              access: source.access,
+              baseline: task.spec.baseline,
+              runtimeState: source.state,
+              ...(recovery
+                ? { recovery: 'needs_reconciliation' as const }
+                : {}),
+            },
+          });
+        }
+      }
+    }
+    return [...agents.values()];
+  }
+  private sourceTask(sessionId: string): TaskRecord | undefined {
+    const child = this.store.get(sessionId);
+    if (!child) return undefined;
+    for (const owner of this.store.list(undefined, true)) {
+      const { records } = this.taskAgentAttempts(owner.id);
+      const task = records.find(
+        (task) =>
+          (task.runtimeSessionId === sessionId &&
+            task.worktree &&
+            canonicalPath(task.worktree) === child.workspace) ||
+          (task.reviewers ?? []).some(
+            (reviewer) =>
+              reviewer.sessionId === sessionId &&
+              canonicalPath(reviewer.workspace) === child.workspace,
+          ),
+      );
+      if (task) {
+        this.taskWorkspaces.set(child.workspace, task.spec.workspace);
+        return task.runtimeSessionId === sessionId
+          ? task
+          : { ...task, spec: { ...task.spec, access: 'readonly' } };
+      }
+    }
+    // A corrupt ledger cannot identify an old child's access mode. Fail closed
+    // for its managed worktrees, not for ordinary parents or other workspaces.
+    // Both read-only and write tasks currently receive trees in this directory.
+    for (const failure of this.taskProjectionErrors.values())
+      if (
+        folderContains(canonicalPath(failure.worktrees), child.workspace) ||
+        (child.workspace !== failure.workspace &&
+          this.taskWorkspaces.get(child.workspace) === failure.workspace)
+      )
+        throw Error(
+          'agent source permission could not be verified; inspect task history error',
+        );
+    return undefined;
+  }
+  private ledger(): Promise<OperationLedger> {
+    return (this.operationLedger ??= OperationLedger.open({
+      directory: join(
+        this.options.dataFolder ?? this.home,
+        'workspace-operations',
+      ),
+      redactError: (error) =>
+        (error as { code?: string })?.code === 'DOCUMENT_CONFLICT'
+          ? 'file changed on disk; reload and compare your draft before saving'
+          : 'operation failed; inspect effects before retrying',
+    }));
+  }
+  private async workspaceOperation(
+    command: RuntimeCommand,
+    workspace: string,
+    request: WorkspaceServiceRequest,
+    action: () => Promise<unknown>,
+  ): Promise<unknown> {
+    const reads: Record<string, string[]> = {
+      documents: ['read', 'refresh', 'resolveSource'],
+      terminal: ['list', 'replay', 'resolveCommand'],
+      git: ['status', 'snapshot', 'diff', 'branches'],
+      debug: [
+        'snapshot',
+        'list',
+        'output',
+        'threads',
+        'stack',
+        'stackTrace',
+        'scopes',
+        'variables',
+        'setBreakpoints',
+        'breakpoints',
+        'pause',
+        'stop',
+      ],
+      tasks: ['list', 'events', 'artifacts', 'readArtifact'],
+      delivery: ['status', 'checks', 'logs'],
+    };
+    const read =
+      (request.service === 'language' &&
+        !['stop', 'restart'].includes(
+          String(
+            request.method === 'request'
+              ? request.params?.method
+              : request.method,
+          ),
+        )) ||
+      request.service === 'events' ||
+      (request.service === 'terminal' &&
+        request.method === 'command' &&
+        ['list', 'replay'].includes(String(request.params?.action))) ||
+      reads[request.service]?.includes(request.method) ||
+      (request.service === 'tasks' &&
+        request.method === 'settings' &&
+        request.params?.limits === undefined) ||
+      (request.service === 'delivery' &&
+        request.method === 'login' &&
+        request.params?.action === 'poll');
+    if (read) return action();
+    const paramsHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          workspace,
+          grant: this.workspaceRoots.get(workspace),
+          params: request.params ?? {},
+        }),
+      )
+      .digest('hex');
+    return (await this.ledger()).run(
+      {
+        id: command.id,
+        sessionId: command.sessionId!,
+        service: request.service,
+        method: request.method,
+        paramsHash,
+      },
+      action,
+    );
+  }
+  /** Existing runtimes only: resolving a card must never open a runtime or spawn. */
+  private commandTerminalSource(
+    viewSessionId: string,
+    sourceSessionId: string,
+    emergency: boolean,
+  ): CommandTerminalSource | undefined {
+    const view = this.store.get(viewSessionId);
+    const source = this.store.get(sourceSessionId);
+    const runtime =
+      this.runtimes.get(sourceSessionId) ??
+      [...this.taskRuntimes.values()].find(
+        (runtime) => runtime.session.id === sourceSessionId,
+      );
+    if (
+      !view ||
+      !source ||
+      (runtime && runtime.options.workspace !== source.workspace)
+    )
+      return;
+    const root = this.workspaceRoots.get(source.workspace)?.canonical;
+    if (!root) return;
+    let allowLive = sourceSessionId === viewSessionId;
+    if (sourceSessionId !== viewSessionId) {
+      // Notification ownership is deliberately irrelevant. Only the actual
+      // TaskService ledger may grant a parent access to an execution session.
+      const owned = [...this.taskServices.values()].some((service) =>
+        service
+          .ownedRuntimeSessions(viewSessionId)
+          .some(
+            (child) =>
+              child.sessionId === sourceSessionId &&
+              child.worktree !== undefined &&
+              this.workspaceRoots.get(canonicalPath(child.worktree))
+                ?.canonical === root,
+          ),
+      );
+      if (!owned && !emergency) this.sourceTask(viewSessionId);
+      const archivedOwned =
+        !owned &&
+        !emergency &&
+        this.taskAgentAttempts(viewSessionId).records.some((task) =>
+          [
+            { sessionId: task.runtimeSessionId, worktree: task.worktree },
+            ...(task.reviewers ?? []).map((reviewer) => ({
+              sessionId: reviewer.sessionId,
+              worktree: reviewer.workspace,
+            })),
+          ].some(
+            (child) =>
+              child.sessionId === sourceSessionId &&
+              child.worktree !== undefined &&
+              this.workspaceRoots.get(canonicalPath(child.worktree))
+                ?.canonical === root,
+          ),
+        );
+      if (!owned && !archivedOwned) return;
+      // Archived provenance grants reading only. A manually reopened old child
+      // must not acquire input/stop authority from its previous parent ledger.
+      allowLive =
+        owned &&
+        [...this.taskRuntimes.values()].some((child) => child === runtime);
+    }
+    if (!emergency) {
+      if (
+        this.metadata.archivedAt(viewSessionId) ||
+        this.metadata.archivedAt(sourceSessionId)
+      )
+        throw Error('restore this session before continuing');
+      for (const [id, workspace] of [
+        [viewSessionId, view.workspace],
+        [sourceSessionId, source.workspace],
+      ]) {
+        try {
+          this.trustedWorkspace(workspace);
+        } catch {
+          // Restore only a proved ledger origin; this never resumes the child.
+          this.sourceTask(id);
+          this.trustedWorkspace(workspace);
+        }
+      }
+    }
+    const receipts = () =>
+      this.store.tree(sourceSessionId).flatMap(({ message }) => {
+        const tool = message.role === 'tool' && message.tool_call_id;
+        const human = message.role === 'user' && message.shell?.id;
+        if (!tool && !human) return [];
+        return (message.commandExecutions ?? []).flatMap((receipt) => {
+          if (
+            receipt.executionSessionId !== sourceSessionId ||
+            (tool
+              ? receipt.toolCallId !== tool || receipt.userShellId !== undefined
+              : receipt.userShellId !== human ||
+                receipt.toolCallId !== undefined)
+          )
+            return [];
+          const safe = commandExecutionReceipt({ ...receipt, outputPath: '' });
+          return safe ? [safe] : [];
+        });
+      });
+    // Loading an existing terminal journal never opens a runtime or executes a command.
+    const services =
+      this.workspaceServices.get(root) ??
+      (!emergency && receipts().length
+        ? this.services(source.workspace)
+        : undefined);
+    return {
+      jobs: allowLive ? runtime?.jobs : undefined,
+      receipts,
+      ...(services
+        ? { terminals: services.terminals, workspaceId: services.id }
+        : {}),
+    };
+  }
+
+  private async workspaceCommand(command: RuntimeCommand): Promise<unknown> {
+    this.metadata.refresh();
+    const id = text(command.sessionId, 'session', 200);
+    const row = this.store.get(id);
+    if (!row) throw Error('session not found');
+    if (this.runtimes.lifecycle(id) !== 'open')
+      throw Error('session is deleting or deleted');
+    const request = validateWorkspaceRequest(command.payload);
+    if (
+      ['documents', 'language'].includes(request.service) &&
+      this.sourceTask(id)?.spec.access === 'readonly'
+    )
+      assertReadonlyTaskRequest(
+        request.service,
+        request.method,
+        request.params,
+      );
+    if (
+      request.service === 'inputs' &&
+      (request.method === 'list' || request.params?.action !== 'resume')
+    ) {
+      const owner =
+        this.runtimes.get(id) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        );
+      if (!owner) this.store.inputs.recover(id, randomUUID());
+      if (request.method === 'list')
+        return (
+          owner?.harness.recoverableInputs ?? this.store.inputs.recoverable(id)
+        );
+      const result = owner
+        ? owner.harness.resolveInputs(
+            request.params as unknown as ResolveInputsRequest,
+          )
+        : this.store.inputs.resolve(
+            id,
+            randomUUID(),
+            request.params as unknown as ResolveInputsRequest,
+          );
+      this.publish();
+      return result;
+    }
+    if (
+      request.service === 'terminal' &&
+      ['resolveCommand', 'command'].includes(request.method)
+    ) {
+      const emergency =
+        request.method === 'command' &&
+        (request.params?.action === 'close' ||
+          (request.params?.action === 'signal' &&
+            ['SIGTERM', 'SIGKILL'].includes(
+              String(
+                (request.params?.params as Record<string, unknown> | undefined)
+                  ?.signal,
+              ),
+            )));
+      const access = {
+        sourceFor: (view: string, source: string) =>
+          this.commandTerminalSource(view, source, emergency),
+      };
+      return this.workspaceOperation(command, row.workspace, request, () =>
+        request.method === 'resolveCommand'
+          ? resolveCommandTerminal(access, id, request.params)
+          : commandTerminalAction(access, id, request.params),
+      );
+    }
+    const emergency =
+      (request.service === 'terminal' &&
+        ['signal', 'close'].includes(request.method)) ||
+      (request.service === 'debug' && request.method === 'stop') ||
+      (request.service === 'delivery' &&
+        request.method === 'login' &&
+        request.params?.action === 'cancel');
+    if (emergency) {
+      const existing = this.workspaceServices.get(row.workspace);
+      if (!existing)
+        throw Error('no native resources are owned by this session');
+      return this.workspaceOperation(command, row.workspace, request, () =>
+        existing.call(id, request.service, request.method, request.params),
+      );
+    }
+    if (request.service === 'tasks' && request.method === 'cancel') {
+      const origin = this.taskWorkspaces.get(row.workspace) ?? row.workspace;
+      const existing = this.taskServices.get(origin);
+      if (existing)
+        return this.workspaceOperation(command, row.workspace, request, () =>
+          existing.call(id, request.method, request.params),
+        );
+    }
+    const workspace = this.trustedWorkspace(row.workspace);
+    if (request.service === 'operations') {
+      const ledger = await this.ledger();
+      if (request.method === 'list')
+        return ledger.list({ ...request.params, sessionId: id });
+      const operationId = text(request.params?.id, 'operation', 200);
+      let before: number | undefined;
+      let found = false;
+      do {
+        const page = ledger.list({ sessionId: id, limit: 500, before });
+        found = page.some((operation) => operation.id === operationId);
+        if (found || page.length < 500) break;
+        before = page[page.length - 1].cursor;
+      } while (true);
+      if (!found) throw Error('operation is not owned by this session');
+      return ledger.acknowledgeUnknown(operationId, {
+        note: text(request.params?.note, 'review note', 4096),
+      });
+    }
+    if (request.service === 'events')
+      return this.services(workspace).replay(
+        request.params?.after as { offset: number; seq: number } | undefined,
+        request.params?.limit as number | undefined,
+      );
+    if (this.metadata.archivedAt(id))
+      throw Error('restore this session before continuing');
+    if (request.service === 'inputs') {
+      const owner =
+        this.runtimes.get(id) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        ) ??
+        this.runtimes.open(workspace, id);
+      const result = owner.harness.resolveInputs(
+        request.params as unknown as ResolveInputsRequest,
+      );
+      if (result.applied && result.action === 'resume' && !owner.busy)
+        this.track(owner.harness.run(), owner);
+      this.publish();
+      return result;
+    }
+    if (request.service === 'tasks')
+      return this.workspaceOperation(command, workspace, request, async () => {
+        if (
+          request.method === 'settings' &&
+          (this.taskSettingsError || this.taskStartRequired(workspace))
+        ) {
+          if (request.params?.limits === undefined)
+            return {
+              ...this.taskResources.getLimits(),
+              ...(this.taskSettingsError
+                ? { error: this.taskSettingsError }
+                : {}),
+              ...(this.taskStartRequired(workspace)
+                ? { requiresStart: true }
+                : {}),
+            };
+          const next = await writeTaskLimits(
+            this.taskSettingsPath,
+            request.params.limits,
+            () => this.taskResources.getLimits(),
+            (next) => {
+              this.taskResources.setLimits(next);
+              this.taskSettingsError = undefined;
+            },
+            () => this.persistTaskRecovery(),
+          );
+          this.publish();
+          return next;
+        }
+        const service = this.collaboration(workspace, id);
+        if (request.method === 'start' && this.taskStartRequired(workspace)) {
+          // Persist the explicit intent before allowing queued work to start.
+          this.persistTaskRecovery(workspace);
+          this.publish();
+        }
+        return service.call(id, request.method, request.params);
+      });
+    return this.workspaceOperation(command, workspace, request, () =>
+      this.services(workspace).call(
+        id,
+        request.service,
+        request.method,
+        request.params,
+      ),
+    );
+  }
+  private createRuntime(
+    workspace: string,
+    sessionId?: string,
+    task?: TaskRecord,
+    role: 'worker' | 'reviewer' = 'worker',
+  ): AgentRuntime {
+    this.bindWorkspace(workspace);
     const settings = settingsForRun(this.home, workspace).settings;
+    const taskPrefix = role === 'reviewer' ? 'review: ' : '';
+    const taskSuffix = task && task.attempt > 1 ? ` · #${task.attempt}` : '';
+    const taskTitle = task
+      ? taskPrefix +
+        Array.from(
+          task.spec.prompt
+            .trim()
+            .split(/\r\n|\r|\n/u)[0]!
+            .replace(/\s+/gu, ' '),
+        )
+          .slice(
+            0,
+            Math.min(
+              task.attempt > 1 ? 90 : 100,
+              100 - Array.from(taskPrefix + taskSuffix).length,
+            ),
+          )
+          .join('') +
+        taskSuffix
+      : undefined;
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
+        // The recovered-input panel offers a closed runtime's queue back.
+        preserveQueuedInputs: true,
+        fileMutations: this.fileMutations(workspace),
+        classifyTool: bindToolResource,
+        executeTool: (tool, args, context, run) =>
+          this.taskResources.executeTool(
+            tool,
+            args,
+            context,
+            run,
+            task?.spec.allowedResources ?? TASK_RESOURCES,
+          ),
+        commandLauncher: this.options.workspaceTools?.commandSupervisorPath
+          ? (request) =>
+              createTerminalCommandLauncher({
+                terminals: this.services(workspace).terminals,
+                runtimeExecutable:
+                  this.options.workspaceTools!.runtimeExecutable,
+                supervisorPath:
+                  this.options.workspaceTools!.commandSupervisorPath!,
+                // Windows commands run in a ConPTY whose processes a Job object owns.
+                windowsJobObject: process.platform === 'win32',
+                executionEpoch: runtime.jobs.runName,
+                stopExecution: (actualSessionId, executionId, reason) =>
+                  runtime.jobs.stopExecution(
+                    actualSessionId,
+                    executionId,
+                    reason,
+                  ),
+              })(request)
+          : undefined,
+        wrapModel: (model) =>
+          wrapModelCompletion(model, (request, invoke) => {
+            this.assertTaskSettings();
+            return this.taskResources.withResource(
+              'agent',
+              () => {
+                this.assertTaskSettings();
+                return invoke(request);
+              },
+              request.signal,
+            );
+          }),
         home: this.home,
         // A sentence shows as a new session until its summary title arrives.
         holdTitle: true,
-        beforeDelete: () =>
-          this.options.beforeDelete?.(runtime.session.id) ?? Promise.resolve(),
+        beforeDelete: async () => {
+          await this.releaseSessionResources(runtime.session.id, workspace);
+          await this.options.beforeDelete?.(runtime.session.id);
+        },
         userHome: this.options.userHome,
-        localContext: isFolderTrusted(settings, workspace),
+        localContext: !!task || isFolderTrusted(settings, workspace),
         settings,
         model:
           this.options.model ??
           (isReady(settings) ? undefined : new DisconnectedModel()),
         catalog: this.options.catalog?.(this.home),
         session,
-        extraTools: this.options.browser
-          ? browserTools(this.options.browser, {
-              confirm: (_sessionId, approval, signal, callId) =>
-                approval.kind === 'upload'
-                  ? this.confirmUpload(runtime, approval, signal, callId)
-                  : approval.kind === 'download'
-                    ? this.confirmDownload(runtime, approval, signal, callId)
-                    : approval.kind === 'coordinate'
-                      ? this.confirmCoordinate(
-                          runtime,
-                          approval,
-                          signal,
-                          callId,
-                        )
-                      : this.confirmCertificate(
-                          runtime,
-                          approval,
-                          signal,
-                          callId,
-                        ),
-              // Paths as the file tools take them (a credential file never goes), the
-              // conversation to record and the values a replayed script takes
-              ...runtimeBrowserOptions(() => runtime),
-            })
+        // Initialize only new persisted sessions. Restoring one or a later human
+        // rename must never be overwritten by the internal Task <id> prompt.
+        run: taskTitle
+          ? { ...defaultRunOptions(), session_name: taskTitle }
           : undefined,
+        extraTools: [
+          ...(!task
+            ? createCollaborationTools({
+                sessionId: () => runtime.session.id,
+                service: () =>
+                  this.collaboration(
+                    runtime.options.workspace,
+                    runtime.session.id,
+                  ),
+              })
+            : []),
+          ...(this.options.browser
+            ? browserTools(this.options.browser, {
+                confirm: (_sessionId, approval, signal, callId) =>
+                  approval.kind === 'upload'
+                    ? this.confirmUpload(runtime, approval, signal, callId)
+                    : approval.kind === 'download'
+                      ? this.confirmDownload(runtime, approval, signal, callId)
+                      : approval.kind === 'coordinate'
+                        ? this.confirmCoordinate(
+                            runtime,
+                            approval,
+                            signal,
+                            callId,
+                          )
+                        : this.confirmCertificate(
+                            runtime,
+                            approval,
+                            signal,
+                            callId,
+                          ),
+                // Paths as the file tools take them (a credential file never goes), the
+                // conversation to record and the values a replayed script takes
+                ...runtimeBrowserOptions(() => runtime),
+              }).map((tool) => bindToolResource(tool, 'browser'))
+            : []),
+        ],
         approve: (call, signal, origin) =>
-          this.approve(runtime, call, signal, origin),
+          this.approve(
+            runtime,
+            call,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
         question: (args, signal, origin) =>
-          this.question(runtime, args, signal, origin),
+          this.question(
+            runtime,
+            args,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
         secret: (request, signal, origin) =>
-          this.secret(runtime, request, signal, origin),
+          this.secret(
+            runtime,
+            request,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
+        githubConnection: this.githubBackend(
+          workspace,
+          () => runtime.session.id,
+        ),
         onExtensionStatus: () => this.publish(),
         openUrl: async (url) => {
           this.openRequest = {
@@ -615,10 +2000,41 @@ export class RuntimeController {
         runtime = create();
       else throw error;
     }
-    runtime.bus.subscribe((event) => this.event(runtime, event));
+    runtime.bus.subscribe((event) => {
+      if (task) {
+        this.event(
+          runtime,
+          event,
+          this.selectedSessionId === runtime.session.id,
+        );
+        const eventRoot =
+          this.taskWorkspaces.get(realpathSync.native(workspace)) ?? workspace;
+        this.workspaceEvent(eventRoot, {
+          workspaceId: identity(eventRoot),
+          sessionId: task.spec.sessionId ?? runtime.session.id,
+          service: 'tasks',
+          resourceId: task.spec.id,
+          epoch: this.workspaceEpoch,
+          seq: ++this.workspaceSeq,
+          at: new Date().toISOString(),
+          data: {
+            kind: 'runtime-event',
+            taskId: task.spec.id,
+            attempt: task.attempt,
+            event: JSON.parse(
+              JSON.stringify(event, (_key, value) =>
+                typeof value === 'string' ? runtime.redact(value) : value,
+              ),
+            ),
+          },
+        });
+      } else this.event(runtime, event);
+    });
     const tracker = new PlanCompletionTracker();
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
+    if (runtime.options.settings.extensions.github?.enabled === true)
+      void runtime.setBundledExtensionEnabled('github', true).catch(() => {});
     return runtime;
   }
   private persistLocation() {
@@ -627,8 +2043,11 @@ export class RuntimeController {
       sessionId: this.selectedSessionId,
     });
   }
-  private projectMessages(runtime: AgentRuntime, id: string): Message[] {
-    const nodes = this.store.tree(id);
+  private projectMessages(
+    runtime: AgentRuntime,
+    id: string,
+    nodes = this.store.tree(id),
+  ): Message[] {
     const labels = this.store.labels(id);
     const turns = this.turnUsage.get(id) ?? {};
     const result: Message[] = [];
@@ -661,10 +2080,23 @@ export class RuntimeController {
             ...call,
             id: node.id,
             parentId: node.parent,
+            attachments: raw.attachments?.map((a, index) => ({
+              id: `${node.id}-attachment-${index}`,
+              name: a.filename,
+              kind: a.kind,
+              content: a.data,
+              mime: a.mime_type,
+            })),
             tool: {
               ...call.tool,
               output: raw.content,
               status: raw.status ?? 'success',
+              agentIds: taskToolAgentIds(
+                call.tool.name,
+                call.tool.input,
+                raw.content,
+                this.taskAgentAttempts(id).records,
+              ),
             },
           };
         } else
@@ -677,10 +2109,15 @@ export class RuntimeController {
           });
         continue;
       }
+      const runtimeNotice =
+        raw.role === 'assistant'
+          ? storedGitHubStatusNotice(raw.content, raw.runtimeNotice)
+          : undefined;
       const base: Message = {
         id: node.id,
         parentId: node.parent,
-        role: raw.role,
+        role: runtimeNotice ? 'notice' : raw.role,
+        ...(runtimeNotice ? { runtimeNotice } : {}),
         text: raw.display ?? raw.content,
         thinking: raw.thinking,
         ...(typeof raw.thinking_seconds === 'number'
@@ -688,6 +2125,28 @@ export class RuntimeController {
           : {}),
         label: labels[raw.id],
         at: new Date(node.created).toISOString(),
+        ...(raw.shell
+          ? {
+              shell: {
+                id: raw.shell.id,
+                sourceSessionId: id,
+                command: raw.shell.command,
+                output: raw.shell.output,
+                exitCode: raw.shell.exit_code,
+                status:
+                  raw.shell.exit_code === 0
+                    ? ('done' as const)
+                    : ('error' as const),
+                interactive: (raw.commandExecutions ?? []).some(
+                  (execution) =>
+                    execution.executionSessionId === id &&
+                    execution.userShellId === raw.shell!.id &&
+                    execution.toolCallId === undefined &&
+                    !!execution.terminal,
+                ),
+              },
+            }
+          : {}),
         attachments: raw.attachments?.map((a, index) => ({
           id: `${node.id}-attachment-${index}`,
           name: a.filename,
@@ -746,6 +2205,12 @@ export class RuntimeController {
             filePath:
               String(call.args.file_path ?? call.args.path ?? '') || undefined,
             diff: this.diffs.get(`${id}:${call.id}`),
+            agentIds: taskToolAgentIds(
+              call.name,
+              call.args,
+              state?.output ?? '',
+              this.taskAgentAttempts(id).records,
+            ),
           },
         };
         calls.set(call.id, row);
@@ -764,6 +2229,51 @@ export class RuntimeController {
           completionFailure: completion.code,
           at: base.at,
         });
+    }
+    const actual =
+      this.runtimes.get(id) ??
+      [...this.taskRuntimes.values()].find(
+        (runtime) => runtime.session.id === id,
+      );
+    const shellAnchors = new Map<string | null, string>();
+    for (const view of actual?.userShells.views ?? []) {
+      if (
+        view.sessionId !== id ||
+        (view.persistedMessageId &&
+          nodes.some((node) => node.message?.id === view.persistedMessageId))
+      )
+        continue;
+      const anchor =
+        nodes.find((node) => node.message?.id === view.anchor)?.id ?? null;
+      const shell: Message = {
+        id: 'user-shell-' + view.id,
+        parentId: anchor,
+        role: 'user',
+        text: (view.quiet ? '!!' : '!') + view.command,
+        at: new Date(
+          view.startedAt ?? view.execution?.started ?? 0,
+        ).toISOString(),
+        shell: {
+          id: view.id,
+          sourceSessionId: id,
+          command: view.command,
+          output: view.output,
+          status: view.status,
+          exitCode: view.exitCode,
+          quiet: view.quiet,
+          interactive: !!view.execution?.terminal,
+        },
+      };
+      const previous = shellAnchors.get(anchor);
+      const after = previous ?? anchor;
+      const at = result.findLastIndex(
+        (message) =>
+          message.id === after ||
+          (message.role === 'tool' && message.parentId === after),
+      );
+      const index = after === null ? 0 : at < 0 ? result.length : at + 1;
+      result.splice(index, 0, shell);
+      shellAnchors.set(anchor, shell.id);
     }
     const parents = new Map(nodes.map((node) => [node.id, node.parent]));
     const insertedAfter = new Map<string | null, string>();
@@ -943,8 +2453,13 @@ export class RuntimeController {
         ...this.opened,
       ]),
     ];
+    const nativeAgents = this.nativeTaskAgents(runtime);
     const sessions: Session[] = rows.map((row) => {
-      const owner = this.runtimes.get(row.id);
+      const owner =
+        this.runtimes.get(row.id) ??
+        [...this.taskRuntimes.values()].find(
+          (task) => task.session.id === row.id,
+        );
       const selected = owner?.session.id === row.id;
       const queue = selected
         ? owner.harness.queuedMessages
@@ -952,8 +2467,8 @@ export class RuntimeController {
       const path = new Set(
         this.store.messages(row.id).map((message) => message.id),
       );
-      const branchIds = this.store
-        .tree(row.id)
+      const nodes = this.store.tree(row.id);
+      const branchIds = nodes
         .filter((node) => node.message && path.has(node.message.id))
         .flatMap((node) => [
           node.id,
@@ -974,6 +2489,13 @@ export class RuntimeController {
           branchIds.push(failure.id);
       const stream = this.streams.get(row.id);
       if (stream) branchIds.push(stream.id);
+      for (const view of owner?.userShells.views ?? [])
+        if (
+          view.sessionId === row.id &&
+          (!view.anchor || path.has(view.anchor)) &&
+          !nodes.some((node) => node.message?.id === view.persistedMessageId)
+        )
+          branchIds.push('user-shell-' + view.id);
       return {
         id: row.id,
         archivedAt: this.metadata.archivedAt(row.id),
@@ -988,11 +2510,12 @@ export class RuntimeController {
           : savedSettings.default_thinking) || 'default') as Effort,
         draft: '',
         attachments: [],
-        messages: this.projectMessages(runtime, row.id),
+        messages: this.projectMessages(runtime, row.id, nodes),
         leafId: row.head,
         branchIds,
         hiddenIds: [],
         undoStack: [],
+        queueVersion: owner?.harness.queuedVersion,
         queue: [
           ...queue.steering.map((value, i) => ({
             id: `steer-${i}`,
@@ -1059,44 +2582,74 @@ export class RuntimeController {
         observedAt: new Date().toISOString(),
         configured: !!this.options.model || isReady(settings),
         hasKey: (this.keySaved ??= Boolean(this.savedKey())),
-        error: this.error,
+        error:
+          this.error ??
+          this.taskSettingsError ??
+          this.workspaceStreamFailures.values().next().value ??
+          this.taskProjectionErrors.values().next().value?.message,
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
         name: this.isScratch(path) ? 'circle' : basename(path),
         path,
-        branch: this.branch(path),
-        trusted: isFolderTrusted(savedSettings, path),
+        branch: this.validWorkspaceRoot(path) ? this.branch(path) : '',
+        trusted:
+          this.validWorkspaceRoot(path) &&
+          isFolderTrusted(savedSettings, this.taskWorkspaces.get(path) ?? path),
         origin: 'native' as const,
         // The default circle folder is a project the person can pick. Scratch is
         // only the separate folder used by "work without a project".
         kind: this.isUnscoped(path)
           ? ('scratch' as const)
           : ('project' as const),
-        instructions: [],
+        instructions:
+          !inspecting &&
+          this.validWorkspaceRoot(path) &&
+          isFolderTrusted(savedSettings, this.taskWorkspaces.get(path) ?? path)
+            ? ((runtime.options.workspace === path
+                ? runtime
+                : [...this.runtimes.values()].find(
+                    (owner) => owner.options.workspace === path,
+                  )
+              )?.loadedInstructions.map((file) => ({
+                name: file.path,
+                path: file.path,
+                content: file.content,
+              })) ?? [])
+            : [],
       })),
       sessions,
       files: [],
-      agents: this.store
-        .list(undefined, true)
-        .filter((row) => row.parent_id)
-        .map((row) => ({
-          id: row.id,
-          sessionId: row.parent_id!,
-          name: row.title || 'agent',
-          activity: this.activities.get(row.id),
-          description: row.title,
-          status: [...this.pending.values()].some(
-            (pending) => pending.row.origin?.agent === row.id,
-          )
-            ? 'waiting'
-            : this.activeRuns.has(row.id)
-              ? 'running'
-              : 'completed',
-          model: row.model,
-          tokens: 0,
-          messages: this.projectMessages(runtime, row.id),
-        })),
+      agents: [
+        ...this.store
+          .list(undefined, true)
+          .filter((row) => row.parent_id)
+          .map(
+            (row) =>
+              ({
+                id: row.id,
+                sessionId: row.parent_id!,
+                workspaceId: identity(row.workspace),
+                resourceSessionId: row.id,
+                // Core history has no durable per-child permission metadata.
+                readOnly: true,
+                name: row.title || 'agent',
+                activity: this.activities.get(row.id),
+                description: row.title,
+                status: [...this.pending.values()].some(
+                  (pending) => pending.row.origin?.agent === row.id,
+                )
+                  ? 'waiting'
+                  : this.activeRuns.has(row.id)
+                    ? 'running'
+                    : 'completed',
+                model: row.model,
+                tokens: 0,
+                messages: this.projectMessages(runtime, row.id),
+              }) as AgentRecord,
+          ),
+        ...nativeAgents,
+      ],
       jobs: [...this.runtimes.values()].flatMap((owner) =>
         owner.jobs.list().map((job) => ({
           id: `${job.sessionId}:${job.id}`,
@@ -1108,14 +2661,18 @@ export class RuntimeController {
           title: job.title,
           state:
             job.status === 'running'
-              ? ('running' as const)
+              ? this.stoppedJobs.has(`${job.sessionId}:${job.id}`)
+                ? ('stopping' as const)
+                : ('running' as const)
               : job.status === 'done'
                 ? ('completed' as const)
-                : ('failed' as const),
+                : job.status === 'stopped'
+                  ? ('cancelled' as const)
+                  : ('failed' as const),
           elapsed: elapsed(job),
           output: existsSync(job.outputPath) ? outputTail(job.outputPath) : '',
           outputPath: job.virtualPath,
-          stopRequested: false,
+          stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
         })),
       ),
       interactions: [
@@ -1193,9 +2750,7 @@ export class RuntimeController {
           name: String(spec.name ?? `server ${i + 1}`),
           transport: String(spec.transport ?? 'stdio') as 'stdio',
           command: String(spec.command ?? ''),
-          args: Array.isArray(spec.args)
-            ? spec.args.map((arg) => JSON.stringify(arg)).join(' ')
-            : '',
+          args: Array.isArray(spec.args) ? formatMcpArguments(spec.args) : '',
           url: String(spec.url ?? ''),
           enabled: spec.enabled !== false,
           status: pendingReload
@@ -1413,14 +2968,21 @@ export class RuntimeController {
   publish(event?: RuntimeUpdate['event']) {
     if (this.closing) return;
     this.persistLocation();
-    this.options.emit({
+    const update: RuntimeUpdate = {
       seq: ++this.sequence,
       connected: true,
       snapshot: this.snapshot(),
+      tokenStream: { epoch: this.tokenEpoch, seq: this.tokenSequence },
       event,
-    });
+    };
+    this.options.emit(update);
+    return update;
   }
-  private event(runtime: AgentRuntime, event: CircleEvent) {
+  private event(
+    runtime: AgentRuntime,
+    event: CircleEvent,
+    publishSnapshot = true,
+  ) {
     if (runtime.isClosing) return;
     if (
       ['run_end', 'run_error'].includes(event.kind) &&
@@ -1617,6 +3179,30 @@ export class RuntimeController {
       });
     }
     // The bus is observation only. Enforcement remains inside Harness and awaited callbacks.
+    if (
+      publishSnapshot &&
+      event.kind === 'llm_token' &&
+      this.options.emitTokenDelta
+    ) {
+      const stream = this.streams.get(id);
+      if (stream) {
+        const chunk = String(event.payload.text ?? '');
+        this.options.emitTokenDelta({
+          epoch: this.tokenEpoch,
+          seq: ++this.tokenSequence,
+          baseSeq: this.sequence,
+          sessionId: id,
+          streamId: stream.id,
+          parentId: this.store.get(id)?.head ?? null,
+          text: event.payload.thinking ? undefined : chunk,
+          thinking: event.payload.thinking ? chunk : undefined,
+          at: event.ts,
+          turn: this.turn(id),
+        });
+        return;
+      }
+    }
+    if (!publishSnapshot) return;
     this.publish({
       kind: event.kind,
       sessionId: id,
@@ -1643,30 +3229,35 @@ export class RuntimeController {
       revision: 1,
       origin: origin ? { ...origin } : undefined,
     };
-    return new Promise((resolve, reject) => {
-      const abort = () => {
-        this.pending.delete(id);
-        reject(new Error('interaction cancelled'));
-        this.publish();
-      };
-      const finish = (answer: string) => {
-        signal.removeEventListener('abort', abort);
-        resolve(answer);
-      };
-      this.pending.set(id, {
-        row: interaction,
-        signal,
-        resolve: finish,
-        reject: (error) => {
-          signal.removeEventListener('abort', abort);
-          reject(error);
-        },
-        secret,
-      });
-      signal.addEventListener('abort', abort, { once: true });
-      if (signal.aborted) abort();
-      else this.publish();
-    });
+    return this.taskResources.suspendResource(
+      'agent',
+      () =>
+        new Promise<string>((resolve, reject) => {
+          const abort = () => {
+            this.pending.delete(id);
+            reject(new Error('interaction cancelled'));
+            this.publish();
+          };
+          const finish = (answer: string) => {
+            signal.removeEventListener('abort', abort);
+            resolve(answer);
+          };
+          this.pending.set(id, {
+            row: interaction,
+            signal,
+            resolve: finish,
+            reject: (error) => {
+              signal.removeEventListener('abort', abort);
+              reject(error);
+            },
+            secret,
+          });
+          signal.addEventListener('abort', abort, { once: true });
+          if (signal.aborted) abort();
+          else this.publish();
+        }),
+      signal,
+    );
   }
   private async approve(
     runtime: AgentRuntime,
@@ -1986,12 +3577,26 @@ export class RuntimeController {
             'archive-session',
             'answer',
             'stop-job',
+            'workspace-service',
           ].includes(command.name)
         )
           throw Error('session changed; retry from the current session');
         const data = await this.execute(command);
-        if (!this.closing) this.publish();
-        return { id: command.id, ok: true, data };
+        let appliedState: RuntimeReply['appliedState'];
+        if (!this.closing && command.name !== 'workspace-service') {
+          const publication = this.publish();
+          if (publication?.tokenStream)
+            appliedState = {
+              epoch: publication.tokenStream.epoch,
+              seq: publication.seq,
+            };
+        }
+        return {
+          id: command.id,
+          ok: true,
+          data,
+          ...(appliedState ? { appliedState } : {}),
+        };
       } catch (error) {
         return {
           id: command.id,
@@ -2010,6 +3615,7 @@ export class RuntimeController {
       'background',
       'stop-job',
       'delete-session',
+      'workspace-service',
       'select-session',
     ].includes(command.name);
     const result = immediate ? operation() : this.mutation.then(operation);
@@ -2021,12 +3627,22 @@ export class RuntimeController {
     }
     return result;
   }
-  private assertArchivable(
+  private async assertArchivable(
     id: string,
     workspace: string,
     action = 'archiving',
-  ): void {
+  ): Promise<void> {
     const owner = this.runtimes.get(id);
+    if (await this.nativeSessionActive(id, workspace))
+      throw Error(
+        `stop this session's native resources and tasks before ${action} it`,
+      );
+    if (
+      [...this.taskServices.values()].some((service) =>
+        service.hasActiveSession(id),
+      )
+    )
+      throw Error(`stop this session's tasks before ${action} it`);
     if (
       (!owner && sessionOccupied(this.home, id)) ||
       (owner?.session.id === id &&
@@ -2042,11 +3658,51 @@ export class RuntimeController {
     this.planCompletions.set(runtime.session.id, tracker);
   }
   /** An empty untitled session. It is not kept once the user leaves it. */
-  private unusedSession(id: string): boolean {
+  private async unusedSession(id: string): Promise<boolean> {
     const row = this.store.get(id);
     if (!row || row.parent_id || row.head || row.title) return false;
     const owner = this.runtimes.get(id);
     if (!owner || owner.busy) return false;
+    // An agent-only parent and recoverable drafts are real work even without a
+    // chat head. Leaving the view must not delete their provenance or payload.
+    if (
+      this.taskAgentAttempts(id).records.length ||
+      this.taskProjectionErrors.size
+    )
+      return false;
+    if (owner.harness.recoverableInputs.items.length) return false;
+    const root =
+      this.workspaceRoots.get(row.workspace)?.canonical ?? row.workspace;
+    if (await this.nativeSessionActive(id, root)) return false;
+    if ((await this.workspaceServices.get(root)?.terminals.list(id))?.length)
+      return false;
+    // Durable operations are real session work even when a tool failed before
+    // producing a chat message or allocating a terminal. Include every state:
+    // completed/reconciled records still carry this owner's idempotency history.
+    const operationLedger =
+      this.operationLedger ??
+      (existsSync(
+        join(
+          this.options.dataFolder ?? this.home,
+          'workspace-operations',
+          'operations.sqlite',
+        ),
+      )
+        ? this.ledger()
+        : undefined);
+    if (
+      operationLedger &&
+      (await operationLedger).list({ sessionId: id, limit: 1 }).length
+    )
+      return false;
+    // Resource reads yield: recheck the session before classifying it as empty.
+    const current = this.store.get(id);
+    if (!current || current.head || current.title || owner.busy) return false;
+    if (
+      this.taskAgentAttempts(id).records.length ||
+      owner.harness.recoverableInputs.items.length
+    )
+      return false;
     if (owner.jobs.list().some((job) => job.status === 'running')) return false;
     if (
       [...this.pending.values()].some((pending) => pending.row.sessionId === id)
@@ -2055,7 +3711,8 @@ export class RuntimeController {
     return this.runtimes.lifecycle(id) === 'open';
   }
   private async dropUnused(id: string): Promise<void> {
-    if (!id || id === this.selectedSessionId || !this.unusedSession(id)) return;
+    if (!id || id === this.selectedSessionId || !(await this.unusedSession(id)))
+      return;
     await this.runtimes.delete(id, { confirmed: true });
     this.publish();
   }
@@ -2068,7 +3725,7 @@ export class RuntimeController {
     const unscoped = this.unscopedPath();
     if (target === unscoped) return true;
     try {
-      return target === realpathSync(unscoped);
+      return target === realpathSync.native(unscoped);
     } catch {
       return false;
     }
@@ -2076,7 +3733,7 @@ export class RuntimeController {
   private ensureUnscoped(): string {
     const folder = this.unscopedPath();
     mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const resolved = realpathSync(folder);
+    const resolved = realpathSync.native(folder);
     saveSettingsChange(this.home, (saved) => {
       Object.assign(saved, trustFolder(saved, resolved));
     });
@@ -2093,7 +3750,7 @@ export class RuntimeController {
     for (const folder of this.opened)
       if (identity(folder) === id) return folder;
     try {
-      const scratch = realpathSync(this.scratchPath());
+      const scratch = realpathSync.native(this.scratchPath());
       if (identity(scratch) === id || identity(this.scratchPath()) === id)
         return scratch;
     } catch {
@@ -2143,7 +3800,9 @@ export class RuntimeController {
     runtime: AgentRuntime,
     p: Record<string, unknown>,
     untilStored = false,
+    inputId?: string,
   ): Promise<{ sessionId?: string }> {
+    this.assertTaskSettings();
     await this.reloadTrustedRuntime(runtime);
     if (!isFolderTrusted(runtime.options.settings, runtime.options.workspace))
       throw Error('trust the workspace before running Circle');
@@ -2177,17 +3836,24 @@ export class RuntimeController {
         text(item.name, 'filename', 500),
       ),
     );
-    if (runtime.busy) {
+    const display =
+      p.display === undefined ? undefined : text(p.display, 'display');
+    // A command whose durable input is already recorded is a replay: it goes
+    // through the queue under the same input id instead of starting a turn twice.
+    if (
+      runtime.busy ||
+      (inputId !== undefined &&
+        this.store.inputs.get(runtime.session.id, inputId))
+    ) {
       if (untilStored) throw Error('a turn is running');
       runtime.harness.queue(
         prompt,
         kind === 'follow-up' ? 'followUp' : 'steer',
         attachments,
+        { inputId, display },
       );
       return {};
     }
-    const display =
-      p.display === undefined ? undefined : text(p.display, 'display');
     const run = runtime.harness.run(prompt, display, attachments);
     this.track(run, runtime);
     if (!untilStored) return {};
@@ -2217,10 +3883,39 @@ export class RuntimeController {
     return { sessionId: runtime.session.id };
   }
   private async execute(command: RuntimeCommand): Promise<unknown> {
+    if (command.name === 'workspace-service')
+      return this.workspaceCommand(command);
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
     let runtime = this.active;
+    const navigation = [
+      'state',
+      'close',
+      'abort',
+      'answer',
+      'select-session',
+      'new-session',
+      // Starts in the workspace it names and checks that root itself.
+      'begin-session',
+      'open-workspace',
+      'set-default-workspace',
+      'delete-session',
+      'archive-session',
+      'archive-workspace',
+      'rename-session',
+      'stop-job',
+      'save-settings',
+      'trust',
+      'export',
+    ];
+    if (!navigation.includes(command.name)) {
+      this.workspaceRoot(runtime.options.workspace);
+      const viewed = this.viewedSessionId
+        ? this.store.get(this.viewedSessionId)
+        : undefined;
+      if (viewed) this.workspaceRoot(viewed.workspace);
+    }
     if (
       this.viewedSessionId &&
       ![
@@ -2246,6 +3941,7 @@ export class RuntimeController {
       if (!row) throw Error('session not found');
       // This acquires a lease only after the previous writer released it. A live
       // foreign writer rejects the action without touching the selected history.
+      this.workspaceRoot(row.workspace);
       runtime = this.runtimes.open(row.workspace, row.id);
       this.active = runtime;
       this.viewedSessionId = undefined;
@@ -2288,7 +3984,7 @@ export class RuntimeController {
       case 'state':
         return this.snapshot();
       case 'prompt':
-        await this.submitPrompt(runtime, p);
+        await this.submitPrompt(runtime, p, false, command.id);
         return {};
       case 'begin-session': {
         const promptText = text(p.text, 'prompt');
@@ -2299,6 +3995,8 @@ export class RuntimeController {
             : this.workspaceById(text(p.workspaceId, 'workspace', 200));
         if (!isFolderTrusted(loadSettings(this.home), workspace))
           throw Error('trust the workspace before running Circle');
+        // A root replaced since it was opened is refused, as for every session.
+        this.bindWorkspace(workspace);
         const owner = this.conversationRuntime(workspace);
         this.selectRuntime(owner);
         this.applyHomeChoices(owner, p);
@@ -2332,11 +4030,28 @@ export class RuntimeController {
           text(p.text, 'queued message'),
         );
       }
+      case 'edit-queued': {
+        if (
+          !Number.isSafeInteger(p.expectedQueueVersion) ||
+          Number(p.expectedQueueVersion) < 0
+        )
+          throw Error('queued message revision is required');
+        if (!['steering', 'follow-up'].includes(String(p.kind)))
+          throw Error('invalid queue kind');
+        return runtime.harness.editQueued(
+          p.kind === 'steering' ? 'steer' : 'followUp',
+          Number(p.index),
+          text(p.text, 'queued message'),
+          text(p.updatedText, 'updated message'),
+          Number(p.expectedQueueVersion),
+        );
+      }
       case 'background':
         return runtime.jobs.backgroundForeground();
       case 'new-session': {
+        this.workspaceRoot(this.selectedWorkspace);
         const previous = this.selectedSessionId;
-        if (this.unusedSession(previous) && !this.viewedSessionId)
+        if ((await this.unusedSession(previous)) && !this.viewedSessionId)
           return { sessionId: previous };
         const owner = this.runtimes.create(this.selectedWorkspace);
         await this.carryExtensions(owner, previous);
@@ -2347,6 +4062,13 @@ export class RuntimeController {
       case 'select-session': {
         const id = text(p.id, 'session', 200);
         const row = this.store.get(id);
+        const taskRuntime = [...this.taskRuntimes.values()].find(
+          (task) => task.session.id === id,
+        );
+        if (taskRuntime && !taskRuntime.isClosing) {
+          this.selectRuntime(taskRuntime);
+          return { sessionId: id };
+        }
         if (!row || row.parent_id) throw Error('session not found');
         if (id === this.selectedSessionId && !this.viewedSessionId)
           return { sessionId: id };
@@ -2372,6 +4094,15 @@ export class RuntimeController {
         const id = text(p.id, 'session', 200);
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
+        const taskRuntime = [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        );
+        if (taskRuntime) {
+          if (p.confirmed !== true)
+            throw Error('confirm stopping this task before deleting it');
+          await this.releaseSessionResources(id, row.workspace);
+        }
+        if (!this.runtimes.get(id)) this.workspaceRoot(row.workspace);
         const owner =
           this.runtimes.get(id) ?? this.runtimes.open(row.workspace, id);
         const owned = new Set([id]);
@@ -2391,7 +4122,8 @@ export class RuntimeController {
         }
         if (
           p.confirmed !== true &&
-          (owner.busy ||
+          ((await this.nativeSessionActive(id, row.workspace)) ||
+            owner.busy ||
             owner.jobs.list().some((job) => job.status === 'running') ||
             [...this.pending.values()].some((pending) =>
               owned.has(pending.row.sessionId),
@@ -2451,7 +4183,7 @@ export class RuntimeController {
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
         const archive = flag(p.archived);
-        if (archive) this.assertArchivable(id, row.workspace);
+        if (archive) await this.assertArchivable(id, row.workspace);
         this.metadata.set([id], archive);
         return { sessionId: id, archivedAt: this.metadata.archivedAt(id) };
       }
@@ -2461,7 +4193,8 @@ export class RuntimeController {
           .list(undefined, false, true)
           .filter((row) => identity(row.workspace) === workspaceId);
         if (!rows.length) throw Error('workspace not found');
-        for (const row of rows) this.assertArchivable(row.id, row.workspace);
+        for (const row of rows)
+          await this.assertArchivable(row.id, row.workspace);
         this.metadata.set(
           rows.map((row) => row.id),
           true,
@@ -2794,7 +4527,7 @@ export class RuntimeController {
                 name: text(row.name, 'server name', 100),
                 transport,
                 command: text(row.command ?? '', 'command', 4000),
-                args: splitArguments(text(row.args ?? '', 'args', 4000)),
+                args: parseMcpArguments(text(row.args ?? '', 'args', 4000)),
                 url: text(row.url ?? '', 'url', 4000),
                 enabled: flag(row.enabled),
               };
@@ -2936,7 +4669,14 @@ export class RuntimeController {
             `${command.sessionId}:${jobId}` === id,
         );
         if (!owner) throw Error('job not found in this session');
-        await owner.jobs.stop(jobId, 'user');
+        this.stoppedJobs.add(id);
+        this.publish();
+        try {
+          await owner.jobs.stop(jobId, 'user');
+        } catch (error) {
+          this.stoppedJobs.delete(id);
+          throw error;
+        }
         return {};
       }
       case 'revoke-approval': {
@@ -2958,18 +4698,20 @@ export class RuntimeController {
         return {};
       }
       case 'open-workspace': {
-        const workspace = realpathSync(text(p.path, 'workspace', 8000));
+        const workspace = realpathSync.native(text(p.path, 'workspace', 8000));
         if (!statSync(workspace).isDirectory())
           throw Error('workspace is not a folder');
         // Home state only. The session is created by begin-session, with the
-        // first message, and not before.
+        // first message, and not before. Choosing the folder in the native dialog
+        // is what authorizes its root for later workspace access.
+        this.bindWorkspace(workspace);
         this.opened.add(workspace);
         return { workspaceId: identity(workspace) };
       }
       case 'set-default-workspace': {
         // The path comes from the native dialog through the main process, exactly
         // like open-workspace: the renderer never names one.
-        const workspace = realpathSync(text(p.path, 'workspace', 8000));
+        const workspace = realpathSync.native(text(p.path, 'workspace', 8000));
         if (!statSync(workspace).isDirectory())
           throw Error('the default workspace must be a folder');
         if (!this.acceptableDefaultFolder(workspace))
@@ -3009,9 +4751,27 @@ export class RuntimeController {
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
         )
           throw Error('trust this workspace first');
-        return runtime.userShells.run(
-          text(p.command, 'shell command', 32000),
-          p.quiet === true,
+        const workspace = this.trustedWorkspace(runtime.options.workspace);
+        const shellCommand = text(p.command, 'shell command', 32000);
+        const quiet = p.quiet === true;
+        return (await this.ledger()).run(
+          {
+            id: command.id,
+            sessionId: runtime.session.id,
+            service: 'shell',
+            method: 'run',
+            paramsHash: createHash('sha256')
+              .update(
+                JSON.stringify({
+                  workspace,
+                  grant: this.workspaceRoots.get(workspace),
+                  command: shellCommand,
+                  quiet,
+                }),
+              )
+              .digest('hex'),
+          },
+          () => runtime.userShells.run(shellCommand, quiet),
         );
       }
       case 'custom-command': {
@@ -3056,8 +4816,21 @@ export class RuntimeController {
             // are not messages in the conversation.
             append: (content) => {
               if (name === 'hub') return;
+              const runtimeNotice = githubStatusNotice(
+                content,
+                name === 'github' &&
+                  found.owner.extensions.isTrustedBundledCommand(
+                    extension,
+                    'github',
+                  ),
+              );
               runtime.store.append(runtime.session.id, [
-                { id: randomUUID(), role: 'assistant', content },
+                {
+                  id: randomUUID(),
+                  role: 'assistant',
+                  content,
+                  ...(runtimeNotice ? { runtimeNotice } : {}),
+                },
               ]);
             },
             sendUserMessage: (prompt) => {
@@ -3115,11 +4888,14 @@ export class RuntimeController {
             ? join(owner, '.circle', 'commands')
             : join(owner, 'commands');
         mkdirSync(folder, { recursive: true, mode: 0o700 });
-        const rel = relative(realpathSync(owner), realpathSync(folder));
+        const rel = relative(
+          realpathSync.native(owner),
+          realpathSync.native(folder),
+        );
         if (rel.startsWith('..') || isAbsolute(rel))
           throw Error('command folder leaves its owner');
-        const path = join(realpathSync(folder), name + '.md');
-        if (existsSync(path) && realpathSync(path) !== path)
+        const path = join(realpathSync.native(folder), name + '.md');
+        if (existsSync(path) && realpathSync.native(path) !== path)
           throw Error('linked commands must be edited in their source folder');
         const template = text(p.template, 'template', 120_000);
         const description = text(p.description ?? '', 'description', 1000);
@@ -3164,31 +4940,23 @@ export class RuntimeController {
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
         )
           throw Error('trust this workspace first');
-        if (runtime.busy) throw Error('finish the current turn before saving');
+        const expected = p.expectedRevision;
+        if (expected !== null && typeof expected !== 'string')
+          throw Error(
+            'expected revision is required; read the file, or use null to create it',
+          );
         const path = text(p.path, 'path', 8000);
         const target = runtime.sandbox.resolvePath(path);
-        const rel = relative(runtime.options.workspace, target);
-        if (
-          !rel ||
-          rel === '..' ||
-          rel.startsWith('../') ||
-          rel.startsWith('..\\') ||
-          isAbsolute(rel)
-        )
-          throw Error('file must be inside this workspace');
-        if (runtime.harness.planMode && basename(target) !== 'plan.md')
-          throw Error('plan mode allows saving plan.md only');
-        const tool = runtime.allTools.find(
-          (tool) => tool.name === 'write_file',
-        )!;
-        const output = await tool.run(
-          { file_path: path, content: text(p.content, 'file', 4_000_000) },
-          {
-            sessionId: runtime.session.id,
-            signal: new AbortController().signal,
-          },
+        const documents = this.services(runtime.options.workspace).documents;
+        const file = relative(documents.root, canonicalPath(target))
+          .split(sep)
+          .join('/');
+        const document = await documents.save(
+          file,
+          text(p.content, 'file', 4_000_000),
+          expected,
         );
-        return { output };
+        return { output: `saved ${file}`, document };
       }
       case 'share':
       case 'unshare': {
@@ -3302,8 +5070,17 @@ export class RuntimeController {
     for (const pending of this.pending.values())
       pending.reject(new Error('runtime closed'));
     this.pending.clear();
+    await Promise.all(
+      [...this.taskServices.values()].map((service) => service.close()),
+    );
     await this.runtimes.close();
     await Promise.allSettled(this.tasks);
+    await Promise.allSettled(this.workspaceEventPending);
+    await Promise.all(
+      [...this.workspaceServices.values()].map((service) => service.dispose()),
+    );
+    await this.githubProfile?.dispose();
+    if (this.operationLedger) await (await this.operationLedger).close();
     this.store.close();
   }
 }

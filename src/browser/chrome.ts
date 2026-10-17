@@ -141,6 +141,8 @@ export interface ChromeOptions {
    * fixed three-second execution deadline.
    */
   closeTimeout?: number;
+  /** Each owned-process inspection is bounded separately from the exit grace period. */
+  processInspectionTimeout?: number;
   /**
    * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
    * a local site by a public name.
@@ -541,8 +543,15 @@ export class ChromeBrowser implements BrowserPort {
     // live owned descendants remain. Read actual process state instead: a zombie
     // cannot run or write. Failure to read state or stop a live member still rejects.
     const output = await new Promise<string>((resolve, reject) =>
-      execFile('ps', ['-A', '-o', 'pgid=,stat='], (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
+      execFile(
+        'ps',
+        ['-A', '-o', 'pgid=,stat='],
+        {
+          timeout: Math.max(1, this.options.processInspectionTimeout ?? 3000),
+          // A stalled inspector must not outlive this check by ignoring SIGTERM.
+          killSignal: 'SIGKILL',
+        },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
       ),
     );
     return output.split('\n').some((line) => {
@@ -1299,6 +1308,8 @@ export class ChromeBrowser implements BrowserPort {
     signal?: AbortSignal,
     what = 'Runtime.evaluate',
   ): Promise<T> {
+    if (tab.closed) throw Error('the tab closed');
+    if (tab.dialogs.length) throw Error('the page is waiting on a dialog');
     // Callers ask a page no dialog holds; one it opens from here on ends the wait
     const dialog = this.dialogOpens(tab);
     try {
@@ -1341,6 +1352,7 @@ export class ChromeBrowser implements BrowserPort {
       dialog.stop();
     }
   }
+
   private async js<T = unknown>(
     tab: Tab,
     command: string,

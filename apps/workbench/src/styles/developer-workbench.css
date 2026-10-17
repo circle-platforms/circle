@@ -1,0 +1,217 @@
+.source-preview {
+  max-height: 75vh;
+  overflow: auto;
+}
+.source-preview img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  margin: auto;
+}
+.queue-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.queue-editor textarea {
+  min-height: 60px;
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 8px;
+}
+.search-results button.selected {
+  background: var(--hover);
+  outline: 1px solid var(--border);
+}
+
+.status-needs_review i,
+.status-blocked i,
+.status-preparing i,
+.status-cancelling i,
+.status-stopping i {
+  background: var(--attention);
+}
+.status-cancelled,
+.status-interrupted,
+.status-rejected {
+  color: var(--secondary);
+}
+
+.native-resource-error {
+  height: 100%;
+  min-height: 160px;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+}
+.native-resource-error h3 {
+  font-size: var(--ui-size);
+  margin: 0 0 10px;
+}
+.native-resource-error p {
+  color: var(--secondary);
+}
+.native-resource-error details {
+  margin-top: 14px;
+}
+.native-resource-error pre {
+  max-height: 180px;
+  overflow: auto;
+  font-size: var(--ui-small);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.recovered-inputs.task-recovery {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  flex: 0 1 auto;
+  max-height: 40vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 10px;
+  padding: 10px 0 14px;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  margin-bottom: 10px;
+}
+.recovered-inputs header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.recovered-inputs article {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.recovered-inputs pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.recovered-inputs label {
+  display: block;
+  margin: 8px 0;
+}
+
+/* The original main region and inspector own all native resources. */
+.session-resource-stack,
+.session-resource-view,
+.inspector-resource-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+}
+.session-resource-view > .conversation,
+.session-resource-view > .file-view {
+  flex: 1;
+  min-height: 0;
+}
+.session-resource-view[hidden],
+.inspector-resource-view[hidden] {
+  display: none !important;
+}
+.inspector-resource-host > .inspector {
+  flex: 1;
+  min-height: 0;
+}
+.workspace-panel-contents > .segmented {
+  margin: 12px 0;
+  flex-wrap: wrap;
+}
+.inspector-body.flush .workspace-panel-contents > .segmented {
+  margin: 12px 16px;
+}
+.page.plugin-detail-page > * {
+  max-width: 760px;
+}
+.inspector-resource-view[data-inspector-resource='browser'] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.inspector-body.flush {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.inspector-body.flush > .inspector-resource-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.workspace-panel-terminal {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-panel-terminal > .segmented {
+  flex: none;
+}
+.workspace-panel-terminal > .inspector-resource-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.inspector-column.inspector-overlay {
+  flex: none !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+.delivery-cycle-panel label {
+  display: block;
+  margin: 12px 0;
+}
+.delivery-cycle-panel label .input {
+  display: block;
+  width: 100%;
+}
+.delivery-cycle-panel textarea.input {
+  min-height: 70px;
+  resize: vertical;
+}
+.delivery-cycle-panel article {
+  overflow-wrap: anywhere;
+}
+.delivery-cycle-panel article > header,
+.delivery-cycle-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.delivery-cycle-panel .panel-note[role='alert'] {
+  color: var(--negative);
+}
+
+/* Panel v4 applies className/style to an inner surface; its registered outer
+   panel must also leave the main region when the original inspector is hidden. */
+#workbench-columns[data-inspector-mode='closed'] > #inspector {
+  display: none !important;
+}
+#workbench-columns[data-inspector-mode='closed'] > #main,
+#workbench-columns[data-inspector-mode='overlay'] > #main {
+  flex: 1 1 0 !important;
+}
+#workbench-columns[data-inspector-mode='overlay'] > #inspector {
+  display: contents !important;
+}

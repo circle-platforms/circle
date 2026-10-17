@@ -22,6 +22,17 @@ const raiseBrowserError = (error: unknown): never => {
 };
 const bridge: DesktopBridge = {
   apiVersion: 1,
+  nativeAccessibility: () => ipcRenderer.invoke('circle:native-accessibility'),
+  onNativeAccessibility: (listener) => {
+    const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>
+      listener(state);
+    ipcRenderer.on('circle:native-accessibility-changed', handler);
+    return () =>
+      ipcRenderer.removeListener(
+        'circle:native-accessibility-changed',
+        handler,
+      );
+  },
   info: () => ipcRenderer.invoke('circle:info'),
   runtimeState: () => ipcRenderer.invoke('circle:runtime-state'),
   runtimeCommand: (command) =>
@@ -31,6 +42,19 @@ const bridge: DesktopBridge = {
       listener(value);
     ipcRenderer.on('circle:runtime-update', handler);
     return () => ipcRenderer.removeListener('circle:runtime-update', handler);
+  },
+  onRuntimeDelta: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:runtime-token-delta', handler);
+    return () =>
+      ipcRenderer.removeListener('circle:runtime-token-delta', handler);
+  },
+  onWorkspaceEvent: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:workspace-event', handler);
+    return () => ipcRenderer.removeListener('circle:workspace-event', handler);
   },
   chooseFiles: (purpose) => ipcRenderer.invoke('circle:choose-files', purpose),
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
@@ -45,6 +69,18 @@ const bridge: DesktopBridge = {
   copyText: (text) => ipcRenderer.invoke('circle:copy-text', text),
   windowControl: (action) =>
     ipcRenderer.invoke('circle:window-control', action),
+  openExternal: (url) => ipcRenderer.invoke('circle:open-external', url),
+  onBrowserDiagnosticEvent: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:browser-diagnostic-event', handler);
+    return () =>
+      ipcRenderer.removeListener('circle:browser-diagnostic-event', handler);
+  },
+  browserDiagnostics: (id, request) =>
+    ipcRenderer
+      .invoke('circle:browser-diagnostics', id, request)
+      .catch(raiseBrowserError),
   browserState: (id) => ipcRenderer.invoke('circle:browser-state', id),
   browserNavigate: (id, url) =>
     ipcRenderer
@@ -80,6 +116,14 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-reveal', id, download),
   browserControl: (id, action) =>
     ipcRenderer.invoke('circle:browser-control', id, action),
+  browserPage: (id, action, value) =>
+    ipcRenderer.invoke('circle:browser-page', id, action, value),
+  onBrowserKey: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:browser-key', handler);
+    return () => ipcRenderer.removeListener('circle:browser-key', handler);
+  },
   onBrowserEvent: (listener) => {
     const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>
       listener(state);

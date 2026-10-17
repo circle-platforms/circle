@@ -1,8 +1,28 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
+import type { Plugin } from 'vite';
+const evidence = process.env.CIRCLE_COMPONENT_UI_EVIDENCE;
+const componentReady: Plugin = {
+  name: 'circle-component-dependencies-ready',
+  configureServer(server) {
+    const listen = server.listen.bind(server);
+    server.listen = async (...args) => {
+      await listen(...args);
+      await server.environments.client.depsOptimizer?.scanProcessing;
+      return server;
+    };
+  },
+};
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), ...(evidence ? [componentReady] : [])],
+  ...(evidence
+    ? {
+        cacheDir: resolve(evidence, 'vite-cache'),
+        optimizeDeps: { entries: ['index.html', 'test/*.html'] },
+      }
+    : {}),
   base: './',
   server: {
     host: '127.0.0.1',

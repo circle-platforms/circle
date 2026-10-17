@@ -45,6 +45,7 @@ function validateMessage(message: Message, previous: Set<string>): Set<string> {
       !isRecord(message.shell) ||
       typeof message.shell.command !== 'string' ||
       typeof message.shell.output !== 'string' ||
+      (message.shell.id !== undefined && !string(message.shell.id)) ||
       !Number.isInteger(message.shell.exit_code))
   )
     throw new Error('invalid user shell message');

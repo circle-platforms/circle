@@ -1,14 +1,19 @@
-import { readFileSync, appendFileSync, existsSync } from 'node:fs';
+import {
+  createRuntimePerformanceDiagnostics,
+  runtimeCommandDiagnosticMetadata,
+} from './runtime-performance-diagnostics.js';
+import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from './runtime-controller';
 import { BrowserBridge } from '../../../src/browser/tools.js';
 import type { BrowserReply } from '../../../src/browser/protocol.js';
-import { ScriptedModel } from '../../../src/testing.js';
-import { emptyUsage, type ModelResponse } from '../../../src/types.js';
+import { RuntimeFixtureModel } from './runtime-fixture';
 import { ModelCatalog } from '../../../src/model_catalog.js';
 import { initializeNetwork } from '../../../src/network_bootstrap.js';
+import { RuntimeCredentialClient } from './runtime-private-channel';
+import { workspaceToolsForWorker, workspaceRuntimePath } from './runtime-tools';
+import type { WorkspaceServiceEvent } from './workspace-protocol';
+import type { RuntimeTokenDelta } from './runtime-protocol';
 
 type Port = {
   postMessage(value: unknown): void;
@@ -18,89 +23,51 @@ const port = (process as unknown as { parentPort: Port }).parentPort;
 if (!port) throw Error('Circle runtime needs its native parent process');
 const home = process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
 if (!home) throw Error('Circle runtime home is missing');
+const workspaceTools = workspaceToolsForWorker(
+  import.meta.url,
+  process.execPath,
+);
+// Child commands, Jobs and their nested package scripts inherit the shipped
+// runtime. This changes only this utility process, never user shell settings.
+process.env.PATH = workspaceRuntimePath(
+  workspaceTools.runtimeExecutable,
+  process.env.PATH,
+);
 initializeNetwork(home);
 const fixturePath = process.env.CIRCLE_DESKTOP_RUNTIME_FIXTURE;
-let model: ScriptedModel | undefined;
+let model: RuntimeFixtureModel | undefined;
 if (fixturePath) {
   if (!process.env.CIRCLE_WORKBENCH_TEST_PROFILE)
     throw Error('scripted model requires an explicit test profile');
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
-  model = new ScriptedModel(
-    fixture.replies.map(
-      (entry: {
-        message?: ModelResponse['message'];
-        delayMs?: number;
-        waitForAbort?: boolean;
-        // `waitForFile` keeps the stream open until a check has seen it and creates the file.
-        chunks?: (
-          | string
-          | { text: string; thinking?: boolean }
-          | { waitForFile: string }
-        )[];
-        usage?: ModelResponse['usage'];
-        error?: string;
-      }) =>
-        async (request: Parameters<ScriptedModel['complete']>[0]) => {
-          if (fixture.requestsPath)
-            appendFileSync(
-              fixture.requestsPath,
-              JSON.stringify({
-                system: request.system,
-                messages: request.messages,
-                tools: request.tools.map(
-                  ({ run: _run, approvalFacts: _facts, ...tool }) => tool,
-                ),
-              }) + '\n',
-              { mode: 0o600 },
-            );
-          if (entry.error) throw Error(entry.error);
-          if (entry.waitForAbort)
-            await new Promise<void>((_resolve, reject) => {
-              const abort = () =>
-                reject(request.signal.reason ?? Error('aborted'));
-              request.signal.addEventListener('abort', abort, { once: true });
-              if (request.signal.aborted) abort();
-            });
-          for (const chunk of entry.chunks ?? []) {
-            if (typeof chunk !== 'string' && 'waitForFile' in chunk) {
-              while (!existsSync(chunk.waitForFile))
-                await delay(20, undefined, { signal: request.signal });
-              continue;
-            }
-            if (typeof chunk === 'string') request.token(chunk);
-            else request.token(chunk.text, chunk.thinking);
-            await delay(entry.delayMs ?? 15, undefined, {
-              signal: request.signal,
-            });
-          }
-          if (entry.delayMs && !entry.chunks)
-            await delay(entry.delayMs, undefined, { signal: request.signal });
-          const message = entry.message ?? {
-            id: randomUUID(),
-            role: 'assistant',
-            content: (entry.chunks ?? [])
-              .flatMap((chunk) =>
-                typeof chunk === 'string'
-                  ? [chunk]
-                  : 'text' in chunk && !chunk.thinking
-                    ? [chunk.text]
-                    : [],
-              )
-              .join(''),
-          };
-          if (message.content && !entry.chunks) request.token(message.content);
-          return { message, usage: entry.usage ?? emptyUsage() };
-        },
-    ),
-  );
+  model = new RuntimeFixtureModel(fixture);
 }
+const diagnostics = createRuntimePerformanceDiagnostics({
+  testProfile: Boolean(process.env.CIRCLE_WORKBENCH_TEST_PROFILE),
+  enabled: process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS === '1',
+  dataFolder: dirname(home),
+});
 const browser = new BrowserBridge((message) => port.postMessage(message));
+const credentialStore = new RuntimeCredentialClient((message) =>
+  port.postMessage(message),
+);
 const controller = new RuntimeController({
   home,
   // The supervisor keeps home as runtime-home inside the application's data folder
   dataFolder: dirname(home),
   model,
   browser,
+  credentialStore,
+  workspaceTools,
+  emitWorkspaceEvent: (event: WorkspaceServiceEvent) => {
+    diagnostics?.record('workspace-event-sent', {
+      resourceId: event.resourceId,
+      epoch: event.epoch,
+      seq: event.seq,
+      sourceSeq: event.sourceSeq,
+    });
+    port.postMessage({ type: 'workspace-event', event });
+  },
   beforeDelete: (sessionId) => browser.releaseSession(sessionId),
   userHome: home,
   catalog: process.env.CIRCLE_WORKBENCH_TEST_PROFILE
@@ -108,23 +75,36 @@ const controller = new RuntimeController({
         new ModelCatalog(path, { env: { CIRCLE_NO_MODELS_REFRESH: '1' } })
     : undefined,
   emit: (update) => port.postMessage({ type: 'update', update }),
+  emitTokenDelta: (delta: RuntimeTokenDelta) =>
+    port.postMessage({ type: 'token-delta', delta }),
   openUrl: (url) => port.postMessage({ type: 'open-url', url }),
 });
 port.on('message', ({ data }) => {
+  if ((data as { type?: unknown })?.type === 'credential-reply') {
+    credentialStore.receive(data);
+    return;
+  }
   const message = data as { type?: unknown; reply?: BrowserReply };
   if (message?.type === 'browser-reply' && message.reply) {
     browser.receive(message.reply);
     return;
   }
-  void controller
-    .dispatch(data)
-    .then((reply) => port.postMessage({ type: 'reply', reply }));
+  const metadata = diagnostics
+    ? runtimeCommandDiagnosticMetadata(data)
+    : undefined;
+  if (metadata) diagnostics?.record('command-start', metadata);
+  void controller.dispatch(data).then((reply) => {
+    if (metadata) diagnostics?.record('command-end', metadata);
+    port.postMessage({ type: 'reply', reply });
+  });
 });
 let exiting = false;
 async function close() {
   if (exiting) return;
   exiting = true;
   await controller.close();
+  credentialStore.close();
+  diagnostics?.close();
   process.exit(0);
 }
 process.on('SIGTERM', () => {

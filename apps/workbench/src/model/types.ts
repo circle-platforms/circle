@@ -57,12 +57,22 @@ export interface ToolCall {
   name: string;
   input: Record<string, unknown>;
   output: string;
-  status: 'running' | 'success' | 'error' | 'waiting' | 'unknown';
+  status:
+    | 'running'
+    | 'success'
+    | 'error'
+    | 'waiting'
+    | 'unknown'
+    | 'cancelled'
+    | 'rejected';
+  attachments?: Attachment[];
   elapsed?: string;
   filePath?: string;
   before?: string;
   after?: string;
   agentId?: string;
+  /** Main-process ledger links to actual child session identities. */
+  agentIds?: string[];
   diff?: DiffView;
 }
 export interface Message {
@@ -75,8 +85,20 @@ export interface Message {
   /** Seconds the model spent thinking, kept with the reply. */
   thinkingSeconds?: number;
   tool?: ToolCall;
+  /** Host-projected human execution, distinct from a model tool call. */
+  shell?: {
+    id?: string;
+    sourceSessionId: string;
+    command: string;
+    output: string;
+    status: 'running' | 'done' | 'error' | 'stopped' | 'background';
+    exitCode?: number;
+    quiet?: boolean;
+    interactive: boolean;
+  };
   label?: string;
   attachments?: Attachment[];
+  runtimeNotice?: import('../../../../src/runtime_notice').GitHubRuntimeNotice;
   /** A runtime notice, separate from user/model text, for interface translation. */
   planCompleted?: number;
   /** A core completion diagnostic; arbitrary model/provider text stays untranslated. */
@@ -108,7 +130,11 @@ export interface Session {
   actionError?: string;
   /** Renderer-only state; never changes the core conversation or execution. */
   presentation?: {
-    scroll?: { top: number; follow: boolean };
+    scroll?: {
+      top: number;
+      follow: boolean;
+      anchor?: { messageId: string; offset: number };
+    };
     planCollapsed?: boolean;
     disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
     toolTabs?: Record<string, 'input' | 'output'>;
@@ -125,6 +151,7 @@ export interface Session {
   undoStack: string[][];
   attachments: Attachment[];
   queue: { id: string; text: string; kind: 'steering' | 'follow-up' }[];
+  queueVersion?: number;
   state: 'idle' | 'waiting' | 'paused';
   readOnly: boolean;
   auto: boolean;
@@ -176,7 +203,7 @@ export interface Workspace {
    * workspace. `scratch` is a conversation that is not in any project.
    */
   kind?: 'project' | 'scratch';
-  instructions: { name: string; content: string }[];
+  instructions: { name: string; content: string; path?: string }[];
 }
 export interface WorkspaceFile {
   id: string;
@@ -201,13 +228,47 @@ export interface AgentRecord {
   model: string;
   tokens: number;
   messages: Message[];
+  /** Resource access remains owned by this actual child session, not its parent. */
+  workspaceId?: string;
+  resourceSessionId?: string;
+  readOnly?: boolean;
+  task?: {
+    role?: 'worker' | 'reviewer';
+    id: string;
+    attempt: number;
+    state:
+      | 'queued'
+      | 'preparing'
+      | 'running'
+      | 'waiting'
+      | 'cancelling'
+      | 'succeeded'
+      | 'failed'
+      | 'blocked'
+      | 'cancelled'
+      | 'interrupted'
+      | 'needs_review';
+    access: 'write' | 'readonly';
+    baseline: string;
+    /** The actual runtime execution, distinct from overall acceptance state. */
+    runtimeState?: NonNullable<AgentRecord['task']>['state'];
+    /** History is visible, but an old in-flight process has not been reconciled. */
+    recovery?: 'needs_reconciliation';
+  };
 }
 export interface Job {
   id: string;
   sessionId: string;
   kind: 'command' | 'agent' | 'watch';
   title: string;
-  state: 'running' | 'waiting' | 'completed' | 'failed';
+  state:
+    | 'running'
+    | 'waiting'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'stopping'
+    | 'interrupted';
   elapsed: string;
   output: string;
   outputPath: string;
@@ -391,6 +452,21 @@ export interface CommandResult {
   selection?: string;
   effect?: 'copy' | 'import' | 'download';
 }
+/** Local fields only: this API cannot edit history, permissions or execution. */
+export type SessionViewPatch = Partial<
+  Pick<
+    Session,
+    | 'draft'
+    | 'attachments'
+    | 'hiddenIds'
+    | 'undoStack'
+    | 'showThinking'
+    | 'expandTools'
+    | 'pinned'
+    | 'shared'
+    | 'presentation'
+  >
+>;
 /** The first message from the home composer. No session exists until this runs. */
 export interface BeginConversation {
   /** A known project. Omit it, or pass null, to work without a project. */
@@ -411,6 +487,7 @@ export interface RuntimePort {
   getSnapshot: () => WorkbenchSnapshot;
   subscribe: (listener: () => void) => () => void;
   change: (update: (draft: WorkbenchSnapshot) => void) => void;
+  updateSessionView: (sessionId: string, patch: SessionViewPatch) => boolean;
   send: (
     kind?: 'steering' | 'follow-up',
   ) => CommandResult | Promise<CommandResult>;

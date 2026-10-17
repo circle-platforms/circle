@@ -1,0 +1,252 @@
+.native-code-editor {
+  flex: 1;
+  min-height: 150px;
+  overflow: hidden;
+}
+.file-view .editor-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+}
+.file-view .editor-notice[role='alert'] {
+  border-left: 3px solid var(--negative);
+}
+.file-view .editor-notice span {
+  flex: 1;
+  min-width: 180px;
+}
+
+/* Code checks fold into the status line; their details open above it. */
+.file-view .file-view-footer {
+  position: relative;
+  gap: 12px;
+  min-height: 36px;
+  padding: 6px 22px;
+}
+.file-view .editor-project-diagnostics {
+  min-width: 0;
+}
+.file-view .editor-project-diagnostics > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-view .editor-project-diagnostics > summary::-webkit-details-marker {
+  display: none;
+}
+.file-view .editor-project-diagnostics > summary:hover,
+.file-view .editor-project-diagnostics[open] > summary {
+  background: var(--hover);
+  color: var(--fg);
+}
+.file-view .editor-project-diagnostics > summary:focus-visible {
+  outline: 1px solid var(--fg);
+  outline-offset: 1px;
+}
+.file-view .editor-project-diagnostics.attention > summary {
+  color: var(--attention);
+}
+.file-view .editor-project-diagnostics > summary .disclosure {
+  transition: transform 120ms ease;
+}
+.file-view .editor-project-diagnostics[open] > summary .disclosure {
+  transform: rotate(180deg);
+}
+.file-view .editor-language-panel {
+  position: absolute;
+  z-index: 4;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  max-height: min(45vh, 360px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 12px 20px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: 0 -6px 16px color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
+  font-size: var(--ui-small);
+}
+.file-view .editor-language-panel span {
+  display: block;
+  min-width: 0;
+  margin-top: 8px;
+}
+.file-view .editor-language-panel button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.file-view .editor-language-panel summary {
+  cursor: pointer;
+  color: var(--secondary);
+  line-height: 1.5;
+}
+.file-view .editor-language-status {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 0 0 8px;
+}
+.file-view .editor-language-status span {
+  margin-top: 0;
+}
+.file-view .editor-language-status details > :not(summary) {
+  margin-top: 6px;
+}
+.file-view .editor-diagnostic-history > summary {
+  margin: 8px 0;
+}
+.file-view .editor-diagnostic-batch[open] {
+  padding: 8px 0 12px 8px;
+}
+.file-view .editor-diagnostic-batch > :not(summary) {
+  margin-top: 8px;
+}
+.file-view .editor-diagnostic-batch li + li {
+  margin-top: 8px;
+}
+.file-view .editor-language-panel pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* One save action, beside the unsaved state it settles. */
+.file-view .file-view-toolbar {
+  gap: 10px;
+  padding: 8px 22px;
+}
+.file-view .file-view-toolbar > .file-view-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-view .file-view-toolbar > .file-view-state.dirty {
+  color: var(--fg);
+}
+.file-view .file-view-toolbar > .file-view-state.dirty::before {
+  content: '';
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+.file-view .file-view-toolbar > .button {
+  flex-shrink: 0;
+}
+@media (max-width: 760px) {
+  .file-view .file-view-toolbar {
+    flex-wrap: nowrap;
+    padding: 8px 12px;
+  }
+  .file-view .file-view-toolbar > .file-view-state {
+    display: inline-flex;
+  }
+  .file-view .file-view-footer {
+    padding: 6px 12px;
+  }
+  .file-view .editor-language-panel {
+    padding: 10px 12px 12px;
+  }
+}
+
+/* Monaco's popup surfaces use the same Circle controls and typography. */
+.monaco-menu-container .monaco-action-bar,
+.monaco-editor .monaco-hover,
+.monaco-editor .suggest-widget {
+  font-size: var(--ui-size);
+  font-family: inherit;
+}
+.monaco-menu-container .monaco-action-bar {
+  border-radius: var(--radius);
+}
+
+.file-view-heading > .file-view-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+.file-view-filename,
+.file-source-summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.file-view-filename strong,
+.file-source-origin {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.file-view-filename > svg,
+.file-source-readonly,
+.file-view-heading > button {
+  flex-shrink: 0;
+}
+.file-source-summary {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  gap: 6px;
+}
+.file-source-folder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.file-source-folder + .file-source-origin::before {
+  content: '·';
+  margin-right: 6px;
+}
+.file-source-origin {
+  flex: 0 1 auto;
+}
+.file-source-readonly {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--secondary);
+}
+.file-source-origin:focus-visible {
+  outline: 1px solid var(--fg);
+  outline-offset: 2px;
+}
+.file-source-directory {
+  max-width: min(600px, calc(100vw - 24px));
+  overflow-wrap: anywhere;
+}
+
+.file-view {
+  min-width: 0;
+}

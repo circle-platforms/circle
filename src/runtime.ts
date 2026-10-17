@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { GitHubConnectionBackend } from './github_connection.js';
 import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
@@ -26,8 +27,12 @@ import {
   written,
   type Redactor,
 } from './secrets.js';
-import { buildSystemPrompt } from './system_prompt.js';
-import { Harness, type ApprovalDecision } from './harness.js';
+import { buildSystemPrompt, type ContextInstruction } from './system_prompt.js';
+import {
+  Harness,
+  type ApprovalDecision,
+  type HarnessOptions,
+} from './harness.js';
 import { EventBus } from './events.js';
 import { defaultRunOptions, type RunOptions } from './run_options.js';
 import type { CircleSettings } from './settings.js';
@@ -51,6 +56,7 @@ import { BUILTIN_SLASH } from './tui/slash_commands.js';
 import { discoverCustomCommands } from './commands.js';
 import { LspManager } from './lsp_tool.js';
 import type { Tool, ToolContext } from './types.js';
+import type { FileMutations } from './file_mutations.js';
 import {
   ContextManager,
   restoredTodos,
@@ -58,6 +64,7 @@ import {
 } from './context_middleware.js';
 import { askQuestions } from './questions.js';
 import type { SecretRequest } from './secret_prompt.js';
+import type { CommandLauncher, CommandExecution } from './command_process.js';
 import { JobRegistry, jobLine, type Job } from './jobs.js';
 import { ModelCatalog } from './model_catalog.js';
 import {
@@ -114,6 +121,13 @@ export interface InteractionContext {
   agent?: string;
 }
 export interface RuntimeOptions {
+  /** Optional host process transport; the CLI keeps its existing pipe launcher. */
+  commandLauncher?: CommandLauncher;
+  /** Safe process identity projection; never receives expanded command or env. */
+  onCommandExecution?: (execution: CommandExecution) => void;
+  githubConnection?: GitHubConnectionBackend;
+  /** Native workspace compare-and-save backend; omitted by the CLI. */
+  fileMutations?: FileMutations;
   workspace: string;
   home: string;
   // Embedders can isolate global context without changing the process HOME.
@@ -128,6 +142,12 @@ export interface RuntimeOptions {
   // `--model`: used for this run, kept over a reload, never saved.
   modelOverride?: string;
   model?: ChatModel;
+  /** Wrap every parent/child completion without replacing the provider used for connection ownership. */
+  wrapModel?: (model: ChatModel) => ChatModel;
+  /** Trusted desktop resource scheduling. The CLI keeps direct tool execution. */
+  executeTool?: HarnessOptions['executeTool'];
+  /** Called only for host-built coordination tools, before extension/extra tools are added. */
+  classifyTool?: (tool: Tool, kind: 'control') => Tool;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
   /**
@@ -182,6 +202,11 @@ export interface RuntimeOptions {
    * the session: this one can read it and cannot continue, change or delete it.
    */
   inspect?: boolean;
+  /**
+   * Keep messages still queued when the runtime closes, for the host to offer
+   * back later (the desktop). The terminal drops them, as a stopped turn does.
+   */
+  preserveQueuedInputs?: boolean;
 }
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
@@ -189,8 +214,10 @@ export class AgentRuntime {
     ChatModel,
     NativeSearchConnection
   >();
+  // Extensions wrap the model first, then the host's wrapper; the harness passes
+  // that outermost model to web search, so its connection is recorded there.
   private modelWithSearch(base: ChatModel): ChatModel {
-    const wrapped = this.extensions.model(base);
+    const wrapped = this.wrapModel(this.extensions.model(base));
     const connection =
       base instanceof GatewayModel
         ? base.webSearchConnection()
@@ -252,6 +279,11 @@ export class AgentRuntime {
   private closingPromise?: Promise<void>;
   readonly policy;
   readonly runOptions: RunOptions;
+  private promptInstructions: ContextInstruction[] = [];
+  /** Project rules actually included in the current system prompt, not a disk scan. */
+  get loadedInstructions(): ContextInstruction[] {
+    return this.promptInstructions.map((file) => ({ ...file }));
+  }
   // Read again with every system prompt, see systemPrompt().
   skills: SkillInfo[] = [];
   readonly mcp: McpManager;
@@ -261,8 +293,12 @@ export class AgentRuntime {
   private activeCompaction?: Promise<string>;
   extensions: ExtensionHost;
   private integrationsReady?: Promise<void>;
+  private extensionChanges = new Map<string, Promise<void>>();
+  private extensionChangeListeners = new Set<() => void>();
   private readonly integrationLifetime = new AbortController();
   private baseModel?: ChatModel;
+  private readonly modelWrappers = new WeakMap<ChatModel, ChatModel>();
+  private readonly wrappedModels = new WeakSet<ChatModel>();
   private authFingerprint?: string;
   private coreTools: Tool[] = [];
   // An extension changed its tools after loading; applied between turns, never inside one.
@@ -350,14 +386,26 @@ export class AgentRuntime {
       (path) => this.sandbox.resolvePath(path),
       options.settings.allowed_commands,
     );
-    this.jobs = new JobRegistry(this.sandbox, (kind, job) => {
-      if (kind === 'job_ended') this.userShells?.ended(job);
-      this.bus.emit(kind, {
-        payload: { job },
-        tags: { session_id: job.sessionId },
-      });
-      if (kind === 'job_ended') this.releaseIfAway();
-    });
+    this.jobs = new JobRegistry(
+      this.sandbox,
+      (kind, job) => {
+        if (kind === 'job_ended') this.userShells?.ended(job);
+        this.bus.emit(kind, {
+          payload: { job },
+          tags: { session_id: job.sessionId },
+        });
+        if (kind === 'job_ended') this.releaseIfAway();
+      },
+      16,
+      JobRegistry.outputLimit(),
+      {
+        commandLauncher: options.commandLauncher,
+        onExecution: (execution) => {
+          this.userShells?.executionChanged(execution);
+          options.onCommandExecution?.(execution);
+        },
+      },
+    );
     // A background command can print a secret: its notice reaches the model and history.
     // Calls and notices share what values each secret had.
     this.redact = secretRedactor(
@@ -436,6 +484,17 @@ export class AgentRuntime {
         });
     });
   }
+  private wrapModel(model: ChatModel): ChatModel {
+    if (!this.options.wrapModel || this.wrappedModels.has(model)) return model;
+    const previous = this.modelWrappers.get(model);
+    if (previous) return previous;
+    const wrapped = this.options.wrapModel(model);
+    if (!wrapped || typeof wrapped.complete !== 'function')
+      throw new Error('model wrapper must return a ChatModel');
+    this.modelWrappers.set(model, wrapped);
+    this.wrappedModels.add(wrapped);
+    return wrapped;
+  }
   private createHarness(modelOverride?: ChatModel): Harness {
     const model =
       modelOverride ??
@@ -446,7 +505,12 @@ export class AgentRuntime {
     this.baseModel = model;
     const system = this.systemPrompt(model.model);
     let tools = buildTools(this.sandbox, {
+      fileMutations: this.options.fileMutations,
       jobs: this.jobs,
+      displayCommand: (raw, context) =>
+        this.redact(raw, {}, () =>
+          written(this.store.messages(context.sessionId)),
+        ),
       screenshot:
         this.options.screenshot === false
           ? undefined
@@ -532,7 +596,7 @@ export class AgentRuntime {
           ? this.modelWithSearch(
               this.gatewayModel(this.options.settings, custom.spec.model),
             )
-          : parentHarness.model;
+          : this.wrapModel(parentHarness.model);
         const session = this.store.create(
           this.options.workspace,
           childModel.model,
@@ -616,7 +680,12 @@ export class AgentRuntime {
               EXPLORE_TOOLS.has(tool.name)),
         );
         const jobTools = buildTools(this.sandbox, {
+          fileMutations: this.options.fileMutations,
           jobs: this.jobs,
+          displayCommand: (raw, context) =>
+            this.redact(raw, {}, () =>
+              written(this.store.messages(context.sessionId)),
+            ),
           jobOwner: () => ({
             sessionId: parentSessionId,
             parent: backgroundJob?.id ?? session.id,
@@ -645,28 +714,35 @@ export class AgentRuntime {
               },
             ),
         });
-        const ownedChildTools = childTools.map((tool) =>
-          tool.name === 'write_todos'
-            ? {
-                ...tool,
-                run: async (args: Record<string, unknown>) => {
-                  childBus.emit('todo_list', {
-                    payload: { todos: args.todos },
-                  });
-                  return 'Updated todo list.';
-                },
-              }
-            : [
-                  'execute',
-                  'list_jobs',
-                  'stop_job',
-                  'wait_jobs',
-                  'question',
-                ].includes(tool.name)
-              ? jobTools.find((jobTool) => jobTool.name === tool.name)!
-              : tool,
+        const ownedChildTools = this.classifyCoreTools(
+          childTools.map((tool) =>
+            tool.name === 'write_todos'
+              ? {
+                  ...tool,
+                  run: async (args: Record<string, unknown>) => {
+                    childBus.emit('todo_list', {
+                      payload: { todos: args.todos },
+                    });
+                    return 'Updated todo list.';
+                  },
+                }
+              : [
+                    'execute',
+                    'list_jobs',
+                    'stop_job',
+                    'wait_jobs',
+                    'question',
+                  ].includes(tool.name)
+                ? jobTools.find((jobTool) => jobTool.name === tool.name)!
+                : tool,
+          ),
         );
         const child: Harness = new Harness({
+          commandExecution: {
+            epoch: this.jobs.runName,
+            forCall: (sessionId, callId) =>
+              this.jobs.executionFor(sessionId, callId),
+          },
           variables: () => this.options.settings.variables,
           secrets: () => loadSecrets(this.options.home),
           redact: this.redact,
@@ -701,6 +777,7 @@ export class AgentRuntime {
           parentPlanMode: () => this.harness.planMode,
           toolBoundary: (tool, args, context) =>
             this.extensionToolBoundary(tool, args, context),
+          executeTool: this.options.executeTool,
           webSearch: (model, query, count, context) =>
             this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
@@ -750,6 +827,7 @@ export class AgentRuntime {
       },
     });
     tools.push(this.lsp.tool());
+    tools = this.classifyCoreTools(tools);
     tools.push(...(this.options.extraTools ?? []));
     this.coreTools = tools;
     tools = this.withIntegrationTools(
@@ -758,6 +836,11 @@ export class AgentRuntime {
     // A new or resumed session after the integrations loaded keeps their subagents.
     if (this.integrationsReady) this.describeSubagents(tools);
     const harness = new Harness({
+      commandExecution: {
+        epoch: this.jobs.runName,
+        forCall: (sessionId, callId) =>
+          this.jobs.executionFor(sessionId, callId),
+      },
       variables: () => this.options.settings.variables,
       secrets: () => loadSecrets(this.options.home),
       redact: this.redact,
@@ -782,6 +865,8 @@ export class AgentRuntime {
         if (this.userShells.busy) throw new Error('a user command is running');
         if (this.activeCompaction) throw new Error('a compaction is running');
         await this.initialize(signal);
+        await this.waitForExtensionChanges(signal);
+        this.refreshIntegrationTools();
       },
       beforeTurn: (prompt) => {
         this.requireTurnConnection();
@@ -795,6 +880,7 @@ export class AgentRuntime {
       },
       toolBoundary: (tool, args, context) =>
         this.extensionToolBoundary(tool, args, context),
+      executeTool: this.options.executeTool,
       webSearch: (model, query, count, context) =>
         this.searchFromModel(model, query, count, context),
       prepareMessages: (signal) =>
@@ -830,6 +916,23 @@ export class AgentRuntime {
     harness.planMode = restoredPlanMode(harness.messages);
     return harness;
   }
+  private classifyCoreTools(tools: Tool[]): Tool[] {
+    const control = new Set([
+      'task',
+      'list_jobs',
+      'stop_job',
+      'wait_jobs',
+      'question',
+      'plan_enter',
+      'plan_exit',
+      'compact_conversation',
+    ]);
+    return tools.map((tool) =>
+      control.has(tool.name) && this.options.classifyTool
+        ? this.options.classifyTool(tool, 'control')
+        : tool,
+    );
+  }
   private extensionHost(reservedTools: Set<string>): ExtensionHost {
     const commands =
       this.options.localContext === false
@@ -853,6 +956,7 @@ export class AgentRuntime {
         ? (request, signal) => this.options.secret!(request, signal)
         : undefined,
       bundledRoot: this.options.bundledExtensions,
+      githubConnection: this.options.githubConnection,
       onStatus: () => this.options.onExtensionStatus?.(),
       onTools: () => {
         this.toolsStale = true;
@@ -891,6 +995,9 @@ export class AgentRuntime {
       this.options.home,
       {
         skills: this.skills,
+        onContextFiles: (files) => {
+          this.promptInstructions = files.map((file) => ({ ...file }));
+        },
         extensionTools: this.extensions.tools(),
         userHome: this.options.userHome,
         localContext: this.options.localContext,
@@ -1028,13 +1135,19 @@ export class AgentRuntime {
         );
         const stop = () => {
           // This host is not installed yet, but already owns background work.
-          // Its catch below awaits the same bounded drain before startup ends.
           void host.close(2000);
         };
         active.addEventListener('abort', stop, { once: true });
         try {
           active.throwIfAborted();
           await abortable(host.load(), active);
+          active.throwIfAborted();
+          for (const ext of host.extensions)
+            if (
+              ext.source === 'bundled' &&
+              this.options.settings.extensions[ext.name]?.enabled !== true
+            )
+              await host.disableBundled(ext.name);
           active.throwIfAborted();
         } catch (error) {
           await host.close(2000);
@@ -1063,6 +1176,77 @@ export class AgentRuntime {
       });
     }
     await this.integrationsReady;
+  }
+  /** Change one bundled extension without restarting unrelated integrations. */
+  setBundledExtensionEnabled(name: string, enabled: boolean): Promise<void> {
+    this.options.settings.extensions[name] = {
+      ...this.options.settings.extensions[name],
+      enabled,
+    };
+    const work = (async () => {
+      if (!enabled) {
+        await this.extensions.disableBundled(name);
+        return;
+      }
+      await this.initialize();
+      if (
+        this.options.settings.extensions[name]?.enabled === true &&
+        !this.isClosing
+      )
+        await this.extensions.enableBundled(name);
+    })();
+    this.extensionChanges.set(name, work);
+    for (const listener of [...this.extensionChangeListeners]) listener();
+    void work
+      .finally(() => {
+        if (this.extensionChanges.get(name) === work)
+          this.extensionChanges.delete(name);
+      })
+      .catch(() => {});
+    return work;
+  }
+  private async waitForExtensionChanges(signal: AbortSignal): Promise<void> {
+    while (true) {
+      signal.throwIfAborted();
+      const pending = [...this.extensionChanges]
+        .filter(
+          ([name]) => this.options.settings.extensions[name]?.enabled === true,
+        )
+        .map(([, work]) => work);
+      if (!pending.length) return;
+      await new Promise<void>((resolve, reject) => {
+        let finished = false;
+        const cleanup = () => {
+          this.extensionChangeListeners.delete(changed);
+          signal.removeEventListener('abort', abort);
+        };
+        const changed = () => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          resolve();
+        };
+        const abort = () => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          reject(signal.reason ?? new Error('cancelled'));
+        };
+        this.extensionChangeListeners.add(changed);
+        signal.addEventListener('abort', abort, { once: true });
+        void Promise.allSettled(pending).then(changed);
+        if (signal.aborted) abort();
+      });
+    }
+  }
+  private refreshIntegrationTools() {
+    if (!this.toolsStale || !this.integrationsReady) return;
+    this.toolsStale = false;
+    this.harness.tools = this.withIntegrationTools(
+      this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+    );
+    this.describeSubagents(this.harness.tools);
+    this.refreshSystemPrompt();
   }
   private scheduleToolRefresh(): void {
     if (this.toolsCheck) return;
@@ -1683,7 +1867,15 @@ export class AgentRuntime {
     await this.catalog.close();
     this.compactionController?.abort(new Error('Interrupted'));
     await this.activeCompaction?.catch(() => {});
-    await this.harness.cancel();
+    await this.harness
+      .cancel({
+        preserveInputs: !deleteSession && this.options.preserveQueuedInputs,
+      })
+      // The turn is stopped either way. A queue the store could not drop stays
+      // queued, and the next open offers it back rather than sending it.
+      .catch((error) => {
+        if (deleteSession) throw error;
+      });
     await this.harness.finishTitle();
     await this.userShells.cancel();
     const stopped = await this.jobs.close();

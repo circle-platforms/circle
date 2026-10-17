@@ -369,7 +369,7 @@ for (const leaseOwner of ['root', 'child'] as const) {
     fs.writeFileSync('background.pid', String(process.pid));
     setInterval(() => { if (fs.existsSync('trigger')) fs.writeFileSync('forbidden', 'late write'); }, 10);`,
     );
-    const job = runtime.jobs.startShell(
+    const job = await runtime.jobs.startShell(
       `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
       { sessionId: runtime.session.id, startedBy: 'model' },
     );
@@ -428,7 +428,7 @@ for (const leaseOwner of ['root', 'child'] as const) {
     assert.equal(other.busy, true);
     assert.ok(runtime.store.get(runtime.session.id));
     assert.ok(runtime.store.messages(runtime.session.id).length > 0);
-    assert.throws(
+    await assert.rejects(
       () =>
         runtime.jobs.startShell('echo late', { sessionId: runtime.session.id }),
       /closed/,

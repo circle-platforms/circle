@@ -59,13 +59,13 @@ test('background shells retain complete ordered output, UTF-8 bytes, exit codes 
     root,
     `const fs=require('fs'); fs.writeSync(1,'first\\n'); fs.writeSync(2,'second\\n'); const bytes=Buffer.from('中文🙂\\n'); for (const b of bytes) fs.writeSync(1,Buffer.from([b])); fs.writeSync(1,'x'.repeat(90000)); process.exitCode=7;`,
   );
-  const job = jobs.startShell(command, { sessionId: 'one' });
+  const job = await jobs.startShell(command, { sessionId: 'one' });
   await jobs.wait([job.id], 5, new AbortController().signal);
   assert.equal(jobs.get(job.id)!.status, 'failed');
   assert.equal(jobs.get(job.id)!.exitCode, 7);
   assert.equal(
     sandbox.resolvePath(job.virtualPath),
-    realpathSync(job.outputPath),
+    realpathSync.native(job.outputPath),
   );
   const output = readFileSync(job.outputPath, 'utf8');
   assert.ok(output.startsWith('first\nsecond\n中文🙂\n'));
@@ -202,15 +202,18 @@ test('stop and close end real process trees before late file writes on every sup
     root,
     `require('child_process').spawn(process.execPath,[${JSON.stringify(child)}],{stdio:'inherit'}); setTimeout(()=>{},10000);`,
   );
-  const job = jobs.startShell(command, { sessionId: 'one' });
+  const job = await jobs.startShell(command, { sessionId: 'one' });
   await until(() => existsSync(ready));
   await jobs.stop(job.id, 'user');
   assert.equal(jobs.get(job.id)!.status, 'stopped');
   await delay(2200);
   assert.equal(existsSync(marker), false);
-  const second = jobs.startShell(script(root, 'setTimeout(()=>{},10000);'), {
-    sessionId: 'two',
-  });
+  const second = await jobs.startShell(
+    script(root, 'setTimeout(()=>{},10000);'),
+    {
+      sessionId: 'two',
+    },
+  );
   const stopped = await jobs.close();
   assert.ok(stopped.some((job) => job.id === second.id));
   assert.equal(jobs.get(second.id)!.status, 'stopped');
@@ -247,18 +250,18 @@ test('output limits and background timeouts fail jobs, and capacity checks do no
     1024,
   );
   cleanup(t, () => jobs.close().then(() => {}));
-  const job = jobs.startShell(
+  const job = await jobs.startShell(
     script(root, `console.log('x'.repeat(3000)); setTimeout(()=>{},10000);`),
     { sessionId: 'one' },
   );
-  assert.throws(
+  await assert.rejects(
     () => jobs.startShell('echo bad', { sessionId: 'one' }),
     /already running/,
   );
   await jobs.wait([job.id], 5, new AbortController().signal);
   assert.equal(jobs.get(job.id)!.status, 'failed');
   assert.equal(jobs.get(job.id)!.reason, 'output limit');
-  const timed = jobs.startShell(
+  const timed = await jobs.startShell(
     script(root, 'setTimeout(()=>{},10000);'),
     { sessionId: 'one' },
     0.05,
@@ -374,9 +377,12 @@ test('an idle job notice resumes the model without inventing a user prompt and s
     headless: true,
   });
   cleanup(t, () => runtime.close());
-  const job = runtime.jobs.startShell(script(root, 'console.log("ready");'), {
-    sessionId: runtime.session.id,
-  });
+  const job = await runtime.jobs.startShell(
+    script(root, 'console.log("ready");'),
+    {
+      sessionId: runtime.session.id,
+    },
+  );
   await runtime.jobs.wait([job.id], 5, new AbortController().signal);
   assert.equal(await runtime.runJobNotices(), 'read the completed job');
   assert.equal(
@@ -385,7 +391,7 @@ test('an idle job notice resumes the model without inventing a user prompt and s
     ).length,
     0,
   );
-  const stopped = runtime.jobs.startShell(
+  const stopped = await runtime.jobs.startShell(
     script(root, 'setTimeout(()=>{},10000);'),
     { sessionId: runtime.session.id },
   );
@@ -573,7 +579,7 @@ test('terminal signal cleanup awaits actual jobs before exit and records no ordi
     headless: true,
   });
   cleanup(t, () => runtime.close());
-  const job = runtime.jobs.startShell(
+  const job = await runtime.jobs.startShell(
     script(root, 'setTimeout(()=>{},10000);'),
     { sessionId: runtime.session.id },
   );

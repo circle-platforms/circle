@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { Code } from 'lucide-react';
 import { splitAutolink } from '../../../../src/autolink.ts';
-import { copyText } from '../host';
 import { t } from '../i18n';
+import './markdown.css';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { useSources, sourceLocation } from './SourceNavigation';
+import { remarkSourceLinks } from '../model/markdown-source-links';
+import { copyText } from '../host';
 import { highlight } from './highlight';
 
 const LANGUAGE_NAMES: Record<string, string> = {
@@ -123,13 +126,42 @@ function remarkFullwidthAutolinks() {
   return (tree: MarkdownNode) => walk(tree);
 }
 export function Markdown({ text }: { text: string }) {
+  const sources = useSources();
   return (
     <div className="markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkFullwidthAutolinks]}
+        remarkPlugins={
+          sources
+            ? [remarkGfm, remarkFullwidthAutolinks, remarkSourceLinks]
+            : [remarkGfm, remarkFullwidthAutolinks]
+        }
+        urlTransform={(url) =>
+          sourceLocation(url) ? url : defaultUrlTransform(url)
+        }
         components={{
+          table: ({ children }) => (
+            <div
+              className="markdown-table-scroll"
+              role="region"
+              aria-label={t('response table')}
+              tabIndex={0}
+            >
+              <table>{children}</table>
+            </div>
+          ),
           a: ({ children, href }) => (
-            <a href={href} target="_blank" rel="noreferrer">
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => {
+                const target = href && sourceLocation(href);
+                if (target && sources) {
+                  event.preventDefault();
+                  sources.openFile(target.path, target.line, target.column);
+                }
+              }}
+            >
               {children}
             </a>
           ),

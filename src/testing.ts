@@ -17,7 +17,8 @@ export class ScriptedModel implements ChatModel {
         system: request.system,
         messages: request.messages,
         tools: request.tools.map(
-          ({ run: _run, approvalFacts: _facts, ...tool }) => tool,
+          ({ run: _run, approvalFacts: _facts, prepare: _prepare, ...tool }) =>
+            tool,
         ),
       }) as Omit<ModelRequest, 'signal' | 'token'>,
     );

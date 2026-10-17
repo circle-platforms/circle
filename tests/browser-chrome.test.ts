@@ -1939,7 +1939,13 @@ test(
       page(res, '<title>Home</title><p>home</p>');
     });
     const other = createHttp((req, res) => {
-      if (req.url === '/download') return file(res, 'theirs.bin');
+      if (req.url === '/download') {
+        // A second navigation of the same main frame can cancel this first
+        // response. Independent frames test two real downloads, even when the
+        // first response arrives after the unchanged 400 ms second trigger.
+        setTimeout(() => file(res, 'theirs.bin'), 1000);
+        return;
+      }
       page(
         res,
         `<title>Asks</title><script>setTimeout(() => confirm('Delete everything?'), 300)</script>`,

@@ -172,6 +172,19 @@ function symbolPhrase(outcome: EditOutcome, count: number) {
 const READS = ['read_file'];
 const EDITS = ['write_file', 'edit_file', 'apply_patch', 'delete'];
 const WEB = ['webfetch', 'websearch'];
+const AGENT_SCHEDULE = [
+  'native_tasks_enqueue',
+  'native_tasks_analyze',
+  'native_tasks_adopt_proposal',
+];
+const AGENT_PROPOSE = ['native_tasks_propose'];
+const AGENT_QUERY = [
+  'native_tasks_list',
+  'native_tasks_wait',
+  'native_tasks_events',
+  'native_tasks_artifacts',
+];
+const AGENT_CONTROL = ['native_tasks_cancel', 'native_tasks_retry'];
 const name = (path: string) =>
   path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 
@@ -184,7 +197,11 @@ export function toolSummary(rows: Message[]): {
   added: number;
   removed: number;
 } {
-  const tools = rows.flatMap((row) => (row.tool ? [row.tool] : []));
+  const allTools = rows.flatMap((row) => (row.tool ? [row.tool] : []));
+  const tools = allTools.filter((tool) =>
+    ['success', 'error', 'waiting', 'running'].includes(tool.status),
+  );
+  const completed = tools.filter((tool) => tool.status === 'success');
   const count = (names: string[]) =>
     tools.filter((tool) => names.includes(tool.name));
   const parts: string[] = [];
@@ -217,9 +234,17 @@ export function toolSummary(rows: Message[]): {
     else if (group.length)
       parts.push(editPhrase(outcome, undefined, files.length || group.length));
   }
-  const agents = count(['task']).length;
+  const agents = completed.filter((tool) => tool.name === 'task').length;
   if (agents) parts.push(tn(agents, 'ran a subagent', 'ran {n} subagents'));
-  const web = count(WEB).length;
+  if (completed.some((tool) => AGENT_SCHEDULE.includes(tool.name)))
+    parts.push(t('scheduled agents'));
+  if (completed.some((tool) => AGENT_PROPOSE.includes(tool.name)))
+    parts.push(t('proposed follow-up tasks'));
+  if (completed.some((tool) => AGENT_QUERY.includes(tool.name)))
+    parts.push(t('checked agent progress'));
+  if (completed.some((tool) => AGENT_CONTROL.includes(tool.name)))
+    parts.push(t('updated agent scheduling'));
+  const web = completed.filter((tool) => WEB.includes(tool.name)).length;
   if (web) parts.push(tn(web, 'used the web once', 'used the web {n} times'));
   const known = [
     'execute',
@@ -228,16 +253,45 @@ export function toolSummary(rows: Message[]): {
     'glob',
     'grep',
     'lsp',
+    ...AGENT_SCHEDULE,
+    ...AGENT_PROPOSE,
+    ...AGENT_QUERY,
+    ...AGENT_CONTROL,
     ...READS,
     ...EDITS,
     ...WEB,
   ];
-  const other = tools.filter((tool) => !known.includes(tool.name));
+  const outcomeTools = [
+    'execute',
+    'ls',
+    'glob',
+    'grep',
+    'lsp',
+    ...READS,
+    ...EDITS,
+  ];
+  for (const status of ['waiting', 'running'] as const) {
+    const pending = tools.filter(
+      (tool) => tool.status === status && !outcomeTools.includes(tool.name),
+    ).length;
+    if (pending)
+      parts.push(
+        status === 'waiting'
+          ? tn(
+              pending,
+              '{n} tool waiting for approval',
+              '{n} tools waiting for approval',
+            )
+          : tn(pending, '{n} tool running', '{n} tools running'),
+      );
+  }
+  const other = completed.filter((tool) => !known.includes(tool.name));
   const names = [...new Set(other.map((tool) => tool.name))];
   if (names.length && names.length <= 2)
     parts.push(t('used {tools}', { tools: names.join(', ') }));
   else if (other.length)
     parts.push(tn(other.length, 'used a tool', 'used {n} tools'));
+  if (!parts.length && allTools.length) parts.push(t('tool results'));
   if (!parts.length && rows.some((row) => row.thinking))
     parts.push(t('thinking'));
   let added = 0;

@@ -125,7 +125,14 @@ export function promptOverrides(
     append: append.filter((text) => text.trim()).map((text) => text.trim()),
   };
 }
+export interface ContextInstruction {
+  path: string;
+  /** Exact text included in this system prompt, including its discovery limit. */
+  content: string;
+}
 export interface PromptCatalog {
+  /** Reports this successful build's project context; never a later rescan. */
+  onContextFiles?: (files: readonly ContextInstruction[]) => void;
   userHome?: string;
   localContext?: boolean;
   skills?: { name: string; description: string }[];
@@ -227,5 +234,7 @@ export function buildSystemPrompt(
           .map((tool) => `${tool.name}: ${tool.description}`)
           .join('\n'),
     );
-  return sections.join('\n\n');
+  const result = sections.join('\n\n');
+  catalog.onContextFiles?.(files.map(([path, content]) => ({ path, content })));
+  return result;
 }

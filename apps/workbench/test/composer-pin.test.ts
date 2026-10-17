@@ -1,25 +1,31 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { test } from 'node:test';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+import { testBrowserOptions } from './helpers/test-browser.ts';
 import { previewPort } from './preview-port.ts';
 
-const chrome = [
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/google-chrome',
-  '/usr/local/bin/google-chrome',
-].find((path) => existsSync(path));
+const browserOptions = testBrowserOptions(chromium.executablePath());
 
 test(
   'the composer stays inside the window after several new sessions',
-  { skip: chrome ? false : 'chrome is not installed' },
+  { skip: browserOptions ? false : 'no supported test browser is installed' },
   async () => {
     const root = fileURLToPath(new URL('..', import.meta.url));
     const port = await previewPort(process.env.CIRCLE_WORKBENCH_TEST_PORT);
     const server: ChildProcess = spawn(
-      'npx',
-      ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
+      // Node runs Vite itself: Windows has no `npx` file to spawn, only npx.cmd.
+      process.execPath,
+      [
+        join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
+        '--host',
+        '127.0.0.1',
+        '--port',
+        String(port),
+        '--strictPort',
+      ],
       { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     let logs = '';
@@ -69,9 +75,8 @@ test(
         });
       });
     };
-    const { chromium } = await import('playwright');
     const browser = await chromium.launch({
-      executablePath: chrome,
+      ...browserOptions,
       headless: true,
       args: ['--no-sandbox'],
     });
@@ -79,8 +84,8 @@ test(
       await ready;
       // The preview follows the browser language. These steps use the English names.
       const page = await browser.newPage({
-        viewport: { width: 1000, height: 520 },
         locale: 'en-US',
+        viewport: { width: 1000, height: 520 },
       });
       await page.goto(`http://127.0.0.1:${port}/`);
       await page.evaluate(() => localStorage.clear());

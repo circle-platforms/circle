@@ -3780,7 +3780,7 @@ async function setupScratch(
 ) {
   // One spelling for every path: on macOS the temp folder is a symlink, and the
   // controller answers with realpath'd ones.
-  const root = realpathSync(
+  const root = realpathSync.native(
     await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
   );
   const home = join(root, 'home');
@@ -3812,7 +3812,7 @@ async function setupScratch(
   };
 }
 test('the default workspace retains its circle identity through a linked home', async (t) => {
-  const root = realpathSync(
+  const root = realpathSync.native(
     await mkdtemp(join(tmpdir(), 'circle-linked-home-')),
   );
   const actualHome = join(root, 'actual-home');
@@ -3839,7 +3839,7 @@ test('the default workspace retains its circle identity through a linked home', 
   const workspace = initial.workspaces.find(
     (row) => row.id === session.workspaceId,
   )!;
-  assert.equal(workspace.path, realpathSync(join(home, 'workspace')));
+  assert.equal(workspace.path, realpathSync.native(join(home, 'workspace')));
   assert.notEqual(workspace.path, join(home, 'workspace'));
   assert.equal(workspace.name, 'circle');
   assert.equal(workspace.trusted, true);
@@ -3983,7 +3983,7 @@ test('the default workspace refuses the data folder and cannot be set through sa
 test('the whole application data folder is refused, not only its runtime home', async (t) => {
   // As the runtime worker runs: home is runtime-home inside the data folder, beside the
   // updates folder the updater clears
-  const root = realpathSync(
+  const root = realpathSync.native(
     await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
   );
   const data = join(root, 'Circle');
@@ -4054,7 +4054,7 @@ test('the data folder keeps its protection when home is reached through a link',
 
 test('startup prefers the last-used folder, then workspace_folder, then the scratch folder', async (t) => {
   // One spelling for every path, as in setupScratch: macOS temp folders are symlinks.
-  const root = realpathSync(
+  const root = realpathSync.native(
     await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
   );
   const home = join(root, 'home');
@@ -4988,7 +4988,7 @@ test('trusting a folder initializes every idle session with its own project cont
   assert(
     f.controller
       .snapshot()
-      .workspaces.find((row) => row.path === realpathSync(f.workspace))!
+      .workspaces.find((row) => row.path === realpathSync.native(f.workspace))!
       .trusted,
   );
 });
@@ -5206,7 +5206,7 @@ test('picking folders writes no session until the first message is sent', async 
       .snapshot()
       .sessions.some((session) =>
         [alpha, beta]
-          .map((folder) => realpathSync(folder))
+          .map((folder) => realpathSync.native(folder))
           .includes(
             f.controller
               .snapshot()
@@ -5270,11 +5270,11 @@ test('picking folders writes no session until the first message is sent', async 
     const rows = store.list(undefined, false, true);
     assert.equal(rows.length, stored.length + 1);
     assert.equal(
-      rows.filter((row) => row.workspace === realpathSync(beta)).length,
+      rows.filter((row) => row.workspace === realpathSync.native(beta)).length,
       1,
     );
     assert.equal(
-      rows.filter((row) => row.workspace === realpathSync(alpha)).length,
+      rows.filter((row) => row.workspace === realpathSync.native(alpha)).length,
       0,
     );
   } finally {
@@ -5377,7 +5377,7 @@ test('the first message from home creates one session in the chosen project', as
     .snapshot()
     .workspaces.find((item) => item.id === scratch[0]!.workspaceId);
   assert.equal(scratchWorkspace?.kind, 'scratch');
-  assert.notEqual(scratchWorkspace?.path, realpathSync(f.workspace));
+  assert.notEqual(scratchWorkspace?.path, realpathSync.native(f.workspace));
 });
 
 test('the default circle workspace stays a project, and no project is a different folder', async (t) => {

@@ -1,0 +1,285 @@
+.native-terminal {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 180px;
+  height: 100%;
+  overflow: hidden;
+}
+.native-terminal.embedded {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  background: inherit;
+}
+.native-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 13px;
+  min-height: 37px;
+  border-bottom: 1px solid var(--border);
+}
+.native-terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+.native-terminal-tabs > button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.native-terminal-lamp {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.native-terminal-lamp.running {
+  background: var(--accent);
+}
+.native-terminal-lamp.stopping {
+  background: var(--attention);
+}
+.native-terminal-lamp.failed {
+  background: var(--negative);
+}
+/* Find opens on demand (the search button or ctrl+f) in place of the
+   status, so the terminal keeps its size. */
+.native-terminal-bar > .native-terminal-search.find-bar {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.native-terminal-bar > .native-terminal-search > input {
+  flex: 1;
+  min-width: 48px;
+  height: 26px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font-size: var(--ui-small);
+  box-shadow: none;
+  outline: none;
+}
+.native-terminal-search > span {
+  flex-shrink: 0;
+  margin-inline: 4px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+}
+.native-terminal-bar > .native-terminal-search + .native-terminal-actions {
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+.native-terminal-surfaces {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  overflow: hidden;
+}
+.native-terminal-surface {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.native-terminal-surface[hidden] {
+  display: none;
+}
+.native-terminal-screen {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  padding: 10px 13px;
+  overflow: hidden;
+}
+.native-terminal-fit {
+  /* FitAddon reads its unpadded parent, within the finite flex viewport. */
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.native-terminal-screen .xterm {
+  height: 100%;
+}
+.native-terminal-screen .xterm-viewport {
+  background: var(--bg);
+}
+/* One quiet bar: where and how the terminal runs, then its actions. */
+.native-terminal-bar {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 4px 6px 4px 12px;
+  border-top: 1px solid var(--border);
+}
+.native-terminal-bar > .native-terminal-status,
+.inspector .native-terminal-bar > .native-terminal-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.native-terminal-status > span {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.native-terminal-status > .native-terminal-folder {
+  flex-shrink: 1;
+  min-width: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--secondary);
+  font-weight: 500;
+}
+.native-terminal-status > span:not(.native-terminal-folder) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.native-terminal-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.native-terminal-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 7px 10px;
+  color: var(--negative);
+  overflow-wrap: anywhere;
+}
+.native-terminal-error > span {
+  flex: 1;
+  min-width: 0;
+}
+.native-terminal-error-details {
+  flex-basis: 100%;
+  min-width: 0;
+  color: var(--secondary);
+}
+.native-terminal-error-details pre {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.native-terminal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--muted);
+}
+.native-service-details {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-service-details code {
+  min-width: 0;
+  flex: 1 1 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-service-details > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dialog-content:has(> .native-service-form) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dialog-content:has(> .native-service-form) > .dialog-heading {
+  flex-shrink: 0;
+}
+.native-service-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.native-service-fields {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.native-service-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.native-service-form p {
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-service-argument {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.native-service-argument > input {
+  flex: 1;
+  font-family: var(--mono);
+}
+.native-service-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.native-terminal-lamp.ready {
+  background: var(--accent);
+}
+.native-terminal-lamp.starting {
+  background: var(--attention);
+}

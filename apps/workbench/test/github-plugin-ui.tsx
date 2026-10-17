@@ -1,0 +1,214 @@
+import { createRoot } from 'react-dom/client';
+import { CircleWorkbench } from '../src/workbench';
+import { LiveRuntime } from '../src/model/live';
+import { circlePlugins } from '../src/plugins/builtins';
+import { createFixtures } from '../src/preview/fixtures';
+import { setLanguage, t } from '../src/i18n';
+import type { DesktopBridge } from '../../desktop/src/contracts';
+import type {
+  RuntimeCommand,
+  RuntimeUpdate,
+} from '../../desktop/src/runtime-protocol';
+const query = new URLSearchParams(location.search);
+setLanguage(query.get('language') === 'zh-CN' ? 'zh-CN' : 'en');
+const snapshot = createFixtures();
+snapshot.runtime = { connected: true, configured: true };
+snapshot.settings.theme = query.get('theme') === 'dark' ? 'dark' : 'light';
+snapshot.interactions = [];
+snapshot.requests = [];
+snapshot.extensions = [
+  {
+    id: 'github',
+    name: 'github',
+    version: '0.1.0',
+    scope: 'bundled',
+    enabled: false,
+    tools: [],
+    commands: [],
+    events: [],
+  },
+  {
+    id: 'observer',
+    name: 'observer',
+    version: '1',
+    scope: 'project',
+    enabled: true,
+    tools: [],
+    commands: [],
+    events: [],
+  },
+];
+let update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
+let listener: ((value: RuntimeUpdate) => void) | undefined;
+const commands: RuntimeCommand[] = [];
+const pending = new Map<number, (reply: unknown) => void>();
+function emit() {
+  update = {
+    seq: update.seq + 1,
+    connected: true,
+    snapshot: structuredClone(snapshot),
+  };
+  listener?.(update);
+}
+const host = {
+  runtimeState: async () => structuredClone(update),
+  onRuntime: (callback: (value: RuntimeUpdate) => void) => {
+    listener = callback;
+    return () => {
+      listener = undefined;
+    };
+  },
+  onBrowserEvent: () => () => {},
+  onAction: () => () => {},
+  setTheme: async () => {},
+  openExternal: async () => {},
+  browserState: async () => ({ sessionId: 'none' }),
+  runtimeCommand: async (command: RuntimeCommand) => {
+    commands.push(command);
+    if (command.name === 'save-settings')
+      return await new Promise((resolve) =>
+        pending.set(commands.length - 1, resolve),
+      );
+    return { id: command.id, ok: true };
+  },
+} as unknown as DesktopBridge;
+window.circleDesktop = host;
+const runtime = new LiveRuntime(host, update);
+Object.assign(window, {
+  githubPluginFixture: {
+    commands,
+    reply: (index: number, failure = false) => {
+      const command = commands[index],
+        reply = pending.get(index);
+      if (!reply) throw Error('save is not pending');
+      pending.delete(index);
+      if (!failure) {
+        const rows = command.payload.extensions as Array<{
+          name: string;
+          enabled: boolean;
+        }>;
+        for (const row of rows) {
+          const item = snapshot.extensions.find(
+            (item) => item.name === row.name,
+          )!;
+          item.enabled = row.enabled;
+          delete item.view;
+          delete item.error;
+        }
+        emit();
+      }
+      reply({
+        id: command.id,
+        ok: !failure,
+        ...(failure ? { error: 'synthetic local settings write failure' } : {}),
+      });
+    },
+    load: (failure = false) => {
+      const extension = snapshot.extensions[0];
+      if (!extension.enabled) return;
+      delete extension.error;
+      if (failure) extension.error = 'synthetic module initialization failure';
+      else {
+        extension.view = {
+          provider: 'github',
+          client: 'GitHub CLI',
+          epoch: 1,
+          state: 'disconnected',
+          repositories: [],
+          remoteRevocation: 'not-requested',
+        };
+        extension.commands = ['github'];
+        extension.tools = ['github_connection'];
+      }
+      emit();
+    },
+    connected: () => {
+      const extension = snapshot.extensions[0];
+      extension.view = {
+        provider: 'github',
+        client: 'GitHub CLI',
+        epoch: 2,
+        state: 'connected',
+        account: { login: 'fixture-account', id: 42 },
+        repositories: ['owner/repository'],
+        storage: 'encrypted',
+        remoteRevocation: 'not-requested',
+      };
+      extension.tools = [
+        'github_connection',
+        'github_candidate',
+        'github_checks',
+        'github_logs',
+        'github_retry',
+        'github_publish',
+      ];
+      emit();
+    },
+    // The device-code step and a failed view, for the layout checks only.
+    authorizing: () => {
+      const extension = snapshot.extensions[0];
+      extension.view = {
+        provider: 'github',
+        client: 'GitHub CLI',
+        epoch: 3,
+        state: 'authorizing',
+        authorizationPhase: 'waiting-for-user',
+        authorization: {
+          id: 'fixture-authorization',
+          code: 'WDJB-MJHT',
+          url: 'https://github.com/login/device',
+          status: 'waiting',
+        },
+        repositories: [],
+        storage: 'encrypted',
+        remoteRevocation: 'not-requested',
+      };
+      extension.tools = ['github_connection'];
+      emit();
+    },
+    failed: () => {
+      const extension = snapshot.extensions[0];
+      extension.view = {
+        provider: 'github',
+        client: 'GitHub CLI',
+        epoch: 4,
+        state: 'disconnected',
+        repositories: ['owner/repository'],
+        error: 'GitHub authorization expired; reconnect in GitHub plugin',
+        remoteRevocation: 'not-requested',
+      };
+      extension.tools = ['github_connection'];
+      emit();
+    },
+    labels: {
+      savingOn: t('saving extension enable request'),
+      savingOff: t('saving extension disable request'),
+      loading: t('enabling extension'),
+      disabled: t('extension disabled'),
+      enabled: t('extension enabled'),
+      saveError: t('extension setting could not be saved'),
+      loadError: t('extension could not be loaded'),
+      reload: t('extension setting saved; reload required'),
+      interface: t('interface components'),
+      runtime: t('runtime extensions'),
+      reloadButton: t('reload'),
+    },
+    snapshot: () => runtime.getSnapshot(),
+  },
+});
+runtime.updateSessionView(snapshot.activeSessionId, {
+  draft: 'original draft',
+  attachments: [
+    {
+      id: 'keep',
+      kind: 'image',
+      name: 'keep.png',
+      mime: 'image/png',
+      content: 'bytes',
+    },
+  ],
+});
+location.hash = '/page/extensions?plugin=github';
+createRoot(document.getElementById('root')!).render(
+  <CircleWorkbench runtime={runtime} plugins={circlePlugins} />,
+);

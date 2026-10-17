@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { canonicalPath, circleHome, normalizeWorkspace } from './paths.js';
 import { commandTouchesRunOutput, isExistingRunOutput } from './run_outputs.js';
 import { isRecord, readJson, writePrivateJson } from './settings.js';
@@ -781,7 +781,12 @@ export class ApprovalPolicy {
                 : resolve(this.workspace, path),
             ),
           );
-          return Boolean(path) && rel !== '..' && !rel.startsWith('..' + sep);
+          return (
+            Boolean(path) &&
+            !isAbsolute(rel) &&
+            rel !== '..' &&
+            !rel.startsWith('..' + sep)
+          );
         });
       return review(
         'ASK',

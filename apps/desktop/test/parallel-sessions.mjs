@@ -386,10 +386,40 @@ try {
   const toolViewport = await readViewport(page);
   await setViewport(app, page, { width: 1024, height: 700 });
   await page.locator('.tool-summary').scrollIntoViewIfNeeded();
-  await page
+  const sessionLink = page
     .locator(`.sidebar .session-link[href="#/session/${b}"]`)
-    .first()
-    .hover();
+    .first();
+  // Move onto the row in steps, as a hand does: a single jump after the
+  // resize can land where the sidebar still counts as just scrolled.
+  const row = await sessionLink.boundingBox();
+  await page.mouse.move(row.x + row.width / 2, row.y - 40);
+  await page.mouse.move(row.x + row.width / 2, row.y + row.height / 2, {
+    steps: 8,
+  });
+  await sessionLink.hover();
+  // Focus opens the same card; Windows runners do not always report the hover.
+  await sessionLink.focus();
+  // Bring the tool row under the hover card: where they meet depends on each
+  // platform's fonts, and the check below needs them to overlap.
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('.session-hover')
+        ?.closest('[data-radix-popper-content-wrapper]'),
+    undefined,
+    { timeout: 30000 },
+  );
+  await page.evaluate(() => {
+    const button = document.querySelector('.tool-summary');
+    const card = document
+      .querySelector('.session-hover')
+      .closest('[data-radix-popper-content-wrapper]')
+      .getBoundingClientRect();
+    const transcript = button.closest('.transcript');
+    const tool = button.getBoundingClientRect();
+    transcript.scrollTop +=
+      tool.top - (card.top + card.height / 2 - tool.height / 2);
+  });
   await page.waitForFunction(() => {
     const button = document.querySelector('.tool-summary');
     const tooltip = document.querySelector('.session-hover');
@@ -456,7 +486,7 @@ try {
   await page.locator('.tool-head').click();
   await page
     .locator('.tool-toolbar')
-    .getByRole('button', { name: 'input', exact: true })
+    .getByRole('button', { name: 'arguments', exact: true })
     .click();
   await select(a);
   await select(b);
@@ -470,7 +500,7 @@ try {
   );
   assert.equal(
     await page.locator('.tool-toolbar button.active').innerText(),
-    'input',
+    'arguments',
   );
   checks.push('individual tool folds and tool input tabs are per session');
   await setViewport(app, page, {

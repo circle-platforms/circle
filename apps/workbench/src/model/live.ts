@@ -2,7 +2,10 @@ import type { DesktopBridge } from '../../../desktop/src/contracts';
 import type {
   RuntimeCommandName,
   RuntimeUpdate,
+  RuntimeTokenDelta,
+  RuntimeReply,
 } from '../../../desktop/src/runtime-protocol';
+import { RuntimeTokenBuffer } from '../../../desktop/src/runtime-token-stream';
 import type {
   Attachment,
   BeginResult,
@@ -12,6 +15,7 @@ import type {
   SessionMode,
   WorkbenchSnapshot,
   Session,
+  SessionViewPatch,
 } from './types';
 import {
   currentSession,
@@ -54,6 +58,7 @@ export class LiveRuntime implements RuntimePort {
   readonly mode = 'live' as const;
   private snapshot: WorkbenchSnapshot;
   private seq = -1;
+  private receivedFullEpoch?: string;
   private listeners = new Set<() => void>();
   private views = new Map<string, View>();
   private sessionErrors = new Map<string, string>();
@@ -65,6 +70,12 @@ export class LiveRuntime implements RuntimePort {
   private plugins?: string[];
   private changes = Promise.resolve();
   private unsubscribe: () => void;
+  private unsubscribeDelta: () => void = () => {};
+  private tokenBuffer = new RuntimeTokenBuffer();
+  private tokenTimer?: ReturnType<typeof setTimeout>;
+  private tokenResync?: Promise<void>;
+  private tokenPending: RuntimeTokenDelta[] = [];
+  private disposed = false;
   constructor(
     private host: DesktopBridge,
     initial: RuntimeUpdate,
@@ -105,8 +116,11 @@ export class LiveRuntime implements RuntimePort {
     }
     this.receive(initial);
     this.unsubscribe = host.onRuntime(this.receive);
+    this.unsubscribeDelta =
+      host.onRuntimeDelta?.(this.receiveDelta) ?? (() => {});
   }
-  private persist() {
+  private persist(): boolean {
+    if (this.disposed) return false;
     try {
       this.storage?.setItem(
         'circle.workbench.live.views.v1',
@@ -116,14 +130,18 @@ export class LiveRuntime implements RuntimePort {
           plugins: this.plugins,
         }),
       );
+      return true;
     } catch {
       this.report(Error(t('UI preferences could not be saved')));
+      return false;
     }
   }
   private receive = (update: RuntimeUpdate) => {
-    if (update.seq <= this.seq) return;
+    if (this.disposed) return;
+    if (!this.tokenBuffer.acceptFull(update)) return;
     this.seq = update.seq;
     this.snapshot = structuredClone(update.snapshot);
+    this.receivedFullEpoch = update.tokenStream?.epoch;
     this.snapshot.files = this.files;
     this.snapshot.settings = { ...this.snapshot.settings, ...this.settings };
     if (this.plugins) this.snapshot.uiPlugins = this.plugins;
@@ -158,6 +176,69 @@ export class LiveRuntime implements RuntimePort {
     )
       void this.listWorkspace(workspace);
   };
+  private receiveDelta = (delta: RuntimeTokenDelta) => {
+    if (this.disposed) return;
+    if (this.tokenResync) {
+      this.bufferToken(delta);
+      return;
+    }
+    const result = this.tokenBuffer.apply(delta);
+    if (result === 'applied') this.scheduleTokens();
+    else if (result !== 'duplicate') {
+      this.bufferToken(delta);
+      this.resyncTokens();
+    }
+  };
+  private bufferToken(delta: RuntimeTokenDelta) {
+    if (this.tokenPending.length >= 4096) this.tokenPending = [];
+    this.tokenPending.push(delta);
+  }
+  private resyncTokens(attempt = 0) {
+    if (this.tokenResync || this.disposed) return;
+    this.tokenResync = this.host
+      .runtimeState()
+      .then((update) => {
+        if (this.disposed) return;
+        this.receive(update);
+        const pending = this.tokenPending.sort((a, b) => a.seq - b.seq);
+        this.tokenPending = [];
+        for (const delta of pending) {
+          const result = this.tokenBuffer.apply(delta);
+          if (result === 'applied') this.scheduleTokens();
+          else if (result !== 'duplicate') this.bufferToken(delta);
+        }
+      })
+      .catch((error) => {
+        if (!this.disposed) this.report(error);
+      })
+      .finally(() => {
+        this.tokenResync = undefined;
+        if (this.tokenPending.length && !this.disposed) {
+          if (attempt < 1) this.resyncTokens(attempt + 1);
+          else {
+            this.tokenPending = [];
+            this.report(Error(t('Circle runtime disconnected')));
+          }
+        }
+      });
+  }
+  private scheduleTokens() {
+    if (this.tokenTimer) return;
+    this.tokenTimer = setTimeout(() => {
+      this.tokenTimer = undefined;
+      if (this.disposed) return;
+      const update = this.tokenBuffer.materialize();
+      this.snapshot = {
+        ...this.snapshot,
+        sessions: update.snapshot.sessions.map((session) => ({
+          ...session,
+          ...(this.views.get(session.id) ?? {}),
+          actionError: this.sessionErrors.get(session.id),
+        })),
+      };
+      for (const listener of this.listeners) listener();
+    }, 16);
+  }
   // The active workspace's files when the desktop may list it (trusted), so the files
   // panel and @ completion work without opening the folder again.
   private listWorkspace(workspaceId: string): Promise<void> {
@@ -165,8 +246,9 @@ export class LiveRuntime implements RuntimePort {
     this.listed = workspaceId;
     const run = async () => {
       await this.listing;
+      if (this.disposed) return;
       const listed = await this.host.listWorkspace(workspaceId);
-      if (!listed) return;
+      if (!listed || this.disposed) return;
       this.files = [
         ...this.files.filter((file) => file.workspaceId !== workspaceId),
         ...listed.files.map((file) => ({
@@ -185,6 +267,7 @@ export class LiveRuntime implements RuntimePort {
     return this.listing;
   }
   private report(error: unknown, sessionId = this.snapshot.activeSessionId) {
+    if (this.disposed) return;
     if (error instanceof SessionActionError) sessionId = error.sessionId;
     const message =
       error instanceof Error ? error.message : t('runtime action failed');
@@ -214,7 +297,12 @@ export class LiveRuntime implements RuntimePort {
     for (const listener of this.listeners) listener();
   };
   dispose() {
+    this.disposed = true;
     this.unsubscribe();
+    this.unsubscribeDelta();
+    if (this.tokenTimer) clearTimeout(this.tokenTimer);
+    this.tokenPending = [];
+    this.listeners.clear();
   }
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => {
@@ -227,8 +315,9 @@ export class LiveRuntime implements RuntimePort {
     name: RuntimeCommandName,
     payload: Record<string, unknown> = {},
     sessionId = this.snapshot.activeSessionId,
+    reportFailure = true,
   ): Promise<unknown> {
-    if (this.sessionErrors.delete(sessionId)) {
+    if (reportFailure && this.sessionErrors.delete(sessionId)) {
       this.snapshot = {
         ...this.snapshot,
         sessions: this.snapshot.sessions.map((session) =>
@@ -240,6 +329,7 @@ export class LiveRuntime implements RuntimePort {
       for (const listener of this.listeners) listener();
     }
     const promise = (async () => {
+      if (this.disposed) throw Error(t('Circle runtime disconnected'));
       if (!this.snapshot.runtime?.connected)
         throw Error(t('Circle runtime disconnected'));
       const reply = await this.host.runtimeCommand({
@@ -248,7 +338,11 @@ export class LiveRuntime implements RuntimePort {
         sessionId,
         payload,
       });
-      this.receive(await this.host.runtimeState());
+      // Token sequence numbers and an unrelated intervening update cannot
+      // acknowledge this command. Only its full publication (or a newer one
+      // from that same runtime epoch) proves the effect reached this renderer.
+      if (!this.disposed && !this.coversAppliedState(reply))
+        this.receive(await this.host.runtimeState());
       if (!reply.ok) throw Error(reply.error ?? t('runtime action failed'));
       return reply.data;
     })().catch((error) => {
@@ -258,10 +352,58 @@ export class LiveRuntime implements RuntimePort {
         error,
       );
     });
-    void promise.catch((error) => this.report(error, sessionId));
+    if (reportFailure)
+      void promise.catch((error) => this.report(error, sessionId));
     return promise;
   }
+  private coversAppliedState(reply: RuntimeReply): boolean {
+    const marker = reply.ok ? reply.appliedState : undefined;
+    return Boolean(
+      marker &&
+      typeof marker.epoch === 'string' &&
+      marker.epoch.length > 0 &&
+      marker.epoch === this.receivedFullEpoch &&
+      Number.isSafeInteger(marker.seq) &&
+      marker.seq >= 1 &&
+      this.seq >= marker.seq,
+    );
+  }
+  updateSessionView = (sessionId: string, patch: SessionViewPatch): boolean => {
+    if (this.disposed) return false;
+    if (
+      !patch ||
+      typeof patch !== 'object' ||
+      Array.isArray(patch) ||
+      Object.keys(patch).some(
+        (key) => !(LOCAL_SESSION as readonly string[]).includes(key),
+      )
+    )
+      throw Error(t('use a native session operation'));
+    const index = this.snapshot.sessions.findIndex(
+      (session) => session.id === sessionId,
+    );
+    if (index < 0) return false;
+    const previous = this.snapshot.sessions[index];
+    const changed = Object.entries(patch).some(
+      ([key, value]) =>
+        !Object.is(previous[key as keyof Session], value) &&
+        !equal(previous[key as keyof Session], value),
+    );
+    if (!changed) return this.persist();
+    const copy = structuredClone(patch);
+    const sessions = this.snapshot.sessions.slice();
+    sessions[index] = { ...previous, ...copy };
+    this.views.set(sessionId, {
+      ...(this.views.get(sessionId) ?? {}),
+      ...copy,
+    });
+    this.snapshot = { ...this.snapshot, sessions };
+    const persisted = this.persist();
+    for (const listener of this.listeners) listener();
+    return persisted;
+  };
   change = (update: (draft: WorkbenchSnapshot) => void) => {
+    if (this.disposed) return;
     const before = this.snapshot;
     const requested = structuredClone(before);
     update(requested);
@@ -326,8 +468,12 @@ export class LiveRuntime implements RuntimePort {
             item.id,
           );
       }
+      const previousMessages = new Map<string, Session['messages'][number]>();
+      for (const message of previous.messages)
+        if (!previousMessages.has(message.id))
+          previousMessages.set(message.id, message);
       for (const message of item.messages) {
-        const old = previous.messages.find((m) => m.id === message.id);
+        const old = previousMessages.get(message.id);
         if (old && message.label !== old.label)
           add(
             'label-branch',
@@ -335,11 +481,7 @@ export class LiveRuntime implements RuntimePort {
             item.id,
           );
       }
-      if (
-        item.messages.some(
-          (m) => !previous.messages.some((old) => old.id === m.id),
-        )
-      )
+      if (item.messages.some((message) => !previousMessages.has(message.id)))
         throw Error(
           t('history can only be imported through the native runtime'),
         );
@@ -535,6 +677,22 @@ export class LiveRuntime implements RuntimePort {
     const sessionId = owner ?? sourceSessionId ?? this.snapshot.activeSessionId;
     const operation = async () => {
       await this.changes;
+      if (kind === 'extension.enabled') {
+        if (
+          typeof payload.name !== 'string' ||
+          typeof payload.enabled !== 'boolean'
+        )
+          throw Error(t('invalid extension setting'));
+        return this.native(
+          'save-settings',
+          {
+            settings: {},
+            extensions: [{ name: payload.name, enabled: payload.enabled }],
+          },
+          sessionId,
+          false,
+        );
+      }
       const names: Record<string, RuntimeCommandName> = {
         'configure-connection': 'configure',
         'probe-connection': 'probe-connection',
@@ -598,7 +756,10 @@ export class LiveRuntime implements RuntimePort {
       return this.native(name, payload, sessionId);
     };
     const result = operation();
-    void result.catch((error) => this.report(error, sessionId));
+    // This settings action reports its Promise result in its original row,
+    // including superseded intents; it must not become a conversation failure.
+    if (kind !== 'extension.enabled')
+      void result.catch((error) => this.report(error, sessionId));
     return result;
   };
   send = async (

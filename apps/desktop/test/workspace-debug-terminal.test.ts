@@ -1,0 +1,301 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { connect } from 'node:net';
+import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WorkspaceServices } from '../src/workspace/workspace-services.ts';
+import type {
+  TerminalSnapshot,
+  TerminalReplay,
+} from '../src/workspace/terminal.ts';
+test(
+  'Node debugging uses an owned interactive PTY and preserves literal empty argv',
+  { timeout: 45000 },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-terminal-'));
+    const data = await mkdtemp(
+      path.join(tmpdir(), 'circle-debug-terminal-data-'),
+    );
+    const runtime = process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath;
+    const adapter =
+      process.env.CIRCLE_JS_DEBUG_ADAPTER ??
+      fileURLToPath(
+        new URL(
+          '../dist/tools/js-debug/src/dapDebugServer.js',
+          import.meta.url,
+        ),
+      );
+    await realpath(adapter);
+    const service = new WorkspaceServices({
+      workspaceRoot: root,
+      dataDir: data,
+      nodeExecutable: process.execPath,
+      runtimeExecutable: runtime,
+      adapterPath: adapter,
+      ghPath: 'unused',
+      terminalEnv: {
+        HOME: root,
+        ZDOTDIR: root,
+        HISTFILE: path.join(root, '.history'),
+        ENV: '',
+        BASH_ENV: '',
+      },
+      emit: () => {},
+    });
+    let phase = 'workspace-created';
+    let originalFailure: unknown;
+    try {
+      const program = path.join(root, 'interactive.cjs');
+      await writeFile(
+        program,
+        "console.log('ARGV64:'+Buffer.from(JSON.stringify(process.argv.slice(2))).toString('base64'));require('readline').createInterface({input:process.stdin}).on('line',line=>console.log('INPUT:'+line));setInterval(()=>{},1000);\n",
+      );
+      const argv = ['', 'space value', "literal '$()'"];
+      await service.call('debug-owner', 'debug', 'launch', {
+        program,
+        args: argv,
+        stopOnEntry: true,
+      });
+      phase = 'launched';
+      for (let i = 0; i < 500; i++) {
+        const snapshot = (await service.call(
+          'debug-owner',
+          'debug',
+          'snapshot',
+        )) as { status: string };
+        if (snapshot.status === 'paused') break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const stack = (await service.call(
+        'debug-owner',
+        'debug',
+        'stackTrace',
+      )) as { stackFrames: { id: number }[] };
+      assert.ok(stack.stackFrames.length);
+      phase = 'paused-with-stack';
+      const evaluated = (await service.call(
+        'debug-owner',
+        'debug',
+        'evaluate',
+        {
+          expression: 'process.debugPort',
+          frameId: stack.stackFrames[0].id,
+          context: 'watch',
+        },
+      )) as { result: string };
+      const inspectorPort = Number(evaluated.result);
+      assert.ok(
+        Number.isSafeInteger(inspectorPort) &&
+          inspectorPort > 0 &&
+          inspectorPort <= 65535,
+      );
+      await service.call('debug-owner', 'debug', 'continue');
+      const terminals = (await service.call(
+        'debug-owner',
+        'terminal',
+        'list',
+      )) as TerminalSnapshot[];
+      const terminal = terminals.find((item) => item.label === 'debug');
+      assert.ok(terminal?.pid);
+      assert.equal(terminal.owner, 'debug-owner');
+      const debugSnapshot = (await service.call(
+        'debug-owner',
+        'debug',
+        'snapshot',
+      )) as {
+        adapterPid?: number;
+        debugTerminals: { id: string; epoch: string }[];
+      };
+      assert.ok(debugSnapshot.adapterPid && debugSnapshot.adapterPid > 0);
+      process.kill(debugSnapshot.adapterPid, 0);
+      assert.deepEqual(debugSnapshot.debugTerminals, [
+        { id: terminal.id, epoch: terminal.epoch },
+      ]);
+      const foreignSnapshot = (await service.call(
+        'other-owner',
+        'debug',
+        'snapshot',
+      )) as { debugTerminals: unknown[] };
+      assert.deepEqual(
+        foreignSnapshot.debugTerminals,
+        [],
+        'another session cannot acquire debug terminal links',
+      );
+      assert.equal(
+        (await service.terminals.list('debug-owner')).length,
+        terminals.length,
+        'reading exact terminal links must not spawn',
+      );
+      assert.ok(
+        terminal.command?.args?.includes(''),
+        'adapter lost empty argv before PTY: ' +
+          JSON.stringify(terminal.command),
+      );
+      const expected =
+        'ARGV64:' + Buffer.from(JSON.stringify(argv)).toString('base64');
+      async function outputContains(marker: string) {
+        for (let i = 0; i < 500; i++) {
+          const replay = (await service.call(
+            'debug-owner',
+            'terminal',
+            'replay',
+            { id: terminal!.id },
+          )) as TerminalReplay;
+          if (
+            replay.events
+              .map((e) => e.data ?? '')
+              .join('')
+              .includes(marker)
+          )
+            return;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        const replay = (await service.call(
+          'debug-owner',
+          'terminal',
+          'replay',
+          { id: terminal!.id },
+        )) as TerminalReplay;
+        throw Error(
+          'debug terminal output missing ' +
+            marker +
+            ' actual=' +
+            replay.events
+              .map((e) => e.data ?? '')
+              .join('')
+              .slice(-4000) +
+            ' state=' +
+            JSON.stringify(
+              await service.call('debug-owner', 'debug', 'snapshot'),
+            ),
+        );
+      }
+      await outputContains(expected);
+      phase = 'literal-argv-observed';
+      await service.call('debug-owner', 'terminal', 'write', {
+        id: terminal.id,
+        data: 'human input\r',
+      });
+      await outputContains('INPUT:human input');
+      phase = 'stdin-observed';
+      await assert.rejects(
+        service.call('other-owner', 'terminal', 'write', {
+          id: terminal.id,
+          data: 'forbidden\r',
+        }),
+        /owner|owned|unknown|not found|belong/i,
+      );
+      await service.call('debug-owner', 'debug', 'stop');
+      phase = 'stop-returned';
+      const stopped = (
+        (await service.call(
+          'debug-owner',
+          'terminal',
+          'list',
+        )) as TerminalSnapshot[]
+      ).find((item) => item.id === terminal.id);
+      assert.equal(
+        stopped?.error,
+        undefined,
+        'normal debug stop must not hide a failed terminal transport',
+      );
+      assert.equal(stopped?.status, 'exited');
+      assert.throws(() => process.kill(terminal.pid!, 0));
+      assert.equal(await service.hasActiveSession('debug-owner'), false);
+      await new Promise<void>((resolve, reject) => {
+        const socket = connect({ host: '127.0.0.1', port: inspectorPort });
+        socket.setTimeout(2000);
+        socket.once('connect', () => {
+          socket.destroy();
+          reject(Error('debug inspector port remained open after stop'));
+        });
+        socket.once('timeout', () => {
+          socket.destroy();
+          reject(Error('inspector port probe timed out'));
+        });
+        socket.once('error', (error: NodeJS.ErrnoException) => {
+          socket.destroy();
+          error.code === 'ECONNREFUSED' ? resolve() : reject(error);
+        });
+      });
+      if (process.env.CIRCLE_TEST_DEBUG_TERMINAL_RECEIPT)
+        await writeFile(
+          process.env.CIRCLE_TEST_DEBUG_TERMINAL_RECEIPT,
+          JSON.stringify(
+            {
+              status: 'passed',
+              realDAP: true,
+              ownedPTY: true,
+              literalEmptyArg: true,
+              stdinReadByProgram: true,
+              terminalPid: terminal.pid,
+              terminalPidGone: true,
+              inspectorPort,
+              afterStopConnect: 'ECONNREFUSED',
+            },
+            null,
+            2,
+          ) + '\n',
+        );
+      phase = 'complete';
+    } catch (error) {
+      originalFailure = error;
+      throw error;
+    } finally {
+      let cleanupFailure: unknown;
+      try {
+        await service.dispose();
+      } catch (error) {
+        cleanupFailure = error;
+      }
+      const evidence = process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR;
+      if (evidence) {
+        await mkdir(evidence, { recursive: true });
+        const snapshots = await service.terminals.list('debug-owner');
+        const record = {
+          phase,
+          failure:
+            originalFailure instanceof Error
+              ? {
+                  message: originalFailure.message,
+                  stack: originalFailure.stack,
+                }
+              : String(originalFailure ?? ''),
+          cleanupFailure:
+            cleanupFailure instanceof Error
+              ? { message: cleanupFailure.message, stack: cleanupFailure.stack }
+              : String(cleanupFailure ?? ''),
+          snapshots,
+        };
+        await writeFile(
+          path.join(evidence, `debug-terminal-${process.platform}.json`),
+          JSON.stringify(record, null, 2) + '\n',
+        );
+        for (const snapshot of snapshots) {
+          const replay = await service.terminals.replay(
+            'debug-owner',
+            snapshot.id,
+          );
+          await writeFile(
+            path.join(
+              evidence,
+              `debug-terminal-${process.platform}-${snapshot.id}.events.json`,
+            ),
+            JSON.stringify(replay, null, 2) + '\n',
+          );
+        }
+      }
+      await rm(root, { recursive: true, force: true });
+      await rm(data, { recursive: true, force: true });
+      if (cleanupFailure)
+        throw originalFailure
+          ? new AggregateError(
+              [originalFailure, cleanupFailure],
+              'debug terminal verification and cleanup both failed',
+            )
+          : cleanupFailure;
+    }
+  },
+);

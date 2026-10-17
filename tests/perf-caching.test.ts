@@ -247,6 +247,20 @@ test('/logout waits for running sessions while read-only /skill remains availabl
   });
   const turn = runtime.harness.run('work').catch(() => {});
   await until(() => runtime.busy);
+  // Busy includes asynchronous initialization and attachment preparation. A history
+  // comparison needs the actual initial user checkpoint, not that earlier boundary.
+  await until(() => model.requests.length === 1);
+  const sentUser = model.requests[0]!.messages.find(
+    (message) => message.role === 'user',
+  );
+  assert.equal(sentUser?.content, 'work');
+  assert.equal(
+    runtime.store
+      .messages(runtime.session.id)
+      .find((message) => message.role === 'user')?.id,
+    sentUser?.id,
+    'the model is waiting on the same user message already stored in history',
+  );
   assert.equal(loadCredentials(root).api_key, 'sk-live');
   await app.command('logout', '');
   assert.equal(app.state.busy, true, 'the turn still runs');
@@ -267,6 +281,7 @@ test('/logout waits for running sessions while read-only /skill remains availabl
   // Loading one writes into the conversation the turn is writing, and a reload replaces
   // the tools the turn may be calling: those forms wait for the turn.
   const head = runtime.store.get(runtime.session.id)?.head;
+  assert.ok(head, 'the running model request has a persisted checkpoint');
   await app.command('skill', 'demo');
   assert.equal(
     app.state.flash,

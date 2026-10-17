@@ -2,6 +2,10 @@ import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { observePage, captureFailure } from './helpers/diagnostics.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
 import { waitDesktopReady } from './helpers/desktop-readiness.mjs';
+import {
+  preserveNativeClipboard,
+  restoreNativeClipboard,
+} from './helpers/native-clipboard.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -19,6 +23,7 @@ const note = join(temp, 'import.md');
 await writeFile(note, '# imported by native host\nno execution');
 const env = {
   ...process.env,
+  CIRCLE_HOME: join(temp, 'home'),
   CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'data'),
   CIRCLE_WORKBENCH_MODE: 'preview',
   CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({
@@ -65,7 +70,11 @@ const route = async (path) => {
   await page.waitForURL((url) => url.hash === '#' + path);
 };
 async function reset() {
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() =>
+    window.addEventListener('pagehide', () => localStorage.clear(), {
+      once: true,
+    }),
+  );
   await page.reload();
   await page.evaluate(() => {
     location.hash = '/session/session1';
@@ -197,7 +206,7 @@ const expected = {
   mcp: ['heading', 'mcp servers'],
   extensions: ['heading', 'extensions'],
   approvals: ['heading', 'approvals'],
-  jobs: ['heading', 'activity'],
+  jobs: ['tab', 'activity'],
   new: ['heading', 'new session'],
   resume: ['heading', 'sessions'],
   continue: ['heading', 'Fix the reconnect race'],
@@ -219,9 +228,16 @@ const expected = {
 let clipboard;
 try {
   await page.getByRole('heading', { name: 'Fix the reconnect race' }).waitFor();
-  clipboard = await application.evaluate(({ clipboard }) =>
-    clipboard.readText(),
-  );
+  await application.evaluate(({ app, BrowserWindow }) => {
+    app.focus({ steal: true });
+    const window = BrowserWindow.getAllWindows().find(
+      (window) => !window.isDestroyed(),
+    );
+    // Pointer assertions use the renderer's controlled input, not unrelated desktop movement.
+    window?.setIgnoreMouseEvents(true);
+    window?.focus();
+  });
+  clipboard = await preserveNativeClipboard(application);
   const sections = page.locator('.project-list > .project');
   await sections
     .nth(0)
@@ -282,6 +298,10 @@ try {
   await page
     .getByRole('menuitem', { name: 'rename session', exact: true })
     .waitFor();
+  await page.screenshot({
+    path: join(output, 'session-menu-open.png'),
+    animations: 'disabled',
+  });
   await page.keyboard.press('Escape');
   await page.reload();
   await page.evaluate(() => {
@@ -290,6 +310,11 @@ try {
   await page
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
     .waitFor();
+  // Establish a fresh outside→row pointer transition after the document reload;
+  // the previous page/menu may have left the controlled pointer over this row.
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .hover();
   await recentActive.hover();
   await hover.waitFor();
   const renameCommand = page.getByRole('textbox', {
@@ -422,7 +447,12 @@ try {
         })),
       });
     }
-    localStorage.setItem(key, JSON.stringify(saved));
+    // Seed after the mounted conversation flushes its state on pagehide.
+    window.addEventListener(
+      'pagehide',
+      () => localStorage.setItem(key, JSON.stringify(saved)),
+      { once: true },
+    );
   });
   await page.reload();
   await page.evaluate(() => {
@@ -510,6 +540,9 @@ try {
     .locator('a.session-link')
     .focus();
   await expectCard(projectRow('orbit-api', 'Fix the reconnect race'));
+  // A keyboard-only step: the pointer rests away from the rows, or the row under
+  // it keeps its hover card open, as it should.
+  await page.mouse.move(700, 400);
   await recentRows.nth(0).locator('a.session-link').focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForFunction(() => {
@@ -598,7 +631,7 @@ try {
         assert.equal(snapshot.sessions[0].showThinking, false);
       else if (command.name === 'details')
         await page
-          .getByRole('heading', { name: 'raw output', exact: true })
+          .getByRole('heading', { name: 'output', exact: true })
           .first()
           .waitFor();
       else if (command.name === 'undo')
@@ -611,11 +644,26 @@ try {
       else if (command.name === 'init' || command.name === 'reload')
         assert.equal(snapshot.requests[0].kind, command.name);
       else if (command.name === 'copy') {
-        await page.getByRole('status').filter({ hasText: 'copied' }).waitFor();
+        const copied = page.getByRole('status').filter({ hasText: 'copied' });
+        await copied.waitFor();
         assert.match(
           await application.evaluate(({ clipboard }) => clipboard.readText()),
           /sample data/,
         );
+        const toastBox = await copied.boundingBox();
+        const inputBox = await page
+          .getByRole('textbox', { name: 'message', exact: true })
+          .boundingBox();
+        assert(
+          toastBox &&
+            inputBox &&
+            (toastBox.y + toastBox.height <= inputBox.y ||
+              toastBox.y >= inputBox.y + inputBox.height ||
+              toastBox.x + toastBox.width <= inputBox.x ||
+              toastBox.x >= inputBox.x + inputBox.width),
+          'copy notice leaves the composer clear',
+        );
+        await copied.waitFor({ state: 'hidden' });
       } else if (command.name === 'unshare')
         assert.equal(snapshot.sessions[0].shared, false);
       else throw Error('missing UI assertion for ' + command.name);
@@ -646,7 +694,11 @@ try {
         status: index < 5 ? 'completed' : index === 5 ? 'running' : 'pending',
       }),
     );
-    localStorage.setItem(key, JSON.stringify(saved));
+    window.addEventListener(
+      'pagehide',
+      () => localStorage.setItem(key, JSON.stringify(saved)),
+      { once: true },
+    );
   });
   await page.reload();
   await page.locator('.plan-items .running').waitFor();
@@ -753,10 +805,11 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Three plain components, and the hub interface with the four platform
+  // Three plain components, GitHub, and the hub interface with the four platform
   // objects, all paired with a runtime extension the preview does not have, so off.
-  assert.equal(await page.getByRole('checkbox').count(), 8);
-  for (const id of ['knowledge', 'work', 'execution', 'methods'])
+  assert.equal(await page.getByRole('checkbox').count(), 9);
+  // Each switch is named by the interface's shown title.
+  for (const id of ['GitHub', 'knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page
         .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
@@ -1074,9 +1127,15 @@ try {
     exact: true,
   });
   await renameBox.waitFor();
-  await page.waitForFunction(
-    () => document.activeElement?.getAttribute('aria-label') === 'session name',
-  );
+  await page.waitForFunction(() => {
+    const field = document.activeElement;
+    return (
+      field instanceof HTMLInputElement &&
+      field.getAttribute('aria-label') === 'session name' &&
+      field.selectionStart === 0 &&
+      field.selectionEnd === field.value.length
+    );
+  });
   assert.equal(await renameBox.inputValue(), 'Fix the reconnect race');
   assert.equal(
     await renameBox.evaluate(
@@ -1147,7 +1206,17 @@ try {
   await page
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
     .waitFor();
-  assert.equal(await state(), null);
+  const assertResetData = async () => {
+    const saved = await state();
+    if (!saved) return;
+    // Reading-position persistence can create a fresh cache after reset.
+    // Every other field must still equal the original sample data.
+    for (const session of saved.sessions) delete session.presentation;
+    const { createFixtures } =
+      await import('../../workbench/src/preview/fixtures.ts');
+    assert.deepEqual(saved, createFixtures());
+  };
+  await assertResetData();
   assert.equal(
     await page
       .getByRole('textbox', { name: 'message', exact: true })
@@ -1158,7 +1227,7 @@ try {
   await page
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
     .waitFor();
-  assert.equal(await state(), null);
+  await assertResetData();
   assert.equal(
     await page
       .getByRole('textbox', { name: 'message', exact: true })
@@ -1393,9 +1462,7 @@ try {
   throw error;
 } finally {
   if (clipboard !== undefined)
-    await application
-      .evaluate(({ clipboard }, value) => clipboard.writeText(value), clipboard)
-      .catch(() => {});
+    await restoreNativeClipboard(application, clipboard);
   await application.close();
   await rm(temp, { recursive: true, force: true });
 }

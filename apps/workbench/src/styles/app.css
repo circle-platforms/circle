@@ -544,6 +544,12 @@ pre {
   border-color: var(--accent);
   color: var(--bg);
 }
+.button.primary:disabled {
+  opacity: 1;
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--secondary);
+}
 .button.danger,
 .danger {
   color: var(--negative);
@@ -883,6 +889,12 @@ pre {
   color: var(--muted);
   font-size: var(--ui-tiny);
   margin-top: 9px;
+}
+/* A call with nothing to show says so in one muted line, not an empty box. */
+.tool-empty {
+  color: var(--muted);
+  font-size: var(--ui-small);
+  margin: 4px 0 2px;
 }
 .data-block h4 {
   font-size: var(--ui-tiny);
@@ -1339,7 +1351,7 @@ pre {
   color: var(--fg);
 }
 .inspector-body {
-  padding: 0 17px 20px;
+  padding: 0 16px 16px;
   overflow: auto;
   flex: 1;
   min-height: 0;
@@ -1510,14 +1522,24 @@ pre {
 }
 .facts dd {
   margin: 0;
+  min-width: 0;
   overflow-wrap: anywhere;
   flex: 1;
   color: var(--secondary);
+}
+.context-workspace-path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
 }
 .facts-note dd {
   flex: none;
 }
 .context-source {
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
@@ -1531,6 +1553,15 @@ pre {
   gap: 7px;
   cursor: pointer;
   overflow-wrap: anywhere;
+}
+.context-source .text-button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.context-source summary svg {
+  flex-shrink: 0;
 }
 .context-source summary span,
 .context-source summary small {
@@ -2675,22 +2706,29 @@ pre {
   position: fixed;
   bottom: 25px;
 }
+/* Brief notices sit just under the top bar, in the middle of the window: clear
+   of the title, the folder chip, the panel buttons and every panel's header. */
 .toast {
-  position: absolute;
-  /* Above the composer, centered on the main pane. */
-  bottom: 140px;
+  position: fixed;
+  top: 60px;
   left: 50%;
+  right: auto;
+  bottom: auto;
   transform: translateX(-50%);
   z-index: 120;
-  max-width: calc(100vw - 40px);
+  width: max-content;
+  max-width: min(440px, calc(100vw - 32px));
   background: var(--surface);
   border: 1px solid var(--border);
-  box-shadow: 0 6px 24px color-mix(in srgb, var(--fg) 12%, transparent);
-  padding: 12px 18px;
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--fg) 10%, transparent);
+  padding: 6px 14px;
   border-radius: 8px;
   font-size: var(--ui-small);
-  line-height: 1.7;
+  line-height: 1.5;
   color: var(--fg);
+  text-align: center;
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
 .search-results {
   max-height: 50vh;
@@ -3367,6 +3405,8 @@ pre {
   align-items: center;
   gap: 7px;
   font-size: var(--ui-tiny);
+  /* One height for every state ("take over" is a button), so the page never resizes. */
+  height: 28px;
   margin: 10px 0;
   color: var(--muted);
 }
@@ -3376,6 +3416,20 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--ui-tiny);
+}
+.native-browser-footer > .status {
+  flex: none;
+}
+.native-browser-footer > .browser-page-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.native-browser-footer > .status + .browser-page-title::before {
+  content: '·';
+  margin-right: 7px;
 }
 .browser-insecure,
 .browser-operating {
@@ -3488,6 +3542,67 @@ pre {
   background: none;
   border: 0;
   color: var(--fg);
+}
+.browser-tab-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.browser-tab-icon > img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+}
+.browser-tab-spinner {
+  animation: spin 1s linear infinite;
+}
+.browser-tab-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-secure,
+.browser-not-secure {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+}
+/* The browser panel's menu, as Chrome's: items with their keys, and the zoom row */
+.dropdown.browser-menu {
+  min-width: 230px;
+}
+.browser-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 2px 2px 10px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.browser-zoom-label {
+  flex: 1;
+  margin-right: 12px;
+}
+.dropdown .browser-zoom-row [role='menuitem'] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 28px;
+  padding: 0 6px;
+}
+.dropdown .browser-zoom-row .browser-zoom-value {
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
 }
 .browser-tab-alert {
   flex: none;
@@ -4225,7 +4340,7 @@ pre {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 46vw;
+  max-width: min(46vw, 100%);
   padding: 4px 8px;
   margin-left: -8px;
   border-radius: 7px;
@@ -4247,6 +4362,22 @@ pre {
 .session-title svg {
   color: var(--muted);
   flex-shrink: 0;
+}
+@media (max-width: 360px) {
+  .topbar {
+    gap: 6px;
+    padding-inline: 6px;
+  }
+  .topbar-title {
+    gap: 4px;
+  }
+  .topbar-actions {
+    gap: 0;
+  }
+  .topbar-actions .icon-button {
+    width: 26px;
+    height: 26px;
+  }
 }
 .project-chip {
   display: inline-flex;
@@ -4415,7 +4546,8 @@ pre {
   color: var(--negative);
   font-size: var(--ui-small);
 }
-.tool-running {
+/* Only the folded line's command. A running card is .tool-call.tool-running and keeps its width. */
+.tool-summary .tool-running {
   max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4882,10 +5014,9 @@ pre {
   z-index: 30;
   display: flex;
   flex-direction: column;
-  width: min(380px, 92%);
+  width: 100%;
   background: var(--bg);
-  border-left: 1px solid var(--border);
-  box-shadow: -10px 0 28px color-mix(in srgb, var(--fg) 10%, transparent);
+  border-left: 0;
 }
 .inspector-overlay > .inspector {
   flex: 1;

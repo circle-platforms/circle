@@ -32,9 +32,11 @@ function installed(t: Parameters<typeof scratch>[0]) {
   const bin = join(base, 'bin');
   activateRelease(root, prefix, bin, 'example/circle');
   const home = join(base, 'home');
-  const data = join(base, 'data');
   mkdirSync(home);
-  mkdirSync(data);
+  mkdirSync(join(base, 'data'));
+  // Circle names its data folder by its native real path, which on Windows
+  // spells out the short names a temporary folder can contain.
+  const data = realpathSync.native(join(base, 'data'));
   writeFileSync(join(data, 'settings.json'), '{}');
   const real = realpathSync(prefix);
   const receiptPath = join(real, 'installation.json');

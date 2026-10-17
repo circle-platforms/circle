@@ -45,7 +45,36 @@ const env = {
   CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify(profile),
 };
 delete env.ELECTRON_RUN_AS_NODE;
-const site = createServer((_req, res) => {
+const ICON = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
+const site = createServer((req, res) => {
+  // The page Chrome's controls are checked on: a named icon, a link, an image, a field
+  // and words to find
+  if (req.url === '/icon.png') {
+    res.writeHead(200, { 'Content-Type': 'image/png' });
+    res.end(ICON);
+    return;
+  }
+  if (req.url === '/slow') {
+    const timer = setTimeout(() => res.end('<title>slow</title>late'), 4000);
+    res.on('close', () => clearTimeout(timer));
+    return;
+  }
+  if (req.url === '/chrome' || req.url === '/linked') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(
+      `<!doctype html><title>${req.url === '/linked' ? 'Linked fixture' : 'Chrome controls fixture'}</title><link rel="icon" href="/icon.png">` +
+        '<style>body{margin:0;font:16px sans-serif}a,img,input,p{display:block;margin:12px}</style>' +
+        '<a id="link" href="/linked">a linked page</a>' +
+        '<img id="image" src="/icon.png" width="60" height="60" alt="icon">' +
+        '<input id="field" value="editable text">' +
+        '<p id="plain">needle one, needle two and needle three</p>' +
+        '<div id="blank" style="height:200px"></div>',
+    );
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/html' });
   res.end(
     '<!doctype html><title>Circle native browser fixture</title><h1>same browser session</h1><p>isolated desktop verification</p>',
@@ -63,6 +92,378 @@ let nativeWindowId;
 let startupReadiness;
 let browserPanelReadiness;
 let captureReadiness;
+// Chrome's controls on the real native page: the icon, the page's own right-click menu,
+// shortcuts pressed in the page, find, zoom, stop, the last tab and the menu that the
+// page steps aside for. The page's input goes through Electron as a person's does.
+async function chromeControls() {
+  const mac = process.platform === 'darwin';
+  const command = mac ? 'meta' : 'control';
+  const state = () =>
+    page.evaluate(() => window.circleDesktop.browserState('session1'));
+  const until = async (check, label, timeout = 10000) => {
+    const end = Date.now() + timeout;
+    for (;;) {
+      const value = await check();
+      if (value) return value;
+      if (Date.now() > end) throw Error('timed out: ' + label);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+  const shown = () =>
+    app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return window.contentView.children.some(
+        (view) =>
+          view.webContents &&
+          view.webContents !== window.webContents &&
+          view.getVisible(),
+      );
+    });
+  // The page that shows, by its address
+  const inPage = (script, prefix = siteUrl + '/chrome') =>
+    app.evaluate(
+      ({ webContents }, { script, prefix }) =>
+        webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().startsWith(prefix))
+          .executeJavaScript(script),
+      { script, prefix },
+    );
+  const send = (events, prefix = siteUrl + '/chrome') =>
+    app.evaluate(
+      ({ webContents }, { events, prefix }) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((entry) => entry.getURL().startsWith(prefix));
+        contents.focus();
+        for (const event of events) contents.sendInputEvent(event);
+      },
+      { events, prefix },
+    );
+  const key = (keyCode, modifiers = []) =>
+    send([
+      { type: 'keyDown', keyCode, modifiers },
+      { type: 'keyUp', keyCode, modifiers },
+    ]);
+  const rightClick = async (selector) => {
+    const box = await inPage(
+      `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: Math.round(r.x + Math.min(r.width / 2, 20)), y: Math.round(r.y + r.height / 2) }; })()`,
+    );
+    await app.evaluate(() => globalThis.circleMenus.splice(0));
+    await send([
+      { type: 'mouseMove', ...box },
+      { type: 'mouseDown', ...box, button: 'right', clickCount: 1 },
+      { type: 'mouseUp', ...box, button: 'right', clickCount: 1 },
+    ]);
+    await until(
+      () => app.evaluate(() => globalThis.circleMenus.length > 0),
+      'context menu for ' + selector,
+    );
+    return app.evaluate(() =>
+      globalThis.circleMenus[0].items.map((item) =>
+        item.type === 'separator'
+          ? '-'
+          : item.label + (item.enabled ? '' : ' (disabled)'),
+      ),
+    );
+  };
+  // A right-click on macOS selects the word under it, and Chrome then offers to copy
+  // it too
+  const besideWord = (items) =>
+    items.join('|').replace('|-|Copy|', '|').split('|');
+  const choose = (label) =>
+    app.evaluate(
+      (_electron, label) =>
+        globalThis.circleMenus[0].items
+          .find((item) => item.label === label)
+          .click(),
+      label,
+    );
+  // A popup would hold the main process: the menu is kept to be read and chosen from
+  await app.evaluate(({ Menu }) => {
+    globalThis.circleMenus = [];
+    Menu.prototype.popup = function () {
+      globalThis.circleMenus.push(this);
+    };
+  });
+  const address = page.getByRole('textbox', {
+    name: 'browser address',
+    exact: true,
+  });
+  await address.fill(siteUrl + '/chrome');
+  await address.press('Enter');
+  await until(
+    async () => (await state()).title === 'Chrome controls fixture',
+    'chrome fixture loaded',
+  );
+  // The icon the page names shows in its tab, read by the main process
+  await until(
+    async () =>
+      (await state()).tabs
+        .find((tab) => tab.active)
+        ?.favicon?.startsWith('data:image/png;base64,'),
+    'the page icon in its tab',
+  );
+  await page.locator('.browser-tab.active .browser-tab-icon img').waitFor();
+  checks.push('a tab shows the icon its page names');
+
+  assert.deepEqual(await rightClick('#blank'), [
+    'Back',
+    'Forward (disabled)',
+    'Reload',
+    '-',
+    'Inspect',
+  ]);
+  assert.deepEqual(besideWord(await rightClick('#link')), [
+    'Open link in new tab',
+    'Copy link address',
+    '-',
+    'Inspect',
+  ]);
+  const before = await state();
+  await choose('Open link in new tab');
+  const opened = await until(async () => {
+    const value = await state();
+    return value.tabs.length === before.tabs.length + 1 &&
+      value.tabs.some((tab) => tab.url === siteUrl + '/linked')
+      ? value
+      : undefined;
+  }, 'the link in a new tab');
+  // Behind the shown tab, as Chrome opens it
+  assert.equal(opened.tab, before.tab);
+  // The person's clipboard is put back afterwards
+  const clipboardBefore = await app.evaluate(({ clipboard }) =>
+    clipboard.readText(),
+  );
+  try {
+    await rightClick('#link');
+    await choose('Copy link address');
+    assert.equal(
+      await app.evaluate(({ clipboard }) => clipboard.readText()),
+      siteUrl + '/linked',
+    );
+  } finally {
+    await app.evaluate(
+      ({ clipboard }, text) => clipboard.writeText(text),
+      clipboardBefore,
+    );
+  }
+  assert.deepEqual(besideWord(await rightClick('#image')), [
+    'Open image in new tab',
+    'Copy image',
+    'Copy image address',
+    '-',
+    'Inspect',
+  ]);
+  // Paste is offered while the clipboard holds text, as in Chrome; a runner's may be empty.
+  const clipboardForField = await app.evaluate(({ clipboard }) =>
+    clipboard.readText(),
+  );
+  let fieldMenu;
+  try {
+    await app.evaluate(({ clipboard }) =>
+      clipboard.writeText('circle paste fixture'),
+    );
+    fieldMenu = await rightClick('#field');
+  } finally {
+    await app.evaluate(
+      ({ clipboard }, text) => clipboard.writeText(text),
+      clipboardForField,
+    );
+  }
+  assert.deepEqual(fieldMenu, [
+    'Undo (disabled)',
+    'Redo (disabled)',
+    '-',
+    // The word the right-click selected on macOS can be cut and copied
+    mac ? 'Cut' : 'Cut (disabled)',
+    mac ? 'Copy' : 'Copy (disabled)',
+    'Paste',
+    'Select all',
+    '-',
+    'Inspect',
+  ]);
+  // The menu speaks the window's language
+  await page.evaluate(() => window.circleDesktop.setLanguage('zh-CN'));
+  assert.deepEqual((await rightClick('#link')).slice(0, 2), [
+    '在新标签页中打开链接',
+    '复制链接地址',
+  ]);
+  await page.evaluate(() => window.circleDesktop.setLanguage('en'));
+  // Inspect opens the panel's developer tools under the page
+  await rightClick('#blank');
+  await choose('Inspect');
+  await page.locator('.browser-diagnostics').waitFor();
+  await page
+    .getByRole('button', { name: 'close developer tools', exact: true })
+    .click();
+  await page.locator('.browser-diagnostics').waitFor({ state: 'detached' });
+  checks.push("the page's right-click menu is Chrome's and does what it says");
+
+  // Shortcuts pressed in the page
+  await key('=', [command]);
+  await until(async () => (await state()).zoom === 110, 'zoom in to 110%');
+  await page.getByRole('button', { name: 'zoom 110%', exact: true }).waitFor();
+  // The page itself is drawn at 110%
+  assert.equal(
+    await app.evaluate(
+      ({ webContents }, prefix) =>
+        webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().startsWith(prefix))
+          .getZoomFactor(),
+      siteUrl + '/chrome',
+    ),
+    1.1,
+  );
+  // Circle's own clicks go to CSS pixels, which the page's zoom leaves where they are:
+  // a click at a field's CSS centre still lands on it at 125%
+  await key('=', [command]);
+  await until(async () => (await state()).zoom === 125, 'zoom in to 125%');
+  const target = await inPage(
+    `(() => { document.activeElement?.blur(); const r = document.querySelector('#field').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+  );
+  await app.evaluate(
+    async ({ webContents }, { prefix, target }) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((entry) => entry.getURL().startsWith(prefix));
+      for (const type of ['mousePressed', 'mouseReleased'])
+        await contents.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type,
+          ...target,
+          button: 'left',
+          clickCount: 1,
+        });
+    },
+    { prefix: siteUrl + '/chrome', target },
+  );
+  assert.equal(await inPage('document.activeElement?.id'), 'field');
+  await key('0', [command]);
+  await until(async () => (await state()).zoom === 100, 'zoom back to 100%');
+  await key('F', [command]);
+  const find = page.getByRole('textbox', { name: 'find in page', exact: true });
+  await find.waitFor();
+  await find.fill('needle');
+  await until(
+    async () => (await state()).find?.matches === 3,
+    'three matches in the page',
+  );
+  await page.getByTestId('browser-find-count').getByText('1/3').waitFor();
+  await find.press('Enter');
+  await page.getByTestId('browser-find-count').getByText('2/3').waitFor();
+  await find.press('Shift+Enter');
+  await page.getByTestId('browser-find-count').getByText('1/3').waitFor();
+  await find.press('Escape');
+  await find.waitFor({ state: 'detached' });
+  assert.equal((await state()).find, undefined);
+  checks.push('find in page counts and steps through matches');
+  await key('F12');
+  await page.locator('.browser-diagnostics').waitFor();
+  await key('F12');
+  await page.locator('.browser-diagnostics').waitFor({ state: 'detached' });
+  await key('L', [command]);
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute('aria-label') === 'browser address',
+  );
+  const tabsBefore = (await state()).tabs.length;
+  await key('T', [command]);
+  await until(
+    async () => (await state()).tabs.length === tabsBefore + 1,
+    'a new tab from the page',
+  );
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute('aria-label') === 'browser address',
+  );
+  await page
+    .getByRole('tab')
+    .filter({ hasText: 'Chrome controls fixture' })
+    .getByRole('button')
+    .first()
+    .click();
+  await until(
+    async () => (await state()).title === 'Chrome controls fixture',
+    'back on the fixture tab',
+  );
+  const shownTab = (await state()).tab;
+  await key('Tab', ['control']);
+  await until(async () => (await state()).tab !== shownTab, 'ctrl+tab');
+  await page
+    .getByRole('tab')
+    .filter({ hasText: 'Chrome controls fixture' })
+    .getByRole('button')
+    .first()
+    .click();
+  await until(async () => (await state()).tab === shownTab, 'tab shown again');
+  await key('W', [command]);
+  await until(
+    async () => !(await state()).tabs.some((tab) => tab.id === shownTab),
+    'the shown tab closed from the page',
+  );
+  checks.push("Chrome's shortcuts work while the page has the keyboard");
+
+  // Reload turns into stop while a page loads, and stop stops it
+  await address.fill(siteUrl + '/slow');
+  await address.press('Enter');
+  const stop = page.getByRole('button', { name: 'stop loading', exact: true });
+  await stop.waitFor();
+  await stop.click();
+  await until(async () => !(await state()).loading, 'loading stopped', 3000);
+  // Stopped by the person, the page is no failure
+  assert.equal((await state()).failure, undefined);
+  assert.equal(await page.getByTestId('browser-load-failure').count(), 0);
+  await page
+    .getByRole('button', { name: 'reload page', exact: true })
+    .waitFor();
+  checks.push('stop ends a page that is loading');
+
+  // The ⋮ menu: the page steps aside for it and comes back
+  await address.fill(siteUrl + '/chrome');
+  await address.press('Enter');
+  await until(
+    async () => (await state()).title === 'Chrome controls fixture',
+    'fixture again',
+  );
+  await until(shown, 'the page shows');
+  await page.getByRole('button', { name: 'browser menu', exact: true }).click();
+  await page.getByRole('menu').waitFor();
+  await until(
+    async () => !(await shown()),
+    'the page steps aside for the menu',
+  );
+  await page.locator('.browser-frozen').waitFor();
+  await page.screenshot({ path: join(output, 'browser-menu.png') });
+  await page.keyboard.press('Escape');
+  await page.getByRole('menu').waitFor({ state: 'detached' });
+  await until(shown, 'the page back after the menu');
+  checks.push('the ⋮ menu shows over a still of the page, never under it');
+
+  // Closing the last tab leaves a new, empty one, as in Chrome
+  for (;;) {
+    const value = await state();
+    if (value.tabs.length === 1) break;
+    await page.evaluate(
+      ({ tab }) => window.circleDesktop.browserTabs('session1', 'close', tab),
+      { tab: value.tabs.find((entry) => !entry.active).id },
+    );
+  }
+  const last = (await state()).tab;
+  await page.getByRole('button', { name: 'close tab', exact: true }).click();
+  const fresh = await until(async () => {
+    const value = await state();
+    return value.tabs.length === 1 && value.tab !== last ? value : undefined;
+  }, 'a new tab after the last one closed');
+  assert.equal(fresh.url, 'about:blank');
+  checks.push('closing the last tab leaves a new empty tab');
+  await address.fill(siteUrl);
+  await address.press('Enter');
+  await until(
+    async () => (await state()).url === siteUrl + '/',
+    'the fixture site again',
+  );
+}
 const nativeState = (childId) =>
   app.evaluate(
     async ({ BrowserWindow }, { windowId, childId }) => {
@@ -267,8 +668,8 @@ try {
     .getByRole('textbox', { name: 'browser address', exact: true })
     .fill(siteUrl);
   await page
-    .getByRole('button', { name: 'navigate browser', exact: true })
-    .click();
+    .getByRole('textbox', { name: 'browser address', exact: true })
+    .press('Enter');
   await page.getByText('native browser', { exact: true }).waitFor();
   const browserState = await waitBrowserState(
     page,
@@ -397,14 +798,15 @@ try {
     .getByRole('textbox', { name: 'browser address', exact: true })
     .fill('file:///etc/passwd');
   await page
-    .getByRole('button', { name: 'navigate browser', exact: true })
-    .click();
+    .getByRole('textbox', { name: 'browser address', exact: true })
+    .press('Enter');
   await page
     .getByRole('status')
     .getByText('invalid address', { exact: true })
     .waitFor();
   await page.waitForFunction(() => !document.querySelector('.toast'));
   checks.push('the address bar says invalid address, not navigation failed');
+  await chromeControls();
   await page.getByRole('button', { name: 'files panel', exact: true }).click();
   checks.push(
     'sandboxed native browser keeps one session identity across panel switches',
@@ -505,9 +907,18 @@ try {
   if ((await files.getAttribute('aria-pressed')) !== 'true')
     await files.click();
   await page.getByRole('button', { name: 'hello.ts', exact: true }).click();
-  await page
-    .getByText('export const hello = "native workspace";', { exact: true })
-    .waitFor();
+  const fileLines = page.locator('.file-view .native-code-editor .view-lines');
+  await fileLines.waitFor({ state: 'visible' });
+  assert.equal(await fileLines.count(), 1, 'one visible source editor');
+  await page.waitForFunction(() => {
+    const lines = document.querySelector(
+      '.file-view .native-code-editor .view-lines',
+    );
+    return (
+      lines?.textContent.replaceAll('\u00a0', ' ') ===
+      'export const hello = "native workspace";'
+    );
+  });
   assert.equal(
     await readFile(join(workspace, 'hello.ts'), 'utf8'),
     'export const hello = "native workspace";\n',
@@ -538,7 +949,28 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  assert.equal(await page.getByRole('checkbox').count(), 8);
+  // Each switch is named by the interface's shown title.
+  const expectedInterfaces = [
+    'GitHub',
+    'file and diff inspector',
+    'activity inspector',
+    'browser pane',
+    'hub',
+    'knowledge',
+    'work',
+    'execution',
+    'methods',
+  ].map((title) => `enable ${title} interface`);
+  assert.equal(
+    await page.getByRole('checkbox').count(),
+    expectedInterfaces.length,
+  );
+  for (const name of expectedInterfaces)
+    assert.equal(
+      await page.getByRole('checkbox', { name, exact: true }).count(),
+      1,
+      `the interface list contains exactly one ${name} checkbox`,
+    );
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page

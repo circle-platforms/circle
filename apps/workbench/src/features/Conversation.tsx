@@ -1,13 +1,14 @@
+import { preserveNativeEditing } from '../model/native-editable-shortcut';
 import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
-import { agentActivityText } from '../model/activity';
+import { agentActivityText, isAgentActive } from '../model/activity';
 import {
   completionNoticeText,
   withoutDuplicateStops,
 } from '../model/completion';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
   ChevronDown,
@@ -38,7 +39,10 @@ import type { Attachment, DialogId, Message, PanelId } from '../model/types';
 import { Button, IconButton, FileChip, Status } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { ToolGroup, TurnRow } from '../components/ToolGroup';
-import { MessageView } from '../components/MessageView';
+import { RecoveredInputs } from './RecoveredInputs';
+import { WindowedList } from '../components/WindowedList';
+import type { ReactNode, RefObject } from 'react';
+import { MessageView, RuntimeNotice } from '../components/MessageView';
 import {
   BrowserDialogRequest,
   BrowserHandoffRequest,
@@ -59,6 +63,10 @@ import { t, tn } from '../i18n';
 import {
   saveSessionScroll,
   useSessionPresentation,
+  transcriptScroll,
+  restoreTranscriptAnchor,
+  sessionScrollAnchor,
+  type SessionScroll,
 } from '../model/presentation';
 import {
   claimComposerFocus,
@@ -70,6 +78,7 @@ import {
   takeComposerText,
 } from '../model/composer-focus';
 interface Props {
+  focusComposer?: number;
   onDialog: (dialog: DialogId, selection?: string) => void;
   onPanel: (panel: PanelId, selection?: string) => void;
   onAgent: (id: string) => void;
@@ -130,12 +139,41 @@ function groupMessages(messages: Message[]): TranscriptItem[] {
   }
   return items;
 }
+const transcriptKey = (item: TranscriptItem) =>
+  item.kind === 'tools' ? item.id : item.message.id;
+function TranscriptList({
+  items,
+  renderItem,
+  scrollRef,
+  revealIndex,
+  initialAnchor,
+}: {
+  items: TranscriptItem[];
+  renderItem: (item: TranscriptItem, index: number) => ReactNode;
+  scrollRef: RefObject<HTMLElement | null>;
+  revealIndex?: number;
+  initialAnchor?: { index: number; offset: number };
+}) {
+  return items.length < 500 ? (
+    items.map(renderItem)
+  ) : (
+    <WindowedList
+      items={items}
+      itemKey={transcriptKey}
+      renderItem={renderItem}
+      scrollRef={scrollRef}
+      revealIndex={revealIndex}
+      initialAnchor={initialAnchor}
+    />
+  );
+}
 // How a queued message goes: steering joins the running turn, a follow-up waits for its end.
 const QUEUE_KIND: Record<string, () => string> = {
   steering: () => t('steering'),
   'follow-up': () => t('follow-up'),
 };
 export function Conversation({
+  focusComposer,
   onDialog,
   onPanel,
   onAgent,
@@ -152,14 +190,27 @@ export function Conversation({
   const workspace = snapshot.workspaces.find(
     (item) => item.id === session.workspaceId,
   )!;
-  const messages = withoutDuplicateStops(visibleMessages(session));
+  const messages = useMemo(
+    () => withoutDuplicateStops(visibleMessages(session)),
+    [session.messages, session.branchIds, session.hiddenIds, session.leafId],
+  );
   const composerWritable =
     !session.archivedAt &&
     session.lifecycle !== 'deleting' &&
     !session.occupied;
   const input = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    if (focusComposer !== undefined)
+      input.current?.focus({ preventScroll: true });
+  }, [focusComposer, session.id]);
   const scroller = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
+  const [editingQueue, setEditingQueue] = useState<{
+    id: string;
+    text: string;
+    original: string;
+    version?: number;
+  } | null>(null);
   const [find, setFind] = useState('');
   const [findIndex, setFindIndex] = useState(0);
   const [completionIndex, setCompletionIndex] = useState(0);
@@ -207,33 +258,39 @@ export function Conversation({
         reader.onerror = () => reject(reader.error);
         reader.readAsDataURL(file);
       });
-      perform(() =>
-        runtime.change((state) => {
-          const target = state.sessions.find((item) => item.id === session.id);
-          if (!target || target.lifecycle === 'deleting') return;
-          const count =
-            target.attachments.filter((item) => item.kind === 'image').length +
-            1;
-          target.attachments.push({
-            id: crypto.randomUUID(),
-            name:
-              file.name && file.name !== 'image.png'
-                ? file.name
-                : `pasted image ${count}.png`,
-            kind: file.type === 'application/pdf' ? 'document' : 'image',
-            content,
-            mime: file.type,
-            size: file.size,
-          });
-        }),
-      );
+      perform(() => {
+        const target = runtime
+          .getSnapshot()
+          .sessions.find((item) => item.id === session.id);
+        if (!target || target.lifecycle === 'deleting') return;
+        const count =
+          target.attachments.filter((item) => item.kind === 'image').length + 1;
+        runtime.updateSessionView(session.id, {
+          attachments: [
+            ...target.attachments,
+            {
+              id: crypto.randomUUID(),
+              name:
+                file.name && file.name !== 'image.png'
+                  ? file.name
+                  : `pasted image ${count}.png`,
+              kind: file.type === 'application/pdf' ? 'document' : 'image',
+              content,
+              mime: file.type,
+              size: file.size,
+            },
+          ],
+        });
+      });
     }
-    input.current?.focus({ preventScroll: true });
+    if (runtime.getSnapshot().activeSessionId === session.id)
+      input.current?.focus({ preventScroll: true });
   };
   const lastEscape = useRef(0);
   const savedDraft = useRef('');
   useEffect(() => {
     setHistoryIndex(-1);
+    setEditingQueue(null);
     savedDraft.current = '';
     lastEscape.current = 0;
     setFind('');
@@ -294,11 +351,17 @@ export function Conversation({
   }, [session.draft, session.id]);
   const latestView = useRef({ session, onDialog, onPanel });
   latestView.current = { session, onDialog, onPanel };
-  const matches = messages.filter((message) =>
-    (message.text + ' ' + (message.tool?.output ?? ''))
-      .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .includes(find.toLowerCase().replace(/\s+/g, ' ')),
+  const matches = useMemo(
+    () =>
+      !find
+        ? []
+        : messages.filter((message) =>
+            (message.text + ' ' + (message.tool?.output ?? ''))
+              .toLowerCase()
+              .replace(/\s+/g, ' ')
+              .includes(find.toLowerCase().replace(/\s+/g, ' ')),
+          ),
+    [messages, find],
   );
   const slash = session.draft.startsWith('/') && !session.draft.includes(' ');
   const mention = session.draft.match(/(?:^|\s)@([^\s]*)$/)?.[1];
@@ -339,11 +402,9 @@ export function Conversation({
           .slice(0, 7)
       : [];
   const setDraft = (value: string) =>
-    perform(() =>
-      runtime.change((state) => {
-        currentSession(state).draft = value;
-      }),
-    );
+    perform(() => {
+      runtime.updateSessionView(session.id, { draft: value });
+    });
   const chooseCompletion = (index: number, send = false) => {
     const item = completions[index];
     if (!item) return;
@@ -357,7 +418,9 @@ export function Conversation({
     input.current?.focus({ preventScroll: true });
   };
   useEffect(() => {
-    if (input.current) {
+    // Chromium sizes content during its normal layout, without a draft-triggered
+    // write -> scrollHeight read -> write forcing a second synchronous layout.
+    if (input.current && !CSS.supports('field-sizing', 'content')) {
       input.current.style.height = 'auto';
       input.current.style.height =
         Math.min(input.current.scrollHeight, 180) + 'px';
@@ -373,23 +436,25 @@ export function Conversation({
   // a window behind others gets no frames.
   const stuck = useRef(true);
   const height = useRef(0);
-  const position = useRef({ top: 0, follow: true });
+  const position = useRef<SessionScroll>({ top: 0, follow: true });
   const follow = (force = false) => {
     const box = scroller.current;
     if (!box) return;
     if (force) stuck.current = true;
     if (stuck.current)
       box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
+    else restoreTranscriptAnchor(box, position.current.anchor);
     height.current = box.scrollHeight;
-    position.current = { top: box.scrollTop, follow: stuck.current };
+    position.current = transcriptScroll(box, stuck.current);
   };
   useEffect(() => {
     const box = scroller.current;
     const content = column.current;
     if (!box || !content) return;
     const scrolled = () => {
-      stuck.current = height.current - box.scrollTop - box.clientHeight < 48;
-      position.current = { top: box.scrollTop, follow: stuck.current };
+      // Only the actual end follows new content; a reader just above it stays put.
+      stuck.current = height.current - box.scrollTop - box.clientHeight <= 1;
+      position.current = transcriptScroll(box, stuck.current);
     };
     box.addEventListener('scroll', scrolled, { passive: true });
     const resized = new ResizeObserver(() => follow());
@@ -413,13 +478,17 @@ export function Conversation({
         behavior: 'instant',
       });
       height.current = box.scrollHeight;
-      position.current = { top: box.scrollTop, follow: stuck.current };
+      position.current = saved ?? transcriptScroll(box, stuck.current);
       follow();
     }
-    return () => {
+    const save = () =>
       saveSessionScroll(runtime, session.id, presentationEpoch, {
         ...position.current,
       });
+    window.addEventListener('pagehide', save);
+    return () => {
+      window.removeEventListener('pagehide', save);
+      save();
     };
   }, [session.id, runtime, presentationEpoch]);
   // A message you just sent brings the end back into view
@@ -435,10 +504,18 @@ export function Conversation({
   useEffect(() => setFinding(false), [session.id, messages.length]);
   useEffect(() => {
     if (find && matches.length) {
-      const target = scroller.current?.querySelector(
-        `[data-message-id="${matches[findIndex % matches.length]?.id}"]`,
-      );
-      if (target && scroller.current) revealIn(scroller.current, target);
+      let frame = 0;
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => {
+          const id = matches[findIndex % matches.length]?.id;
+          if (!id) return;
+          const target = scroller.current?.querySelector(
+            `[data-message-id="${CSS.escape(id)}"]`,
+          );
+          if (target && scroller.current) revealIn(scroller.current, target);
+        });
+      });
+      return () => cancelAnimationFrame(frame);
     }
   }, [find, findIndex]);
   useEffect(() => {
@@ -467,6 +544,11 @@ export function Conversation({
         return;
       // The window handles the sidebar, including settings and home.
       if (mapped === 'sidebar.toggle') return;
+      // The browser owns paste, including images. Cancelling this key prevents
+      // the trusted paste event that supplies clipboard files to the composer.
+      // A custom chord does not grant permission to read the clipboard either.
+      if (mapped === 'image.paste') return;
+      if (preserveNativeEditing(event, mapped)) return;
       if (mapped) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -570,7 +652,7 @@ export function Conversation({
       ['running', 'waiting'].includes(job.state),
   );
   const agents = snapshot.agents.filter(
-    (agent) => agent.sessionId === session.id && agent.status !== 'completed',
+    (agent) => agent.sessionId === session.id && isAgentActive(agent),
   );
   const pending = snapshot.interactions.filter(
     (item) => item.sessionId === session.id && item.status === 'pending',
@@ -592,7 +674,22 @@ export function Conversation({
   };
   // The turn's clock goes on the row of its latest tools, as Claude's does; before any, on
   // a row of its own. Waiting for you, it stops.
-  const items = groupMessages(messages);
+  const items = useMemo(() => groupMessages(messages), [messages]);
+  const savedAnchor = sessionScrollAnchor(session.presentation?.scroll?.anchor);
+  const initialAnchor = useMemo(() => {
+    if (!savedAnchor || session.presentation?.scroll?.follow) return undefined;
+    const index = items.findIndex((item) =>
+      item.kind === 'tools'
+        ? item.rows.some((row) => row.id === savedAnchor.messageId)
+        : item.message.id === savedAnchor.messageId,
+    );
+    return index < 0 ? undefined : { index, offset: savedAnchor.offset };
+  }, [
+    items,
+    savedAnchor?.messageId,
+    savedAnchor?.offset,
+    session.presentation?.scroll?.follow,
+  ]);
   const clock = showTurnClock(messages, pending.length, session.turn)
     ? session.turn
     : undefined;
@@ -647,7 +744,11 @@ export function Conversation({
           </IconButton>
         </div>
       )}
-      <div className="transcript" ref={scroller}>
+      <div
+        className="transcript"
+        ref={scroller}
+        style={{ overflowAnchor: 'none' }}
+      >
         <div className="transcript-column" ref={column}>
           {messages.length === 0 ? (
             <div className="welcome">
@@ -677,71 +778,98 @@ export function Conversation({
               </div>
             </div>
           ) : (
-            items.map((item, index) =>
-              item.kind === 'tools' ? (
-                <div key={item.id} data-message-id={item.rows[0]!.id}>
-                  <ToolGroup
-                    rows={item.rows}
-                    expanded={
-                      session.expandTools ||
-                      (!!find &&
-                        item.rows.some(
-                          (row) =>
-                            row.id === matches[findIndex % matches.length]?.id,
-                        ))
-                    }
-                    onAgent={onAgent}
-                    onFile={onFile}
-                    turn={index === clockAt ? clock : undefined}
-                  >
-                    {pending
-                      .filter(
-                        (request) =>
-                          request.kind === 'approval' &&
-                          !!request.callId &&
+            <TranscriptList
+              key={session.id}
+              items={items}
+              initialAnchor={initialAnchor}
+              scrollRef={scroller}
+              revealIndex={
+                find && matches.length
+                  ? items.findIndex((item) =>
+                      item.kind === 'tools'
+                        ? item.rows.some(
+                            (row) =>
+                              row.id ===
+                              matches[findIndex % matches.length]?.id,
+                          )
+                        : item.message.id ===
+                          matches[findIndex % matches.length]?.id,
+                    )
+                  : undefined
+              }
+              renderItem={(item, index) =>
+                item.kind === 'tools' ? (
+                  <div key={item.id} data-message-id={item.rows[0]!.id}>
+                    <ToolGroup
+                      rows={item.rows}
+                      expanded={
+                        session.expandTools ||
+                        (!!find &&
                           item.rows.some(
-                            (row) => row.tool?.id === request.callId,
-                          ),
-                      )
-                      .map((request) => (
-                        <InlineRequest
-                          key={request.id}
-                          item={request}
-                          onSecret={() => onDialog('secret')}
-                          onSettled={() =>
-                            requestAnimationFrame(() =>
-                              input.current?.focus({ preventScroll: true }),
-                            )
-                          }
-                        />
-                      ))}
-                  </ToolGroup>
-                </div>
-              ) : (
-                <div
-                  key={item.message.id}
-                  data-message-id={item.message.id}
-                  className={
-                    find &&
-                    matches[findIndex % matches.length]?.id === item.message.id
-                      ? 'find-match'
-                      : ''
-                  }
-                >
-                  {item.message.role === 'notice' ? (
-                    <div className="transcript-notice">
-                      {completionNoticeText(item.message)}
-                    </div>
-                  ) : (
-                    <MessageView
-                      message={item.message}
-                      showThinking={session.showThinking}
-                      onAttachment={() => onPanel('context')}
-                    />
-                  )}
-                </div>
-              ),
-            )
+                            (row) =>
+                              row.id ===
+                              matches[findIndex % matches.length]?.id,
+                          ))
+                      }
+                      onAgent={onAgent}
+                      onFile={onFile}
+                      turn={index === clockAt ? clock : undefined}
+                    >
+                      {pending
+                        .filter(
+                          (request) =>
+                            request.kind === 'approval' &&
+                            !!request.callId &&
+                            item.rows.some(
+                              (row) => row.tool?.id === request.callId,
+                            ),
+                        )
+                        .map((request) => (
+                          <InlineRequest
+                            key={request.id}
+                            item={request}
+                            onSecret={() => onDialog('secret')}
+                            onSettled={() =>
+                              requestAnimationFrame(() =>
+                                input.current?.focus({ preventScroll: true }),
+                              )
+                            }
+                          />
+                        ))}
+                    </ToolGroup>
+                  </div>
+                ) : (
+                  <div
+                    key={item.message.id}
+                    data-message-id={item.message.id}
+                    className={
+                      find &&
+                      matches[findIndex % matches.length]?.id ===
+                        item.message.id
+                        ? 'find-match'
+                        : ''
+                    }
+                  >
+                    {item.message.role === 'notice' ? (
+                      <RuntimeNotice
+                        message={{
+                          ...item.message,
+                          text: completionNoticeText(item.message),
+                        }}
+                        onConnection={() => onDialog('connect')}
+                        onMessage={() => input.current?.focus()}
+                      />
+                    ) : (
+                      <MessageView
+                        message={item.message}
+                        showThinking={session.showThinking}
+                        onAttachment={() => onPanel('context')}
+                      />
+                    )}
+                  </div>
+                )
+              }
+            />
           )}
           {loose.map((item) => (
             <InlineRequest
@@ -824,6 +952,9 @@ export function Conversation({
       )}
       {composerWritable && (
         <div className="composer-area">
+          {snapshot.runtime?.connected && (
+            <RecoveredInputs key={session.id} sessionId={session.id} />
+          )}
           {planVisible(
             session.todos,
             pending.some(
@@ -913,7 +1044,8 @@ export function Conversation({
           )}
           {pending.length > 0 && (
             <button className="interaction-summary" onClick={showRequest}>
-              <Status value="waiting" />
+              {/* The line already says it waits; a second "waiting" word repeated it. */}
+              <i className="attention-dot" />
               <span>
                 {tn(
                   pending.length,
@@ -924,12 +1056,127 @@ export function Conversation({
               <ArrowRight size={13} />
             </button>
           )}
+          {editingQueue &&
+            !session.queue.some((item) => item.id === editingQueue.id) && (
+              <div className="queue-editor" role="status">
+                <p>
+                  {t('queued message was consumed; your edit is preserved')}
+                </p>
+                <textarea
+                  aria-label={t('edit queued message')}
+                  value={editingQueue.text}
+                  onChange={(event) =>
+                    setEditingQueue({
+                      ...editingQueue,
+                      text: event.target.value,
+                    })
+                  }
+                />
+                <div>
+                  <Button
+                    onClick={() => {
+                      setDraft(
+                        [session.draft, editingQueue.text]
+                          .filter(Boolean)
+                          .join('\n'),
+                      );
+                      setEditingQueue(null);
+                    }}
+                  >
+                    {t('return edit to draft')}
+                  </Button>
+                  <Button onClick={() => setEditingQueue(null)}>
+                    {t('dismiss')}
+                  </Button>
+                </div>
+              </div>
+            )}
           {session.queue.length > 0 && (
             <div className="queue">
               {session.queue.map((item) => (
                 <div key={item.id}>
                   <span>{QUEUE_KIND[item.kind]?.() ?? item.kind}</span>
-                  <p>{item.text}</p>
+                  {editingQueue?.id === item.id ? (
+                    <div className="queue-editor">
+                      <textarea
+                        aria-label={t('edit queued message')}
+                        value={editingQueue.text}
+                        onChange={(event) =>
+                          setEditingQueue({
+                            ...editingQueue,
+                            text: event.target.value,
+                          })
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') {
+                            event.stopPropagation();
+                            setEditingQueue(null);
+                          }
+                        }}
+                      />
+                      <div>
+                        <Button
+                          disabled={!editingQueue.text.trim()}
+                          onClick={() => {
+                            const text = editingQueue.text;
+                            void perform(async () => {
+                              if (runtime.mode === 'live')
+                                await runtime.request(
+                                  'edit-queued',
+                                  {
+                                    kind: item.kind,
+                                    index: Number(item.id.split('-').at(-1)),
+                                    text: editingQueue.original,
+                                    expectedQueueVersion: editingQueue.version,
+                                    updatedText: text,
+                                  },
+                                  session.id,
+                                );
+                              else
+                                runtime.change((state) => {
+                                  const target = state.sessions.find(
+                                    (value) => value.id === session.id,
+                                  );
+                                  const queued = target?.queue.find(
+                                    (entry) => entry.id === item.id,
+                                  );
+                                  if (
+                                    !queued ||
+                                    queued.text !== editingQueue.original
+                                  )
+                                    throw Error(
+                                      t('queued message changed before saving'),
+                                    );
+                                  queued.text = text;
+                                });
+                              setEditingQueue(null);
+                            });
+                          }}
+                        >
+                          {t('save queued message')}
+                        </Button>
+                        <Button onClick={() => setEditingQueue(null)}>
+                          {t('cancel')}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p>{item.text}</p>
+                      <Button
+                        onClick={() =>
+                          setEditingQueue({
+                            id: item.id,
+                            text: item.text,
+                            original: item.text,
+                            version: session.queueVersion,
+                          })
+                        }
+                      >
+                        {t('edit queued message')}
+                      </Button>
+                    </>
+                  )}
                   <IconButton
                     label={t('remove queued {kind}', {
                       kind: QUEUE_KIND[item.kind]?.() ?? item.kind,
@@ -1005,6 +1252,7 @@ export function Conversation({
             )}
             <textarea
               ref={input}
+              style={{ fieldSizing: 'content' }}
               rows={1}
               aria-label={t('message')}
               placeholder={t('Ask anything, or describe a change…')}
@@ -1022,18 +1270,19 @@ export function Conversation({
                   event.preventDefault();
                   const id = crypto.randomUUID();
                   const marker = `[pasted text ${session.attachments.filter((file) => file.kind === 'paste').length + 1} · ${text.split('\n').length} lines]`;
-                  perform(() =>
-                    runtime.change((state) => {
-                      const target = currentSession(state);
-                      target.attachments.push({
-                        id,
-                        name: marker,
-                        kind: 'paste',
-                        content: text,
-                      });
-                      target.draft += marker;
-                    }),
-                  );
+                  perform(() => {
+                    const target = runtime
+                      .getSnapshot()
+                      .sessions.find((item) => item.id === session.id);
+                    if (!target || target.lifecycle === 'deleting') return;
+                    runtime.updateSessionView(session.id, {
+                      attachments: [
+                        ...target.attachments,
+                        { id, name: marker, kind: 'paste', content: text },
+                      ],
+                      draft: target.draft + marker,
+                    });
+                  });
                 }
               }}
               onKeyDown={(event) => {
@@ -1170,13 +1419,17 @@ export function Conversation({
                     name={file.name}
                     onClick={() => onPanel('context', file.id)}
                     onRemove={() =>
-                      perform(() =>
-                        runtime.change((state) => {
-                          currentSession(state).attachments = currentSession(
-                            state,
-                          ).attachments.filter((item) => item.id !== file.id);
-                        }),
-                      )
+                      perform(() => {
+                        const target = runtime
+                          .getSnapshot()
+                          .sessions.find((item) => item.id === session.id);
+                        if (target)
+                          runtime.updateSessionView(session.id, {
+                            attachments: target.attachments.filter(
+                              (item) => item.id !== file.id,
+                            ),
+                          });
+                      })
                     }
                   />
                 ))}
@@ -1294,8 +1547,8 @@ export function Conversation({
                   key={job.id}
                   onClick={() => onPanel('activity', job.id)}
                 >
+                  {/* The job's internal id is not shown; its title says what runs. */}
                   <Status value={job.state} />
-                  <strong>{job.id}</strong>
                   <span>{job.title}</span>
                   <small>{job.elapsed}</small>
                 </button>

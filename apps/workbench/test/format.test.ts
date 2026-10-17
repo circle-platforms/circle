@@ -27,8 +27,10 @@ import {
   isDesktopSettings,
 } from '../src/model/shortcuts.ts';
 import {
+  addressParts,
   browserApprovalInput,
   browserEventAddress,
+  connectionKind,
   browserOpened,
   browserTabChanged,
   dialogSource,
@@ -515,4 +517,43 @@ test('the first blank browser tab arriving after address input preserves the dra
   assert.equal(changed, true);
   assert.equal(browserEventAddress(nextTab, editing, false, changed), '');
   assert.equal(browserTabChanged('t2', undefined), true);
+});
+
+test('the address bar shows an address as Chrome does, and names its connection', () => {
+  assert.deepEqual(addressParts('https://example.test/a/b?c=1#d'), {
+    host: 'example.test',
+    rest: '/a/b?c=1#d',
+  });
+  // A bare site shows without its trailing slash
+  assert.deepEqual(addressParts('http://127.0.0.1:8080/'), {
+    host: '127.0.0.1:8080',
+    rest: '',
+  });
+  assert.deepEqual(addressParts('https://user:secret@example.test/x'), {
+    host: 'example.test',
+    rest: '/x',
+  });
+  assert.deepEqual(addressParts('about:blank'), {
+    host: '',
+    rest: 'about:blank',
+  });
+  assert.equal(connectionKind(null), 'none');
+  assert.equal(connectionKind({ url: 'about:blank' }), 'none');
+  assert.equal(connectionKind({ url: 'https://example.test/' }), 'https');
+  assert.equal(connectionKind({ url: 'http://example.test/' }), 'http');
+  assert.equal(
+    connectionKind({ url: 'https://example.test/', insecure: true }),
+    'insecure',
+  );
+  assert.equal(
+    connectionKind({ url: 'https://example.test/', warning: {} }),
+    'warning',
+  );
+  assert.equal(
+    connectionKind({
+      url: 'about:blank',
+      failure: { url: 'http://down.test/' },
+    }),
+    'http',
+  );
 });

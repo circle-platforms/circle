@@ -1,0 +1,618 @@
+/*
+ * The inspector's panes as Claude's desktop app draws them: one header row with the
+ * pane's tabs or name and its buttons, and the terminal, browser and files filling the
+ * rest to the edges. Loaded after app.css, terminal.css and developer-workbench.css;
+ * selectors start at .inspector so they hold against those whatever the load order.
+ */
+
+/* The header row. A pane's own tabs and buttons stay in its body, where its code and
+   tests find them, and are laid over the left of this row; the inspector is their
+   containing block. --header-end is the width of full view and close. */
+.inspector {
+  position: relative;
+  background: var(--bg);
+  --header-end: 36px;
+}
+.inspector[data-inspector-whole-button] {
+  --header-end: 64px;
+}
+.inspector .inspector-title {
+  gap: 2px;
+  height: 40px;
+  padding: 0 6px 0 8px;
+  font-weight: 500;
+  border-bottom-color: transparent;
+}
+.inspector .inspector-title-name {
+  flex: 1;
+  min-width: 0;
+  padding-left: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.inspector .inspector-actions {
+  gap: 2px;
+}
+.inspector .inspector-title .icon-button,
+.inspector .panel-header-actions .icon-button,
+.inspector .native-terminal-toolbar > .icon-button,
+.inspector .browser-tabs > .icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.inspector .inspector-title .icon-button:hover:not(:disabled),
+.inspector .panel-header-actions .icon-button:hover:not(:disabled) {
+  color: var(--fg);
+}
+.inspector .panel-header-actions .icon-button:disabled {
+  opacity: 0.45;
+}
+/* The terminal, browser and files: no rule under the header, the pane's own
+   background throughout, and their tabs or name in place of the title. */
+.inspector:is(
+  [data-inspector-panel='terminal'],
+  [data-inspector-panel='browser'],
+  [data-inspector-panel='files']
+) {
+  background: var(--bg);
+}
+.inspector:is(
+    [data-inspector-panel='terminal'],
+    [data-inspector-panel='browser'],
+    [data-inspector-panel='files']
+  )
+  .inspector-title {
+  border-bottom-color: transparent;
+}
+.inspector[data-inspector-panel='terminal']:has(
+    #inspector-terminal-terminal:not([hidden])
+  )
+  .inspector-title-name,
+.inspector[data-inspector-panel='browser']:has(.native-browser)
+  .inspector-title-name,
+.inspector[data-inspector-panel='files']:has(.files-panel)
+  .inspector-title-name {
+  visibility: hidden;
+}
+.inspector .inspector-body.flush .native-browser > .browser-tabs,
+.inspector
+  .inspector-body.flush
+  .native-terminal.embedded
+  > .native-terminal-toolbar,
+.inspector .inspector-body.flush .files-panel > .panel-header-name {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  left: 8px;
+}
+.inspector .inspector-body.flush .panel-header-actions {
+  position: absolute;
+  z-index: 1;
+  top: 5px;
+  right: calc(var(--header-end) + 2px);
+  display: flex;
+  gap: 2px;
+}
+/* A pane's name where it has no tabs, as Claude's "Files". */
+.inspector .panel-header-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--hover);
+  color: var(--fg);
+  font-size: var(--ui-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.inspector:is(
+    [data-inspector-panel='changes'],
+    [data-inspector-panel='activity']
+  )
+  .inspector-title-name {
+  visibility: hidden;
+}
+.inspector .workspace-panel-contents > .panel-header-tabs {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  left: 8px;
+  right: calc(var(--header-end) + 2px);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  background: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.inspector .panel-header-tabs > button {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 8px;
+  font-size: var(--ui-small);
+  white-space: nowrap;
+}
+
+/* Terminal and history: two icons before full view and close. */
+.inspector .inspector-body.flush .workspace-panel-terminal > .panel-switch {
+  position: absolute;
+  z-index: 1;
+  top: 7px;
+  right: calc(var(--header-end) + 2px);
+  gap: 0;
+  margin: 0;
+  padding: 2px;
+  border-radius: 7px;
+}
+.inspector .panel-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+}
+
+/* Terminal tabs in the header row */
+.inspector
+  .inspector-body.flush
+  .native-terminal.embedded
+  > .native-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  right: calc(var(--header-end) + 60px);
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+.inspector .native-terminal-toolbar .native-terminal-tabs {
+  flex: 0 1 auto;
+  gap: 2px;
+  padding: 0;
+  background: none;
+  scrollbar-width: none;
+}
+.inspector .native-terminal-tabs.segmented > button.active {
+  box-shadow: none;
+}
+.inspector .native-terminal-tabs > button {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: calc(var(--ui-size) - 0.5px);
+  font-weight: 500;
+}
+.inspector .native-terminal-tabs > button:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.inspector .native-terminal-tabs > button.active {
+  color: var(--fg);
+}
+.inspector .native-terminal-tabs > button.active:not(:only-child) {
+  background: var(--hover);
+}
+
+/* The terminal itself: the screen to the edges, a quiet bar under it. */
+.inspector .native-terminal.embedded {
+  background: var(--bg);
+}
+.inspector .native-terminal-screen {
+  padding: 6px 12px 4px;
+}
+.inspector .native-terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border-top: 1px solid var(--border);
+}
+.inspector .native-terminal-bar .native-terminal-search {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  gap: 2px;
+  border: 0;
+  background: none;
+}
+.inspector .native-terminal-bar .native-terminal-search > input {
+  height: 24px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font-size: var(--ui-small);
+  outline: none;
+  box-shadow: none;
+}
+.inspector .native-terminal-bar .native-terminal-search .icon-button,
+.inspector .native-terminal-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.inspector .native-terminal-actions .icon-button:hover:not(:disabled) {
+  color: var(--fg);
+}
+.inspector .native-terminal-actions .icon-button:disabled {
+  opacity: 0.4;
+}
+.inspector .native-terminal-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: auto;
+}
+.inspector .native-terminal-status {
+  gap: 10px;
+  padding: 0 10px 5px;
+  border-top: 0;
+  font-size: var(--ui-tiny);
+}
+.inspector .native-terminal-title {
+  padding: 0 8px;
+  color: var(--fg);
+  font-size: calc(var(--ui-size) - 0.5px);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.inspector .native-terminal-surfaces:empty {
+  display: none;
+}
+.inspector .native-terminal-empty {
+  flex: 1;
+  gap: 10px;
+  font-size: var(--ui-small);
+}
+
+/* The browser */
+.inspector .native-browser {
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+.inspector .inspector-body.flush .native-browser > .browser-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  right: calc(var(--header-end) + 6px);
+  height: 28px;
+  margin: 0;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+/* Chrome's tabs: icon, title and close, all as wide as there is room for, up to a
+   limit; the full title is the tooltip. */
+.inspector .native-browser > .browser-tabs .browser-tab {
+  flex: 0 1 200px;
+  min-width: 64px;
+  height: 28px;
+  max-width: 200px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+}
+.inspector .native-browser > .browser-tabs .browser-tab:hover,
+.inspector .native-browser > .browser-tabs .browser-tab.active {
+  background: var(--hover);
+}
+.inspector .native-browser > .browser-tabs .browser-tab-title {
+  flex: 1;
+  height: 100%;
+  padding: 0 2px 0 8px;
+  gap: 6px;
+  color: var(--secondary);
+  font-size: calc(var(--ui-size) - 0.5px);
+  font-weight: 500;
+  cursor: default;
+}
+.inspector
+  .native-browser
+  > .browser-tabs
+  .browser-tab.active
+  .browser-tab-title {
+  color: var(--fg);
+}
+.inspector .native-browser > .browser-tabs .browser-tab .icon-button {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+  margin-right: 1px;
+}
+.inspector .native-browser > .browser-tabs .browser-tab .icon-button:hover {
+  color: var(--fg);
+}
+.inspector .native-browser > .browser-tabs > .icon-button {
+  flex: none;
+}
+.inspector .native-browser .browser-address {
+  position: relative;
+  gap: 2px;
+  margin: 0;
+  padding: 0 8px 7px;
+  flex: none;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+}
+.inspector .native-browser .browser-address > .icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.inspector .native-browser .browser-address > .icon-button:disabled {
+  opacity: 0.4;
+}
+.inspector .browser-url {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  gap: 6px;
+  margin-left: 4px;
+  padding: 0 3px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.inspector .browser-url:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+.inspector .browser-url-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+.inspector .browser-url input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font-size: var(--ui-small);
+  outline: none;
+}
+.inspector .browser-url input::placeholder {
+  color: var(--muted);
+}
+/* While you are not typing, the address as Chrome shows it: the host in the text
+   colour, the rest quieter, drawn over the field's own (hidden) text. */
+.inspector .browser-url-field.display input {
+  color: transparent;
+}
+.inspector .browser-url-display {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  white-space: pre;
+  pointer-events: none;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  text-overflow: ellipsis;
+}
+.inspector .browser-url-display > b {
+  flex: none;
+  color: var(--fg);
+  font-weight: 400;
+}
+.inspector .browser-url-display > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector .browser-url .icon-button {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.inspector .browser-url .icon-button:hover {
+  color: var(--fg);
+}
+/* Chrome's find bar hangs over the end of the address bar, so the page keeps its
+   size; it covers the address, never the buttons, and only where it has to. */
+.inspector .browser-find {
+  position: absolute;
+  z-index: 2;
+  top: -1px;
+  right: -1px;
+  bottom: -1px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: min(330px, calc(100% + 2px));
+  padding: 0 1px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.inspector .browser-find:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+.inspector .browser-find input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font-size: var(--ui-small);
+  outline: none;
+}
+.inspector .browser-find input::placeholder {
+  color: var(--muted);
+}
+.inspector .browser-find-count {
+  flex: none;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  font-variant-numeric: tabular-nums;
+}
+.inspector .browser-find .icon-button {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.inspector .browser-find .icon-button:hover:not(:disabled) {
+  color: var(--fg);
+}
+.inspector .browser-find .icon-button:disabled {
+  opacity: 0.4;
+}
+/* The page's picture while a menu is open over it */
+.inspector .browser-frozen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: left top;
+  pointer-events: none;
+}
+.inspector .native-browser-viewport {
+  flex: 1 0 200px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+}
+.inspector .native-browser-viewport > .browser-empty {
+  position: absolute;
+  inset: 0;
+  gap: 6px;
+  padding: 24px;
+}
+.inspector .browser-empty > svg {
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+.inspector .browser-empty h3 {
+  color: var(--fg);
+  font-size: var(--ui-size);
+  font-weight: 500;
+}
+.inspector .browser-empty p {
+  color: var(--muted);
+  font-size: var(--ui-small);
+  line-height: 1.5;
+}
+.inspector .native-browser-footer {
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.inspector .native-browser-footer:empty {
+  display: none;
+}
+
+/* Files: a filter field and the tree under it. */
+.inspector .files-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0 8px 8px;
+}
+.inspector .files-panel > .search-field {
+  height: 30px;
+  flex: none;
+  margin: 0 0 6px;
+  border-radius: 8px;
+}
+.inspector .files-panel > .search-field input {
+  padding: 0;
+}
+.inspector .files-panel > .file-tree {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+}
+.inspector .file-tree > button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: var(--ui-small);
+  text-align: left;
+}
+.inspector .file-tree > button:hover {
+  background: var(--hover);
+}
+.inspector .file-tree > button.active {
+  background: var(--active);
+}
+.inspector .file-tree > button > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.inspector .file-tree > .tree-folder > svg {
+  color: var(--muted);
+}
+.inspector .file-tree > .tree-file {
+  /* a file lines up with the name of the folder it is in */
+  padding-left: calc(6px + var(--depth, 0) * 14px + 19px);
+}
+.inspector .file-icon {
+  flex: none;
+  color: var(--muted);
+}
+.inspector .file-icon.code {
+  color: var(--accent);
+}
+.inspector .file-icon.data {
+  color: var(--attention);
+}
+.inspector .file-icon.image {
+  color: var(--violet);
+}
+.inspector .files-panel > .panel-note {
+  margin: 10px 6px;
+}
+/* The tab's view sits in a display: contents fieldset, so it is not the flex child the
+   terminal's own rule expects; make it fill the panel here. */
+.inspector .workspace-panel-terminal fieldset > .inspector-resource-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}

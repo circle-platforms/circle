@@ -49,6 +49,17 @@ const ZH_CN: Record<string, string> = {
   click: '点击',
   type: '输入',
   select: '选择',
+  // The page's context menu in the browser panel, in Chrome's words
+  Back: '返回',
+  Forward: '前进',
+  Reload: '重新加载',
+  'Open link in new tab': '在新标签页中打开链接',
+  'Copy link address': '复制链接地址',
+  'Open image in new tab': '在新标签页中打开图片',
+  'Copy image': '复制图片',
+  'Copy image address': '复制图片地址',
+  'Select all': '全选',
+  Inspect: '检查',
   // The certificate warning Circle shows inside a browser tab, in Chrome's words
   'Privacy error': '隐私设置错误',
   'Your connection is not private': '您的连接不是私密连接',

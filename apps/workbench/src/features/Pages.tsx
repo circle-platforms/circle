@@ -1,6 +1,11 @@
+import {
+  setTerminalAccessibility,
+  useTerminalAccessibilityChoice,
+} from '../terminal-accessibility';
 import { desktopHost, setDefaultWorkspace } from '../host';
 import { recordedDecision, recordedTitle } from '../model/decisions';
 import { KeybindingsEditor } from './KeybindingsEditor';
+import { TaskLimitsSettings } from './TaskLimitsSettings';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
 import {
@@ -28,6 +33,7 @@ import {
   Pin,
   RotateCcw,
   Eye,
+  ChevronLeft,
   ChevronRight,
   Command,
   BookOpen,
@@ -82,6 +88,8 @@ import { SessionMenu } from '../components/SessionMenus';
 import {
   canArchiveSession,
   sessionActivityAt,
+  taskWorkspaceIds,
+  topLevelSessions,
   visibleSessions,
 } from '../model/session-management';
 import { openHome } from './home-selection';
@@ -155,7 +163,10 @@ function SessionsPage({ onSession, onDialog }: Props) {
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
   const openedOnPress = useRef(false);
-  const sessions = visibleSessions(snapshot.sessions).filter(
+  // Task conversations are reached from the conversation that started them.
+  const sessions = visibleSessions(
+    topLevelSessions(snapshot.sessions, snapshot.agents),
+  ).filter(
     (session) =>
       (all || session.workspaceId === current.workspaceId) &&
       Boolean(session.archivedAt) === archived &&
@@ -1098,24 +1109,241 @@ function useExtensionEnabled() {
 }
 function ExtensionsPage() {
   const { snapshot, runtime, notify } = useRuntime();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<'runtime' | 'interface'>('runtime');
   const { registry, enabled, toggle } = usePlugins();
-  const extensionSwitch = useExtensionEnabled();
-  const [pendingPlugins, setPendingPlugins] = useState<Record<string, boolean>>(
-    {},
-  );
+  type ExtensionAction = {
+    target: boolean;
+    revision: number;
+    phase:
+      | 'saving'
+      | 'waiting'
+      | 'reload'
+      | 'complete'
+      | 'preview'
+      | 'save-error'
+      | 'load-error';
+    error?: string;
+    reloaded?: boolean;
+  };
+  const [actions, setActions] = useState<Record<string, ExtensionAction>>({});
+  const revisions = useRef(new Map<string, number>());
+  const [reloading, setReloading] = useState(false);
+  const [reloadError, setReloadError] = useState('');
   useEffect(() => {
-    setPendingPlugins((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const [id, value] of Object.entries(current))
-        if (enabled.includes(id) === value) {
-          delete next[id];
+    let changed = false;
+    const next = { ...actions };
+    for (const [name, action] of Object.entries(actions)) {
+      if (
+        action.phase !== 'waiting' &&
+        action.phase !== 'complete' &&
+        action.phase !== 'load-error'
+      )
+        continue;
+      const extension = snapshot.extensions.find((item) => item.name === name);
+      if (!extension) continue;
+      if (action.phase === 'complete') {
+        if (extension.enabled !== action.target) {
+          delete next[name];
           changed = true;
+          continue;
         }
-      return changed ? next : current;
-    });
-  }, [enabled]);
+        if (
+          !action.target ||
+          (!extension.error &&
+            (name !== 'github' ||
+              (extension.view as { provider?: string } | undefined)
+                ?.provider === 'github'))
+        )
+          continue;
+        if (!extension.error) {
+          next[name] = { ...action, phase: 'waiting' };
+          changed = true;
+          continue;
+        }
+      }
+      if (action.target && extension.enabled && extension.error) {
+        if (action.phase === 'load-error' && action.error === extension.error)
+          continue;
+        next[name] = { ...action, phase: 'load-error', error: extension.error };
+        changed = true;
+      } else if (
+        (!action.target && !extension.enabled && !extension.view) ||
+        (action.target &&
+          extension.enabled &&
+          !extension.error &&
+          (name === 'github'
+            ? (extension.view as { provider?: string } | undefined)
+                ?.provider === 'github'
+            : action.reloaded))
+      ) {
+        next[name] = { ...action, phase: 'complete' };
+        changed = true;
+      }
+    }
+    if (changed)
+      setActions((current) => {
+        const merged = { ...current };
+        let applied = false;
+        for (const [name, previous] of Object.entries(actions)) {
+          if (
+            current[name]?.revision !== previous.revision ||
+            current[name]?.phase !== previous.phase ||
+            next[name] === previous
+          )
+            continue;
+          if (next[name]) merged[name] = next[name];
+          else delete merged[name];
+          applied = true;
+        }
+        return applied ? merged : current;
+      });
+  }, [snapshot.extensions, actions]);
+  async function setExtension(name: string, target: boolean) {
+    const revision = (revisions.current.get(name) ?? 0) + 1;
+    revisions.current.set(name, revision);
+    setActions((current) => ({
+      ...current,
+      [name]: { target, revision, phase: 'saving' },
+    }));
+    try {
+      await runtime.request('extension.enabled', { name, enabled: target });
+      if (revisions.current.get(name) !== revision) return;
+      setActions((current) => ({
+        ...current,
+        [name]: {
+          target,
+          revision,
+          phase:
+            runtime.mode === 'preview'
+              ? 'preview'
+              : target && name !== 'github'
+                ? 'reload'
+                : 'waiting',
+        },
+      }));
+    } catch (error) {
+      if (revisions.current.get(name) !== revision) return;
+      setActions((current) => ({
+        ...current,
+        [name]: { target, revision, phase: 'save-error', error: String(error) },
+      }));
+    }
+  }
+  const checkedExtension = (name: string, fallback: boolean) => {
+    const action = actions[name];
+    return action && ['saving', 'waiting', 'reload'].includes(action.phase)
+      ? action.target
+      : fallback;
+  };
+  const feedback = (name: string) => {
+    const action = actions[name];
+    if (!action) return null;
+    const failed =
+      action.phase === 'save-error' || action.phase === 'load-error';
+    return (
+      <div role={failed ? 'alert' : 'status'}>
+        <p className="panel-note">
+          {action.phase === 'saving'
+            ? action.target
+              ? t('saving extension enable request')
+              : t('saving extension disable request')
+            : action.phase === 'waiting'
+              ? action.target
+                ? t('enabling extension')
+                : t('disabling extension')
+              : action.phase === 'reload'
+                ? t('extension setting saved; reload required')
+                : action.phase === 'preview'
+                  ? t('preview setting updated; no extension code was loaded')
+                  : action.phase === 'save-error'
+                    ? t('extension setting could not be saved')
+                    : action.phase === 'load-error'
+                      ? t('extension could not be loaded')
+                      : action.target
+                        ? t('extension enabled')
+                        : t('extension disabled')}
+        </p>
+        {failed && action.error && (
+          <details className="context-source">
+            <summary>{t('technical details')}</summary>
+            <pre>{action.error}</pre>
+          </details>
+        )}
+      </div>
+    );
+  };
+  async function reloadExtensions() {
+    setReloading(true);
+    setReloadError('');
+    try {
+      await runtime.request('extensions.reload');
+      if (runtime.mode === 'preview')
+        notify(t('extension reload recorded; no code was loaded'));
+      else
+        setActions((current) =>
+          Object.fromEntries(
+            Object.entries(current).map(([name, action]) => [
+              name,
+              action.phase === 'reload'
+                ? { ...action, phase: 'waiting' as const, reloaded: true }
+                : action,
+            ]),
+          ),
+        );
+    } catch (error) {
+      setReloadError(String(error));
+    } finally {
+      setReloading(false);
+    }
+  }
+
+  const detailId = new URLSearchParams(location.search).get('plugin');
+  const detailPlugin = registry.plugins.find(
+    (plugin) => plugin.id === detailId && plugin.detail,
+  );
+  if (detailPlugin?.detail) {
+    const Detail = detailPlugin.detail;
+    const name = detailPlugin.runtimeExtension;
+    return (
+      <Page
+        title={detailPlugin.title}
+        description={detailPlugin.description}
+        className="plugin-detail-page"
+        action={
+          <Button onClick={() => navigate('/page/extensions')}>
+            <ChevronLeft size={14} />
+            {t('back to plugins')}
+          </Button>
+        }
+      >
+        <Detail
+          enabled={
+            name
+              ? checkedExtension(
+                  name,
+                  snapshot.extensions.find(
+                    (item) => item.name === name && item.scope === 'bundled',
+                  )?.enabled ?? false,
+                )
+              : enabled.includes(detailPlugin.id)
+          }
+          onToggle={(value) =>
+            name
+              ? void setExtension(name, value)
+              : toggle(detailPlugin.id, value)
+          }
+          // Once the switch has settled, the page's own state says the rest.
+          feedback={
+            name && actions[name]?.phase !== 'complete'
+              ? feedback(name)
+              : undefined
+          }
+        />
+      </Page>
+    );
+  }
   return (
     <Page
       title={t('extensions')}
@@ -1123,21 +1351,21 @@ function ExtensionsPage() {
         'Extensions add tools, commands and checks written in JavaScript or TypeScript.',
       )}
       action={
-        <Button
-          onClick={() => {
-            runtime.request('extensions.reload');
-            notify(
-              runtime.mode === 'live'
-                ? t('reloading extensions')
-                : t('extension reload recorded; no code was loaded'),
-            );
-          }}
-        >
+        <Button disabled={reloading} onClick={() => void reloadExtensions()}>
           <RotateCcw size={14} />
           {t('reload')}
         </Button>
       }
     >
+      {reloadError && (
+        <div role="alert">
+          <p>{t('extension could not be loaded')}</p>
+          <details className="context-source">
+            <summary>{t('technical details')}</summary>
+            <pre>{reloadError}</pre>
+          </details>
+        </div>
+      )}
       <div className="segmented page-tabs">
         <button
           className={tab === 'runtime' ? 'active' : ''}
@@ -1180,18 +1408,35 @@ function ExtensionsPage() {
                   label={t('enable {name}', {
                     name: platformTitle(extension.name),
                   })}
-                  checked={extensionSwitch.checked(
-                    extension.name,
-                    extension.enabled,
-                  )}
-                  onChange={(enabled) =>
-                    extensionSwitch.setEnabled(extension.name, enabled)
-                  }
+                  checked={checkedExtension(extension.name, extension.enabled)}
+                  onChange={(value) => void setExtension(extension.name, value)}
                 />
               </div>
-              {extension.error && (
-                <div className="inline-error">
-                  {extensionErrorText(extension.error)}
+              {registry.plugins.find(
+                (plugin) =>
+                  plugin.runtimeExtension === extension.name && plugin.detail,
+              ) && (
+                <NavLink
+                  to={
+                    '/page/extensions?plugin=' +
+                    registry.plugins.find(
+                      (plugin) =>
+                        plugin.runtimeExtension === extension.name &&
+                        plugin.detail,
+                    )!.id
+                  }
+                >
+                  {t('plugin details')}
+                </NavLink>
+              )}
+              {feedback(extension.name)}
+              {extension.error && !actions[extension.name] && (
+                <div role="alert">
+                  <p>{extensionErrorText(extension.error)}</p>
+                  <details className="context-source">
+                    <summary>{t('technical details')}</summary>
+                    <pre>{extension.error}</pre>
+                  </details>
                 </div>
               )}
               <div className="extension-contributions">
@@ -1238,29 +1483,37 @@ function ExtensionsPage() {
                     name: platformTitle(plugin.id, plugin.title),
                   })}
                   checked={
-                    pendingPlugins[plugin.id] ?? enabled.includes(plugin.id)
+                    plugin.runtimeExtension
+                      ? checkedExtension(
+                          plugin.runtimeExtension,
+                          enabled.includes(plugin.id),
+                        )
+                      : enabled.includes(plugin.id)
                   }
                   onChange={(value) => {
-                    // A paired page that cannot turn on reports the reason and
-                    // leaves the switch where it was.
-                    if (
-                      plugin.runtimeExtension &&
-                      (runtime.mode !== 'live' ||
-                        !snapshot.extensions.some(
-                          (item) => item.name === plugin.runtimeExtension,
-                        ))
-                    ) {
-                      toggle(plugin.id, value);
-                      return;
-                    }
-                    setPendingPlugins((current) => ({
-                      ...current,
-                      [plugin.id]: value,
-                    }));
-                    toggle(plugin.id, value);
+                    if (!plugin.runtimeExtension)
+                      return toggle(plugin.id, value);
+                    // The interface's own page comes and goes with this switch; the
+                    // runtime extension follows through its usual save and reload.
+                    runtime.change((state) => {
+                      state.uiPlugins = registry.change(
+                        state.uiPlugins.filter((id) =>
+                          registry.plugins.some((item) => item.id === id),
+                        ),
+                        plugin.id,
+                        value,
+                      );
+                    });
+                    void setExtension(plugin.runtimeExtension, value);
                   }}
                 />
               </div>
+              {plugin.detail && (
+                <NavLink to={'/page/extensions?plugin=' + plugin.id}>
+                  {t('plugin details')}
+                </NavLink>
+              )}
+              {plugin.runtimeExtension && feedback(plugin.runtimeExtension)}
               <p className="panel-note">
                 {plugin.runtimeExtension
                   ? t('paired with runtime extension {name} · {version}', {
@@ -1443,7 +1696,9 @@ const THEME_LABELS: Record<'auto' | 'light' | 'dark', () => string> = {
   dark: () => t('dark'),
 };
 function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
+  const terminalAccessibility = useTerminalAccessibilityChoice();
   const { snapshot, runtime, perform, notify } = useRuntime();
+  const taskFolders = taskWorkspaceIds(snapshot.sessions, snapshot.agents);
   const settings = snapshot.settings;
   const navigate = useNavigate();
   const extensionSwitch = useExtensionEnabled();
@@ -1519,6 +1774,25 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             ))}
           </div>
         </div>
+        <div className="setting-row">
+          <span>{t('terminal screen reader')}</span>
+          <div
+            className="segmented"
+            role="group"
+            aria-label={t('terminal screen reader')}
+          >
+            {(['auto', 'always'] as const).map((value) => (
+              <button
+                key={value}
+                aria-pressed={terminalAccessibility === value}
+                className={terminalAccessibility === value ? 'active' : ''}
+                onClick={() => setTerminalAccessibility(value)}
+              >
+                {value === 'auto' ? t('follow system') : t('always on')}
+              </button>
+            ))}
+          </div>
+        </div>
         <Switch
           label={t('hide thinking in new sessions')}
           checked={settings.hideThinking}
@@ -1528,6 +1802,12 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             })
           }
         />
+      </section>
+      <section className="settings-block">
+        <h2>GitHub</h2>
+        <NavLink to="/page/extensions?plugin=github">
+          {t('manage GitHub plugin')}
+        </NavLink>
       </section>
       <section className="settings-block">
         <h2>{t('session defaults')}</h2>
@@ -1589,6 +1869,9 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           </div>
         </div>
       </section>
+      {runtime.mode === 'live' && desktopHost() && snapshot.activeSessionId && (
+        <TaskLimitsSettings sessionId={snapshot.activeSessionId} />
+      )}
       <section className="settings-block">
         <h2>{t('default workspace')}</h2>
         <div className="setting-row">
@@ -1625,18 +1908,20 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
       </section>
       <section className="settings-block">
         <h2>{t('workspace trust')}</h2>
-        {snapshot.workspaces.map((workspace) => (
-          <div className="setting-row" key={workspace.id}>
-            <span>
-              {workspaceLabel(workspace)}
-              <small>{workspace.path}</small>
-            </span>
-            <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
-            <Button onClick={() => onDialog('trust', workspace.id)}>
-              {t('review')}
-            </Button>
-          </div>
-        ))}
+        {snapshot.workspaces
+          .filter((workspace) => !taskFolders.has(workspace.id))
+          .map((workspace) => (
+            <div className="setting-row" key={workspace.id}>
+              <span>
+                {workspaceLabel(workspace)}
+                <small>{workspace.path}</small>
+              </span>
+              <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
+              <Button onClick={() => onDialog('trust', workspace.id)}>
+                {t('review')}
+              </Button>
+            </div>
+          ))}
       </section>
       <section className="settings-block">
         <h2>{t('protected files')}</h2>

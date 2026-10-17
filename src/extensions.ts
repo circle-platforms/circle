@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  lstatSync,
+} from 'node:fs';
+import type { GitHubConnectionBackend } from './github_connection.js';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -134,6 +142,7 @@ export interface ExtensionServices {
   track?: (work: Promise<unknown>) => void;
   /** Called when an extension adds or removes a tool after it loaded. */
   onTools?: () => void;
+  githubConnection?: GitHubConnectionBackend;
 }
 const live = new WeakSet<ExtensionAPI>();
 const settled = (): void => undefined;
@@ -142,6 +151,7 @@ export class ExtensionAPI {
   readonly Watch = Watch;
   /** Values this extension keeps between runs, in a private file of its own. */
   readonly secrets: ExtensionSecrets;
+  readonly githubConnection?: GitHubConnectionBackend;
   /**
    * Fires when Circle closes the extension: when it leaves, and before extensions are loaded
    * again. Pass it to requests and timers, and end loops on it.
@@ -161,6 +171,7 @@ export class ExtensionAPI {
       (value) => ext.mask.remember(value),
     );
     this.signal = services?.signal ?? new AbortController().signal;
+    this.githubConnection = services?.githubConnection;
   }
   /**
    * Work that goes on after a tool or command returned, such as following something until it
@@ -362,7 +373,7 @@ export class ExtensionAPI {
       );
     if (typeof execute !== 'function')
       throw new ExtensionError(`tool '${name}': execute must be callable`);
-    if (live.has(this)) this.reservedTools.add(name);
+    this.reservedTools.add(name);
     this.ext.tools.push({
       name,
       description: description || name,
@@ -441,6 +452,7 @@ export class ExtensionAPI {
       throw new ExtensionError(`command /${name} already exists`);
     if (typeof handler !== 'function')
       throw new ExtensionError('command handler must be callable');
+    this.reservedCommands.add(name);
     const mask = this.ext.mask;
     this.ext.commands.push({
       name,
@@ -543,11 +555,23 @@ export interface ExtensionHostOptions {
   /** Shows a masked card for api.askSecret; without it askSecret fails. */
   secret?: ExtensionServices['secret'];
   secretTimeoutMs?: number;
+  githubConnection?: GitHubConnectionBackend;
   settings?: Record<string, Record<string, unknown>>;
   reservedTools?: Set<string>;
   reservedCommands?: Set<string>;
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => JobOwner;
+}
+/**
+ * The entry Circle shipped for a bundled extension, not a link to something else. The
+ * terminal ships extension.ts; the desktop build compiles it to extension.js.
+ */
+function bundledEntry(path: string, root: string, name: string): boolean {
+  if (lstatSync(path).isSymbolicLink()) return false;
+  const actual = realpathSync.native(path);
+  return ['extension.ts', 'extension.mjs', 'extension.js'].some(
+    (entry) => actual === join(realpathSync.native(root), name, entry),
+  );
 }
 function isEnotdir(error: unknown): boolean {
   return (
@@ -566,6 +590,16 @@ export class ExtensionHost {
   // handlers, and what they gave api.background.
   private readonly pending = new Set<Promise<unknown>>();
   private closing?: Promise<void>;
+  private toolReservations = new Set<string>();
+  private commandReservations = new Set<string>();
+  private readonly scopes = new Map<
+    Extension,
+    {
+      controller: AbortController;
+      pending: Set<Promise<unknown>>;
+      trustedBundled: boolean;
+    }
+  >();
   constructor(readonly options: ExtensionHostOptions) {
     // Listed before load, still with nothing registered, once the folder is
     // trusted. The desktop publishes a snapshot before integrations finish;
@@ -653,63 +687,173 @@ export class ExtensionHost {
   async load(): Promise<this> {
     this.controller.signal.throwIfAborted();
     const loaded: Extension[] = [];
-    const tools = new Set(this.options.reservedTools);
-    const commands = new Set(this.options.reservedCommands);
+    const tools = (this.toolReservations = new Set(this.options.reservedTools));
+    const commands = (this.commandReservations = new Set(
+      this.options.reservedCommands,
+    ));
     for (const discovered of this.discover()) {
       this.controller.signal.throwIfAborted();
       const ext: Extension = this.unloaded(discovered);
       loaded.push(ext);
       if (!ext.enabled) continue;
-      try {
-        const module: unknown = await import(
-          pathToFileURL(ext.path).href + '?reload=' + randomUUID()
-        );
-        this.controller.signal.throwIfAborted();
-        if (!isRecord(module) || typeof module.register !== 'function')
-          throw new ExtensionError('extension defines no register(api)');
-        const api = new ExtensionAPI(
-          ext,
-          tools,
-          commands,
-          this.options.jobs,
-          this.options.jobOwner,
-          {
-            home: this.options.home,
-            workspace: this.options.workspace,
-            secret: this.options.secret,
-            secretTimeoutMs: this.options.secretTimeoutMs,
-            settings: this.options.settings?.[discovered.name],
-            onStatus: this.options.onStatus,
-            openUrl: this.options.openUrl,
-            onTools: this.options.onTools,
-            signal: this.controller.signal,
-            track: (work) => this.track(work),
-          },
-        );
-        await abortable(
-          Promise.resolve(module.register(api)),
-          this.controller.signal,
-        );
-        this.controller.signal.throwIfAborted();
-        for (const tool of ext.tools) tools.add(tool.name);
-        live.add(api);
-        for (const command of ext.commands) commands.add(command.name);
-      } catch (error) {
-        this.controller.signal.throwIfAborted();
-        ext.error =
-          error instanceof Error
-            ? `${error.name}: ${error.message}`
-            : String(error);
-        ext.tools = [];
-        ext.commands = [];
-        ext.middleware = [];
-        ext.subagents = [];
-        ext.renderers.clear();
-        ext.handlers.clear();
-      }
+      await this.activate(ext, tools, commands);
+      this.controller.signal.throwIfAborted();
     }
     this.extensions = loaded;
     return this;
+  }
+  private async activate(
+    ext: Extension,
+    tools: Set<string>,
+    commands: Set<string>,
+    notify = false,
+  ): Promise<void> {
+    const scope = {
+      controller: new AbortController(),
+      pending: new Set<Promise<unknown>>(),
+      trustedBundled: false,
+    };
+    this.scopes.set(ext, scope);
+    try {
+      const bundledRoot = this.options.bundledRoot ?? bundledExtensionsRoot();
+      scope.trustedBundled =
+        ext.source === 'bundled' &&
+        !!bundledRoot &&
+        bundledEntry(ext.path, bundledRoot, ext.name);
+      const module: unknown = await import(
+        pathToFileURL(ext.path).href + '?reload=' + randomUUID()
+      );
+      this.controller.signal.throwIfAborted();
+      scope.controller.signal.throwIfAborted();
+      if (!isRecord(module) || typeof module.register !== 'function')
+        throw new ExtensionError('extension defines no register(api)');
+      const api = new ExtensionAPI(
+        ext,
+        tools,
+        commands,
+        this.options.jobs,
+        this.options.jobOwner,
+        {
+          home: this.options.home,
+          workspace: this.options.workspace,
+          githubConnection:
+            ext.source === 'bundled' &&
+            ext.name === 'github' &&
+            this.options.bundledRoot !== false &&
+            !!bundledRoot &&
+            bundledEntry(ext.path, bundledRoot, 'github')
+              ? this.options.githubConnection
+              : undefined,
+          secret: this.options.secret,
+          secretTimeoutMs: this.options.secretTimeoutMs,
+          settings: this.options.settings?.[ext.name],
+          onStatus: this.options.onStatus,
+          openUrl: this.options.openUrl,
+          onTools: this.options.onTools,
+          signal: AbortSignal.any([
+            this.controller.signal,
+            scope.controller.signal,
+          ]),
+          track: (work) => this.track(work, ext),
+        },
+      );
+      scope.controller.signal.throwIfAborted();
+      this.controller.signal.throwIfAborted();
+      await abortable(
+        Promise.resolve(module.register(api)),
+        AbortSignal.any([this.controller.signal, scope.controller.signal]),
+      );
+      scope.controller.signal.throwIfAborted();
+      this.controller.signal.throwIfAborted();
+      for (const tool of ext.tools) tools.add(tool.name);
+      live.add(api);
+      for (const command of ext.commands) commands.add(command.name);
+    } catch (error) {
+      scope.controller.abort(error);
+      ext.error = !ext.enabled
+        ? ''
+        : error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error);
+      for (const tool of ext.tools) tools.delete(tool.name);
+      for (const command of ext.commands) commands.delete(command.name);
+      ext.tools = [];
+      ext.commands = [];
+      ext.middleware = [];
+      ext.subagents = [];
+      ext.renderers.clear();
+      ext.handlers.clear();
+    }
+    if (notify) {
+      this.options.onTools?.();
+      this.options.onStatus?.();
+    }
+  }
+  private activating = new Map<string, Promise<void>>();
+  /** Load only the selected bundled extension, preserving every unrelated live scope. */
+  async enableBundled(name: string): Promise<void> {
+    this.controller.signal.throwIfAborted();
+    const previous = this.extensions.find((ext) => ext.name === name);
+    const pending = this.activating.get(name);
+    if (pending && previous?.enabled) return pending;
+    if (previous?.enabled && !previous.error) return;
+    const discovered = this.discover().find(
+      (ext) => ext.name === name && ext.source === 'bundled',
+    );
+    const root = this.options.bundledRoot ?? bundledExtensionsRoot();
+    if (!discovered || !root || !bundledEntry(discovered.path, root, name))
+      throw new ExtensionError('bundled extension is unavailable');
+    const ext: Extension = {
+      ...discovered,
+      enabled: true,
+      error: '',
+      warnings: [],
+      tools: [],
+      commands: [],
+      middleware: [],
+      subagents: [],
+      renderers: new Map(),
+      handlers: new Map(),
+      mask: new SecretMask(),
+    };
+    const index = this.extensions.findIndex((item) => item.name === name);
+    if (index < 0) this.extensions.push(ext);
+    else this.extensions[index] = ext;
+    const tools = this.toolReservations;
+    const commands = this.commandReservations;
+    const work = this.activate(ext, tools, commands, true);
+    this.track(work, ext);
+    this.activating.set(name, work);
+    try {
+      await work;
+    } finally {
+      if (this.activating.get(name) === work) this.activating.delete(name);
+    }
+  }
+  /** Stop only the actual bundled provider; unrelated extensions and MCP stay alive. */
+  async disableBundled(name: string): Promise<void> {
+    const ext = this.extensions.find(
+      (ext) => ext.name === name && this.scopes.get(ext)?.trustedBundled,
+    );
+    if (!ext) return;
+    ext.enabled = false;
+    const scope = this.scopes.get(ext);
+    scope?.controller.abort(new ExtensionError('the extension was disabled'));
+    for (const tool of ext.tools) this.toolReservations.delete(tool.name);
+    for (const command of ext.commands)
+      this.commandReservations.delete(command.name);
+    ext.tools = [];
+    ext.commands = [];
+    ext.handlers.clear();
+    ext.middleware = [];
+    ext.subagents = [];
+    ext.renderers.clear();
+    ext.view = undefined;
+    ext.status = undefined;
+    this.options.onTools?.();
+    this.options.onStatus?.();
+    while (scope?.pending.size) await Promise.allSettled([...scope.pending]);
+    this.scopes.delete(ext);
   }
   private loaded(): Extension[] {
     return this.extensions.filter((ext) => ext.enabled && !ext.error);
@@ -725,6 +869,16 @@ export class ExtensionHost {
   statuses(): ExtensionStatus[] {
     return this.loaded().flatMap((ext) =>
       ext.status ? [{ extension: ext.name, ...ext.status }] : [],
+    );
+  }
+  /** Identity is assigned by this host, not by an extension's name or published view. */
+  isTrustedBundledCommand(command: ExtensionCommand, name: string): boolean {
+    return this.loaded().some(
+      (ext) =>
+        ext.name === name &&
+        ext.source === 'bundled' &&
+        this.scopes.get(ext)?.trustedBundled === true &&
+        ext.commands.includes(command),
     );
   }
   commands(): Map<string, ExtensionCommand> {
@@ -829,18 +983,27 @@ export class ExtensionHost {
             Promise.resolve(handler({ ...payload })).catch((error) =>
               this.warn(ext, event, error),
             ),
+            ext,
           );
         } catch (error) {
           this.warn(ext, event, error);
         }
       }
   }
-  private track(work: Promise<unknown>): void {
+  private track(work: Promise<unknown>, ext?: Extension): void {
+    const scoped = ext && this.scopes.get(ext)?.pending;
     const tracked: Promise<void> = work.then(
-      () => void this.pending.delete(tracked),
-      () => void this.pending.delete(tracked),
+      () => {
+        this.pending.delete(tracked);
+        scoped?.delete(tracked);
+      },
+      () => {
+        this.pending.delete(tracked);
+        scoped?.delete(tracked);
+      },
     );
     this.pending.add(tracked);
+    scoped?.add(tracked);
   }
   /**
    * End the extensions: their api.signal fires, then nothing of them runs any more, once the

@@ -1,6 +1,7 @@
 import type { WorkbenchSnapshot } from '../../workbench/src/model/types';
 
 export type RuntimeCommandName =
+  | 'workspace-service'
   | 'state'
   | 'prompt'
   | 'abort'
@@ -47,6 +48,7 @@ export type RuntimeCommandName =
   | 'check-update'
   | 'discover-models'
   | 'shell'
+  | 'edit-queued'
   | 'remove-queued'
   | 'save-command'
   | 'save-secret'
@@ -65,11 +67,15 @@ export interface RuntimeReply {
   ok: boolean;
   error?: string;
   data?: unknown;
+  /** The exact authoritative full publication made after this command's effect. */
+  appliedState?: { epoch: string; seq: number };
 }
 export interface RuntimeUpdate {
   seq: number;
   connected: boolean;
   snapshot: WorkbenchSnapshot;
+  /** Cursor of the separate token channel included in this authoritative snapshot. */
+  tokenStream?: { epoch: string; seq: number };
   event?: {
     kind: string;
     sessionId: string;
@@ -81,7 +87,21 @@ export interface RuntimeUpdate {
   };
   error?: string;
 }
+/** Streaming-only chunks never carry the full conversation history. */
+export interface RuntimeTokenDelta {
+  epoch: string;
+  seq: number;
+  baseSeq: number;
+  sessionId: string;
+  streamId: string;
+  parentId: string | null;
+  text?: string;
+  thinking?: string;
+  at: string;
+  turn?: WorkbenchSnapshot['sessions'][number]['turn'];
+}
 export const runtimeCommands = new Set<RuntimeCommandName>([
+  'workspace-service',
   'state',
   'prompt',
   'abort',
@@ -128,6 +148,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'check-update',
   'discover-models',
   'shell',
+  'edit-queued',
   'remove-queued',
   'save-command',
   'save-secret',

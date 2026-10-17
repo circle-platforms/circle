@@ -1,3 +1,10 @@
+import type {
+  BrowserDiagnosticEvent,
+  BrowserDiagnosticRequest,
+  BrowserDiagnosticResult,
+} from './browser-diagnostics-contracts';
+import type { WorkspaceServiceEvent } from './workspace-protocol';
+
 export interface NativeFile {
   id: string;
   name: string;
@@ -57,12 +64,27 @@ export type UpdateState =
       linux?: LinuxUpdate;
     };
 export type UpdateAction = 'check' | 'download' | 'install';
+export interface NativeAccessibilityState {
+  supported: boolean;
+  enabled: boolean;
+  revision: number;
+}
 export interface DesktopBridge {
+  nativeAccessibility?: () => Promise<NativeAccessibilityState>;
+  onNativeAccessibility?: (
+    listener: (state: NativeAccessibilityState) => void,
+  ) => () => void;
   apiVersion: 1;
   info: () => Promise<DesktopInfo>;
   runtimeState: () => Promise<RuntimeUpdate>;
   runtimeCommand: (command: RuntimeCommand) => Promise<RuntimeReply>;
   onRuntime: (listener: (update: RuntimeUpdate) => void) => () => void;
+  onRuntimeDelta?: (
+    listener: (delta: import('./runtime-protocol').RuntimeTokenDelta) => void,
+  ) => () => void;
+  onWorkspaceEvent?: (
+    listener: (event: WorkspaceServiceEvent) => void,
+  ) => () => void;
   chooseFiles: (
     purpose: 'attach' | 'import' | 'source',
   ) => Promise<NativeFile[]>;
@@ -86,6 +108,15 @@ export interface DesktopBridge {
   windowControl: (
     action: 'minimize' | 'maximize' | 'close' | 'quit',
   ) => Promise<void>;
+  /** Opens a human-requested HTTPS link; credentials are never accepted. */
+  openExternal?: (url: string) => Promise<void>;
+  onBrowserDiagnosticEvent?: (
+    listener: (event: BrowserDiagnosticEvent) => void,
+  ) => () => void;
+  browserDiagnostics?: (
+    sessionId: string,
+    request: BrowserDiagnosticRequest,
+  ) => Promise<BrowserDiagnosticResult>;
   browserState: (sessionId: string) => Promise<BrowserState>;
   browserNavigate: (sessionId: string, url: string) => Promise<BrowserState>;
   browserBounds: (
@@ -145,6 +176,18 @@ export interface DesktopBridge {
     action: 'take' | 'return',
   ) => Promise<BrowserState>;
   onBrowserEvent: (listener: (state: BrowserState) => void) => () => void;
+  /**
+   * What the person does to the shown page from the panel: stop loading, zoom, find in
+   * the page, switch to the next or previous tab, a still picture of the page to show
+   * while a menu covers it, and whether the panel has the keyboard.
+   */
+  browserPage: (
+    sessionId: string,
+    action: BrowserPageAction,
+    value?: unknown,
+  ) => Promise<BrowserState | string | null>;
+  /** A browser shortcut pressed in the page, or in the panel when the system took it. */
+  onBrowserKey: (listener: (event: BrowserKeyEvent) => void) => () => void;
   /** Whether the window shows dark or light: the browser's own pages follow it. */
   setTheme: (dark: boolean) => Promise<void>;
   onAction: (listener: (action: DesktopAction) => void) => () => void;
@@ -153,6 +196,15 @@ export interface DesktopBridge {
   onUpdate: (listener: (state: UpdateState) => void) => () => void;
 }
 
+export type BrowserPageAction =
+  'stop' | 'zoom' | 'find' | 'find-stop' | 'tab' | 'snapshot' | 'keys';
+export interface BrowserKeyEvent {
+  /** `browser:<session>`, as BrowserState names it. */
+  sessionId: string;
+  action: import('./browser-controls').BrowserKeyAction;
+  /** The tab whose page had the keyboard, when the key was pressed in a page. */
+  tab?: string;
+}
 export interface BrowserBounds {
   x: number;
   y: number;
@@ -193,6 +245,10 @@ export interface BrowserState {
   handoff?: string;
   /** The person took the browser and an action of Circle's waits until they hand it back. */
   waiting?: boolean;
+  /** The shown tab's page zoom, in percent. */
+  zoom?: number;
+  /** Find in the shown tab's page: what is sought, the current match and how many. */
+  find?: { text: string; active: number; matches: number };
 }
 export type BrowserControl = 'shared' | 'agent' | 'user_pending' | 'user';
 /** A site asks for a client certificate: only the person chooses one, or none. */
@@ -237,6 +293,8 @@ export interface BrowserTab {
   url: string;
   loading: boolean;
   active: boolean;
+  /** The page's icon, as a data URL. */
+  favicon?: string;
 }
 export interface BrowserDialog {
   id: string;

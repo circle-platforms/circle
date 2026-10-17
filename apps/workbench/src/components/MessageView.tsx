@@ -1,14 +1,18 @@
-import { Brain, Copy } from 'lucide-react';
+import { formatRuntimeNotice } from '../model/runtime-notice';
+import { Brain, ChevronRight, Copy } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { copyText } from '../host';
 import type { Message } from '../model/types';
 import { formatBusyElapsed } from '../model/format';
 import { fullTime, shownTime } from '../model/time';
-import { FileChip, IconButton } from './common';
+import { Button, FileChip, IconButton } from './common';
+import './runtime-notice.css';
 import { Markdown } from './Markdown';
 import { t } from '../i18n';
+import { useSources } from './SourceNavigation';
 import { interruptedLabel } from '../model/completion';
 import { useSessionDisclosure } from '../model/presentation';
+import { ToolMessage } from './ToolMessage';
 import { formatUsdAmount } from '../../../../src/pricing.ts';
 
 /**
@@ -25,6 +29,7 @@ export function MessageView({
   onAttachment: () => void;
 }) {
   const { notify } = useRuntime();
+  const sources = useSources();
   const [thinkingOpen, setThinkingOpen] = useSessionDisclosure(
     'thinking:' + message.id,
   );
@@ -39,6 +44,11 @@ export function MessageView({
               setThinkingOpen(!thinkingOpen);
             }}
           >
+            <ChevronRight
+              size={12}
+              className="thinking-chevron"
+              aria-hidden="true"
+            />
             <Brain size={13} />
             <span>
               {message.thinkingSeconds === undefined
@@ -53,11 +63,50 @@ export function MessageView({
         </details>
       )}
       <div className={message.role === 'user' ? 'bubble' : 'message-body'}>
-        <Markdown text={message.text} />
+        {message.shell ? (
+          <>
+            <ToolMessage
+              tool={{
+                id: 'human-' + (message.shell.id ?? message.id),
+                name: message.shell.quiet ? '!!' : '!',
+                input: { command: message.shell.command },
+                output: message.shell.output,
+                status:
+                  message.shell.status === 'done'
+                    ? 'success'
+                    : message.shell.status === 'error'
+                      ? 'error'
+                      : message.shell.status === 'stopped'
+                        ? 'cancelled'
+                        : 'running',
+              }}
+              ownerSessionId={message.shell.sourceSessionId}
+              userShellId={
+                message.shell.interactive ? message.shell.id : undefined
+              }
+              expanded
+              onFile={(path) => sources?.openFile(path)}
+              onAgent={() => {}}
+            />
+            {message.shell.exitCode !== undefined && (
+              <div className="message-meta">
+                {t('exit {code}', { code: message.shell.exitCode })}
+              </div>
+            )}
+          </>
+        ) : (
+          <Markdown text={message.text} />
+        )}
         {message.attachments?.length ? (
           <div className="message-attachments">
             {message.attachments.map((file) => (
-              <FileChip key={file.id} name={file.name} onClick={onAttachment} />
+              <FileChip
+                key={file.id}
+                name={file.name}
+                onClick={() =>
+                  sources ? sources.openAttachment(file) : onAttachment()
+                }
+              />
             ))}
           </div>
         ) : null}
@@ -107,3 +156,60 @@ const usageText = (usage: NonNullable<Message['usage']>) =>
   ]
     .filter(Boolean)
     .join(' · ');
+
+/** Only controller-owned failure identities are errors; quoted error text is ordinary content. */
+export function RuntimeNotice({
+  message,
+  onConnection,
+  onMessage,
+}: {
+  message: Message;
+  onConnection: () => void;
+  onMessage: () => void;
+}) {
+  const { notify } = useRuntime();
+  if (!message.id.startsWith('failure-'))
+    return (
+      <div className="transcript-notice">
+        {message.planCompleted === undefined
+          ? formatRuntimeNotice(message)
+          : t('plan completed · {n} steps', { n: message.planCompleted })}
+      </div>
+    );
+  return (
+    <section
+      className="transcript-notice runtime-failure"
+      role="alert"
+      aria-label={t('action failed')}
+    >
+      <strong>{t('action failed')}</strong>
+      {/* The cause in the runtime's own words; the whole text stays folded below. */}
+      <p className="runtime-failure-cause">{message.text.split('\n')[0]}</p>
+      <p className="panel-note">
+        {t(
+          'steps that finished before the error stay done; check them before you retry.',
+        )}
+      </p>
+      {message.text.trim().includes('\n') && (
+        <details>
+          <summary>{t('error details')}</summary>
+          <pre>{message.text}</pre>
+        </details>
+      )}
+      <div className="runtime-failure-actions">
+        <Button onClick={onMessage}>{t('return to message')}</Button>
+        <Button onClick={onConnection}>{t('review connection')}</Button>
+        <Button
+          onClick={() =>
+            void copyText(message.text).then(
+              () => notify(t('copied')),
+              () => notify(t('clipboard unavailable')),
+            )
+          }
+        >
+          {t('copy error details')}
+        </Button>
+      </div>
+    </section>
+  );
+}

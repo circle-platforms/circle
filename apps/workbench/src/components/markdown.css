@@ -1,0 +1,25 @@
+.markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.markdown-table-scroll:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.markdown-table-scroll > table {
+  min-width: 32em;
+}
+.markdown-table-scroll td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.markdown-table-scroll th {
+  white-space: nowrap;
+}
+.thinking-chevron {
+  flex: 0 0 auto;
+}
+.thinking[open] .thinking-chevron {
+  transform: rotate(90deg);
+}

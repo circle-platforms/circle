@@ -16,7 +16,8 @@ import { loadToolPrompt } from './system_prompt.js';
 import { applyPatch } from './apply_patch.js';
 import { QUESTION_SCHEMA } from './questions.js';
 import { JobRegistry, jobLine, jobNotice } from './jobs.js';
-import { readTextWindow } from './file_read.js';
+import { readTextWindow, readTextContentWindow } from './file_read.js';
+import { FileMutationTools, type FileMutations } from './file_mutations.js';
 import { mediaType, readMedia } from './media.js';
 import { GREP_SCHEMA, grepSearch } from './grep_tool.js';
 import { takeScreenshot, type ScreenshotOptions } from './screenshot.js';
@@ -25,8 +26,11 @@ export interface Todo {
   status: 'pending' | 'in_progress' | 'completed';
 }
 export interface ToolHooks {
+  fileMutations?: FileMutations;
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => import('./jobs.js').JobOwner;
+  /** Only the runtime may turn original arguments into public command display. */
+  displayCommand?: (rawCommand: string, context: ToolContext) => string;
   todos?: (todos: Todo[]) => void;
   question?: (
     args: Record<string, unknown>,
@@ -64,6 +68,9 @@ const integer = (description: string, minimum = 1) => ({
 });
 export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   const read = new Set<string>();
+  const mutations = hooks.fileMutations
+    ? new FileMutationTools(sandbox, hooks.fileMutations)
+    : undefined;
   const tools: Tool[] = [];
   // What these write stays on disk: a %NAME% there is text, never a variable's value.
   const FILE_WRITERS = new Set(['write_file', 'edit_file', 'apply_patch']);
@@ -135,7 +142,14 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       }
       const offset = Math.max(0, Math.trunc(Number(args.offset ?? 0)));
       const limit = Math.max(0, Math.trunc(Number(args.limit ?? 2000)));
-      const content = await readTextWindow(path, offset, limit, context.signal);
+      const content =
+        mutations && sandbox.isInside(path)
+          ? readTextContentWindow(
+              (await mutations.read(path, context)).content!,
+              offset,
+              limit,
+            )
+          : await readTextWindow(path, offset, limit, context.signal);
       read.add(path);
       return content;
     },
@@ -147,7 +161,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       { file_path: text('Path to write'), content: text('File contents') },
       ['file_path', 'content'],
     ),
-    async (args) => {
+    async (args, context) => {
+      if (mutations)
+        return (await mutations.prepareWrite(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
       mkdirSync(dirname(path), { recursive: true });
@@ -167,7 +183,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       },
       ['file_path', 'old_string', 'new_string'],
     ),
-    async (args) => {
+    async (args, context) => {
+      if (mutations)
+        return (await mutations.prepareEdit(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
       if (!read.has(path))
@@ -197,8 +215,19 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     schema({ patchText: text('Patch in Begin Patch / End Patch format') }, [
       'patchText',
     ]),
-    async (args) => applyPatch(string(args, 'patchText'), sandbox),
+    async (args, context) =>
+      mutations
+        ? (await mutations.preparePatch(args, context))(args, context)
+        : applyPatch(string(args, 'patchText'), sandbox),
   );
+  if (mutations) {
+    tools.find((tool) => tool.name === 'write_file')!.prepare =
+      mutations.prepareWrite;
+    tools.find((tool) => tool.name === 'edit_file')!.prepare =
+      mutations.prepareEdit;
+    tools.find((tool) => tool.name === 'apply_patch')!.prepare =
+      mutations.preparePatch;
+  }
   add('ls', 'read', schema({ path: text('Directory') }), async (args) => {
     const path = sandbox.resolvePath(String(args.path || '.'));
     return readdirSync(path, { withFileTypes: true })
@@ -250,17 +279,32 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     ),
     async (args, context) => {
       if (hooks.jobs) {
-        const owner = hooks.jobOwner?.(context) ?? {
+        const notificationOwner = hooks.jobOwner?.(context) ?? {
           sessionId: context.sessionId,
           startedBy: 'model' as const,
+        };
+        const rawCommand = context.rawArgs?.command;
+        const owner = {
+          ...notificationOwner,
+          origin: {
+            executionSessionId: context.sessionId,
+            toolCallId: context.callId,
+            ...(typeof rawCommand === 'string' && hooks.displayCommand
+              ? { displayCommand: hooks.displayCommand(rawCommand, context) }
+              : {}),
+            ...(context.secretNames
+              ? { secretNames: [...context.secretNames] }
+              : {}),
+          },
         };
         const command = string(args, 'command');
         if (args.background === true) {
           context.signal.throwIfAborted();
-          const job = hooks.jobs.startShell(
+          const job = await hooks.jobs.startShell(
             command,
             owner,
             args.timeout === undefined ? undefined : Number(args.timeout),
+            context.signal,
           );
           return `In background: ${jobLine(job)}. A notice will arrive when it ends; do not poll or sleep.`;
         }

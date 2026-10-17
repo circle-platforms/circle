@@ -291,3 +291,47 @@ test('usage from an unsuccessful native request survives a tool error and reache
     1,
   );
 });
+
+test('native search keeps its connection through a host model wrapper', async (t) => {
+  const requests: any[] = [];
+  const setup = await fixture(t, (url, body, res) => {
+    assert.equal(url, '/v1/responses');
+    requests.push(body);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(native(body.model)));
+  });
+  const scripted = new ScriptedModel([
+    { message: search() },
+    { message: assistant('done', 'done') },
+  ]);
+  const gateway = new GatewayModel(setup.settings, setup.home);
+  gateway.complete = (request) => scripted.complete(request);
+  // The desktop wraps every model its runtimes use; the wrapper is what the
+  // harness hands to web search.
+  let wrappedCalls = 0;
+  const runtime = new AgentRuntime({
+    ...setup,
+    model: gateway,
+    headless: true,
+    bundledExtensions: false,
+    wrapModel: (model) => ({
+      get model() {
+        return model.model;
+      },
+      complete: (request) => {
+        wrappedCalls++;
+        return model.complete(request);
+      },
+    }),
+  });
+  cleanup(t, () => runtime.close());
+  const run = await runtime.harness.run('search through the wrapper');
+  assert.equal(run.answer, 'done');
+  assert.equal(wrappedCalls, 2);
+  assert.equal(requests.length, 1, 'the native search reached the gateway');
+  assert.equal(requests[0].model, 'main-model');
+  const next = scripted.requests[1]!.messages.find(
+    (m) => m.tool_call_id === 'search',
+  )!;
+  assert.match(next.content, /https:\/\/docs.example\/verified/);
+});
