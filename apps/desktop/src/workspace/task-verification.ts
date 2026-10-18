@@ -38,6 +38,10 @@ import type {
   TaskVerificationCheck,
   TaskVerificationContext,
 } from './task-executor.ts';
+import {
+  groupHasLiveMember,
+  signalProcessGroup,
+} from '../../../../src/process_group.js';
 
 const exec = promisify(execFile);
 const READ_TOOLS = new Set(['read_file', 'ls', 'glob', 'grep']);
@@ -322,26 +326,15 @@ async function stopOwned(child: ChildProcess): Promise<void> {
     );
     return;
   }
-  const running = async () => {
-    const rows = (
-      await exec('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf8' })
-    ).stdout;
-    return rows.split('\n').some((row) => {
-      const [group, state] = row.trim().split(/\s+/);
-      return Number(group) === child.pid && state && !state.startsWith('Z');
-    });
-  };
-  const kill = (signal: NodeJS.Signals) => {
-    try {
-      process.kill(-child.pid!, signal);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-    }
-  };
+  const running = () => groupHasLiveMember(child.pid!);
+  // A group whose members exited between the check and the signal has
+  // stopped; macOS refuses to signal it (EPERM) rather than ignoring it.
+  const kill = (signal: NodeJS.Signals) =>
+    signalProcessGroup(child.pid!, signal);
   if (!(await running())) return;
-  kill('SIGTERM');
+  await kill('SIGTERM');
   await delay(100);
-  if (await running()) kill('SIGKILL');
+  if (await running()) await kill('SIGKILL');
   const deadline = Date.now() + 3000;
   while (await running()) {
     if (Date.now() > deadline)

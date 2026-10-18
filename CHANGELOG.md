@@ -20,6 +20,16 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **F12 and ctrl+shift+I work from the address bar.** They used to need a click on the page first, and the first F12 after the address bar gained focus did nothing until the field was clicked again. They open and close the developer tools while the keyboard is in the browser panel, and only then. In the editor, F12 stays go to definition.
 - **The project resources note stays on the changes panel.** On a new session it was drawn above every inspector panel, including the browser, and pushed the page down. It belongs to Changes, which is the panel that pauses until a conversation starts.
 
+## 1.8.1 - 2026-10-18
+
+### Fixed
+
+- **The upgrade notice links to the release it names.** After a patch release the notice is still titled with the release whose changes it lists, such as 1.8.0, but its link opened the patch's notes, which do not describe them. It now opens that release's notes.
+- **Saving in the desktop editor no longer says the file changed on disk when only your own saves changed it.** When your saves kept finishing while the editor read the file back, it gave up after three reads and showed `file changed on disk; your changes are kept`. It now reads again until a read is not overtaken, and asks you to reopen the file only after 10 seconds of saves overtaking it.
+- **On macOS, a task's verification no longer fails with `Verification process cleanup failed` after its commands passed.** macOS refuses to signal a process group whose processes have all exited but are not yet cleaned up; the verification now counts that as stopped when no live process is left, as closing a session already did.
+- **The daily update check no longer takes back an update you started.** When it answered after you had chosen check now and update, settings could offer the update again while it downloaded or once it was ready, and update then downloaded it again. A check's answer now counts only when nothing else changed the update meanwhile.
+- **On Windows, the desktop update's installer no longer holds Circle's network ports while the new version installs.** Its hidden PowerShell inherited Circle's sockets and kept them until it had started Circle again, so a Circle started with `--remote-debugging-port` could come back without that port. The installer that runs is the one of the version you update from, so this applies to updates from 1.8.1 on.
+
 ## 1.8.0 - 2026-10-18
 
 ### Added

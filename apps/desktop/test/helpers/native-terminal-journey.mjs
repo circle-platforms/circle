@@ -121,8 +121,8 @@ export async function runNativeTerminalJourney({
       ));
   const until =
     injectedUntil ??
-    (async (predicate, label) => {
-      const deadline = Date.now() + patience(20000);
+    (async (predicate, label, ms = 20000) => {
+      const deadline = Date.now() + patience(ms);
       while (Date.now() < deadline) {
         if (await predicate()) return;
         await page.waitForTimeout(40);
@@ -363,6 +363,9 @@ export async function runNativeTerminalJourney({
           )),
         ),
       'real managed HTTP service ready by both port and log',
+      // Longer than the service's own 30 s readiness limit, so the journey
+      // sees the service's outcome rather than giving up before it.
+      40000,
     );
     created.push(service.id);
     const response = async () => {

@@ -70,6 +70,12 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      # The pinned developer tools (Node, gh, js-debug) from an earlier run, so a build does
+      # not download them again; each is used only while its receipt matches it
+      - uses: actions/cache@v6
+        with:
+          path: apps/desktop/dist/tools
+          key: developer-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/scripts/developer-toolchain.mjs') }}
       # Electron 44 resolves its development binary lazily, after npm ci.
       - name: Resolve the development Electron binary before configuring its sandbox
         run: node -e "console.log(require('./apps/desktop/node_modules/electron'))"
@@ -197,6 +203,12 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      # The pinned developer tools (Node, gh, js-debug) from an earlier run, so a build does
+      # not download them again; each is used only while its receipt matches it
+      - uses: actions/cache@v6
+        with:
+          path: apps/desktop/dist/tools
+          key: developer-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/scripts/developer-toolchain.mjs') }}
       - name: Install the WiX Toolset
         if: runner.os == 'Windows'
         shell: pwsh
