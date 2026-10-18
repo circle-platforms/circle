@@ -52,6 +52,8 @@ const MAC_WINDOWS = `function run(argv) {
 // it; the main screen is copied as it shows.
 const WINDOWS_SHOT = [
   "$ErrorActionPreference = 'Stop'",
+  // Window and app names reach Circle in UTF-8, not in the console's code page.
+  '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
   'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
   'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class CircleWindow { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect); [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window); [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags); public struct Rect { public int Left, Top, Right, Bottom; } }\'',
   '[CircleWindow]::SetProcessDPIAware() | Out-Null',
