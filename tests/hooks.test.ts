@@ -42,6 +42,17 @@ function nodeCommand(script: string): string {
   return `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`;
 }
 
+// A hook that writes to stderr and exits 1 without reading its input, in any
+// system shell (cmd.exe does not take `;` between commands).
+function failingCommand(dir: string, message: string): string {
+  const script = join(dir, `fail-${message.replace(/\W+/g, '-')}.mjs`);
+  writeFileSync(
+    script,
+    `process.stderr.write(${JSON.stringify(message + '\n')});\nprocess.exit(1);\n`,
+  );
+  return nodeCommand(script);
+}
+
 function writeJson(path: string, value: unknown): void {
   mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, JSON.stringify(value, null, 2));
@@ -350,7 +361,9 @@ test('a hook that exits without reading its input denies instead of crashing on 
   const { home, workspace, userHome } = layout(t);
   writeJson(join(home, 'hooks.json'), {
     hooks: {
-      before_tool: [{ name: 'deaf', command: 'echo broken hook >&2; exit 1' }],
+      before_tool: [
+        { name: 'deaf', command: failingCommand(workspace, 'broken hook') },
+      ],
     },
   });
   const runner = new HookRunner(
@@ -606,7 +619,7 @@ test('gating output that is not JSON denies, and a non-gating failure only notif
       after_tool: [
         {
           name: 'lint',
-          command: 'echo lint failed >&2; exit 1',
+          command: failingCommand(workspace, 'lint failed'),
           tools: 'write_file',
         },
       ],
@@ -683,7 +696,7 @@ test('a failed after_tool hook notifies without giving the model its error text'
       after_tool: [
         {
           name: 'lint',
-          command: 'echo private lint detail >&2; exit 1',
+          command: failingCommand(dirs.workspace, 'private lint detail'),
           tools: 'read_file',
         },
       ],
