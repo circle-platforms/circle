@@ -13,6 +13,7 @@ import { DeliveryCyclePanel } from './DeliveryCyclePanel';
 import { appendTerminalSelection } from '../model/terminal-context';
 import { workspaceCall } from '../model/workspace-client';
 import { developerToolsEnabled } from '../plugins/developer';
+import { activityTabWhenDebugHidden, forcedActivityTab } from './activity-tabs';
 import type { TerminalReplay } from '../../../desktop/src/workspace/terminal';
 const NativeTerminal = lazy(() =>
   import('../components/NativeTerminal').then((m) => ({
@@ -74,16 +75,20 @@ export function WorkspacePanelContents({
     setTab(next);
   };
   useEffect(() => {
-    if (kind === 'activity' && selection.startsWith('task:')) select('tasks');
-    else if (
-      kind === 'activity' &&
-      showDebug &&
-      (selection === 'debug' || debugSourceRequest)
-    )
-      select('debug');
-    else if (kind === 'activity' && !showDebug && tab === 'debug')
-      select('original');
-  }, [kind, selection, debugSourceRequest?.id, showDebug, tab]);
+    const forced = forcedActivityTab({
+      kind,
+      selection,
+      showDebug,
+      hasSourceRequest: !!debugSourceRequest,
+    });
+    if (forced) select(forced);
+    // The current tab is intentionally not a dependency: after a debug-file
+    // request the person can still open tasks or the activity list.
+  }, [kind, selection, debugSourceRequest?.id, showDebug]);
+  useEffect(() => {
+    const next = activityTabWhenDebugHidden(kind, showDebug, tab);
+    if (next) select(next);
+  }, [kind, showDebug, tab]);
   const tabs =
     kind === 'terminal'
       ? [
