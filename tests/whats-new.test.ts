@@ -16,6 +16,7 @@ import {
   noticeLocale,
   notesSince,
   releaseNotesUrl,
+  WHATS_NEW_ITEMS,
 } from '../src/whats_new.js';
 import {
   circleHasHistory,
@@ -27,7 +28,7 @@ import {
 } from '../src/whats_new_state.js';
 import { whatsNewRows } from '../src/tui/whats_new_rows.js';
 import { stripAnsi } from '../src/ink/string_width.js';
-import { VERSION } from '../src/version.js';
+import { compareVersions, VERSION } from '../src/version.js';
 import { cleanup, scratch } from './helpers.js';
 
 test('notes cover the releases after the one last seen', () => {
@@ -40,6 +41,11 @@ test('notes cover the releases after the one last seen', () => {
   assert.equal(notesSince('0.5.0', '1.6.0', hub).length, 0);
   assert.equal(notesSince('1.7.4', '1.8.0', hub).length, 1);
   assert.equal(notesSince('1.8.0', '1.8.0', hub).length, 0);
+  // A patch release after the newest item names that release and its notes.
+  const patch = noticeFor('1.8.1', notesSince('1.7.4', '1.8.1', hub));
+  assert.match(patch!.title.en, /what's new in 1\.8\.0$/);
+  assert.equal(patch!.version, '1.8.1');
+  assert.equal(patch!.link, releaseNotesUrl('1.8.0'));
   const notice = noticeFor('1.7.4', notesSince('1.6.0', '1.7.4', hub));
   assert.equal(notice?.link, releaseNotesUrl('1.7.4'));
   assert.equal(notice?.link.includes('blob/main'), false);
@@ -115,8 +121,17 @@ test('a first run records the version and an upgrade shows the notice once', (t)
   writeFileSync(join(home, 'credentials.json'), '{}\n');
   const notice = pendingWhatsNew(home, VERSION, '');
   assert.equal(notice?.version, VERSION);
-  assert.match(notice!.title.en, new RegExp(VERSION));
-  assert.match(notice!.title['zh-CN'], new RegExp(VERSION));
+  // A patch release adds no item, so the notice names the newest release that
+  // did, which is not always the running version.
+  const newest = WHATS_NEW_ITEMS.map((item) => item.since)
+    .sort(compareVersions)
+    .at(-1)!;
+  assert.match(notice!.title.en, new RegExp(newest.replaceAll('.', '\\.')));
+  assert.match(
+    notice!.title['zh-CN'],
+    new RegExp(newest.replaceAll('.', '\\.')),
+  );
+  assert.equal(notice!.link, releaseNotesUrl(newest));
   assert.equal(hadCircleServer(home), false);
   assert.equal(
     notice!.items.some((item) => /circle-server/.test(item.en)),
