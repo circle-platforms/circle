@@ -149,7 +149,13 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               offset,
               limit,
             )
-          : await readTextWindow(path, offset, limit, context.signal);
+          : await readTextWindow(
+              path,
+              offset,
+              limit,
+              context.signal,
+              sandbox.isJobOutput(path),
+            );
       read.add(path);
       return content;
     },
