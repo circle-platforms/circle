@@ -1,14 +1,21 @@
 name: release
 
-# Every push to main builds the runtime-inclusive package on six targets and smoke-tests it:
-# install, relocation, upgrade, checksum rejection, the default location, a real tool turn.
-# It also packages the desktop application on four targets and runs each package; on Windows it
-# also builds the MSI, installs it and removes it again.
+# Every push to main runs the whole check and builds the runtime-inclusive package on six targets
+# and smoke-tests it: install, relocation, upgrade, checksum rejection, the default location, a
+# real tool turn. It also packages the desktop application on four targets and runs the desktop
+# journeys on each package; on Windows it also builds the MSI, installs it and removes it again.
 # A pull request runs it only when it changes how Circle is packaged or installed; the Check
-# workflow builds and smoke-tests the Linux package for every other one, and the Desktop
-# workbench workflow packages the desktop application.
-# Push a tag vX.Y.Z and the same run publishes one GitHub Release once every target passed.
-# Steps to cut one: docs/development/releasing.md. A manual run never publishes.
+# workflow builds and smoke-tests the Linux package for every other one and launches the packaged
+# desktop application, and the Desktop workbench workflow runs its journeys.
+# A tag vX.Y.Z verifies what it publishes instead of testing the code again, which main did
+# before the tag: the version agrees with the tag, each package is built and smoke-tested, each
+# desktop package is launched and, on macOS and Linux, updates itself, and the MSI installs and
+# is removed. The release exists as a draft from the start; publish puts every package that
+# passed in it and publishes it once all of its files are there. A target that failed leaves the
+# draft unpublished, and re-running the failed jobs finishes it.
+# A manual run never publishes. With rehearse it goes through a tag's steps without a tag: it
+# fills a draft named rehearsal-<run> and deletes it at the end.
+# Steps to cut a release: docs/development/releasing.md.
 
 on:
   push:
@@ -39,6 +46,11 @@ on:
       - '.github/release-install.md'
       - '.github/workflows/release.yml'
   workflow_dispatch:
+    inputs:
+      rehearse:
+        description: Go through a tag's steps with a draft release that is deleted at the end
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -75,6 +87,9 @@ jobs:
           {"runner": "windows-11-arm", "target": "windows-arm64"}
           ]') }}
     runs-on: ${{ matrix.runner }}
+    env:
+      # A tag (or its rehearsal) verifies the package; the check ran on main before the tag
+      VERIFY_ONLY: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.rehearse == true }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -83,23 +98,32 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Tag, version files and changelog agree
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.VERIFY_ONLY == 'true'
         shell: bash
-        run: npm run -s release -- --check "${GITHUB_REF_NAME#v}"
-      - run: npm run check
-      - run: npm run format:check
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then version="$(node -p "require('./package.json').version")"; fi
+          npm run -s release -- --check "$version"
+      - if: env.VERIFY_ONLY != 'true'
+        run: npm run check
+      - if: env.VERIFY_ONLY != 'true'
+        run: npm run format:check
+      - if: env.VERIFY_ONLY == 'true'
+        run: npm run build
       - run: npm run release:build
       - run: npm run release:smoke
+      # Kept for a week, so the failed jobs of a tag's run can still be re-run days later
       - uses: actions/upload-artifact@v7
         with:
           name: circle-${{ matrix.target }}
           path: .tmp/release/*
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7
 
   # The desktop application, built and run as a user gets it: a signed-ad-hoc .dmg on macOS,
   # an .msi on Windows, a .tar.gz on Linux, each started from the package before it is
-  # published. The MSI holds the packaged folder; it is installed and removed here.
+  # published. The MSI holds the packaged folder; it is installed and removed here. A tag's run
+  # launches each package and updates it; main also runs the desktop journeys on it.
   desktop:
     name: desktop (${{ matrix.target }})
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -119,6 +143,9 @@ jobs:
           {"runner": "ubuntu-24.04", "target": "linux-x64", "app": "Circle-linux-x64", "executable": "Circle-linux-x64/Circle"}
           ]') }}
     runs-on: ${{ matrix.runner }}
+    env:
+      # A tag (or its rehearsal) verifies the packages; the journeys ran on main before the tag
+      VERIFY_ONLY: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.rehearse == true }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -132,6 +159,12 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      # The pinned developer tools (Node, gh, js-debug) from an earlier run, so a build does
+      # not download them again; each is used only while its receipt matches it
+      - uses: actions/cache@v6
+        with:
+          path: apps/desktop/dist/tools
+          key: developer-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/scripts/developer-toolchain.mjs') }}
       - name: Install the WiX Toolset
         if: runner.os == 'Windows'
         shell: pwsh
@@ -140,25 +173,33 @@ jobs:
           dotnet tool install --global wix --version 5.0.2
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
-      - run: npm --prefix apps/workbench test
+      - if: env.VERIFY_ONLY != 'true'
+        run: npm --prefix apps/workbench test
+      # What a display needs on Linux, for the application from source and packaged
+      - name: Install the Linux display
+        if: runner.os == 'Linux'
+        timeout-minutes: 8
+        run: |
+          timeout 180 sudo apt-get update -o Acquire::Retries=1
+          timeout 240 sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
       # Runtime discovery includes the real Electron sandbox guard. Configure
       # its development binary before runtime tests, not only the packaged app.
       - name: Prepare the Linux development display and Chromium sandbox
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && env.VERIFY_ONLY != 'true'
         shell: bash
         run: |
           node -e "console.log(require('./apps/desktop/node_modules/electron'))"
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
           Xvfb :99 -screen 0 1920x1080x24 > "$RUNNER_TEMP/circle-release-xvfb.log" 2>&1 &
           echo 'DISPLAY=:99' >> "$GITHUB_ENV"
           helper="$GITHUB_WORKSPACE/apps/desktop/node_modules/electron/dist/chrome-sandbox"
           sudo chown root:root "$helper"
           sudo chmod 4755 "$helper"
-      - run: npm --prefix apps/desktop run test:runtime
+      - if: env.VERIFY_ONLY != 'true'
+        run: npm --prefix apps/desktop run test:runtime
         # Bound leaked native handles without forcing tests to report success.
         timeout-minutes: 20
       - run: npm --prefix apps/desktop run package
+        timeout-minutes: 20
       # Built and installed before the packaged folder is started, so both hold exactly what
       # package wrote
       - name: Build the MSI
@@ -231,32 +272,54 @@ jobs:
           if ((Get-Content "$data\msi-smoke.txt") -ne 'kept') { throw 'removing Circle changed its data folder' }
           Remove-Item "$data\msi-smoke.txt"
           if ($created) { Remove-Item $data }
-      - name: Run the packaged application
+      - name: Prepare the packaged application on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+          executable="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
+          # As a user who only unpacked the archive starts it
+          timeout 20 xvfb-run -a "$executable" 2>&1 | head -20 || true
+          # Chromium's sandbox helper must belong to root and be setuid where unprivileged
+          # user namespaces are restricted (Ubuntu 24.04 and later)
+          helper="$(dirname "$executable")/chrome-sandbox"
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
+      # The window, the bridge to the main process, a turn against a local model, a clean quit
+      - name: Start the packaged application
+        timeout-minutes: 8
         shell: bash
         run: |
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
           export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
           run=()
-          if [ "$RUNNER_OS" = Linux ]; then
-            sysctl kernel.apparmor_restrict_unprivileged_userns || true
-            # As a user who only unpacked the archive starts it
-            timeout 20 xvfb-run -a "$CIRCLE_DESKTOP_EXECUTABLE" 2>&1 | head -20 || true
-            # Chromium's sandbox helper must belong to root and be setuid where unprivileged
-            # user namespaces are restricted (Ubuntu 24.04 and later)
-            helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
-            sudo chown root:root "$helper"
-            sudo chmod 4755 "$helper"
-            run=(xvfb-run -a)
-          fi
+          if [ "$RUNNER_OS" = Linux ]; then run=(xvfb-run -a); fi
+          "${run[@]}" npm --prefix apps/desktop run test:launch
+      - name: Run the desktop journeys on the package
+        if: env.VERIFY_ONLY != 'true'
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
+          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
+          run=()
+          if [ "$RUNNER_OS" = Linux ]; then run=(xvfb-run -a); fi
           "${run[@]}" npm --prefix apps/desktop run test:desktop
           "${run[@]}" npm --prefix apps/desktop run test:live
-          # It updates itself to a newer package: the bundle on macOS, the unpacked folder
-          # on Linux. The installed MSI's update on Windows runs in the Desktop workbench workflow
-          # only: a runner machine that stops answering under it, as some did while Windows
-          # Installer used Restart Manager (#45), must not hold a release.
-          if [ "$RUNNER_OS" != Windows ]; then
-            "${run[@]}" npm --prefix apps/desktop run test:update
-          fi
+      # It updates itself to a newer package: the bundle on macOS, the unpacked folder on Linux.
+      # The installed MSI's update on Windows runs in the Desktop workbench workflow only: a
+      # runner machine that stops answering under it, as some did while Windows Installer used
+      # Restart Manager (#45), must not hold a release.
+      - name: Update the packaged application
+        if: runner.os != 'Windows'
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
+          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
+          run=()
+          if [ "$RUNNER_OS" = Linux ]; then run=(xvfb-run -a); fi
+          "${run[@]}" npm --prefix apps/desktop run test:update
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -270,7 +333,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: failure() && runner.os == 'Windows'
         with:
-          name: circle-desktop-msi-logs
+          # Not circle-*: publish takes every circle-* artifact as a release asset
+          name: verification-desktop-msi-logs
           path: ${{ runner.temp }}/msi-*.log
           if-no-files-found: ignore
           retention-days: 7
@@ -279,14 +343,21 @@ jobs:
           name: circle-desktop-${{ matrix.target }}
           path: apps/desktop/out/circle-desktop-*
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7
 
-  publish:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [build, desktop]
+  # A tag's release exists as a draft from the start, with its notes: publish fills it and
+  # publishes it once every file is there. A tag that already has a published release fails
+  # here within a minute, and nothing is published. A rehearsal makes a draft named
+  # rehearsal-<run>.
+  draft:
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.rehearse == true
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.draft.outputs.tag }}
+      version: ${{ steps.draft.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -294,57 +365,121 @@ jobs:
           node-version: '24.21.0'
           cache: npm
       - run: npm ci
+      - id: draft
+        name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            version="$(node -p "require('./package.json').version")"
+            tag="rehearsal-$GITHUB_RUN_ID"
+          else
+            version="${GITHUB_REF_NAME#v}"
+            tag="$GITHUB_REF_NAME"
+          fi
+          npm run -s release -- --check "$version"
+          {
+            npm run -s release -- --notes "$version"
+            echo
+            sed -e "s/@VERSION@/${version}/g" -e "s|@REPO@|${GITHUB_REPOSITORY}|g" \
+                -e "s|@TAG@|${tag}|g" .github/release-install.md
+          } > notes.md
+          if gh release view "$tag" --json isDraft > existing-release.json 2>/dev/null; then
+            node -e 'if (!JSON.parse(require("fs").readFileSync("existing-release.json")).isDraft) throw Error("refusing to overwrite a published release")'
+            gh release edit "$tag" --notes-file notes.md
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Circle $version (rehearsal)" --notes-file notes.md
+          else
+            gh release create "$tag" --verify-tag --draft --title "Circle $version" --notes-file notes.md
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Every package that passed goes into the draft, even when another target failed; the
+  # release is published only once all 23 files are in it and match what was built.
+  # Re-running the failed jobs of the run builds what is missing and comes back here.
+  publish:
+    needs: [draft, build, desktop]
+    if: always() && needs.draft.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.draft.outputs.tag }}
+      VERSION: ${{ needs.draft.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
       # The packages only, not the checks' evidence
       - uses: actions/download-artifact@v7
         with:
           path: dist-release
           pattern: circle-*
           merge-multiple: true
-      - name: Checksums
+      - name: Put the packages that passed in the draft
+        shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist-release
+          cd dist-release
+          ls -l
+          if compgen -G 'circle-*.sha256' > /dev/null; then
+            sha256sum --check circle-*.sha256
+            gh release upload "$TAG" circle-* --clobber
+          fi
+      - name: Every package is in the draft
+        shell: bash
+        run: |
+          expected=()
           for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
-            test -s "dist-release/circle-$VERSION-$target.tar.gz"
-            test -s "dist-release/circle-$VERSION-$target.tar.gz.sha256"
+            expected+=("circle-$VERSION-$target.tar.gz")
           done
           for target in windows-x64 windows-arm64; do
-            test -s "dist-release/circle-$VERSION-$target.zip"
-            test -s "dist-release/circle-$VERSION-$target.zip.sha256"
+            expected+=("circle-$VERSION-$target.zip")
           done
           for asset in darwin-arm64.dmg darwin-x64.dmg windows-x64.msi linux-x64.tar.gz; do
-            test -s "dist-release/circle-desktop-$VERSION-$asset"
-            test -s "dist-release/circle-desktop-$VERSION-$asset.sha256"
+            expected+=("circle-desktop-$VERSION-$asset")
+          done
+          gh release view "$TAG" --json assets --jq '.assets[].name' > drafted.txt
+          missing=()
+          for name in "${expected[@]}"; do
+            for file in "$name" "$name.sha256"; do
+              grep -qxF "$file" drafted.txt || missing+=("$file")
+            done
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::the draft $TAG lacks ${missing[*]}; re-run the failed jobs of this run to build them"
+            exit 1
+          fi
+          # The checksums below are made from the packages themselves, so this run must have them
+          # all; artifacts are kept for a week
+          for name in "${expected[@]}"; do
+            if ! [ -s "dist-release/$name" ]; then
+              echo "::error::$name is in the draft but not in this run's artifacts; push the tag's run again"
+              exit 1
+            fi
           done
           test "$(ls dist-release | wc -l)" -eq 20
+      - name: Checksums and installers
+        run: |
           cp install.sh install.ps1 dist-release/
           cd dist-release
-          sha256sum --check circle-*.sha256
           sha256sum circle-*.tar.gz circle-*.zip circle-*.dmg circle-*.msi install.sh install.ps1 > SHA256SUMS
-          ls -l
-      - name: Release notes
+          gh release upload "$TAG" SHA256SUMS install.sh install.ps1 --clobber
+      - name: The draft holds exactly what was built
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          {
-            npm run -s release -- --notes "$VERSION"
-            echo
-            sed -e "s/@VERSION@/${VERSION}/g" -e "s|@REPO@|${GITHUB_REPOSITORY}|g" \
-                -e "s|@TAG@|${GITHUB_REF_NAME}|g" .github/release-install.md
-          } > notes.md
-      - name: Create the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$GITHUB_REF_NAME" --json isDraft > existing-release.json 2>/dev/null; then
-            node -e 'if (!JSON.parse(require("fs").readFileSync("existing-release.json")).isDraft) throw Error("refusing to overwrite a published release")'
-          else
-            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "Circle ${GITHUB_REF_NAME#v}" --notes-file notes.md
-          fi
-          gh release upload "$GITHUB_REF_NAME" dist-release/* --clobber
-          gh release view "$GITHUB_REF_NAME" --json assets > release-assets.json
+          gh release view "$TAG" --json assets > release-assets.json
           node -e '
             const fs = require("fs");
             const expected = Object.fromEntries(fs.readdirSync("dist-release").map((name) => [name, fs.statSync("dist-release/" + name).size]));
             const actual = Object.fromEntries(JSON.parse(fs.readFileSync("release-assets.json")).assets.map((asset) => [asset.name, asset.size]));
             require("assert").deepStrictEqual(actual, expected);
+            console.log(Object.keys(actual).length + " files");
           '
-          gh release edit "$GITHUB_REF_NAME" --draft=false --latest --notes-file notes.md
+      - name: Publish the release
+        if: github.event_name == 'push'
+        run: gh release edit "$TAG" --draft=false --latest
+      - name: Delete the rehearsal's draft
+        if: always() && github.event_name == 'workflow_dispatch'
+        run: gh release delete "$TAG" --yes

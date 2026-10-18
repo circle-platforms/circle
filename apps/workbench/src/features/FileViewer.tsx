@@ -525,9 +525,12 @@ export function FileViewer({
             continue;
           }
           const readCurrent = async () => {
-            // Recheck a snapshot overtaken by our own save, but never spin
-            // indefinitely under continuous writes. A newer event supersedes us.
-            for (let attempt = 0; attempt < 3; attempt++) {
+            // A save of ours that finishes during the read makes the read
+            // stale: read again. Saves finish, so this settles; a newer event
+            // supersedes it, and only saves that keep overtaking it for this
+            // long ask for the file to be reopened.
+            const deadline = Date.now() + 10_000;
+            for (;;) {
               if (!alive || reads.get(target) !== readVersion) return;
               const baselineRevision = editorDocuments.get(uri)?.revision;
               const document = await workspaceCall<EditorDocument>(
@@ -537,8 +540,11 @@ export function FileViewer({
                 { path: target },
               );
               if (!alive || reads.get(target) !== readVersion) return;
-              if (editorDocuments.get(uri)?.revision !== baselineRevision)
+              if (editorDocuments.get(uri)?.revision !== baselineRevision) {
+                if (Date.now() > deadline)
+                  throw Error(t('the file changed while saving; reopen it'));
                 continue;
+              }
               const pending = [...inFlightSaves.current.values()].find(
                 (flight) => flight.writes.has(uri),
               );
@@ -577,7 +583,6 @@ export function FileViewer({
               }
               return;
             }
-            throw Error(t('file changed on disk; your changes are kept'));
           };
           void readCurrent().catch((cause) => {
             if (alive && reads.get(target) === readVersion && target === path)

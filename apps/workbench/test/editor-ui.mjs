@@ -1173,6 +1173,59 @@ try {
   await switched.getByText('all changes saved', { exact: true }).waitFor();
   assert.equal(readFileSync(join(workspace, 'main.ts'), 'utf8'), initial);
   console.log('A clean buffer refreshes to a write made during its own save');
+  // A read overtaken by several of our own saves in a row still settles, and
+  // never reports a change on disk that is only our own saves.
+  releaseHeldRead = undefined;
+  await switched.evaluate(() =>
+    fetch('/__editor_workspace?hold-read=1', { method: 'POST' }),
+  );
+  for (let round = 1; round <= 3; round++) {
+    await settle(() => !!releaseHeldRead, `read ${round} is held`);
+    const content = initial + `// overtaking save ${round}\n`;
+    await replaceDraft(content);
+    await switched.getByRole('button', { name: 'save', exact: true }).click();
+    await diskUntil('main.ts', (text) => text === content);
+    await switched.getByText('all changes saved', { exact: true }).waitFor();
+    const release = releaseHeldRead;
+    releaseHeldRead = undefined;
+    // Hold the next attempt too, until the last round.
+    if (round < 3)
+      await switched.evaluate(() =>
+        fetch('/__editor_workspace?hold-read=1', { method: 'POST' }),
+      );
+    const before = mainReads;
+    release();
+    if (round < 3)
+      await settle(() => mainReads > before, `read ${round + 1} starts`);
+  }
+  const settledReads = mainReads;
+  await settle(
+    () => mainReads > settledReads,
+    'the read overtaken three times is read again',
+  );
+  await switched.waitForTimeout(300);
+  assert.equal(
+    await switched
+      .getByText('file changed on disk; your changes are kept')
+      .count(),
+    0,
+    'our own saves are no change on disk',
+  );
+  await switched.getByText('all changes saved', { exact: true }).waitFor();
+  await switched.evaluate(() =>
+    fetch('/__editor_workspace?resume-events=1', { method: 'POST' }),
+  );
+  await switched
+    .getByRole('button', { name: 'edit', exact: true })
+    .click()
+    .catch(() => {});
+  await replaceDraft(initial);
+  await switched.getByRole('button', { name: 'save', exact: true }).click();
+  await switched.getByText('all changes saved', { exact: true }).waitFor();
+  assert.equal(readFileSync(join(workspace, 'main.ts'), 'utf8'), initial);
+  console.log(
+    'A read overtaken by several own saves settles without a false change notice',
+  );
   await appendTo('x');
   await switched.evaluate(() =>
     fetch('/__editor_workspace?touch=1', { method: 'POST' }),
