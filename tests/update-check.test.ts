@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -288,8 +296,35 @@ function installed(t: Parameters<typeof scratch>[0]) {
   });
   return { root: join(prefix, 'versions', VERSION), seen };
 }
-const updateFolders = (): string[] =>
-  readdirSync(tmpdir()).filter((name) => name.startsWith('circle-update-'));
+// The update's temporary folders go to a folder of this test's own, so another program's
+// circle-update-* folders in the system temporary folder cannot change what is counted.
+function privateTemp(t: Parameters<typeof scratch>[0]): {
+  folders: () => string[];
+  neighbour: () => void;
+} {
+  const shared = tmpdir();
+  const own = join(scratch(t), 'tmp');
+  mkdirSync(own);
+  const names = ['TMPDIR', 'TEMP', 'TMP'] as const;
+  const saved = names.map((name) => process.env[name]);
+  for (const name of names) process.env[name] = own;
+  cleanup(t, () =>
+    names.forEach((name, index) => {
+      if (saved[index] === undefined) delete process.env[name];
+      else process.env[name] = saved[index];
+    }),
+  );
+  assert.equal(tmpdir(), own);
+  return {
+    folders: () =>
+      readdirSync(own).filter((name) => name.startsWith('circle-update-')),
+    // Stands for another test runner creating and removing a similarly named folder.
+    neighbour: () =>
+      rmSync(mkdtempSync(join(shared, 'circle-update-preflight-')), {
+        recursive: true,
+      }),
+  };
+}
 
 test('circle update downloads the release itself, showing how far it got, and hands it to the installer', async (t) => {
   const { root, seen } = installed(t);
@@ -297,11 +332,14 @@ test('circle update downloads the release itself, showing how far it got, and ha
   const archive = new Uint8Array(300_000).fill(3);
   const asked: string[] = [];
   const shown = screen();
-  const before = updateFolders();
+  const temp = privateTemp(t);
   const code = await updateInstalled(
     ['99.0.0'],
     async (url) => {
       asked.push(String(url));
+      // The update's own download folder is the one counted, and another runner's is not.
+      assert.equal(temp.folders().length, 1);
+      temp.neighbour();
       return String(url).endsWith('.sha256')
         ? new Response(`${'a'.repeat(64)}  ${asset}\n`)
         : slowly([archive.subarray(0, 100_000), archive.subarray(100_000)], {
@@ -326,12 +364,12 @@ test('circle update downloads the release itself, showing how far it got, and ha
   );
   assert.equal(readFileSync(join(seen, 'version'), 'utf8'), '99.0.0');
   assert.equal(existsSync(readFileSync(join(seen, 'folder'), 'utf8')), false);
-  assert.deepEqual(updateFolders(), before);
+  assert.deepEqual(temp.folders(), []);
 });
 
 test('ctrl+c during the download of circle update stops it and leaves nothing behind', async (t) => {
   const { root, seen } = installed(t);
-  const before = updateFolders();
+  const temp = privateTemp(t);
   const listeners = process.listeners('SIGINT');
   const update = updateInstalled(
     ['99.0.0'],
@@ -341,6 +379,8 @@ test('ctrl+c during the download of circle update stops it and leaves nothing be
         .listeners('SIGINT')
         .filter((listener) => !listeners.includes(listener));
       assert.equal(added.length, 1);
+      assert.equal(temp.folders().length, 1);
+      temp.neighbour();
       setTimeout(() => added[0]!('SIGINT'), 50);
       return slowly([new Uint8Array(10)], { end: false, signal: init?.signal });
     },
@@ -348,7 +388,7 @@ test('ctrl+c during the download of circle update stops it and leaves nothing be
   );
   await assert.rejects(update, /update cancelled/);
   assert.deepEqual(process.listeners('SIGINT'), listeners);
-  assert.deepEqual(updateFolders(), before);
+  assert.deepEqual(temp.folders(), []);
   assert.equal(existsSync(seen), false);
 });
 
