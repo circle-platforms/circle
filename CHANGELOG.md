@@ -7,11 +7,18 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 ### Added
 
 - **Hooks.** A shell command in `hooks.json` can allow, deny or ask before a tool runs, check a tool's result, block the end of a turn until a loop limit, run when a session starts, or answer a permission request. A deny stands in every approval mode, including auto. An allow skips an ordinary approval and does not skip a call that always asks, a hard refusal, or read-only mode. On the gating events any non-zero exit, a timeout, or output that is not a JSON object is a deny; exit 2 is a deny too. A skill's hooks run only after that skill is loaded in the current session. A secret's value is `%NAME%` in what a hook can see. When an `after_tool` or `session_start` hook fails, the transcript keeps the error and the model is told only that the hook failed. Project hooks run only in a trusted folder. See [Hooks](docs/hooks.md).
+- **One work drawer beside the desktop conversation.** Overview, files, changes, tasks, browser, terminal and the other tools are labelled modes of the same drawer; choosing the open mode closes it. The overview shows the session's environment, context, outputs, changes and background tasks, and says unavailable rather than showing a zero it does not know. Switching modes keeps the open file, its unsaved text, the transcript's reading position and the draft.
+- **A file and Git tree that stays fast in large projects.** The project and Git trees draw only the rows you can see, work from the keyboard, and load the project page by page, saying when a listing is incomplete. The index beside a document can be resized by dragging or from the keyboard. Git shows read-only commit history, and clicking a file to read its diff no longer selects it for staging.
+- **Access to one file outside the project.** From the overview, the files index or settings, you can give the current conversation read or read and write access to one existing text file chosen in the system file picker. The access ends when you revoke it, when the conversation is archived or deleted, or when Circle quits, and it never covers the folder, other files, commands or MCP servers.
+- **Undo file changes on a message** previews the files a turn's text edits changed and restores them only after you confirm, when nothing else changed them since. It covers edits made by Circle's file tools in the running application, not commands or Git.
+- **Markdown files have a reading view** that shows the editor's current text, including unsaved changes.
 
 ### Changed
 
 - **Who has the desktop browser is the ring around the page.** The status line under the page is gone. The accent ring lights on the turn's first browser tool and stays lit until the turn ends, you take the browser, or the session stops, including while Circle is thinking and while an approval card is open (then it says **Waiting for your approval**). During an action it says **Circle is operating**, or **Waiting for Circle to stop…** after you take over. While you have the browser the border is the ordinary one and says **you have the browser**. **take over** is in the ⋮ menu for the whole time the ring is lit. The native page is drawn inside the ring, so the ring stays visible, and the page keeps its size when the ring thickens, so a screenshot's coordinates still land. The pointer mark on a click still flashes for that action only.
 - **Node debugging and TypeScript/JavaScript language features are the bundled developer extension**, labelled 开发者工具. It is off until you turn it on from the extensions page or with `/extensions enable developer`. The desktop switch applies at once. While it is off there is no debug tab and no debug-file button, the js-debug adapter is not started, and the editor has no go to definition, rename or diagnostics. The editor still opens, highlights syntax and saves with the version check. With the extension on, debugging and the language service behave as before.
+- **Desktop controls share one size, spacing and radius**, in the composer, approvals, settings, the document reader, the native tools and task evidence. Settings has a search box and an index of its sections.
+- **A task's checks show what really ran.** The independent verifier is given the worker's real command results, a failing command and its exit code stay visible, and a human review is labelled apart from an automatic check.
 
 ### Removed
 
@@ -40,6 +47,9 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **On Windows, stopping a command just after it started no longer leaves the program it started running.** `taskkill` ends the command's process tree as it finds it, so a program the shell was starting at that moment kept running and could keep the workspace folder in use. Circle now also ends what the stopped shell started while it ran.
 - **On Windows, a screenshot no longer waits for the C# compiler.** Each screenshot compiled a small helper with `Add-Type`, which took from seconds to more than the minute PowerShell is given on a busy machine, so the screenshot, or the answer that an app has no window open, ended with `PowerShell did not finish the screenshot in 60 seconds`. The helper's four Windows functions are now defined in memory without compiling.
 
+- **A disabled MCP server stays disconnected.**
+- **When the desktop's Circle runtime exits, running turns and tools are shown as stopped**, and stopping the debugger waits until its program and terminals have closed before it says stopped.
+- **Code checks follow the project's `tsconfig.json` options.**
 ## 1.8.1 - 2026-10-18
 
 ### Fixed

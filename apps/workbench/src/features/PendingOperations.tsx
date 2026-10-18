@@ -5,6 +5,7 @@ import { Button } from '../components/common';
 import { operationLabel } from '../model/operation-label';
 import { dateLocale, t } from '../i18n';
 import './task-panel.css';
+import './conversation-requests.css';
 
 /** Safe metadata only: request parameters and fingerprints never enter this view. */
 interface PendingOperation {
@@ -30,6 +31,7 @@ export function PendingOperations({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reviewError, setReviewError] = useState('');
   const [hasMore, setHasMore] = useState(false);
   const generation = useRef(0);
   async function refresh(epoch = generation.current, before?: number) {
@@ -52,6 +54,7 @@ export function PendingOperations({
     const epoch = ++generation.current;
     setRows([]);
     setNotes({});
+    setReviewError('');
     setError('');
     setBusy(false);
     void refresh(epoch);
@@ -67,7 +70,7 @@ export function PendingOperations({
     if (!note || busy) return;
     const epoch = generation.current;
     setBusy(true);
-    setError('');
+    setReviewError('');
     try {
       await workspaceCall(
         sessionId,
@@ -77,14 +80,15 @@ export function PendingOperations({
       );
       if (epoch === generation.current) await refresh(epoch);
     } catch (err) {
-      if (epoch === generation.current) setError(String(err));
+      if (epoch === generation.current) setReviewError(String(err));
     } finally {
       if (epoch === generation.current) setBusy(false);
     }
   }
   // Nothing to check: the panel shows no empty section for it.
-  if (!rows.length && !error) return null;
-  const diagnostic = (row: PendingOperation) =>
+  if (!rows.length && !error && !reviewError) return null;
+  const diagnostic = (row: PendingOperation) => {
+    const epoch = generation.current;
     void navigator.clipboard
       .writeText(
         JSON.stringify(
@@ -102,11 +106,15 @@ export function PendingOperations({
           2,
         ),
       )
-      .catch((err) => setError(String(err)));
+      .catch((err) => {
+        if (epoch === generation.current) setReviewError(String(err));
+      });
+  };
   return (
     <section
       className="task-operations panel-section"
       aria-label={t('needs your review')}
+      aria-busy={busy}
     >
       <header className="task-section-heading">
         <strong>
@@ -124,6 +132,11 @@ export function PendingOperations({
       {error && (
         <p role="alert">
           {t('could not load actions to review')}: {error}
+        </p>
+      )}
+      {reviewError && (
+        <p className="request-failure" role="alert">
+          {t('action failed')}: {reviewError}
         </p>
       )}
       {rows.map((row) => (

@@ -33,7 +33,7 @@ const deferStatus = () => {
 };
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
-  server: { host: '127.0.0.1', port: 0 },
+  server: { host: '127.0.0.1', port: 0, hmr: false },
   logLevel: 'error',
   plugins: [
     {
@@ -73,6 +73,8 @@ try {
       : {}),
   });
   const page = await browser.newPage();
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
   page.setDefaultTimeout(8000);
   await page.goto(`${server.resolvedUrls.local[0]}test/git-continuity-ui.html`);
   assert.equal(
@@ -175,10 +177,28 @@ try {
   console.log(
     'deferred refresh exposes busy/errors and drops stale session snapshots',
   );
+  // Viewing a file is independent from selecting paths for a mutation.
+  await panel.getByRole('treeitem', { name: 'first.txt', exact: true }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
+  assert.equal(
+    await page
+      .getByRole('checkbox', { name: 'first.txt', exact: true })
+      .isChecked(),
+    false,
+  );
   await page.getByRole('checkbox', { name: 'first.txt', exact: true }).check();
   await stage.click();
   await message.fill('First UI commit');
   await commit.click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
   await page
     .getByRole('checkbox', { name: 'first.txt', exact: true })
     .waitFor({ state: 'detached' });
@@ -191,6 +211,11 @@ try {
   await stage.click();
   await message.fill('Second UI commit');
   await commit.click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
   await page
     .getByRole('checkbox', { name: 'second.txt', exact: true })
     .waitFor({ state: 'detached' });
@@ -208,6 +233,216 @@ try {
   );
   assert.equal((await git.snapshot()).entries.length, 0);
   console.log('real React + Git: two consecutive explicit-file commits passed');
+  // Browse actual immutable Git objects while preserving an unrelated index.
+  await writeFile(join(repo, 'baseline.txt'), 'working copy stays here');
+  await writeFile(join(repo, 'selected.txt'), 'explicit selection');
+  await refresh.click();
+  const chosen = page.getByRole('checkbox', {
+    name: 'selected.txt',
+    exact: true,
+  });
+  await chosen.check();
+  await panel
+    .getByRole('treeitem', { name: 'baseline.txt', exact: true })
+    .click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
+  assert.equal(await chosen.isChecked(), true);
+  assert.equal(
+    await page
+      .getByRole('checkbox', { name: 'baseline.txt', exact: true })
+      .isChecked(),
+    false,
+  );
+  const beforeHistory = await git.snapshot();
+  const historyStart = requests.length;
+  await panel
+    .locator('summary')
+    .filter({ hasText: /^commits$/ })
+    .click();
+  const initial = panel
+    .locator('.native-git-commits button')
+    .filter({ hasText: 'Create baseline' });
+  await initial.click();
+  await panel
+    .getByRole('note')
+    .filter({ hasText: 'commit view is read-only' })
+    .waitFor();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
+  assert.equal(await panel.getByRole('checkbox').count(), 0);
+  assert.equal(await stage.count(), 0);
+  assert.equal(await commit.count(), 0);
+  assert.match(
+    await panel.getByLabel('git diff', { exact: true }).innerText(),
+    /\+baseline/,
+  );
+  const locate = panel.getByRole('button', {
+    name: 'search changed files',
+    exact: true,
+  });
+  await locate.click();
+  const locator = page.getByRole('combobox', { name: 'search changed files' });
+  const beforeSearch = requests.length;
+  await locator.fill('baseline');
+  assert.equal(
+    requests.length,
+    beforeSearch,
+    'quick locator queries stay local',
+  );
+  assert.equal(await page.getByRole('option').count(), 1);
+  assert.match(await page.getByRole('option').innerText(), /\+1/);
+  await locator.press('ArrowDown');
+  await locator.press('Enter');
+  await page.getByRole('dialog').waitFor({ state: 'detached' });
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'git diff',
+  );
+  await locate.click();
+  await page
+    .getByRole('combobox', { name: 'search changed files' })
+    .press('Escape');
+  await page.getByRole('dialog').waitFor({ state: 'detached' });
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute('aria-label') ===
+      'search changed files',
+  );
+  const filter = panel.getByRole('searchbox', { name: 'filter changed files' });
+  const readCount = requests.length;
+  await filter.fill('nothing-here');
+  await panel.getByText('no matching changed files', { exact: true }).waitFor();
+  assert.equal(
+    requests.length,
+    readCount,
+    'local filtering never calls runtime',
+  );
+  await filter.fill('baseline');
+  const indexToggle = panel.getByRole('button', {
+    name: 'change index',
+    exact: true,
+  });
+  const previewText = await panel
+    .getByLabel('git diff', { exact: true })
+    .innerText();
+  await indexToggle.click();
+  assert.equal(await filter.isVisible(), false);
+  assert.equal(
+    await panel.getByLabel('git diff', { exact: true }).innerText(),
+    previewText,
+  );
+  await indexToggle.click();
+  assert.equal(
+    await filter.inputValue(),
+    'baseline',
+    'index toggling preserves its local query',
+  );
+  await panel
+    .getByRole('treeitem', { name: 'baseline.txt', exact: true })
+    .click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
+  assert.deepEqual(
+    await git.snapshot(),
+    beforeHistory,
+    'history did not touch checkout/index',
+  );
+  assert.equal(await git.git(['show', 'HEAD:baseline.txt']), 'baseline');
+  assert.ok(
+    requests
+      .slice(historyStart)
+      .every((r) => ['history', 'commitDiff'].includes(r.payload.method)),
+    'browsing issued only readonly Git calls',
+  );
+  await panel.getByRole('button', { name: 'unstaged', exact: true }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
+  await filter.fill('');
+  assert.equal(
+    await chosen.isChecked(),
+    true,
+    'historical browsing preserves explicit operation selection',
+  );
+  console.log(
+    'readonly historical browsing, scoped local index and independent operation selection passed',
+  );
+  // The compact index is a dismissible resource overlay, never a cover over
+  // repository-wide actions or delivery, and choosing a file reveals its diff.
+  await message.fill('overlay keeps my draft');
+  await page.setViewportSize({ width: 500, height: 1000 });
+  const contextIndex = panel.locator('[data-context-index-resource="git"]');
+  await page.waitForFunction(() =>
+    document
+      .querySelector('[data-context-index-resource="git"]')
+      ?.hasAttribute('data-index-overlay'),
+  );
+  await panel.getByRole('tree', { name: 'changed files' }).focus();
+  const beforeDismiss = requests.length;
+  await page.keyboard.press('Escape');
+  assert.equal(await contextIndex.isVisible(), false);
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.getAttribute('aria-label'),
+    ),
+    'change index',
+  );
+  assert.equal(
+    requests.length,
+    beforeDismiss,
+    'dismissing the index never stops or changes a runtime resource',
+  );
+  const indexButton = panel
+    .locator('header.inspector-heading')
+    .getByRole('button', { name: 'change index', exact: true });
+  await indexButton.click();
+  await panel
+    .getByRole('treeitem', { name: 'baseline.txt', exact: true })
+    .click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'false',
+  );
+  assert.equal(
+    await contextIndex.isVisible(),
+    false,
+    'file selection exposes its diff at narrow widths',
+  );
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.getAttribute('aria-label'),
+    ),
+    'git diff',
+  );
+  assert.equal(await message.inputValue(), 'overlay keeps my draft');
+  await indexButton.click();
+  assert.equal(
+    await chosen.isChecked(),
+    true,
+    'overlay dismissal preserves explicit operation targets',
+  );
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  console.log(
+    'narrow index Escape/file selection restore accessible content, draft and operation targets',
+  );
+
   for (const [language, friendly, details] of [
     [
       'en',
@@ -250,6 +485,7 @@ try {
   console.log(
     'disconnected preview has localized next action and expandable original error',
   );
+  assert.deepEqual(pageErrors, [], 'the loaded React fixture must not throw');
 } finally {
   await browser?.close();
   await server.close();

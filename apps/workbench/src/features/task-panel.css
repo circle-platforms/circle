@@ -274,3 +274,73 @@
 .task-operations .task-operation:last-of-type {
   border-bottom: 0;
 }
+
+/* One task list, progressively disclosed evidence, then explicit review actions. */
+.task-panel .task-panel-toolbar {
+  margin-top: 0;
+  gap: var(--workbench-space-2, 8px);
+}
+.task-panel .tasks-list article + article {
+  border-top: 1px solid var(--border);
+}
+.task-panel .task-row {
+  padding-block: 10px;
+  min-height: 42px;
+}
+.task-panel .task-row:hover {
+  background: var(--hover);
+}
+.task-panel .task-detail {
+  padding-right: 8px;
+}
+.task-evidence-checks {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+.task-evidence-checks > li {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.task-evidence-heading {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.task-evidence-heading strong {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.task-evidence-source,
+.task-artifact-identity {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.task-evidence-text,
+.task-evidence pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-evidence pre {
+  font-family: var(--mono);
+  padding: 8px;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+.task-artifact-identity {
+  overflow-wrap: anywhere;
+}
+.task-panel .task-review {
+  margin-block: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--workbench-radius, 10px);
+  background: var(--surface);
+}
+.task-panel .task-review > .button {
+  width: 100%;
+}
+.task-panel .task-review .tasks-error {
+  color: var(--negative);
+}

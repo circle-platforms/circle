@@ -1,0 +1,68 @@
+/* Conversation requests share the work drawer's quiet, label-first surfaces. */
+.inline-request {
+  border-color: var(--border);
+  border-inline-start: 2px solid var(--attention);
+  border-radius: 10px;
+  background: var(--surface);
+  gap: 12px;
+}
+.inline-request > header {
+  align-items: baseline;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.inline-request > header svg {
+  align-self: center;
+}
+.inline-request > header strong {
+  font-family: inherit;
+  font-size: var(--ui-small);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.inline-request > header small {
+  overflow-wrap: anywhere;
+}
+.request-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.request-source code {
+  min-width: 0;
+  flex: 1;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+  font-size: var(--ui-small);
+}
+.request-source button {
+  flex-shrink: 0;
+}
+.request-failure {
+  margin: 0;
+  color: var(--negative);
+  overflow-wrap: anywhere;
+}
+.inline-request .request-explain {
+  flex-wrap: wrap;
+}
+.inline-request .approval-command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.inline-request[aria-busy='true'] {
+  cursor: progress;
+}
+.tool-summary {
+  min-width: 0;
+  text-align: start;
+  gap: 8px;
+}
+.tool-group[data-waiting] .tool-summary {
+  color: var(--fg);
+}
+.tool-summary > .attention-dot {
+  flex: 0 0 auto;
+  align-self: center;
+}

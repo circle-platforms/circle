@@ -86,6 +86,19 @@ export class Sandbox {
         `Denied by approval policy: '${name}' is a credential file`,
       );
   }
+  /** Whether a resolved path is in Circle's own output folder: offloaded history,
+   * large tool results and job output. */
+  isOffloadOutput(path: string): boolean {
+    if (!this.offloadRoot) return false;
+    const rel = relative(
+      resolvedTarget(resolve(this.offloadRoot)),
+      resolvedTarget(path),
+    );
+    return (
+      rel === '' ||
+      (rel !== '..' && !rel.startsWith('..' + sep) && !/^[A-Za-z]:/.test(rel))
+    );
+  }
   /** Whether a resolved path is in the folder of command and job output. */
   isJobOutput(path: string): boolean {
     if (!this.offloadRoot) return false;

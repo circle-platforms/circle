@@ -184,10 +184,16 @@ export function NativeBrowser({
     const update = () => {
       const node = viewport.current;
       const rect = node ? laidOutBrowserViewport(node) : null;
-      // Hidden, collapsed, or zero-size: the native view must leave the window.
-      // Returning here used to keep the last WebContentsView painted on top.
+      // Hidden, collapsed, zero-size, or a drawer mode that folds the page: the
+      // native view must leave the window. Returning here used to keep the last
+      // WebContentsView painted on top. Native surfaces do not inherit DOM
+      // visibility, so also release the page's keyboard ownership while
+      // retaining its tab and session.
       if (disposed || !node || !rect) {
-        void host.browserHide(id);
+        void host.browserHide(id).catch(() => {});
+        void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
+          () => {},
+        );
         return;
       }
       const ownDialog = node.closest('[role="dialog"]');

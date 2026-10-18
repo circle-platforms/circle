@@ -196,6 +196,7 @@ export function NativeCodeEditor({
   onSave,
   onNavigate,
   live,
+  visible = true,
 }: {
   workspaceId: string;
   sessionId: string;
@@ -206,12 +207,15 @@ export function NativeCodeEditor({
   readOnly: boolean;
   diff: boolean;
   live: boolean;
+  visible?: boolean;
   selection?: Range;
   onChange: (value: string) => void;
   onSave: () => void;
   onNavigate: (path: string, range?: Range) => Promise<void>;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const visibility = useRef(visible);
+  visibility.current = visible;
   const owner = JSON.stringify([workspaceId, sessionId, path]);
   const selectionIdentity = selection
     ? JSON.stringify([
@@ -379,7 +383,7 @@ export function NativeCodeEditor({
       editor.revealRangeInCenter(selection);
     }
     activeEditor.current = { owner, editor, selectionIdentity };
-    editor.focus();
+    if (visibility.current) editor.focus();
     editor.addCommand(
       monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
       () => callbacks.current.owner === owner && callbacks.current.onSave(),
@@ -671,6 +675,13 @@ export function NativeCodeEditor({
       themeWatcher.disconnect();
     };
   }, [workspaceId, sessionId, path, language, readOnly, diff, live]);
+  // Revealing a retained source view restores focus without replacing its model.
+  useLayoutEffect(() => {
+    if (visible) {
+      activeEditor.current?.editor.layout();
+      activeEditor.current?.editor.focus();
+    }
+  }, [visible]);
   // Source location updates reposition the existing view. Recreating it here
   // disposes transient widgets (notably Rename) after asynchronous navigation.
   useLayoutEffect(() => {
@@ -685,7 +696,7 @@ export function NativeCodeEditor({
     current.selectionIdentity = selectionIdentity;
     current.editor.setSelection(selection);
     current.editor.revealRangeInCenter(selection);
-    current.editor.focus();
+    if (visibility.current) current.editor.focus();
   }, [owner, selectionIdentity]);
   return <div className="native-code-editor" ref={container} />;
 }

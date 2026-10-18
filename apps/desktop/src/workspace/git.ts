@@ -48,6 +48,59 @@ export type GitSnapshot = {
   }[];
   merging: boolean;
 };
+export type GitHistory = {
+  head: string;
+  commits: {
+    id: string;
+    parents: string[];
+    author: string;
+    date: string;
+    subject: string;
+  }[];
+  offset: number;
+  hasMore: boolean;
+};
+export type GitCommitDiff = {
+  commit: string;
+  parent: string | null;
+  text: string;
+  entries: {
+    path: string;
+    status: string;
+    added?: number | null;
+    removed?: number | null;
+  }[];
+};
+function changedFiles(raw: string, stats?: string): GitCommitDiff['entries'] {
+  const counts = new Map(
+    (stats ?? '')
+      .split('\0')
+      .filter(Boolean)
+      .map((row) => {
+        const first = row.indexOf('\t'),
+          second = row.indexOf('\t', first + 1);
+        const added = row.slice(0, first),
+          removed = row.slice(first + 1, second);
+        return [
+          row.slice(second + 1),
+          {
+            added: added === '-' ? null : Number(added),
+            removed: removed === '-' ? null : Number(removed),
+          },
+        ] as const;
+      }),
+  );
+  const fields = raw.split('\0');
+  const entries: GitCommitDiff['entries'] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2)
+    if (fields[i] && fields[i + 1])
+      entries.push({
+        status: fields[i]!,
+        path: fields[i + 1]!,
+        ...counts.get(fields[i + 1]!),
+      });
+  return entries;
+}
 export interface GitInvocation {
   pushAuthentication?: GitPushAuthentication;
   signal?: AbortSignal;
@@ -89,7 +142,7 @@ export class GitWorkspaceService {
     const readonly =
       input === undefined &&
       (['rev-parse', 'status'].includes(args[0] ?? '') ||
-        (args[0] === 'diff' &&
+        (['diff', 'log', 'diff-tree'].includes(args[0] ?? '') &&
           !args.some((arg) => arg.startsWith('--output'))) ||
         (args.length === 4 &&
           args[0] === 'symbolic-ref' &&
@@ -126,7 +179,7 @@ export class GitWorkspaceService {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
       GIT_EDITOR: 'true',
-      ...(['status', 'diff'].includes(args[0] ?? '')
+      ...(['status', 'diff', 'log', 'diff-tree'].includes(args[0] ?? '')
         ? { GIT_OPTIONAL_LOCKS: '0' }
         : {}),
     };
@@ -752,6 +805,16 @@ export class GitWorkspaceService {
       throw Error('explicit repository-relative paths are required');
     return value as string[];
   }
+  private async commitId(value: unknown): Promise<string> {
+    if (
+      typeof value !== 'string' ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value)
+    )
+      throw Error('a full commit id is required');
+    return (
+      await this.git(['rev-parse', '--verify', `${value}^{commit}`])
+    ).trim();
+  }
   async call(
     method: string,
     params: Record<string, unknown> = {},
@@ -771,6 +834,107 @@ export class GitWorkspaceService {
       params = { ...params, action: 'discard' };
     }
     if (method === 'snapshot') return this.snapshot();
+    if (method === 'history') {
+      const limit = params.limit ?? 30,
+        offset = params.offset ?? 0;
+      if (
+        !Number.isInteger(limit) ||
+        Number(limit) < 1 ||
+        Number(limit) > 100 ||
+        !Number.isInteger(offset) ||
+        Number(offset) < 0 ||
+        Number(offset) > 100000
+      )
+        throw Error('invalid history page');
+      let head: string;
+      if (params.head !== undefined) head = await this.commitId(params.head);
+      else
+        head = (
+          await this.optionalGit(
+            ['rev-parse', '--verify', '--quiet', 'HEAD'],
+            1,
+            '',
+          )
+        ).trim();
+      if (!head)
+        return {
+          head: '',
+          commits: [],
+          offset: Number(offset),
+          hasMore: false,
+        } satisfies GitHistory;
+      const fields = (
+        await this.git([
+          'log',
+          '-z',
+          '--no-show-signature',
+          '--format=%H%x00%P%x00%an%x00%aI%x00%s',
+          `--max-count=${Number(limit) + 1}`,
+          `--skip=${offset}`,
+          head,
+          '--',
+        ])
+      ).split('\0');
+      const commits: GitHistory['commits'] = [];
+      for (let i = 0; i + 4 < fields.length; i += 5)
+        if (fields[i])
+          commits.push({
+            id: fields[i]!,
+            parents: fields[i + 1]!.split(' ').filter(Boolean),
+            author: fields[i + 2]!,
+            date: fields[i + 3]!,
+            subject: fields[i + 4]!,
+          });
+      return {
+        head,
+        commits: commits.slice(0, Number(limit)),
+        offset: Number(offset),
+        hasMore: commits.length > Number(limit),
+      } satisfies GitHistory;
+    }
+    if (method === 'commitDiff') {
+      const commit = await this.commitId(params.commit);
+      const parents = (await this.git(['rev-parse', `${commit}^@`]))
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+      const parent = parents[0] ?? null;
+      const paths = params.paths === undefined ? [] : this.paths(params.paths);
+      // A merge is inspected against its first parent. Root commits compare to
+      // the empty tree through diff-tree --root, without writing a tree object.
+      const args = parent
+        ? [
+            'diff',
+            '--no-ext-diff',
+            '--no-textconv',
+            '--no-color',
+            '--no-renames',
+            parent,
+            commit,
+          ]
+        : [
+            'diff-tree',
+            '--root',
+            '--no-commit-id',
+            '-r',
+            '--no-ext-diff',
+            '--no-textconv',
+            '--no-color',
+            '--no-renames',
+            commit,
+          ];
+      const [text, raw, stats] = await Promise.all([
+        this.git([...args, '-p', '--', ...paths]),
+        this.git([...args, '--name-status', '-z', '--', ...paths]),
+        this.git([...args, '--numstat', '-z', '--', ...paths]),
+      ]);
+      return {
+        commit,
+        parent,
+        text,
+        entries: changedFiles(raw, stats),
+      } satisfies GitCommitDiff;
+    }
     if (method === 'branches')
       return {
         branches: (
@@ -785,10 +949,21 @@ export class GitWorkspaceService {
           .filter(Boolean),
       };
     if (method === 'diff') {
+      if (
+        params.revision !== undefined &&
+        params.revision !== (await this.snapshot()).revision
+      )
+        throw Error('repository changed; refresh before inspecting changes');
       const scope = params.scope ?? 'working';
       if (!['working', 'index', 'branch'].includes(String(scope)))
         throw Error('invalid diff scope');
-      const args = ['diff', '--no-ext-diff', '--no-color'];
+      const args = [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--no-color',
+        '--no-renames',
+      ];
       if (scope === 'index') args.push('--cached');
       if (scope === 'branch') {
         if (typeof params.base !== 'string' || params.base.startsWith('-'))
@@ -798,6 +973,12 @@ export class GitWorkspaceService {
       args.push('--');
       if (params.paths) args.push(...this.paths(params.paths));
       let text = await this.git(args);
+      const options = args.slice(0, args.indexOf('--')),
+        paths = args.slice(args.indexOf('--'));
+      const entries = changedFiles(
+        await this.git([...options, '--name-status', '-z', ...paths]),
+        await this.git([...options, '--numstat', '-z', ...paths]),
+      );
       const previews = [];
       if (scope === 'working' && params.paths) {
         const explicit = this.paths(params.paths);
@@ -821,9 +1002,27 @@ export class GitWorkspaceService {
           const preview = await this.untrackedPreview(root, file);
           text += preview.text;
           previews.push({ path: file, status: preview.status });
+          entries.push({
+            path: file,
+            status: 'A',
+            added:
+              preview.status === 'binary'
+                ? null
+                : preview.text
+                    .split('\n')
+                    .filter(
+                      (line) => line.startsWith('+') && !line.startsWith('+++'),
+                    ).length,
+            removed: preview.status === 'binary' ? null : 0,
+          });
         }
       }
-      return { text, previews, revision: (await this.snapshot()).revision };
+      const revision = (await this.snapshot()).revision;
+      if (params.revision !== undefined && params.revision !== revision)
+        throw Error(
+          'repository changed while inspecting changes; refresh and try again',
+        );
+      return { text, previews, entries, revision };
     }
     const common = (await this.git(['rev-parse', '--git-common-dir'])).trim();
     return serializeGitMutation(path.resolve(this.root, common), async () => {

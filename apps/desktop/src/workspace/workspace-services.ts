@@ -324,7 +324,10 @@ export class WorkspaceServices {
     }
     if ((await this.terminals.activeIds(sessionId)).length) return true;
     const debug = this.debuggers.get(sessionId)?.snapshot();
-    if (debug && ['starting', 'running', 'paused'].includes(debug.status))
+    if (
+      debug &&
+      ['starting', 'running', 'paused', 'stopping'].includes(debug.status)
+    )
       return true;
     for (const [id, owner] of this.loginOwners)
       if (owner === sessionId) {
@@ -814,6 +817,14 @@ export class WorkspaceServices {
       if (!debug) {
         debug = new WorkspaceDebugService({
           ...this.options,
+          stopTerminals: async () => {
+            await Promise.all(
+              [...(this.debugTerminals.get(sessionId) ?? [])].map((id) =>
+                this.terminals.close(sessionId, id),
+              ),
+            );
+            this.debugTerminals.delete(sessionId);
+          },
           runInTerminal: async (request) => {
             if (
               !Array.isArray(request.args) ||
@@ -950,9 +961,16 @@ export class WorkspaceServices {
       }
       if (
         !this.failure &&
-        !['status', 'snapshot', 'diff', 'branches', 'checks', 'logs'].includes(
-          method,
-        )
+        ![
+          'status',
+          'snapshot',
+          'diff',
+          'branches',
+          'history',
+          'commitDiff',
+          'checks',
+          'logs',
+        ].includes(method)
       )
         for (const session of this.sessions)
           await this.publish(session, service, service, {

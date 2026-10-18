@@ -1,3 +1,7 @@
+import { ResizableContextIndex } from '../components/ResizableContextIndex';
+import { VirtualFileTree } from '../components/VirtualFileTree';
+import { buildFileTreeRows } from '../model/virtual-file-tree';
+import { useOwnerState } from '../model/owner-state';
 import type { CommandTerminalView } from '../model/command-terminal-client';
 import { TerminalSelectionPreview } from '../components/TerminalSelectionPreview';
 import { WorkspacePanelContents } from './WorkspacePanelContents';
@@ -9,9 +13,9 @@ import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
@@ -22,7 +26,6 @@ import {
   FileJson,
   Folder,
   ChevronRight,
-  ChevronDown,
   X,
   ArrowUpRight,
   Terminal,
@@ -41,18 +44,16 @@ import {
   Users,
   ShieldCheck,
   Check,
+  LayoutDashboard,
+  PanelRight,
+  GitBranch,
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { currentSession, sessionMode } from '../model/state';
 import { DiffBlock } from '../components/DiffBlock';
 import { EFFORT_TEXT, MODE_TEXT } from './Composer';
 import { t, tn } from '../i18n';
-import type {
-  PanelId,
-  Interaction,
-  DialogId,
-  WorkbenchSnapshot,
-} from '../model/types';
+import type { PanelId, Interaction, DialogId } from '../model/types';
 import {
   Button,
   IconButton,
@@ -84,6 +85,9 @@ const REQUEST_KIND: Record<string, () => string> = {
   'plan-exit': () => t('plan exit'),
 };
 interface Props {
+  fileView?: ReactNode;
+  filePath?: string;
+  fileOwnerKey?: string;
   resourcesPaused?: boolean;
   commandTerminal?: CommandTerminalView;
   debugSourceRequest?: { id: string; path: string; line?: number };
@@ -114,10 +118,7 @@ function usePanels() {
       (plugin.panels ?? []).map((panel) => ({ plugin, panel })),
     );
 }
-/**
- * The inspector's panels as icons in the top bar, as Claude places them: a click opens
- * that panel, a second click closes it.
- */
+/** Label-first resource modes share one work drawer. Repeating the active mode closes it. */
 export function PanelButtons({
   panel,
   open,
@@ -130,50 +131,34 @@ export function PanelButtons({
   onClose: () => void;
 }) {
   const panels = usePanels();
-  const active = panels.some((item) => item.panel.id === panel)
-    ? panel
-    : 'context';
-  const current = panel === 'terminal' ? 'terminal' : active;
-  const toggle = (id: PanelId) =>
-    open && current === id ? onClose() : onPanel(id);
+  const modes = [
+    { id: 'overview', title: t('overview'), icon: LayoutDashboard },
+    ...panels.map(({ panel: item }) => item),
+    { id: 'terminal', title: t('terminal'), icon: Terminal },
+  ];
   // The click that opens a panel must not leave that button focused. The next
   // Enter (the address bar's) would otherwise activate it and close the panel.
   const blurAfterPress = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button === 0) event.currentTarget.blur();
   };
   return (
-    <>
-      <IconButton
-        label={t('terminal panel')}
-        aria-pressed={open && current === 'terminal'}
-        className={`icon-button ${open && current === 'terminal' ? 'active' : ''}`}
-        onClick={() => toggle('terminal')}
-        onPointerUp={blurAfterPress}
-      >
-        <Terminal size={16} />
-      </IconButton>
-      {panels.map(({ panel: item }) => (
-        <IconButton
+    <nav className="drawer-mode-toolbar" aria-label={t('work drawer')}>
+      {modes.map((item) => (
+        <button
           key={item.id}
-          label={t('{title} panel', { title: item.title })}
-          aria-pressed={open && current === item.id}
-          className={`icon-button ${open && current === item.id ? 'active' : ''}`}
-          onClick={() => toggle(item.id)}
+          className={`drawer-mode-button ${open && panel === item.id ? 'active' : ''}`}
+          aria-label={t('{title} panel', { title: item.title })}
+          aria-pressed={open && panel === item.id}
+          onClick={() =>
+            open && panel === item.id ? onClose() : onPanel(item.id)
+          }
           onPointerUp={blurAfterPress}
         >
-          <item.icon size={16} />
-        </IconButton>
+          <item.icon size={15} aria-hidden />
+          <span>{item.title}</span>
+        </button>
       ))}
-      <IconButton
-        label={t('context panel')}
-        aria-pressed={open && current === 'context'}
-        className={`icon-button ${open && current === 'context' ? 'active' : ''}`}
-        onClick={() => toggle('context')}
-        onPointerUp={blurAfterPress}
-      >
-        <Layers size={16} />
-      </IconButton>
-    </>
+    </nav>
   );
 }
 // Panels that fill the inspector to its edges, as Claude's terminal, browser and files do.
@@ -184,21 +169,34 @@ export function Inspector(props: Props) {
   const panels = usePanels();
   const selected = panels.find((item) => item.panel.id === props.panel);
   const terminal = props.panel === 'terminal';
+  const [fileIndexOpen, setFileIndexOpen] = useState(true);
   return (
     <aside
-      className="inspector"
+      className={`inspector work-drawer ${props.panel === 'overview' ? 'work-drawer-overview' : ''}`}
+      aria-label={t('work drawer')}
       data-inspector-panel={props.panel}
       data-inspector-whole-button={props.canBeWhole ? '' : undefined}
     >
       <header className="inspector-title">
         <h2 className="inspector-title-name">
-          {terminal
-            ? t('terminal')
-            : selected
-              ? selected.panel.title
-              : t('context')}
+          {props.panel === 'overview'
+            ? t('overview')
+            : terminal
+              ? t('terminal')
+              : selected
+                ? selected.panel.title
+                : t('context')}
         </h2>
         <span className="inspector-actions">
+          {props.panel === 'files' && (
+            <IconButton
+              label={t('file index')}
+              aria-pressed={fileIndexOpen}
+              onClick={() => setFileIndexOpen((open) => !open)}
+            >
+              <PanelRight size={15} />
+            </IconButton>
+          )}
           {props.canBeWhole && (
             <IconButton
               label={props.whole ? t('exit full view') : t('full view')}
@@ -217,13 +215,24 @@ export function Inspector(props: Props) {
       <div
         className={`inspector-body ${FLUSH.has(props.panel) ? 'flush' : ''}`}
       >
-        <InspectorResources {...props} sessionId={session.id} panels={panels} />
+        <InspectorResources
+          {...props}
+          sessionId={session.id}
+          panels={panels}
+          fileIndexOpen={fileIndexOpen}
+          onFileIndexOpen={setFileIndexOpen}
+        />
       </div>
     </aside>
   );
 }
 function InspectorResources(
-  props: Props & { sessionId: string; panels: ReturnType<typeof usePanels> },
+  props: Props & {
+    sessionId: string;
+    panels: ReturnType<typeof usePanels>;
+    fileIndexOpen: boolean;
+    onFileIndexOpen: (open: boolean) => void;
+  },
 ) {
   const [visited, setVisited] = useState<Set<string>>(
     () => new Set([props.panel]),
@@ -238,15 +247,28 @@ function InspectorResources(
     <>
       {[...ids].map((id) => {
         const item = props.panels.find((item) => item.panel.id === id);
+        const resourceSelection =
+          id === 'files' &&
+          (!props.fileOwnerKey || props.fileOwnerKey === props.sessionId)
+            ? (props.filePath ?? props.selection)
+            : props.selection;
         const original =
-          id === 'terminal' ? (
+          id === 'overview' ? (
+            <DrawerOverview {...props} />
+          ) : id === 'terminal' ? (
             <TerminalPanel embedded onClose={props.onClose} />
           ) : item ? (
             <PluginBoundary name={item.plugin.title}>
-              <item.panel.component {...props} sessionId={props.sessionId} />
+              <item.panel.component
+                {...props}
+                selection={resourceSelection}
+                sessionId={props.sessionId}
+              />
             </PluginBoundary>
-          ) : (
+          ) : id === 'context' ? (
             <ContextPanel {...props} />
+          ) : (
+            <p className="panel-note">{t('plugin disabled')}</p>
           );
         return (
           <div
@@ -255,7 +277,22 @@ function InspectorResources(
             className="inspector-resource-view"
             data-inspector-resource={id}
           >
-            {id === 'terminal' || id === 'changes' || id === 'activity' ? (
+            {id === 'files' ? (
+              <DrawerFiles
+                index={original}
+                filePath={props.filePath}
+                ownerKey={props.fileOwnerKey ?? props.sessionId}
+                indexed={props.fileIndexOpen}
+                onIndexed={props.onFileIndexOpen}
+              >
+                {props.fileView ?? (
+                  <div className="empty-state">
+                    <Folder size={24} />
+                    <p>{t('select a file to open')}</p>
+                  </div>
+                )}
+              </DrawerFiles>
+            ) : id === 'terminal' || id === 'changes' || id === 'activity' ? (
               <WorkspacePanelContents
                 kind={id}
                 resourcesPaused={props.resourcesPaused}
@@ -286,33 +323,213 @@ function InspectorResources(
     </>
   );
 }
-// The workspace's files as a tree, folders first, each level sorted by name.
-interface TreeNode {
-  name: string;
-  path: string;
-  folders: Map<string, TreeNode>;
-  files: WorkbenchSnapshot['files'];
+/** This index is local to the opened document; hiding it never recreates the editor. */
+function DrawerFiles({
+  index,
+  filePath,
+  ownerKey,
+  children,
+  indexed,
+  onIndexed,
+}: {
+  index: ReactNode;
+  filePath?: string;
+  ownerKey: string;
+  children: ReactNode;
+  indexed: boolean;
+  onIndexed: (open: boolean) => void;
+}) {
+  const documentBox = useRef<HTMLElement>(null);
+  useEffect(() => {
+    // Revealing a document or narrowing the drawer must not leave its controls
+    // underneath the index overlay. The person can reopen the index explicitly.
+    const node = documentBox.current;
+    if (!node || !filePath) return;
+    const reveal = () => {
+      if (node.clientWidth > 0 && node.clientWidth < 620) onIndexed(false);
+    };
+    reveal();
+    const observer = new ResizeObserver(reveal);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [filePath, onIndexed]);
+  return (
+    <section className="drawer-document" ref={documentBox}>
+      <div className="drawer-document-layout">
+        <div className="drawer-document-content">{children}</div>
+        <ResizableContextIndex
+          className="drawer-context-index"
+          ownerKey={ownerKey}
+          resourceKey="files"
+          open={indexed}
+        >
+          {index}
+        </ResizableContextIndex>
+      </div>
+    </section>
+  );
 }
-function fileTree(files: WorkbenchSnapshot['files']) {
-  const root: TreeNode = { name: '', path: '', folders: new Map(), files: [] };
-  for (const file of files) {
-    const parts = file.path.split('/');
-    let node = root;
-    for (const part of parts.slice(0, -1)) {
-      const path = node.path ? node.path + '/' + part : part;
-      let next = node.folders.get(part);
-      if (!next) {
-        next = { name: part, path, folders: new Map(), files: [] };
-        node.folders.set(part, next);
-      }
-      node = next;
-    }
-    node.files.push(file);
-  }
-  return root;
+/** All summaries come from this conversation's snapshot. Cards only navigate or disclose. */
+export function DrawerOverview(
+  props: Pick<Props, 'onPanel' | 'onFile' | 'onDialog'>,
+) {
+  const { snapshot } = useRuntime();
+  const session = currentSession(snapshot);
+  const workspace = snapshot.workspaces.find(
+    (item) => item.id === session.workspaceId,
+  );
+  const outputs = [
+    ...new Map(
+      session.messages
+        .filter((message) => message.role !== 'user')
+        .flatMap((message) => [
+          ...(message.attachments ?? []),
+          ...(message.tool?.attachments ?? []),
+        ])
+        .map((item) => [item.id, item]),
+    ).values(),
+  ];
+  const changes = session.changes ?? [];
+  const jobs = snapshot.jobs.filter((item) => item.sessionId === session.id);
+  const running = jobs.filter((item) =>
+    ['running', 'waiting', 'stopping'].includes(item.state),
+  );
+  const meters = session.meters;
+  const context =
+    meters?.contextInput != null &&
+    meters?.contextWindow &&
+    meters.contextWindow > 0
+      ? Math.min(
+          100,
+          Math.round((meters.contextInput / meters.contextWindow) * 100),
+        )
+      : null;
+  return (
+    <div className="drawer-overview-cards">
+      <details className="drawer-summary-card" open>
+        <summary>{t('environment')}</summary>
+        <button
+          className="drawer-summary-row"
+          onClick={() => props.onDialog('session')}
+        >
+          <Folder size={14} />
+          <span title={workspace?.path}>
+            {workspace?.name ?? session.title}
+            <small>{workspace?.path}</small>
+          </span>
+        </button>
+        <div className="drawer-summary-row">
+          <GitBranch size={14} />
+          <span>{workspace?.branch || t('unavailable')}</span>
+        </div>
+        <div className="drawer-summary-row">
+          <span>{session.model}</span>
+          <small>{MODE_TEXT[sessionMode(session)].label()}</small>
+        </div>
+        <button
+          className="drawer-summary-row"
+          onClick={() => props.onDialog('external-files')}
+        >
+          <ShieldCheck size={14} />
+          <span>{t('manage external file access')}</span>
+          <ChevronRight size={13} />
+        </button>
+      </details>
+      <details className="drawer-summary-card">
+        <summary>
+          {t('context')}
+          <span>{context === null ? t('unavailable') : `${context}%`}</span>
+        </summary>
+        {context !== null && (
+          <progress max={100} value={context} aria-label={t('context')} />
+        )}
+        <button
+          className="drawer-summary-row"
+          onClick={() => props.onPanel('context')}
+        >
+          <Layers size={14} />
+          <span>{t('attached context')}</span>
+          <small>{session.attachments.length}</small>
+          <ChevronRight size={13} />
+        </button>
+      </details>
+      <details className="drawer-summary-card" open>
+        <summary>
+          {t('outputs')}
+          <span>{outputs.length}</span>
+        </summary>
+        {outputs.length ? (
+          outputs.map((item) => (
+            <details key={item.id} className="drawer-output">
+              <summary>
+                <FileText size={14} />
+                {item.name}
+                <small>{ATTACHMENT_KIND[item.kind]?.() ?? item.kind}</small>
+              </summary>
+              <TerminalSelectionPreview file={item} />
+            </details>
+          ))
+        ) : (
+          <p className="muted">{t('no outputs yet')}</p>
+        )}
+      </details>
+      <details className="drawer-summary-card" open>
+        <summary>
+          {t('changes')}
+          <span>{changes.length}</span>
+        </summary>
+        {changes.slice(0, 5).map((item) => (
+          <button
+            className="drawer-summary-row"
+            key={item.path}
+            onClick={() => props.onPanel('changes', item.path)}
+          >
+            <FileDiff size={14} />
+            <span title={item.path}>{item.path.split(/[\\/]/).at(-1)}</span>
+            <small>
+              {item.kind === 'added'
+                ? t('added')
+                : item.kind === 'deleted'
+                  ? t('deleted')
+                  : t('modified')}
+            </small>
+          </button>
+        ))}
+        <button
+          className="drawer-summary-row"
+          onClick={() => props.onPanel('changes')}
+        >
+          <span>{t('session changes')}</span>
+          <ChevronRight size={13} />
+        </button>
+      </details>
+      <details className="drawer-summary-card">
+        <summary>
+          {t('background tasks')}
+          <span>{running.length}</span>
+        </summary>
+        {jobs.slice(0, 5).map((job) => (
+          <button
+            className="drawer-summary-row"
+            key={job.id}
+            onClick={() => props.onPanel('activity', job.id)}
+          >
+            <Activity size={14} />
+            <span>{job.title}</span>
+            <Status value={job.state} />
+          </button>
+        ))}
+        <button
+          className="drawer-summary-row"
+          onClick={() => props.onPanel('activity')}
+        >
+          <span>{t('activity')}</span>
+          <ChevronRight size={13} />
+        </button>
+      </details>
+    </div>
+  );
 }
-const byName = (a: string, b: string) =>
-  a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
 // A file's kind by its extension, for the colour of its icon.
 function fileKind(name: string) {
   const extension = name.includes('.') ? name.split('.').at(-1)! : '';
@@ -337,16 +554,18 @@ function FileIcon({ name }: { name: string }) {
 export function FilesPanel({
   selection,
   onFile,
-}: Pick<Props, 'selection' | 'onFile'>) {
+  onDialog,
+}: Pick<Props, 'selection' | 'onFile'> & Partial<Pick<Props, 'onDialog'>>) {
   const { snapshot } = useRuntime();
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState<Set<string>>(() => new Set());
-  const panel = useRef<HTMLDivElement>(null);
   const session = currentSession(snapshot);
-  // The folders around the open file stay open, so it shows in the tree.
+  const listing = snapshot.fileListings?.[session.workspaceId];
+  const owner = JSON.stringify([session.workspaceId, session.id]);
+  const [query, setQuery] = useOwnerState(owner, '');
+  const [open, setOpen] = useOwnerState<Set<string>>(owner, new Set());
+  const panel = useRef<HTMLDivElement>(null);
+  // Opening a source reveals its ancestors without replacing the retained editor.
   useEffect(() => {
     const parts = selection.split('/').slice(0, -1);
-    if (!parts.length) return;
     setOpen((old) => {
       const next = new Set(old);
       parts.forEach((_, index) =>
@@ -354,19 +573,29 @@ export function FilesPanel({
       );
       return next.size === old.size ? old : next;
     });
-  }, [selection]);
-  const files = snapshot.files.filter(
-    (file) =>
-      file.workspaceId === session.workspaceId &&
-      file.path.toLowerCase().includes(query.toLowerCase()),
+  }, [selection, owner]);
+  const workspaceFiles = useMemo(
+    () =>
+      snapshot.files.filter((file) => file.workspaceId === session.workspaceId),
+    [snapshot.files, session.workspaceId],
   );
-  const tree = fileTree(files);
+  const fileByPath = useMemo(
+    () => new Map(workspaceFiles.map((file) => [file.path, file])),
+    [workspaceFiles],
+  );
+  const tree = useMemo(
+    () =>
+      buildFileTreeRows(
+        workspaceFiles.map((file) => file.path),
+        open,
+        query,
+      ),
+    [workspaceFiles, open, query],
+  );
   const native =
     snapshot.workspaces.find(
       (workspace) => workspace.id === session.workspaceId,
     )?.origin === 'native';
-  // While a filter is typed every folder that holds a match is open.
-  const isOpen = (path: string) => !!query || open.has(path);
   const toggle = (path: string) =>
     setOpen((old) => {
       const next = new Set(old);
@@ -374,51 +603,6 @@ export function FilesPanel({
       else next.add(path);
       return next;
     });
-  const rows = (node: TreeNode, depth: number): ReactNode[] => [
-    ...[...node.folders.values()]
-      .sort((a, b) => byName(a.name, b.name))
-      .flatMap((folder) => [
-        <button
-          key={'d:' + folder.path}
-          className="tree-folder"
-          aria-expanded={isOpen(folder.path)}
-          style={{ '--depth': depth } as CSSProperties}
-          onClick={() => toggle(folder.path)}
-        >
-          {isOpen(folder.path) ? (
-            <ChevronDown size={13} aria-hidden />
-          ) : (
-            <ChevronRight size={13} aria-hidden />
-          )}
-          <span>{folder.name}</span>
-        </button>,
-        ...(isOpen(folder.path) ? rows(folder, depth + 1) : []),
-      ]),
-    ...[...node.files]
-      .sort((a, b) =>
-        byName(a.path.split('/').at(-1)!, b.path.split('/').at(-1)!),
-      )
-      .map((file) => {
-        const name = file.path.split('/').at(-1)!;
-        return (
-          <button
-            className={`tree-file ${selection === file.path ? 'active' : ''}`}
-            key={file.id}
-            title={file.path}
-            style={{ '--depth': depth } as CSSProperties}
-            onClick={() => onFile(file.path)}
-          >
-            <FileIcon name={name} />
-            <span>{name}</span>
-            {file.status && (
-              <small className={file.status}>
-                {file.status === 'added' ? 'A' : 'M'}
-              </small>
-            )}
-          </button>
-        );
-      }),
-  ];
   return (
     <div className="files-panel" ref={panel}>
       <span className="panel-header-name">
@@ -443,14 +627,56 @@ export function FilesPanel({
         label={t('filter files')}
         placeholder={t('filter files…')}
       />
-      <div className="file-tree">{rows(tree, 0)}</div>
-      {(!native || !(files.length || query)) && (
+      <VirtualFileTree
+        rows={tree.rows}
+        selectedPath={selection}
+        ownerKey={owner}
+        filterKey={query}
+        ariaLabel={t('files')}
+        onToggle={toggle}
+        onSelect={onFile}
+        renderIcon={(row) =>
+          !row.folder ? <FileIcon name={row.name} /> : null
+        }
+        renderTrailing={(row) => {
+          const status = fileByPath.get(row.path)?.status;
+          return status ? (
+            <small className={status}>{status === 'added' ? 'A' : 'M'}</small>
+          ) : null;
+        }}
+      />
+      {listing && (
+        <div
+          className="file-listing-status"
+          role={listing.error ? 'alert' : 'status'}
+        >
+          <span>
+            {tn(listing.loaded, '{n} file loaded', '{n} files loaded')}
+          </span>
+          {!listing.complete && !listing.error && (
+            <span>{t('loading file list…')}</span>
+          )}
+          {listing.truncated && <span>{t('file list is incomplete')}</span>}
+          {listing.error && (
+            <span title={listing.error}>{t('could not load file list')}</span>
+          )}
+        </div>
+      )}
+      {(!native || (!listing && !(workspaceFiles.length || query))) && (
         <p className="panel-note">
           {native ? t('trust this folder to browse files') : t('sample files')}
         </p>
       )}
-      {!!query && !files.length && (
+      {!!query && !tree.matchedCount && (!listing || listing.complete) && (
         <p className="panel-note">{t('no matching files')}</p>
+      )}
+      {onDialog && (
+        <div className="file-index-footer">
+          <button type="button" onClick={() => onDialog('external-files')}>
+            <ExternalLink size={14} aria-hidden />
+            <span>{t('external files')}</span>
+          </button>
+        </div>
       )}
     </div>
   );

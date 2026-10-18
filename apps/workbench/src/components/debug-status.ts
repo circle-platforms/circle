@@ -4,6 +4,7 @@ export function debugStatusValue(
   label: (status: string) => string,
 ): string {
   if (status === 'idle' || status === 'stopped') return 'not debugging';
-  if (status === 'running' || status === 'failed') return status;
+  if (status === 'running' || status === 'stopping' || status === 'failed')
+    return status;
   return label(status);
 }

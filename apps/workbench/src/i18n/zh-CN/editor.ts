@@ -1,4 +1,7 @@
 export const editor: Record<string, string> = {
+  'source code': '源码',
+  reading: '阅读',
+  'document reading view': '文档阅读视图',
   'debug file': '调试文件',
   'isolated copy for {name}': '{name} 的隔离副本',
   'isolated task copy': '任务隔离副本',

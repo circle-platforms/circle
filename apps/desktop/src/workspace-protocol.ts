@@ -70,6 +70,8 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'commit',
     'push',
     'branches',
+    'history',
+    'commitDiff',
     'continueMerge',
     'abortMerge',
   ]),

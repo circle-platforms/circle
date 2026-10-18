@@ -17,7 +17,9 @@ const repos = new Map(),
 let hold = false,
   release,
   holdStatus = false,
-  releaseStatus;
+  releaseStatus,
+  holdGitStatus = false,
+  releaseGitStatus;
 for (const id of ['a', 'b']) {
   const path = join(directory, id);
   await mkdir(path);
@@ -39,7 +41,7 @@ for (const id of ['a', 'b']) {
 }
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
-  server: { host: '127.0.0.1', port: 0 },
+  server: { host: '127.0.0.1', port: 0, hmr: false },
   logLevel: 'error',
   plugins: [
     {
@@ -69,6 +71,8 @@ const server = await createServer({
           try {
             const p = command.payload;
             let data;
+            if (p.service === 'git' && p.method === 'status' && holdGitStatus)
+              await new Promise((r) => (releaseGitStatus = r));
             if (p.service === 'git')
               data = await repos
                 .get(command.sessionId)
@@ -123,6 +127,36 @@ try {
       document.querySelector('.native-git')?.getAttribute('data-branch') ===
       'owner-a',
   );
+  // A file chosen while a refresh is still running opens once it finishes.
+  holdGitStatus = true;
+  await git
+    .getByRole('button', { name: 'refresh', exact: true })
+    .first()
+    .click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+      'true',
+  );
+  await git
+    .getByRole('tree', { name: 'changed files', exact: true })
+    .getByRole('treeitem', { name: 'dirty-a.txt', exact: true })
+    .click();
+  assert.equal(
+    await git
+      .getByLabel('git diff', { exact: true })
+      .filter({ hasText: 'owned a' })
+      .count(),
+    0,
+    'the diff waits for the running refresh',
+  );
+  holdGitStatus = false;
+  releaseGitStatus();
+  await git
+    .getByLabel('git diff', { exact: true })
+    .filter({ hasText: 'owned a' })
+    .waitFor();
+  receipt.fileChosenWhileBusyOpens = true;
   await git
     .getByRole('textbox', { name: 'commit message', exact: true })
     .fill('commit draft A');
@@ -319,6 +353,23 @@ try {
   );
   await select('a');
   holdStatus = true;
+  const refreshStatus = delivery.getByRole('button', {
+    name: 'refresh status',
+    exact: true,
+  });
+  await refreshStatus.scrollIntoViewIfNeeded();
+  assert.equal(
+    await refreshStatus.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        bounds.x + bounds.width / 2,
+        bounds.y + bounds.height / 2,
+      );
+      return hit === element || element.contains(hit);
+    }),
+    true,
+    'the narrow change index must never cover unrelated delivery controls',
+  );
   await delivery
     .getByRole('button', { name: 'refresh status', exact: true })
     .click();

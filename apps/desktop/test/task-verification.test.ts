@@ -35,7 +35,10 @@ import {
   createAgentTaskExecutor,
   type TaskVerificationContext,
 } from '../src/workspace/task-executor.ts';
-import { createTaskVerifier } from '../src/workspace/task-verification.ts';
+import {
+  createTaskVerifier,
+  workerProcessEvidence,
+} from '../src/workspace/task-verification.ts';
 
 const exec = promisify(execFile);
 const criterion = 'value is fixed';
@@ -645,7 +648,28 @@ for (const mode of ['unread', 'read', 'empty'] as const) {
           model,
         }),
     });
-    const checks = await verify(f.task, await f.context());
+    const context = await f.context();
+    context.events.push({
+      run_id: 'worker-run',
+      parent_run_id: null,
+      seq: 1,
+      ts: new Date().toISOString(),
+      kind: 'tool_result',
+      tags: {},
+      payload: {
+        id: 'failed-execution',
+        name: 'execute',
+        status: 'error',
+        output: 'fixture failure remains evidence',
+        commandExecutions: [{ command: 'npm test', exitCode: 1 }],
+      },
+    });
+    const checks = await verify(f.task, context);
+    const request = JSON.stringify(model.requests[0]!.messages);
+    assert.match(request, /workerProcessEvidence/);
+    assert.match(request, /fixture failure remains evidence/);
+    assert.match(request, /failed-execution/);
+    assert.match(request, /exitCode/);
     assert.equal(
       checks[0]?.status,
       mode === 'read' ? 'passed' : 'needs_review',
@@ -716,4 +740,35 @@ test('cancellation stops the real owned command descendant before releasing its 
   await stopped;
   assert.equal(await fixtureGate.release(), 'closed');
   assert.equal(existsSync(join(owned, 'late')), false);
+});
+
+test('bounded reviewer process evidence retains failed execution identity and exit after long output', () => {
+  const events = Array.from({ length: 70 }, (_, seq) => ({
+    run_id: 'worker',
+    parent_run_id: null,
+    seq,
+    ts: '',
+    tags: {},
+    kind: 'tool_result' as const,
+    payload: {
+      id: 'call-' + seq,
+      name: 'execute',
+      status: seq === 69 ? 'error' : 'success',
+      output: 'x'.repeat(9000),
+      commandExecutions: [
+        {
+          executionId: 'execution-' + seq,
+          status: seq === 69 ? 'failed' : 'done',
+          exitCode: seq === 69 ? 7 : 0,
+        },
+      ],
+    },
+  }));
+  const evidence = workerProcessEvidence(events);
+  assert.equal(evidence.totalResults, 70);
+  assert.equal(evidence.omittedResults, 6);
+  assert.equal(evidence.entries[0]!.id, 'call-69');
+  assert.equal(evidence.entries[0]!.commandExecutions[0]!.exitCode, 7);
+  assert.equal(evidence.entries[0]!.truncated, true);
+  assert.ok(evidence.entries.reduce((n, e) => n + e.output.length, 0) <= 48000);
 });

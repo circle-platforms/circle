@@ -332,7 +332,7 @@ export function DebugPanel({
           action === 'pause'
             ? state.status === 'running'
             : action === 'stop'
-              ? !['idle', 'stopped'].includes(state.status)
+              ? !['idle', 'stopping', 'stopped'].includes(state.status)
               : state.status === 'paused'
         }
         onAction={(action) => void act(action)}

@@ -1,3 +1,4 @@
+import { openNativeProjectFile } from './native-project-file.mjs';
 // One serialized native app only. Every mutation below is a visible GUI action;
 // the supplied query bridge observes actual debugger/PTY effects.
 import assert from 'node:assert/strict';
@@ -145,16 +146,7 @@ export async function runNativeDebugJourney({
   let launched = false;
   let terminal, inspectorPort;
   try {
-    const files = page.getByRole('button', {
-      name: 'files panel',
-      exact: true,
-    });
-    if ((await files.getAttribute('aria-pressed')) !== 'true')
-      await files.click();
-    await page
-      .locator('.file-tree')
-      .getByRole('button', { name: program, exact: true })
-      .click();
+    await openNativeProjectFile(page, program);
     await page.getByRole('button', { name: 'debug file', exact: true }).click();
     await wait(
       async () =>

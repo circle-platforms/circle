@@ -144,7 +144,7 @@ export class LanguageService {
       const read = ts.readConfigFile(configFile, readFile);
       if (read.error) {
         this.configErrors = [read.error];
-        this.options = defaults;
+        this.options = {};
         this.files = [];
       } else {
         const parsed = ts.parseJsonConfigFileContent(
@@ -159,7 +159,10 @@ export class LanguageService {
           undefined,
           configFile,
         );
-        this.options = { ...defaults, ...parsed.options };
+        // Configured projects use TypeScript's own omitted-option semantics.
+        // Inferred Bundler/ESNext defaults can conflict with an explicit module
+        // or hide errors from the configured target, including inherited options.
+        this.options = parsed.options;
         this.files = parsed.fileNames
           .map((file) => path.normalize(file))
           .filter((file) => this.allowed(file));

@@ -31,6 +31,7 @@ import { t, useLocale } from '../i18n';
 import { Button, FileChip, IconButton } from '../components/common';
 import type { WhatsNewNotice } from '../../../../src/whats_new';
 import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
+import { commandCompletions, ownsHomeSubmission } from './composer-interaction';
 import {
   forgetHomeComposer,
   homeComposerMemory,
@@ -53,7 +54,7 @@ export function Home({
   onStarted: (sessionId: string) => void;
   onAttach: (accept: (attachment: Attachment) => void) => void;
 }) {
-  const { snapshot, runtime, perform, notify } = useRuntime();
+  const { snapshot, runtime, perform, notify, act } = useRuntime();
   const navigate = useNavigate();
   const location = useLocation();
   const message = useRef<HTMLTextAreaElement>(null);
@@ -76,6 +77,15 @@ export function Home({
     remembered.current?.attachments ?? [],
   );
   const [query, setQuery] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const submission = useRef(false);
+  const [completionIndex, setCompletionIndex] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const completions = commandCompletions(draft, snapshot);
+  useEffect(() => {
+    setCompletionIndex(0);
+    setDismissed(false);
+  }, [draft]);
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [model, setModelId] = useState(
     () =>
@@ -211,41 +221,57 @@ export function Home({
   const deliverRef = useRef(() => {});
   deliverRef.current = () => {
     const text = draftRef.current.trim();
-    if (!text) return;
+    if (!text || submission.current) return;
     const files = attachmentsRef.current;
+    const submitted = { text: draftRef.current, attachments: files };
+    submission.current = true;
+    setSubmitting(true);
     perform(async () => {
-      if (project && !project.trusted) {
-        pendingSend.current = true;
-        const anchor = snapshot.sessions.find(
-          (session) =>
-            session.workspaceId === project.id &&
-            session.lifecycle !== 'deleting',
-        );
-        if (anchor && runtime.mode === 'live')
-          await runtime.selectSession(anchor.id);
-        onDialog('trust', project.id);
-        return;
+      try {
+        if (project && !project.trusted) {
+          pendingSend.current = true;
+          const anchor = snapshot.sessions.find(
+            (session) =>
+              session.workspaceId === project.id &&
+              session.lifecycle !== 'deleting',
+          );
+          if (anchor && runtime.mode === 'live')
+            await runtime.selectSession(anchor.id);
+          onDialog('trust', project.id);
+          return;
+        }
+        pendingSend.current = false;
+        const result = await runtime.beginConversation({
+          workspaceId: project?.id ?? null,
+          text,
+          model,
+          effort,
+          mode,
+          ...(files.length ? { attachments: files } : {}),
+        });
+        if ('dialog' in result) {
+          pendingSend.current = true;
+          onDialog(result.dialog, project?.id);
+          return;
+        }
+        if (
+          ownsHomeSubmission(submitted, {
+            text: draftRef.current,
+            attachments: attachmentsRef.current,
+          })
+        ) {
+          released.current = true;
+          remembered.current = null;
+          forgetHomeComposer();
+          setDraft('');
+          setAttachments([]);
+        }
+        onStarted(result.sessionId);
+        if (result.commandResult) act(() => result.commandResult!);
+      } finally {
+        submission.current = false;
+        setSubmitting(false);
       }
-      pendingSend.current = false;
-      const result = await runtime.beginConversation({
-        workspaceId: project?.id ?? null,
-        text,
-        model,
-        effort,
-        mode,
-        ...(files.length ? { attachments: files } : {}),
-      });
-      if ('dialog' in result) {
-        pendingSend.current = true;
-        onDialog(result.dialog, project?.id);
-        return;
-      }
-      released.current = true;
-      remembered.current = null;
-      forgetHomeComposer();
-      setDraft('');
-      setAttachments([]);
-      onStarted(result.sessionId);
     });
   };
   useEffect(() => {
@@ -254,6 +280,16 @@ export function Home({
     deliverRef.current();
   }, [project?.id, project?.trusted]);
   const send = () => deliverRef.current();
+  const chooseCompletion = (index: number, execute = false) => {
+    const item = completions[index];
+    if (!item) return;
+    const next = item.name + ' ';
+    draftRef.current = next;
+    setDraft(next);
+    setDismissed(true);
+    if (execute) send();
+    message.current?.focus({ preventScroll: true });
+  };
   const sentence = project
     ? t('what should we build in {name}?', { name: project.name })
     : '';
@@ -278,7 +314,32 @@ export function Home({
         </p>
       </div>
       <div className="home-composer">
-        <div className="composer">
+        <div
+          className="composer"
+          data-mode={mode}
+          data-state={submitting ? 'waiting' : 'idle'}
+        >
+          {!dismissed && completions.length > 0 && (
+            <div
+              className="completion-list"
+              role="listbox"
+              aria-label={t('input completions')}
+            >
+              {completions.map((item, index) => (
+                <button
+                  key={item.name}
+                  role="option"
+                  aria-selected={index === completionIndex}
+                  className={index === completionIndex ? 'selected' : ''}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => chooseCompletion(index)}
+                >
+                  <span>{item.name}</span>
+                  <small>{item.description}</small>
+                </button>
+              ))}
+            </div>
+          )}
           <textarea
             ref={message}
             autoFocus
@@ -303,6 +364,32 @@ export function Home({
             }}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing) return;
+              if (!dismissed && completions.length) {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  setCompletionIndex(
+                    (index) =>
+                      (index +
+                        (event.key === 'ArrowDown' ? 1 : -1) +
+                        completions.length) %
+                      completions.length,
+                  );
+                  return;
+                }
+                if (
+                  event.key === 'Tab' ||
+                  (event.key === 'Enter' && !event.shiftKey)
+                ) {
+                  event.preventDefault();
+                  chooseCompletion(completionIndex, event.key === 'Enter');
+                  return;
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setDismissed(true);
+                  return;
+                }
+              }
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 send();
@@ -328,7 +415,7 @@ export function Home({
             <button
               className="send"
               aria-label={t('send message')}
-              disabled={!draft.trim()}
+              disabled={!draft.trim() || submitting}
               onClick={send}
             >
               <ArrowUp size={16} />
@@ -375,7 +462,7 @@ export function Home({
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  className="dropdown project-menu home-menu"
+                  className="dropdown composer-menu project-menu home-menu"
                   side="bottom"
                   avoidCollisions={false}
                   collisionPadding={8}

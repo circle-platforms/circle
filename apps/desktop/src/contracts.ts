@@ -1,5 +1,13 @@
 import type { WorkspaceServiceEvent } from './workspace-protocol';
 
+/** One exact OS-selected file; runtime-memory-only and bound to this session. */
+export type ExternalFileAccess = 'read' | 'readwrite';
+export interface NativeExternalFileGrant {
+  id: string;
+  sessionId: string;
+  path: string;
+  access: ExternalFileAccess;
+}
 export interface NativeFile {
   id: string;
   name: string;
@@ -15,6 +23,8 @@ export interface NativeWorkspace {
   path: string;
   files: { id: string; path: string; language: string }[];
   truncated: boolean;
+  complete?: boolean;
+  nextCursor?: string;
 }
 export interface DesktopInfo {
   kind: 'desktop';
@@ -83,6 +93,11 @@ export interface DesktopBridge {
   chooseFiles: (
     purpose: 'attach' | 'import' | 'source',
   ) => Promise<NativeFile[]>;
+  /** The main-process OS picker chooses the path. Renderer supplies no path. */
+  requestExternalFileGrant?: (
+    sessionId: string,
+    access: ExternalFileAccess,
+  ) => Promise<NativeExternalFileGrant | null>;
   chooseWorkspace: () => Promise<NativeWorkspace | null>;
   /** Reveal only a workspace identity already known to the native runtime. */
   revealWorkspace: (workspaceId: string) => Promise<void>;
@@ -91,7 +106,10 @@ export interface DesktopBridge {
     fileId: string,
   ) => Promise<NativeFile>;
   /** The files of the active, trusted workspace; null for any other. */
-  listWorkspace: (workspaceId: string) => Promise<NativeWorkspace | null>;
+  listWorkspace: (
+    workspaceId: string,
+    cursor?: string,
+  ) => Promise<NativeWorkspace | null>;
   /** The window's language, for menus, system dialogs and notifications. */
   setLanguage: (locale: 'en' | 'zh-CN') => Promise<void>;
   saveFile: (options: {

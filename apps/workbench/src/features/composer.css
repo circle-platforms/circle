@@ -1,0 +1,23 @@
+/* One composer surface and bounded menus for home and active conversations. */
+.composer-menu {
+  max-height: min(360px, var(--radix-dropdown-menu-content-available-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.home-composer .composer {
+  min-height: 108px;
+}
+.home-composer .completion-list {
+  max-height: min(320px, 35vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.composer-footbar button:focus-visible,
+.composer .completion-list button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.composer .attachment-strip {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}

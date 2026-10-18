@@ -59,6 +59,17 @@ test('the component gate preserves prior journeys and includes each native regre
       (name) =>
         ![
           'git-conflict-selector-ui.mjs',
+          'external-file-access-ui.mjs',
+          'external-file-entry-ui.mjs',
+          'git-large-index-ui.mjs',
+          'context-index-resize-ui.mjs',
+          'virtual-file-tree-ui.mjs',
+          'project-index-journey-ui.mjs',
+          'conversation-requests-ui.mjs',
+          'safe-file-undo-ui.mjs',
+          'large-file-tree-ui.mjs',
+          'settings-navigation-ui.mjs',
+          'native-tools-drawer-ui.mjs',
           'child-terminal-rendered-match-ui.mjs',
           'tasks-panel-ui.mjs',
           'task-config-recovery-ui.mjs',
@@ -154,7 +165,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'tool-text-output-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 47);
+  assert.equal(new Set(COMPONENT_SUITES).size, 58);
 });
 
 test('task configuration recovery remains a required component journey', () => {
@@ -163,4 +174,28 @@ test('task configuration recovery remains a required component journey', () => {
       .length,
     1,
   );
+});
+
+test('safe file undo remains a required component journey', () => {
+  assert.equal(
+    COMPONENT_SUITES.filter((name) => name === 'safe-file-undo-ui.mjs').length,
+    1,
+  );
+});
+
+test('large workspace selection remains a required component journey', () => {
+  assert.equal(
+    COMPONENT_SUITES.filter((name) => name === 'large-file-tree-ui.mjs').length,
+    1,
+  );
+});
+
+test('remaining-goal journeys stay required once', () => {
+  for (const name of [
+    'virtual-file-tree-ui.mjs',
+    'context-index-resize-ui.mjs',
+    'git-large-index-ui.mjs',
+    'external-file-access-ui.mjs',
+  ])
+    assert.equal(COMPONENT_SUITES.filter((value) => value === name).length, 1);
 });

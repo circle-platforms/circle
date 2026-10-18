@@ -30,6 +30,7 @@ import {
 } from './helpers/native-clipboard.mjs';
 import {
   createNativeGitFixture,
+  openNativeGitFile,
   runNativeGitJourney,
 } from './helpers/native-git-journey.mjs';
 import {
@@ -791,8 +792,17 @@ try {
   await check(
     'loaded project instruction source opens actual file',
     async () => {
+      // The work drawer's overview leads to the session context through its context card.
       await page
-        .getByRole('button', { name: 'context panel', exact: true })
+        .getByRole('button', { name: 'overview panel', exact: true })
+        .click();
+      const contextCard = page.locator('.drawer-summary-card').filter({
+        has: page.locator('summary', { hasText: /^context/ }),
+      });
+      if ((await contextCard.getAttribute('open')) === null)
+        await contextCard.locator('summary').first().click();
+      await contextCard
+        .getByRole('button', { name: /attached context/ })
         .click();
       await page
         .locator('.inspector details')
@@ -854,7 +864,7 @@ try {
         .click();
       await page
         .locator('.file-view')
-        .getByRole('button', { name: 'edit', exact: true })
+        .getByRole('button', { name: 'source code', exact: true })
         .click();
       const editor = page.locator('.file-view .monaco-editor').last();
       await editor
@@ -994,9 +1004,7 @@ try {
       .getByRole('button', { name: 'refresh', exact: true })
       .first()
       .click();
-    await panel
-      .getByRole('button', { name: 'git-probe.txt', exact: true })
-      .click();
+    await openNativeGitFile(page, 'git-probe.txt');
     await panel
       .getByLabel('git diff', { exact: true })
       .filter({ hasText: 'JOURNEY_GIT_HUNK' })
@@ -1013,9 +1021,7 @@ try {
       'actual index hunk staged',
     );
     await panel.getByRole('button', { name: 'staged', exact: true }).click();
-    await panel
-      .getByRole('button', { name: 'git-probe.txt', exact: true })
-      .click();
+    await openNativeGitFile(page, 'git-probe.txt');
     await screenshot('04-staged-git-hunk');
     await panel
       .getByRole('button', { name: 'unstage this hunk', exact: true })
@@ -1074,6 +1080,13 @@ try {
       .getByRole('button', { name: /fixture.*debug\.cjs:3/ })
       .first()
       .click();
+    // The work drawer shows one mode at a time: the frame's source opens in files,
+    // and the debug view keeps the frame's variables for the way back.
+    await page
+      .locator('.file-view-heading strong')
+      .getByText('debug.cjs', { exact: true })
+      .waitFor();
+    await openInspector('activity', 'debug');
     await panel.getByRole('button', { name: 'count', exact: true }).waitFor();
     assert.equal(
       await panel

@@ -41,6 +41,10 @@ export type RuntimeCommandName =
   | 'close'
   | 'custom-command'
   | 'init'
+  | 'list-external-file-grants'
+  | 'revoke-external-file-grant'
+  | 'preview-file-undo'
+  | 'restore-turn-files'
   | 'write-file'
   | 'share'
   | 'unshare'
@@ -141,6 +145,10 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'close',
   'custom-command',
   'init',
+  'list-external-file-grants',
+  'revoke-external-file-grant',
+  'preview-file-undo',
+  'restore-turn-files',
   'write-file',
   'share',
   'unshare',

@@ -1,3 +1,4 @@
+import { NativeExternalFilePicker } from './external-file-picker';
 import {
   EncryptedCredentialStore,
   nativeHttpsUrl,
@@ -113,6 +114,8 @@ const browserCertificates = new Map<string, Set<string>>();
 let runtime: RuntimeSupervisor | undefined;
 let runtimeSessions = new Set<string>();
 const workspaceSelections = new Map<string, string>();
+const externalFilePicker = new NativeExternalFilePicker();
+let externalFixtureSelection = 0;
 const previewMode = process.env.CIRCLE_WORKBENCH_MODE === 'preview';
 const rendererRoot = join(__dirname, 'renderer');
 const fixtureProfile = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
@@ -471,6 +474,12 @@ async function createWindow() {
     if (allowed && !fixtureProfile) void shell.openExternal(allowed);
     return { action: 'deny' };
   });
+  window.webContents.on(
+    'did-start-navigation',
+    (_event, _url, _inPlace, mainFrame) => {
+      if (mainFrame) externalFilePicker.invalidate();
+    },
+  );
   window.webContents.on('will-navigate', (event, url) => {
     if (!trustedAppUrl(url)) event.preventDefault();
   });
@@ -576,6 +585,11 @@ app
           window.webContents.send('circle:runtime-token-delta', delta);
       });
       runtime.subscribe((update) => {
+        externalFilePicker.observe({
+          connected: update.connected,
+          activeSessionId: update.snapshot.activeSessionId,
+          sessions: update.snapshot.sessions,
+        });
         const current = new Set(
           update.snapshot.sessions.map((session) => session.id),
         );
@@ -613,6 +627,74 @@ app
       // A message to Circle hands back the browser the person had
       if (command.name === 'prompt') browsers?.personWrote(command.sessionId);
       return runtime.command(command);
+    });
+    handle('circle:request-external-file-grant', async (sessionId, access) => {
+      if (!runtime || !window) throw Error('runtime not enabled');
+      const ownerWindow = window;
+      const ownerRuntime = runtime;
+      return externalFilePicker.request(sessionId, access, {
+        refresh: () => {
+          if (
+            window !== ownerWindow ||
+            ownerWindow.isDestroyed() ||
+            runtime !== ownerRuntime
+          )
+            throw Error('external file permission selection is stale');
+          const state = ownerRuntime.state();
+          return {
+            connected: state.connected,
+            activeSessionId: state.snapshot.activeSessionId,
+            sessions: state.snapshot.sessions,
+          };
+        },
+        choose: async (scope) => {
+          // The automation profile belongs to the native process and never
+          // comes from renderer input. An exhausted fixture cancels, never opens
+          // a real file dialog or reads files from the actual user profile.
+          if (fixtureProfile) {
+            const selected =
+              fixtureProfile.externalFileSelections?.[
+                externalFixtureSelection++
+              ];
+            if (selected?.delayMs)
+              await new Promise((done) =>
+                setTimeout(
+                  done,
+                  Math.min(10000, Math.max(0, Number(selected.delayMs))),
+                ),
+              );
+            return selected
+              ? {
+                  canceled: selected.canceled === true,
+                  filePaths: selected.filePaths ?? [],
+                }
+              : { canceled: true, filePaths: [] };
+          }
+          return dialog.showOpenDialog(ownerWindow, {
+            title: text('allow one external file'),
+            buttonLabel:
+              scope === 'read'
+                ? text('allow read')
+                : text('allow read and write'),
+            message:
+              scope === 'read'
+                ? text('choose one file for this session to read')
+                : text('choose one file for this session to read and write'),
+            properties: [
+              'openFile',
+              'dontAddToRecent',
+              ...(process.platform === 'darwin'
+                ? ['noResolveAliases' as const]
+                : []),
+            ],
+          });
+        },
+        mint: (owner, path, scope) =>
+          ownerRuntime.grantExternalFile(owner, path, scope),
+        revoke: async (owner, id) => {
+          await ownerRuntime.revokeExternalFileGrant(owner, id);
+        },
+      });
     });
     handle('circle:choose-files', async (purpose) => {
       if (!['attach', 'import', 'source'].includes(String(purpose)))
@@ -711,23 +793,64 @@ app
     });
     // The files of the folder the runtime works in, when it is trusted: the app's own
     // workspace, or one you opened and trusted. Reads still go through granted handles.
-    handle('circle:list-workspace', async (workspaceId) => {
-      if (!runtime || typeof workspaceId !== 'string')
-        throw Error('invalid workspace');
+    let listing:
+      { sessionId: string; workspaceId: string; cursor?: string } | undefined;
+    handle('circle:list-workspace', async (workspaceId, cursor) => {
+      if (
+        !runtime ||
+        typeof workspaceId !== 'string' ||
+        (cursor !== undefined && typeof cursor !== 'string')
+      )
+        throw Error('invalid workspace listing');
       const snapshot = runtime.state().snapshot;
-      const active = snapshot.sessions.find(
-        (row) => row.id === snapshot.activeSessionId,
-      );
+      const sessionId = snapshot.activeSessionId;
       const workspace = snapshot.workspaces.find(
         (row) => row.id === workspaceId,
       );
+      const assertActive = () => {
+        const current = runtime!.state().snapshot;
+        if (
+          !runtime!.connected ||
+          current.activeSessionId !== sessionId ||
+          current.sessions.find((row) => row.id === sessionId)?.workspaceId !==
+            workspaceId ||
+          !current.workspaces.find((row) => row.id === workspaceId)?.trusted
+        )
+          throw Error('file listing owner changed');
+      };
       if (
         !workspace ||
-        active?.workspaceId !== workspaceId ||
-        !workspace.trusted
+        !workspace.trusted ||
+        snapshot.sessions.find((row) => row.id === sessionId)?.workspaceId !==
+          workspaceId
       )
         return null;
-      const listed = await grants.open(workspace.path);
+      assertActive();
+      if (
+        cursor &&
+        (!listing ||
+          listing.sessionId !== sessionId ||
+          listing.workspaceId !== workspaceId ||
+          listing.cursor !== cursor)
+      )
+        throw Error('file listing cursor is not owned by this session');
+      if (!cursor && listing?.cursor) await grants.cancel(listing.cursor);
+      const owner = {
+        sessionId,
+        workspaceId,
+        cursor: undefined as string | undefined,
+      };
+      if (!cursor) listing = owner;
+      const selected = listing!;
+      const check = () => {
+        assertActive();
+        if (listing !== selected) throw Error('file listing was superseded');
+      };
+      const listed = cursor
+        ? await grants.nextPage(cursor, check)
+        : await grants.open(workspace.path, check);
+      check();
+      selected.cursor = listed.nextCursor;
       workspaceSelections.set(listed.id, listed.path);
       return listed;
     });

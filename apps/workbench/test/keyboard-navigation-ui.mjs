@@ -89,7 +89,7 @@ try {
   });
   await sourceSearch.fill('README.md');
   await sourceSearch.press('Enter');
-  await page.getByRole('button', { name: 'edit', exact: true }).click();
+  await page.getByRole('button', { name: 'source code', exact: true }).click();
   const sourceInput = page
     .locator(
       '.native-code-editor .native-edit-context, .native-code-editor textarea.inputarea',
@@ -132,7 +132,7 @@ try {
     const { setLanguage } = await import('/src/i18n/index.ts');
     setLanguage('zh-CN');
   });
-  await page.getByRole('button', { name: '编辑', exact: true }).waitFor();
+  await page.getByRole('button', { name: '源码', exact: true }).waitFor();
   assert.equal(
     await page
       .locator('.native-code-editor .monaco-editor')
@@ -149,7 +149,9 @@ try {
     const { setLanguage } = await import('/src/i18n/index.ts');
     setLanguage('en');
   });
-  await page.getByRole('button', { name: 'edit', exact: true }).waitFor();
+  await page
+    .getByRole('button', { name: 'source code', exact: true })
+    .waitFor();
   assert.equal(
     await page
       .locator('.native-code-editor .monaco-editor')

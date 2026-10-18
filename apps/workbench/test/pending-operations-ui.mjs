@@ -33,6 +33,11 @@ try {
   await note.fill('Inspected remote branch and terminal; push completed once.');
   await button.click();
   await page.getByRole('alert').waitFor();
+  assert.match(await page.getByRole('alert').innerText(), /^action failed:/);
+  assert.doesNotMatch(
+    await page.getByRole('alert').innerText(),
+    /could not load/,
+  );
   assert.equal(
     await note.inputValue(),
     'Inspected remote branch and terminal; push completed once.',

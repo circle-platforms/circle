@@ -31,6 +31,7 @@ test('an idle or stopped debugger reads as not debugging', () => {
   assert.equal(debugStatusValue('idle', label), 'not debugging');
   assert.equal(debugStatusValue('stopped', label), 'not debugging');
   assert.equal(debugStatusValue('running', label), 'running');
+  assert.equal(debugStatusValue('stopping', label), 'stopping');
   assert.equal(debugStatusValue('paused', label), 'word:paused');
 });
 

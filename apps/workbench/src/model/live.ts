@@ -65,6 +65,9 @@ export class LiveRuntime implements RuntimePort {
   private files: WorkbenchSnapshot['files'] = [];
   // The workspace whose files were last listed, and a listing in flight.
   private listed?: string;
+  private listingEpoch = 0;
+  private listingSession?: string;
+  private fileListings: NonNullable<WorkbenchSnapshot['fileListings']> = {};
   private listing?: Promise<void>;
   private settings: Partial<WorkbenchSnapshot['settings']> = {};
   private plugins?: string[];
@@ -143,6 +146,7 @@ export class LiveRuntime implements RuntimePort {
     this.snapshot = structuredClone(update.snapshot);
     this.receivedFullEpoch = update.tokenStream?.epoch;
     this.snapshot.files = this.files;
+    this.snapshot.fileListings = this.fileListings;
     this.snapshot.settings = { ...this.snapshot.settings, ...this.settings };
     if (this.plugins) this.snapshot.uiPlugins = this.plugins;
     const existing = new Set(
@@ -168,6 +172,7 @@ export class LiveRuntime implements RuntimePort {
     const workspace = currentSession(this.snapshot).workspaceId;
     if (
       workspace !== this.listed ||
+      this.snapshot.activeSessionId !== this.listingSession ||
       kind === 'run_end' ||
       (kind === 'tool_result' &&
         ['write_file', 'edit_file', 'apply_patch', 'delete'].includes(
@@ -244,26 +249,97 @@ export class LiveRuntime implements RuntimePort {
   private listWorkspace(workspaceId: string): Promise<void> {
     if (!this.host.listWorkspace) return Promise.resolve();
     this.listed = workspaceId;
-    const run = async () => {
-      await this.listing;
-      if (this.disposed) return;
-      const listed = await this.host.listWorkspace(workspaceId);
-      if (!listed || this.disposed) return;
-      this.files = [
-        ...this.files.filter((file) => file.workspaceId !== workspaceId),
-        ...listed.files.map((file) => ({
-          id: file.id,
-          workspaceId,
-          path: file.path,
-          content: '',
-          language: file.language,
-          nativeGrant: { workspaceId: listed.id, fileId: file.id },
-        })),
-      ];
-      this.snapshot = { ...this.snapshot, files: this.files };
+    this.listingSession = this.snapshot.activeSessionId;
+    const epoch = ++this.listingEpoch;
+    const sourceSession = this.snapshot.activeSessionId;
+    const active = () =>
+      !this.disposed &&
+      epoch === this.listingEpoch &&
+      this.snapshot.activeSessionId === sourceSession &&
+      currentSession(this.snapshot).workspaceId === workspaceId;
+    const publish = () => {
+      this.snapshot = {
+        ...this.snapshot,
+        files: this.files,
+        fileListings: { ...this.fileListings },
+      };
       for (const listener of this.listeners) listener();
     };
-    this.listing = run().catch(() => undefined);
+    const run = async () => {
+      if (!active()) return;
+      this.fileListings[workspaceId] = {
+        loaded: this.files.filter((file) => file.workspaceId === workspaceId)
+          .length,
+        complete: false,
+        truncated: false,
+      };
+      publish();
+      let cursor: string | undefined;
+      let accumulated: WorkbenchSnapshot['files'] = [];
+      do {
+        const listed = await this.host.listWorkspace(workspaceId, cursor);
+        if (!active()) return;
+        if (!listed) {
+          this.files = this.files.filter(
+            (file) => file.workspaceId !== workspaceId,
+          );
+          this.fileListings[workspaceId] = {
+            loaded: 0,
+            complete: true,
+            truncated: false,
+          };
+          publish();
+          return;
+        }
+        accumulated.push(
+          ...listed.files.map((file) => ({
+            id: file.id,
+            workspaceId,
+            path: file.path,
+            content: '',
+            language: file.language,
+            nativeGrant: { workspaceId: listed.id, fileId: file.id },
+          })),
+        );
+        // Keep already loaded document identities while a refresh is paged.
+        // Otherwise a file near the end would disappear and remount its editor
+        // after each earlier page. On completion, remove genuinely absent files.
+        const visible = listed.nextCursor
+          ? [
+              ...new Map(
+                [
+                  ...this.files.filter(
+                    (file) => file.workspaceId === workspaceId,
+                  ),
+                  ...accumulated,
+                ].map((file) => [file.path, file]),
+              ).values(),
+            ]
+          : accumulated;
+        this.files = [
+          ...this.files.filter((file) => file.workspaceId !== workspaceId),
+          ...visible,
+        ];
+        this.fileListings[workspaceId] = {
+          loaded: visible.length,
+          complete: !listed.nextCursor,
+          truncated: listed.truncated,
+        };
+        publish();
+        cursor = listed.nextCursor;
+      } while (cursor && active());
+    };
+    this.listing = run().catch((error) => {
+      if (!active()) return;
+      this.fileListings[workspaceId] = {
+        loaded: this.files.filter((file) => file.workspaceId === workspaceId)
+          .length,
+        complete: false,
+        truncated: true,
+        error: error instanceof Error ? error.message : 'file listing failed',
+      };
+      publish();
+    });
     return this.listing;
   }
   private report(error: unknown, sessionId = this.snapshot.activeSessionId) {
@@ -619,16 +695,28 @@ export class LiveRuntime implements RuntimePort {
         throw Error(t('open the workspace through the native folder dialog'));
       if (!workspace.trusted) return { dialog: 'trust' };
     }
+    // First commands use exactly the session composer dispatch path. Prepare
+    // the owner first, without ever forwarding command text to the model.
+    const commandInput = text.startsWith('/') || text.startsWith('!');
     const folded = promptAttachments(text, input.attachments ?? []);
     const result = (await this.native('begin-session', {
       ...(workspaceId ? { workspaceId } : {}),
-      text: folded.text,
-      display: folded.display,
+      text: commandInput ? text : folded.text,
+      display: commandInput ? text : folded.display,
+      ...(commandInput ? { prepareOnly: true } : {}),
       ...(folded.attachments.length ? { attachments: folded.attachments } : {}),
       ...(input.model ? { modelId: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
       ...(input.mode ? { mode: input.mode } : {}),
     })) as { sessionId: string };
+    if (commandInput) {
+      this.updateSessionView(result.sessionId, {
+        draft: text,
+        attachments: input.attachments ?? [],
+      });
+      const commandResult = await this.send('steering', result.sessionId);
+      return { sessionId: result.sessionId, commandResult };
+    }
     return { sessionId: result.sessionId };
   };
   selectSession = async (id: string) => {
@@ -677,6 +765,11 @@ export class LiveRuntime implements RuntimePort {
     const sessionId = owner ?? sourceSessionId ?? this.snapshot.activeSessionId;
     const operation = async () => {
       await this.changes;
+      if (
+        kind === 'list-external-file-grants' ||
+        kind === 'revoke-external-file-grant'
+      )
+        return this.native(kind, payload, sessionId, false);
       if (kind === 'extension.enabled') {
         if (
           typeof payload.name !== 'string' ||
@@ -694,6 +787,8 @@ export class LiveRuntime implements RuntimePort {
         );
       }
       const names: Record<string, RuntimeCommandName> = {
+        'list-external-file-grants': 'list-external-file-grants',
+        'revoke-external-file-grant': 'revoke-external-file-grant',
         'configure-connection': 'configure',
         'probe-connection': 'probe-connection',
         'cancel-interaction': 'answer',
@@ -717,6 +812,8 @@ export class LiveRuntime implements RuntimePort {
         'set-default-workspace': 'set-default-workspace',
         reload: 'reload',
         'clear-queue': 'clear-queue',
+        'preview-file-undo': 'preview-file-undo',
+        'restore-turn-files': 'restore-turn-files',
         'write-file': 'write-file',
         'check-update': 'check-update',
         'dismiss-whats-new': 'dismiss-whats-new',
@@ -758,20 +855,30 @@ export class LiveRuntime implements RuntimePort {
     const result = operation();
     // This settings action reports its Promise result in its original row,
     // including superseded intents; it must not become a conversation failure.
-    if (kind !== 'extension.enabled')
+    if (
+      ![
+        'extension.enabled',
+        'list-external-file-grants',
+        'revoke-external-file-grant',
+      ].includes(kind)
+    )
       void result.catch((error) => this.report(error, sessionId));
     return result;
   };
   send = async (
     kind: 'steering' | 'follow-up' = 'steering',
+    sessionId = this.snapshot.activeSessionId,
   ): Promise<CommandResult> => {
-    const sessionId = this.snapshot.activeSessionId;
     await this.changes;
     const session = this.snapshot.sessions.find(
       (item) => item.id === sessionId,
     );
     if (!session) throw Error(t('session not found'));
     const raw = session.draft.trim();
+    if (raw === '/') {
+      this.updateSessionView(session.id, { draft: '' });
+      return { page: 'help' };
+    }
     if (raw.startsWith('!')) {
       await this.native(
         'shell',
