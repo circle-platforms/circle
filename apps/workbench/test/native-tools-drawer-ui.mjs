@@ -17,7 +17,11 @@ try {
       : {}),
   });
   for (const theme of ['dark', 'light']) {
-    const page = await browser.newPage();
+    // The two drawers are stacked (650 + 480 pixels). The browser drawer must be on
+    // screen, or the page rightly stays hidden.
+    const page = await browser.newPage({
+      viewport: { width: 1280, height: 1200 },
+    });
     const errors = [];
     page.on('pageerror', (error) => errors.push(String(error)));
     await page.goto(
