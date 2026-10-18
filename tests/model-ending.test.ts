@@ -904,9 +904,74 @@ test('OpenAI resumed history omits thinking-only assistant turns but retains too
     received?.messages.map((item: any) => item.role),
     ['system', 'user', 'assistant', 'tool', 'user'],
   );
-  assert.equal(received?.messages[2].content, null);
+  assert.equal(received?.messages[2].content, '');
   assert.equal(received?.messages[2].tool_calls[0].id, 'call1');
   assert.equal(received?.messages[3].tool_call_id, 'call1');
   assert.equal(received?.messages[3].content, 'synthetic command failed');
   assert.ok(!JSON.stringify(received).includes('private reasoning'));
+});
+
+test('history with empty tool output, empty prompts and blank partials sends content on every row', async (t) => {
+  const messages: import('../src/types.js').Message[] = [
+    { id: 'u1', role: 'user', content: 'inspect synthetic workspace' },
+    {
+      id: 'a1',
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'call1', name: 'synthetic_tool', args: {} }],
+    },
+    { id: 't1', role: 'tool', content: '', tool_call_id: 'call1' },
+    { id: 'u-empty', role: 'user', content: '' },
+    {
+      id: 'a2',
+      role: 'assistant',
+      content: ' \n',
+      thinking: 'stopped private reasoning',
+      interrupted: true,
+    },
+    { id: 'u2', role: 'user', content: 'continue' },
+  ];
+  const original = structuredClone(messages);
+  for (const protocol of ['openai', 'anthropic'] as const) {
+    let received: Record<string, any> | undefined;
+    const base = await gateway(t, (body, response) => {
+      received = body;
+      if (protocol === 'openai') openai(response, 'stop', { content: 'ok' });
+      else anthropic(response, 'end_turn', [{ type: 'text', text: 'ok' }]);
+    });
+    const result = await model(t, base, protocol).complete({
+      ...request(),
+      messages,
+    });
+    assert.equal(result.message.content, 'ok');
+    const sent = received!.messages as any[];
+    if (protocol === 'openai') {
+      assert.deepEqual(
+        sent.map((item) => [item.role, item.content]),
+        [
+          ['system', 'synthetic system'],
+          ['user', 'inspect synthetic workspace'],
+          ['assistant', ''],
+          ['tool', '(no output)'],
+          ['user', 'continue'],
+        ],
+      );
+    } else {
+      assert.deepEqual(
+        sent.map((item) => item.role),
+        ['user', 'assistant', 'user'],
+      );
+      assert.deepEqual(
+        sent[1].content.map((block: any) => block.type),
+        ['tool_use'],
+      );
+      assert.deepEqual(
+        sent[2].content.map((block: any) => block.type),
+        ['tool_result', 'text'],
+      );
+      assert.equal(sent[2].content[1].text, 'continue');
+    }
+    assert.ok(!JSON.stringify(received).includes('private reasoning'));
+  }
+  assert.deepEqual(messages, original, 'the request never changes history');
 });
