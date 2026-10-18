@@ -7,6 +7,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 ### Fixed
 
 - **A secret you enter is no longer thrown away as `no value was entered before the deadline`.** When the machine was slow, a value could be accepted, so the question card closed, and then refused because the waiting side looked at it only after its time was up. A value entered in time is now always used, and one entered too late is refused when you enter it. Waiting for the answer also no longer competes with entering it.
+- **On Windows, stopping a command just after it started no longer leaves the program it started running.** `taskkill` ends the command's process tree as it finds it, so a program the shell was starting at that moment kept running and could keep the workspace folder in use. Circle now also ends what the stopped shell started while it ran.
 
 ## 1.8.1 - 2026-10-18
 

@@ -12,8 +12,20 @@ import lockfile from 'proper-lockfile';
 const ioError = (code: string) =>
   Object.assign(new Error(`injected ${code}`), { code });
 
+// A sharing refusal is retried only while the call that failed was quick (250 ms); a
+// failure that took longer is not retried, as input-history-persistence.test.ts checks.
+// A loaded runner can pause this process for longer than that between the start of the
+// call and its failure, so the tests that expect a retry hold the clock still: the retry
+// is then decided by the refusal itself, never by how busy the machine was.
+function stillClock(t: TestContext): void {
+  const now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+}
+const STILL_CLOCK = 'const frozen = Date.now(); Date.now = () => frozen;';
+
 for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
   test(`a transient ${code} atomic publish does not lose an entry or another view's browsing state`, (t) => {
+    stillClock(t);
     const directory = scratch(t);
     const path = join(directory, 'history');
     const writer = new InputHistory(path);
@@ -50,6 +62,7 @@ for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
 }
 
 test('a transient locked read never replaces newer peer entries with a stale browsing snapshot', (t) => {
+  stillClock(t);
   const path = join(scratch(t), 'history');
   const stale = new InputHistory(path);
   stale.add('first');
@@ -98,6 +111,7 @@ test('a transient lock acquisition failure retries the history transaction', (t)
 });
 
 test('persistent failures stay bounded and pending entries survive browsing and a later peer merge', (t) => {
+  stillClock(t);
   const path = join(scratch(t), 'history');
   const history = new InputHistory(path);
   history.add('first');
@@ -285,6 +299,7 @@ async function historyFault(
     import { dirname } from 'node:path';
     import lockfile from 'proper-lockfile';
     import { InputHistory } from ${JSON.stringify(module)};
+    ${STILL_CLOCK}
     const path = process.argv[1];
     const history = new InputHistory(path);
     const append = (text) => execFileSync(process.execPath, [
@@ -347,6 +362,7 @@ function restoreFs(t: TestContext): void {
 }
 
 test('a transient history rename failure retries publication without dropping the entry', (t) => {
+  stillClock(t);
   const path = join(scratch(t), 'history');
   const history = new InputHistory(path);
   history.add('first');
@@ -369,6 +385,7 @@ test('a transient history rename failure retries publication without dropping th
 });
 
 test('a transient locked history read never overwrites another terminal with a stale snapshot', (t) => {
+  stillClock(t);
   const path = join(scratch(t), 'history');
   const history = new InputHistory(path);
   history.add('A first');
@@ -564,6 +581,7 @@ test('independent terminal processes retain all 60 entries after each suffers a 
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
     import { InputHistory } from ${JSON.stringify(module)};
+    ${STILL_CLOCK}
     const original = fs.renameSync;
     let failed = false;
     fs.renameSync = (source, target) => {

@@ -28,6 +28,7 @@ import type {
   CommandDescendantCoverage,
 } from './command_process.js';
 import { commandExecutionReceipt } from './command_process.js';
+import { endStranded } from './windows_stranded.js';
 export function plainJobOutput(text: string): string {
   return text
     .split('\n')
@@ -79,6 +80,8 @@ interface Entry {
   child?: ChildProcess;
   pid?: number;
   shellExited?: boolean;
+  /** When the shell was seen to end. */
+  shellEnded?: number;
   exitCode?: number;
   deadline?: number;
   reason?: string;
@@ -719,6 +722,7 @@ export class JobRegistry {
       });
       child.once('exit', (code) => {
         entry.shellExited = true;
+        entry.shellEnded = Date.now();
         entry.exitCode = code ?? 130;
         if (!groupAlive(entry)) this.finish(entry);
         else if (!entry.job && !entry.stopPromise) {
@@ -1048,6 +1052,13 @@ export class JobRegistry {
           await new Promise<void>((resolve) =>
             entry.child!.once('close', () => resolve()),
           );
+        // taskkill misses a program the shell starts just as it is stopped.
+        if (process.platform === 'win32' && entry.pid)
+          await endStranded({
+            pid: entry.pid,
+            started: entry.started,
+            ended: entry.shellEnded ?? Date.now(),
+          }).catch(() => []);
         this.finish(entry);
       } else if (entry.watch) {
         await stopWatch(entry.watch);
