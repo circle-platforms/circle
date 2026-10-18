@@ -464,6 +464,7 @@ export function Home({
                 <DropdownMenu.Content
                   className="dropdown composer-menu project-menu home-menu"
                   side="bottom"
+                  avoidCollisions={false}
                   collisionPadding={8}
                   align="start"
                   sideOffset={7}
