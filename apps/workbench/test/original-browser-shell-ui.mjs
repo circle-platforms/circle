@@ -301,6 +301,67 @@ try {
             checks.push({ height, expanded, geometry });
           }
         }
+  // Thickening the ring must not move or resize the page. A screenshot's
+  // coordinates are taken before Circle clicks.
+  await page.setViewportSize({ width: 1400, height: 684 });
+  await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
+  await page.locator('.workbench').waitFor();
+  await page.evaluate(async () => {
+    await (await import('/src/i18n/index.ts')).setLanguage('en');
+    window.__browserCaptureFixture.drive(false);
+  });
+  {
+    const toggle = page.getByRole('button', {
+      name: 'browser panel',
+      exact: true,
+    });
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+      await toggle.click();
+    await page
+      .getByRole('button', { name: 'browser menu', exact: true })
+      .waitFor();
+  }
+  const pageBox = () =>
+    page.evaluate(() => {
+      const frame = document
+        .querySelector('.native-browser-frame')
+        .getBoundingClientRect();
+      const view = document
+        .querySelector('.native-browser-viewport')
+        .getBoundingClientRect();
+      const round = (value) => Math.round(value);
+      return {
+        x: round(view.x),
+        y: round(view.y),
+        w: round(view.width),
+        h: round(view.height),
+        inset: round(view.x - frame.x),
+      };
+    });
+  const idlePage = await pageBox();
+  assert.ok(idlePage.w > 50 && idlePage.h > 50, 'the page has a box');
+  await page.evaluate(() => window.__browserCaptureFixture.drive(true));
+  await page.getByTestId('browser-operating').waitFor();
+  const drivingPage = await pageBox();
+  assert.deepEqual(
+    drivingPage,
+    idlePage,
+    'the control ring resized the page: ' +
+      JSON.stringify({ idle: idlePage, driving: drivingPage }),
+  );
+  await page.evaluate(() => window.__browserCaptureFixture.drive(false));
+  await page.getByTestId('browser-frame').waitFor();
+  const restoredPage = await pageBox();
+  assert.deepEqual(
+    restoredPage,
+    idlePage,
+    'giving the browser back resized the page: ' +
+      JSON.stringify({ idle: idlePage, restored: restoredPage }),
+  );
+  checks.push({
+    scenario: 'the control ring does not resize the page',
+    status: 'passed',
+  });
   // Circle driving the page is a ring, in both languages and both themes.
   for (const language of ['en', 'zh-CN'])
     for (const theme of ['dark', 'light']) {
@@ -336,11 +397,15 @@ try {
         return {
           driving: node.classList.contains('driving'),
           border: getComputedStyle(node).borderTopWidth,
+          padding: getComputedStyle(node).paddingTop,
+          shadow: getComputedStyle(node).boxShadow,
           inset: view.top - box.top,
         };
       });
       assert.equal(ring.driving, true);
-      assert.equal(ring.border, '4px');
+      assert.equal(ring.border, '1px');
+      assert.equal(ring.padding, '3px');
+      assert.notEqual(ring.shadow, 'none');
       assert(
         ring.inset >= 3,
         'the page covers the driving ring: ' + JSON.stringify(ring),

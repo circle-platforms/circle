@@ -1320,7 +1320,9 @@ try {
           label: node.getAttribute('aria-label'),
           title: node.getAttribute('title'),
           border: style.borderTopWidth,
+          padding: style.paddingTop,
           color: style.borderTopColor,
+          shadow: style.boxShadow,
           footer: !!document.querySelector('.native-browser-footer'),
           frame: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
           view: view
@@ -1330,13 +1332,14 @@ try {
       });
     const ringHoldsPage = (ring) => {
       assert(ring?.view, 'the page box is missing');
-      const border = Number.parseFloat(ring.border);
+      const inset =
+        Number.parseFloat(ring.border) + Number.parseFloat(ring.padding);
       const { frame, view } = ring;
       assert(
-        view.x >= frame.x + border - 1 &&
-          view.y >= frame.y + border - 1 &&
-          view.x + view.w <= frame.x + frame.w - border + 1.5 &&
-          view.y + view.h <= frame.y + frame.h - border + 1.5,
+        view.x >= frame.x + inset - 1 &&
+          view.y >= frame.y + inset - 1 &&
+          view.x + view.w <= frame.x + frame.w - inset + 1.5 &&
+          view.y + view.h <= frame.y + frame.h - inset + 1.5,
         'the page covers the control ring: ' + JSON.stringify(ring),
       );
     };
@@ -1362,6 +1365,11 @@ try {
       Math.abs(Number.parseFloat(yours.border) - 1) < 0.2,
       'ordinary ring is ' + yours.border,
     );
+    assert.ok(
+      Math.abs(Number.parseFloat(yours.padding) - 3) < 0.5,
+      'ordinary ring padding is ' + yours.padding,
+    );
+    assert.equal(yours.shadow, 'none');
     ringHoldsPage(yours);
     const yoursNative = await nativePageBox();
     assert(
@@ -1411,16 +1419,26 @@ try {
     assert.equal(driving.driving, true);
     assert.equal(driving.label, 'Circle is operating');
     assert.equal(driving.title, 'Circle is operating');
-    // Device pixels snap a CSS border, so the used width is not the literal 4px.
+    // The border stays 1px. The accent fills the reserved padding, so the page
+    // box does not change between the screenshot and the click.
     assert.ok(
-      Number.parseFloat(driving.border) >
-        Number.parseFloat(yours.border) + 1,
+      Math.abs(
+        Number.parseFloat(driving.border) - Number.parseFloat(yours.border),
+      ) < 0.2,
       'driving ring is ' + driving.border,
     );
+    assert.ok(
+      Math.abs(
+        Number.parseFloat(driving.padding) - Number.parseFloat(yours.padding),
+      ) < 0.2,
+      'driving padding is ' + driving.padding,
+    );
     assert.notEqual(driving.color, yours.color);
+    assert.notEqual(driving.shadow, 'none');
     ringHoldsPage(driving);
     const drivingNative = await nativePageBox();
-    const inset = Number.parseFloat(driving.border);
+    const inset =
+      Number.parseFloat(driving.border) + Number.parseFloat(driving.padding);
     assert(
       drivingNative &&
         drivingNative.x >= Math.round(driving.frame.x + inset) - 1 &&
@@ -1431,6 +1449,21 @@ try {
           Math.round(driving.frame.y + driving.frame.h - inset) + 1,
       'the native page covers the driving ring: ' +
         JSON.stringify({ drivingNative, frame: driving.frame }),
+    );
+    assert.deepEqual(
+      {
+        x: drivingNative.x,
+        y: drivingNative.y,
+        width: drivingNative.width,
+        height: drivingNative.height,
+      },
+      {
+        x: yoursNative.x,
+        y: yoursNative.y,
+        width: yoursNative.width,
+        height: yoursNative.height,
+      },
+      'the control ring resized the page',
     );
     await page.screenshot({
       path: join(output, 'browser-control-driving.png'),

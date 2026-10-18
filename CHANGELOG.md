@@ -10,7 +10,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Changed
 
-- **Who has the desktop browser is the ring around the page.** The status line under the page is gone. While Circle acts, the page has an accent border (the words **Circle is operating**, or **Waiting for Circle to stop…**, are the border's tooltip and accessible name). While you have the browser the border is the ordinary one and says **you have the browser**. **take over** is in the ⋮ menu. The native page is drawn inside the ring, so the ring stays visible.
+- **Who has the desktop browser is the ring around the page.** The status line under the page is gone. While Circle acts, the page has an accent border (the words **Circle is operating**, or **Waiting for Circle to stop…**, are the border's tooltip and accessible name). While you have the browser the border is the ordinary one and says **you have the browser**. **take over** is in the ⋮ menu. The native page is drawn inside the ring, so the ring stays visible, and the page keeps its size when the ring thickens, so a screenshot's coordinates still land.
 
 ### Fixed
 
