@@ -104,7 +104,7 @@ const baseline = '# native journey\n\noriginal content\n';
 const program =
   "function fixture() {\n  const count = 3;\n  const next = count + 1;\n  console.log('DEBUG_RESULT', next);\n  return next;\n}\nfixture();\n";
 const browserDebugFixture = browserDebugFixtureSource(
-  "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\nnew EventSource('/events').onmessage = event => console.log(event.data);\n",
+  "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\nnew EventSource('/events').onmessage = event => { (window.__journeyEvents ||= []).push(event.data); console.log(event.data); };\n",
 );
 const browserSource = browserDebugFixture.source;
 await Promise.all([
@@ -1169,159 +1169,162 @@ try {
       });
     },
   );
-  await check('browser diagnostics actual source navigation', async () => {
-    await page
-      .getByRole('button', { name: 'browser panel', exact: true })
-      .click();
-    await page
-      .getByRole('textbox', { name: 'browser address', exact: true })
-      .fill(origin);
-    await page
-      .getByRole('textbox', { name: 'browser address', exact: true })
-      .press('Enter');
-    // Developer tools open from the browser's ⋮ menu, as in Chrome
-    if (!(await page.locator('.browser-diagnostics').count())) {
+  await check(
+    'Chromium developer tools and native page visibility',
+    async () => {
+      await page
+        .getByRole('button', { name: 'browser panel', exact: true })
+        .click();
+      await page
+        .getByRole('textbox', { name: 'browser address', exact: true })
+        .fill(origin);
+      await page
+        .getByRole('textbox', { name: 'browser address', exact: true })
+        .press('Enter');
+      await page
+        .getByRole('button', { name: 'browser menu', exact: true })
+        .waitFor();
+      assert.equal(await page.locator('.browser-diagnostics').count(), 0);
+      const devToolsOpen = () =>
+        app.evaluate(
+          ({ webContents }, origin) =>
+            webContents
+              .getAllWebContents()
+              .some(
+                (contents) =>
+                  contents.getURL().startsWith(origin) &&
+                  contents.isDevToolsOpened(),
+              ),
+          origin,
+        );
       await page
         .getByRole('button', { name: 'browser menu', exact: true })
         .click();
       await page.getByRole('menuitem', { name: 'developer tools' }).click();
-      await page.locator('.browser-diagnostics').waitFor();
-    }
-    const panel = page.locator('.browser-diagnostics');
-    const entry = panel
-      .locator('details')
-      .filter({
-        has: page.locator('summary', { hasText: 'JOURNEY_CONSOLE_SOURCE' }),
-      })
-      .first();
-    await entry.locator('summary').click();
-    await entry
-      .getByRole('button', { name: /browserFixture.*browser-source\.js:2/ })
-      .click();
-    await until(
-      async () =>
-        (await page
-          .locator('.file-view')
-          .getByText('browser-source.js', { exact: false })
-          .count()) > 0,
-      'console opens real local source',
-    );
-    await until(
-      async () =>
-        (await page
-          .locator('.file-view .monaco-editor .line-numbers.active-line-number')
-          .first()
-          .innerText()) === '2',
-      'console source cursor is at actual line2',
-    );
-    await screenshot('06-console-to-source');
-    const browserToggle = page.getByRole('button', {
-      name: 'browser panel',
-      exact: true,
-    });
-    if ((await browserToggle.getAttribute('aria-pressed')) !== 'true')
-      await browserToggle.click();
-    // Developer tools open from the browser's ⋮ menu, as in Chrome
-    if (!(await page.locator('.browser-diagnostics').count())) {
+      await until(devToolsOpen, 'Chromium developer tools open from the menu');
       await page
         .getByRole('button', { name: 'browser menu', exact: true })
         .click();
-      await page.getByRole('menuitem', { name: 'developer tools' }).click();
-      await page.locator('.browser-diagnostics').waitFor();
-    }
-    await panel.getByRole('tab', { name: 'network', exact: true }).click();
-    await panel.getByRole('button', { name: /GET 200.*api\/data/ }).click();
-    await panel.getByText('JOURNEY_NETWORK_OK', { exact: true }).waitFor();
-    await panel.getByRole('tab', { name: 'storage', exact: true }).click();
-    await panel
-      .getByRole('button', { name: 'journey: before', exact: true })
-      .waitFor();
-    await panel.getByLabel('storage key', { exact: true }).fill('journey');
-    await panel.getByLabel('storage value', { exact: true }).fill('after');
-    await panel
-      .getByRole('button', { name: 'save storage item', exact: true })
-      .click();
-    await panel
-      .getByRole('button', { name: 'journey: after', exact: true })
-      .waitFor();
-    // Read back via the native page debugger, not the renderer origin.
-    const actual = await page.evaluate(
-      ({ sessionId, origin }) =>
-        window.circleDesktop.browserDiagnostics(sessionId, {
-          action: 'storage',
-          kind: 'local',
-          origin,
-          operation: 'read',
-        }),
-      { sessionId, origin },
-    );
-    assert(actual.storage.some(([k, v]) => k === 'journey' && v === 'after'));
-    // Restore the fixture's original value through the same visible controls.
-    await panel.getByLabel('storage value', { exact: true }).fill('before');
-    await panel
-      .getByRole('button', { name: 'save storage item', exact: true })
-      .click();
-    await panel
-      .getByRole('button', { name: 'journey: before', exact: true })
-      .waitFor();
-    const restored = await page.evaluate(
-      ({ sessionId, origin }) =>
-        window.circleDesktop.browserDiagnostics(sessionId, {
-          action: 'storage',
-          kind: 'local',
-          origin,
-          operation: 'read',
-        }),
-      { sessionId, origin },
-    );
-    assert(
-      restored.storage.some(([k, v]) => k === 'journey' && v === 'before'),
-      'test-modified browser data is restored on the real page',
-    );
-
-    const viewportSettings = panel.getByRole('button', {
-      name: 'viewport',
-      exact: true,
-    });
-    if ((await viewportSettings.getAttribute('aria-expanded')) !== 'true')
-      await viewportSettings.click();
-    await panel.getByLabel('viewport width', { exact: true }).fill('375');
-    await panel.getByLabel('viewport height', { exact: true }).fill('812');
-    await panel
-      .getByRole('button', { name: 'apply viewport', exact: true })
-      .click();
-    await page
-      .getByRole('button', { name: 'browser menu', exact: true })
-      .click();
-    await page
-      .getByRole('menuitem', { name: 'take screenshot', exact: true })
-      .click();
-    await page.getByText('captured observation', { exact: true }).click();
-    const capture = await page
-      .locator('.native-browser img.attachment-image')
-      .getAttribute('src');
-    assert(capture?.startsWith('data:image/png;base64,'));
-    const png = Buffer.from(capture.split(',')[1], 'base64');
-    assert.equal(png.readUInt32BE(16), 375);
-    assert.equal(png.readUInt32BE(20), 812);
-    await writeFile(join(output, '07-actual-browser-capture-375x812.png'), png);
-    await screenshot('07-browser-storage-viewport');
-    if (process.env.CIRCLE_NATIVE_JOURNEY_PUSH === '1') {
+      await page
+        .getByRole('menuitem', { name: 'close developer tools' })
+        .click();
       await until(
-        async () => browserStreams.size > 0,
-        'synthetic browser event stream connected',
+        async () => !(await devToolsOpen()),
+        'the menu closes Chromium developer tools',
       );
-      await runNativeBrowserStream({
-        page,
-        sessionId,
-        output,
-        emit(marker) {
-          for (const stream of browserStreams)
-            stream.write('data: ' + marker + '\n\n');
-        },
-      });
-    }
-  });
+      const guestViews = () =>
+        app.evaluate(({ BrowserWindow }) => {
+          const window = BrowserWindow.getAllWindows()[0];
+          return window.contentView.children
+            .filter(
+              (view) =>
+                view.webContents && view.webContents !== window.webContents,
+            )
+            .map((view) => ({
+              visible: view.getVisible(),
+              url: view.webContents.getURL(),
+              bounds: view.getBounds(),
+            }));
+        });
+      const pageViews = async () =>
+        (await guestViews()).filter(
+          (view) =>
+            view.url.startsWith('http') && !view.url.includes('circle-mask'),
+        );
+      await until(async () => {
+        const views = await pageViews();
+        return views.length > 0 && views.every((view) => view.visible);
+      }, 'the page is shown in the browser panel');
+      const hide = async (label) => {
+        await until(async () => {
+          const views = await pageViews();
+          return views.length > 0 && views.every((view) => !view.visible);
+        }, label);
+      };
+      await page
+        .getByRole('button', { name: 'activity panel', exact: true })
+        .click();
+      await page.getByRole('tab', { name: 'tasks', exact: true }).click();
+      await hide('the page hides on the tasks tab');
+      await page
+        .getByRole('button', { name: 'changes panel', exact: true })
+        .click();
+      await page.getByRole('tab', { name: 'git', exact: true }).click();
+      await hide('the page hides on Git');
+      await page
+        .getByRole('button', { name: 'close inspector', exact: true })
+        .click();
+      await hide('the page hides when the inspector closes');
+      await page
+        .getByRole('button', { name: 'browser panel', exact: true })
+        .click();
+      await until(async () => {
+        const views = await pageViews();
+        const box = await page.evaluate(() => {
+          const node = document.querySelector('.native-browser-viewport');
+          const rect = node?.getBoundingClientRect();
+          return rect
+            ? {
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+              }
+            : null;
+        });
+        return (
+          views.length > 0 &&
+          views.every((view) => view.visible) &&
+          box &&
+          views.every(
+            (view) =>
+              Math.abs(view.bounds.x - box.x) <= 2 &&
+              Math.abs(view.bounds.y - box.y) <= 2 &&
+              Math.abs(view.bounds.width - box.width) <= 2 &&
+              Math.abs(view.bounds.height - box.height) <= 2,
+          )
+        );
+      }, 'the page returns to its box');
+      await page
+        .getByRole('button', { name: 'browser menu', exact: true })
+        .click();
+      await page
+        .getByRole('menuitem', { name: 'take screenshot', exact: true })
+        .click();
+      await page.getByText('captured observation', { exact: true }).click();
+      const capture = await page
+        .locator('.native-browser img.attachment-image')
+        .getAttribute('src');
+      assert(capture?.startsWith('data:image/png;base64,'));
+      const png = Buffer.from(capture.split(',')[1], 'base64');
+      assert.ok(png.readUInt32BE(16) > 0 && png.readUInt32BE(20) > 0);
+      await writeFile(join(output, '07-actual-browser-capture.png'), png);
+      await screenshot('07-browser-chromium-devtools');
+      if (process.env.CIRCLE_NATIVE_JOURNEY_PUSH === '1') {
+        await until(
+          async () => browserStreams.size > 0,
+          'synthetic browser event stream connected',
+        );
+        await runNativeBrowserStream({
+          page,
+          output,
+          emit(marker) {
+            for (const stream of browserStreams)
+              stream.write('data: ' + marker + '\n\n');
+          },
+          readGuest: (script) =>
+            app.evaluate(
+              ({ webContents }, { origin, script }) =>
+                webContents
+                  .getAllWebContents()
+                  .find((contents) => contents.getURL().startsWith(origin))
+                  .executeJavaScript(script),
+              { origin, script },
+            ),
+        });
+      }
+    },
+  );
   await check('draft survives original inspector switches', async () => {
     await closeFile();
     const message = page.getByRole('textbox', { name: 'message', exact: true });
@@ -1705,7 +1708,7 @@ try {
     );
   if (process.env.CIRCLE_NATIVE_JOURNEY_WEB_DEBUG === '1')
     await check(
-      'web GUI breakpoint refreshed locals source navigation and resume',
+      'Chromium developer tools open and the page stays usable',
       async () => {
         if (!(await page.locator('.native-browser').isVisible()))
           await page
@@ -1717,14 +1720,6 @@ try {
         await page
           .getByRole('textbox', { name: 'browser address', exact: true })
           .press('Enter');
-        // Developer tools open from the browser's ⋮ menu, as in Chrome
-        if (!(await page.locator('.browser-diagnostics').count())) {
-          await page
-            .getByRole('button', { name: 'browser menu', exact: true })
-            .click();
-          await page.getByRole('menuitem', { name: 'developer tools' }).click();
-          await page.locator('.browser-diagnostics').waitFor();
-        }
         await until(
           async () => browserStreams.size > 0,
           'actual web debug fixture stream connected',
@@ -1888,25 +1883,7 @@ try {
               await address.fill(origin);
               await address.press('Enter');
             }
-            // Developer tools open from the browser's ⋮ menu, as in Chrome
-            if (!(await page.locator('.browser-diagnostics').count())) {
-              await page
-                .getByRole('button', {
-                  name: zh ? '浏览器菜单' : 'browser menu',
-                  exact: true,
-                })
-                .click();
-              await page
-                .getByRole('menuitem', {
-                  name: zh ? '开发工具' : 'developer tools',
-                })
-                .click();
-              await page.locator('.browser-diagnostics').waitFor();
-            }
-            await page
-              .locator('.browser-diagnostics')
-              .getByRole('tab', { name: zh ? '存储' : 'storage', exact: true })
-              .click();
+            await address.waitFor();
           }
         },
         restore: async () => {

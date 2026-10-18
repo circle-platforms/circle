@@ -117,6 +117,7 @@ export const githubConnection: Record<string, string> = {
   add: '添加',
   'Write it as owner/repository, for example octo-org/app.':
     '请写成 owner/repository 格式，例如 octo-org/app。',
+  reset: '重置',
   'Your sign-in is kept in secure storage.': '登录信息保存在安全存储中。',
   'You sign in again the next time.': '下次使用时需要重新登录。',
   permissions: '权限',

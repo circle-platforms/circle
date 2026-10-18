@@ -14,7 +14,7 @@ The desktop application uses the existing `AgentRuntime` with native workspace s
 | Workspace services    | `apps/desktop/src/workspace/workspace-services.ts` owns documents, terminals, language services, debugger, Git and delivery for a granted workspace. `workspace-protocol.ts` validates the service/method surface.                                                                                                      |
 | Development UI        | `App.tsx` retains the original main file/conversation area and resizable Inspector. `FileViewer.tsx` hosts Monaco and versioned saves. `WorkspacePanelContents.tsx` places interactive terminals in Terminal, Git and delivery in Changes, and tasks and debugging in Activity, using existing controls and theme.      |
 | Collaboration         | `TaskService`, `CollaborationScheduler` and task worktrees bind a task to its baseline, dependencies, session, access and attempt. Default shared limits are eight model requests, two builds, one foreground UI task and one browser resource. Settings can change supported limits; foreground UI remains serialized. |
-| Browser acceptance    | `NativeBrowser` and `BrowserDiagnostics` expose console, network, storage, viewport and source/debug actions through the existing browser controller. Browser recording/replay remains on that controller's ownership and approval path.                                                                                |
+| Browser acceptance    | `NativeBrowser` shows the page in a native view and opens Chromium's own developer tools. The model's browser tools, including recording and replay, stay on that controller's ownership and approval path. The native view hides when its tab, the inspector, or a dialog or menu covers it, and resizes with the panel. |
 | Delivery              | `delivery-cycle.ts` coordinates tasks, verification, publication and CI. `cycle-ports.ts` binds it to owned integration worktrees, Git, task verification and the bundled GitHub CLI. The renderer opens these controls in automatic delivery.                                                                          |
 
 The GitHub plugin details (`/page/extensions?plugin=github`) are the account connection and management entry. Settings and automatic delivery link there and share the same profile connection. The bundled `github` runtime extension exposes repository tools only with an enabled provider, a connected account and explicitly allowed repositories. Once an account is connected, `try in a conversation` prepares a read-only connection example in the original conversation's unsent draft; it does not submit it. Local adapter tests do not establish live authorization, repository permissions or hosted CI for a release.
@@ -68,7 +68,6 @@ npm --prefix apps/workbench ci
 npm --prefix apps/desktop run build
 npm --prefix apps/desktop run test:runtime
 npm --prefix apps/desktop run test:developer
-npm --prefix apps/desktop run test:browser-diagnostics
 npm --prefix apps/desktop run test:journey
 npm --prefix apps/desktop run test:performance
 ```

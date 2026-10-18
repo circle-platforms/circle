@@ -122,6 +122,11 @@ try {
               observedAt: '2026-10-17T00:00:00Z',
             };
           },
+          // The desktop hands the keyboard over on its own channel; record it as
+          // the page action it replaced.
+          browserKeys: (id, focused) => {
+            calls.push(['page', 'keys', focused]);
+          },
           browserPage: async (id, action, value) => {
             calls.push(['page', action, value ?? null]);
             if (action === 'snapshot') return ICON;
@@ -139,27 +144,11 @@ try {
                 value === 'reset'
                   ? 100
                   : state.zoom + (value === 'in' ? 25 : -25);
+            if (action === 'devtools' || action === 'inspect')
+              state.devTools = !state.devTools;
             if (action !== 'keys') emit();
             return null;
           },
-          browserDiagnostics: async (id, request) => {
-            if (request.action === 'devtools') calls.push(['devtools']);
-            return {
-              state: {
-                owner: 'circle',
-                console: [],
-                network: [],
-                debugger: {
-                  paused: false,
-                  pauseEpoch: 1,
-                  breakpoints: [],
-                  stackFrames: [],
-                },
-              },
-              stream: { epoch: 'e', sequence: 0 },
-            };
-          },
-          onBrowserDiagnosticEvent: () => () => {},
         },
         {
           get: (target, key) =>
@@ -395,56 +384,41 @@ try {
       ['page', 'zoom', 'reset'],
     ],
   );
-  // Take screenshot and developer tools are the old header actions
+  // Take screenshot is in the menu. Developer tools are Chromium's, so the
+  // page keeps its size and the menu asks the browser to open them.
   await clearCalls();
   await page.getByRole('button', { name: 'browser menu', exact: true }).click();
   await page
     .getByRole('menuitem', { name: 'take screenshot', exact: true })
     .click();
   await page.getByText('captured observation', { exact: true }).waitFor();
-  // Developer tools take no room until asked for, then dock under the page as
-  // Chrome's do, and close with their own button or the same shortcut
   assert.equal(await page.locator('.browser-diagnostics').count(), 0);
-  assert.equal(
-    await page
-      .getByRole('button', { name: 'page diagnostics', exact: true })
-      .count(),
-    0,
-  );
   const closedTools = await viewportRect();
   await page.getByRole('button', { name: 'browser menu', exact: true }).click();
   await page.getByRole('menuitem', { name: 'developer tools' }).click();
-  const docked = page.locator('.browser-diagnostics');
-  await docked.getByRole('heading', { name: 'developer tools' }).waitFor();
-  await settle();
-  const openTools = await viewportRect();
-  assert.ok(openTools[3] < closedTools[3], 'docked tools take the page bottom');
-  assert.deepEqual(openTools.slice(0, 3), closedTools.slice(0, 3));
-  await page.screenshot({ path: out + '/devtools-en-light-1400.png' });
-  await docked
-    .getByRole('button', { name: 'open developer tools', exact: true })
-    .click();
   await page.waitForFunction(() =>
-    window.__browser.calls.some((call) => call[0] === 'devtools'),
+    window.__browser.calls.some(
+      (call) => call[0] === 'page' && call[1] === 'devtools',
+    ),
   );
-  await docked
-    .getByRole('button', { name: 'close developer tools', exact: true })
-    .click();
-  await docked.waitFor({ state: 'detached' });
   await settle();
   assert.deepEqual(await viewportRect(), closedTools);
+  assert.equal(await page.locator('.browser-diagnostics').count(), 0);
+  await page.getByRole('button', { name: 'browser menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'close developer tools' }).click();
   await page.getByRole('button', { name: 'go back', exact: true }).focus();
   await page.keyboard.press('Meta+Alt+KeyI');
-  await docked.waitFor();
   await page.getByRole('button', { name: 'go back', exact: true }).focus();
   await page.keyboard.press('F12');
-  await docked.waitFor({ state: 'detached' });
-  // Inspect on the page opens them through the main process
   await page.evaluate(() => window.__browser.key('inspect'));
-  await docked.waitFor();
   await page.evaluate(() => window.__browser.key('devtools'));
-  await docked.waitFor({ state: 'detached' });
   assert.deepEqual(await viewportRect(), closedTools);
+  assert.equal(
+    (await pageCalls()).filter(
+      (call) => call[0] === 'page' && ['devtools', 'inspect'].includes(call[1]),
+    ).length,
+    6,
+  );
   assert.equal(
     await page
       .getByRole('button', { name: 'capture browser', exact: true })

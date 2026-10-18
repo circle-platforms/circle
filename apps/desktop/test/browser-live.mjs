@@ -442,6 +442,19 @@ await script([
     call('auto-permission-ask', 'browser_click', { ref: 'e1', element: 'Ask' }),
   ]),
   answer('auto-permission-done', 'auto mode refused notifications'),
+  calls('ring-first', [
+    call('ring-first', 'browser_navigate', { url: url + 'status' }),
+  ]),
+  {
+    chunks: [{ waitForFile: join(temp, 'browser-ring-gap') }],
+    message: {
+      id: 'ring-second',
+      role: 'assistant',
+      content: '',
+      tool_calls: [call('ring-second', 'browser_snapshot', {})],
+    },
+  },
+  answer('ring-held', 'the ring stayed on'),
 ]);
 const env = {
   ...process.env,
@@ -492,13 +505,15 @@ const nativeUrls = () =>
       view.webContents.getURL(),
     ),
   );
-// Close one named tab from its own page, as a page's script does
+// Close one named tab from its own page, as a page's script does. The call
+// resolves when the page has run `window.close()`, so a refused close is
+// settled before the tab list is read.
 const closeView = (title) =>
-  app.evaluate(({ BrowserWindow }, name) => {
+  app.evaluate(async ({ BrowserWindow }, name) => {
     const views = BrowserWindow.getAllWindows()[0].contentView.children;
     const view = views.find((entry) => entry.webContents.getTitle() === name);
     if (!view) throw Error(`no tab titled ${name}`);
-    view.webContents.executeJavaScript('window.close()');
+    await view.webContents.executeJavaScript('window.close()');
   }, title);
 // The tab’s own back-forward list, as Chromium holds it
 const nativeHistory = () =>
@@ -523,6 +538,9 @@ const resultOf = async (id) => {
 };
 const textOf = async (id) => (await resultOf(id)).content;
 async function launch() {
+  // The process is ready when its debugger is listening and the first window
+  // exists. A 45s clock expired while a busy machine was still starting Electron;
+  // the message box below is the screen that says the app is up.
   app = await electron.launch({
     chromiumSandbox: true,
     executablePath:
@@ -530,11 +548,11 @@ async function launch() {
     args: [resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root)],
     cwd: root,
     env,
-    timeout: 45_000,
+    timeout: 0,
   });
   // Playwright answers a page's dialogs itself unless something listens: let Circle do it
   app.context().on('page', (nativePage) => nativePage.on('dialog', () => {}));
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: 0 });
   page.setDefaultTimeout(patience(20_000));
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
@@ -626,6 +644,17 @@ try {
       /Circle proceeded, approved by the user/,
     );
     assert.match(await textOf('proceed'), /Local browser form/);
+    const hiddenPages = await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return window.contentView.children
+        .filter((view) => view.webContents.getURL().startsWith('http'))
+        .map((view) => view.getVisible());
+    });
+    assert(
+      hiddenPages.length > 0 && hiddenPages.every((visible) => !visible),
+      'the native page stays painted while the narrow panel is closed: ' +
+        JSON.stringify(hiddenPages),
+    );
     checks.push(
       "in a narrow window the browser panel stays closed while Circle uses the browser, so Circle's cards and the input box stay in reach, and Circle acts in the closed panel all the same",
     );
@@ -703,8 +732,7 @@ try {
       'a passed certificate warning leaves no dead page in the tab history',
     );
     // The page fills the panel, also in a window as tall as the screen allows, where a
-    // page of fixed height left a gap: below the footer there is only the panel's own
-    // padding (20) and the footer's margin (10)
+    // page of fixed height left a gap under the frame.
     const blankBelow = async (height) => {
       await setViewport(app, page, { width, height });
       // The screen may hold less than asked: wait until the window has settled
@@ -727,7 +755,7 @@ try {
         return {
           height: innerHeight,
           footerGap:
-            bottom('.inspector-body') - bottom('.native-browser-footer'),
+            bottom('.inspector-body') - bottom('.native-browser-frame'),
           blank: bottom('.inspector-body') - contentBottom,
           contentBottom,
           containerBottom: bottom('.inspector-body'),
@@ -1012,32 +1040,211 @@ try {
       });
     const split = { dom: await domBox(), view: await viewBox() };
     assert(split.dom && split.view, 'the browser page is shown in the panel');
-    await page.getByRole('button', { name: 'full view', exact: true }).click();
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    const whole = { dom: await domBox(), view: await viewBox() };
-    assert(
-      whole.view.width > split.view.width + 40,
-      `the native page grew with the panel: ${JSON.stringify([
-        split.view,
-        whole.view,
-      ])}`,
-    );
-    assert(
-      Math.abs(whole.view.width - whole.dom.width) <= 3 &&
-        Math.abs(whole.view.height - whole.dom.height) <= 3,
-      `the native page left its box: ${JSON.stringify(whole)}`,
+    if (
+      await page.getByRole('button', { name: 'full view', exact: true }).count()
+    ) {
+      await page
+        .getByRole('button', { name: 'full view', exact: true })
+        .click();
+      let whole;
+      await waitFor(async () => {
+        const dom = await domBox();
+        const view = await viewBox();
+        if (!dom || !view) return false;
+        whole = { dom, view };
+        return (
+          view.width > split.view.width + 40 &&
+          Math.abs(view.width - dom.width) <= 3 &&
+          Math.abs(view.height - dom.height) <= 3
+        );
+      }, 'the native page grew with the panel');
+      assert(
+        whole.view.width > split.view.width + 40,
+        `the native page grew with the panel: ${JSON.stringify([
+          split.view,
+          whole.view,
+        ])}`,
+      );
+      assert(
+        Math.abs(whole.view.width - whole.dom.width) <= 3 &&
+          Math.abs(whole.view.height - whole.dom.height) <= 3,
+        `the native page left its box: ${JSON.stringify(whole)}`,
+      );
+      await page
+        .getByRole('button', { name: 'exit full view', exact: true })
+        .click();
+      let back;
+      await waitFor(async () => {
+        const dom = await domBox();
+        const view = await viewBox();
+        if (!dom || !view) return false;
+        back = view;
+        return (
+          Math.abs(view.width - split.view.width) <= 3 &&
+          Math.abs(view.width - dom.width) <= 3 &&
+          Math.abs(view.height - dom.height) <= 3
+        );
+      }, 'the split took the page back');
+      assert(
+        Math.abs(back.width - split.view.width) <= 3,
+        `the split did not take the page back: ${JSON.stringify([
+          split.view,
+          back,
+        ])}`,
+      );
+      checks.push(
+        'the full view carries the native browser page across the workspace and back, in step with its box',
+      );
+    }
+    // Switching the inspector, closing it, a dialog and a resize must take the
+    // native page with them. A hidden tab used to leave the WebContentsView painted.
+    const httpViews = () =>
+      app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0];
+        return window.contentView.children
+          .filter((view) => view.webContents.getURL().startsWith('http'))
+          .map((view) => ({
+            visible: view.getVisible(),
+            bounds: view.getBounds(),
+          }));
+      });
+    const waitViews = async (check, label) => {
+      let last;
+      try {
+        await waitFor(async () => {
+          last = await httpViews();
+          return check(last);
+        }, label);
+      } catch (error) {
+        throw Error(`${label}: ${JSON.stringify(last)}`, { cause: error });
+      }
+      return last;
+    };
+    await page
+      .getByRole('button', { name: 'activity panel', exact: true })
+      .click();
+    await page.getByRole('tab', { name: 'tasks', exact: true }).click();
+    await waitViews(
+      (views) => views.length > 0 && views.every((view) => !view.visible),
+      'the page stays painted on the tasks tab',
     );
     await page
-      .getByRole('button', { name: 'exit full view', exact: true })
+      .getByRole('button', { name: 'changes panel', exact: true })
       .click();
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    const back = await viewBox();
+    await page.getByRole('tab', { name: 'git', exact: true }).click();
+    await waitViews(
+      (views) => views.every((view) => !view.visible),
+      'the page stays painted on Git',
+    );
+    await page
+      .getByRole('button', { name: 'close inspector', exact: true })
+      .click();
+    await waitViews(
+      (views) => views.every((view) => !view.visible),
+      'the page stays painted after the inspector closes',
+    );
+    await page
+      .getByRole('button', { name: 'browser panel', exact: true })
+      .click();
+    await waitViews(
+      (views) => views.some((view) => view.visible),
+      'the page did not return with the browser panel',
+    );
+    await page
+      .getByRole('button', { name: 'browser menu', exact: true })
+      .click();
+    await page.getByRole('menu').waitFor();
+    await waitViews(
+      (views) => views.length > 0 && views.every((view) => !view.visible),
+      'the page stays painted under the browser menu',
+    );
+    await page.keyboard.press('Escape');
+    await page.getByRole('menu').waitFor({ state: 'detached' });
+    await waitViews(
+      (views) => views.some((view) => view.visible),
+      'the page did not return after the menu',
+    );
+    await app.evaluate(({ Menu }) =>
+      Menu.getApplicationMenu()
+        .items.find((item) => item.label === 'view')
+        .submenu.items.find((item) => item.label === 'session tree')
+        .click(),
+    );
+    const tree = page.getByRole('dialog', {
+      name: 'session tree',
+      exact: true,
+    });
+    await tree.waitFor();
+    await waitViews(
+      (views) => views.every((view) => !view.visible),
+      'the page stays painted under a dialog',
+    );
+    await tree
+      .getByRole('button', { name: 'close dialog', exact: true })
+      .click();
+    await waitViews(
+      (views) => views.some((view) => view.visible),
+      'the page did not return after the dialog',
+    );
+    const beforeResize = await viewBox();
+    const beforeDom = await domBox();
+    const beforeInner = await page.evaluate(() => ({
+      width: innerWidth,
+      height: innerHeight,
+    }));
+    const resized = await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      const bounds = window.getBounds();
+      window.setBounds({
+        ...bounds,
+        width: Math.max(800, bounds.width - 120),
+        height: Math.max(600, bounds.height - 80),
+      });
+      const [width, height] = window.getContentSize();
+      return { width, height };
+    });
+    let afterResize;
+    let afterDom;
+    await waitFor(async () => {
+      const inner = await page.evaluate(() => ({
+        width: innerWidth,
+        height: innerHeight,
+      }));
+      afterResize = await viewBox();
+      afterDom = await domBox();
+      const fitted =
+        Math.abs(inner.width - resized.width) <= 2 &&
+        Math.abs(inner.height - resized.height) <= 2;
+      const unchangedWindow =
+        Math.abs(resized.width - beforeInner.width) <= 2 &&
+        Math.abs(resized.height - beforeInner.height) <= 2;
+      const domMoved =
+        !!beforeDom &&
+        !!afterDom &&
+        (Math.abs(afterDom.width - beforeDom.width) > 3 ||
+          Math.abs(afterDom.height - beforeDom.height) > 3);
+      return (
+        fitted &&
+        (domMoved || unchangedWindow) &&
+        !!afterResize &&
+        !!afterDom &&
+        Math.abs(afterResize.width - afterDom.width) <= 3 &&
+        Math.abs(afterResize.height - afterDom.height) <= 3
+      );
+    }, 'resize moved the native page with its box');
     assert(
-      Math.abs(back.width - split.view.width) <= 3,
-      `the split did not take the page back: ${JSON.stringify([split.view, back])}`,
+      afterResize &&
+        afterDom &&
+        Math.abs(afterResize.width - afterDom.width) <= 3 &&
+        Math.abs(afterResize.height - afterDom.height) <= 3,
+      `resize left the native page: ${JSON.stringify({
+        beforeResize,
+        afterResize,
+        afterDom,
+      })}`,
     );
     checks.push(
-      'the full view carries the native browser page across the workspace and back, in step with its box',
+      'the native page hides when its tab, the debug tab, tasks, Git, the inspector, a menu or a dialog covers it, and follows a window resize',
     );
 
     await send('open the unavailable local port');
@@ -1172,6 +1379,81 @@ try {
       /When you are done, continue here or send a message/,
     );
     await page.getByTestId('browser-user').waitFor();
+    const controlRing = () =>
+      page.evaluate(() => {
+        const node = document.querySelector('.native-browser-frame');
+        if (!node) return null;
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        const view = document
+          .querySelector('.native-browser-viewport')
+          ?.getBoundingClientRect();
+        return {
+          driving: node.classList.contains('driving'),
+          label: node.getAttribute('aria-label'),
+          title: node.getAttribute('title'),
+          border: style.borderTopWidth,
+          padding: style.paddingTop,
+          color: style.borderTopColor,
+          shadow: style.boxShadow,
+          footer: !!document.querySelector('.native-browser-footer'),
+          frame: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+          view: view
+            ? { x: view.x, y: view.y, w: view.width, h: view.height }
+            : null,
+        };
+      });
+    const ringHoldsPage = (ring) => {
+      assert(ring?.view, 'the page box is missing');
+      const inset =
+        Number.parseFloat(ring.border) + Number.parseFloat(ring.padding);
+      const { frame, view } = ring;
+      assert(
+        view.x >= frame.x + inset - 1 &&
+          view.y >= frame.y + inset - 1 &&
+          view.x + view.w <= frame.x + frame.w - inset + 1.5 &&
+          view.y + view.h <= frame.y + frame.h - inset + 1.5,
+        'the page covers the control ring: ' + JSON.stringify(ring),
+      );
+    };
+    const nativePageBox = () =>
+      app.evaluate(({ BrowserWindow }) => {
+        const view = BrowserWindow.getAllWindows()[0].contentView.children.find(
+          (entry) =>
+            entry.getVisible() && entry.webContents.getURL().startsWith('http'),
+        );
+        return view ? view.getBounds() : null;
+      });
+    const yours = await controlRing();
+    assert.equal(
+      yours.footer,
+      false,
+      'the status line is still under the page',
+    );
+    assert.equal(yours.driving, false);
+    assert.equal(yours.label, 'you have the browser');
+    assert.equal(yours.title, 'you have the browser');
+    // Electron reports a CSS pixel as a fraction of a device pixel.
+    assert.ok(
+      Math.abs(Number.parseFloat(yours.border) - 1) < 0.2,
+      'ordinary ring is ' + yours.border,
+    );
+    assert.ok(
+      Math.abs(Number.parseFloat(yours.padding) - 3) < 0.5,
+      'ordinary ring padding is ' + yours.padding,
+    );
+    assert.equal(yours.shadow, 'none');
+    ringHoldsPage(yours);
+    const yoursNative = await nativePageBox();
+    assert(
+      yoursNative &&
+        yoursNative.x >= Math.round(yours.frame.x) &&
+        yoursNative.y >= Math.round(yours.frame.y),
+      'the native page covers the frame: ' + JSON.stringify(yoursNative),
+    );
+    await page.screenshot({
+      path: join(output, 'browser-control-yours.png'),
+    });
     assert.equal(await page.getByTestId('browser-control').count(), 0);
     assert.equal(
       await page
@@ -1206,6 +1488,59 @@ try {
     assert.equal((await browserState(sessionId)).control, 'shared');
     await send('open the slow page');
     await page.getByTestId('browser-operating').waitFor();
+    const driving = await controlRing();
+    assert.equal(driving.driving, true);
+    assert.equal(driving.label, 'Circle is operating');
+    assert.equal(driving.title, 'Circle is operating');
+    // The border stays 1px. The accent fills the reserved padding, so the page
+    // box does not change between the screenshot and the click.
+    assert.ok(
+      Math.abs(
+        Number.parseFloat(driving.border) - Number.parseFloat(yours.border),
+      ) < 0.2,
+      'driving ring is ' + driving.border,
+    );
+    assert.ok(
+      Math.abs(
+        Number.parseFloat(driving.padding) - Number.parseFloat(yours.padding),
+      ) < 0.2,
+      'driving padding is ' + driving.padding,
+    );
+    assert.notEqual(driving.color, yours.color);
+    assert.notEqual(driving.shadow, 'none');
+    ringHoldsPage(driving);
+    const drivingNative = await nativePageBox();
+    const inset =
+      Number.parseFloat(driving.border) + Number.parseFloat(driving.padding);
+    assert(
+      drivingNative &&
+        drivingNative.x >= Math.round(driving.frame.x + inset) - 1 &&
+        drivingNative.y >= Math.round(driving.frame.y + inset) - 1 &&
+        drivingNative.x + drivingNative.width <=
+          Math.round(driving.frame.x + driving.frame.w - inset) + 1 &&
+        drivingNative.y + drivingNative.height <=
+          Math.round(driving.frame.y + driving.frame.h - inset) + 1,
+      'the native page covers the driving ring: ' +
+        JSON.stringify({ drivingNative, frame: driving.frame }),
+    );
+    assert.deepEqual(
+      {
+        x: drivingNative.x,
+        y: drivingNative.y,
+        width: drivingNative.width,
+        height: drivingNative.height,
+      },
+      {
+        x: yoursNative.x,
+        y: yoursNative.y,
+        width: yoursNative.width,
+        height: yoursNative.height,
+      },
+      'the control ring resized the page',
+    );
+    await page.screenshot({
+      path: join(output, 'browser-control-driving.png'),
+    });
     // A click on the clear layer over the page while Circle acts
     const masked = await app.evaluate(async ({ BrowserWindow }) => {
       const views = BrowserWindow.getAllWindows()[0].contentView.children;
@@ -1574,6 +1909,53 @@ try {
     checks.push(
       "auto mode takes the browser back once the person stops, says so to the model, and refuses a page's permission request without asking",
     );
+    // The ring stays lit between two browser tools, while Circle is only thinking.
+    const ringGap = join(temp, 'browser-ring-gap');
+    const requestsBeforeRing = (await requests()).length;
+    await send('look twice and pause between the looks');
+    await waitFor(
+      async () => (await requests()).length >= requestsBeforeRing + 2,
+      'the model paused between browser tools',
+    );
+    await waitFor(async () => {
+      const ring = await controlRing();
+      const shown = await browserState(sessionId);
+      return (
+        ring?.driving === true &&
+        shown.operating !== true &&
+        shown.control !== 'user' &&
+        shown.control !== 'agent'
+      );
+    }, 'the ring stays on between browser tools');
+    const held = await controlRing();
+    assert.equal(held.driving, true, 'the ring went out between browser tools');
+    assert.equal(held.label, 'Circle is operating');
+    assert.notEqual((await browserState(sessionId)).operating, true);
+    assert.ok(
+      Math.abs(Number.parseFloat(held.border) - 1) < 0.2,
+      'held ring border is ' + held.border,
+    );
+    assert.ok(
+      Math.abs(Number.parseFloat(held.padding) - 3) < 0.5,
+      'held ring padding is ' + held.padding,
+    );
+    assert.notEqual(held.shadow, 'none');
+    await page
+      .getByRole('button', { name: 'browser menu', exact: true })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'take over', exact: true })
+      .waitFor();
+    await page.keyboard.press('Escape');
+    await writeFile(ringGap, 'go\n');
+    await page.getByText('the ring stayed on', { exact: true }).waitFor();
+    await waitFor(async () => {
+      const ring = await controlRing();
+      return ring?.driving === false && !ring.label;
+    }, 'the ring goes out when the turn ends');
+    checks.push(
+      'the control ring stays on between two browser tools, including while Circle is only thinking, and goes out when the turn ends',
+    );
     assert.deepEqual(errors, []);
     // The address draft belongs to the shown tab, even when navigation fails before loading.
     const draftAddress = page.getByRole('textbox', {
@@ -1632,7 +2014,6 @@ try {
     // that, and so does Circle - otherwise a site that ends a side panel with
     // window.close() would empty the browser panel under the person.
     await closeView('Close fixture opener');
-    await new Promise((resolve) => setTimeout(resolve, 400));
     assert.equal(
       (await browserState(sessionId)).tabs.length,
       openerState.tabs.length,
@@ -1799,7 +2180,13 @@ try {
         password,
         role,
         formSteps[firstSubmit],
-        { expect: 'INTENTIONAL_MISSING_BROWSER_ASSERTION' },
+        // The string is absent on purpose. The default ten seconds would keep
+        // polling until the test's own wait for the model's reply had expired.
+        // One second is one look at a page that already finished submitting.
+        {
+          expect: 'INTENTIONAL_MISSING_BROWSER_ASSERTION',
+          timeout: 1,
+        },
       ],
     };
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -1875,6 +2262,14 @@ try {
     await approval('trusts an untrusted certificate')
       .getByRole('button', { name: 'allow once', exact: true })
       .click();
+    await waitFor(async () => {
+      try {
+        await resultOf('replay-failure');
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'the failed replay reached the model');
     await page.getByText('replay failure inspected', { exact: true }).waitFor();
     const failed = await textOf('replay-failure');
     assert.match(failed, /Step 7 of 7 could not be done/);
@@ -1919,12 +2314,22 @@ try {
 
     const browserBeforeFix = await browserState(sessionId);
     edited.steps[6].expect = 'Submitted admin as maintainer';
+    // The repaired step waits until the submitted page shows, up to the default.
+    delete edited.steps[6].timeout;
     await editScript(JSON.stringify(edited, null, 2) + '\n');
     await send('continue the repaired browser script from failed step seven');
     const retryApproval = approval('runs a recorded browser script');
     await retryApproval
       .getByRole('button', { name: 'allow once', exact: true })
       .click();
+    await waitFor(async () => {
+      try {
+        await resultOf('replay');
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'the repaired replay reached the model');
     await page.getByText('replay finished', { exact: true }).waitFor();
     const replayed = await textOf('replay');
     assert.match(replayed, /^Replayed "fixture form": steps 7–7 of 7 done\./);

@@ -115,6 +115,7 @@ export const panels: Record<string, string> = {
   'cannot reach this site': '无法访问此网站',
   'reload page': '重新加载页面',
   'Circle is operating': 'Circle 正在操作',
+  'Waiting for your approval': '等待你的批准',
   'The page asks for a file': '网页在请求一个文件',
   'The page asks for files': '网页在请求文件',
   'choose…': '选择…',

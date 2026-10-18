@@ -109,3 +109,55 @@ export function connectionKind(
   if (/^http:/i.test(url)) return 'http';
   return 'none';
 }
+
+export type BrowserRing = 'idle' | 'user' | 'pending' | 'driving' | 'awaiting';
+
+/** Tools the current turn has called, after its latest user message. */
+export function currentTurnTools(
+  messages: readonly {
+    role: string;
+    shell?: unknown;
+    tool?: { name: string; status: string };
+  }[],
+): { name: string; status: string }[] {
+  let start = 0;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.role === 'user' && !message.shell) {
+      start = index + 1;
+      break;
+    }
+  }
+  return messages
+    .slice(start)
+    .flatMap((message) =>
+      message.tool
+        ? [{ name: message.tool.name, status: message.tool.status }]
+        : [],
+    );
+}
+
+/**
+ * Who the ring around the page says has the browser.
+ * Circle's turn keeps it lit from the first browser tool until the turn ends, the
+ * person takes the browser, or the session stops. Waiting for an approval is quieter.
+ */
+export function browserRing(input: {
+  control?: 'shared' | 'agent' | 'user_pending' | 'user';
+  operating?: boolean;
+  sessionState?: 'idle' | 'waiting' | 'paused';
+  tools?: readonly { name: string; status: string }[];
+}): BrowserRing {
+  if (input.control === 'user') return 'user';
+  if (input.control === 'user_pending') return 'pending';
+  if (input.operating || input.control === 'agent') return 'driving';
+  if (input.sessionState !== 'waiting') return 'idle';
+  const browser = (input.tools ?? []).filter((tool) =>
+    tool.name.startsWith('browser_'),
+  );
+  if (!browser.length) return 'idle';
+  const running = browser.some((tool) => tool.status === 'running');
+  if (!running && browser.some((tool) => tool.status === 'waiting'))
+    return 'awaiting';
+  return 'driving';
+}

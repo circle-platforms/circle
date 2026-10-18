@@ -29,7 +29,6 @@
     "test:extensions": "node test/extensions-native.mjs",
     "tools:prepare": "node scripts/developer-toolchain.mjs",
     "test:developer": "node test/developer-toolchain-smoke.mjs && node test/developer-debug-smoke.mjs",
-    "test:browser-diagnostics": "node test/browser-diagnostics-native.mjs",
     "postinstall": "node scripts/developer-toolchain.mjs --native-permissions",
     "test:journey": "node test/native-developer-journey.mjs",
     "test:performance": "node --import tsx test/native-performance.mjs",

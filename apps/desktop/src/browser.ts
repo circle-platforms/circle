@@ -1,6 +1,3 @@
-import type { BrowserDiagnosticEvent } from './browser-diagnostics-contracts';
-import { BrowserDiagnostics } from './browser-diagnostics';
-import { validateBrowserDiagnosticRequest } from './browser-diagnostics-contracts';
 import {
   checkCoordinateTarget,
   checkScreenshot,
@@ -196,7 +193,6 @@ interface Warning {
 }
 interface Tab {
   id: string;
-  emulatedViewport?: { width: number; height: number };
   view: WebContentsView;
   contents: WebContents;
   ready: Promise<void>;
@@ -216,7 +212,10 @@ interface Tab {
   wake: Set<() => void>;
   closed: boolean;
   screenshot?: ScreenshotCapture;
-  diagnostics?: BrowserDiagnostics;
+  // Chromium's own developer tools hold this tab's debugger until they close.
+  devTools?: boolean;
+  // A tab the page opened, which the page may close; a tab the person opened may not.
+  fromPage?: boolean;
   // The same-origin path the page's prompt() asks; Circle answers it, never the site.
   promptPath: string;
   // Dialogs as the debugger saw them open, oldest first, to pair with their closing
@@ -354,8 +353,6 @@ export class BrowserSessions {
   private held?: string;
   private closed = false;
   private closePromise?: Promise<void>;
-  private diagnosticCloses = new Set<Promise<void>>();
-  private diagnosticCloseError?: unknown;
   // The window's theme, which Circle's own pages and the pointer follow
   private dark = nativeTheme.shouldUseDarkColors;
   /** Hands a browser shortcut to the window, which does it as its panel's buttons do. */
@@ -373,8 +370,6 @@ export class BrowserSessions {
     private downloadsDir = downloadsFolder(),
     // The conversation's mode (manual, accept-edits, plan or auto), as the runtime has it
     private modeOf: (id: string) => string | undefined = () => undefined,
-    private emitDiagnostics: (event: BrowserDiagnosticEvent) => void = () => {},
-    private diagnosticLogDir?: string,
   ) {
     this.trusted = new TrustedCertificates(trustFile);
   }
@@ -437,6 +432,12 @@ export class BrowserSessions {
     return tab ?? this.createTab(conversation, { activate: true });
   }
   private visibility(conversation: Conversation) {
+    const [windowWidth, windowHeight] = this.window.isDestroyed()
+      ? [0, 0]
+      : this.window.getContentSize();
+    // Off the window as well as invisible: a native view that only flips its
+    // flag can stay composited over the conversation on Linux.
+    const away = { x: windowWidth, y: windowHeight, width: 1, height: 1 };
     for (const tab of conversation.tabs.values()) {
       const shown =
         conversation.wantedVisible &&
@@ -444,17 +445,19 @@ export class BrowserSessions {
         !tab.failure &&
         !tab.dialogs.length &&
         !tab.choice;
+      tab.view.setBounds(shown ? conversation.bounds : away);
       tab.view.setVisible(shown);
     }
     // The person chooses a certificate in the panel while Circle's action waits for it
     const shown = conversation.active
       ? conversation.tabs.get(conversation.active)
       : undefined;
-    conversation.mask?.setVisible(
+    const maskShown =
       conversation.wantedVisible &&
-        conversation.control === 'agent' &&
-        !shown?.choice,
-    );
+      conversation.control === 'agent' &&
+      !shown?.choice;
+    conversation.mask?.setBounds(maskShown ? conversation.bounds : away);
+    conversation.mask?.setVisible(maskShown);
   }
   private prepareSession(conversation: Conversation, session: Session) {
     if (this.sessions.has(session)) return;
@@ -599,6 +602,74 @@ export class BrowserSessions {
       return new Response('not found', { status: 404 });
     });
   }
+  /**
+   * The debugger the model's browser tools use. Chromium's own developer tools detach
+   * it while they are open; closing them attaches it again, without Circle's panels.
+   */
+  private async attachModelDebugger(tab: Tab, initial: boolean) {
+    const contents = tab.contents;
+    if (tab.closed || contents.isDestroyed()) return;
+    if (!contents.debugger.isAttached()) contents.debugger.attach('1.3');
+    await Promise.all([
+      contents.debugger.sendCommand('Page.enable'),
+      contents.debugger.sendCommand('Network.enable'),
+      contents.debugger.sendCommand('Fetch.enable', {
+        patterns: [{ urlPattern: '*' + tab.promptPath + '*' }],
+      }),
+      contents.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
+        source: promptScript(tab.promptPath),
+        runImmediately: true,
+      }),
+      // A tab the page did not open is not the page's to close away. Restoring
+      // after developer tools does not add the guard a second time.
+      initial && !tab.fromPage
+        ? contents.debugger.sendCommand(
+            'Page.addScriptToEvaluateOnNewDocument',
+            { source: closeGuard, runImmediately: true },
+          )
+        : Promise.resolve(),
+    ]);
+  }
+  /**
+   * Open or close Chromium's own developer tools, as Chrome's F12 does. Inspect
+   * opens them on the element under the pointer. They are always a separate
+   * window: `inspectElement` on its own docks into the page.
+   */
+  private chromiumDevTools(
+    conversation: Conversation,
+    tab: Tab,
+    point?: { x: number; y: number },
+  ) {
+    if (tab.closed || tab.contents.isDestroyed()) return;
+    const contents = tab.contents;
+    // The same control again closes them, as F12 does.
+    if (contents.isDevToolsOpened()) {
+      contents.closeDevTools();
+      return;
+    }
+    tab.devTools = true;
+    tab.screenshot = undefined;
+    if (conversation.control === 'shared' || conversation.control === 'agent')
+      this.control(conversation.id, 'take');
+    if (point) {
+      // Opening with detach is not settled on the same turn as the event.
+      // Inspecting before that docks the tools into the page, and opening
+      // them again while they are open does not undock them.
+      contents.once('devtools-opened', () => {
+        setTimeout(() => {
+          if (
+            tab.closed ||
+            contents.isDestroyed() ||
+            !contents.isDevToolsOpened()
+          )
+            return;
+          contents.inspectElement(Math.round(point.x), Math.round(point.y));
+        }, 80);
+      });
+    }
+    contents.openDevTools({ mode: 'detach', activate: true });
+    this.publish(conversation.id);
+  }
   private createTab(
     conversation: Conversation,
     options: { contents?: WebContents; activate: boolean; opener?: string },
@@ -644,87 +715,32 @@ export class BrowserSessions {
       this.window.contentView.addChildView(conversation.mask);
     this.prepareSession(conversation, contents.session);
     this.handle(conversation, tab);
+    tab.fromPage = !!options.opener;
     contents.debugger.attach('1.3');
-    tab.diagnostics = new BrowserDiagnostics(
-      (method, params) => contents.debugger.sendCommand(method, params),
-      (event) =>
-        this.emitDiagnostics({
-          ...event,
-          sessionId: conversation.id,
-          tab: tab.id,
-        }),
-      this.diagnosticLogDir
-        ? {
-            directory: this.diagnosticLogDir,
-            sessionId: conversation.id,
-            tab: tab.id,
-          }
-        : undefined,
-    );
-    contents.once('destroyed', () => {
-      const pending = tab.diagnostics!.dispose();
-      this.diagnosticCloses.add(pending);
-      void pending
-        .catch((error) => {
-          this.diagnosticCloseError = error;
-        })
-        .finally(() => this.diagnosticCloses.delete(pending));
+    contents.on('devtools-opened', () => {
+      tab.devTools = true;
+      tab.screenshot = undefined;
+      this.publish(conversation.id);
     });
-    const enableDiagnostics = () => tab.diagnostics!.enable();
     contents.on('devtools-closed', () => {
+      tab.devTools = false;
       void (async () => {
         if (tab.closed || contents.isDestroyed()) return;
-        tab.diagnostics!.invalidateConnection();
-        if (!contents.debugger.isAttached()) contents.debugger.attach('1.3');
-        await Promise.all([
-          enableDiagnostics(),
-          contents.debugger.sendCommand('Page.enable'),
-          contents.debugger.sendCommand('Fetch.enable', {
-            patterns: [{ urlPattern: '*' + tab.promptPath + '*' }],
-          }),
-          contents.debugger.sendCommand(
-            'Page.addScriptToEvaluateOnNewDocument',
-            { source: promptScript(tab.promptPath), runImmediately: true },
-          ),
-        ]);
-        await tab.diagnostics!.restoreBreakpoints();
-        tab.diagnostics!.state.owner = 'circle';
-        tab.diagnostics!.state.reconnectError = undefined;
-        tab.diagnostics!.resetEpoch();
+        await this.attachModelDebugger(tab, false);
         tab.screenshot = undefined;
         conversation.events.push(
           'devtools closed; browser observations must be refreshed',
         );
         this.publish(conversation.id);
       })().catch((error) => {
-        tab.diagnostics!.state.reconnectError = String(error);
-        tab.diagnostics!.resetEpoch();
         conversation.events.push(
-          'browser diagnostics could not reconnect: ' + String(error),
+          'browser could not reconnect after devtools: ' + String(error),
         );
         this.publish(conversation.id);
       });
     });
     // A page opened by another may not answer until it navigates: do not wait for these
-    const enable = Promise.all([
-      enableDiagnostics(),
-      contents.debugger.sendCommand('Page.enable'),
-      contents.debugger.sendCommand('Network.enable'),
-      contents.debugger.sendCommand('Fetch.enable', {
-        patterns: [{ urlPattern: '*' + tab.promptPath + '*' }],
-      }),
-      contents.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
-        source: promptScript(tab.promptPath),
-        runImmediately: true,
-      }),
-      // A tab the page did not open is not the page's to close away
-      options.opener
-        ? Promise.resolve()
-        : contents.debugger.sendCommand(
-            'Page.addScriptToEvaluateOnNewDocument',
-            { source: closeGuard, runImmediately: true },
-          ),
-    ]).then(() => {});
+    const enable = this.attachModelDebugger(tab, true);
     tab.ready = options.contents
       ? (void enable.catch(() => {}), Promise.resolve())
       : this.limit(contents.loadURL(BLANK), undefined, 10000).then(
@@ -1233,7 +1249,6 @@ export class BrowserSessions {
       );
     });
     contents.debugger.on('message', (_event, method, params) => {
-      tab.diagnostics?.event(method, params);
       if (method === 'Fetch.requestPaused') {
         this.prompt(conversation, tab, params);
         return;
@@ -1542,6 +1557,9 @@ export class BrowserSessions {
       ...(conversation?.handoff ? { handoff: conversation.handoff } : {}),
       zoom: contents ? zoomPercent(contents.getZoomFactor()) : 100,
       ...(tab?.find ? { find: { ...tab.find } } : {}),
+      ...(contents?.isDevToolsOpened() || tab?.devTools
+        ? { devTools: true }
+        : {}),
       tab: tab?.id,
       tabs: conversation
         ? [...conversation.tabs.values()]
@@ -1696,8 +1714,13 @@ export class BrowserSessions {
   async page(idValue: unknown, action: unknown, value: unknown) {
     const id = this.validId(idValue);
     if (action === 'keys') {
-      if (value === true) this.keyTarget = id;
-      else if (this.keyTarget === id) this.keyTarget = undefined;
+      if (value === true) {
+        this.keyTarget = id;
+        // A click on the address bar has to take the keyboard from the page view.
+        // Until the window has it, the first F12 reaches neither of them.
+        if (!this.window.isDestroyed() && !this.window.webContents.isFocused())
+          this.window.webContents.focus();
+      } else if (this.keyTarget === id) this.keyTarget = undefined;
       return null;
     }
     const conversation = this.conversations.get(id);
@@ -1759,6 +1782,17 @@ export class BrowserSessions {
       const next =
         open[(index + (value === 'next' ? 1 : -1) + open.length) % open.length];
       if (next && next !== tab) return this.tabs(id, 'select', next.id);
+    } else if (action === 'devtools') {
+      this.chromiumDevTools(conversation, tab);
+    } else if (action === 'inspect') {
+      const point = (value ?? {}) as { x?: unknown; y?: unknown };
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y))
+        this.chromiumDevTools(conversation, tab);
+      else
+        this.chromiumDevTools(conversation, tab, {
+          x: Number(point.x),
+          y: Number(point.y),
+        });
     } else throw Error('invalid browser page action');
     this.publish(id);
     return this.state(id);
@@ -1842,14 +1876,9 @@ export class BrowserSessions {
     else if (command === 'redo') contents.redo();
     else if (command === 'select-all') contents.selectAll();
     else if (command === 'inspect') {
-      // The panel's developer tools open under the page, as Chrome docks its own
+      // Chromium's own developer tools, on the element, as Chrome's Inspect does
       if (conversation.active !== tab.id) return;
-      this.window.webContents.focus();
-      this.sendKey({
-        sessionId: 'browser:' + conversation.id,
-        action: 'inspect',
-        tab: tab.id,
-      });
+      this.chromiumDevTools(conversation, tab, { x: params.x, y: params.y });
     }
   }
   /**
@@ -1898,63 +1927,6 @@ export class BrowserSessions {
       return;
     tab.favicon = data;
     this.publish(conversation.id);
-  }
-  clearDiagnosticSubscriptions() {
-    for (const conversation of this.conversations.values())
-      for (const tab of conversation.tabs.values())
-        tab.diagnostics?.clearWatches();
-  }
-  async diagnostics(idValue: unknown, request: unknown) {
-    const id = this.validId(idValue);
-    const input = validateBrowserDiagnosticRequest(request);
-    const conversation =
-      input.action === 'log'
-        ? this.conversations.get(id)
-        : this.conversation(id);
-    if (!conversation) throw Error('browser session has no existing tab');
-    const tab = ['watch', 'log'].includes(input.action)
-      ? conversation.tabs.get((input as { tab: string }).tab)
-      : this.activeTab(conversation);
-    if (!tab) throw Error('browser tab no longer exists');
-    await tab.ready;
-    if (input.action === 'log')
-      return tab.diagnostics!.log(input.domain, input.cursor, input.limit);
-    if (input.action === 'watch')
-      return tab.diagnostics!.watch(
-        input.subscription,
-        input.domains,
-        input.enabled,
-      );
-    if (
-      input.action !== 'read' &&
-      (conversation.operating ||
-        conversation.control === 'agent' ||
-        conversation.control === 'user_pending')
-    )
-      throw Error('take over the browser before changing diagnostics');
-    if (input.action === 'devtools') {
-      this.control(id, 'take');
-      // Human-only API: no model tool can invoke this explicit ownership handoff.
-      tab.diagnostics!.invalidateConnection();
-      tab.diagnostics!.state.reconnectError = undefined;
-      tab.diagnostics!.state.owner = 'devtools';
-      tab.diagnostics!.resetEpoch();
-      tab.screenshot = undefined;
-      tab.contents.openDevTools({ mode: 'detach', activate: true });
-      return { state: tab.diagnostics!.state };
-    }
-    const result = await tab.diagnostics!.request(input, tab.contents.getURL());
-    if (input.action === 'viewport') {
-      tab.emulatedViewport =
-        input.width === undefined
-          ? undefined
-          : { width: input.width, height: input.height! };
-      tab.screenshot = undefined;
-      conversation.events.push(
-        'browser viewport changed; take a new snapshot and screenshot before using coordinates',
-      );
-    }
-    return result;
   }
   async navigate(idValue: unknown, urlValue: unknown) {
     const id = this.validId(idValue);
@@ -2068,7 +2040,7 @@ export class BrowserSessions {
   private giveBack(conversation: Conversation, event: string, auto = false) {
     if (
       [...conversation.tabs.values()].some(
-        (tab) => tab.diagnostics?.state.owner === 'devtools',
+        (tab) => tab.devTools || tab.contents.isDevToolsOpened(),
       )
     )
       return;
@@ -2594,31 +2566,12 @@ export class BrowserSessions {
         signal,
       );
       const { image, attempts, retryErrors } = await this.limit(
-        captureFrame(async () => {
-          if (tab.emulatedViewport) {
-            // Native capturePage clips to the panel bounds. CDP captures the
-            // emulated CSS viewport even when the panel itself is narrower.
-            const { data } = await tab.contents.debugger.sendCommand(
-              'Page.captureScreenshot',
-              {
-                format: 'png',
-                captureBeyondViewport: true,
-                fromSurface: true,
-                clip: {
-                  x: capturedState.scrollX ?? 0,
-                  y: capturedState.scrollY ?? 0,
-                  ...tab.emulatedViewport,
-                  scale: 1,
-                },
-              },
-            );
-            return nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
-          }
-          return tab.contents.capturePage(undefined, {
+        captureFrame(async () =>
+          tab.contents.capturePage(undefined, {
             stayAwake: true,
             stayHidden: !tab.view.getVisible(),
-          });
-        }),
+          }),
+        ),
         signal,
         10000,
       );
@@ -3527,11 +3480,6 @@ export class BrowserSessions {
     clearInterval(conversation.autoReturn);
     for (const wake of conversation.handedBack) wake();
     conversation.handedBack.clear();
-    const journals = [...conversation.tabs.values()].map((tab) =>
-      tab.diagnostics!.dispose(),
-    );
-    const drained = Promise.all(journals);
-    void drained.catch(() => {});
     const mask = conversation.mask;
     const contents = this.retiringContents.get(id) ?? new Set<WebContents>();
     for (const tab of conversation.tabs.values()) contents.add(tab.contents);
@@ -3563,21 +3511,13 @@ export class BrowserSessions {
       if (!content.isDestroyed()) content.close({ waitForBeforeUnload: false });
     for (const hold of [...conversation.holds])
       this.decideHold(conversation, hold, false, false);
-    await Promise.all([stopped, drained]);
+    await stopped;
     this.retiringContents.delete(id);
     this.exceptions.delete(id);
     this.conversations.delete(id);
   }
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
-    const pending = [
-      ...this.diagnosticCloses,
-      ...[...this.conversations.values()].flatMap((conversation) =>
-        [...conversation.tabs.values()].map((tab) =>
-          tab.diagnostics!.dispose(),
-        ),
-      ),
-    ];
     this.closed = true;
     for (const conversation of this.conversations.values())
       clearInterval(conversation.autoReturn);
@@ -3590,8 +3530,6 @@ export class BrowserSessions {
         this.closeTab(conversation, tab, 'the browser closed');
     }
     this.conversations.clear();
-    return (this.closePromise = Promise.all(pending).then(() => {
-      if (this.diagnosticCloseError) throw this.diagnosticCloseError;
-    }));
+    return (this.closePromise = Promise.resolve());
   }
 }

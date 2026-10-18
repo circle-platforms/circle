@@ -12,9 +12,8 @@ const suites = [
   ['git', 'git-conflict-selector-ui.mjs', 8],
   ['debug', 'debug-panel-embedded.mjs', 8],
   ['github', 'github-plugin-ui.mjs', 16],
-  ['browser diagnostics', 'browser-diagnostics-ui.mjs', 32],
   ['recovered inputs', 'recovered-input-ui.mjs', 16],
-  ['native browser panel', 'original-browser-shell-ui.mjs', 32],
+  ['native browser panel', 'original-browser-shell-ui.mjs', 28],
   ['file headers', 'file-source-heading-ui.mjs', 16],
 ];
 
