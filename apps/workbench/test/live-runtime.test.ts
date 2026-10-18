@@ -205,6 +205,98 @@ test('session presentation survives background snapshots and switching without r
   assert.deepEqual(host.commands, []);
 });
 
+test('a pasted picture is stored once, not again with each keystroke, and comes back with the draft', () => {
+  const values = new Map<string, string>();
+  const writes: { key: string; characters: number }[] = [];
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      writes.push({ key, characters: value.length });
+      values.set(key, value);
+    },
+  };
+  const snapshot = createFixtures();
+  snapshot.runtime = { connected: true, configured: true };
+  const update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
+  const runtime = new LiveRuntime(bridge(update), update, storage);
+  const id = runtime.getSnapshot().activeSessionId;
+  // What the composer keeps for a pasted screenshot: several megabytes of base64
+  const picture = 'iVBO' + 'A'.repeat(4_000_000);
+  runtime.updateSessionView(id, {
+    attachments: [
+      {
+        id: 'shot',
+        kind: 'image',
+        name: 'screen.png',
+        content: picture,
+        mime: 'image/png',
+        size: 3_000_000,
+      },
+    ],
+  });
+  assert.equal(
+    writes.filter((write) => write.characters > picture.length).length,
+    1,
+  );
+  writes.length = 0;
+  for (const draft of ['a', 'an', 'and', 'and this screenshot'])
+    runtime.updateSessionView(id, { draft });
+  assert.equal(writes.length, 4);
+  assert.ok(writes.every((write) => write.characters < 100_000));
+  // A restart finds the draft and its picture
+  const restarted = new LiveRuntime(bridge(update), update, storage);
+  const session = restarted
+    .getSnapshot()
+    .sessions.find((item) => item.id === id)!;
+  assert.equal(session.draft, 'and this screenshot');
+  assert.equal(session.attachments[0]!.content, picture);
+  // A removed picture leaves storage
+  restarted.updateSessionView(id, { attachments: [] });
+  assert.ok(![...values.values()].some((value) => value.includes(picture)));
+});
+
+test('draft attachments saved with the view by an earlier version are kept', () => {
+  const snapshot = createFixtures();
+  snapshot.runtime = { connected: true, configured: true };
+  const update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
+  const id = snapshot.activeSessionId;
+  const values = new Map([
+    [
+      'circle.workbench.live.views.v1',
+      JSON.stringify({
+        views: [
+          [
+            id,
+            {
+              draft: 'kept',
+              attachments: [
+                { id: 'a', kind: 'file', name: 'A.txt', content: 'A bytes' },
+              ],
+            },
+          ],
+        ],
+      }),
+    ],
+  ]);
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => void values.set(key, value),
+  };
+  const runtime = new LiveRuntime(bridge(update), update, storage);
+  const session = () =>
+    runtime.getSnapshot().sessions.find((item) => item.id === id)!;
+  assert.equal(session().attachments[0]!.content, 'A bytes');
+  runtime.updateSessionView(id, { draft: 'kept, then typed' });
+  // Saved again in the current form, the attachment is still there after a restart
+  const restarted = new LiveRuntime(bridge(update), update, storage);
+  const again = restarted
+    .getSnapshot()
+    .sessions.find((item) => item.id === id)!;
+  assert.equal(again.draft, 'kept, then typed');
+  assert.equal(again.attachments[0]!.content, 'A bytes');
+  assert.ok(!values.get('circle.workbench.live.views.v1')!.includes('A bytes'));
+});
+
 test('a tab switch while send and stop wait for queued changes keeps the originating session identity', async () => {
   const { runtime, host } = live();
   const a = runtime.getSnapshot().activeSessionId;

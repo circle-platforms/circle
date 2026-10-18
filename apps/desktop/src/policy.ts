@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from 'node:fs';
 import { resolve, relative, isAbsolute, extname } from 'node:path';
 export const APP_ORIGIN = 'circle://workbench';
 export const MAX_FILE_BYTES = 4_000_000;
@@ -57,6 +58,27 @@ export function assetPath(root: string, value: string) {
   if (local.startsWith('..') || isAbsolute(local))
     throw Error('asset is outside the application');
   return path;
+}
+/**
+ * One of the window's own files, or undefined when there is none at that address. Read
+ * synchronously: in the packaged application they are in the application archive, and
+ * Electron's asynchronous reads from it sometimes never finish once several run at once,
+ * which left the window empty with its scripts still loading. The synchronous reads do not
+ * wait on them, and the files are small.
+ */
+export function windowFile(
+  root: string,
+  url: string,
+): { body: Buffer<ArrayBuffer>; type: string } | undefined {
+  const path = assetPath(root, url);
+  try {
+    if (!statSync(path).isFile()) return undefined;
+    // A file read is never on shared memory
+    const body = readFileSync(path) as Buffer<ArrayBuffer>;
+    return { body, type: assetType(path) };
+  } catch {
+    return undefined;
+  }
 }
 export function validSaveName(value: unknown) {
   if (

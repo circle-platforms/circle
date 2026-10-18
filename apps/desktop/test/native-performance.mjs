@@ -601,15 +601,23 @@ try {
         const entry = JSON.parse(
           localStorage.getItem('circle.workbench.live.views.v1') ?? 'null',
         )?.views?.find(([key]) => key === id)?.[1];
+        // Attachments are kept apart from the view; an earlier version kept them in it
+        const text = localStorage.getItem(
+          'circle.workbench.live.attachments.v1',
+        );
+        const stored = text === null ? undefined : new Map(JSON.parse(text));
+        const attachments = stored?.has(id)
+          ? stored.get(id)
+          : (entry?.attachments ?? (stored && []));
         if (
           !entry ||
-          (!Array.isArray(entry.attachments) &&
-            !(initial && entry.attachments === undefined))
+          (!Array.isArray(attachments) &&
+            !(initial && attachments === undefined))
         )
           throw Error('actual composer view is unavailable');
         return {
           draft: entry.draft ?? '',
-          attachments: entry.attachments ?? [],
+          attachments: attachments ?? [],
         };
       },
       { id: mainSession, initial },

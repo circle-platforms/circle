@@ -22,9 +22,15 @@ const view = (page, sessionId) =>
       localStorage.getItem('circle.workbench.live.views.v1') ?? '{"views":[]}',
     );
     const item = stored.views.find(([key]) => key === id)?.[1];
+    // Attachments are kept apart from the view; an earlier version kept them in it
+    const attachments = new Map(
+      JSON.parse(
+        localStorage.getItem('circle.workbench.live.attachments.v1') ?? '[]',
+      ),
+    );
     return {
       draft: item?.draft ?? '',
-      attachments: item?.attachments ?? [],
+      attachments: attachments.get(id) ?? item?.attachments ?? [],
       pastes: item?.pastes ?? {},
     };
   }, sessionId);

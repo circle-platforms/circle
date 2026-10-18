@@ -46,6 +46,15 @@ export interface Checkpoint {
   message: Message | null;
   created: number;
 }
+// A session's checkpoints as tree() orders them (by created, then rowid), with what
+// tells whether they are still all of them.
+interface CheckpointRows {
+  count: number;
+  last: number | null;
+  end: { created: number; rowid: number } | null;
+  tree: (Checkpoint & { message: Message })[];
+  byId: Map<string, Checkpoint>;
+}
 export interface ContextState {
   subagentSessionIds?: string[];
   compactionCalls?: {
@@ -231,6 +240,13 @@ export class CheckpointStore {
     string,
     { head: string | null; messages: Message[] }
   >();
+  // Every checkpoint of each session, decoded, so a repaint does not read and parse the
+  // whole conversation again, pictures included: the desktop shows every session's history
+  // on each update. A checkpoint never changes once written and goes only with its session,
+  // so a read takes only the rows written since, by this connection or another; when the
+  // count does not add up, it reads them all again. Shared like messageCache: callers must
+  // not modify them.
+  private checkpointCache = new Map<string, CheckpointRows>();
   // One recent head per session, bounded independently of conversation length.
   // SQLite's data_version covers other connections; writeVersion covers this one.
   private contextCache = new Map<
@@ -314,6 +330,7 @@ export class CheckpointStore {
         throw error;
       }
       this.messageCache.delete(sessionId);
+      this.checkpointCache.delete(sessionId);
       this.deferred.set(sessionId, {
         ...session,
         title: '',
@@ -544,15 +561,91 @@ export class CheckpointStore {
     return row ? this.decode(row) : undefined;
   }
   tree(session: string): (Checkpoint & { message: Message })[] {
-    return this.db
+    return this.checkpoints(session).tree;
+  }
+  // What the database holds for a session: count(*) and max(rowid) come from its index.
+  private checkpointExtent(session: string): {
+    count: number;
+    last: number | null;
+  } {
+    const row = this.db
       .prepare(
-        'SELECT * FROM checkpoints WHERE session_id = ? ORDER BY created, rowid',
+        'SELECT count(*) AS count, max(rowid) AS last FROM checkpoints WHERE session_id = ?',
       )
-      .all(session)
-      .map((row) => this.decode(row))
-      .filter(
-        (row): row is Checkpoint & { message: Message } => row.message !== null,
-      );
+      .get(session)!;
+    return {
+      count: Number(row.count),
+      last: row.last === null ? null : Number(row.last),
+    };
+  }
+  private checkpoints(session: string): CheckpointRows {
+    const { count, last } = this.checkpointExtent(session);
+    const cached = this.checkpointCache.get(session);
+    if (cached && cached.count === count && cached.last === last) return cached;
+    const read = (after?: number) =>
+      this.db
+        .prepare(
+          after === undefined
+            ? 'SELECT rowid AS row_number, * FROM checkpoints WHERE session_id = ? ORDER BY created, rowid'
+            : 'SELECT rowid AS row_number, * FROM checkpoints WHERE session_id = ? AND rowid > ? ORDER BY created, rowid',
+        )
+        .all(...(after === undefined ? [session] : [session, after]))
+        .map((row) => ({
+          rowid: Number(row.row_number),
+          checkpoint: this.decode(row),
+        }));
+    if (cached && cached.last !== null && count > cached.count) {
+      const added = read(cached.last);
+      if (cached.count + added.length === count) {
+        const extended = this.extendCheckpoints(cached, added);
+        if (extended) {
+          this.checkpointCache.set(session, extended);
+          return extended;
+        }
+      }
+    }
+    const fresh = this.extendCheckpoints(
+      {
+        count: 0,
+        last: null,
+        end: null,
+        tree: [],
+        byId: new Map(),
+      },
+      read(),
+    )!;
+    this.checkpointCache.set(session, fresh);
+    return fresh;
+  }
+  // The rows after the cached ones, or undefined when one would sort among them.
+  private extendCheckpoints(
+    cached: CheckpointRows,
+    added: { rowid: number; checkpoint: Checkpoint }[],
+  ): CheckpointRows | undefined {
+    let end = cached.end;
+    const byId = new Map(cached.byId);
+    const tree: (Checkpoint & { message: Message })[] = [];
+    let last = cached.last;
+    for (const { rowid, checkpoint } of added) {
+      if (
+        end &&
+        (checkpoint.created < end.created ||
+          (checkpoint.created === end.created && rowid < end.rowid))
+      )
+        return undefined;
+      end = { created: checkpoint.created, rowid };
+      last = last === null ? rowid : Math.max(last, rowid);
+      byId.set(checkpoint.id, checkpoint);
+      if (checkpoint.message !== null)
+        tree.push(checkpoint as Checkpoint & { message: Message });
+    }
+    return {
+      count: cached.count + added.length,
+      last,
+      end,
+      tree: cached.tree.concat(tree),
+      byId,
+    };
   }
   append(
     sessionId: string,
@@ -593,12 +686,28 @@ export class CheckpointStore {
       if (input)
         this.inputs.consumeInTransaction(sessionId, input.id, input.epoch);
       let head = session.head;
+      const rows = this.checkpointCache.get(sessionId);
+      const extent = rows && this.checkpointExtent(sessionId);
+      const current =
+        rows && rows.count === extent!.count && rows.last === extent!.last;
       const stored = messages.map((message) => JSON.stringify(message));
+      const written: { rowid: number; checkpoint: Checkpoint }[] = [];
       for (const text of stored) {
         const id = randomUUID();
-        this.db
+        const created = Date.now();
+        const { lastInsertRowid } = this.db
           .prepare('INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?)')
-          .run(id, sessionId, head, text, Date.now());
+          .run(id, sessionId, head, text, created);
+        written.push({
+          rowid: Number(lastInsertRowid),
+          checkpoint: {
+            id,
+            session_id: sessionId,
+            parent: head,
+            message: JSON.parse(text) as Message,
+            created,
+          },
+        });
         head = id;
       }
       // An internal-only append (an interrupted marker, a mode boundary) is not
@@ -617,13 +726,17 @@ export class CheckpointStore {
       // When the cache holds the head this append started from, the new messages extend
       // it; otherwise the chain is walked again on the next read. It extends with what was
       // written, decoded, not the caller's objects: a read returns what the database holds.
+      // Both caches hold the same decoded messages.
       const cached = this.messageCache.get(sessionId);
       if (cached && cached.head === session.head) {
         cached.head = head;
         cached.messages = cached.messages.concat(
-          stored.map((text) => JSON.parse(text) as Message),
+          written.map(({ checkpoint }) => checkpoint.message!),
         );
       } else this.messageCache.delete(sessionId);
+      const extended = current && this.extendCheckpoints(rows, written);
+      if (extended) this.checkpointCache.set(sessionId, extended);
+      else this.checkpointCache.delete(sessionId);
       this.writeVersion++;
       return head;
     } catch (error) {
@@ -638,11 +751,12 @@ export class CheckpointStore {
     if (cached && cached.head === resolved) return cached.messages;
     const messages: Message[] = [];
     const seen = new Set<string>();
+    const checkpoints = resolved ? this.checkpoints(sessionId).byId : undefined;
     let cursor = resolved;
     while (cursor) {
       if (seen.has(cursor)) throw new Error('checkpoint ancestry cycle');
       seen.add(cursor);
-      const row = this.checkpoint(cursor);
+      const row = checkpoints!.get(cursor);
       if (!row || row.session_id !== sessionId)
         throw new Error('invalid checkpoint ancestry');
       if (row.message) messages.push(row.message);
@@ -699,6 +813,7 @@ export class CheckpointStore {
       seen.add(id);
       for (const child of this.children(id)) visit(child.id, seen);
       this.messageCache.delete(id);
+      this.checkpointCache.delete(id);
       this.deferred.delete(id);
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
     };
