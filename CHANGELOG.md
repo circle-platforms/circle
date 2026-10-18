@@ -11,6 +11,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 ### Changed
 
 - **Who has the desktop browser is the ring around the page.** The status line under the page is gone. The accent ring lights on the turn's first browser tool and stays lit until the turn ends, you take the browser, or the session stops, including while Circle is thinking and while an approval card is open (then it says **Waiting for your approval**). During an action it says **Circle is operating**, or **Waiting for Circle to stop…** after you take over. While you have the browser the border is the ordinary one and says **you have the browser**. **take over** is in the ⋮ menu for the whole time the ring is lit. The native page is drawn inside the ring, so the ring stays visible, and the page keeps its size when the ring thickens, so a screenshot's coordinates still land. The pointer mark on a click still flashes for that action only.
+- **Node debugging and TypeScript/JavaScript language features are the bundled developer extension**, labelled 开发者工具. It is off until you turn it on from the extensions page or with `/extensions enable developer`. The desktop switch applies at once. While it is off there is no debug tab and no debug-file button, the js-debug adapter is not started, and the editor has no go to definition, rename or diagnostics. The editor still opens, highlights syntax and saves with the version check. With the extension on, debugging and the language service behave as before.
 
 ### Removed
 
@@ -23,6 +24,13 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **The first Enter in the address bar opens the page.** It used to close the browser panel instead, until the address bar had been clicked once.
 - **F12 and ctrl+shift+I work from the address bar.** They used to need a click on the page first, and the first F12 after the address bar gained focus did nothing until the field was clicked again. They open and close the developer tools while the keyboard is in the browser panel, and only then. In the editor, F12 stays go to definition.
 - **The project resources note stays on the changes panel.** On a new session it was drawn above every inspector panel, including the browser, and pushed the page down. It belongs to Changes, which is the panel that pauses until a conversation starts.
+- **The debug adapter no longer accepts connections on a TCP port.** It listens on a private socket in a directory mode 0700 (a randomly named pipe on Windows). Circle refuses an adapter that announces a TCP port. js-debug's `node-cdp` socket is created in that same directory on macOS and Linux. On Windows both stay named pipes; see [Known issues](docs/known-issues.md#desktop-application).
+- **A missing debug target names the file.** The desktop says so in Chinese (找不到调试目标：…).
+- **Ctrl+A selects the text in the debug target field.** The desktop Edit menu no longer takes that key.
+- **The debug status reads 未在调试 while nothing is being debugged**, including after a session has stopped.
+- **Turning 开发者工具 off hides the debug tab immediately**, and the switch stays where you put it if a stale snapshot arrives.
+- **Code checks and the sidebar use the desktop language for this extension.** A refused code check says 开发者工具未开启, and the sidebar status says 就绪.
+- **A click in the editor gutter toggles a breakpoint** for a JavaScript or TypeScript file while the developer extension is on.
 
 ## 1.8.1 - 2026-10-18
 

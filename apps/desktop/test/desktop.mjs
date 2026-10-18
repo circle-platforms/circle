@@ -1283,6 +1283,7 @@ try {
   // Each switch is named by the interface's shown title.
   const expectedInterfaces = [
     'GitHub',
+    'developer extension',
     'file and diff inspector',
     'activity inspector',
     'browser pane',

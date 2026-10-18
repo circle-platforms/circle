@@ -1,11 +1,18 @@
 import type { RuntimeExtension } from './types';
 import { t } from '../i18n';
 
-/** Only Circle's typed GitHub enum is interface text. Custom status is content. */
+/** Circle's own extension statuses are interface text. Custom status is content. */
 export function extensionStatusText(extension: RuntimeExtension): string {
   const text = extension.status?.text ?? '';
   const view = extension.view as
     { provider?: unknown; state?: unknown } | undefined;
+  if (
+    extension.name === 'developer' &&
+    extension.scope === 'bundled' &&
+    view?.provider === 'developer' &&
+    text === 'ready'
+  )
+    return t('ready');
   if (
     extension.name !== 'github' ||
     extension.scope !== 'bundled' ||

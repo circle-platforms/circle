@@ -63,7 +63,9 @@ test('a corrupt task archive blocks its unknown readonly child while both ordina
       'Create fixture',
     ]);
   }
-  saveSettings(trustFolder(trustFolder(defaultSettings(), a), b), home);
+  const settings = trustFolder(trustFolder(defaultSettings(), a), b);
+  settings.extensions.developer = { enabled: true };
+  saveSettings(settings, home);
   const model = new ScriptedModel(
     Array.from({ length: 10 }, () => ({
       message: {

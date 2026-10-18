@@ -26,6 +26,16 @@ window.circleDesktop = {
 } as DesktopBridge;
 const runtime = new PreviewRuntime();
 runtime.change((snapshot) => {
+  snapshot.extensions.push({
+    id: 'developer',
+    name: 'developer',
+    version: '0.1.0',
+    scope: 'bundled',
+    enabled: true,
+    tools: [],
+    commands: [],
+    events: [],
+  });
   snapshot.files = [
     {
       id: 'parent-main',
