@@ -272,6 +272,8 @@ const NAVIGATE_TIMEOUT = 30_000;
 /** How long the browser has to start: a new profile on a busy Windows machine has taken 20 s. */
 const START_TIMEOUT = 60_000;
 const TASKKILL_TIMEOUT = 3000;
+/** How long a Windows root whose termination was accepted has to finish ending. */
+const TERMINATED_EXIT_TIMEOUT = 20_000;
 const BLANK = 'about:blank';
 const CERTIFICATE_ERROR = /^ERR_(CERT_|SSL_PINNED|BAD_SSL)/;
 const originOf = (url: string) => {
@@ -623,15 +625,25 @@ export class ChromeBrowser implements BrowserPort {
             }
             // A successful tree command is not an observed root exit. Stop the
             // same owned handle once, then retain the existing exit verification.
-            if (
+            const terminated =
               !forceFailed &&
               process.platform === 'win32' &&
-              !this.exited(child)
-            )
+              !this.exited(child) &&
               child.kill('SIGKILL');
             // A failed taskkill callback can precede the owned root's exit.
             // Observe the same bounded exit phase before retaining its error.
-            if (!(await this.waitForExit(child, timeout))) {
+            // Once Windows has accepted the termination of the root's own handle,
+            // the process runs no more code, but it ends only when its last thread
+            // does: on a busy machine that has taken over 5 s (#108). Its exit is
+            // still what confirms the stop.
+            if (
+              !(await this.waitForExit(
+                child,
+                terminated
+                  ? Math.max(timeout, TERMINATED_EXIT_TIMEOUT)
+                  : timeout,
+              ))
+            ) {
               if (forceFailed) throw forceError;
               throw new Error(
                 'the browser process did not stop; retry closing the session',

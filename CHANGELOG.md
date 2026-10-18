@@ -10,7 +10,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Fixed
 
-
+- **On Windows, closing the terminal browser no longer says it did not stop when it was still ending.** After Windows accepted the browser's termination, Circle waited 3 seconds for it to end and then said `the browser process did not stop; retry closing the session`, and deleting the session failed; on a busy machine the browser ended seconds later. Circle now waits up to 20 seconds for a browser whose termination Windows accepted, and still reports one that does not end.
 
 ## 1.8.1 - 2026-10-18
 
