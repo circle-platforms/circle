@@ -219,9 +219,14 @@ fi
 export const WINDOWS_INSTALLER = String.raw`param([string]$Plan, [switch]$Start)
 $ErrorActionPreference = 'Stop'
 if ($Start) {
-  Start-Process powershell.exe -WindowStyle Hidden -RedirectStandardOutput "$Plan.out" -RedirectStandardError "$Plan.err" -ArgumentList @(
-    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+  $again = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
     ('"{0}"' -f $MyInvocation.MyCommand.Path), ('"{0}"' -f $Plan))
+  # DIAGNOSTIC ONLY: without redirection Start-Process uses ShellExecuteEx, which passes on no handles
+  if ($env:CIRCLE_DIAG_INSTALLER -eq 'noredirect') {
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $again
+  } else {
+    Start-Process powershell.exe -WindowStyle Hidden -RedirectStandardOutput "$Plan.out" -RedirectStandardError "$Plan.err" -ArgumentList $again
+  }
   exit 0
 }
 $p = Get-Content -Raw -Encoding UTF8 -LiteralPath $Plan | ConvertFrom-Json

@@ -7,7 +7,13 @@ on:
 permissions:
   contents: read
 jobs:
-  win-port:
+  # Who holds the debugging port while the installer runs: the installer as it
+  # is (Start-Process with redirection) and without redirection.
+  win-update:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [redirect, noredirect]
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
@@ -23,10 +29,50 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
-      - run: npm --prefix apps/desktop run package
-      - name: Quit with a debugging connection open, then start again on the same port
+      - name: Install the WiX Toolset
         shell: pwsh
         run: |
-          $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64/Circle.exe'
-          $env:REUSE_ROUNDS = '10'
-          node apps/desktop/test/diagnostics/devtools-port-reuse.mjs
+          $PSNativeCommandUseErrorActionPreference = $true
+          dotnet tool install --global wix --version 5.0.2
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
+      - run: npm --prefix apps/desktop run package
+      - run: npm --prefix apps/desktop run package:msi
+      - name: Update the installed application, following the debugging port
+        timeout-minutes: 20
+        shell: bash
+        env:
+          CIRCLE_DIAG_PORT: '9605'
+          CIRCLE_DIAG_INSTALLER: ${{ matrix.variant }}
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-win32-x64"
+          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Circle.exe"
+          version="$(node -p "require('./package.json').version")"
+          export CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi"
+          npm --prefix apps/desktop run test:update
+  # The update's download and check, many times on Apple silicon, recording any
+  # round that is not ready.
+  mac-download-loop:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/workbench/package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm --prefix apps/workbench ci
+      - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/desktop run package
+      - name: Check, download and verify the update many times
+        env:
+          LOOP_ROUNDS: '30'
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-darwin-arm64/Circle.app"
+          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Contents/MacOS/Circle"
+          node apps/desktop/test/diagnostics/update-download-loop.mjs

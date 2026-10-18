@@ -12,7 +12,15 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { cp, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import {
+  cp,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { existsSync, createReadStream, openSync } from 'node:fs';
 import { join, relative, basename, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -126,6 +134,7 @@ let passed = false;
 let installationAttempted = false;
 let installedPath;
 let port;
+let samples;
 try {
   // The installed copy: in a folder of its own, or where the .msi puts it
   const installed = msi
@@ -183,7 +192,9 @@ try {
     createReadStream(file).pipe(res);
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  port = 9400 + Math.floor(Math.random() * 400);
+  port =
+    Number(process.env.CIRCLE_DIAG_PORT) ||
+    9400 + Math.floor(Math.random() * 400);
   const env = {
     ...process.env,
     CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'data'),
@@ -264,11 +275,44 @@ try {
     ((await stat(helper)).mode & 0o4000) !== 0;
   const installName = setuid ? 'quit and replace' : 'restart to update';
   // Downloading and checking the whole application takes minutes on the
-  // Intel macOS runner.
-  await control
-    .getByRole('button', { name: installName })
-    .waitFor({ timeout: patience(120000) });
+  // Intel macOS runner. Wait for it to be ready or to fail, and say which:
+  // a failed or stalled download names its cause and how far it got.
+  const readyBy = Date.now() + patience(120000);
+  for (;;) {
+    const state = await view.evaluate(() =>
+      window.circleDesktop.updateState(),
+    );
+    if (state.phase === 'ready') break;
+    if (state.phase === 'failed')
+      throw Error(`the update failed: ${JSON.stringify(state)}`);
+    if (Date.now() > readyBy)
+      throw Error(
+        `the update was not ready in time: ${JSON.stringify(state)}`,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  await control.getByRole('button', { name: installName }).waitFor();
   check('the update downloads and is checked');
+  // DIAGNOSTIC ONLY: who holds the debugging port from here on
+  if (process.platform === 'win32' && process.env.CIRCLE_DIAG_PORT) {
+    samples = join(temp, 'port-samples.log');
+    spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        join(root, 'test', 'diagnostics', 'port-sampler.ps1'),
+        '-Port',
+        String(port),
+        '-Out',
+        samples,
+      ],
+      { stdio: 'ignore' },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
   await control.getByRole('button', { name: installName }).click();
   if (setuid) {
     const dialog = view.getByRole('dialog');
@@ -289,6 +333,7 @@ try {
     ),
   ]);
   clearInterval(beat);
+  console.log(`diag: exit seen ${new Date().toISOString()}`);
   if (!left)
     throw Error(
       `the application did not quit for the installer: ${JSON.stringify(
@@ -298,7 +343,9 @@ try {
         ).catch((error) => String(error)),
       )}`,
     );
+  const closing = Date.now();
   await within(browser.close(), 10000).catch(() => {});
+  console.log(`diag: closing the debugging connection took ${Date.now() - closing} ms`);
   check('the application quits for the installer');
 
   if (setuid) {
@@ -386,6 +433,12 @@ try {
   await evidence();
   throw error;
 } finally {
+  if (samples) {
+    await writeFile(`${samples}.stop`, '');
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (existsSync(samples))
+      console.log(`--- port samples\n${await readFile(samples, 'utf8')}`);
+  }
   if (running && running.exitCode === null) running.kill();
   server?.close();
   // The installed package goes, whichever version it is now. Quietly, Windows Installer
