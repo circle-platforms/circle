@@ -1,5 +1,6 @@
 import { utilityProcess, type UtilityProcess } from 'electron';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import type { WorkspaceServiceEvent } from './workspace-protocol';
 import {
@@ -15,6 +16,12 @@ import type {
 import { RuntimeTokenBuffer } from './runtime-token-stream';
 import type { PrivateExternalFileRequest } from './runtime-external-file-channel';
 import {
+  describeRuntimeExit,
+  redactRuntimeOutput,
+  RUNTIME_RESTART_DELAY_MS,
+  RUNTIME_RESTART_WINDOW_MS,
+} from './runtime-exit';
+import {
   validateBrowserRequest,
   type BrowserReply,
   type BrowserRequest,
@@ -25,9 +32,23 @@ export type BrowserHandler = (
   signal: AbortSignal,
 ) => Promise<BrowserResult>;
 
+const STDERR_TAIL = 16 * 1024;
+const LOG_LIMIT = 1024 * 1024;
+export interface RuntimeSupervisorOptions {
+  /** Where unexpected exits, with the end of the runtime's stderr, are recorded. */
+  logFile?: string;
+  restartDelayMs?: number;
+  version?: string;
+}
+
 /** One app-owned core process survives renderer reloads and closes actual jobs on quit. */
 export class RuntimeSupervisor {
   private child?: UtilityProcess;
+  private stoppedAt = 0;
+  private startedAt = 0;
+  private automaticRestartAt?: number;
+  private restarting?: Promise<void>;
+  private cancelRestartWait?: () => void;
   private pending = new Map<
     string,
     {
@@ -59,12 +80,17 @@ export class RuntimeSupervisor {
     readonly directory: string,
     // A link an extension asked to open; the caller checks it before opening anything.
     private readonly openUrl: (url: string) => void = () => {},
+    private readonly options: RuntimeSupervisorOptions = {},
   ) {}
   get connected() {
     return !!this.child && !!this.latest?.connected;
   }
   async start() {
-    const ready = new Promise<void>((resolve, reject) => {
+    await this.spawn();
+  }
+  private spawn() {
+    let stderr = '';
+    return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(Error('runtime did not start')),
         30_000,
@@ -79,9 +105,14 @@ export class RuntimeSupervisor {
         },
       );
       this.child = child;
+      this.startedAt = Date.now();
       // Avoid dumping model credentials or workspace contents into app stderr.
+      // The end of stderr is kept to say why the runtime died (V8 writes
+      // "JavaScript heap out of memory" there) and goes only to the log.
       child.stdout?.on('data', () => {});
-      child.stderr?.on('data', () => {});
+      child.stderr?.on('data', (chunk: Buffer | string) => {
+        stderr = (stderr + String(chunk)).slice(-STDERR_TAIL);
+      });
       child.on(
         'message',
         (message: {
@@ -175,99 +206,224 @@ export class RuntimeSupervisor {
       this.exited = new Promise<void>((exit) =>
         child.once('exit', (code) => {
           clearTimeout(timer);
-          this.child = undefined;
-          this.externalGrantRequests.clear();
-          this.credentialRequests.clear();
-          this.completedCredentialRequests.clear();
-          for (const request of this.browserRequests.values()) request.abort();
-          this.browserRequests.clear();
-          const error = Error(`Circle runtime exited (${code})`);
-          for (const pending of this.pending.values()) {
-            clearTimeout(pending.timer);
-            pending.reject(error);
-          }
-          this.pending.clear();
-          if (this.latest) {
-            this.latest = this.tokenBuffer.materialize();
-            this.latest = {
-              ...this.latest,
-              seq: this.latest.seq + 1,
-              connected: false,
-              snapshot: {
-                ...this.latest.snapshot,
-                // A lost core cannot report further progress. Preserve output
-                // and unsent queue entries, but retire all live claims. This
-                // does not assert that detached child processes were killed.
-                sessions: this.latest.snapshot.sessions.map((session) => ({
-                  ...session,
-                  state:
-                    session.turn || session.state === 'waiting'
-                      ? ('paused' as const)
-                      : session.state,
-                  turn: undefined,
-                  ...(session.turn || session.state === 'waiting'
-                    ? { actionError: error.message }
-                    : {}),
-                  messages: session.messages.map((message) => ({
-                    ...message,
-                    ...(message.at === 'streaming'
-                      ? { interrupted: true }
-                      : {}),
-                    ...(message.tool &&
-                    ['running', 'waiting'].includes(message.tool.status)
-                      ? {
-                          tool: { ...message.tool, status: 'unknown' as const },
-                        }
-                      : {}),
-                    ...(message.shell?.status === 'running' ||
-                    message.shell?.status === 'background'
-                      ? {
-                          shell: { ...message.shell, status: 'error' as const },
-                        }
-                      : {}),
-                  })),
-                })),
-                agents: (this.latest.snapshot.agents ?? []).map((agent) =>
-                  agent.status === 'running' ||
-                  agent.status === 'waiting' ||
-                  (agent.task &&
-                    [
-                      'queued',
-                      'preparing',
-                      'running',
-                      'waiting',
-                      'cancelling',
-                    ].includes(agent.task.runtimeState ?? agent.task.state))
-                    ? { ...agent, status: 'unknown' as const }
-                    : agent,
-                ),
-                jobs: (this.latest.snapshot.jobs ?? []).map((job) =>
-                  ['running', 'waiting', 'stopping'].includes(job.state)
-                    ? {
-                        ...job,
-                        state: 'interrupted' as const,
-                        stopRequested: false,
-                      }
-                    : job,
-                ),
-                interactions: (this.latest.snapshot.interactions ?? []).filter(
-                  (interaction) => interaction.status !== 'pending',
-                ),
-                runtime: {
-                  connected: false,
-                  configured: false,
-                  error: error.message,
-                },
-              },
-            };
-            for (const listener of this.listeners) listener(this.latest);
-          }
+          const error = this.childExited(child, code, stderr);
           reject(error);
           exit();
         }),
       );
     });
-    await ready;
+  }
+  private childExited(
+    child: UtilityProcess,
+    code: number | null | undefined,
+    stderr: string,
+  ): Error {
+    if (this.child !== child) return Error('runtime replaced');
+    const expected = !!this.closing;
+    const exit = describeRuntimeExit(code, stderr);
+    this.child = undefined;
+    this.stoppedAt = Date.now();
+    this.externalGrantRequests.clear();
+    this.credentialRequests.clear();
+    this.completedCredentialRequests.clear();
+    for (const request of this.browserRequests.values()) request.abort();
+    this.browserRequests.clear();
+    const error = Error(exit.message);
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+    const restarting = !expected && !!this.latest && this.automaticRestart();
+    if (!expected)
+      this.log(
+        [
+          `runtime stopped: ${exit.message}${exit.detail ? ` · ${exit.detail}` : ''}`,
+          `up ${Math.round((this.stoppedAt - this.startedAt) / 1000)}s · ${restarting ? `restarting in ${Math.round(this.restartDelay / 1000)}s` : this.restarting ? 'restart under way' : 'not restarted automatically'}`,
+          stderr.trim()
+            ? `last stderr:\n${redactRuntimeOutput(stderr.trimEnd())}`
+            : 'no stderr',
+        ].join('\n'),
+      );
+    if (this.latest) {
+      const previous = this.latest.snapshot.runtime;
+      this.latest = this.tokenBuffer.materialize();
+      this.latest = {
+        ...this.latest,
+        seq: this.latest.seq + 1,
+        connected: false,
+        snapshot: {
+          ...this.latest.snapshot,
+          // A lost core cannot report further progress. Preserve output
+          // and unsent queue entries, but retire all live claims. This
+          // does not assert that detached child processes were killed.
+          sessions: this.latest.snapshot.sessions.map((session) => ({
+            ...session,
+            state:
+              session.turn || session.state === 'waiting'
+                ? ('paused' as const)
+                : session.state,
+            turn: undefined,
+            ...(session.turn || session.state === 'waiting'
+              ? { actionError: error.message }
+              : {}),
+            messages: session.messages.map((message) => ({
+              ...message,
+              ...(message.at === 'streaming' ? { interrupted: true } : {}),
+              ...(message.tool &&
+              ['running', 'waiting'].includes(message.tool.status)
+                ? {
+                    tool: { ...message.tool, status: 'unknown' as const },
+                  }
+                : {}),
+              ...(message.shell?.status === 'running' ||
+              message.shell?.status === 'background'
+                ? {
+                    shell: { ...message.shell, status: 'error' as const },
+                  }
+                : {}),
+            })),
+          })),
+          agents: (this.latest.snapshot.agents ?? []).map((agent) =>
+            agent.status === 'running' ||
+            agent.status === 'waiting' ||
+            (agent.task &&
+              [
+                'queued',
+                'preparing',
+                'running',
+                'waiting',
+                'cancelling',
+              ].includes(agent.task.runtimeState ?? agent.task.state))
+              ? { ...agent, status: 'unknown' as const }
+              : agent,
+          ),
+          jobs: (this.latest.snapshot.jobs ?? []).map((job) =>
+            ['running', 'waiting', 'stopping'].includes(job.state)
+              ? {
+                  ...job,
+                  state: 'interrupted' as const,
+                  stopRequested: false,
+                }
+              : job,
+          ),
+          interactions: (this.latest.snapshot.interactions ?? []).filter(
+            (interaction) => interaction.status !== 'pending',
+          ),
+          // The saved connection did not go away with the process: keep
+          // saying whether one is configured, and say the runtime stopped.
+          runtime: {
+            configured: previous?.configured ?? false,
+            ...(previous?.hasKey === undefined
+              ? {}
+              : { hasKey: previous.hasKey }),
+            connected: false,
+            error: error.message,
+            stopped: {
+              reason: exit.reason,
+              code: exit.code,
+              restarting: restarting || !!this.restarting,
+              at: new Date(this.stoppedAt).toISOString(),
+            },
+          },
+        },
+      };
+      this.publishLatest();
+    }
+    if (restarting) void this.restart().catch(() => {});
+    return error;
+  }
+  private get restartDelay() {
+    return this.options.restartDelayMs ?? RUNTIME_RESTART_DELAY_MS;
+  }
+  /** Restart by itself once; a runtime that dies again soon after stays stopped. */
+  private automaticRestart() {
+    if (this.closing || this.restarting) return false;
+    const now = Date.now();
+    if (
+      this.automaticRestartAt !== undefined &&
+      now - this.automaticRestartAt < RUNTIME_RESTART_WINDOW_MS
+    )
+      return false;
+    this.automaticRestartAt = now;
+    return true;
+  }
+  /** Start a new runtime after one stopped. The sessions it reopens are the
+   * stored ones; the turn that was cut off is marked interrupted there. */
+  restart(): Promise<void> {
+    if (this.closing) return Promise.reject(Error('Circle is quitting'));
+    if (this.child) return Promise.resolve();
+    if (this.restarting) return this.restarting;
+    const operation = (async () => {
+      this.markStopped({ restarting: true });
+      const wait = this.stoppedAt + this.restartDelay - Date.now();
+      if (wait > 0)
+        await new Promise<void>((done) => {
+          const timer = setTimeout(done, wait);
+          this.cancelRestartWait = () => {
+            clearTimeout(timer);
+            done();
+          };
+        });
+      this.cancelRestartWait = undefined;
+      if (this.closing) throw Error('Circle is quitting');
+      await this.spawn();
+      this.log(`runtime restarted`);
+    })();
+    this.restarting = operation;
+    void operation.then(
+      () => {
+        if (this.restarting === operation) this.restarting = undefined;
+      },
+      (error) => {
+        if (this.restarting === operation) this.restarting = undefined;
+        if (this.closing) return;
+        const message = `Circle runtime could not restart: ${error instanceof Error ? error.message : String(error)}`;
+        this.log(message);
+        this.markStopped({ restarting: false, error: message });
+      },
+    );
+    return operation;
+  }
+  private markStopped(change: { restarting: boolean; error?: string }) {
+    const runtime = this.latest?.snapshot.runtime;
+    if (!this.latest || !runtime || this.latest.connected) return;
+    this.latest = {
+      ...this.latest,
+      seq: this.latest.seq + 1,
+      snapshot: {
+        ...this.latest.snapshot,
+        runtime: {
+          ...runtime,
+          ...(change.error ? { error: change.error } : {}),
+          ...(runtime.stopped
+            ? { stopped: { ...runtime.stopped, restarting: change.restarting } }
+            : {}),
+        },
+      },
+    };
+    this.publishLatest();
+  }
+  private publishLatest() {
+    const update = this.latest;
+    if (!update) return;
+    for (const listener of this.listeners) listener(update);
+  }
+  private log(text: string) {
+    const file = this.options.logFile;
+    if (!file) return;
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      try {
+        if (statSync(file).size > LOG_LIMIT) renameSync(file, `${file}.1`);
+      } catch {
+        /* no log yet */
+      }
+      const where = `circle ${this.options.version ?? '?'} · electron ${process.versions.electron ?? '?'} · ${process.platform} ${process.arch}`;
+      appendFileSync(file, `${new Date().toISOString()} ${where}\n${text}\n\n`);
+    } catch {
+      /* the log is best effort */
+    }
   }
   /** Who carries out the runtime's browser requests: the window's browser sessions. */
   onBrowser(handler: BrowserHandler) {
@@ -479,6 +635,7 @@ export class RuntimeSupervisor {
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.closing = (async () => {
+      this.cancelRestartWait?.();
       if (!this.child) return;
       const reply = await this.command({
         id: randomUUID(),

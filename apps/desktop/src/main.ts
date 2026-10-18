@@ -562,6 +562,10 @@ app
           const allowed = safeExternalUrl(url);
           if (allowed && !fixtureProfile) void shell.openExternal(allowed);
         },
+        {
+          logFile: join(dataPath, 'logs', 'runtime.log'),
+          version: circleVersion,
+        },
       );
       runtime.onCredentials(
         new EncryptedCredentialStore(join(dataPath, 'private-credentials'), {
@@ -607,6 +611,10 @@ app
     handle('circle:runtime-state', () => {
       if (!runtime) throw Error('runtime not enabled');
       return runtime.state();
+    });
+    handle('circle:runtime-restart', async () => {
+      if (!runtime) throw Error('runtime not enabled');
+      await runtime.restart();
     });
     handle('circle:runtime-command', (value) => {
       if (!runtime) throw Error('runtime not enabled');

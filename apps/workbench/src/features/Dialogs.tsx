@@ -128,6 +128,39 @@ const hostOf = (url: string): string => {
     return '';
   }
 };
+// While the runtime is down nothing can probe or save a connection. Say so,
+// say the saved one is kept, and offer to start the runtime again.
+function RuntimeStopped() {
+  const { snapshot, runtime, perform } = useRuntime();
+  const restarting = !!snapshot.runtime?.stopped?.restarting;
+  return (
+    <div className="form-stack">
+      <div className="connection-banner">
+        <Status
+          value={snapshot.runtime?.configured ? 'configured' : 'not configured'}
+        />
+        <span>{t('runtime stopped')}</span>
+      </div>
+      <p className="dialog-paragraph">
+        {t(
+          'The Circle runtime stopped. The saved connection is kept; the connection can be changed once the runtime runs again.',
+        )}
+      </p>
+      {runtime.restartRuntime && (
+        <div className="dialog-actions">
+          <Button
+            type="button"
+            className="primary"
+            disabled={restarting}
+            onClick={() => perform(() => runtime.restartRuntime!())}
+          >
+            {restarting ? t('restarting…') : t('restart runtime')}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
 // The connection, asked as the terminal's /login asks it: the URL and the key, then what the
 // endpoint lists, or the kind of API and a typed model id when it lists nothing. The key is
 // kept in this component's state only and is gone when the dialog closes.
@@ -990,9 +1023,13 @@ export function DialogHost({
           </div>
         </>
       )}
-      {dialog === 'connect' && runtime.mode === 'live' && (
-        <ConnectionWizard onClose={onClose} />
-      )}
+      {dialog === 'connect' &&
+        runtime.mode === 'live' &&
+        (snapshot.runtime?.connected === false ? (
+          <RuntimeStopped />
+        ) : (
+          <ConnectionWizard onClose={onClose} />
+        ))}
       {dialog === 'connect' && runtime.mode !== 'live' && (
         <form
           className="form-stack"

@@ -3,6 +3,8 @@ export const app: Record<string, string> = {
   connected: '已连接',
   'connect a model': '连接模型',
   'runtime stopped': '运行时已停止',
+  'runtime stopped · restart': '运行时已停止 · 重启',
+  'runtime restarting…': '运行时正在重启…',
   // the top bar and the search
   mcp: 'MCP',
   'open navigation': '打开导航',

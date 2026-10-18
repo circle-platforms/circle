@@ -5,6 +5,16 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import type { RuntimeSupervisor as Supervisor } from '../src/runtime-supervisor.ts';
 import type { WorkspaceServiceEvent } from '../src/workspace-protocol.ts';
+import type { RuntimeUpdate } from '../src/runtime-protocol.ts';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  describeRuntimeExit,
+  redactRuntimeOutput,
+  RUNTIME_RESTART_DELAY_MS,
+} from '../src/runtime-exit.ts';
+import { SESSION_LEASE_STALE_MS } from '../../../src/session_lock.ts';
 
 class Child extends EventEmitter {
   stdout = new EventEmitter();
@@ -28,17 +38,31 @@ const globals = globalThis as typeof globalThis & {
   __circleUtilityFork?: () => Child;
 };
 async function fixture(
-  run: (supervisor: Supervisor, child: Child) => Promise<void>,
+  run: (
+    supervisor: Supervisor,
+    child: Child,
+    children: Child[],
+  ) => Promise<void>,
+  options: Record<string, unknown> = {},
+  first?: Record<string, unknown>,
 ) {
-  const child = new Child();
+  const children: Child[] = [];
   globals.__circleUtilityFork = () => {
+    // Each start is a new process with its own token epoch.
+    const child = new Child();
+    const epoch = `epoch-${children.length}`;
+    children.push(child);
     queueMicrotask(() =>
       child.emit('message', {
         type: 'update',
         update: {
           seq: 1,
           connected: true,
-          snapshot: { sessions: [], runtime: { connected: true } },
+          tokenStream: { epoch, seq: 0 },
+          snapshot: first ?? {
+            sessions: [],
+            runtime: { connected: true },
+          },
         },
       }),
     );
@@ -72,15 +96,22 @@ async function fixture(
   const { RuntimeSupervisor } = (await import(
     `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}#${Math.random()}`
   )) as {
-    RuntimeSupervisor: new (home: string, directory: string) => Supervisor;
+    RuntimeSupervisor: new (
+      home: string,
+      directory: string,
+      openUrl?: (url: string) => void,
+      options?: Record<string, unknown>,
+    ) => Supervisor;
   };
   const supervisor = new RuntimeSupervisor(
     '/synthetic/home',
     '/synthetic/application',
+    () => {},
+    options,
   );
   try {
     await supervisor.start();
-    await run(supervisor, child);
+    await run(supervisor, children[0]!, children);
   } finally {
     await supervisor.close();
     delete globals.__circleUtilityFork;
@@ -443,3 +474,144 @@ test('a native grant receipt arriving after timeout is revoked before it can bec
       t.mock.timers.reset();
     }
   }));
+
+test('exit codes say what is known: crashpad without a handler, out of memory, a plain exit', () => {
+  // Issue #140: Windows reported 4294930435, crashpad's
+  // kTerminationCodeNotConnectedToHandler; signed it is -36861.
+  for (const code of [4294930435, -36861]) {
+    const exit = describeRuntimeExit(code);
+    assert.equal(exit.reason, 'crashed');
+    assert.equal(exit.code, '4294930435 (0xFFFF7003)');
+    assert.equal(
+      exit.message,
+      'Circle runtime crashed (4294930435 (0xFFFF7003))',
+    );
+    assert.match(exit.detail ?? '', /no crash handler is connected/);
+  }
+  // What Electron's utility process wrote when its heap ran out (measured on
+  // Electron 44, macOS: exit code 5, the same lines on stderr).
+  const stderr =
+    '[39663:1019/020233.186686:ERROR:electron/shell/common/node_bindings.cc:195] OOM error in V8: MarkCompactCollector: young object promotion failed Allocation failed - JavaScript heap out of memory\n';
+  assert.equal(describeRuntimeExit(4294930435, stderr).reason, 'out-of-memory');
+  assert.equal(
+    describeRuntimeExit(5, stderr).message,
+    'Circle runtime ran out of memory (5)',
+  );
+  assert.equal(describeRuntimeExit(0xe0000008).reason, 'out-of-memory');
+  assert.equal(describeRuntimeExit(0xc0000005).reason, 'crashed');
+  assert.deepEqual(describeRuntimeExit(9), {
+    reason: 'exited',
+    code: '9',
+    message: 'Circle runtime exited (9)',
+  });
+  assert.equal(describeRuntimeExit(null).code, 'unknown');
+  assert.equal(
+    redactRuntimeOutput(
+      'Authorization: Bearer abc.def-123 api_key=sk-live-1234567890 "token": "ghp_abcdefghijkl"',
+    ).match(/abc\.def|1234567890|abcdefghijkl/g),
+    null,
+  );
+});
+
+test("the automatic restart waits until the dead runtime's session leases are stale", () => {
+  assert(RUNTIME_RESTART_DELAY_MS > SESSION_LEASE_STALE_MS);
+});
+
+const configured = {
+  sessions: [
+    {
+      id: 's',
+      state: 'running',
+      turn: { verb: 'thinking', startedAt: 1, waited: 0, tokens: 0 },
+      queue: [],
+      messages: [{ id: 'u', role: 'user', text: 'long task' }],
+    },
+  ],
+  runtime: { connected: true, configured: true, hasKey: true },
+};
+async function scratchLog(t: import('node:test').TestContext) {
+  const folder = await mkdtemp(join(tmpdir(), 'circle-runtime-log-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  return join(folder, 'logs', 'runtime.log');
+}
+
+test('an unexpected exit keeps the saved connection, says why, logs stderr and restarts once', async (t) => {
+  const logFile = await scratchLog(t);
+  await fixture(
+    async (supervisor, child, children) => {
+      const updates: RuntimeUpdate[] = [];
+      supervisor.subscribe((update) => updates.push(update));
+      child.stderr.emit(
+        'data',
+        'request failed Authorization: Bearer secret-value-123\n<--- Last few GCs --->\nFATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n',
+      );
+      child.emit('exit', 4294930435);
+      const stopped = supervisor.state();
+      assert.equal(stopped.connected, false);
+      assert.equal(stopped.snapshot.runtime?.configured, true);
+      assert.equal(stopped.snapshot.runtime?.hasKey, true);
+      assert.equal(stopped.snapshot.runtime?.stopped?.reason, 'out-of-memory');
+      assert.equal(stopped.snapshot.runtime?.stopped?.restarting, true);
+      assert.equal(
+        stopped.snapshot.runtime?.error,
+        'Circle runtime ran out of memory (4294930435 (0xFFFF7003))',
+      );
+      assert.equal(stopped.snapshot.sessions[0].state, 'paused');
+      assert.equal(stopped.snapshot.sessions[0].turn, undefined);
+      // The new process starts and its own snapshot replaces the stopped one.
+      while (children.length < 2) await settle();
+      await settle();
+      const restarted = supervisor.state();
+      assert.equal(restarted.connected, true);
+      assert.equal(restarted.snapshot.runtime?.stopped, undefined);
+      // Commands go to the new process.
+      void supervisor
+        .command({ id: 'after', name: 'state', payload: {} })
+        .catch(() => {});
+      assert.equal(children[1]!.sent.at(-1)?.id, 'after');
+      const log = await readFile(logFile, 'utf8');
+      assert.match(
+        log,
+        /runtime stopped: Circle runtime ran out of memory \(4294930435 \(0xFFFF7003\)\)/,
+      );
+      assert.match(log, /JavaScript heap out of memory/);
+      assert.match(log, /runtime restarted/);
+      assert.equal(log.includes('secret-value-123'), false);
+      // A second unexpected exit soon after is not restarted again.
+      children[1]!.emit('exit', 4294930435);
+      for (let i = 0; i < 10; i++) await settle();
+      assert.equal(children.length, 2);
+      const left = supervisor.state();
+      assert.equal(left.snapshot.runtime?.stopped?.restarting, false);
+      assert.equal(left.snapshot.runtime?.stopped?.reason, 'crashed');
+      assert.equal(left.snapshot.runtime?.configured, true);
+      assert.match(
+        await readFile(logFile, 'utf8'),
+        /not restarted automatically/,
+      );
+      // The person can still start it.
+      await supervisor.restart();
+      assert.equal(children.length, 3);
+      assert.equal(supervisor.state().connected, true);
+      assert(
+        updates.some((update) => update.snapshot.runtime?.stopped?.restarting),
+      );
+    },
+    { logFile, restartDelayMs: 0, version: 'test' },
+    configured,
+  );
+});
+
+test('quitting while a restart waits for stale leases cancels it', async (t) => {
+  const logFile = await scratchLog(t);
+  const started = Date.now();
+  await fixture(
+    async (_supervisor, child, children) => {
+      child.emit('exit', 1);
+      assert.equal(children.length, 1);
+    },
+    { logFile, restartDelayMs: 60_000 },
+    configured,
+  );
+  assert(Date.now() - started < 30_000, 'close did not wait for the restart');
+});
