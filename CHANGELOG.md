@@ -10,10 +10,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Fixed
 
-- **A secret you enter is no longer thrown away as `no value was entered before the deadline`.** When the machine was slow, a value could be accepted, so the question card closed, and then refused because the waiting side looked at it only after its time was up. A value entered in time is now always used, and one entered too late is refused when you enter it. Waiting for the answer also no longer competes with entering it.
-- **On Windows, stopping a command just after it started no longer leaves the program it started running.** `taskkill` ends the command's process tree as it finds it, so a program the shell was starting at that moment kept running and could keep the workspace folder in use. Circle now also ends what the stopped shell started while it ran.
-- **On Windows, a screenshot no longer waits for the C# compiler.** Each screenshot compiled a small helper with `Add-Type`, which took from seconds to more than the minute PowerShell is given on a busy machine, so the screenshot, or the answer that an app has no window open, ended with `PowerShell did not finish the screenshot in 60 seconds`. The helper's four Windows functions are now defined in memory without compiling.
-- **Command output on Windows in Chinese and other languages is no longer garbled.** `cmd.exe`, PowerShell and most Windows programs write in the console's code page, such as 936 on Simplified Chinese Windows, but Circle read every command's output as UTF-8, so `ver`, `dir` and `echo 中文` reached the model, the terminal and `/jobs` as `�`. Circle now asks the console for its code page once and reads output in it; programs that write UTF-8 anyway, such as git and node, are still read as UTF-8. On every system, a character split between two pieces of output, or cut at the end of the 80 000 bytes a command result keeps, is no longer shown as `�`.
+
 
 ## 1.8.1 - 2026-10-18
 
