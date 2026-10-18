@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
-import { existsSync, openSync } from 'node:fs';
+import { existsSync, openSync, readdirSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -127,20 +127,33 @@ const output = openSync(log, 'a');
 const leftovers = () => {
   try {
     if (process.platform === 'win32') {
-      // Circle's own bounded native query: PowerShell's Win32_Process query can
-      // take longer than 30 s on a busy runner (#176, #115).
-      const query = windowsProcessQuery([], true);
+      // Circle's own bounded native query, by the package's program names as Circle
+      // asks it: PowerShell's Win32_Process query can take longer than 30 s on a busy
+      // runner (#176, #115), and listing every process fails on protected ones.
+      const names = [
+        ...new Set(
+          readdirSync(appPath, { recursive: true })
+            .map(String)
+            .filter((file) => /\.exe$/i.test(file))
+            .map((file) => basename(file).replace(/\.exe$/i, '')),
+        ),
+      ];
+      const query = windowsProcessQuery(names, false);
       const result = spawnSync(process.execPath, query.args, {
         encoding: 'utf8',
         timeout: 30000,
       });
-      if (result.error) throw result.error;
-      if (result.status !== 0)
-        throw Error(`process query exited ${result.status}: ${result.stderr}`);
       const root = resolve(appPath).toLowerCase();
-      return readWindowsProcessRecords(result.stdout)
+      const left = readWindowsProcessRecords(result.stdout || '')
         .entries.filter((entry) => entry.path.toLowerCase().startsWith(root))
         .map((entry) => `${entry.pid} ${basename(entry.path)}`);
+      // A query that found none of them but did not complete cannot say none is left.
+      if (!left.length && (result.error || result.status !== 0))
+        throw (
+          result.error ??
+          Error(`process query exited ${result.status}: ${result.stderr}`)
+        );
+      return left;
     }
     return execFileSync('ps', ['-axo', 'pid=,command='], {
       encoding: 'utf8',
