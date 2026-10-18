@@ -10,6 +10,10 @@ export const model: Record<string, string> = {
   'runtime action failed': '运行时操作失败',
   disconnected: '已断开',
   'Circle runtime disconnected': 'Circle 运行时已断开',
+  'Circle runtime ran out of memory': 'Circle 运行时内存不足',
+  'Circle runtime crashed': 'Circle 运行时崩溃',
+  'Circle runtime exited': 'Circle 运行时已退出',
+  'restart it from the sidebar': '可在侧边栏重启',
   'use a native session operation': '请使用原生会话操作',
   'queue messages through the composer': '请通过输入框把消息加入队列',
   'history can only be imported through the native runtime':

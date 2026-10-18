@@ -415,6 +415,11 @@ export class LiveRuntime implements RuntimePort {
     };
     for (const listener of this.listeners) listener();
   };
+  restartRuntime = async () => {
+    if (!this.host.restartRuntime)
+      throw Error(t('Circle runtime disconnected'));
+    await this.host.restartRuntime();
+  };
   dispose() {
     this.disposed = true;
     this.unsubscribe();

@@ -37,6 +37,7 @@ const bridge: DesktopBridge = {
   runtimeState: () => ipcRenderer.invoke('circle:runtime-state'),
   runtimeCommand: (command) =>
     ipcRenderer.invoke('circle:runtime-command', command),
+  restartRuntime: () => ipcRenderer.invoke('circle:runtime-restart'),
   onRuntime: (listener) => {
     const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
       listener(value);

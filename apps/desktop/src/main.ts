@@ -4,7 +4,11 @@ import {
   nativeHttpsUrl,
 } from './encrypted-credentials';
 import { BrowserSessions } from './browser';
-import { devToolsMenuShortcut, selectAllMenuItem } from './menu-shortcuts';
+import {
+  devToolsMenuShortcut,
+  selectAllMenuItem,
+  windowContextMenu,
+} from './menu-shortcuts';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { validateRuntimeCommand } from './runtime-protocol';
 import {
@@ -468,6 +472,33 @@ async function createWindow() {
     if (!browsers) throw Error('the browser is closed');
     return browsers.agent(request, signal);
   });
+  // Electron gives the window no right-click menu of its own. A text field gets the
+  // system's editing commands, selected text gets Copy; the page asks nothing of the
+  // main process for it, so the preload bridge stays as it is.
+  window.webContents.on('context-menu', (_event, params) => {
+    const items = windowContextMenu(params);
+    if (!items.length || !window) return;
+    Menu.buildFromTemplate(
+      items.map((item): MenuItemConstructorOptions => {
+        if (item === 'separator') return { type: 'separator' };
+        if (item.command === 'selectAll')
+          return {
+            ...selectAllMenuItem(text(item.label)),
+            enabled: item.enabled,
+          };
+        // A click of its own rather than a role: on macOS a role item only sends the
+        // system's selector, so its click() does nothing and cannot be checked.
+        const command = item.command;
+        return {
+          label: text(item.label),
+          enabled: item.enabled,
+          click: () => {
+            if (window && !window.isDestroyed()) window.webContents[command]();
+          },
+        };
+      }),
+    ).popup({ window });
+  });
   window.webContents.setWindowOpenHandler(({ url }) => {
     const allowed = safeExternalUrl(url);
     if (allowed && !fixtureProfile) void shell.openExternal(allowed);
@@ -560,6 +591,10 @@ app
           const allowed = safeExternalUrl(url);
           if (allowed && !fixtureProfile) void shell.openExternal(allowed);
         },
+        {
+          logFile: join(dataPath, 'logs', 'runtime.log'),
+          version: circleVersion,
+        },
       );
       runtime.onCredentials(
         new EncryptedCredentialStore(join(dataPath, 'private-credentials'), {
@@ -605,6 +640,10 @@ app
     handle('circle:runtime-state', () => {
       if (!runtime) throw Error('runtime not enabled');
       return runtime.state();
+    });
+    handle('circle:runtime-restart', async () => {
+      if (!runtime) throw Error('runtime not enabled');
+      await runtime.restart();
     });
     handle('circle:runtime-command', (value) => {
       if (!runtime) throw Error('runtime not enabled');

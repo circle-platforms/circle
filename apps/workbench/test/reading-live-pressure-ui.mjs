@@ -316,6 +316,9 @@ try {
   receipt.returns = [];
   for (let round = 0; round < 4; round++) {
     for (const title of ['performance alternate', 'performance history']) {
+      // The panel toggles leave the keyboard in the terminal, whose Ctrl keys are the
+      // shell's on Windows and Linux: step out of it, as a person clicking elsewhere does.
+      await page.evaluate(() => document.activeElement?.blur());
       await page.keyboard.press('ControlOrMeta+k');
       await page
         .getByRole('textbox', { name: 'global search', exact: true })

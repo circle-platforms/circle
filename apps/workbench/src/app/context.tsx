@@ -14,6 +14,7 @@ import type {
 } from '../model/types';
 import { t } from '../i18n';
 import { SessionActionError } from '../model/action-error';
+import { runtimeStoppedNotice } from '../model/runtime-notice';
 interface ContextValue {
   runtime: RuntimePort;
   snapshot: WorkbenchSnapshot;
@@ -57,13 +58,16 @@ export function RuntimeProvider({
     }, 4200);
   };
   const notify = (message: string) => showNotice(message);
+  // A stopped runtime is said in the interface language, with its exit code.
+  const runtimeNotice =
+    runtimeStoppedNotice(snapshot.runtime) ?? snapshot.runtime?.error;
   useEffect(() => {
-    if (snapshot.runtime?.error) showNotice(snapshot.runtime.error, 'runtime');
+    if (runtimeNotice) showNotice(runtimeNotice, 'runtime');
     else if (shownNotice.current?.source === 'runtime') {
       shownNotice.current = undefined;
       setNotice('');
     }
-  }, [snapshot.runtime?.error]);
+  }, [runtimeNotice]);
   const actionError = snapshot.sessions.find(
     (session) => session.id === snapshot.activeSessionId,
   )?.actionError;

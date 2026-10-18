@@ -8,7 +8,7 @@ The desktop application is a window around the same Circle: the same model conne
 
 ## First start
 
-The first time, Circle opens the connection form by itself. Later, open it from the connection at the bottom of the sidebar (`connect a model` until one is set), from the top bar's ⋯ menu, from settings or with `/login`. It asks what the terminal's setup asks, in two steps:
+The first time, Circle opens the connection form by itself. Later, open it from the connection at the bottom of the sidebar (`connect a model` until one is set; see [When the runtime stops](#when-the-runtime-stops) for `runtime stopped`), from the top bar's ⋯ menu, from settings or with `/login`. It asks what the terminal's setup asks, in two steps:
 
 1. The provider, editable API URL and key. Online providers request their model list; selecting a provider without a compatible list chooses its released presets before any request. Custom endpoints keep protocol discovery. Nothing is saved yet.
 2. The model. Preset providers show their ids marked `preset`, under a line with the date of the preset list; they remain unverified and can be edited. Providers that require deployment names ask you to type yours. When the endpoint listed its models, pick one from the list (arrow keys and `enter` work in its search box); type to search it, and `use “…”` takes an id it does not list. When it listed none, or could not be asked, type the model id your provider documents; it is not checked. If the endpoint could not be asked, choose whether the API is OpenAI-style or Anthropic-style too. Connect saves the URL that answered (the one you typed when none did), the kind of API, the model and the key, and lists that endpoint's models in place of the ones listed before.
@@ -35,7 +35,7 @@ New session, in the sidebar, on a folder, on the sessions page, or from the file
 
 After the first turn the model names the session with a short summary of its first message, the same request as the terminal's. Until that title arrives the row says new session, and the trimmed message is not used as the title. A short line such as hi is its own title. A refused or failed request leaves the row as new session and says title failed in the conversation. A network failure says could not reach the endpoint, and that request is tried once more. A title that only repeats the question is asked for once more and otherwise leaves the session untitled. A name you give a session is kept. Opening an older session asks again when the stored title is still the short first message, a cut of it, several messages stuck together, or a title that reads as work already done.
 
-Ctrl+N and new session take the keyboard from a sidebar row and put the cursor in the home composer before the next key, so the next keys are the message; they go after a draft the home composer kept. Search is Ctrl+K. Ctrl+R opens the same search; that is the history-search key, kept on purpose.
+Ctrl+N (⌘N on macOS) and new session take the keyboard from a sidebar row and put the cursor in the home composer before the next key, so the next keys are the message; they go after a draft the home composer kept. Search is Ctrl+K (⌘K). Ctrl+R (⌃R on macOS) opens the same search; that is the history-search key, kept on purpose.
 
 Archiving hides a session from the sidebar. All sessions → archived sessions shows it again; its history stays readable, and restore conversation enables the composer. Until restored, it cannot change the saved branch, labels or conversation mode. A fork or clone can start a separate conversation from it. Archive state is kept in desktop metadata, without deleting the folder or changing the terminal's checkpoint history.
 
@@ -77,6 +77,14 @@ The mode belongs to the session, as in the terminal; see [Modes](usage.md#modes)
 The input box is one line and grows as you type more. Its frame takes the approval mode's colour: blue to accept edits, violet to plan, orange for auto; in manual mode it keeps its plain border. While the model works, the row of the turn's latest tools shows how long the turn has run and, once a model request has finished, the tokens the endpoint reported for it, as Claude's desktop application does; before the first tool a row of its own shows them beside Circle's turning ring. Time spent waiting for you is not counted. When a model request is tried again the row says why and which try. When the turn ends, its last answer shows the whole turn: the time, the tokens sent and received, and the cost when every request had a price in dollars. Turns finished before Circle started again show only the last request's tokens.
 
 A finished file change shows its diff when its line is opened. The changes panel lists every file this session changed while the app was open, each against its version before the first change. The files panel lists the open folder when it is trusted.
+
+### When the runtime stops
+
+Conversations run in a separate process, the Circle runtime. When it ends without being asked to, as when it crashes or runs out of memory, the turn under way stops and a notice says why and gives the process's exit code, such as `Circle runtime crashed (4294930435 (0xFFFF7003)) · restarting…`. The saved connection stays: the sidebar says `runtime restarting…` rather than `connect a model`. About 31 seconds later, once the stopped process's sessions are free (a session lease expires 30 seconds after its holder's last heartbeat), Circle starts the runtime again by itself and reopens the same session, idle. The turn that was cut off ends with `✖ Interrupted`, after its last saved message or tool result, and the next message goes to the same endpoint with that history. Text the model was still streaming is not kept.
+
+Circle restarts the runtime by itself once. If it stops again within ten minutes, it stays stopped: the sidebar says `runtime stopped · restart`, and a click on it starts it again. While it is stopped the connection dialog says so and offers **restart runtime** instead of a form that cannot save.
+
+Each unexpected exit is written to `logs/runtime.log` in the data folder (`runtime.log.1` keeps the previous megabyte): the exit code and what it means when Circle knows, how long the runtime ran, whether it restarted, and the last 16 KB the runtime wrote to its error output, with values that look like keys or tokens replaced by `[redacted]`. When V8 ran out of heap, that output says `JavaScript heap out of memory` and the notice says the runtime ran out of memory. On Windows a crash without a crash handler reports `4294930435 (0xFFFF7003)`: Chromium's crash reporter was asked for a dump and none was connected, so the code does not say what failed; the log's error output may.
 
 ## Developing in the window
 
@@ -139,6 +147,16 @@ While the panel has the keyboard, ⌘W closes the tab rather than the window, an
 ## Under the input box
 
 As in Claude: on the left, + to attach files and the mode; on the right, the model and the thinking depth, each a menu, and a ring for the context. The ring fills as the context of the last answer fills the model's window, orange from 70% and red from 90%. Click it for the terminal footer's numbers — tokens sent and received over the whole session, the estimated cost from the model's published prices, the share read from the cache — and to compact the conversation or open the session's details. While jobs run, the ring carries their count. Unknown values read `N/A`.
+
+## Keys and text fields
+
+Text fields keep the system's editing keys. On macOS ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z and ⇧⌘Z, ⌘ with an arrow, ⌥← and ⌥→, and ⌘⌫ do in the input box and every other field what they do in any Mac application; on Windows and Linux Ctrl with C, V, X, A and Z do the same.
+
+Circle's own keys in the input box are the terminal's, listed in [Keyboard and mouse](keybindings.md). On macOS they are Control keys, as in the terminal: ⌃C clears the draft, ⌃D on an empty box asks to close the session, ⌃T shows or hides thinking, ⌃O expands tool details, ⌃G opens the larger editor, ⌃R opens search and ⌃Q queues a follow-up. ⌘ is left to the system, apart from the window's own commands: ⌘K search, ⌘P quick open of a file, ⌘N new session, ⌘O open folder, ⌘, settings, ⌘B the sidebar, ⌘F find in the conversation and ⇧⌘M the model list. On Windows and Linux all of these are Ctrl.
+
+Where the two meet, the field wins. With text selected in the input box, Ctrl+C copies instead of clearing. Ctrl+Z in a text field is the field's undo, not suspend. Ctrl+D over a draft deletes the character after the cursor, as in the terminal; only on an empty box does it ask to close. In any other text field, such as a rename box, a settings field, the editor or the terminal panel, Circle's keys do nothing but `esc`.
+
+A right-click in a text field offers **Cut**, **Copy**, **Paste** and **Select All**; on selected text, **Copy**. Elsewhere in the window there is no menu. The menu follows the application's language. Settings → keyboard gives an action another key; a key recorded with ⌘ on macOS stays a ⌘ key.
 
 ## Outside the window
 

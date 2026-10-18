@@ -434,6 +434,15 @@ export interface WorkbenchSnapshot {
     /** Whether a key is saved; the key itself never reaches the window. */
     hasKey?: boolean;
     error?: string;
+    /** Set by the desktop application after the runtime process ended unexpectedly. */
+    stopped?: {
+      reason: 'out-of-memory' | 'crashed' | 'exited';
+      /** The exit code as reported, such as `4294930435 (0xFFFF7003)`. */
+      code: string;
+      /** An automatic or requested restart is under way. */
+      restarting: boolean;
+      at: string;
+    };
     processId?: number;
     observedAt?: string;
     coreVersion?: string;
@@ -530,6 +539,8 @@ export interface RuntimePort {
   ) => string | Promise<unknown>;
   /** Drop a session error the page is already showing, so it is not also a toast. */
   dismissActionError?: (sessionId?: string) => void;
+  /** Start the desktop runtime again after it stopped. */
+  restartRuntime?: () => Promise<void>;
   newSession: (workspaceId?: string) => string | Promise<string>;
   beginConversation: (
     input: BeginConversation,

@@ -1,9 +1,15 @@
+/**
+ * The desktop's default keys. `ctrl` is the Control key, as in the terminal, on every
+ * system. `mod` is the platform's command key: ⌘ on macOS, Ctrl on Windows and Linux.
+ * On macOS ⌘ belongs to the system's editing keys (⌘C, ⌘V, ⌘Z, ⌘A, ⌘←…) and to
+ * the window's own commands; only the actions written with `mod` take a ⌘ chord.
+ */
 export const KEY_ACTIONS = {
   interrupt: 'escape',
   clear: 'ctrl+c',
   exit: 'ctrl+d',
   suspend: 'ctrl+z',
-  'model.select': 'ctrl+shift+m',
+  'model.select': 'mod+shift+m',
   'session.select': 'alt+s',
   'model.cycle': 'alt+m',
   'mode.cycle': 'shift+tab',
@@ -16,12 +22,12 @@ export const KEY_ACTIONS = {
   'message.dequeue': 'alt+up',
   'message.followup': 'ctrl+q',
   'image.paste': 'ctrl+v',
-  find: 'ctrl+f',
+  find: 'mod+f',
   'history.search': 'ctrl+r',
   'secret.enter': 'ctrl+alt+s',
   newline: 'ctrl+j',
   'job.background': 'alt+b',
-  'sidebar.toggle': 'ctrl+b',
+  'sidebar.toggle': 'mod+b',
 } as const;
 /** Defaults, then the user's overrides. An override replaces that action's key. */
 export function effectiveBindings(
@@ -29,13 +35,44 @@ export function effectiveBindings(
 ): Record<string, string | string[]> {
   return { ...KEY_ACTIONS, ...overrides };
 }
-export function chordFromEvent(event: {
+type KeyEvent = {
   key: string;
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
   metaKey: boolean;
-}): string {
+};
+/**
+ * Whether ⌘ and Control are told apart: the macOS desktop, or the browser preview on a
+ * Mac. Outside a page (unit tests) it is false unless the caller says otherwise.
+ */
+export function macKeyboard(): boolean {
+  if (typeof document === 'undefined') return false;
+  const desktop = document.documentElement.dataset.desktop;
+  if (desktop) return desktop === 'darwin';
+  return typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+}
+const MODIFIERS = ['ctrl', 'alt', 'shift', 'meta'] as const;
+/**
+ * One spelling for a chord: modifiers in a fixed order, and `mod` resolved for the
+ * platform. Windows and Linux keep the old reading of Meta as Ctrl, so a saved
+ * `meta+x` and `ctrl+x` are the same chord there.
+ */
+export function normalizeChord(chord: string, mac = macKeyboard()): string {
+  const parts = chord.split('+');
+  // A chord such as ctrl++ names the plus key itself.
+  const key = chord.endsWith('++') ? '+' : parts.pop()!;
+  const held = new Set<string>();
+  for (const part of parts) {
+    if (!part) continue;
+    const name = part.toLowerCase();
+    if (name === 'mod') held.add(mac ? 'meta' : 'ctrl');
+    else if (name === 'meta' && !mac) held.add('ctrl');
+    else held.add(name);
+  }
+  return [...MODIFIERS.filter((name) => held.has(name)), key].join('+');
+}
+export function chordFromEvent(event: KeyEvent, mac = macKeyboard()): string {
   const key =
     (
       {
@@ -46,59 +83,59 @@ export function chordFromEvent(event: {
         Escape: 'escape',
       } as Record<string, string>
     )[event.key] ?? event.key.toLowerCase();
-  // Command on macOS is the same chord as Ctrl in the saved names.
-  const command = event.ctrlKey || event.metaKey;
+  // On macOS ⌘ is its own modifier: the terminal's ctrl chords are the Control key
+  // there too, and ⌘ chords stay the system's. Elsewhere the Windows or Super key
+  // reads as Ctrl, as it always did.
+  const ctrl = mac ? event.ctrlKey : event.ctrlKey || event.metaKey;
+  const meta = mac && event.metaKey;
   return (
-    (command ? 'ctrl+' : '') +
+    (ctrl ? 'ctrl+' : '') +
     (event.altKey ? 'alt+' : '') +
     (event.shiftKey ? 'shift+' : '') +
+    (meta ? 'meta+' : '') +
     key
   );
 }
-/** Desktop session search. The header menu and the shortcut list both show this chord. */
-export const DESKTOP_SEARCH_CHORD = 'ctrl+k';
-export function isDesktopSearch(event: {
-  key: string;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  metaKey: boolean;
-}): boolean {
-  return chordFromEvent(event) === DESKTOP_SEARCH_CHORD;
+/** Whether the event is this chord, written with `mod`, `ctrl`, `meta` or neither. */
+export function isChord(
+  event: KeyEvent,
+  chord: string,
+  mac = macKeyboard(),
+): boolean {
+  return chordFromEvent(event, mac) === normalizeChord(chord, mac);
 }
+/** Desktop session search. The header menu and the shortcut list both show this chord. */
+export const DESKTOP_SEARCH_CHORD = 'mod+k';
+export function isDesktopSearch(event: KeyEvent, mac = macKeyboard()): boolean {
+  return isChord(event, DESKTOP_SEARCH_CHORD, mac);
+}
+/** Quick open: search with an empty field. */
+export const DESKTOP_QUICK_OPEN_CHORD = 'mod+p';
 /** Desktop new session. The File menu owns this chord in the app window. */
-export const DESKTOP_NEW_SESSION_CHORD = 'ctrl+n';
-export function isDesktopNewSession(event: {
-  key: string;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  metaKey: boolean;
-}): boolean {
-  return chordFromEvent(event) === DESKTOP_NEW_SESSION_CHORD;
+export const DESKTOP_NEW_SESSION_CHORD = 'mod+n';
+export function isDesktopNewSession(
+  event: KeyEvent,
+  mac = macKeyboard(),
+): boolean {
+  return isChord(event, DESKTOP_NEW_SESSION_CHORD, mac);
 }
 /** Desktop settings. Not a terminal binding, so it stays out of KEY_ACTIONS. */
-export const DESKTOP_SETTINGS_CHORD = 'ctrl+,';
-export function isDesktopSettings(event: {
-  key: string;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  metaKey: boolean;
-}): boolean {
-  return chordFromEvent(event) === DESKTOP_SETTINGS_CHORD;
+export const DESKTOP_SETTINGS_CHORD = 'mod+,';
+export function isDesktopSettings(
+  event: KeyEvent,
+  mac = macKeyboard(),
+): boolean {
+  return isChord(event, DESKTOP_SETTINGS_CHORD, mac);
 }
-export function formatChord(chord: string): string {
-  const mac =
-    typeof document !== 'undefined' &&
-    document.documentElement.dataset.desktop === 'darwin';
-  return chord
-    .split('+')
+export function formatChord(chord: string, mac = macKeyboard()): string {
+  return normalizeChord(chord, mac)
+    .split(/\+(?!$)/)
     .map((part) => {
-      if (part === 'ctrl') return mac ? '⌘' : 'Ctrl';
+      // Control is ⌃ on macOS; ⌘ is written meta (or mod) and shows as ⌘.
+      if (part === 'ctrl') return mac ? '⌃' : 'Ctrl';
       if (part === 'alt') return mac ? '⌥' : 'Alt';
       if (part === 'shift') return mac ? '⇧' : 'Shift';
-      if (part === 'meta') return mac ? '⌘' : 'Meta';
+      if (part === 'meta') return '⌘';
       if (part === 'escape') return 'Esc';
       if (part.length === 1) return part.toUpperCase();
       // A function key stays in the spelling that was saved (f3). Uppercasing
@@ -133,7 +170,7 @@ export function validateKeybindings(
       throw Error('keys must be a string or list of strings');
     for (const key of typeof keys === 'string' ? [keys] : keys)
       if (
-        !/^(?:(?:ctrl|alt|shift|meta)\+)*(?:[a-z0-9]|escape|up|down|left|right|enter|tab|backspace|delete|home|end|pageup|pagedown|f(?:[1-9]|1[0-2]))$/.test(
+        !/^(?:(?:ctrl|alt|shift|meta|mod)\+)*(?:[a-z0-9]|escape|up|down|left|right|enter|tab|backspace|delete|home|end|pageup|pagedown|f(?:[1-9]|1[0-2]))$/.test(
           key,
         )
       )
@@ -142,18 +179,17 @@ export function validateKeybindings(
   return value as Record<string, string | string[]>;
 }
 export function matchingAction(
-  event: {
-    key: string;
-    ctrlKey: boolean;
-    altKey: boolean;
-    shiftKey: boolean;
-    metaKey: boolean;
-  },
+  event: KeyEvent,
   bindings: Record<string, string | string[]>,
+  mac = macKeyboard(),
 ): KeyAction | undefined {
-  const chord = chordFromEvent(event);
+  const chord = chordFromEvent(event, mac);
   for (const [action, keys] of Object.entries(bindings)) {
-    if ((typeof keys === 'string' ? [keys] : keys).includes(chord))
+    if (
+      (typeof keys === 'string' ? [keys] : keys).some(
+        (key) => normalizeChord(key, mac) === chord,
+      )
+    )
       return action as KeyAction;
   }
   return undefined;
