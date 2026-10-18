@@ -22,6 +22,7 @@ import {
   readModelRequests,
 } from './helpers/model-requests.mjs';
 import { patience } from './helpers/patience.mjs';
+import { saveWithShortcut } from './helpers/native-editor-save.mjs';
 
 // The conversation's browser, driven by a scripted model and by the person, against local
 // HTTPS sites with a self-signed certificate: everything a page asks for reaches both.
@@ -1828,10 +1829,12 @@ try {
           .locator('.file-view')
           .getByText('unsaved changes', { exact: true })
           .waitFor();
-        await page.keyboard.press(`${modifier}+s`);
-        await waitFor(
+        await saveWithShortcut(
+          page,
+          modifier,
           async () => (await readFile(replayPath, 'utf8')) === content,
           'real Monaco saves the edited recorded script',
+          page.locator('.file-view:visible'),
         );
         await page
           .getByRole('button', { name: 'close file', exact: true })
