@@ -17,7 +17,9 @@ import {
   safeExternalUrl,
   trustedAppUrl,
   validSaveName,
+  windowFile,
 } from '../src/policy.ts';
+import fs from 'node:fs';
 import { nativeFile, WorkspaceGrants } from '../src/files.ts';
 
 test('only the application frame URL is trusted', () => {
@@ -221,6 +223,39 @@ test('chosen pictures and PDFs go whole up to 20 MB, other files up to 4 MB', as
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("the window's own files are served even while asynchronous file reads never finish", async (t) => {
+  const renderer = await mkdtemp(join(tmpdir(), 'circle-renderer-'));
+  t.after(() => rm(renderer, { recursive: true, force: true }));
+  await mkdir(join(renderer, 'assets'));
+  await writeFile(join(renderer, 'index.html'), '<script type=module>');
+  await writeFile(join(renderer, 'assets', 'index-abc.js'), 'export {}');
+  // As Electron's reads from the application archive sometimes do in the packaged app
+  const { stat, readFile } = fs.promises;
+  const stalled = () => new Promise<never>(() => {});
+  fs.promises.stat = stalled as typeof stat;
+  fs.promises.readFile = stalled as typeof readFile;
+  try {
+    const script = windowFile(
+      renderer,
+      'circle://workbench/assets/index-abc.js',
+    );
+    assert.equal(script?.body.toString(), 'export {}');
+    assert.equal(script?.type, 'text/javascript; charset=utf-8');
+    assert.equal(
+      windowFile(renderer, 'circle://workbench/')?.body.toString(),
+      '<script type=module>',
+    );
+  } finally {
+    fs.promises.stat = stat;
+    fs.promises.readFile = readFile;
+  }
+  assert.equal(windowFile(renderer, 'circle://workbench/assets'), undefined);
+  assert.equal(
+    windowFile(renderer, 'circle://workbench/missing.js'),
+    undefined,
+  );
 });
 
 test('the window serves its own files under the types a module, worker and stylesheet need', () => {

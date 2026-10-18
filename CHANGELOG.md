@@ -49,6 +49,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **A disabled MCP server stays disconnected.**
 - **When the desktop's Circle runtime exits, running turns and tools are shown as stopped**, and stopping the debugger waits until its program and terminals have closed before it says stopped.
 - **Code checks follow the project's `tsconfig.json` options.**
+- **The installed desktop application no longer sometimes opens an empty window.** About one start in a hundred stayed blank: the window's scripts were read from the application archive with reads that sometimes never finish once several run at once. They are now read at once, so the window always gets them.
 - **Typing after pasting a large picture into the desktop composer is no longer slow.** The window saved the whole picture again, several megabytes, with every keystroke of the draft. It now saves the picture once, when it is attached, and the draft and its pictures still come back after a restart.
 - **A desktop session with pictures in it no longer slows every update.** The desktop read and parsed every stored message of every session, pictures included, each time it updated the window. It now reads a message once and then only the messages written since, including those the terminal writes.
 

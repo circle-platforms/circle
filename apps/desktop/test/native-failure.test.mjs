@@ -336,7 +336,6 @@ for (const { brokenCapture, closeFailure } of [
           CIRCLE_HOME: join(folder, 'home'),
           CIRCLE_WORKBENCH_DATA_DIR: join(folder, 'data'),
           CIRCLE_DESKTOP_EXECUTABLE: 'synthetic-native-not-launched',
-          CIRCLE_DESKTOP_TEST_EXPLICIT_CONNECT: '',
         },
       },
     );
