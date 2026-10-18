@@ -316,10 +316,9 @@ try {
   receipt.returns = [];
   for (let round = 0; round < 4; round++) {
     for (const title of ['performance alternate', 'performance history']) {
-      // The panel toggles leave the keyboard in the terminal, whose Ctrl keys are the
-      // shell's on Windows and Linux: step out of it, as a person clicking elsewhere does.
-      await page.evaluate(() => document.activeElement?.blur());
-      await page.keyboard.press('ControlOrMeta+k');
+      // The fixture's desktop says darwin (reading-live-pressure-ui.tsx), so search is
+      // ⌘K on every runner; ControlOrMeta would press Ctrl on Linux.
+      await page.keyboard.press('Meta+k');
       await page
         .getByRole('textbox', { name: 'global search', exact: true })
         .fill(title);
