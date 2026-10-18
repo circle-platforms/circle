@@ -139,7 +139,23 @@ try {
     { id: session, profile: 'rack' },
   );
   assert.equal(state.sessions[0].state, 'ready');
-  // A console that appears opens its own panel; the top-bar button toggles it.
+  // A console that appears opens its own panel, except in a narrow window (1050 px
+  // or less, as a Windows runner's screen gives), where it waits for the top-bar
+  // button; the button toggles it either way.
+  const narrow = await page.evaluate(
+    () => matchMedia('(max-width: 1050px)').matches,
+  );
+  if (narrow) {
+    // Had it opened, this click would close it and the wait below would fail.
+    assert.equal(
+      await page.locator('.device-terminal').isVisible(),
+      false,
+      'a console does not open its panel over a narrow window',
+    );
+    await page
+      .getByRole('button', { name: 'device terminals panel', exact: true })
+      .click();
+  }
   await page.locator('.device-terminal').waitFor({ timeout: 15000 });
   await page
     .getByRole('button', { name: 'device terminals panel', exact: true })
@@ -203,13 +219,24 @@ try {
     1,
     'closing a tab disconnects only that console',
   );
-  // A console is worth the whole workspace, as the browser page is.
-  await page.getByRole('button', { name: 'full view', exact: true }).click();
-  await page.locator('.workspace-content.whole').waitFor();
-  await page
-    .getByRole('button', { name: 'exit full view', exact: true })
-    .click();
-  await page.locator('.workspace-content.whole').waitFor({ state: 'hidden' });
+  // A console is worth the whole workspace, as the browser page is; a narrow window
+  // offers no full view to any panel.
+  if (narrow)
+    assert.equal(
+      await page
+        .getByRole('button', { name: 'full view', exact: true })
+        .count(),
+      0,
+      'no full view in a narrow window',
+    );
+  else {
+    await page.getByRole('button', { name: 'full view', exact: true }).click();
+    await page.locator('.workspace-content.whole').waitFor();
+    await page
+      .getByRole('button', { name: 'exit full view', exact: true })
+      .click();
+    await page.locator('.workspace-content.whole').waitFor({ state: 'hidden' });
+  }
   // A disconnect closes the console; its last screen stays readable
   await page.evaluate(
     ({ id, one }) => window.circleDesktop.terminalDisconnect(id, one),
