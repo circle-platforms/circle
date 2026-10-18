@@ -14,6 +14,19 @@ const query = new URLSearchParams(location.search);
 applyTheme(query.get('theme') === 'light' ? 'light' : 'dark');
 setLanguage('en');
 const runtime = new PreviewRuntime();
+// The debug tab belongs to the developer extension; this drawer exercises it.
+runtime.change((snapshot) => {
+  snapshot.extensions.push({
+    id: 'developer',
+    name: 'developer',
+    version: '0.1.0',
+    scope: 'bundled',
+    enabled: true,
+    tools: [],
+    commands: [],
+    events: [],
+  });
+});
 const fixture = {
   calls: [] as any[],
   bounds: [] as any[],

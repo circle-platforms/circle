@@ -1181,7 +1181,12 @@ try {
   const files = page.getByRole('button', { name: 'files panel', exact: true });
   if ((await files.getAttribute('aria-pressed')) !== 'true')
     await files.click();
-  await page.getByRole('button', { name: 'hello.ts', exact: true }).click();
+  // The project index is a virtual tree: each file is a treeitem named by its
+  // path. The workspace is small, so hello.ts is listed without filtering.
+  await page
+    .getByRole('tree', { name: 'files', exact: true })
+    .getByRole('treeitem', { name: 'hello.ts', exact: true })
+    .click();
   const fileLines = page.locator('.file-view .native-code-editor .view-lines');
   await fileLines.waitFor({ state: 'visible' });
   assert.equal(await fileLines.count(), 1, 'one visible source editor');

@@ -122,6 +122,11 @@ try {
               observedAt: '2026-10-17T00:00:00Z',
             };
           },
+          // The desktop hands the keyboard over on its own channel; record it as
+          // the page action it replaced.
+          browserKeys: (id, focused) => {
+            calls.push(['page', 'keys', focused]);
+          },
           browserPage: async (id, action, value) => {
             calls.push(['page', action, value ?? null]);
             if (action === 'snapshot') return ICON;

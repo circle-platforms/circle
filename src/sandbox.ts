@@ -6,6 +6,7 @@ import {
   DEFAULT_CREDENTIAL_FILES,
   wildcard,
 } from './approvals.js';
+import { decodeOutput } from './output_encoding.js';
 /**
  * A path the operating system already anchors. On POSIX every leading `/` is absolute,
  * including `/workspace`, `/srv`, `/data` and `/code`. On Windows a drive (`C:\`, `C:/`),
@@ -37,6 +38,8 @@ export function shellEnvironment(
     ),
   );
 }
+// The most output bytes kept from a command; the text keeps its last 2 000 000 characters.
+const OUTPUT_BYTES = 8_000_000;
 function resolvedTarget(path: string): string {
   return canonicalPath(path);
 }
@@ -83,19 +86,35 @@ export class Sandbox {
         `Denied by approval policy: '${name}' is a credential file`,
       );
   }
+  /** Whether a resolved path is in Circle's own output folder: offloaded history,
+   * large tool results and job output. */
+  isOffloadOutput(path: string): boolean {
+    if (!this.offloadRoot) return false;
+    const rel = relative(
+      resolvedTarget(resolve(this.offloadRoot)),
+      resolvedTarget(path),
+    );
+    return (
+      rel === '' ||
+      (rel !== '..' && !rel.startsWith('..' + sep) && !/^[A-Za-z]:/.test(rel))
+    );
+  }
+  /** Whether a resolved path is in the folder of command and job output. */
+  isJobOutput(path: string): boolean {
+    if (!this.offloadRoot) return false;
+    const rel = relative(
+      resolvedTarget(resolve(this.offloadRoot, 'background_jobs')),
+      resolvedTarget(path),
+    );
+    return (
+      rel === '' ||
+      (rel !== '..' && !rel.startsWith('..' + sep) && !/^[A-Za-z]:/.test(rel))
+    );
+  }
   checkMutablePath(path: string): void {
     this.checkCredentialPath(path);
-    if (this.offloadRoot) {
-      const rel = relative(
-        resolvedTarget(resolve(this.offloadRoot, 'background_jobs')),
-        resolvedTarget(path),
-      );
-      if (
-        rel === '' ||
-        (rel !== '..' && !rel.startsWith('..' + sep) && !/^[A-Za-z]:/.test(rel))
-      )
-        throw new Error('Background job output is read-only');
-    }
+    if (this.isJobOutput(path))
+      throw new Error('Background job output is read-only');
   }
   async execute(
     command: string,
@@ -114,15 +133,23 @@ export class Sandbox {
         detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      let output = '';
+      // Bytes, decoded once at the end, so no character is split between two reads.
+      let chunks: Buffer[] = [];
+      let size = 0;
+      let cut = false;
       let stopping = false;
       let timedOut = false;
       let timer: NodeJS.Timeout | undefined;
       let escalation: NodeJS.Timeout | undefined;
       let windowsKill: Promise<void> | undefined;
       const collect = (chunk: Buffer): void => {
-        output += chunk.toString('utf8');
-        if (output.length > 2_000_000) output = output.slice(-2_000_000);
+        chunks.push(chunk);
+        size += chunk.length;
+        if (size > 2 * OUTPUT_BYTES) {
+          chunks = [Buffer.concat(chunks).subarray(-OUTPUT_BYTES)];
+          size = OUTPUT_BYTES;
+          cut = true;
+        }
       };
       child.stdout.on('data', collect);
       child.stderr.on('data', collect);
@@ -166,6 +193,8 @@ export class Sandbox {
         if (stopping) kill(true);
         await windowsKill;
         cleanup();
+        let output = decodeOutput(Buffer.concat(chunks), { cutStart: cut });
+        if (output.length > 2_000_000) output = output.slice(-2_000_000);
         resolveResult({
           output: signal.aborted
             ? output +

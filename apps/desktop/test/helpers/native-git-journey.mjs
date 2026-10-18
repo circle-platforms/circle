@@ -15,6 +15,23 @@ export function nativeGitFileRow(page, filename) {
     has: page.getByRole('checkbox', { name: filename, exact: true }),
   });
 }
+// Choosing a file folds the changed-files index away in a narrow drawer; open it again
+// before choosing the next one.
+export async function showNativeGitIndex(page) {
+  const index = page
+    .locator('.native-git')
+    .getByRole('button', { name: 'change index', exact: true });
+  if ((await index.getAttribute('aria-pressed')) !== 'true')
+    await index.click();
+}
+export async function openNativeGitFile(page, filename) {
+  const panel = page.locator('.native-git');
+  await showNativeGitIndex(page);
+  await panel
+    .getByRole('tree', { name: 'changed files', exact: true })
+    .getByRole('treeitem', { name: filename, exact: true })
+    .click();
+}
 const names = {
   first: 'git-journey-manual-first.txt',
   second: 'git-journey-manual-second.txt',
@@ -158,8 +175,30 @@ export async function runNativeGitJourney({
   };
   const snapshot = async (name) =>
     page.screenshot({ path: path.join(output, name + '.png') });
-  const select = async (name) => {
+  // The index lists the files of the chosen scope: work to stage is unstaged,
+  // a staged change to commit is staged.
+  // The work drawer shows one mode: a file opened from Git moves it to files.
+  const showChanges = async () => {
+    const changesToggle = page.getByRole('button', {
+      name: 'changes panel',
+      exact: true,
+    });
+    if ((await changesToggle.getAttribute('aria-pressed')) !== 'true')
+      await changesToggle.click();
+    await page.locator('#inspector-changes-tab-git').click();
+    await panel.waitFor();
+  };
+  const select = async (name, scope = 'unstaged') => {
+    await showChanges();
     await refresh();
+    await panel.getByRole('button', { name: scope, exact: true }).click();
+    // Push stays disabled during a merge; the panel's own busy state says the
+    // scope's listing has arrived.
+    await until(
+      async () => (await panel.getAttribute('aria-busy')) === 'false',
+      'native Git scope listed',
+    );
+    await showNativeGitIndex(page);
     for (const checkbox of await panel.getByRole('checkbox').all())
       await checkbox.uncheck();
     await panel.getByRole('checkbox', { name, exact: true }).check();
@@ -249,14 +288,7 @@ export async function runNativeGitJourney({
       path.join(root, names.unselected),
       'UNSELECTED_MUST_NOT_COMMIT\n',
     );
-    const changesToggle = page.getByRole('button', {
-      name: 'changes panel',
-      exact: true,
-    });
-    if ((await changesToggle.getAttribute('aria-pressed')) !== 'true')
-      await changesToggle.click();
-    await page.locator('#inspector-changes-tab-git').click();
-    await panel.waitFor();
+    await showChanges();
     await select(names.first);
     await panel
       .getByRole('button', { name: 'stage selected', exact: true })
@@ -287,9 +319,7 @@ export async function runNativeGitJourney({
       await refresh();
       await panel.getByRole('button', { name: scope, exact: true }).click();
       await waitForNativeIdle();
-      await panel
-        .getByRole('button', { name: names.hunks, exact: true })
-        .click();
+      await openNativeGitFile(page, names.hunks);
     };
     await showHunks('unstaged');
     await panel
@@ -350,7 +380,7 @@ export async function runNativeGitJourney({
     checks.push(
       'GUI hunk discard restores disk while preserving partial index, staged unrelated file and unselected work',
     );
-    await select(names.first);
+    await select(names.first, 'staged');
     await commit('Record first native manual change', [names.first]);
     await push();
     checks.push(
@@ -401,6 +431,7 @@ export async function runNativeGitJourney({
       await readFile(path.join(root, names.conflict), 'utf8'),
       /<<<<<<<[\s\S]*=======/,
     );
+    await showNativeGitIndex(page);
     const conflictRow = nativeGitFileRow(page, names.conflict);
     await conflictRow
       .getByRole('button', { name: 'open file', exact: true })

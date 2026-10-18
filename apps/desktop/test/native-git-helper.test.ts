@@ -39,6 +39,10 @@ test('native Git fixture preserves the primary failure when dirty cleanup cannot
       getByRole: (_role: string, options: { name?: string } = {}) => {
         const locator = {
           first: () => locator,
+          // The change index is already showing; files are found inside it.
+          getAttribute: async () => 'true',
+          getByRole: (role: string, inner: { name?: string } = {}) =>
+            panel.getByRole(role, inner),
           all: async () => [],
           check: async () => {},
           click: async () => {
@@ -80,8 +84,11 @@ test('native Git fixture preserves the primary failure when dirty cleanup cannot
       runNativeGitJourney({ page, workspace, output, sessionId: 'fixture' }),
       /PRIMARY_STAGE_FAILURE/,
     );
+    // Opening the drawer, then going back to the Git view before choosing the
+    // file to stage: in the one-mode drawer a file opened from Git moves it away.
     assert.deepEqual(navigation, [
       'changes panel',
+      '#inspector-changes-tab-git',
       '#inspector-changes-tab-git',
     ]);
     const failure = JSON.parse(

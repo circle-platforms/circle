@@ -1357,8 +1357,8 @@ try {
     'preview reset cancel, confirmation, reopen and persisted data effects',
   );
   await reset();
-  // The panel seen whole, as Codex lets a preview be: the shell offers it, a file list
-  // does not, and the conversation underneath keeps what the person had typed.
+  // The panel seen whole, as Codex lets a preview be: the shell and the files drawer
+  // offer it, and the conversation underneath keeps what the person had typed.
   const boxes = () =>
     page.evaluate(() => {
       const at = (selector) => {
@@ -1411,10 +1411,12 @@ try {
     await page
       .getByRole('button', { name: 'files panel', exact: true })
       .click();
+    // The files drawer holds the project index and the editor, so it is worth
+    // the whole workspace as well.
     assert.equal(
       await wholeButton('full view').count(),
-      0,
-      'a file list does not',
+      1,
+      'the files drawer offers it too',
     );
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })

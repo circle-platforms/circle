@@ -24,6 +24,13 @@ import type {
   GitHistory,
   GitCommitDiff,
 } from '../../../desktop/src/workspace/git';
+/** A file chosen in the changed-files tree, opened as it was chosen. */
+interface PendingFile {
+  path: string;
+  readonly: boolean;
+  commitId: string;
+  scope: string;
+}
 export function gitHunks(diff: string): string[] {
   const result: string[] = [];
   for (const file of diff.split(/(?=^diff --git )/m).filter(Boolean)) {
@@ -269,6 +276,19 @@ export function GitPanel({
     }
   }
   const readonly = scope === 'history';
+  const openFile = (file: PendingFile) => {
+    if (file.readonly) void showCommit(file.commitId, [file.path]);
+    else void showDiff(file.scope, [file.path]);
+  };
+  const [pendingFile, setPendingFile] = useOwnerState<PendingFile | null>(
+    sessionId,
+    null,
+  );
+  useEffect(() => {
+    if (busy || !pendingFile) return;
+    setPendingFile(null);
+    openFile(pendingFile);
+  }, [busy, pendingFile]);
   const canMutate = !readonly && scope !== 'branch';
   const files = useMemo<
     (GitSnapshot['entries'][number] & {
@@ -615,12 +635,13 @@ export function GitPanel({
               ownerKey={sessionId}
               filterKey={JSON.stringify([scope, commitId, query])}
               ariaLabel={t('changed files')}
-              onSelect={(path) => {
-                if (!busy) {
-                  if (readonly) void showCommit(commitId, [path]);
-                  else void showDiff(scope, [path]);
-                }
-              }}
+              onSelect={(path) =>
+                // A file chosen while an operation runs opens once it finishes,
+                // rather than cancelling that operation or being dropped.
+                busy
+                  ? setPendingFile({ path, readonly, commitId, scope })
+                  : openFile({ path, readonly, commitId, scope })
+              }
               onToggle={(path) => {
                 if (query.trim()) return;
                 setClosedFolders((old) =>

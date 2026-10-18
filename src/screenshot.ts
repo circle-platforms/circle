@@ -49,14 +49,20 @@ const MAC_WINDOWS = `function run(argv) {
 
 // One line, as Circle's other PowerShell commands: run with -Command, not as a script file.
 // A named window draws itself into the picture (PrintWindow), so a window over it is not in
-// it; the main screen is copied as it shows.
+// it; the main screen is copied as it shows. The four user32 functions are defined in memory
+// (Reflection.Emit) rather than with Add-Type -TypeDefinition, which runs the C# compiler on
+// every screenshot and has taken from seconds to more than a minute on a busy machine.
 const WINDOWS_SHOT = [
   "$ErrorActionPreference = 'Stop'",
+  // Window and app names reach Circle in UTF-8, not in the console's code page.
+  '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
   'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
-  'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class CircleWindow { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect); [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window); [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags); public struct Rect { public int Left, Top, Right, Bottom; } }\'',
-  '[CircleWindow]::SetProcessDPIAware() | Out-Null',
+  "$type = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object Reflection.AssemblyName 'CircleWindow'), [Reflection.Emit.AssemblyBuilderAccess]::Run).DefineDynamicModule('CircleWindow').DefineType('CircleWindow', [Reflection.TypeAttributes]'Public, Class')",
+  "foreach ($call in @(@('SetProcessDPIAware', @()), @('GetWindowRect', @([IntPtr], [int[]])), @('IsIconic', @([IntPtr])), @('PrintWindow', @([IntPtr], [IntPtr], [uint32])))) { $type.DefinePInvokeMethod($call[0], 'user32.dll', [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard, [bool], [Type[]]($call[1]), [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Auto).SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig) }",
+  '$window = $type.CreateType()',
+  '$window::SetProcessDPIAware() | Out-Null',
   '$app = $env:CIRCLE_SCREENSHOT_APP',
-  "if ($app) { $windows = @(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 }); $found = (@($windows | Where-Object { $_.ProcessName -eq $app }) + @($windows | Where-Object { $_.ProcessName -like \"*$app*\" }) + @($windows | Where-Object { $_.MainWindowTitle -like \"*$app*\" })) | Select-Object -First 1; if (-not $found) { 'apps:' + (($windows | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join ', '); exit }; if ([CircleWindow]::IsIconic($found.MainWindowHandle)) { 'minimized'; exit }; $rect = New-Object CircleWindow+Rect; [CircleWindow]::GetWindowRect($found.MainWindowHandle, [ref]$rect) | Out-Null; $bitmap = New-Object Drawing.Bitmap ($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top); $graphics = [Drawing.Graphics]::FromImage($bitmap); $dc = $graphics.GetHdc(); $drawn = [CircleWindow]::PrintWindow($found.MainWindowHandle, $dc, 2); $graphics.ReleaseHdc($dc); if (-not $drawn) { throw 'the window did not draw itself' } } else { $bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds; $bitmap = New-Object Drawing.Bitmap $bounds.Width, $bounds.Height; $graphics = [Drawing.Graphics]::FromImage($bitmap); $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size) }",
+  "if ($app) { $windows = @(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 }); $found = (@($windows | Where-Object { $_.ProcessName -eq $app }) + @($windows | Where-Object { $_.ProcessName -like \"*$app*\" }) + @($windows | Where-Object { $_.MainWindowTitle -like \"*$app*\" })) | Select-Object -First 1; if (-not $found) { 'apps:' + (($windows | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join ', '); exit }; if ($window::IsIconic($found.MainWindowHandle)) { 'minimized'; exit }; $rect = New-Object int[] 4; $window::GetWindowRect($found.MainWindowHandle, $rect) | Out-Null; $bitmap = New-Object Drawing.Bitmap ($rect[2] - $rect[0]), ($rect[3] - $rect[1]); $graphics = [Drawing.Graphics]::FromImage($bitmap); $dc = $graphics.GetHdc(); $drawn = $window::PrintWindow($found.MainWindowHandle, $dc, 2); $graphics.ReleaseHdc($dc); if (-not $drawn) { throw 'the window did not draw itself' } } else { $bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds; $bitmap = New-Object Drawing.Bitmap $bounds.Width, $bounds.Height; $graphics = [Drawing.Graphics]::FromImage($bitmap); $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size) }",
   '$bitmap.Save($env:CIRCLE_SCREENSHOT, [Drawing.Imaging.ImageFormat]::Png)',
   "'png'",
 ].join('; ');
@@ -148,8 +154,6 @@ async function capture(options: ScreenshotOptions): Promise<string> {
     return windows.allowed ? '' : MAC_PERMISSION;
   }
   if (platform === 'win32') {
-    // PowerShell builds the window helper each time, which has taken over 20 seconds on a
-    // busy machine
     const shot = await run(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_SHOT],

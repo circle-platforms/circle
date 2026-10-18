@@ -128,9 +128,12 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         string(args, 'file_path', 'filePath', 'path'),
       );
       sandbox.checkCredentialPath(path);
-      if (mutations) await mutations.authorize(path, context, 'read');
+      // Circle's own offloaded output (history, large results, job logs) is read
+      // directly: it is never a workspace or granted external file.
+      const native = sandbox.isOffloadOutput(path) ? undefined : mutations;
+      if (native) await native.authorize(path, context, 'read');
       if (
-        mutations &&
+        native &&
         !sandbox.isInside(path) &&
         (statSync(path).isDirectory() || mediaType(path))
       )
@@ -151,13 +154,19 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       }
       const offset = Math.max(0, Math.trunc(Number(args.offset ?? 0)));
       const limit = Math.max(0, Math.trunc(Number(args.limit ?? 2000)));
-      const content = mutations
+      const content = native
         ? readTextContentWindow(
-            (await mutations.read(path, context)).content!,
+            (await native.read(path, context)).content!,
             offset,
             limit,
           )
-        : await readTextWindow(path, offset, limit, context.signal);
+        : await readTextWindow(
+            path,
+            offset,
+            limit,
+            context.signal,
+            sandbox.isJobOutput(path),
+          );
       read.add(path);
       return content;
     },

@@ -91,6 +91,9 @@ export function ModeMenu({
         <DropdownMenu.Content
           className={`dropdown composer-menu mode-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
+          // Home menus always open downward and scroll within the room below;
+          // flipping would cover the composer they belong to.
+          avoidCollisions={side !== 'bottom'}
           collisionPadding={8}
           align="start"
           sideOffset={7}
@@ -193,6 +196,9 @@ export function ModelMenu({
         <DropdownMenu.Content
           className={`dropdown composer-menu footbar-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
+          // Home menus always open downward and scroll within the room below;
+          // flipping would cover the composer they belong to.
+          avoidCollisions={side !== 'bottom'}
           collisionPadding={8}
           align="end"
           sideOffset={7}
@@ -243,6 +249,9 @@ export function EffortMenu({
         <DropdownMenu.Content
           className={`dropdown composer-menu footbar-menu effort-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
+          // Home menus always open downward and scroll within the room below;
+          // flipping would cover the composer they belong to.
+          avoidCollisions={side !== 'bottom'}
           collisionPadding={8}
           align="end"
           sideOffset={7}

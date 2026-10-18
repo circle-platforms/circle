@@ -41,7 +41,9 @@ assert.equal(gh.status, 0, gh.stderr);
 assert.match(gh.stdout, /2\\.83\\.2/);
 const socketDir = fs.mkdtempSync(path.join(${JSON.stringify(scratch)}, 'adapter-'));
 fs.chmodSync(socketDir, 0o700);
-const socketPath = path.join(socketDir, 's');
+// As the desktop does: a named pipe on Windows, a socket in a private directory elsewhere.
+const slash = String.fromCharCode(92);
+const socketPath = process.platform === 'win32' ? [slash, slash, '.', slash, 'pipe', slash, 'circle-debug-smoke-', process.pid].join('') : path.join(socketDir, 's');
 const adapter = cp.spawn(process.execPath, [path.join(dist, 'tools/js-debug/src/dapDebugServer.js'), socketPath], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 let adapterOutput = '';
 let adapterReady = false;
