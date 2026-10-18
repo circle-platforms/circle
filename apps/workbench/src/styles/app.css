@@ -4420,6 +4420,9 @@ pre {
 .connection-status[data-state='stopped'] i {
   background: var(--negative);
 }
+.connection-status[data-state='restarting'] i {
+  background: var(--attention);
+}
 .sidebar-footer button.sidebar-settings {
   display: flex;
   align-items: center;

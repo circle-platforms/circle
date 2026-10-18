@@ -49,6 +49,8 @@ const LOCAL_SESSION = [
   'presentation',
 ] as const;
 const LOCAL_SETTINGS = ['textSize', 'keybindings'] as const;
+// Each session's draft attachments, apart from the rest of its view
+const ATTACHMENTS_KEY = 'circle.workbench.live.attachments.v1';
 const equal = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 type View = Partial<Pick<Session, (typeof LOCAL_SESSION)[number]>>;
@@ -61,6 +63,11 @@ export class LiveRuntime implements RuntimePort {
   private receivedFullEpoch?: string;
   private listeners = new Set<() => void>();
   private views = new Map<string, View>();
+  // The attachments in storage: what persist() wrote, or read at start
+  private storedAttachments = new Map<
+    string,
+    NonNullable<View['attachments']>
+  >();
   private sessionErrors = new Map<string, string>();
   private files: WorkbenchSnapshot['files'] = [];
   // The workspace whose files were last listed, and a listing in flight.
@@ -114,6 +121,23 @@ export class LiveRuntime implements RuntimePort {
         value.plugins.every((id: unknown) => typeof id === 'string')
           ? value.plugins
           : undefined;
+      // Earlier versions kept the attachments with the rest of the view, read above
+      const stored = JSON.parse(
+        storage?.getItem(ATTACHMENTS_KEY) ?? 'null',
+      ) as unknown;
+      if (Array.isArray(stored))
+        for (const entry of stored) {
+          if (
+            !Array.isArray(entry) ||
+            typeof entry[0] !== 'string' ||
+            !Array.isArray(entry[1])
+          )
+            continue;
+          const view = this.views.get(entry[0]) ?? {};
+          view.attachments = entry[1];
+          this.views.set(entry[0], view);
+          this.storedAttachments.set(entry[0], entry[1]);
+        }
     } catch {
       /* Invalid UI preferences do not replace runtime history. */
     }
@@ -128,11 +152,30 @@ export class LiveRuntime implements RuntimePort {
       this.storage?.setItem(
         'circle.workbench.live.views.v1',
         JSON.stringify({
-          views: [...this.views],
+          views: [...this.views].map(([id, view]) => {
+            const { attachments: _, ...rest } = view;
+            return [id, rest];
+          }),
           settings: this.settings,
           plugins: this.plugins,
         }),
       );
+      // A pasted picture is megabytes of base64. Kept with the draft, it was written
+      // again with every keystroke; it is written when the attachments change.
+      const current = new Map(
+        [...this.views]
+          .filter(([, view]) => view.attachments?.length)
+          .map(([id, view]) => [id, view.attachments!]),
+      );
+      if (
+        current.size !== this.storedAttachments.size ||
+        [...current].some(
+          ([id, attachments]) => this.storedAttachments.get(id) !== attachments,
+        )
+      ) {
+        this.storage?.setItem(ATTACHMENTS_KEY, JSON.stringify([...current]));
+        this.storedAttachments = current;
+      }
       return true;
     } catch {
       this.report(Error(t('UI preferences could not be saved')));
@@ -371,6 +414,11 @@ export class LiveRuntime implements RuntimePort {
       ),
     };
     for (const listener of this.listeners) listener();
+  };
+  restartRuntime = async () => {
+    if (!this.host.restartRuntime)
+      throw Error(t('Circle runtime disconnected'));
+    await this.host.restartRuntime();
   };
   dispose() {
     this.disposed = true;

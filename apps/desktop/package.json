@@ -15,7 +15,7 @@
     "package:msi": "node scripts/msi.ts",
     "test": "node --import tsx --test test/policy.test.ts test/browser-controls.test.ts test/folder-dialog.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/channel.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs test/developer-toolchain.test.mjs test/journey-platform.test.mjs test/native-clipboard.test.mjs test/native-clipboard-checkpoint.test.mjs test/native-paste-cleanup.test.mjs test/native-performance-fixture.test.mjs test/native-build-manifest.test.mjs test/build-manifest-generator.test.mjs test/native-performance-observation.test.mjs test/native-performance-cpu-profile.test.mjs test/native-debug-selector-contract.test.mjs test/native-editor-interactions.test.mjs test/devtools-resume-control.test.mjs test/native-devtools-bridge-handoff.test.mjs test/native-panel-acceptance.test.mjs",
     "test:runtime": "node scripts/runtime-tests.mjs",
-    "test:live": "node test/extensions-native.mjs && node test/live.mjs && node test/browser-live.mjs && node test/browser-coordinate-live.mjs && node test/ui-issues.mjs && node test/session-management.mjs && node test/parallel-sessions.mjs && node test/network-native.mjs && node test/native-websearch.mjs && node test/connection-issues.mjs && node test/completion.mjs && npm run test:thinking",
+    "test:live": "node test/extensions-native.mjs && node test/live.mjs && node test/browser-live.mjs && node test/browser-coordinate-live.mjs && node test/ui-issues.mjs && node test/session-management.mjs && node test/parallel-sessions.mjs && node test/network-native.mjs && node test/native-websearch.mjs && node test/connection-issues.mjs && node test/runtime-restart.mjs && node test/completion.mjs && npm run test:thinking",
     "test:websearch": "node test/native-websearch.mjs",
     "test:sessions": "node test/session-management.mjs && node test/parallel-sessions.mjs",
     "test:clipboard": "node test/system-clipboard.mjs",
@@ -33,6 +33,7 @@
     "test:journey": "node test/native-developer-journey.mjs",
     "test:performance": "node --import tsx test/native-performance.mjs",
     "test:completion": "node test/completion.mjs",
+    "test:restart": "node test/runtime-restart.mjs",
     "test:thinking": "node ../../node_modules/tsx/dist/cli.mjs test/thinking-switch.mjs"
   },
   "engines": {

@@ -1,6 +1,6 @@
 import { storedGitHubStatusNotice } from '../../../../src/runtime_notice';
 import type { HookNotice } from '../../../../src/hooks';
-import type { Message } from './types';
+import type { Message, WorkbenchSnapshot } from './types';
 import { t } from '../i18n';
 
 /** Circle's own failure words. A reason the hook wrote stays as it wrote it. */
@@ -63,4 +63,22 @@ export function formatRuntimeNotice(
     case 'error':
       return t('GitHub connection error');
   }
+}
+
+/** The notice for a desktop runtime that stopped: why, its exit code, and
+ * whether it is starting again. Undefined while it runs. */
+export function runtimeStoppedNotice(
+  runtime: WorkbenchSnapshot['runtime'],
+): string | undefined {
+  const stopped = runtime?.connected === false ? runtime.stopped : undefined;
+  if (!stopped) return undefined;
+  const what =
+    stopped.reason === 'out-of-memory'
+      ? t('Circle runtime ran out of memory')
+      : stopped.reason === 'crashed'
+        ? t('Circle runtime crashed')
+        : t('Circle runtime exited');
+  return `${what} (${stopped.code}) · ${
+    stopped.restarting ? t('restarting…') : t('restart it from the sidebar')
+  }`;
 }

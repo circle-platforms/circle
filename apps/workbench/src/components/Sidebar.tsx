@@ -667,7 +667,9 @@ export function Sidebar({
     runtime.mode !== 'live'
       ? 'preview'
       : !snapshot.runtime?.connected
-        ? 'stopped'
+        ? snapshot.runtime?.stopped?.restarting
+          ? 'restarting'
+          : 'stopped'
         : snapshot.runtime.configured
           ? 'ready'
           : 'not-configured';
@@ -950,7 +952,13 @@ export function Sidebar({
         <button
           className="connection-status"
           data-state={connection}
+          disabled={connection === 'restarting'}
           onClick={() => {
+            // A stopped runtime kept its connection: start it again.
+            if (connection === 'stopped' && runtime.restartRuntime) {
+              void perform(() => runtime.restartRuntime!());
+              return;
+            }
             if (connection === 'ready') navigate('/page/models');
             else onDialog?.(connection === 'preview' ? 'preview' : 'connect');
             onNavigate?.();
@@ -960,11 +968,15 @@ export function Sidebar({
           <span>
             {connection === 'preview'
               ? t('frontend preview')
-              : connection === 'stopped'
-                ? t('runtime stopped')
-                : connection === 'not-configured'
-                  ? t('connect a model')
-                  : current.model}
+              : connection === 'restarting'
+                ? t('runtime restarting…')
+                : connection === 'stopped'
+                  ? runtime.restartRuntime
+                    ? t('runtime stopped · restart')
+                    : t('runtime stopped')
+                  : connection === 'not-configured'
+                    ? t('connect a model')
+                    : current.model}
           </span>
         </button>
         <button

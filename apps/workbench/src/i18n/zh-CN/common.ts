@@ -1,5 +1,6 @@
 // Simplified Chinese for words shared across the window. English is the key.
 export const common: Record<string, string> = {
+  'restarting…': '正在重启…',
   // approval modes
   'approval mode': '审批模式',
   manual: '手动',

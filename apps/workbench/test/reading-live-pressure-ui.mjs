@@ -316,7 +316,9 @@ try {
   receipt.returns = [];
   for (let round = 0; round < 4; round++) {
     for (const title of ['performance alternate', 'performance history']) {
-      await page.keyboard.press('ControlOrMeta+k');
+      // The fixture's desktop says darwin (reading-live-pressure-ui.tsx), so search is
+      // ⌘K on every runner; ControlOrMeta would press Ctrl on Linux.
+      await page.keyboard.press('Meta+k');
       await page
         .getByRole('textbox', { name: 'global search', exact: true })
         .fill(title);

@@ -83,6 +83,8 @@ export interface DesktopBridge {
   info: () => Promise<DesktopInfo>;
   runtimeState: () => Promise<RuntimeUpdate>;
   runtimeCommand: (command: RuntimeCommand) => Promise<RuntimeReply>;
+  /** Start the runtime process again after it stopped; nothing while it runs. */
+  restartRuntime?: () => Promise<void>;
   onRuntime: (listener: (update: RuntimeUpdate) => void) => () => void;
   onRuntimeDelta?: (
     listener: (delta: import('./runtime-protocol').RuntimeTokenDelta) => void,

@@ -1,6 +1,9 @@
 // Simplified Chinese for the interface words in the dialogs files. English is the key.
 export const dialogs: Record<string, string> = {
   // the connection form
+  'The Circle runtime stopped. The saved connection is kept; the connection can be changed once the runtime runs again.':
+    'Circle 运行时已停止。已保存的连接仍在；运行时重新运行后才能更改连接。',
+  'restart runtime': '重启运行时',
   provider: '提供商',
   'Use a Bedrock API key and choose your region in the base URL.':
     '请使用 Bedrock API 密钥，并在 API 地址中选择你的地域。',

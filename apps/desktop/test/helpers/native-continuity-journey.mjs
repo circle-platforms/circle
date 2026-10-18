@@ -49,11 +49,20 @@ const persistedSessionView = (page, sessionId) =>
     const stored = JSON.parse(text);
     if (!Array.isArray(stored.views))
       throw Error('native journey renderer view store is invalid');
-    return (
+    const view =
       stored.views.find(
         (entry) => Array.isArray(entry) && entry[0] === id,
-      )?.[1] ?? null
+      )?.[1] ?? null;
+    // Attachments are kept apart from the view; an earlier version kept them in it
+    const attachments = localStorage.getItem(
+      'circle.workbench.live.attachments.v1',
     );
+    if (!view || attachments === null) return view;
+    const saved = new Map(JSON.parse(attachments));
+    return {
+      ...view,
+      attachments: saved.has(id) ? saved.get(id) : (view.attachments ?? []),
+    };
   }, sessionId);
 const composer = (page) =>
   page.getByRole('textbox', { name: 'message', exact: true });

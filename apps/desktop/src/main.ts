@@ -33,7 +33,7 @@ import type {
   WebContents,
   WebFrameMain,
 } from 'electron';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import originalFs from 'original-fs';
@@ -48,8 +48,7 @@ import {
   type NativeLocale,
 } from './native-text';
 import {
-  assetPath,
-  assetType,
+  windowFile,
   boundedText,
   MAX_EXPORT_BYTES,
   MAX_FILE_BYTES,
@@ -572,18 +571,17 @@ app
       } catch (error) {
         process.stderr.write('circle: no dock icon: ' + String(error) + '\n');
       }
-    // The window's own files, read whole by Node, which also reads them from
-    // the application archive, rather than streamed through Chromium's file
-    // loader: the window's start must never wait on a stream of its files.
-    protocol.handle('circle', async (request) => {
+    // The window's own files, read whole by Node, which also reads them from the
+    // application archive, rather than streamed through Chromium's file loader, and read
+    // at once (see windowFile): the window's start must never wait on its files.
+    protocol.handle('circle', (request) => {
       try {
-        const path = assetPath(rendererRoot, request.url);
-        if (!(await stat(path)).isFile())
-          return new Response('not found', { status: 404 });
-        return new Response(await readFile(path), {
+        const file = windowFile(rendererRoot, request.url);
+        if (!file) return new Response('not found', { status: 404 });
+        return new Response(file.body, {
           status: 200,
           headers: {
-            'Content-Type': assetType(path),
+            'Content-Type': file.type,
             'Content-Security-Policy':
               "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
           },
@@ -617,6 +615,10 @@ app
           if (window && !window.isDestroyed()) return;
           const allowed = safeExternalUrl(url);
           if (allowed && !fixtureProfile) void shell.openExternal(allowed);
+        },
+        {
+          logFile: join(dataPath, 'logs', 'runtime.log'),
+          version: circleVersion,
         },
       );
       runtime.onCredentials(
@@ -664,6 +666,10 @@ app
     handle('circle:runtime-state', () => {
       if (!runtime) throw Error('runtime not enabled');
       return runtime.state();
+    });
+    handle('circle:runtime-restart', async () => {
+      if (!runtime) throw Error('runtime not enabled');
+      await runtime.restart();
     });
     handle('circle:runtime-command', (value) => {
       if (!runtime) throw Error('runtime not enabled');

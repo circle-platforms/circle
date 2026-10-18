@@ -98,6 +98,71 @@ test('the store serves one shared messages array while the head stands still, an
   );
 });
 
+test("a session's checkpoints are read once: a write adds only its rows, and another connection's are read", (t) => {
+  const home = scratch(t);
+  const store = new CheckpointStore(home);
+  const other = new CheckpointStore(home);
+  cleanup(t, () => {
+    store.close();
+    other.close();
+  });
+  const session = store.create('/w', 'm');
+  // A pasted picture is several megabytes of base64 in one message
+  const picture: Message = {
+    id: 'u1',
+    role: 'user',
+    content: 'and this screenshot',
+    attachments: [
+      {
+        kind: 'image',
+        mime_type: 'image/png',
+        filename: 'screen.png',
+        data: 'A'.repeat(4_000_000),
+        sha256: '0'.repeat(64),
+      },
+    ],
+  };
+  store.append(session.id, [picture, reply('a1', 'a big one')]);
+  const first = store.tree(session.id);
+  assert.equal(first.length, 2);
+  // A repaint reads nothing again: the rows and their messages are the same objects
+  assert.equal(store.tree(session.id), first);
+  assert.equal(store.messages(session.id)[0], first[0]!.message);
+  // A later turn adds its rows; the picture's row is not decoded again
+  store.append(session.id, [user('u2', 'two'), reply('a2', 'second answer')]);
+  const second = store.tree(session.id);
+  assert.deepEqual(
+    second.map((row) => row.message.id),
+    ['u1', 'a1', 'u2', 'a2'],
+  );
+  assert.ok(second.slice(0, 2).every((row, i) => row === first[i]));
+  assert.equal(store.messages(session.id)[2], second[2]!.message);
+  // What another connection (the terminal) writes is read, and only that
+  other.append(session.id, [user('u3', 'from the terminal')]);
+  const third = store.tree(session.id);
+  assert.deepEqual(
+    third.map((row) => row.message.id),
+    ['u1', 'a1', 'u2', 'a2', 'u3'],
+  );
+  assert.ok(third.slice(0, 4).every((row, i) => row === second[i]));
+  assert.deepEqual(
+    store.messages(session.id).map((message) => message.id),
+    ['u1', 'a1', 'u2', 'a2', 'u3'],
+  );
+  // A branch from an earlier head is read from the same rows
+  store.select(session.id, first[1]!.id);
+  store.append(session.id, [user('u4', 'a branch')]);
+  assert.deepEqual(
+    store.messages(session.id).map((message) => message.id),
+    ['u1', 'a1', 'u4'],
+  );
+  assert.equal(store.messages(session.id)[0], first[0]!.message);
+  assert.equal(store.tree(session.id).length, 6);
+  // A session another connection deleted has no rows left
+  other.delete(session.id);
+  assert.deepEqual(store.tree(session.id), []);
+});
+
 test('frozen message rows replay from the cache, and every input that changes them re-renders', () => {
   const messages: Message[] = [
     user('u1', 'compile the batches'),
