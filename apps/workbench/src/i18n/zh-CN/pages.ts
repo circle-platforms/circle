@@ -9,6 +9,10 @@ export const pages: Record<string, string> = {
   'A skill hook runs after that skill is loaded in this session.':
     '技能自带的钩子在本次会话加载该技能之后才运行。',
   'waits for the skill': '等待技能加载',
+  'search settings': '搜索设置',
+  'settings sections': '设置分组',
+  'no matching settings': '没有匹配的设置',
+  navigation: '导航',
   'invalid extension setting': '扩展设置无效',
   'saving extension enable request': '正在保存启用请求',
   'saving extension disable request': '正在保存停用请求',

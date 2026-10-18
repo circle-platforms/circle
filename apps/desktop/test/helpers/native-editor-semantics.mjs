@@ -1,3 +1,4 @@
+import { openNativeProjectFile } from './native-project-file.mjs';
 // Supplemental journey: the main editor driver already verifies definition,
 // multi-file semantic rename and unsaved diagnostics. Never launches an app.
 import assert from 'node:assert/strict';
@@ -75,14 +76,7 @@ export async function runNativeEditorSemantics({
     assert(completion.some((c) => c.label === 'member'));
     assert.equal(await disk(), initial, 'unsaved completion cannot write disk');
     checks.push('completion reads an unsaved object member');
-    const entry = page
-      .locator('.file-tree')
-      .getByRole('button', { name: file, exact: true });
-    if (!(await entry.isVisible()))
-      await page
-        .getByRole('button', { name: 'files panel', exact: true })
-        .click();
-    await entry.click();
+    await openNativeProjectFile(page, file);
     await page
       .locator('.file-view-heading strong')
       .getByText(file, { exact: true })

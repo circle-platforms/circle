@@ -142,3 +142,10 @@ test('legacy activity fallback follows status without replacing actual event tex
   }
   setLanguage('en');
 });
+
+test('disconnected agent never retains a live task activity claim', () => {
+  const agent = { ...taskAgent('running'), status: 'unknown' as const };
+  assert.equal(agentState(agent), 'unknown');
+  assert.equal(isAgentActive(agent), false);
+  assert.equal(agentActivityText(agent), 'disconnected');
+});

@@ -67,16 +67,6 @@
   .inspector-title {
   border-bottom-color: transparent;
 }
-.inspector[data-inspector-panel='terminal']:has(
-    #inspector-terminal-terminal:not([hidden])
-  )
-  .inspector-title-name,
-.inspector[data-inspector-panel='browser']:has(.native-browser)
-  .inspector-title-name,
-.inspector[data-inspector-panel='files']:has(.files-panel)
-  .inspector-title-name {
-  visibility: hidden;
-}
 .inspector .inspector-body.flush .native-browser > .browser-tabs,
 .inspector
   .inspector-body.flush
@@ -111,13 +101,6 @@
   white-space: nowrap;
 }
 
-.inspector:is(
-    [data-inspector-panel='changes'],
-    [data-inspector-panel='activity']
-  )
-  .inspector-title-name {
-  visibility: hidden;
-}
 .inspector .workspace-panel-contents > .panel-header-tabs {
   position: absolute;
   z-index: 1;
@@ -636,4 +619,11 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* The drawer owns the resource title and index toggle. The nested file index
+   already has a real filter; its legacy absolute heading must not cover the document. */
+.inspector .drawer-context-index .files-panel > .panel-header-name,
+.inspector .drawer-context-index .files-panel > .panel-header-actions {
+  display: none;
 }

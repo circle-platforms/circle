@@ -5,6 +5,7 @@ import { t } from '../i18n/index.ts';
 export function agentState(
   agent: Pick<AgentRecord, 'status' | 'task'>,
 ): string {
+  if (agent.status === 'unknown') return 'unknown';
   if (agent.task?.recovery === 'needs_reconciliation') return 'needs_review';
   const state = agent.task?.runtimeState ?? agent.task?.state ?? agent.status;
   return state === 'succeeded' ? 'completed' : state;
@@ -12,6 +13,7 @@ export function agentState(
 export function isAgentActive(
   agent: Pick<AgentRecord, 'status' | 'task'>,
 ): boolean {
+  if (agent.status === 'unknown') return false;
   if (agent.task?.recovery === 'needs_reconciliation') return false;
   return agent.task
     ? ['queued', 'preparing', 'running', 'waiting', 'cancelling'].includes(
@@ -25,6 +27,7 @@ export function agentActivityText(
   agent: Pick<AgentRecord, 'status' | 'activity' | 'description' | 'task'>,
 ): string {
   const state = agentState(agent);
+  if (state === 'unknown') return t('disconnected');
   if (state === 'failed') return t('failed');
   if (state === 'cancelled') return t('cancelled');
   if (state === 'interrupted') return t('interrupted');

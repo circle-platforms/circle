@@ -26,7 +26,7 @@ if (!process.env.CIRCLE_AGENT_SOURCE_WIDTH) {
 }
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
-  server: { host: '127.0.0.1', port: 0 },
+  server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
   logLevel: 'error',
   plugins: [
     {

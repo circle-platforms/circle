@@ -88,8 +88,18 @@ export function planPatch(
       move = sandbox.resolvePath(lines[i++]!.slice(13));
       sandbox.checkMutablePath(move);
     }
-    const textLines = original.split('\n');
-    if (textLines.at(-1) === '') textLines.pop();
+    // Match logical lines without rewriting an existing file's BOM, line endings
+    // or final-newline convention. Untouched separators retain their own bytes.
+    const bom = original.startsWith('\uFEFF') ? '\uFEFF' : '';
+    const body = original.slice(bom.length);
+    const separators = body.match(/\r\n|\n|\r/g) ?? [];
+    const separator = separators[0] ?? '\n';
+    const trailing = /[\r\n]$/.test(body);
+    const textLines = body.split(/\r\n|\n|\r/);
+    if (trailing) textLines.pop();
+    // A separator belongs to the line before it; the last unterminated line
+    // has an empty delimiter. Hunk insertions use the local file convention.
+    const delimiters = textLines.map((_, index) => separators[index] ?? '');
     let cursor = 0;
     let applied = false;
     while (
@@ -107,6 +117,7 @@ export function planPatch(
       }
       const old: string[] = [];
       const replacement: string[] = [];
+      const replacementOrigins: (number | null)[] = [];
       let eof = false;
       while (
         i < lines.length &&
@@ -121,7 +132,10 @@ export function planPatch(
         if (![' ', '+', '-'].includes(line[0] ?? ''))
           throw new Error('invalid hunk line');
         if (line[0] !== '+') old.push(line.slice(1));
-        if (line[0] !== '-') replacement.push(line.slice(1));
+        if (line[0] !== '-') {
+          replacement.push(line.slice(1));
+          replacementOrigins.push(line[0] === ' ' ? old.length - 1 : null);
+        }
       }
       let position = -1;
       for (let at = cursor; at <= textLines.length - old.length; at++) {
@@ -134,12 +148,35 @@ export function planPatch(
         }
       }
       if (position < 0) throw new Error('hunk context not found');
+      const ending = old.length
+        ? (delimiters[position + old.length - 1] ?? '')
+        : separator;
+      delimiters.splice(
+        position,
+        old.length,
+        ...replacement.map((_, index) =>
+          replacementOrigins[index] !== null
+            ? (delimiters[position + replacementOrigins[index]!] ?? '')
+            : index === replacement.length - 1
+              ? ending
+              : separator,
+        ),
+      );
       textLines.splice(position, old.length, ...replacement);
       cursor = position + replacement.length;
       applied = true;
     }
     if (!applied) throw new Error('update has no hunks');
-    const content = textLines.join('\n') + '\n';
+    const content =
+      bom +
+      textLines
+        .map(
+          (line, index) =>
+            line +
+            (delimiters[index] ||
+              (index < textLines.length - 1 ? separator : '')),
+        )
+        .join('');
     if (move) {
       if (read(move) !== null)
         throw new Error('move destination already exists');

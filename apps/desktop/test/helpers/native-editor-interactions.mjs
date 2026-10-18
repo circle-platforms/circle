@@ -1,3 +1,4 @@
+import { openNativeProjectFile } from './native-project-file.mjs';
 // Invoked by the serialized native driver on its existing isolated application.
 // All language interactions below originate in the visible editor keyboard UI.
 import assert from 'node:assert/strict';
@@ -33,15 +34,7 @@ export async function runNativeEditorInteractions({ page, workspace, output }) {
   };
   try {
     assert.equal(await disk(), interactionSource);
-    const entry = page.locator('.file-tree').getByRole('button', {
-      name: interactionFile,
-      exact: true,
-    });
-    if (!(await entry.isVisible()))
-      await page
-        .getByRole('button', { name: 'files panel', exact: true })
-        .click();
-    await entry.click();
+    await openNativeProjectFile(page, interactionFile);
     await page
       .locator('.file-view-heading strong')
       .getByText(interactionFile, {

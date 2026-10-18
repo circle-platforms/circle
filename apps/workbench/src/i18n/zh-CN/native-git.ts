@@ -1,4 +1,27 @@
 export const nativeGit: Record<string, string> = {
+  'search changed files': '搜索改动文件',
+  'changed files': '改动文件',
+  binary: '二进制',
+  '{n} more file; narrow your search': '还有 {n} 个文件，请缩小搜索范围',
+  '{n} more files; narrow your search': '还有 {n} 个文件，请缩小搜索范围',
+  'operation selection ({n})': '操作所选文件（{n}）',
+  'clear operation selection': '清空操作选择',
+  'select a file to inspect this large comparison':
+    '此比较包含较多文件，请选择文件查看完整差异',
+  '{n} changed file': '{n} 个改动文件',
+  '{n} changed files': '{n} 个改动文件',
+  'change index': '改动索引',
+  'all changes': '全部改动',
+  'filter changed files': '筛选改动文件',
+  'no matching changed files': '没有匹配的改动文件',
+  'no changed files in this scope': '此范围没有改动文件',
+  commits: '提交',
+  'refresh commits': '刷新提交',
+  'no commits yet': '暂无提交',
+  'load more commits': '加载更多提交',
+  'commit view is read-only; merge commits compare with their first parent':
+    '提交视图为只读；合并提交与第一个父提交比较',
+
   'resolve and stage conflicts first': '先解决并暂存冲突',
   conflict: '冲突',
   untracked: '未跟踪',

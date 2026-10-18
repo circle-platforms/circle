@@ -854,7 +854,7 @@ try {
         .click();
       await page
         .locator('.file-view')
-        .getByRole('button', { name: 'edit', exact: true })
+        .getByRole('button', { name: 'source code', exact: true })
         .click();
       const editor = page.locator('.file-view .monaco-editor').last();
       await editor

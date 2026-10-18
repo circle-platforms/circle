@@ -7,7 +7,6 @@ import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
-import { History, SquareTerminal } from 'lucide-react';
 import { TasksPanel } from './TasksPanel';
 import { DeliveryCyclePanel } from './DeliveryCyclePanel';
 import { appendTerminalSelection } from '../model/terminal-context';
@@ -67,6 +66,7 @@ export function WorkspacePanelContents({
       snapshot.sessions.find((session) => session.id === sessionId)
         ?.workspaceId,
   )?.path;
+  const panelId = (name: string) => `inspector-${kind}-${name}`;
   const initial = kind === 'terminal' ? 'terminal' : 'original';
   const [tab, setTab] = useState(initial);
   const [visited, setVisited] = useState<Set<string>>(() => new Set([initial]));
@@ -143,11 +143,7 @@ export function WorkspacePanelContents({
         </p>
       )}
       <div
-        className={
-          kind === 'terminal'
-            ? 'segmented panel-switch'
-            : 'segmented panel-header-tabs'
-        }
+        className="segmented workspace-resource-tabs"
         role="tablist"
         aria-label={
           kind === 'changes'
@@ -160,13 +156,13 @@ export function WorkspacePanelContents({
         {tabs.map((item, index) => (
           <button
             key={item.id}
-            id={`inspector-${kind}-tab-${item.id}`}
+            id={panelId(`tab-${item.id}`)}
             role="tab"
             className={tab === item.id ? 'active' : ''}
             aria-selected={tab === item.id}
-            aria-controls={`inspector-${kind}-${item.id}`}
-            aria-label={kind === 'terminal' ? item.label : undefined}
-            title={kind === 'terminal' ? item.label : undefined}
+            aria-controls={panelId(item.id)}
+            aria-label={item.label}
+            title={item.label}
             tabIndex={tab === item.id ? 0 : -1}
             onClick={() => select(item.id)}
             onKeyDown={(e) => {
@@ -185,18 +181,10 @@ export function WorkspacePanelContents({
                         tabs.length
                 ]!;
               select(next.id);
-              document
-                .getElementById(`inspector-${kind}-tab-${next.id}`)
-                ?.focus();
+              document.getElementById(panelId(`tab-${next.id}`))?.focus();
             }}
           >
-            {kind !== 'terminal' ? (
-              item.label
-            ) : item.id === 'terminal' ? (
-              <SquareTerminal size={14} aria-hidden />
-            ) : (
-              <History size={14} aria-hidden />
-            )}
+            {item.label}
           </button>
         ))}
       </div>
@@ -212,9 +200,9 @@ export function WorkspacePanelContents({
             .map((item) => (
               <div
                 key={item.id}
-                id={`inspector-${kind}-${item.id}`}
+                id={panelId(item.id)}
                 role="tabpanel"
-                aria-labelledby={`inspector-${kind}-tab-${item.id}`}
+                aria-labelledby={panelId(`tab-${item.id}`)}
                 className="inspector-resource-view"
                 hidden={tab !== item.id}
               >

@@ -39,7 +39,7 @@ for (const id of ['a', 'b']) {
 }
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
-  server: { host: '127.0.0.1', port: 0 },
+  server: { host: '127.0.0.1', port: 0, hmr: false },
   logLevel: 'error',
   plugins: [
     {
@@ -319,6 +319,23 @@ try {
   );
   await select('a');
   holdStatus = true;
+  const refreshStatus = delivery.getByRole('button', {
+    name: 'refresh status',
+    exact: true,
+  });
+  await refreshStatus.scrollIntoViewIfNeeded();
+  assert.equal(
+    await refreshStatus.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        bounds.x + bounds.width / 2,
+        bounds.y + bounds.height / 2,
+      );
+      return hit === element || element.contains(hit);
+    }),
+    true,
+    'the narrow change index must never cover unrelated delivery controls',
+  );
   await delivery
     .getByRole('button', { name: 'refresh status', exact: true })
     .click();

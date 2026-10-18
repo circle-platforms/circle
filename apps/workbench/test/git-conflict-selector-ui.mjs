@@ -38,7 +38,7 @@ try {
   await writeFile(join(root, longName), 'untracked preview fixture\n');
   server = await createServer({
     root: fileURLToPath(new URL('..', import.meta.url)),
-    server: { host: '127.0.0.1', port: 0 },
+    server: { host: '127.0.0.1', port: 0, hmr: false },
     logLevel: 'error',
     plugins: [
       {
@@ -103,6 +103,24 @@ try {
     'U',
     'opening preserves the actual unresolved index',
   );
+  const folder = panel.getByRole('treeitem', { name: 'nested', exact: true });
+  await folder.click();
+  assert.equal(await nativeGitFileRow(page, longName).isVisible(), false);
+  const filter = panel.getByRole('searchbox', { name: 'filter changed files' });
+  await filter.fill('very-long-file-name');
+  assert.equal(
+    await nativeGitFileRow(page, longName).isVisible(),
+    true,
+    'filter reveals every matching ancestor',
+  );
+  await folder.click();
+  await filter.fill('');
+  assert.equal(
+    await nativeGitFileRow(page, longName).isVisible(),
+    false,
+    'clearing a filter restores prior folder state',
+  );
+  await folder.click();
   const matrix = [];
   for (const width of [380, 760])
     for (const language of ['en', 'zh-CN'])
@@ -133,8 +151,8 @@ try {
           const actualRow = nativeGitFileRow(page, filename);
           await actualRow.waitFor();
           assert.equal(
-            await actualRow.locator('.change-file span').innerText(),
-            filename,
+            await actualRow.locator('.virtual-file-tree-label').innerText(),
+            filename.split('/').at(-1),
           );
           const geometry = await actualRow.evaluate((element) => {
             const row = element.getBoundingClientRect();

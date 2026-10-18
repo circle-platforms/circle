@@ -1,4 +1,11 @@
 export const taskPanel: Record<string, string> = {
+  'recorded checks are separate from the worker completion claim':
+    '已记录的检查与执行代理的完成声明分别展示',
+  'no recorded verification checks': '没有已记录的验证检查',
+  'independent review': '独立复核',
+  'human review': '人工核对',
+  inspection: '检查',
+  'exit code': '退出码',
   'patch identity': '补丁标识',
   'acceptance report': '验收报告',
   'task transcript': '任务对话',

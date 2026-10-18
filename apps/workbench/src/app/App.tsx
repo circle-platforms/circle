@@ -29,7 +29,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Group, Panel, Separator } from 'react-resizable-panels';
+import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import { DropdownMenu, Tooltip } from 'radix-ui';
 import {
   Folder,
@@ -165,7 +165,21 @@ export function App() {
   useEffect(() => {
     if (narrow) setInspectorOpen(false);
   }, [narrow]);
-  const [panel, setPanel] = useState<PanelId>('files');
+  const [panel, setPanel] = useState<PanelId>('overview');
+  const drawerPanel = usePanelRef();
+  const drawerWidthMode = useRef<'overview' | 'resource' | null>(null);
+  const resourceDrawerWidth = useRef('52%');
+  useEffect(() => {
+    if (!inspectorOpen || narrow || !drawerPanel.current) return;
+    const mode = panel === 'overview' ? 'overview' : 'resource';
+    if (drawerWidthMode.current === mode) return;
+    if (drawerWidthMode.current === 'resource')
+      resourceDrawerWidth.current = `${drawerPanel.current.getSize().asPercentage}%`;
+    drawerPanel.current.resize(
+      mode === 'overview' ? 320 : resourceDrawerWidth.current,
+    );
+    drawerWidthMode.current = mode;
+  }, [panel, inspectorOpen, narrow]);
   // A panel the person wants to see whole, for as long as they want it there.
   const [fullView, setFullView] = useState(false);
   const [selection, setSelection] = useState('');
@@ -295,6 +309,8 @@ export function App() {
   const canBeWhole =
     !narrow &&
     (panel === 'terminal' ||
+      panel === 'files' ||
+      panel === 'changes' ||
       registry
         .active(enabled)
         .flatMap((plugin) => plugin.panels ?? [])
@@ -508,7 +524,8 @@ export function App() {
     setFile(result.source.path);
     setSourceLine(result.source.line);
     setSourceColumn(result.source.column);
-    if (narrow) setInspectorOpen(false);
+    setPanel('files');
+    setInspectorOpen(true);
     navigate(`/session/${sourceSessionId}`);
   };
 
@@ -901,6 +918,52 @@ export function App() {
   const installedPage = registry.plugins.find((plugin) =>
     plugin.pages?.some((item) => item.id === page),
   );
+  const fileView = (
+    <div className="session-resource-view" hidden={!file}>
+      {file && (
+        <NativeResourceBoundary name={t('editor')} resetKey={file}>
+          <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
+            <FileViewer
+              path={file}
+              line={sourceLine}
+              column={sourceColumn}
+              resourceOwner={fileOwner}
+              onDebugSource={
+                runtime.mode === 'live' &&
+                developerToolsEnabled(snapshot.extensions)
+                  ? (path, line) => {
+                      const owner = fileOwner?.sessionId ?? session.id;
+                      perform(async () => {
+                        if (owner !== runtime.getSnapshot().activeSessionId)
+                          await selectSessionAndNavigate(owner);
+                        if (runtime.getSnapshot().activeSessionId !== owner)
+                          return;
+                        setDebugSourceRequest({
+                          id: crypto.randomUUID(),
+                          sessionId: owner,
+                          path,
+                          line,
+                        });
+                        onPanel('activity', 'debug');
+                      });
+                    }
+                  : undefined
+              }
+              onNavigate={(path, line, column) =>
+                openSource(path, line, column, fileOwner)
+              }
+              onClose={() => {
+                sourceOpener.current.cancel();
+                setFile(null);
+                setFileOwner(undefined);
+                if (narrow) setInspectorOpen(false);
+              }}
+            />
+          </Suspense>
+        </NativeResourceBoundary>
+      )}
+    </div>
+  );
   const content = pluginPage ? (
     <PluginBoundary key={pluginPage.page.id} name={pluginPage.plugin.title}>
       <pluginPage.page.component sessionId={session.id} />
@@ -929,7 +992,7 @@ export function App() {
     />
   ) : (
     <div className="session-resource-stack">
-      <div className="session-resource-view" hidden={!!file}>
+      <div className="session-resource-view">
         {activeAgent ? (
           <SourceNavigation onFile={onAgentFile}>
             <section className="agent-record">
@@ -1009,49 +1072,6 @@ export function App() {
           </NativeResourceBoundary>
         )}
       </div>
-      <div className="session-resource-view" hidden={!file}>
-        {file && (
-          <NativeResourceBoundary name={t('editor')} resetKey={file}>
-            <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
-              <FileViewer
-                path={file}
-                line={sourceLine}
-                column={sourceColumn}
-                resourceOwner={fileOwner}
-                onDebugSource={
-                  runtime.mode === 'live' &&
-                  developerToolsEnabled(snapshot.extensions)
-                    ? (path, line) => {
-                        const owner = fileOwner?.sessionId ?? session.id;
-                        perform(async () => {
-                          if (owner !== runtime.getSnapshot().activeSessionId)
-                            await selectSessionAndNavigate(owner);
-                          if (runtime.getSnapshot().activeSessionId !== owner)
-                            return;
-                          setDebugSourceRequest({
-                            id: crypto.randomUUID(),
-                            sessionId: owner,
-                            path,
-                            line,
-                          });
-                          onPanel('activity', 'debug');
-                        });
-                      }
-                    : undefined
-                }
-                onNavigate={(path, line, column) =>
-                  openSource(path, line, column, fileOwner)
-                }
-                onClose={() => {
-                  sourceOpener.current.cancel();
-                  setFile(null);
-                  setFileOwner(undefined);
-                }}
-              />
-            </Suspense>
-          </NativeResourceBoundary>
-        )}
-      </div>
     </div>
   );
   // The session's own actions, under its title as Claude has them.
@@ -1072,6 +1092,9 @@ export function App() {
     <NativeResourceBoundary name={t('inspector')} resetKey={panel}>
       <Inspector
         resourcesPaused={home}
+        fileView={file ? fileView : undefined}
+        filePath={file ?? undefined}
+        fileOwnerKey={fileOwner?.sessionId ?? session.id}
         panel={panel}
         visible={inspectorVisible}
         commandTerminal={commandTerminal}
@@ -1409,9 +1432,10 @@ export function App() {
                   />
                   <Panel
                     id="inspector"
+                    panelRef={drawerPanel}
                     minSize={narrow ? 0 : 290}
-                    maxSize={narrow ? '100%' : '50%'}
-                    defaultSize="32%"
+                    maxSize={narrow ? '100%' : '65%'}
+                    defaultSize="46%"
                     className={
                       narrow
                         ? 'inspector-column inspector-overlay'

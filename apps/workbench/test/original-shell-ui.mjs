@@ -8,7 +8,7 @@ const output =
 await mkdir(output, { recursive: true });
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
-  server: { host: '127.0.0.1', port: 0 },
+  server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
   logLevel: 'error',
 });
 await server.listen();
@@ -45,12 +45,24 @@ async function capturePanels(page, locale, theme, width) {
     ['context', '上下文'],
     ['changes', '改动'],
   ]) {
-    await page
-      .getByRole('button', {
-        name: zh ? `${chinese}面板` : `${kind} panel`,
-        exact: true,
-      })
-      .click();
+    if (kind === 'context') {
+      await page
+        .getByRole('button', {
+          name: zh ? '概览面板' : 'overview panel',
+          exact: true,
+        })
+        .click();
+      const card = page.locator('.drawer-summary-card').nth(1);
+      if (!(await card.evaluate((node) => node.open)))
+        await card.locator('summary').click();
+      await card.getByRole('button').click();
+    } else
+      await page
+        .getByRole('button', {
+          name: zh ? `${chinese}面板` : `${kind} panel`,
+          exact: true,
+        })
+        .click();
     const inspector = await page.locator('.inspector').evaluate((node) => ({
       headerHeight: node
         .querySelector('.inspector-title')
@@ -60,7 +72,7 @@ async function capturePanels(page, locale, theme, width) {
       flush: node.querySelector('.inspector-body').classList.contains('flush'),
       headerIcons: [
         ...node.querySelectorAll(
-          '.inspector-title .icon-button, .panel-switch button, .native-terminal-toolbar > .icon-button, .browser-tabs > .icon-button',
+          '.inspector-title .icon-button, .native-terminal-toolbar > .icon-button, .browser-tabs > .icon-button',
         ),
       ]
         .filter((button) => button.getClientRects().length)
@@ -72,7 +84,7 @@ async function capturePanels(page, locale, theme, width) {
             radius: getComputedStyle(button).borderRadius,
           };
         }),
-      tabsInHeader: (() => {
+      tabsInBody: (() => {
         const tabs = node.querySelector(
           `.workspace-panel-${node.dataset.inspectorPanel} > .panel-header-tabs`,
         );
@@ -81,7 +93,10 @@ async function capturePanels(page, locale, theme, width) {
           .querySelector('.inspector-title')
           .getBoundingClientRect();
         const box = tabs.getBoundingClientRect();
-        return box.top >= header.top && box.bottom <= header.bottom;
+        return (
+          box.top >= header.bottom - 1 &&
+          box.bottom <= node.getBoundingClientRect().bottom + 1
+        );
       })(),
     }));
     assert.equal(inspector.headerHeight, 40, `${kind}: one 40px header`);
@@ -90,7 +105,10 @@ async function capturePanels(page, locale, theme, width) {
       assert.equal(icon.height, 26, `${kind}: 26px icon height`);
       assert.equal(icon.radius, '6px', `${kind}: 6px icon radius`);
     }
-    assert.ok(inspector.tabsInHeader, `${kind}: own tabs share the header row`);
+    assert.ok(
+      inspector.tabsInBody,
+      `${kind}: scoped text tabs remain below the drawer header`,
+    );
     assert.ok(
       inspector.scrollWidth <= inspector.width + 1,
       `${kind}: no horizontal overflow at ${width}px`,
@@ -269,10 +287,21 @@ try {
       await page.locator('.file-view').waitFor({ state: 'visible' });
       assert.equal(
         await composer.isVisible(),
-        false,
-        'file replaces conversation in original main region',
+        true,
+        'conversation owner stays rendered while the work drawer displays the source',
       );
       assert.equal(await composer.count(), 1, 'draft owner remains mounted');
+      assert.equal(
+        await page.locator('.work-drawer .file-view').count(),
+        1,
+        'source belongs to the resource drawer',
+      );
+      assert.equal(
+        await page
+          .locator('#workbench-columns')
+          .getAttribute('data-inspector-mode'),
+        width >= 760 ? 'split' : 'overlay',
+      );
       await page
         .getByRole('button', { name: 'close file', exact: true })
         .click();

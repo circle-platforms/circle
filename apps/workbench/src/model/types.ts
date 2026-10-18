@@ -42,7 +42,8 @@ export type DialogId =
   | 'compact'
   | 'exit'
   | 'secret'
-  | 'job-stop';
+  | 'job-stop'
+  | 'external-files';
 export interface Attachment {
   id: string;
   name: string;
@@ -122,6 +123,8 @@ export interface Todo {
   status: 'pending' | 'running' | 'completed';
 }
 export interface Session {
+  /** Controlled text-tool receipts available in the current native runtime only. */
+  fileUndoTurns?: string[];
   id: string;
   /** Desktop-only organization; the core transcript and project files stay intact. */
   archivedAt?: string;
@@ -226,7 +229,7 @@ export interface AgentRecord {
   name: string;
   description: string;
   activity?: string;
-  status: 'running' | 'completed' | 'waiting';
+  status: 'running' | 'completed' | 'waiting' | 'unknown';
   model: string;
   tokens: number;
   messages: Message[];
@@ -441,6 +444,10 @@ export interface WorkbenchSnapshot {
   workspaces: Workspace[];
   sessions: Session[];
   files: WorkspaceFile[];
+  fileListings?: Record<
+    string,
+    { loaded: number; complete: boolean; truncated: boolean; error?: string }
+  >;
   agents: AgentRecord[];
   jobs: Job[];
   interactions: Interaction[];
@@ -499,7 +506,8 @@ export interface BeginConversation {
   /** Files chosen on the home composer, folded the same way as a session send. */
   attachments?: Attachment[];
 }
-export type BeginResult = { sessionId: string } | { dialog: 'trust' };
+export type BeginResult =
+  { sessionId: string; commandResult?: CommandResult } | { dialog: 'trust' };
 export interface RuntimePort {
   readonly mode: 'preview' | 'live';
   /** Changes when a reset replaces renderer session identities, even if IDs recur. */

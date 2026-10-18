@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { KeyRound, MessageCircleQuestion, ShieldAlert } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { Button } from '../components/common';
@@ -9,6 +9,7 @@ import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { browserApprovalInput, hasToolInput } from '../model/browser';
 import { requestReason } from '../model/reasons.ts';
+import './conversation-requests.css';
 
 export { requestReason };
 
@@ -72,10 +73,12 @@ export function InlineRequest({
   item,
   onSecret,
   onSettled,
+  onFile,
 }: {
   item: Interaction;
   onSecret: () => void;
-  /** The buttons unmount once the answer is sent, so the composer takes the keys again. */
+  onFile?: (path: string) => void;
+  /** Called after the core accepts an answer, while its session still owns focus. */
   onSettled?: () => void;
 }) {
   const { runtime, perform, snapshot } = useRuntime();
@@ -86,29 +89,56 @@ export function InlineRequest({
     (workspace) => workspace.id === workspaceId,
   )?.path;
   const target = item.target ? relativePath(item.target, root) : '';
+  const sourcePath =
+    target &&
+    (item.diff ||
+      [
+        'read_file',
+        'write_file',
+        'edit_file',
+        'apply_patch',
+        'delete',
+      ].includes(item.tool ?? ''));
+  const headingId = useId();
+  const sending = useRef(false);
+  const [error, setError] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [comment, setComment] = useState('');
   const [explaining, setExplaining] = useState(false);
   const [sent, setSent] = useState(false);
   const finish = (answer: string) => {
-    if (sent) return;
+    if (sending.current) return;
+    sending.current = true;
     setSent(true);
-    onSettled?.();
+    setError('');
     perform(async () => {
       try {
         await runtime.answer(item.id, item.revision, answer);
+        if (runtime.getSnapshot().activeSessionId === item.sessionId)
+          onSettled?.();
       } catch (error) {
+        sending.current = false;
         setSent(false);
+        setError(error instanceof Error ? error.message : t('action failed'));
         throw error;
       }
     });
   };
+  const failure = error ? (
+    <p className="request-failure" role="alert">
+      {t('action failed')}: {error}
+    </p>
+  ) : null;
   if (item.kind === 'secret')
     return (
-      <section className="inline-request" data-kind="secret">
+      <section
+        className="inline-request"
+        data-kind="secret"
+        aria-labelledby={headingId}
+      >
         <header>
           <KeyRound size={14} />
-          <strong>{item.title}</strong>
+          <strong id={headingId}>{item.title}</strong>
         </header>
         <div className="request-actions">
           <Button className="primary" onClick={onSecret}>
@@ -119,10 +149,15 @@ export function InlineRequest({
     );
   if (item.kind === 'question' || item.kind === 'plan-exit')
     return (
-      <section className="inline-request" data-kind="question">
+      <section
+        className="inline-request"
+        data-kind="question"
+        aria-labelledby={headingId}
+        aria-busy={sent}
+      >
         <header>
           <MessageCircleQuestion size={14} />
-          <strong>{item.title}</strong>
+          <strong id={headingId}>{item.title}</strong>
           {item.origin?.name && <small>{item.origin.name}</small>}
         </header>
         {item.choices?.length ? (
@@ -132,6 +167,7 @@ export function InlineRequest({
                 <input
                   type={item.multiple ? 'checkbox' : 'radio'}
                   name={item.id}
+                  disabled={sent}
                   checked={selected.includes(choice)}
                   onChange={(event) =>
                     setSelected(
@@ -148,7 +184,9 @@ export function InlineRequest({
             ))}
           </div>
         ) : null}
+        {failure}
         <textarea
+          disabled={sent}
           className="input short"
           aria-label={t('your answer')}
           placeholder={
@@ -180,13 +218,29 @@ export function InlineRequest({
   const allowed = (choice: string) =>
     runtime.mode !== 'live' || !!item.choices?.includes(choice);
   return (
-    <section className="inline-request" data-kind="approval">
+    <section
+      className="inline-request"
+      data-kind="approval"
+      aria-labelledby={headingId}
+      aria-busy={sent}
+    >
       <header>
         <ShieldAlert size={14} />
-        <strong>{item.tool ?? item.title}</strong>
+        <strong id={headingId}>{item.tool ?? item.title}</strong>
         <span>{requestReason(item.reason)}</span>
         {item.origin?.name && <small>{item.origin.name}</small>}
       </header>
+      {target && (
+        <div className="request-source">
+          <code title={target}>{target}</code>
+          {onFile && sourcePath && (
+            <Button onClick={() => onFile(item.target!)}>
+              {t('open file')}
+            </Button>
+          )}
+        </div>
+      )}
+      {failure}
       {item.tool?.startsWith('browser_') ? (
         <BrowserApproval input={item.input} />
       ) : item.command ? (
@@ -195,7 +249,6 @@ export function InlineRequest({
         <DiffBlock diff={item.diff} path={target || undefined} />
       ) : (
         <>
-          {target && <p className="file-path">{target}</p>}
           {hasToolInput(item.input) && (
             <DataBlock title={t('tool input')} value={item.input} />
           )}

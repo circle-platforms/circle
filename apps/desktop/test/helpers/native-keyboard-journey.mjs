@@ -45,7 +45,12 @@ export async function runNativeKeyboardJourney({
     await page.locator('.native-code-editor .view-lines').first().waitFor();
   };
   await openFile();
-  await page.getByRole('button', { name: 'edit', exact: true }).click();
+  await page
+    .getByRole('button', {
+      name: /\.(md|markdown|mdown)$/i.test(fileName) ? 'source code' : 'edit',
+      exact: true,
+    })
+    .click();
   const editor = page.locator('.native-code-editor');
   const input = editor
     .locator('.native-edit-context, textarea.inputarea')

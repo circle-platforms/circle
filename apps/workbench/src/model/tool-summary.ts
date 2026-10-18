@@ -192,6 +192,17 @@ const name = (path: string) =>
  * What a run of tool calls did, in one line: `ran 2 commands, edited calc.py +1 −1`.
  * Lowercase, as the interface words are. A directory listing is not a search.
  */
+/** Count patch targets from the prepared tool input, including move destinations. */
+function editPaths(tool: NonNullable<Message['tool']>): string[] {
+  if (tool.name === 'apply_patch')
+    return [
+      ...String(tool.input.patchText ?? '').matchAll(
+        /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm,
+      ),
+    ].map((match) => match[1]!.trim());
+  return tool.filePath ? [tool.filePath] : [];
+}
+
 export function toolSummary(rows: Message[]): {
   text: string;
   added: number;
@@ -226,9 +237,7 @@ export function toolSummary(rows: Message[]): {
     parts.push(symbolPhrase(outcome, group.length));
   const edits = count(EDITS);
   for (const [outcome, group] of editGroups(edits)) {
-    const files = [
-      ...new Set(group.map((tool) => tool.filePath).filter(Boolean)),
-    ] as string[];
+    const files = [...new Set(group.flatMap(editPaths))] as string[];
     if (files.length === 1)
       parts.push(editPhrase(outcome, name(files[0]!), group.length));
     else if (group.length)

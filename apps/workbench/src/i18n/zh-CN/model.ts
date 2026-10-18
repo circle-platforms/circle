@@ -8,6 +8,7 @@ export const model: Record<string, string> = {
   // what the live runtime says
   'UI preferences could not be saved': '无法保存界面偏好',
   'runtime action failed': '运行时操作失败',
+  disconnected: '已断开',
   'Circle runtime disconnected': 'Circle 运行时已断开',
   'use a native session operation': '请使用原生会话操作',
   'queue messages through the composer': '请通过输入框把消息加入队列',

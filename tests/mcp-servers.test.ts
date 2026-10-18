@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { McpManager, mcpToolName } from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
-import { defaultSettings } from '../src/settings.js';
+import { defaultSettings, saveSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message } from '../src/types.js';
 
@@ -182,4 +182,102 @@ test('a call timeout given to the MCP manager still stops a call on the same moc
   } finally {
     t.mock.timers.reset();
   }
+});
+
+test('disabled MCP cannot register or write after reload, a new session, or restart', async (t) => {
+  const root = scratch(t);
+  const workspace = join(root, 'workspace');
+  mkdirSync(workspace);
+  const settings = defaultSettings();
+  settings.mcp_servers = [server('fixture')];
+  const receipt = join(workspace, 'forbidden-receipt');
+  const replies = () => [
+    {
+      message: assistant('', [
+        {
+          id: crypto.randomUUID(),
+          name: 'fixture_write_receipt',
+          args: { path: receipt },
+        },
+      ]),
+    },
+    { message: assistant('done') },
+  ];
+  const model = new ScriptedModel([...replies(), ...replies()]);
+  const runtime = new AgentRuntime({
+    home: join(root, 'home'),
+    workspace,
+    settings,
+    model,
+  });
+  cleanup(t, () => runtime.close());
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.initialize();
+  assert.ok(
+    runtime.mcp.tools.some((tool) => tool.name === 'fixture_write_receipt'),
+  );
+  settings.mcp_servers = [{ ...server('fixture'), enabled: false }];
+  saveSettings(settings, join(root, 'home'));
+  await runtime.reloadIntegrations();
+  for (const fresh of [false, true]) {
+    if (fresh) await runtime.newSession();
+    runtime.policy.setYolo(runtime.session.id, true);
+    await runtime.harness.run('try the disabled tool');
+    assert.equal(existsSync(receipt), false);
+  }
+  assert.ok(
+    model.requests.every(
+      (request) =>
+        !request.tools.some((tool) => tool.name.startsWith('fixture_')),
+    ),
+  );
+  const restartedModel = new ScriptedModel(replies());
+  const restarted = new AgentRuntime({
+    home: join(root, 'restarted-home'),
+    workspace,
+    settings,
+    model: restartedModel,
+  });
+  cleanup(t, () => restarted.close());
+  restarted.policy.setYolo(restarted.session.id, true);
+  await restarted.initialize();
+  await restarted.harness.run('try after restart');
+  assert.equal(existsSync(receipt), false);
+  assert.equal(restarted.mcp.tools.length, 0);
+  assert.match(restarted.mcp.describe(), /disabled/);
+  assert.ok(
+    restartedModel.requests.every(
+      (request) =>
+        !request.tools.some((tool) => tool.name.startsWith('fixture_')),
+    ),
+  );
+});
+
+test('disabled MCP starts no transport, including a later disabled duplicate', async (t) => {
+  const root = scratch(t);
+  const started = join(root, 'must-not-start');
+  const manager = new McpManager(root, 500);
+  cleanup(t, () => manager.close());
+  const command = {
+    name: 'disabled',
+    command: process.execPath,
+    args: [
+      '-e',
+      `require('node:fs').writeFileSync(${JSON.stringify(started)}, 'started')`,
+    ],
+  };
+  await manager.load([
+    command,
+    { ...command, enabled: false },
+    { name: 'remote', url: 'http://127.0.0.1:1', enabled: false },
+  ]);
+  assert.equal(existsSync(started), false);
+  assert.equal(manager.tools.length, 0);
+  assert.deepEqual(
+    manager.status.map((row) => [row.name, row.error]),
+    [
+      ['disabled', 'disabled'],
+      ['remote', 'disabled'],
+    ],
+  );
 });

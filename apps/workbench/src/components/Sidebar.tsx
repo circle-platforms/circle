@@ -1,3 +1,4 @@
+import '../features/navigation-settings.css';
 import { extensionStatusText } from '../model/extension-status';
 import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
@@ -691,7 +692,7 @@ export function Sidebar({
         <Search size={14} />
         <span>{t('search')}</span>
       </button>
-      <nav className="sidebar-primary">
+      <nav className="sidebar-primary" aria-label={t('navigation')}>
         <button
           className="sidebar-item"
           onPointerDown={(event) => {
@@ -722,6 +723,7 @@ export function Sidebar({
         <NavLink
           to="/page/skills"
           className={customizing ? 'sidebar-item active' : 'sidebar-item'}
+          aria-current={customizing ? 'page' : undefined}
           onClick={onNavigate}
         >
           <SlidersHorizontal size={15} />

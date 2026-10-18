@@ -13,6 +13,7 @@ import type {
   RuntimeTokenDelta,
 } from './runtime-protocol';
 import { RuntimeTokenBuffer } from './runtime-token-stream';
+import type { PrivateExternalFileRequest } from './runtime-external-file-channel';
 import {
   validateBrowserRequest,
   type BrowserReply,
@@ -35,6 +36,7 @@ export class RuntimeSupervisor {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  private externalGrantRequests = new Map<string, string>();
   private latest?: RuntimeUpdate;
   private tokenBuffer = new RuntimeTokenBuffer();
   private tokenListeners = new Set<(delta: RuntimeTokenDelta) => void>();
@@ -147,6 +149,21 @@ export class RuntimeSupervisor {
           }
           if (message.type === 'reply' && message.reply) {
             const pending = this.pending.get(message.reply.id);
+            const grantOwner = this.externalGrantRequests.get(message.reply.id);
+            if (grantOwner) {
+              this.externalGrantRequests.delete(message.reply.id);
+              if (!pending && message.reply.ok) {
+                const grant = message.reply.data as
+                  { id?: unknown; sessionId?: unknown } | undefined;
+                if (
+                  typeof grant?.id === 'string' &&
+                  grant.sessionId === grantOwner
+                )
+                  void this.revokeExternalFileGrant(grantOwner, grant.id).catch(
+                    () => {},
+                  );
+              }
+            }
             if (pending) {
               clearTimeout(pending.timer);
               this.pending.delete(message.reply.id);
@@ -159,6 +176,7 @@ export class RuntimeSupervisor {
         child.once('exit', (code) => {
           clearTimeout(timer);
           this.child = undefined;
+          this.externalGrantRequests.clear();
           this.credentialRequests.clear();
           this.completedCredentialRequests.clear();
           for (const request of this.browserRequests.values()) request.abort();
@@ -177,6 +195,64 @@ export class RuntimeSupervisor {
               connected: false,
               snapshot: {
                 ...this.latest.snapshot,
+                // A lost core cannot report further progress. Preserve output
+                // and unsent queue entries, but retire all live claims. This
+                // does not assert that detached child processes were killed.
+                sessions: this.latest.snapshot.sessions.map((session) => ({
+                  ...session,
+                  state:
+                    session.turn || session.state === 'waiting'
+                      ? ('paused' as const)
+                      : session.state,
+                  turn: undefined,
+                  ...(session.turn || session.state === 'waiting'
+                    ? { actionError: error.message }
+                    : {}),
+                  messages: session.messages.map((message) => ({
+                    ...message,
+                    ...(message.at === 'streaming'
+                      ? { interrupted: true }
+                      : {}),
+                    ...(message.tool &&
+                    ['running', 'waiting'].includes(message.tool.status)
+                      ? {
+                          tool: { ...message.tool, status: 'unknown' as const },
+                        }
+                      : {}),
+                    ...(message.shell?.status === 'running' ||
+                    message.shell?.status === 'background'
+                      ? {
+                          shell: { ...message.shell, status: 'error' as const },
+                        }
+                      : {}),
+                  })),
+                })),
+                agents: (this.latest.snapshot.agents ?? []).map((agent) =>
+                  agent.status === 'running' ||
+                  agent.status === 'waiting' ||
+                  (agent.task &&
+                    [
+                      'queued',
+                      'preparing',
+                      'running',
+                      'waiting',
+                      'cancelling',
+                    ].includes(agent.task.runtimeState ?? agent.task.state))
+                    ? { ...agent, status: 'unknown' as const }
+                    : agent,
+                ),
+                jobs: (this.latest.snapshot.jobs ?? []).map((job) =>
+                  ['running', 'waiting', 'stopping'].includes(job.state)
+                    ? {
+                        ...job,
+                        state: 'interrupted' as const,
+                        stopRequested: false,
+                      }
+                    : job,
+                ),
+                interactions: (this.latest.snapshot.interactions ?? []).filter(
+                  (interaction) => interaction.status !== 'pending',
+                ),
                 runtime: {
                   connected: false,
                   configured: false,
@@ -325,6 +401,58 @@ export class RuntimeSupervisor {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  /** Called only by the native picker after its active-session checks. */
+  async grantExternalFile(
+    sessionId: string,
+    path: string,
+    access: 'read' | 'readwrite',
+  ) {
+    const reply = await this.privateExternalFile({
+      type: 'external-file-capability',
+      id: randomUUID(),
+      operation: 'grant',
+      sessionId,
+      path,
+      access,
+    });
+    if (!reply.ok) throw Error(reply.error ?? 'external file grant failed');
+    return reply.data as {
+      id: string;
+      sessionId: string;
+      path: string;
+      access: 'read' | 'readwrite';
+    };
+  }
+  async revokeExternalFileGrant(sessionId: string, id: string) {
+    const reply = await this.privateExternalFile({
+      type: 'external-file-capability',
+      id: randomUUID(),
+      operation: 'revoke',
+      sessionId,
+      grantId: id,
+    });
+    if (!reply.ok)
+      throw Error(reply.error ?? 'external file revocation failed');
+    return reply.data as { revoked: boolean };
+  }
+  private privateExternalFile(
+    request: PrivateExternalFileRequest,
+  ): Promise<RuntimeReply> {
+    if (!this.child) return Promise.reject(Error('runtime disconnected'));
+    if (request.operation === 'grant') {
+      if (this.externalGrantRequests.size >= 64)
+        return Promise.reject(Error('too many native file selections'));
+      this.externalGrantRequests.set(request.id, request.sessionId);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(request.id);
+        reject(Error('native external file capability request timed out'));
+      }, 30_000);
+      this.pending.set(request.id, { resolve, reject, timer });
+      this.child!.postMessage(request);
+    });
+  }
   async command(command: RuntimeCommand): Promise<RuntimeReply> {
     if (!this.child) throw Error('runtime disconnected');
     if (this.pending.has(command.id)) throw Error('duplicate runtime command');
@@ -336,7 +464,16 @@ export class RuntimeSupervisor {
         );
       }, 120_000);
       this.pending.set(command.id, { resolve, reject, timer });
-      this.child!.postMessage(command);
+      // Discard extra renderer properties: private message tags may never be
+      // smuggled through the public command validator.
+      this.child!.postMessage({
+        id: command.id,
+        name: command.name,
+        payload: command.payload,
+        ...(command.sessionId === undefined
+          ? {}
+          : { sessionId: command.sessionId }),
+      });
     });
   }
   close(): Promise<void> {

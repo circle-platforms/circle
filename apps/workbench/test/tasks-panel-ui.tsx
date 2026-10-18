@@ -4,6 +4,7 @@ import { TasksPanel } from '../src/features/TasksPanel';
 import { setLanguage } from '../src/i18n';
 import { applyTheme } from '../src/theme';
 import '../src/styles/app.css';
+import '../src/styles/workbench-unified.css';
 const query = new URLSearchParams(location.search);
 setLanguage(query.get('language') === 'zh-CN' ? 'zh-CN' : 'en');
 applyTheme(query.get('theme') === 'dark' ? 'dark' : 'light');
@@ -50,7 +51,31 @@ const reviewRecord = {
   },
   state: 'needs_review',
   reason: 'Acceptance requires human review.',
-  result: { changes: { sha256: 'b'.repeat(64), head: 'c'.repeat(40) } },
+  result: {
+    taskId: 'review-task',
+    attempt: 1,
+    changes: {
+      sha256: 'b'.repeat(64),
+      head: 'c'.repeat(40),
+      paths: ['demo.ts'],
+    },
+    checks: [
+      {
+        criterion: 'keep complete source',
+        status: 'failed',
+        source: 'command',
+        command: 'npm test',
+        exitCode: 1,
+        evidence: 'Original regression failed.',
+      },
+      {
+        criterion: 'keep complete source',
+        status: 'needs_review',
+        source: 'inspection',
+        evidence: 'Manual source inspection is still required.',
+      },
+    ],
+  },
 };
 const patch = 'diff --git a/demo.ts b/demo.ts\n+preserved complete change\n';
 Object.assign(window, {

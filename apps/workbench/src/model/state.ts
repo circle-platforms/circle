@@ -381,10 +381,16 @@ export class PreviewRuntime implements RuntimePort {
         ? { attachments: structuredClone(input.attachments) }
         : {}),
     };
-    session.messages = [message];
-    session.leafId = message.id;
-    session.title = text.split('\n')[0]!.slice(0, 60);
-    session.state = 'waiting';
+    const commandInput = text.startsWith('/') || text.startsWith('!');
+    if (commandInput) {
+      session.draft = text;
+      session.attachments = structuredClone(input.attachments ?? []);
+    } else {
+      session.messages = [message];
+      session.leafId = message.id;
+      session.title = text.split('\n')[0]!.slice(0, 60);
+      session.state = 'waiting';
+    }
     if (input.model) session.model = input.model;
     if (input.effort) session.effort = input.effort;
     if (input.mode) {
@@ -399,6 +405,10 @@ export class PreviewRuntime implements RuntimePort {
       state.activeSessionId = session.id;
       state.sessions.unshift(session);
     });
+    if (commandInput) {
+      const commandResult = this.send();
+      return { sessionId: session.id, commandResult };
+    }
     return { sessionId: session.id };
   };
   selectSession = (id: string) => {

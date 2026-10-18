@@ -128,6 +128,15 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         string(args, 'file_path', 'filePath', 'path'),
       );
       sandbox.checkCredentialPath(path);
+      if (mutations) await mutations.authorize(path, context, 'read');
+      if (
+        mutations &&
+        !sandbox.isInside(path) &&
+        (statSync(path).isDirectory() || mediaType(path))
+      )
+        throw Error(
+          'native external file grants support existing text files only',
+        );
       if (statSync(path).isDirectory())
         return readdirSync(path, { withFileTypes: true })
           .map((entry) => entry.name + (entry.isDirectory() ? '/' : ''))
@@ -142,14 +151,13 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       }
       const offset = Math.max(0, Math.trunc(Number(args.offset ?? 0)));
       const limit = Math.max(0, Math.trunc(Number(args.limit ?? 2000)));
-      const content =
-        mutations && sandbox.isInside(path)
-          ? readTextContentWindow(
-              (await mutations.read(path, context)).content!,
-              offset,
-              limit,
-            )
-          : await readTextWindow(path, offset, limit, context.signal);
+      const content = mutations
+        ? readTextContentWindow(
+            (await mutations.read(path, context)).content!,
+            offset,
+            limit,
+          )
+        : await readTextWindow(path, offset, limit, context.signal);
       read.add(path);
       return content;
     },

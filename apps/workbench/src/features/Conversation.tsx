@@ -1,3 +1,4 @@
+import { SafeFileUndo } from './SafeFileUndo';
 import { preserveNativeEditing } from '../model/native-editable-shortcut';
 import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
@@ -435,26 +436,51 @@ export function Conversation({
   // arrives does not count as scrolling away, and it does not wait for a frame to be drawn:
   // a window behind others gets no frames.
   const stuck = useRef(true);
-  const height = useRef(0);
   const position = useRef<SessionScroll>({ top: 0, follow: true });
+  // The desired manual position survives temporary layout clamps. Applied geometry
+  // describes only what the browser could display, never a new reading intention.
+  const geometry = (box: HTMLElement) => ({
+    top: box.scrollTop,
+    width: box.clientWidth,
+    height: box.scrollHeight,
+    viewport: box.clientHeight,
+  });
+  const applied = useRef<ReturnType<typeof geometry> | undefined>(undefined);
   const follow = (force = false) => {
     const box = scroller.current;
     if (!box) return;
     if (force) stuck.current = true;
-    if (stuck.current)
+    if (stuck.current) {
       box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
-    else restoreTranscriptAnchor(box, position.current.anchor);
-    height.current = box.scrollHeight;
-    position.current = transcriptScroll(box, stuck.current);
+      position.current = transcriptScroll(box, true);
+    } else if (!restoreTranscriptAnchor(box, position.current.anchor)) {
+      // Pending request cards can be below the message rows and have no message
+      // anchor. Keep their desired pixel offset even when the current width clamps it.
+      box.scrollTo({ top: position.current.top, behavior: 'instant' });
+    }
+    applied.current = geometry(box);
   };
   useEffect(() => {
     const box = scroller.current;
     const content = column.current;
     if (!box || !content) return;
     const scrolled = () => {
-      // Only the actual end follows new content; a reader just above it stays put.
-      stuck.current = height.current - box.scrollTop - box.clientHeight <= 1;
+      const now = geometry(box),
+        previous = applied.current;
+      if (
+        previous &&
+        (now.width !== previous.width ||
+          now.height !== previous.height ||
+          now.viewport !== previous.viewport)
+      ) {
+        follow();
+        return;
+      }
+      // Our own compensation and the browser's clamp are observations, not input.
+      if (previous && Math.abs(now.top - previous.top) <= 0.5) return;
+      stuck.current = now.height - now.top - now.viewport <= 1;
       position.current = transcriptScroll(box, stuck.current);
+      applied.current = now;
     };
     box.addEventListener('scroll', scrolled, { passive: true });
     const resized = new ResizeObserver(() => follow());
@@ -477,7 +503,6 @@ export function Conversation({
         top: saved?.top ?? box.scrollHeight,
         behavior: 'instant',
       });
-      height.current = box.scrollHeight;
       position.current = saved ?? transcriptScroll(box, stuck.current);
       follow();
     }
@@ -802,6 +827,7 @@ export function Conversation({
                   <div key={item.id} data-message-id={item.rows[0]!.id}>
                     <ToolGroup
                       rows={item.rows}
+                      ownerSessionId={session.id}
                       expanded={
                         session.expandTools ||
                         (!!find &&
@@ -828,6 +854,7 @@ export function Conversation({
                           <InlineRequest
                             key={request.id}
                             item={request}
+                            onFile={onFile}
                             onSecret={() => onDialog('secret')}
                             onSettled={() =>
                               requestAnimationFrame(() =>
@@ -860,11 +887,23 @@ export function Conversation({
                         onMessage={() => input.current?.focus()}
                       />
                     ) : (
-                      <MessageView
-                        message={item.message}
-                        showThinking={session.showThinking}
-                        onAttachment={() => onPanel('context')}
-                      />
+                      <>
+                        <MessageView
+                          message={item.message}
+                          showThinking={session.showThinking}
+                          onAttachment={() => onPanel('context')}
+                        />
+                        {item.message.role === 'user' &&
+                          session.fileUndoTurns?.includes(item.message.id) && (
+                            <SafeFileUndo
+                              sessionId={session.id}
+                              turnId={item.message.id}
+                              disabled={
+                                !!session.turn || session.state !== 'idle'
+                              }
+                            />
+                          )}
+                      </>
                     )}
                   </div>
                 )
@@ -875,6 +914,7 @@ export function Conversation({
             <InlineRequest
               key={item.id}
               item={item}
+              onFile={onFile}
               onSecret={() => onDialog('secret')}
               onSettled={() =>
                 requestAnimationFrame(() =>

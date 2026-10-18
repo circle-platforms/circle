@@ -259,3 +259,35 @@
 .file-view {
   min-width: 0;
 }
+
+/* Keep Monaco and its model mounted while reading the same dirty buffer. */
+.file-source-editor {
+  display: flex;
+  flex: 1;
+  min-height: 150px;
+  min-width: 0;
+  overflow: hidden;
+}
+.file-source-editor[hidden],
+.file-markdown-reading[hidden] {
+  display: none;
+}
+.file-markdown-reading {
+  flex: 1;
+  min-height: 150px;
+  min-width: 0;
+  overflow: auto;
+  padding: 20px 24px;
+  background: var(--bg);
+  color: var(--fg);
+  scrollbar-gutter: stable;
+}
+.file-markdown-reading:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+.file-markdown-reading .markdown {
+  max-width: 76ch;
+  margin-inline: auto;
+  overflow-wrap: anywhere;
+}
