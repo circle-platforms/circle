@@ -10,7 +10,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Fixed
 
-- **A terminal browser page that stops answering no longer holds the conversation.** Every command Circle sends the browser now has a deadline, and ends at once when its tab closes or its page crashes, so the model gets an error that names the command and the tab, such as `the browser did not answer Page.enable for tab t1 in 15 s`, and its next browser action runs. Before, a hung or crashed page could leave a turn waiting with no end: taking on the window's first tab, cancelling a download you did not keep, stopping a failed load and reading a crashed page had no limit. A first tab that never answers is let go and the action goes on in a new tab. A crashed page says so until it is loaded again. A download whose cancel the browser does not confirm is told as such, and what it wrote is deleted when it ends.
+
 
 ## 1.8.1 - 2026-10-18
 
