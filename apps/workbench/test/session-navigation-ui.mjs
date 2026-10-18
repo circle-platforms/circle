@@ -33,7 +33,8 @@ try {
   );
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const choose = async (title) => {
-    await page.keyboard.press('Control+k');
+    // The platform's search chord: ⌘K on a Mac, where ⌃K is the field's own.
+    await page.keyboard.press('ControlOrMeta+k');
     const search = page.getByRole('textbox', {
       name: 'global search',
       exact: true,

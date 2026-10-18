@@ -77,8 +77,6 @@ const ROLE_TEXT: Record<string, () => string> = {
 // The app's own keys, as the composer and the menus handle them (Conversation.tsx,
 // App.tsx, the main process menu); the terminal's keys differ.
 function desktopShortcuts(): [string, string][] {
-  const mod =
-    document.documentElement.dataset.desktop === 'darwin' ? '⌘' : 'Ctrl+';
   return [
     [
       'Enter',
@@ -95,17 +93,18 @@ function desktopShortcuts(): [string, string][] {
     [formatChord(DESKTOP_SEARCH_CHORD), t('search')],
     // ctrl+r is history.search. It opens this same search on purpose.
     [formatChord('ctrl+r'), t('search')],
-    [mod + 'F', t('find in conversation')],
-    [mod + 'N', t('new session')],
-    [mod + 'O', t('open folder')],
+    [formatChord('mod+f'), t('find in conversation')],
+    [formatChord('mod+n'), t('new session')],
+    [formatChord('mod+o'), t('open folder')],
     [formatChord(DESKTOP_SETTINGS_CHORD), t('settings')],
     ['Alt+M', t('next model')],
-    [mod + 'Shift+M', t('models')],
-    [mod + 'B', t('show or hide the sidebar')],
+    [formatChord('mod+shift+m'), t('models')],
+    [formatChord('mod+b'), t('show or hide the sidebar')],
     ['Alt+B', t('background the turn')],
-    [mod + 'T', t('show or hide thinking')],
-    [mod + 'G', t('write the message in a larger editor')],
-    ['Ctrl+Alt+S', t('enter a secret')],
+    // The terminal's Control keys; on macOS ⌘ stays the system's.
+    [formatChord('ctrl+t'), t('show or hide thinking')],
+    [formatChord('ctrl+g'), t('write the message in a larger editor')],
+    [formatChord('ctrl+alt+s'), t('enter a secret')],
     ['Alt+C', t('copy the last answer, when nothing is selected')],
     ['F2', t('rename session')],
   ];

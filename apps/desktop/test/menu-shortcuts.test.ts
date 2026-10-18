@@ -4,6 +4,7 @@ import {
   devToolsMenuShortcut,
   selectAllMenuItem,
   selectFocusedEditableScript,
+  windowContextMenu,
 } from '../src/menu-shortcuts.ts';
 
 test('Linux DevTools menu leaves Monaco document-format binding available', () => {
@@ -21,4 +22,44 @@ test('Select All does not register the Ctrl or Command chord', () => {
   assert.equal('accelerator' in item, false);
   assert.match(selectFocusedEditableScript(), /node\.select\(\)/);
   assert.match(selectFocusedEditableScript(), /execCommand\('selectAll'\)/);
+});
+
+test("the window's right-click menu: a field's editing commands, or Copy over a selection", () => {
+  const flags = {
+    canCut: false,
+    canCopy: false,
+    canPaste: true,
+    canSelectAll: true,
+  };
+  assert.deepEqual(
+    windowContextMenu({
+      isEditable: true,
+      selectionText: '',
+      editFlags: flags,
+    }),
+    [
+      { command: 'cut', label: 'Cut', enabled: false },
+      { command: 'copy', label: 'Copy', enabled: false },
+      { command: 'paste', label: 'Paste', enabled: true },
+      'separator',
+      { command: 'selectAll', label: 'Select All', enabled: true },
+    ],
+  );
+  assert.deepEqual(
+    windowContextMenu({
+      isEditable: false,
+      selectionText: 'some words',
+      editFlags: { ...flags, canCopy: true },
+    }),
+    [{ command: 'copy', label: 'Copy', enabled: true }],
+  );
+  // Nothing selected and no field: no menu at all.
+  assert.deepEqual(
+    windowContextMenu({
+      isEditable: false,
+      selectionText: ' \n',
+      editFlags: flags,
+    }),
+    [],
+  );
 });

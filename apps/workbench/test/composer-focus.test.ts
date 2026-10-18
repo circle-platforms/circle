@@ -138,14 +138,18 @@ test(
           const link = document.querySelector('.session-link');
           if (link instanceof HTMLElement) link.focus({ preventScroll: true });
         });
-      // A listed row has the keyboard. Ctrl+N must move it before any typing.
+      // A listed row has the keyboard. Ctrl+N (⌘N) must move it before any typing.
       // The fixture session is idle; a waiting turn refuses the command.
       await focusRow();
       await page.evaluate(() => {
         window.dispatchEvent(
           new KeyboardEvent('keydown', {
             key: 'n',
-            ctrlKey: true,
+            // The platform's new-session chord: ⌘N on a Mac, where ⌃N is the
+            // field's own next-line key, and Ctrl+N elsewhere.
+            ...(/Mac/.test(navigator.platform)
+              ? { metaKey: true }
+              : { ctrlKey: true }),
             bubbles: true,
             cancelable: true,
           }),
@@ -164,7 +168,11 @@ test(
         window.dispatchEvent(
           new KeyboardEvent('keydown', {
             key: 'n',
-            ctrlKey: true,
+            // The platform's new-session chord: ⌘N on a Mac, where ⌃N is the
+            // field's own next-line key, and Ctrl+N elsewhere.
+            ...(/Mac/.test(navigator.platform)
+              ? { metaKey: true }
+              : { ctrlKey: true }),
             bubbles: true,
             cancelable: true,
           }),

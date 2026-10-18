@@ -267,7 +267,7 @@ export function WorkspaceMenu({
       <Item
         icon={Plus}
         label={t('new session')}
-        hint={formatChord('ctrl+n')}
+        hint={formatChord('mod+n')}
         onSelect={onNew}
       />
       <Reveal workspaceId={workspace.id} />

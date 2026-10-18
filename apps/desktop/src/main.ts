@@ -4,7 +4,11 @@ import {
   nativeHttpsUrl,
 } from './encrypted-credentials';
 import { BrowserSessions } from './browser';
-import { devToolsMenuShortcut, selectAllMenuItem } from './menu-shortcuts';
+import {
+  devToolsMenuShortcut,
+  selectAllMenuItem,
+  windowContextMenu,
+} from './menu-shortcuts';
 import { TerminalPanelHost } from './terminal';
 import { loadSecrets } from '../../../src/secrets.js';
 import { RuntimeSupervisor } from './runtime-supervisor';
@@ -491,6 +495,33 @@ async function createWindow() {
   runtime?.onTerminal((request, signal) => {
     if (!terminals) throw Error('the terminal host is closed');
     return terminals.agent(request, signal);
+  });
+  // Electron gives the window no right-click menu of its own. A text field gets the
+  // system's editing commands, selected text gets Copy; the page asks nothing of the
+  // main process for it, so the preload bridge stays as it is.
+  window.webContents.on('context-menu', (_event, params) => {
+    const items = windowContextMenu(params);
+    if (!items.length || !window) return;
+    Menu.buildFromTemplate(
+      items.map((item): MenuItemConstructorOptions => {
+        if (item === 'separator') return { type: 'separator' };
+        if (item.command === 'selectAll')
+          return {
+            ...selectAllMenuItem(text(item.label)),
+            enabled: item.enabled,
+          };
+        // A click of its own rather than a role: on macOS a role item only sends the
+        // system's selector, so its click() does nothing and cannot be checked.
+        const command = item.command;
+        return {
+          label: text(item.label),
+          enabled: item.enabled,
+          click: () => {
+            if (window && !window.isDestroyed()) window.webContents[command]();
+          },
+        };
+      }),
+    ).popup({ window });
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
     const allowed = safeExternalUrl(url);
