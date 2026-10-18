@@ -3,6 +3,7 @@ import type { CardLine } from '../ink/components/dialog_card.js';
 import type { ApprovalRequest } from '../ink/components/approval_card.js';
 import type { Review } from '../approvals.js';
 import type { ToolCall } from '../types.js';
+import { uiText } from '../locale.js';
 // Rows of change an approval card shows before "… +N more lines".
 export const APPROVAL_PREVIEW_LINES = 40;
 const MAX_CHANGE_CHARS = 256 * 1024;
@@ -379,7 +380,12 @@ export function approvalRequest(
     ...(origin ? { origin } : {}),
     body: approvalBody(call.name, call.args),
     preview: approvalPreview(call.name, call.args, resolve),
-    policy: review.reason,
+    policy: [
+      review.reason,
+      call.hook_reason ? `${uiText('hook')} · ${call.hook_reason}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
     scope: ask && review.pattern ? review.scope || 'this call' : '',
     prefixScope:
       ask && review.prefix.length ? `"${review.prefix.join(' ')} …"` : '',

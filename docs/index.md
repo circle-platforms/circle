@@ -27,6 +27,7 @@ New here? Start with the [Quickstart](quickstart.md).
 | Run a server, a watcher or a subagent while I keep working | [Background jobs](background-jobs.md) |
 | Drive Circle from a script or an editor | [CLI: print mode and JSON events](cli.md), [RPC mode](rpc.md) |
 | Teach Circle my project's rules | [Configuration](configuration.md#instruction-files) |
+| Run a command of my own before a tool or before a turn ends | [Hooks](hooks.md) |
 | Add instructions on demand | [Skills](skills.md) |
 | Save a prompt as a command | [Custom commands](custom-commands.md) |
 | Add tools from other programs | [MCP servers](mcp.md) |
@@ -51,6 +52,7 @@ New here? Start with the [Quickstart](quickstart.md).
 - [Run Circle safely](security.md)
 - [Configuration](configuration.md)
 - [Skills](skills.md)
+- [Hooks](hooks.md)
 - [Custom commands](custom-commands.md)
 - [MCP servers](mcp.md)
 - [Build extensions](extensions.md)

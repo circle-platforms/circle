@@ -117,8 +117,8 @@ export const dialogs: Record<string, string> = {
   'session exported': '会话已导出',
   'export cancelled': '已取消导出',
   // workspace trust
-  "Circle can load this workspace's instructions, skills, commands, settings and extensions after you trust it. Extensions run code in the runtime.":
-    '信任这个项目后，Circle 才能加载它的指令、技能、命令、设置和扩展。扩展会在运行时中执行代码。',
+  "Circle can load this workspace's instructions, skills, commands, settings, extensions and hooks after you trust it. Extensions and hooks run code.":
+    '信任这个项目后，Circle 才能加载它的指令、技能、命令、设置、扩展和钩子。扩展和钩子都会执行代码。',
   'This choice is kept locally. The connected Circle runtime must enforce workspace trust before loading project code.':
     '这个选择保存在本地。已连接的 Circle 运行时必须先确认项目已信任，才能加载项目代码。',
   'trust workspace': '信任项目',
