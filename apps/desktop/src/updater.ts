@@ -484,6 +484,11 @@ export class Updater {
         ? this.options.latest(this.releases)
         : latestRelease(DEFAULT_REPO, this.request, this.releases);
     if (force) this.set({ phase: 'checking' });
+    // The daily check can answer after the user has checked and started the download, or
+    // after it is ready: an answer that comes after another change says nothing new.
+    const asked = this.current;
+    const answer = (state: UpdateState) =>
+      this.current === asked ? this.set(state) : this.current;
     try {
       let latest: string | undefined;
       if (force) {
@@ -500,14 +505,15 @@ export class Updater {
         !validVersion(latest) ||
         compareVersions(latest, this.options.version) <= 0
       )
-        return this.set(force ? { phase: 'current' } : this.current);
-      return this.set({
+        return answer(force ? { phase: 'current' } : this.current);
+      const replaceable = await this.canReplace();
+      return answer({
         phase: 'available',
         version: latest,
-        ...((await this.canReplace()) ? {} : { page: this.page(latest) }),
+        ...(replaceable ? {} : { page: this.page(latest) }),
       });
     } catch (error) {
-      return this.set(
+      return answer(
         force ? { phase: 'failed', error: message(error) } : this.current,
       );
     }
