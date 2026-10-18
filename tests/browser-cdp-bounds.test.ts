@@ -329,6 +329,27 @@ test('a page that crashes while a command waits ends the action, and the tab say
   assertNothingLeft(fake);
 });
 
+test("a crash told only on the tab's own session ends what waits on it too", async (t) => {
+  const fake = heldReload(t);
+  await fake.browser.request('c', 'snapshot', {}, never);
+  const reload = fake.browser.request(
+    'c',
+    'navigate',
+    { url: 'reload' },
+    never,
+  );
+  await fake.sent('Page.reload', 'S-T1');
+  fake.emit('Inspector.targetCrashed', {}, 'S-T1');
+  await assert.rejects(reload, {
+    message: 'tab t1 crashed before the browser answered Page.reload',
+  });
+  await assert.rejects(fake.browser.request('c', 'snapshot', {}, never), {
+    message: 'the page in tab t1 crashed; load it again with browser_navigate',
+  });
+  await fake.browser.close();
+  assertNothingLeft(fake);
+});
+
 test('a browser whose pipe ends while a command waits ends the action and leaves no process', async (t) => {
   const fake = heldReload(t);
   await fake.browser.request('c', 'snapshot', {}, never);
@@ -346,7 +367,7 @@ test('a browser whose pipe ends while a command waits ends the action and leaves
 });
 
 test(
-  "a real page's crash ends the command waiting on it, which Chrome never answers, and a load recovers the tab",
+  'a real page whose renderer ends fails the command waiting on it, which Chrome never answers, and a load recovers the tab',
   { skip: findBrowser() ? false : 'no Chrome, Edge or Chromium is installed' },
   async (t) => {
     const site = createServer((_req, res) => {
@@ -382,7 +403,16 @@ test(
       { expression: 'new Promise(() => {})', awaitPromise: true },
       tab.session,
     );
-    void internal.send('Page.crash', {}, tab.session).catch(() => {});
+    // The renderers end, as when one crashes. Not Page.crash: on Linux CI's Chrome it leaves
+    // the renderer hung, not gone (no crash event in 20 s, #172), which is a page that does
+    // not answer, as the deadline tests cover.
+    const { processInfo } = (await internal.send(
+      'SystemInfo.getProcessInfo',
+      {},
+    )) as { processInfo: { type: string; id: number }[] };
+    const renderers = processInfo.filter((entry) => entry.type === 'renderer');
+    assert.ok(renderers.length, 'the browser has renderer processes');
+    for (const renderer of renderers) process.kill(renderer.id, 'SIGKILL');
     await assert.rejects(waiting, {
       message: 'tab t1 crashed before the browser answered Runtime.evaluate',
     });

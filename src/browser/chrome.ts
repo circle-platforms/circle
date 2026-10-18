@@ -874,19 +874,11 @@ export class ChromeBrowser implements BrowserPort {
       }
       return;
     }
+    // The browser tells of a page's renderer ending on the browser's session and on the
+    // tab's own: either counts
     if (method === 'Target.targetCrashed') {
-      // A crashed page answers nothing until it loads again
       const tab = this.byTarget.get(params.targetId);
-      if (tab && !tab.crashed && !this.closed) {
-        tab.crashed = true;
-        tab.world = undefined;
-        tab.loading = false;
-        tab.network.clear();
-        cdp.fail(tab.session, 'crashed');
-        tab.conversation.events.push(
-          `the page in tab ${tab.id} crashed; load it again with browser_navigate`,
-        );
-      }
+      if (tab) this.crashed(cdp, tab);
       return;
     }
     if (method === 'Browser.downloadWillBegin') {
@@ -958,6 +950,9 @@ export class ChromeBrowser implements BrowserPort {
     const tab = sessionId ? this.bySession.get(sessionId) : undefined;
     if (!tab) return;
     switch (method) {
+      case 'Inspector.targetCrashed':
+        this.crashed(cdp, tab);
+        break;
       case 'Page.javascriptDialogOpening': {
         const dialog: PageDialog = {
           id: `d${++tab.conversation.nextDialog}`,
@@ -1123,6 +1118,23 @@ export class ChromeBrowser implements BrowserPort {
         };
         break;
     }
+  }
+  /**
+   * The tab's renderer is gone: nothing waiting on it will be answered, and its page answers
+   * nothing until it loads again. Chrome tells of this only once the renderer process has
+   * ended; a renderer that hangs (as one held while a crash report is written) is a page
+   * that does not answer, which the commands' deadlines end.
+   */
+  private crashed(cdp: CdpPipe, tab: Tab) {
+    if (tab.crashed || this.closed) return;
+    tab.crashed = true;
+    tab.world = undefined;
+    tab.loading = false;
+    tab.network.clear();
+    cdp.fail(tab.session, 'crashed');
+    tab.conversation.events.push(
+      `the page in tab ${tab.id} crashed; load it again with browser_navigate`,
+    );
   }
   /** A finished download goes to the downloads folder, and the model is told where. */
   private finish(download: Download) {
