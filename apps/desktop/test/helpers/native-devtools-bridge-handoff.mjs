@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { clickReadyDevToolsResume } from './devtools-resume-control.mjs';
+import { patience } from './patience.mjs';
 
 /** Standalone trusted-main callback. Never opens a second debugger client. */
 export function installOwnedBrowserWitness(
@@ -93,7 +94,10 @@ export async function runActualBridgeDevToolsHandoff({
       async () => (await read()).state.owner === 'devtools',
       'actual Circle bridge hands the existing target to DevTools',
     );
-    const deadline = Date.now() + 2750;
+    // DevTools builds its debugger controls after its page has loaded; on a
+    // slow runner that takes several seconds. The loop ends once the guest
+    // prints its result after the resume.
+    const deadline = Date.now() + patience(10000);
     let clicked = false;
     while (Date.now() < deadline) {
       const observation = await app.evaluate(

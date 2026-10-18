@@ -147,7 +147,7 @@ test(
       assert.equal(service.snapshot().status, 'paused');
       assert.ok(child?.pid);
       await service.stop();
-      const ended = Date.now() + 3000;
+      const ended = Date.now() + patience(3000);
       while (
         child?.exitCode === null &&
         child?.signalCode === null &&

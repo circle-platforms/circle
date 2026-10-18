@@ -16,6 +16,7 @@ import {
   LspLanguageService,
   WorkspaceLanguageService,
 } from '../src/workspace/lsp-language';
+import { patience } from './helpers/patience.mjs';
 
 const lspFixture = fileURLToPath(
   new URL('../../../tests/fixtures/lsp-server.ts', import.meta.url),
@@ -301,7 +302,7 @@ test('held rename rejects changed target buffers for unversioned changes and nul
         (error: unknown) => error,
       );
       // The real server holds this reply until didChange; await recorded receipt, not a timing guess.
-      const deadline = Date.now() + 1000;
+      const deadline = Date.now() + patience(1000);
       while (true) {
         const records = JSON.parse(await readFile(log, 'utf8')) as any[];
         if (

@@ -667,7 +667,7 @@ test('diagnostic bodies remain replayable after clearing and restart, with byte-
       }),
       /stale language response/,
     );
-    const deadline = Date.now() + 1000;
+    const deadline = Date.now() + patience(1000);
     while (true) {
       const requests = JSON.parse(await readFile(protocolLog, 'utf8')) as any[];
       if (

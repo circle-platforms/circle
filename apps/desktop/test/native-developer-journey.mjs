@@ -79,6 +79,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { setViewport } from './helpers/viewport.mjs';
 import { patience } from './helpers/patience.mjs';
+import { saveWithShortcut } from './helpers/native-editor-save.mjs';
 const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packaged = !!process.env.CIRCLE_DESKTOP_EXECUTABLE;
@@ -827,13 +828,15 @@ try {
           ),
         'actual edit buffer receives keyboard input',
       );
-      await page.keyboard.press('ControlOrMeta+s');
-      await until(
+      await saveWithShortcut(
+        page,
+        'ControlOrMeta',
         async () =>
           (await readFile(join(repo, 'README.md'), 'utf8')).includes(
             'JOURNEY_MANUAL_SAVE',
           ),
         'actual disk save during active agent',
+        page.locator('.file-view:visible'),
       );
       const savedReadme = await readFile(join(repo, 'README.md'), 'utf8');
       await writeFile(join(output, '02-manual-readme-disk.txt'), savedReadme);

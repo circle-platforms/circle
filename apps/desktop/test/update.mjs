@@ -263,9 +263,11 @@ try {
     existsSync(helper) &&
     ((await stat(helper)).mode & 0o4000) !== 0;
   const installName = setuid ? 'quit and replace' : 'restart to update';
+  // Downloading and checking the whole application takes minutes on the
+  // Intel macOS runner.
   await control
     .getByRole('button', { name: installName })
-    .waitFor({ timeout: 120000 });
+    .waitFor({ timeout: patience(120000) });
   check('the update downloads and is checked');
   await control.getByRole('button', { name: installName }).click();
   if (setuid) {
@@ -282,7 +284,9 @@ try {
   );
   const left = await Promise.race([
     exited.then(() => true),
-    new Promise((resolve) => setTimeout(() => resolve(false), 120000)),
+    new Promise((resolve) =>
+      setTimeout(() => resolve(false), patience(120000)),
+    ),
   ]);
   clearInterval(beat);
   if (!left)
@@ -299,7 +303,7 @@ try {
 
   if (setuid) {
     const updates = join(temp, 'data', 'updates');
-    const end = Date.now() + 120000;
+    const end = Date.now() + patience(120000);
     let log = '';
     while (Date.now() < end) {
       if (existsSync(join(updates, 'install.log')))

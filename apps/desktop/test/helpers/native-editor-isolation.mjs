@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { patience } from './patience.mjs';
+import { saveWithShortcut } from './native-editor-save.mjs';
 
 const files = {
   'isolation-a.ts': 'export const DOCUMENT_A_ONLY = "alpha";\n',
@@ -77,7 +78,14 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
     );
     await page.getByText('unsaved changes', { exact: true }).waitFor();
   };
-  const save = () => page.keyboard.press(`${modifier}+s`);
+  const save = (written, label) =>
+    saveWithShortcut(
+      page,
+      modifier,
+      written,
+      label,
+      page.locator('.file-view:visible'),
+    );
   const a = 'isolation-a.ts',
     b = 'isolation-b.md';
   const aMarker = 'DOCUMENT_A_UNSAVED',
@@ -93,8 +101,7 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
     /DOCUMENT_A_ONLY|DOCUMENT_A_UNSAVED/,
   );
   await appendSingleEdit(bMarker);
-  await save();
-  await until(
+  await save(
     async () => (await disk(b)).includes('DOCUMENT_B_SAVED'),
     'CmdS saves B',
   );
@@ -107,8 +114,7 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
     async () => !(await visibleText()).includes('DOCUMENT_A_UNSAVED'),
     'A Undo removes its actual buffer edit before saving',
   );
-  await save();
-  await until(
+  await save(
     async () => (await disk(a)) === files[a],
     'A Undo then CmdS restores exactly A',
   );
@@ -120,8 +126,7 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
     async () => !(await visibleText()).includes('DOCUMENT_B_SAVED'),
     'B Undo removes its own edit before saving',
   );
-  await save();
-  await until(
+  await save(
     async () => (await disk(b)) === files[b],
     'B retains its independent Undo stack',
   );
