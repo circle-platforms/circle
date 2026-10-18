@@ -6,6 +6,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 
+/** Where the adapter's private socket directory goes. macOS temporary
+ * directories are too long for a Unix socket path. */
+export function adapterSocketParent(): string {
+  return process.platform === 'darwin' ? '/tmp' : tmpdir();
+}
 /** js-debug reads TMPDIR once at process start for its node-cdp socket. */
 export function adapterEnvironment(
   base: NodeJS.ProcessEnv,
@@ -206,7 +211,19 @@ export class WorkspaceDebugService {
     if (typeof input !== 'string' || !input.trim())
       throw Error('source path is required');
     const root = await realpath(this.options.workspaceRoot);
-    const resolved = path.resolve(root, input);
+    let resolved = path.resolve(root, input);
+    // An absolute path may spell the workspace as it was given, before its links
+    // are resolved (/var is /private/var on macOS): read it against that too.
+    const given = path.relative(
+      path.resolve(this.options.workspaceRoot),
+      resolved,
+    );
+    if (
+      path.isAbsolute(input) &&
+      !given.startsWith('..') &&
+      !path.isAbsolute(given)
+    )
+      resolved = path.join(root, given);
     const relative = path.relative(root, resolved);
     if (relative.startsWith('..') || path.isAbsolute(relative))
       throw Error('debug source is outside the workspace');
@@ -232,8 +249,7 @@ export class WorkspaceDebugService {
   private async adapterAddress(): Promise<string> {
     if (process.platform === 'win32')
       return `\\\\.\\pipe\\circle-debug-${randomUUID()}`;
-    // macOS temporary directories are too long for a Unix socket path.
-    const parent = process.platform === 'darwin' ? '/tmp' : tmpdir();
+    const parent = adapterSocketParent();
     const dir = path.join(parent, `cd-${randomBytes(6).toString('hex')}`);
     await mkdir(dir, { mode: 0o700 });
     await chmod(dir, 0o700);
