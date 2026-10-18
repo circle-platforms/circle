@@ -205,9 +205,12 @@ export interface Workspace {
   origin?: 'native' | 'preview';
   /**
    * `project` is a folder the person can pick, including the default circle
-   * workspace. `scratch` is a conversation that is not in any project.
+   * workspace. `scratch` is work that is not in any project: a task's own folder
+   * under the task root, or the shared unscoped folder before it.
    */
   kind?: 'project' | 'scratch';
+  /** One task's own folder under the task folder, grouped under no project. */
+  task?: boolean;
   instructions: { name: string; content: string; path?: string }[];
 }
 export interface WorkspaceFile {
@@ -394,6 +397,8 @@ export interface Settings {
    * changes through the native folder dialog, never through save-settings.
    */
   workspaceFolder: string;
+  /** Where a task with no project gets a folder of its own. */
+  taskFolder?: string;
   /**
    * The built-in scratch folder's path while a different default workspace is
    * configured and the scratch folder still holds files: changing the default

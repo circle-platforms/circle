@@ -78,9 +78,11 @@ Circle 工作时可以继续打字：`enter` 会插话给正在进行的回合�
 
 终端界面使用对话卡片、状态灯，以及跟随终端颜色的 `auto` 主题。如果终端不能报告颜色，可用 `/themes dark` 或 `/themes light` 手动指定。各信号的含义和限制见[界面说明](https://circle-platforms.github.io/circle/interface/)。
 
-## 浏览器、变量和密钥
+## 浏览器、设备终端、变量和密钥
 
 让 Circle 打开一个网页，比如你内网里某台设备的管理界面，它会像人一样用浏览器：读页面，移动指针去点击和输入，回答网页弹出的对话框。遇到证书警告，要你批准后才继续；下载、网页要的文件和登录框，它都会告诉你。终端里的浏览器是一个用全新空白配置启动的 Chrome、Edge 或 Chromium 窗口；桌面版里是你和 Circle 共用的浏览器面板，你随时可以接管。操作浏览器按站点审批，有些事始终由你决定：把文件交给网页、摄像头或位置等权限，以及用哪张客户端证书表明身份。
+
+让 Circle 连接你管理的设备——交换机、路由器或服务器控制台——它会打开一个 SSH 或 Telnet 终端，像你使用 SecureCRT 那样操作它：读设备的回答，输入你批准的命令，按设备逐个审批，主机密钥由你确认信任，密码只以 `%NAME%` 秘密引用。终端界面里设备画面是一页你随时可以接管自己输入的页面；桌面版里是你和 Circle 共用的终端面板。`/terminals` 列出打开的控制台和你保存的会话。详见[设备终端](https://circle-platforms.github.io/circle/tools/#device-terminals)。
 
 用 `/secrets NAME` 保存密码，桌面版在设置 → 变量里保存。模型在需要的地方写 `%NAME%`，浏览器里的输入框或其他任何工具都可以，它看不到真实值：工具运行时 Circle 才填入，返回的内容里再把它隐藏起来。`/variables NAME=value` 用同样的方式保存普通值。详见[浏览器](https://circle-platforms.github.io/circle/tools/#the-browser)和[按名字使用密钥](https://circle-platforms.github.io/circle/security/#secrets-by-name)。
 
@@ -93,6 +95,7 @@ Circle 工作时可以继续打字：`enter` 会插话给正在进行的回合�
 | [安全使用](https://circle-platforms.github.io/circle/security/) | 问什么、拒什么、不保护什么 |
 | [选择模型](https://circle-platforms.github.io/circle/models/) | 网关、切换、思考深度 |
 | [浏览器](https://circle-platforms.github.io/circle/tools/#the-browser) | 你和 Circle 一起用的网页 |
+| [设备终端](https://circle-platforms.github.io/circle/tools/#device-terminals) | 你和 Circle 一起操作的 SSH、Telnet 控制台 |
 | [Skills](https://circle-platforms.github.io/circle/skills/)、[自定义命令](https://circle-platforms.github.io/circle/custom-commands/)、[MCP](https://circle-platforms.github.io/circle/mcp/)、[扩展](https://circle-platforms.github.io/circle/extensions/) | 让 Circle 适合你 |
 | [桌面应用](https://circle-platforms.github.io/circle/desktop/) | 同一个助手，自己一个窗口 |
 | [全部文档](https://circle-platforms.github.io/circle/) | 指南与参考 |

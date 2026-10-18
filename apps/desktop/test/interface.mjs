@@ -208,6 +208,7 @@ const expected = {
   extensions: ['heading', 'extensions'],
   approvals: ['heading', 'approvals'],
   jobs: ['tab', 'activity'],
+  terminals: ['heading', 'device terminals'],
   new: ['heading', 'new session'],
   resume: ['heading', 'sessions'],
   continue: ['heading', 'Fix the reconnect race'],
@@ -806,9 +807,16 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Three plain components, GitHub, the developer extension, and the hub
-  // interface with the four platform objects. Paired ones stay off in preview.
-  assert.equal(await page.getByRole('checkbox').count(), 10);
+  // Three plain components, the device-terminal pane, GitHub, the developer
+  // extension, and the hub interface with the four platform objects. Paired
+  // ones stay off in preview.
+  assert.equal(await page.getByRole('checkbox').count(), 11);
+  await page
+    .getByRole('checkbox', {
+      name: 'enable device terminal pane interface',
+      exact: true,
+    })
+    .waitFor();
   // Each switch is named by the interface's shown title.
   for (const id of [
     'GitHub',
@@ -863,21 +871,110 @@ try {
   checks.push(
     'the preview settings name the default workspace without a picker',
   );
+  // The settings page explains itself: a pattern you can check a name against, a
+  // workspace you can take away, and a key you change by pressing it.
+  const trust = page.locator('section.settings-block', {
+    has: page.getByRole('heading', { name: 'workspace trust', exact: true }),
+  });
+  const docsRow = trust
+    .locator('.setting-row')
+    .filter({ has: page.getByText('docs-site') });
+  await docsRow.getByRole('button', { name: 'remove…', exact: true }).click();
+  const removeDialog = page.getByRole('dialog', {
+    name: 'remove docs-site?',
+  });
+  await removeDialog.getByText('/workspace/docs-site').waitFor();
+  await removeDialog
+    .getByRole('button', { name: 'cancel', exact: true })
+    .click();
+  await removeDialog.waitFor({ state: 'hidden' });
+  assert.equal(await docsRow.count(), 1);
+  await docsRow.getByRole('button', { name: 'remove…', exact: true }).click();
+  await removeDialog
+    .getByRole('button', { name: 'remove workspace', exact: true })
+    .click();
+  await docsRow.waitFor({ state: 'hidden' });
+  assert.equal(
+    await trust
+      .locator('.setting-row')
+      .filter({ has: page.getByText('orbit-api') })
+      .getByRole('button', { name: 'remove…', exact: true })
+      .isDisabled(),
+    true,
+  );
+  checks.push(
+    'a workspace is removed from settings through a confirmation, and the active one is not',
+  );
+  const protectedFiles = page.locator('section.settings-block', {
+    has: page.getByRole('heading', { name: 'protected files', exact: true }),
+  });
+  const patternField = protectedFiles.getByRole('textbox', {
+    name: 'new file pattern',
+    exact: true,
+  });
+  const items = protectedFiles.getByRole('listitem');
+  const patternsBefore = await items.count();
+  await patternField.fill('secrets/*.key');
+  await protectedFiles
+    .getByRole('button', { name: 'add', exact: true })
+    .click();
+  await protectedFiles
+    .getByText('a pattern is a file name, not a path')
+    .waitFor();
+  assert.equal(await items.count(), patternsBefore);
+  await patternField.fill('.env');
+  await protectedFiles
+    .getByRole('button', { name: 'add', exact: true })
+    .click();
+  await protectedFiles
+    .getByText('.env is on the always protected list')
+    .waitFor();
+  assert.equal(await items.count(), patternsBefore);
+  await patternField.fill('*.crt');
+  await protectedFiles
+    .getByRole('button', { name: 'add', exact: true })
+    .click();
+  await items.filter({ hasText: '*.crt' }).waitFor();
+  assert.equal(await items.count(), patternsBefore + 1);
+  await protectedFiles
+    .getByRole('textbox', { name: 'check a file name', exact: true })
+    .fill('server.crt');
+  await protectedFiles.getByText('server.crt is protected by *.crt').waitFor();
+  await protectedFiles
+    .getByRole('textbox', { name: 'check a file name', exact: true })
+    .fill('notes.txt');
+  await protectedFiles.getByText('notes.txt is not protected').waitFor();
+  await protectedFiles
+    .getByRole('button', { name: 'remove *.crt', exact: true })
+    .click();
+  assert.equal(await items.count(), patternsBefore);
+  checks.push(
+    'a file pattern is refused, added, checked against a name and removed',
+  );
   // Key preferences are one row per action: change…, then the new key.
   const modelsKey = page.locator('.keybinding-list .setting-row', {
     has: page.getByText('models', { exact: true }),
   });
-  await modelsKey.getByRole('button', { name: 'change…', exact: true }).click();
+  await modelsKey
+    .getByRole('button', { name: 'change the key for models' })
+    .click();
   await modelsKey.getByText('press the new key', { exact: true }).waitFor();
   await page.keyboard.press('F3');
   await modelsKey.getByText('f3', { exact: true }).waitFor();
   await modelsKey
-    .getByRole('button', { name: 'reset key', exact: true })
+    .getByRole('button', { name: 'reset the key for models' })
     .waitFor();
+  // A keyboard row answers to the action it changes, so the page keeps exactly one
+  // button named "change…": the default workspace's picker (live.mjs clicks it).
+  assert.equal(
+    await page.getByRole('button', { name: 'change…', exact: true }).count(),
+    0,
+    "a keyboard row answers to the workspace picker's name",
+  );
   await route('/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).press('F3');
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
-  checks.push('custom key binding invokes its configured action');
+  checks.push('a key recorded in settings invokes its action');
   await reset();
   const beforeNew = await state();
   await page.getByRole('button', { name: 'new session', exact: true }).click();

@@ -13,6 +13,7 @@ import {
 } from '../jobs.js';
 import { formatElapsed, formatTokens } from './status_rows.js';
 import type { SubagentView } from './subagents.js';
+import type { TerminalBandView, TerminalView } from '../terminal/sessions.js';
 
 export const AGENT_ROWS = 6;
 export const JOB_ROWS = 4;
@@ -80,11 +81,13 @@ export function stripHeader(
   agents: number,
   jobs: number,
   width: number,
+  terminals = 0,
 ): string {
   const p = palette();
   const parts = [
     ...(agents ? [`Agents · ${agents}`] : []),
     ...(jobs ? [`Jobs · ${jobs}`] : []),
+    ...(terminals ? [`Terminals · ${terminals}`] : []),
   ];
   return (
     sgrJoin(p.panel_bg, p.faint) +
@@ -255,6 +258,131 @@ export function jobRows(
   return rows;
 }
 
+// A live device terminal's row, in the job row's shape: lamp, `t1 name`, the last line
+// the device showed, and how long the screen has rested. Held consoles say waiting
+// for you; their lamp is cyan, like a job's or a background agent's.
+export const TERMINAL_ROWS = 4;
+
+export function terminalLamp(session: TerminalBandView): LampState {
+  if (session.held) return 'wait';
+  if (session.state === 'connecting') return 'running';
+  if (session.state === 'error') return 'error';
+  if (session.state !== 'ready') return 'none';
+  return session.quiet < 1500 ? 'running' : 'ok';
+}
+
+export function terminalRows(
+  sessions: TerminalView[],
+  options: { width: number; now?: number; max?: number },
+): string[] {
+  if (!sessions.length) return [];
+  const p = palette();
+  const now = options.now ?? Date.now();
+  const width = options.width;
+  const shown = sessions.slice(
+    0,
+    Math.max(1, Math.min(TERMINAL_ROWS, options.max ?? TERMINAL_ROWS)),
+  );
+  const names = shown.map((one) => `${one.id} ${one.name}`);
+  const doings = shown.map((one) =>
+    one.held
+      ? 'waiting for you'
+      : one.state === 'connecting'
+        ? 'connecting'
+        : one.state !== 'ready'
+          ? one.detail || one.state
+          : (one.last ?? '').replace(/\s+/g, ' ').trim() || '—',
+  );
+  const metas = shown.map((one) =>
+    one.state === 'ready' && !one.held
+      ? `${formatElapsed(Math.round(one.quiet / 1000))}`
+      : '',
+  );
+  const nameW = Math.min(
+    28,
+    Math.max(...names.map((name) => stringWidth(name))),
+  );
+  const metaW = Math.max(0, ...metas.map((meta) => stringWidth(meta)));
+  const doingW = Math.max(0, width - 3 - nameW - 2 - metaW - 2 - 1);
+  const rows = shown.map((one, index) => {
+    // A console at its prompt is not work in progress. Only a device that is
+    // connecting, has just answered, or waits for the person takes the strip's
+    // colour; the same 1.5 s the page's band calls "output".
+    const busy =
+      one.held !== undefined ||
+      one.state === 'connecting' ||
+      (one.state === 'ready' && one.quiet < 1500);
+    return row(
+      busy ? p.write_bg : '',
+      p.text,
+      terminalLamp(one),
+      `${padTo(names[index]!, nameW)}  ${padTo(fit(doings[index]!, doingW), doingW)}  `,
+      rightTo(metas[index]!, metaW),
+      now,
+    );
+  });
+  if (sessions.length > shown.length)
+    rows.push(
+      sgrJoin(p.panel_bg, p.faint) +
+        padTo(`  … +${sessions.length - shown.length} more terminals`, width) +
+        p.reset,
+    );
+  return rows;
+}
+
+// The terminal page's band, two rows on the panel background like the job's: its lamp,
+// id and name, the device and state; the second row names the transport and address,
+// or — while the person is attached — says how to leave, as every mode's line does.
+export function terminalBand(
+  session: TerminalBandView,
+  width: number,
+  attached: boolean,
+  now = Date.now(),
+): string[] {
+  const p = palette();
+  const w = Math.max(20, width);
+  const lamp = terminalLamp(session);
+  const state = session.held
+    ? 'waiting for you'
+    : session.state === 'ready'
+      ? session.quiet < 1500
+        ? 'output'
+        : `quiet ${formatElapsed(Math.round(session.quiet / 1000))}`
+      : session.detail || session.state;
+  const meta = state;
+  const light = lampSgr(lamp, now);
+  const name = `${session.id} ${session.name}`;
+  const first =
+    sgrJoin(p.panel_bg) +
+    ' ' +
+    sgrJoin(p.panel_bg, light) +
+    (light ? '●' : ' ') +
+    sgrJoin(p.panel_bg, p.em) +
+    ' ' +
+    padTo(name, w - 3 - stringWidth(meta) - 2 - 1) +
+    '  ' +
+    sgrJoin(p.panel_bg, p.dim) +
+    meta +
+    ' ' +
+    p.reset;
+  // A bare host connect is named by its address, so the row above already shows it:
+  // say the transport and the size the device lays out at, and name the address only
+  // when the line above does not.
+  const size = `${session.cols}×${session.rows}`;
+  const second = attached
+    ? 'typing goes to the device · ctrl+] detaches'
+    : session.name === session.target
+      ? `${session.transport} · ${size}`
+      : `${session.transport} ${session.target} · ${size}`;
+  return [
+    first,
+    sgrJoin(p.panel_bg, attached ? p.em : p.faint) +
+      padTo('   ' + second, w) +
+      p.reset,
+  ];
+}
+
+// The job page's band, on the panel background: its lamp, id and
 // The job page's band, on the panel background: its lamp, id and
 // command, its state and time; under them the file its output goes to.
 export function jobBand(job: Job, width: number, now = Date.now()): string[] {

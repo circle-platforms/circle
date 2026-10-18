@@ -86,6 +86,8 @@ const publish = (item: (typeof items)[number]) => {
 };
 window.circleDesktop = {
   setTheme: async () => {},
+  // Device consoles: none in this fixture.
+  onTerminalEvent: () => () => {},
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   browserState: async () => ({ sessionId: 'none' }),

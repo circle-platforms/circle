@@ -53,6 +53,8 @@ Object.assign(window, { nativeDrawerFixture: fixture });
       },
     ],
   }),
+  // Device consoles: none in this fixture.
+  onTerminalEvent: () => () => {},
   onBrowserEvent: () => () => {},
   browserBounds: async (...args: any[]) => {
     fixture.bounds.push(args);

@@ -343,6 +343,11 @@ try {
     0,
   );
   await route('/page/sessions');
+  // The archived session sits in the folder the app fell back to, while a session
+  // started after it belongs to its own task folder: list the workspaces together.
+  await page
+    .getByRole('checkbox', { name: 'all workspaces', exact: true })
+    .check();
   await page
     .getByRole('checkbox', { name: 'archived sessions', exact: true })
     .check();
@@ -409,22 +414,32 @@ try {
     .filter({ hasText: 'managed fixture A' })
     .first()
     .click();
+  // The row belongs to another folder now, so opening it moves the app between the
+  // runtimes of the two workspaces: wait for that to land rather than assume it.
   await until(
     async () => (await state()).activeSessionId === a,
     'approval session selected',
   );
-  const decision = (await state()).interactions.find(
-    (row) => row.status === 'pending',
-  );
-  assert.equal(
-    (
-      await command('answer', {
+  // The switch re-publishes the interaction: answer it on the runtime that now
+  // owns it, re-reading the record whenever a re-publish has made it stale.
+  let answered = false;
+  for (let tries = 0; tries < 20 && !answered; tries++) {
+    const decision = (await state()).interactions.find(
+      (row) => row.status === 'pending',
+    );
+    if (decision) {
+      const reply = await command('answer', {
         id: decision.id,
         revision: decision.revision,
         answer: 'approve',
-      })
-    ).ok,
-    true,
+      });
+      if (reply.ok) answered = true;
+    }
+    if (!answered) await new Promise((done) => setTimeout(done, 150));
+  }
+  assert.ok(
+    answered,
+    'the approval card was never answerable on its new runtime',
   );
   await page.getByText('approved fixture answer', { exact: true }).waitFor();
   assert.equal(
@@ -495,6 +510,32 @@ try {
     const network = (await state()).runtime.network;
     assert(network.authorities > 0);
     await page.getByText('network trust', { exact: false }).waitFor();
+    // The panel says what the number means: the total, what Circle added of
+    // its own, how requests leave the machine, and each source by name.
+    const panel = page.locator('.network-status');
+    await panel
+      .getByText(`${network.authorities} authorities`, { exact: false })
+      .first()
+      .waitFor();
+    await panel
+      .getByText(
+        network.proxy
+          ? 'through a proxy'
+          : 'no proxy: Circle reaches the server itself',
+        { exact: false },
+      )
+      .first()
+      .waitFor();
+    await panel.getByText('the roots Node.js ships with').waitFor();
+    assert.equal(
+      await panel.locator('.source-table tbody tr').count(),
+      network.sources.length,
+    );
+    for (const source of network.sources)
+      await panel
+        .getByRole('cell', { name: `${source.certificates} certificates` })
+        .first()
+        .waitFor();
     await page.screenshot({ path: join(output, `network-trust-${theme}.png`) });
     await route(`/session/${a}`);
   }
@@ -512,7 +553,32 @@ try {
         .every((session) => session.archivedAt),
     'whole workspace archived',
   );
-  assert.equal(await page.locator('.sidebar .project').count(), 0);
+  // Archiving a workspace takes the sessions of that folder only. The task started
+  // outside it lives in a folder of its own, so its group stays: that is what a task
+  // having its own folder means.
+  assert.equal(
+    await page
+      .locator('.sidebar .project')
+      .filter({ hasText: 'managed fixture A' })
+      .count(),
+    0,
+    'the archived workspace lost its group',
+  );
+  // The strip's own 'recent' group is a .project too, so name the groups that
+  // matter: the task folder keeps its own, the archived workspace loses its.
+  const groupNames = (
+    await page.locator('.sidebar .project .project-name').allInnerTexts()
+  ).map((name) => name.trim());
+  assert.equal(
+    groupNames.filter((name) => name === 'work without a project').length,
+    1,
+    'the task folder keeps its group',
+  );
+  assert.equal(
+    groupNames.includes('managed fixture A'),
+    false,
+    'the archived workspace lost its group',
+  );
   assert.equal(
     await readFile(join(workspace.path, 'kept.txt'), 'utf8'),
     'approved fixture bytes',
@@ -560,11 +626,14 @@ try {
     .getByRole('checkbox', { name: 'archived sessions', exact: true })
     .check();
   const other = (await state()).sessions.find((session) => session.id === b);
+  // A session is listed in recent and in its folder group by design, so name
+  // the copy the click means: the first row that carries its menu.
   await page
     .getByRole('button', {
       name: `session actions for ${other.title}`,
       exact: true,
     })
+    .first()
     .click();
   await page
     .getByRole('menuitem', { name: 'delete session', exact: true })

@@ -11,6 +11,23 @@ import { Resvg } from '@resvg/resvg-js';
 import { execFileSync } from 'node:child_process';
 import { buildBundledExtensions, shareExtensionError } from './extensions.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
+// ssh2 loads two optional native accelerators, each inside a try/catch: the
+// `cpu-features` package and its own sshcrypto.node, built by npm on a machine that
+// has a compiler. esbuild cannot put a .node binary in a bundle, and `external` takes
+// strings only, so a plugin matches the path ssh2 writes. Left to runtime, a packaged
+// Circle simply does not have them and ssh2 uses its pure-JS crypto - which is already
+// what happens where they were never compiled. The device terminals reach ssh2 from
+// the main process (src/terminal.ts); the worker is covered for the same require.
+const nativeModules = ['cpu-features'];
+const nativeBinaries = {
+  name: 'native-binaries',
+  setup(api) {
+    api.onResolve({ filter: /\.node$/ }, (args) => ({
+      path: args.path,
+      external: true,
+    }));
+  },
+};
 const dist = join(root, 'dist');
 await resetDesktopOutput(dist);
 await build({
@@ -23,9 +40,15 @@ await build({
   banner: {
     js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
   },
-  plugins: [shareExtensionError()],
+  plugins: [shareExtensionError(), nativeBinaries],
   sourcemap: true,
-  external: ['koffi', 'node-pty', 'typescript-language-server', 'typescript'],
+  external: [
+    'koffi',
+    'node-pty',
+    'typescript-language-server',
+    'typescript',
+    ...nativeModules,
+  ],
 });
 await cp(join(root, '../../src/prompts'), join(dist, 'prompts'), {
   recursive: true,
@@ -46,7 +69,9 @@ await build({
     'node-pty',
     'typescript-language-server',
     'typescript',
+    ...nativeModules,
   ],
+  plugins: [nativeBinaries],
   sourcemap: true,
 });
 await build({

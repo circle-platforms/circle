@@ -12,7 +12,7 @@ A message that looks like a command but is not one, such as `/modles`, is **not 
 
 Most commands wait until the turn ends and answer `Busy · wait for the current turn to finish`. These work at any time:
 
-`/help`, `/hotkeys`, `/exit`, `/yolo`, `/mode`, `/settings`, `/approvals`, `/jobs`, `/session`, `/name`, `/tree`, `/themes`, `/thinking`, `/details`, `/copy`, `/export`, `/share`, `/unshare`, `/logout`, `/mcp` (listing only), `/skill` and `/extensions` (listing only: `/skill <name>` and `/extensions reload` wait)
+`/help`, `/hotkeys`, `/exit`, `/yolo`, `/mode`, `/settings`, `/approvals`, `/jobs`, `/terminals`, `/session`, `/name`, `/tree`, `/themes`, `/thinking`, `/details`, `/copy`, `/export`, `/share`, `/unshare`, `/logout`, `/mcp` (listing only), `/skill` and `/extensions` (listing only: `/skill <name>` and `/extensions reload` wait)
 
 Going back with `/tree` while a turn runs stops the turn first. A [custom command](custom-commands.md) also works: its text is queued like any message.
 
@@ -32,6 +32,7 @@ Going back with `/tree` while a turn runs stops the turn first. A [custom comman
 | `/redo` | | Bring it back. |
 | `/compact [hint]` | `/summarize` | Summarize older messages now. |
 | `/jobs [id]` | `/tasks` | List the session's [background jobs](background-jobs.md), running ones first, or open one's page. `enter` opens a job's page: a band with its lamp, id and command, state and time, and the file its output goes to, then the end of the output. `ctrl+k` stops a running job (after asking in the list) or removes one that has ended. |
+| `/terminals [id]` | | List this conversation's [device terminals](tools.md#device-terminals), live ones first then the saved profiles, or open one console's page. `enter` opens a terminal's page or connects a profile; `ctrl+d` cuts a live console after asking. On the page `enter` attaches and `esc` leaves. |
 
 What these do and do not do is on [Sessions](sessions.md). Several have limits in this version.
 

@@ -125,6 +125,32 @@ const bridge: DesktopBridge = {
     ipcRenderer.on('circle:browser-event', handler);
     return () => ipcRenderer.removeListener('circle:browser-event', handler);
   },
+  terminalState: (id) => ipcRenderer.invoke('circle:terminal-state', id),
+  terminalProfiles: () => ipcRenderer.invoke('circle:terminal-profiles'),
+  terminalSnapshot: (id, session) =>
+    ipcRenderer.invoke('circle:terminal-snapshot', id, session),
+  terminalConnect: (id, profile) =>
+    ipcRenderer.invoke('circle:terminal-connect', id, profile),
+  terminalConnectTarget: (id, target) =>
+    ipcRenderer.invoke('circle:terminal-connect-target', id, target),
+  terminalHostKey: (id, decision) =>
+    ipcRenderer.invoke('circle:terminal-host-key', id, decision),
+  terminalDisconnect: (id, session) =>
+    ipcRenderer.invoke('circle:terminal-disconnect', id, session),
+  terminalAttach: (id, session) =>
+    ipcRenderer.invoke('circle:terminal-attach', id, session),
+  terminalDetach: (id, session) =>
+    ipcRenderer.invoke('circle:terminal-detach', id, session),
+  terminalInput: (id, session, text) =>
+    ipcRenderer.invoke('circle:terminal-input', id, session, text),
+  terminalResize: (id, session, cols, rows) =>
+    ipcRenderer.invoke('circle:terminal-resize', id, session, cols, rows),
+  onTerminalEvent: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:terminal-event', handler);
+    return () => ipcRenderer.removeListener('circle:terminal-event', handler);
+  },
   updateState: () => ipcRenderer.invoke('circle:update-state'),
   update: (action) => ipcRenderer.invoke('circle:update', action),
   onUpdate: (listener) => {

@@ -44,7 +44,12 @@ export interface NetworkSetup {
 
 export interface NetworkStatus {
   proxy: boolean;
+  /** Which variable chose the proxy, and where it points: never a key in its value. */
+  proxyFrom?: string;
+  proxyHost?: string;
+  /** Certificate authorities added on top of the ones Node.js ships with. */
   certificates: number;
+  /** All the authorities Circle verifies a certificate against. */
   authorities: number;
   sources: { name: string; certificates: number; path?: string }[];
   problems: string[];
@@ -68,7 +73,15 @@ export function networkSummary(value = currentNetworkStatus()): string {
         `${source.name}${source.path ? ` (${source.path})` : ''}: ${source.certificates}`,
     )
     .join(', ');
-  return `network: proxy ${value.proxy ? 'on' : 'off'}; trust ${value.authorities} authorities (${sources})${value.bundle ? `; bundle ${value.bundle}` : ''}${value.problems.length ? `; ${value.problems.join('; ')}` : ''}`;
+  const proxyWhere = value.proxyFrom
+    ? value.proxyHost
+      ? `${value.proxyFrom} at ${value.proxyHost}`
+      : value.proxyFrom
+    : (value.proxyHost ?? '');
+  const proxy = value.proxy
+    ? `on${proxyWhere ? ` (${proxyWhere})` : ''}`
+    : 'off';
+  return `network: proxy ${proxy}; trust ${value.authorities} authorities (${sources})${value.bundle ? `; bundle ${value.bundle}` : ''}${value.problems.length ? `; ${value.problems.join('; ')}` : ''}`;
 }
 export function networkProblem(problem: string): void {
   status.problems.push(safeNetworkText(problem));
@@ -196,6 +209,18 @@ function reason(error: unknown): string {
 const expandHome = (path: string): string =>
   path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
 
+/** The host a proxy value points at: no scheme, and no key that sits in front of it. */
+function proxyHostOf(value: string): string {
+  for (const candidate of [value, 'http://' + value])
+    try {
+      const host = new URL(candidate).host;
+      if (host) return host;
+    } catch {
+      // Not a URL on its own; the second spelling may still be one.
+    }
+  return '';
+}
+
 const PROXY_VARIABLES = [
   'https_proxy',
   'HTTPS_PROXY',
@@ -232,22 +257,34 @@ export function configureNetwork(
     }
   }
   let proxy = false;
-  if (PROXY_VARIABLES.some((name) => env[name]?.trim())) {
+  let proxyFrom = '';
+  let proxyHost = '';
+  const chosen = PROXY_VARIABLES.map((name) => ({
+    name,
+    value: env[name]?.trim() ?? '',
+  })).find((row) => row.value);
+  if (chosen) {
     if (typeof nodeHttp.setGlobalProxyFromEnv === 'function')
       try {
         undo.push(nodeHttp.setGlobalProxyFromEnv(env));
         proxy = true;
+        proxyFrom = chosen.name;
+        proxyHost = proxyHostOf(chosen.value);
       } catch (error) {
         problems.push(`the proxy setting cannot be used: ${reason(error)}`);
       }
-    else if (env.NODE_USE_ENV_PROXY === '1') proxy = true;
-    else
+    else if (env.NODE_USE_ENV_PROXY === '1') {
+      proxy = true;
+      proxyFrom = chosen.name;
+      proxyHost = proxyHostOf(chosen.value);
+    } else
       problems.push(
         `Node.js ${process.version} cannot use HTTPS_PROXY or HTTP_PROXY; use Node.js 24.14 or later`,
       );
   }
   status = {
     proxy,
+    ...(proxy ? { proxyFrom, proxyHost } : {}),
     certificates: added,
     authorities: new Set(
       tls

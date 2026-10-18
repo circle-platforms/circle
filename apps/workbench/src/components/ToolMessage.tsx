@@ -20,6 +20,7 @@ import {
   Users,
   FileText,
   Globe,
+  SquareTerminal,
 } from 'lucide-react';
 import type { AgentRecord, ToolCall } from '../model/types';
 import { agentState } from '../model/activity';
@@ -168,9 +169,11 @@ export function ToolMessage({
       ? Terminal
       : tool.name.startsWith('browser_')
         ? Globe
-        : tool.diff || tool.before !== undefined
-          ? FileDiff
-          : FileText;
+        : tool.name.startsWith('terminal_')
+          ? SquareTerminal
+          : tool.diff || tool.before !== undefined
+            ? FileDiff
+            : FileText;
   const isCommand = ['execute', '!', '!!'].includes(tool.name);
   // What the call was given, in plain words: a command reads as its command
   // line, other tools as their arguments.

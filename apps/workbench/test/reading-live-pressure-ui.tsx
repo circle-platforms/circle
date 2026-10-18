@@ -36,6 +36,8 @@ const host = {
   onRuntime: subscribe('update'),
   onRuntimeDelta: subscribe('delta'),
   onWorkspaceEvent: subscribe('workspace'),
+  // Device consoles: none in this fixture.
+  onTerminalEvent: () => () => {},
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   setTheme: async () => {},

@@ -68,6 +68,8 @@ const host = {
       listener = undefined;
     };
   },
+  // Device consoles: none in this fixture.
+  onTerminalEvent: () => () => {},
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   setTheme: async () => {},

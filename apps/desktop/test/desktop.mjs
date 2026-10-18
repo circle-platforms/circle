@@ -1292,6 +1292,7 @@ try {
     'file and diff inspector',
     'activity inspector',
     'browser pane',
+    'device terminal pane',
     'hub',
     'knowledge',
     'work',

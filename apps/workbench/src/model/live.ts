@@ -615,7 +615,7 @@ export class LiveRuntime implements RuntimePort {
       if (!old)
         throw Error(t('choose a workspace through the native folder dialog'));
       if (workspace.trusted !== old.trusted)
-        add('trust', { enabled: workspace.trusted });
+        add('trust', { enabled: workspace.trusted, workspaceId: workspace.id });
     }
     const settings: Record<string, unknown> = {};
     for (const key of Object.keys(

@@ -44,7 +44,7 @@ export const conversation: Record<string, string> = {
   'what should we build in {name}?': '你想让我们在 {name} 中构建什么？',
   'search projects': '搜索项目',
   'no matching projects': '没有匹配的项目',
-  'no project': '不选择项目',
+  'no project': '无项目',
   'choose a project': '选择项目',
   'Start with a message, a file, or a question about your project.':
     '从一条消息、一个文件或一个关于项目的问题开始。',

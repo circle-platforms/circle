@@ -5,6 +5,7 @@ import {
   FileDiff,
   Activity,
   Globe,
+  SquareTerminal,
   BookOpen,
   CirclePlay,
   Server,
@@ -16,6 +17,7 @@ import {
   ActivityPanel,
   BrowserPanel,
 } from '../features/Panels';
+import { TerminalDevice } from '../features/TerminalDevice';
 import {
   KnowledgePage,
   WorkPage,
@@ -112,6 +114,29 @@ export const circlePlugins: WorkbenchPlugin[] = [
         },
         icon: Globe,
         component: BrowserPanel,
+        fullView: true,
+      },
+    ],
+  },
+  {
+    id: 'devices',
+    apiVersion: 1,
+    version: '0.1.0',
+    get title() {
+      return t('device terminal pane');
+    },
+    get description() {
+      return t('SSH and Telnet consoles shared with Circle.');
+    },
+    icon: SquareTerminal,
+    panels: [
+      {
+        id: 'devices',
+        get title() {
+          return t('device terminals');
+        },
+        icon: SquareTerminal,
+        component: TerminalDevice,
         fullView: true,
       },
     ],

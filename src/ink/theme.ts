@@ -282,3 +282,106 @@ export function statusLight(state: LampState, now = Date.now()): string {
   const sgr = lampSgr(state, now);
   return sgr ? sgr + '●' + palette().reset : ' ';
 }
+
+// The sixteen ANSI colours a device screen may ask for, drawn from the current palette so
+// they read on this background in both dark and light. A cell's colour number lands here;
+// nowhere else may a terminal colour be minted.
+//   0..7 base   8..15 bright   16..231 6×6×6 cube   232..255 grey ramp
+// The cube and the ramp, and a truecolour cell, collapse onto the nearest of the sixteen.
+const ANSI_BASE: [number, number, number][] = [
+  [60, 76, 92], // 0 black: a dark grey that still reads on a light background
+  [214, 84, 84], // 1 red
+  [92, 184, 110], // 2 green
+  [214, 168, 74], // 3 yellow
+  [96, 140, 224], // 4 blue
+  [196, 120, 200], // 5 magenta
+  [90, 184, 196], // 6 cyan
+  [196, 204, 212], // 7 white: a light grey that still reads on a dark background
+];
+function ansiSlot(
+  slot: number,
+  fg: [number, number, number],
+): [number, number, number] {
+  const base = ANSI_BASE[slot % 8]!;
+  if (slot < 8) return base;
+  // A bright slot is its base lifted halfway toward this palette's foreground
+  return [
+    Math.round((base[0] + fg[0]) / 2),
+    Math.round((base[1] + fg[1]) / 2),
+    Math.round((base[2] + fg[2]) / 2),
+  ];
+}
+function nearestOf16(
+  rgb: [number, number, number],
+  fg: [number, number, number],
+): number {
+  let best = 7;
+  let distance = -1;
+  for (let slot = 0; slot < 16; slot++) {
+    const c = ansiSlot(slot, fg);
+    const d =
+      (c[0] - rgb[0]) * (c[0] - rgb[0]) +
+      (c[1] - rgb[1]) * (c[1] - rgb[1]) +
+      (c[2] - rgb[2]) * (c[2] - rgb[2]);
+    if (distance < 0 || d < distance) {
+      distance = d;
+      best = slot;
+    }
+  }
+  return best;
+}
+/**
+ * A cell's colour number as one of the sixteen slots, or -1 for the screen's own
+ * foreground. `mode` is what a cell reports: 0 default, 0x01000000 a palette index,
+ * 0x03000000 direct RGB. Recomputed every repaint: nothing here may be cached past one.
+ */
+export function terminalColorSlot(mode: number, value: number): number {
+  const fg = hexToRgb(palette().fg_hex);
+  if (mode === 16777216) {
+    if (value < 16) return value;
+    if (value < 232) {
+      const i = value - 16;
+      const level = (c: number) => (c === 0 ? 40 : 55 + c * 40);
+      return nearestOf16(
+        [level(Math.floor(i / 36)), level(Math.floor(i / 6) % 6), level(i % 6)],
+        fg,
+      );
+    }
+    const grey = 8 + (value - 232) * 10;
+    return nearestOf16([grey, grey, grey], fg);
+  }
+  if (mode === 50331648)
+    return nearestOf16(
+      [(value >> 16) & 255, (value >> 8) & 255, value & 255],
+      fg,
+    );
+  return -1;
+}
+export function terminalAnsiFg(slot: number): string {
+  if (slot < 0) return palette().text;
+  return fgSgr(terminalAnsiHex()[slot]!);
+}
+/** The sixteen slots as text colours, hex: the xterm.js panel themes itself with these. */
+export function terminalAnsiHex(): string[] {
+  const fg = hexToRgb(palette().fg_hex);
+  return Array.from({ length: 16 }, (_, slot) => rgbToHex(ansiSlot(slot, fg)));
+}
+export function terminalAnsiBg(slot: number): string {
+  if (slot < 0) return '';
+  return bgSgr(rgbToHex(ansiSlot(slot, hexToRgb(palette().bg_hex))));
+}
+/** Whether a slot's background would swallow the screen's own text colour. */
+export function terminalBgEatsText(slot: number): boolean {
+  if (slot < 0) return false;
+  return (
+    contrastRatio(
+      rgbToHex(ansiSlot(slot, hexToRgb(palette().bg_hex))),
+      palette().fg_hex,
+    ) < 3
+  );
+}
+/** The text colour to put on a background slot when the screen's own would vanish. */
+export function terminalFgOverBg(slot: number): string {
+  const bgHex = rgbToHex(ansiSlot(slot, hexToRgb(palette().bg_hex)));
+  return terminalAnsiFg(relativeLuminance(bgHex) > 0.5 ? 0 : 15);
+}

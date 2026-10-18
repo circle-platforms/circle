@@ -26,6 +26,13 @@ export const panels: Record<string, string> = {
   'no files changed in this session yet': '这个会话还没有改动文件',
   configured: '已配置',
   'not configured': '未配置',
+  // tasks with no project
+  'no project': '无项目',
+  'tasks with no project': '无项目任务',
+  'task folder changed': '任务文件夹已更改',
+  'a task you start outside a project gets a folder of its own here, and is listed apart from your projects':
+    '在项目外启动的任务会在这里得到自己的文件夹，并在侧栏里与项目分开列出',
+
   // the inspector
   'context panel': '上下文面板',
   context: '上下文',
@@ -195,4 +202,32 @@ export const panels: Record<string, string> = {
   'zoom {percent}%': '缩放 {percent}%',
   'take screenshot': '截取网页画面',
   'close developer tools': '关闭开发工具',
+  // device terminals
+  'new connection': '新建连接',
+  port: '端口',
+  user: '用户',
+  'ssh signs in from a saved profile; a telnet console answers its own login':
+    'ssh 通过已保存的配置文件登录；telnet 控制台会自己询问登录。',
+  'no saved profiles yet; a new connection reaches a device by address':
+    '还没有保存的配置文件；用“新建连接”按地址连接设备。',
+  'disconnect {name}': '断开 {name}',
+  'no device terminals yet': '尚无设备终端',
+  'the desktop application shows Circle device terminals here':
+    '桌面应用会在这里显示 Circle 的设备终端。',
+  connecting: '正在连接',
+  closed: '已关闭',
+  'the device is answering': '设备正在回答',
+  'quiet {time}': '已静默 {time}',
+  'Circle handed it to you': 'Circle 已把它交给你',
+  'you have the terminal': '你正握着这个终端',
+  'trust this device key?': '信任这台设备的密钥吗？',
+  'connect once': '仅本次连接',
+  'trust for good': '永久信任',
+  'Circle hands you {name}': 'Circle 把 {name} 交给你',
+  'give back': '交还',
+  'refresh the screen': '刷新画面',
+  'take the terminal': '接管终端',
+  disconnect: '断开连接',
+  'saved profiles': '已保存的会话档案',
+  'device terminal': '设备终端',
 };
