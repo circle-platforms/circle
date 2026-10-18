@@ -26,7 +26,12 @@ import { join, posix, win32 } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { palette } from '../ink/theme.js';
-import { CdpPipe, type CdpEvent } from './cdp.js';
+import {
+  CdpPipe,
+  COMMAND_TIMEOUT,
+  type CdpEvent,
+  type CdpSendOptions,
+} from './cdp.js';
 import { TrustedCertificates } from './certificates.js';
 import {
   actedOn,
@@ -141,6 +146,12 @@ export interface ChromeOptions {
    * fixed three-second execution deadline.
    */
   closeTimeout?: number;
+  /**
+   * How long the browser has to answer one protocol command, in milliseconds: 15 s unless
+   * given. A page that never answers, as a hung renderer, ends the action with an error that
+   * names the command and the tab instead of holding the conversation.
+   */
+  commandTimeout?: number;
   /** Each owned-process inspection is bounded separately from the exit grace period. */
   processInspectionTimeout?: number;
   /**
@@ -215,6 +226,8 @@ interface Tab {
     };
   };
   closed: boolean;
+  /** Its page crashed: nothing in it answers until it loads again. */
+  crashed?: boolean;
   screenshot?: ScreenshotCapture;
   /** Circle's clicks get file choosers; turned off again once no dialog holds the page. */
   intercepting?: boolean;
@@ -254,6 +267,8 @@ interface Hold {
 }
 /** How long after an action of the model's a download still counts as its doing. */
 const LATE_DOWNLOAD = 10_000;
+/** How long a navigation has for the browser to answer that it began (or failed). */
+const NAVIGATE_TIMEOUT = 30_000;
 /** How long the browser has to start: a new profile on a busy Windows machine has taken 20 s. */
 const START_TIMEOUT = 60_000;
 const TASKKILL_TIMEOUT = 3000;
@@ -283,6 +298,11 @@ export class ChromeBrowser implements BrowserPort {
   private bySession = new Map<string, Tab>();
   private adopting = new Map<string, Promise<Tab | undefined>>();
   private downloads = new Map<string, Download>();
+  /**
+   * Downloads not kept whose stop the browser did not confirm: what they write is deleted
+   * when they end.
+   */
+  private discarded = new Set<string>();
   /** Where the browser writes a download before Circle names it, in the start's profile. */
   private staging = '';
   private trusted: TrustedCertificates;
@@ -348,6 +368,7 @@ export class ChromeBrowser implements BrowserPort {
     const cdp = new CdpPipe(
       child.stdio[3] as Writable,
       child.stdio[4] as Readable,
+      this.options.commandTimeout ?? COMMAND_TIMEOUT,
     );
     this.child = child;
     if (process.platform !== 'win32' && child.pid)
@@ -377,7 +398,8 @@ export class ChromeBrowser implements BrowserPort {
       const limit = this.options.startTimeout ?? START_TIMEOUT;
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        cdp.send('Browser.getVersion'),
+        // The start's own deadline bounds this one
+        cdp.send('Browser.getVersion', {}, undefined, { timeout: Infinity }),
         failed,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(
@@ -441,6 +463,7 @@ export class ChromeBrowser implements BrowserPort {
     this.cdp = undefined;
     this.child = undefined;
     this.downloads.clear();
+    this.discarded.clear();
     for (const conversation of this.conversations.values()) {
       if (conversation.tabs.size)
         conversation.events.push(
@@ -451,13 +474,23 @@ export class ChromeBrowser implements BrowserPort {
       conversation.active = undefined;
     }
   }
+  /**
+   * A protocol command. It ends at the browser's answer, at its deadline (the browser's own
+   * `commandTimeout` unless `options` give one), at the caller's signal, or when its tab
+   * closes or crashes: its error names the command and the tab.
+   */
   private send<T = any>(
     method: string,
     params: Record<string, unknown> = {},
     session?: string,
+    options: CdpSendOptions = {},
   ): Promise<T> {
     if (!this.cdp) return Promise.reject(Error('the browser was closed'));
-    return this.cdp.send<T>(method, params, session);
+    const tab = session ? this.bySession.get(session) : undefined;
+    return this.cdp.send<T>(method, params, session, {
+      target: tab ? `tab ${tab.id}` : session ? 'a new tab' : 'the browser',
+      ...options,
+    });
   }
   close(): Promise<void> {
     this.closed = true;
@@ -704,14 +737,25 @@ export class ChromeBrowser implements BrowserPort {
       // joins the list
       if (opener || !conversation.active) conversation.active = tab.id;
       if (conversation.tabs.size > 1) conversation.tabsChanged = true;
-      await Promise.all(
-        [
-          'Page.enable',
-          'Network.enable',
-          'Runtime.enable',
-          'Security.enable',
-        ].map((method) => this.send(method, {}, sessionId)),
-      );
+      try {
+        await Promise.all(
+          [
+            'Page.enable',
+            'Network.enable',
+            'Runtime.enable',
+            'Security.enable',
+          ].map((method) => this.send(method, {}, sessionId)),
+        );
+      } catch (error) {
+        // A tab whose page does not answer (a hung or crashed renderer) cannot be followed:
+        // Circle lets go of it, and the next action opens a tab of its own
+        const message = error instanceof Error ? error.message : String(error);
+        this.drop(tab, `not taken on: ${message}`);
+        void this.send('Target.detachFromTarget', { sessionId }).catch(
+          () => {},
+        );
+        throw error;
+      }
       // A page's sign-in comes to Circle first: documents only, which go on at once
       await this.send(
         'Fetch.enable',
@@ -742,7 +786,8 @@ export class ChromeBrowser implements BrowserPort {
       const tab = this.byTarget.get(targetId);
       if (tab) return tab;
       const adopting = this.adopting.get(targetId);
-      if (adopting) await adopting.catch(() => undefined);
+      // Taking it on failed: why is the action's error
+      if (adopting) await adopting;
       else await delay(20);
     }
     throw Error('the browser did not open the tab');
@@ -810,7 +855,38 @@ export class ChromeBrowser implements BrowserPort {
     }
     if (method === 'Target.targetDestroyed') {
       const tab = this.byTarget.get(params.targetId);
-      if (tab) this.drop(tab, 'closed');
+      if (tab) {
+        // Nothing sent to it will be answered. A browser Circle is closing closes every
+        // tab first: its pipe's close says so.
+        if (!this.closed) cdp.fail(tab.session, 'closed');
+        this.drop(tab, 'closed');
+      }
+      return;
+    }
+    if (method === 'Target.detachedFromTarget') {
+      // As a closed tab: nothing sent to the session will be answered
+      const tab = params.sessionId
+        ? this.bySession.get(params.sessionId)
+        : undefined;
+      if (tab) {
+        if (!this.closed) cdp.fail(tab.session, 'closed');
+        this.drop(tab, 'closed');
+      }
+      return;
+    }
+    if (method === 'Target.targetCrashed') {
+      // A crashed page answers nothing until it loads again
+      const tab = this.byTarget.get(params.targetId);
+      if (tab && !tab.crashed && !this.closed) {
+        tab.crashed = true;
+        tab.world = undefined;
+        tab.loading = false;
+        tab.network.clear();
+        cdp.fail(tab.session, 'crashed');
+        tab.conversation.events.push(
+          `the page in tab ${tab.id} crashed; load it again with browser_navigate`,
+        );
+      }
       return;
     }
     if (method === 'Browser.downloadWillBegin') {
@@ -861,7 +937,11 @@ export class ChromeBrowser implements BrowserPort {
     }
     if (method === 'Browser.downloadProgress') {
       const download = this.downloads.get(params.guid);
-      if (!download || params.state === 'inProgress') return;
+      if (params.state === 'inProgress') return;
+      // Not kept, and its stop not confirmed: what it wrote goes now that it has ended
+      if (!download && this.discarded.delete(params.guid))
+        rmSync(join(this.staging, params.guid), { force: true });
+      if (!download) return;
       download.running = false;
       download.size = params.receivedBytes ?? 0;
       if (params.state !== 'completed') {
@@ -951,6 +1031,7 @@ export class ChromeBrowser implements BrowserPort {
       case 'Page.frameNavigated':
         if (!params.frame.parentId) {
           tab.frameUrl = params.frame.url;
+          tab.crashed = false;
           if (params.frame.loaderId) tab.navigation?.add(params.frame.loaderId);
           tab.world = undefined;
           // Past the warning to its site, wherever on that host it went on to (a site that
@@ -1075,12 +1156,23 @@ export class ChromeBrowser implements BrowserPort {
         continue;
       }
       this.downloads.delete(download.guid);
+      // Its file never reaches the downloads folder. Whether the browser stopped it is
+      // told as the browser answered: one it did not confirm is deleted when it ends.
+      let unconfirmed = '';
       if (download.running)
-        await this.send('Browser.cancelDownload', {
+        unconfirmed = await this.send('Browser.cancelDownload', {
           guid: download.guid,
-        }).catch(() => {});
+        }).then(
+          () => '',
+          (error: Error) => error.message,
+        );
+      if (unconfirmed) this.discarded.add(download.guid);
       rmSync(join(this.staging, download.guid), { force: true });
-      conversation.events.push(`download ${download.id} was not kept`);
+      conversation.events.push(
+        unconfirmed
+          ? `download ${download.id} was not kept; the browser did not confirm it stopped (${unconfirmed}), so what it writes is deleted when it ends`
+          : `download ${download.id} was not kept`,
+      );
     }
   }
   /** The next site's held downloads to ask the person about, if any. */
@@ -1136,8 +1228,13 @@ export class ChromeBrowser implements BrowserPort {
     return tab.dialogs.some((dialog) => dialog.type !== 'auth');
   }
   /** The browser's own id for the element the page script marked with `token`. */
-  private async marked(tab: Tab, token: string): Promise<number> {
-    await this.send('DOM.getDocument', { depth: 0 }, tab.session);
+  private async marked(
+    tab: Tab,
+    token: string,
+    signal: AbortSignal,
+  ): Promise<number> {
+    const options = { signal };
+    await this.send('DOM.getDocument', { depth: 0 }, tab.session, options);
     const { searchId, resultCount } = await this.send<{
       searchId: string;
       resultCount: number;
@@ -1145,6 +1242,7 @@ export class ChromeBrowser implements BrowserPort {
       'DOM.performSearch',
       { query: `[data-circle-file="${token}"]` },
       tab.session,
+      options,
     );
     try {
       if (!resultCount) throw Error('the file input could not be found');
@@ -1152,11 +1250,13 @@ export class ChromeBrowser implements BrowserPort {
         'DOM.getSearchResults',
         { searchId, fromIndex: 0, toIndex: 1 },
         tab.session,
+        options,
       );
       const { node } = await this.send<{ node: { backendNodeId: number } }>(
         'DOM.describeNode',
         { nodeId: nodeIds[0] },
         tab.session,
+        options,
       );
       return node.backendNodeId;
     } finally {
@@ -1309,6 +1409,10 @@ export class ChromeBrowser implements BrowserPort {
     what = 'Runtime.evaluate',
   ): Promise<T> {
     if (tab.closed) throw Error('the tab closed');
+    if (tab.crashed)
+      throw Error(
+        `the page in tab ${tab.id} crashed; load it again with browser_navigate`,
+      );
     if (tab.dialogs.length) throw Error('the page is waiting on a dialog');
     // Callers ask a page no dialog holds; one it opens from here on ends the wait
     const dialog = this.dialogOpens(tab);
@@ -1401,8 +1505,14 @@ export class ChromeBrowser implements BrowserPort {
     // The tab is chosen in its window; a browser that does not show it then is asked to
     // bring the page itself to the front
     for (const front of [
-      () => this.send('Target.activateTarget', { targetId: tab.targetId }),
-      () => this.send('Page.bringToFront', {}, tab.session),
+      () =>
+        this.send(
+          'Target.activateTarget',
+          { targetId: tab.targetId },
+          undefined,
+          { signal, target: `tab ${tab.id}` },
+        ),
+      () => this.send('Page.bringToFront', {}, tab.session, { signal }),
     ]) {
       await front().catch(() => {});
       for (let tries = 0; tries < 10; tries++) {
@@ -1450,6 +1560,7 @@ export class ChromeBrowser implements BrowserPort {
           : { response: 'CancelAuth' },
       },
       tab.session,
+      { signal },
     ).catch((error: Error) => {
       throw Error(`the sign-in could not be answered: ${error.message}`);
     });
@@ -1548,7 +1659,9 @@ export class ChromeBrowser implements BrowserPort {
               errorText?: string;
               isDownload?: boolean;
               loaderId?: string;
-            }>('Page.navigate', { url }, tab.session),
+            }>('Page.navigate', { url }, tab.session, {
+              timeout: NAVIGATE_TIMEOUT,
+            }),
             dialog.opened.then(
               () =>
                 ({}) as {
@@ -1559,7 +1672,7 @@ export class ChromeBrowser implements BrowserPort {
             ),
           ]),
           signal,
-          30000,
+          NAVIGATE_TIMEOUT,
         );
         error = result.errorText ?? '';
         downloaded = result.isDownload === true;
@@ -1572,7 +1685,11 @@ export class ChromeBrowser implements BrowserPort {
         signal?.throwIfAborted();
         if (!tab.dialogs.length) {
           error = 'ERR_TIMED_OUT';
-          await this.send('Page.stopLoading', {}, tab.session).catch(() => {});
+          // Its own deadline: a page that did not answer the navigation may not answer this
+          await this.send('Page.stopLoading', {}, tab.session, {
+            signal,
+          }).catch(() => {});
+          signal?.throwIfAborted();
         }
       } finally {
         dialog.stop();
@@ -1701,12 +1818,12 @@ export class ChromeBrowser implements BrowserPort {
         await this.load(tab, target, signal);
         return;
       }
-      await this.send('Page.reload', {}, tab.session);
+      await this.send('Page.reload', {}, tab.session, { signal });
     } else {
       const { currentIndex, entries } = await this.send<{
         currentIndex: number;
         entries: { id: number }[];
-      }>('Page.getNavigationHistory', {}, tab.session);
+      }>('Page.getNavigationHistory', {}, tab.session, { signal });
       const entry = entries[currentIndex + (which === 'back' ? -1 : 1)];
       if (!entry)
         throw Error(which === 'back' ? 'no previous page' : 'no next page');
@@ -1714,6 +1831,7 @@ export class ChromeBrowser implements BrowserPort {
         'Page.navigateToHistoryEntry',
         { entryId: entry.id },
         tab.session,
+        { signal },
       );
     }
     tab.lastNetwork = Date.now();
@@ -1939,11 +2057,21 @@ export class ChromeBrowser implements BrowserPort {
         if (!tab) throw Error(`no tab ${String(args.tab)}; see the Tabs list`);
         if (which === 'select') {
           conversation.active = tab.id;
-          await this.send('Target.activateTarget', { targetId: tab.targetId });
+          await this.send(
+            'Target.activateTarget',
+            { targetId: tab.targetId },
+            undefined,
+            { signal, target: `tab ${tab.id}` },
+          );
           text = `Showing tab ${tab.id}.`;
         } else {
           this.drop(tab);
-          await this.send('Target.closeTarget', { targetId: tab.targetId });
+          await this.send(
+            'Target.closeTarget',
+            { targetId: tab.targetId },
+            undefined,
+            { signal, target: `tab ${tab.id}` },
+          );
           text = `Closed tab ${tab.id}.`;
         }
       } else if (which !== 'list') throw Error('invalid browser tab action');
@@ -1964,7 +2092,9 @@ export class ChromeBrowser implements BrowserPort {
           'plan mode does not hand the browser over: plan from what the page shows, and say what the user will do there',
         );
       // The window comes to the front for the person, who has it until they hand it back
-      await this.send('Page.bringToFront', {}, tab.session).catch(() => {});
+      await this.send('Page.bringToFront', {}, tab.session, { signal }).catch(
+        () => {},
+      );
       // A sign-in waiting for the model is the browser's own dialog for them
       for (const owner of conversation.tabs.values())
         for (const dialog of owner.dialogs.filter(
@@ -2261,7 +2391,7 @@ export class ChromeBrowser implements BrowserPort {
       >(tab, 'file-input', { ref: args.ref, token }, signal);
       let backendNodeId: number;
       try {
-        backendNodeId = await this.marked(tab, token);
+        backendNodeId = await this.marked(tab, token, signal);
       } finally {
         await this.js(tab, 'file-input', { ref: args.ref }).catch(() => {});
       }
@@ -2308,6 +2438,7 @@ export class ChromeBrowser implements BrowserPort {
         'DOM.setFileInputFiles',
         { files: [], backendNodeId: target.backendNodeId },
         tab.session,
+        { signal },
       );
       return {
         text: await this.result(
@@ -2351,6 +2482,7 @@ export class ChromeBrowser implements BrowserPort {
         backendNodeId: target.backendNodeId,
       },
       tab.session,
+      { signal },
     );
     if (!target.which) tab.chooser = undefined;
     tab.lastNetwork = Date.now();

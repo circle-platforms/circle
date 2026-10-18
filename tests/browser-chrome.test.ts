@@ -317,6 +317,7 @@ function browserProtocolTrace(chrome: ChromeBrowser) {
       method: string,
       params?: Record<string, unknown>,
       session?: string,
+      options?: Record<string, unknown>,
     ) => Promise<any>;
   };
   const started = Date.now();
@@ -329,7 +330,7 @@ function browserProtocolTrace(chrome: ChromeBrowser) {
     if (records.length > 160) records.shift();
   };
   const send = internal.send.bind(chrome);
-  internal.send = (method, params = {}, session) => {
+  internal.send = (method, params = {}, session, options) => {
     if (internal.cdp && internal.cdp !== watched) {
       watched = internal.cdp;
       watched.on((event) => {
@@ -394,7 +395,7 @@ function browserProtocolTrace(chrome: ChromeBrowser) {
     add({ kind: 'request', ...request });
     if (method === 'Page.enable')
       void send('Animation.enable', {}, session).catch(() => {});
-    return send(method, params, session).then(
+    return send(method, params, session, options).then(
       (value) => {
         pending.delete(id);
         add({
@@ -2225,6 +2226,7 @@ test(
         method: string,
         params?: Record<string, unknown>,
         session?: string,
+        options?: Record<string, unknown>,
       ) => Promise<any>;
       limit: (
         promise: Promise<unknown>,
@@ -2259,7 +2261,7 @@ test(
       let seen = 0;
       let staged = false;
       // The page opens its dialog, and then Circle's request reaches it
-      internal.send = async (name, params = {}, session) => {
+      internal.send = async (name, params = {}, session, options) => {
         if (
           !staged &&
           name === method &&
@@ -2287,7 +2289,7 @@ test(
           );
           await opened;
         }
-        return send(name, params, session);
+        return send(name, params, session, options);
       };
       internal.limit = (promise, abort, _ms, what) =>
         limit(promise, abort, 2 ** 31 - 1, what);
