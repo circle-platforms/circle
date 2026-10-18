@@ -32,6 +32,7 @@ import type {
   CommandLaunchRequest,
 } from '../src/command_process.js';
 import { cleanup, scratch } from './helpers.js';
+import { signalProcessGroup } from '../src/process_group.js';
 
 const exec = promisify(execFile);
 function deferred<T>() {
@@ -182,9 +183,10 @@ function pipeLauncher(
             if (!shellClosed && child.pid)
               await exec('taskkill', ['/PID', String(child.pid), '/T', '/F']);
           } else if (child.pid && groupAlive(child.pid)) {
-            process.kill(-child.pid, 'SIGTERM');
+            await signalProcessGroup(child.pid, 'SIGTERM');
             await delay(30);
-            if (groupAlive(child.pid)) process.kill(-child.pid, 'SIGKILL');
+            if (groupAlive(child.pid))
+              await signalProcessGroup(child.pid, 'SIGKILL');
           }
           await settled;
           observed('stop-resolved');
