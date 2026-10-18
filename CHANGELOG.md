@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **A secret you enter is no longer thrown away as `no value was entered before the deadline`.** When the machine was slow, a value could be accepted, so the question card closed, and then refused because the waiting side looked at it only after its time was up. A value entered in time is now always used, and one entered too late is refused when you enter it. Waiting for the answer also no longer competes with entering it.
+
 ## 1.8.1 - 2026-10-18
 
 ### Fixed

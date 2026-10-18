@@ -11,6 +11,7 @@ import {
   writeSync,
   fsyncSync,
   closeSync,
+  statSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -56,6 +57,21 @@ const answerPath = (home: string, id: string): string => {
   validId(id);
   return join(requestsDir(home), id + '.answer');
 };
+// When the waiting side stops taking answers, in milliseconds since the epoch. An answer is
+// taken only if it was written before then, so the side that enters a value is never told it
+// arrived when the waiting side then throws it away.
+const deadlinePath = (home: string, id: string): string => {
+  validId(id);
+  return join(requestsDir(home), id + '.deadline');
+};
+function answerDeadline(home: string, id: string): number | undefined {
+  try {
+    const value = Number(readFileSync(deadlinePath(home, id), 'utf8'));
+    return Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
 async function locked<T>(home: string, operation: () => T): Promise<T> {
   const directory = requestsDir(home);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -189,6 +205,13 @@ export async function submitAnswer(
       privateMode(temporary);
       if (!existsSync(requestPath(home, id)))
         throw new SecretPromptError('the request is gone');
+      // Checked after the value is written, so an answer published here is older than the
+      // deadline by its own time stamp too.
+      const deadline = answerDeadline(home, id);
+      if (deadline !== undefined && Date.now() >= deadline)
+        throw new SecretPromptError(
+          'the request is gone (it timed out or was cancelled)',
+        );
       renameSync(temporary, path);
       privateMode(path);
       if (!existsSync(requestPath(home, id))) {
@@ -205,6 +228,8 @@ export async function cancelRequest(home: string, id: string): Promise<void> {
     shred(answerPath(home, id));
     const path = requestPath(home, id);
     if (existsSync(path)) unlinkSync(path);
+    const deadline = deadlinePath(home, id);
+    if (existsSync(deadline)) unlinkSync(deadline);
   });
 }
 export async function pollAnswer(
@@ -215,42 +240,67 @@ export async function pollAnswer(
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   try {
-    while (Date.now() < deadline) {
+    // Recorded before the first wait, without the lock, so that a value entered from now on
+    // is refused once the time is up rather than accepted and then thrown away.
+    mkdirSync(requestsDir(home), { recursive: true, mode: 0o700 });
+    const recorded = deadlinePath(home, id);
+    const temporary = recorded + '.' + randomUUID() + '.tmp';
+    try {
+      writeFileSync(temporary, String(deadline), { mode: 0o600, flag: 'wx' });
+      renameSync(temporary, recorded);
+    } finally {
+      if (existsSync(temporary)) unlinkSync(temporary);
+    }
+    for (;;) {
       signal.throwIfAborted();
-      const answer = await locked(home, () => {
-        signal.throwIfAborted();
-        if (Date.now() >= deadline)
-          throw new SecretPromptTimeout(
-            'no value was entered before the deadline',
-          );
-        const path = answerPath(home, id);
-        if (existsSync(path)) {
-          let bytes: Buffer;
-          try {
-            bytes = readFileSync(path);
-          } finally {
-            shred(path);
-            const request = requestPath(home, id);
-            if (existsSync(request)) unlinkSync(request);
+      // Take the lock only when there is something to decide, so waiting does not hold off
+      // the side that enters the value. The last look is always after the deadline: an
+      // answer written while this side slept or waited for the lock is not lost.
+      if (
+        Date.now() >= deadline ||
+        existsSync(answerPath(home, id)) ||
+        !existsSync(requestPath(home, id))
+      ) {
+        const answer = await locked(home, () => {
+          signal.throwIfAborted();
+          const path = answerPath(home, id);
+          if (existsSync(path)) {
+            let bytes: Buffer | undefined;
+            try {
+              if (statSync(path).mtimeMs < deadline) bytes = readFileSync(path);
+            } finally {
+              shred(path);
+              const request = requestPath(home, id);
+              if (existsSync(request)) unlinkSync(request);
+            }
+            if (!bytes)
+              throw new SecretPromptTimeout(
+                'no value was entered before the deadline',
+              );
+            if (!bytes.byteLength || bytes.byteLength > 4096)
+              throw new SecretPromptError(
+                'the answer file was empty or too long',
+              );
+            return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
           }
-          if (!bytes.byteLength || bytes.byteLength > 4096)
-            throw new SecretPromptError(
-              'the answer file was empty or too long',
+          if (!existsSync(requestPath(home, id)))
+            throw new SecretPromptError('the request was cancelled');
+          if (Date.now() >= deadline)
+            throw new SecretPromptTimeout(
+              'no value was entered before the deadline; ask again if it is still needed',
             );
-          return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-        }
-        if (!existsSync(requestPath(home, id)))
-          throw new SecretPromptError('the request was cancelled');
-        return undefined;
-      });
-      if (answer !== undefined) return answer;
+          return undefined;
+        });
+        if (answer !== undefined) return answer;
+      }
+      // A stop says why, as it does while the lock is held.
       await delay(Math.min(50, Math.max(1, deadline - Date.now())), undefined, {
         signal,
+      }).catch((error: unknown) => {
+        signal.throwIfAborted();
+        throw error;
       });
     }
-    throw new SecretPromptTimeout(
-      'no value was entered before the deadline; ask again if it is still needed',
-    );
   } finally {
     await cancelRequest(home, id);
   }
