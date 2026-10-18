@@ -38,6 +38,11 @@ export interface FakeBrowser {
   ): void;
   /** The browser's protocol pipe ends, as when it crashes; the process is killed too. */
   crash(): void;
+  /**
+   * The browser ends by itself, in the order a real one is seen to: its protocol pipe
+   * closes first, then it writes its last words and exits with `code`.
+   */
+  end(lastWords: string, code: number): void;
   child(): ChildProcess;
   /** The commands the pipe still waits on. */
   pending(): { method: string; target: string }[];
@@ -160,6 +165,10 @@ export function fakeBrowser(
       output?.destroy();
       child?.kill('SIGKILL');
     },
+    end(lastWords, code) {
+      output?.destroy();
+      child?.send({ end: { lastWords, code } }, () => {});
+    },
     child: () => {
       assert(child, 'the fake browser was not started');
       return child;
@@ -189,7 +198,7 @@ export function fakeBrowser(
         process.execPath,
         [
           '-e',
-          "process.on('message', (m) => { if (m.exit) process.exit(0); }); setInterval(() => {}, 1000);",
+          "process.on('message', (m) => { if (m.exit) process.exit(0); if (m.end) process.stderr.write(m.end.lastWords + '\\n', () => process.exit(m.end.code)); }); setInterval(() => {}, 1000);",
         ],
         { ...spawnOptions, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] },
       );

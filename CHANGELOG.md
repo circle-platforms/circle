@@ -10,7 +10,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Fixed
 
-
+- **On Windows, closing the terminal browser no longer says it did not stop when it was still ending.** After Windows accepted the browser's termination, Circle waited 3 seconds for it to end and then said `the browser process did not stop; retry closing the session`, and deleting the session failed; on a busy machine the browser ended seconds later. Circle now waits up to 20 seconds for a browser whose termination Windows accepted, and still reports one that does not end.
+- **A browser that ends while it starts is reported by how it ended.** The action's error said only `exitCode=unknown; signal=unknown`, and Circle stopped the browser before its exit and its last words arrived. It now waits up to a second for them and names the exit code or signal and what the browser wrote, and does not signal a browser that had already ended.
 
 ## 1.8.1 - 2026-10-18
 
