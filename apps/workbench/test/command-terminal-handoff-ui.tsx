@@ -20,6 +20,8 @@ stream.onmessage = (event) => {
 const host = {
   setTheme: async () => {},
   setLanguage: async () => {},
+  // Device consoles: none in this fixture.
+  onTerminalEvent: () => () => {},
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   browserState: async () => ({ sessionId: 'none' }),

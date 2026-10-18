@@ -24,6 +24,8 @@ stream.onmessage = (event) => {
   for (const receive of listeners) receive(JSON.parse(event.data));
 };
 (window as any).circleDesktop = {
+  // Device consoles: none in this fixture.
+  onTerminalEvent: () => () => {},
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   setTheme: async () => {},

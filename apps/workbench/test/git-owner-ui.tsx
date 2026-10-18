@@ -48,6 +48,8 @@ let update: any = { seq: 0, connected: true, snapshot };
 let listener: any;
 const host = {
   setTheme: async () => {},
+  // Device consoles: none in this fixture.
+  onTerminalEvent: () => () => {},
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   browserState: async () => ({ tabs: [], dialogs: [], downloads: [] }),
