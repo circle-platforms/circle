@@ -26,6 +26,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Fixed
 
+- **Text fields in the desktop keep the system's editing keys** (#155). On macOS ⌘ no longer stands for Control: ⌘C copies instead of clearing the draft, ⌘V pastes, and ⌘D, ⌘T, ⌘O, ⌘G, ⌘R and ⌘Q no longer ask to close the session or run one of Circle's actions. The terminal's keys are the Control key there, as in the terminal; the window's own commands (⌘K, ⌘P, ⌘N, ⌘O, ⌘,, ⌘B, ⌘F, ⇧⌘M) keep ⌘. On every system ctrl+d over a draft deletes forward instead of asking to close, and Circle's keys other than `esc` no longer act from another text field, such as a rename box or a settings field. A right-click in a text field now offers Cut, Copy, Paste and Select All, and Copy on selected text, in the window's language. See [Keys and text fields](docs/desktop.md#keys-and-text-fields).
 - **The desktop browser page stays with its panel.** Opening a page and then switching the inspector to tasks or Git, closing the inspector, or opening a dialog or menu no longer leaves the page drawn over the conversation. The page hides with its tab and follows the panel when the window resizes or the panel goes to full view.
 - **Inspect opens Chromium's developer tools in their own window.** Choosing **Inspect** on the page used to dock the tools inside the page. They now open detached, as F12 does, and the same control closes them.
 - **The first Enter in the address bar opens the page.** It used to close the browser panel instead, until the address bar had been clicked once.

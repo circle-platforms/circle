@@ -321,10 +321,10 @@ test('custom key preferences validate actions and resolve aliases', () => {
     ),
     undefined,
   );
-  assert.equal(KEY_ACTIONS['sidebar.toggle'], 'ctrl+b');
+  assert.equal(KEY_ACTIONS['sidebar.toggle'], 'mod+b');
   assert.equal(KEY_ACTIONS['secret.enter'], 'ctrl+alt+s');
   assert.equal(KEY_ACTIONS['message.copy'], 'alt+c');
-  assert.equal(KEY_ACTIONS['model.select'], 'ctrl+shift+m');
+  assert.equal(KEY_ACTIONS['model.select'], 'mod+shift+m');
   assert.equal(KEY_ACTIONS['model.cycle'], 'alt+m');
   assert.equal(KEY_ACTIONS['job.background'], 'alt+b');
   assert.equal(

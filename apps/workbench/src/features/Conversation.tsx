@@ -1422,6 +1422,8 @@ export function Conversation({
                   }
                   return;
                 }
+                // ⌘↑ ⌘↓ (and ctrl with an arrow) move the cursor as the system does.
+                if (event.metaKey || event.ctrlKey) return;
                 if (
                   event.key === 'ArrowUp' &&
                   event.currentTarget.selectionStart === 0
