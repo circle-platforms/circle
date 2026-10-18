@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import {
@@ -135,6 +136,11 @@ export function PanelButtons({
   const current = panel === 'terminal' ? 'terminal' : active;
   const toggle = (id: PanelId) =>
     open && current === id ? onClose() : onPanel(id);
+  // The click that opens a panel must not leave that button focused. The next
+  // Enter (the address bar's) would otherwise activate it and close the panel.
+  const blurAfterPress = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button === 0) event.currentTarget.blur();
+  };
   return (
     <>
       <IconButton
@@ -142,6 +148,7 @@ export function PanelButtons({
         aria-pressed={open && current === 'terminal'}
         className={`icon-button ${open && current === 'terminal' ? 'active' : ''}`}
         onClick={() => toggle('terminal')}
+        onPointerUp={blurAfterPress}
       >
         <Terminal size={16} />
       </IconButton>
@@ -152,6 +159,7 @@ export function PanelButtons({
           aria-pressed={open && current === item.id}
           className={`icon-button ${open && current === item.id ? 'active' : ''}`}
           onClick={() => toggle(item.id)}
+          onPointerUp={blurAfterPress}
         >
           <item.icon size={16} />
         </IconButton>
@@ -161,6 +169,7 @@ export function PanelButtons({
         aria-pressed={open && current === 'context'}
         className={`icon-button ${open && current === 'context' ? 'active' : ''}`}
         onClick={() => toggle('context')}
+        onPointerUp={blurAfterPress}
       >
         <Layers size={16} />
       </IconButton>

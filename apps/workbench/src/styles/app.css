@@ -3390,72 +3390,40 @@ pre {
   flex-direction: column;
   min-height: 100%;
 }
-.native-browser-viewport {
-  position: relative;
-  /* Fills the panel under the bars, so nothing is left blank below the footer */
-  flex: 1 0 320px;
-  margin: 12px -5px 0;
+.native-browser-frame {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
-  overflow: hidden;
 }
-.native-browser-footer {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: var(--ui-tiny);
-  /* One height for every state ("take over" is a button), so the page never resizes. */
-  height: 28px;
-  margin: 10px 0;
-  color: var(--muted);
+.native-browser-frame.driving {
+  border-width: 4px;
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
 }
-.native-browser-footer code {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: var(--ui-tiny);
-}
-.native-browser-footer > .status {
-  flex: none;
-}
-.native-browser-footer > .browser-page-title {
-  flex: 1;
+.native-browser-viewport {
+  position: relative;
+  /* Fills the frame under the bars. The frame's border stays outside this box,
+     which is where the native page is drawn. */
+  flex: 1 1 auto;
   min-width: 0;
-  white-space: nowrap;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
   overflow: hidden;
-  text-overflow: ellipsis;
 }
-.native-browser-footer > .status + .browser-page-title::before {
-  content: '·';
-  margin-right: 7px;
-}
-.browser-insecure,
-.browser-operating {
+.browser-insecure {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-}
-.browser-insecure {
   color: var(--attention);
   font-size: var(--ui-tiny);
-}
-.browser-operating {
-  color: var(--accent);
-}
-.browser-operation-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: browser-operation-pulse 1.6s ease-in-out infinite;
-}
-@keyframes browser-operation-pulse {
-  50% {
-    opacity: 0.4;
-  }
 }
 .browser-error-page {
   position: absolute;
@@ -5268,9 +5236,4 @@ pre {
 }
 .browser-control small {
   color: var(--secondary);
-}
-.browser-operating .button {
-  margin-left: 6px;
-  padding: 2px 8px;
-  font-size: var(--ui-tiny);
 }

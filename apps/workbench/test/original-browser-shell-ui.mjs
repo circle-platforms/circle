@@ -61,6 +61,11 @@ try {
         ];
         for (const listener of listeners) listener({ ...state });
       },
+      drive: (driving) => {
+        state.operating = driving;
+        state.control = driving ? 'agent' : 'shared';
+        for (const listener of listeners) listener({ ...state });
+      },
     };
     window.circleDesktop = new Proxy(
       {
@@ -208,7 +213,7 @@ try {
                 '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])',
                 '.native-browser',
                 '.native-browser-viewport',
-                '.native-browser-footer',
+                '.native-browser-frame',
                 '.browser-diagnostics',
               ];
               return selectors.map((selector) => {
@@ -239,9 +244,13 @@ try {
                 out +
                 `/${language}-${theme}-${width}-${height}-${expanded ? 'expanded' : 'closed'}.png`,
             });
-            const [body, wrapper, native, viewport, footer, docked] = geometry;
+            const [body, wrapper, native, viewport, frame, docked] = geometry;
             assert.equal(docked.missing, true);
-            const diagnostics = footer;
+            assert.equal(
+              await page.locator('.native-browser-footer').count(),
+              0,
+              'the status line under the page is gone',
+            );
             assert.equal(
               body.paddingBottom,
               0,
@@ -257,25 +266,91 @@ try {
               'native browser fills its bounded parent',
             );
             assert(
-              Math.abs(diagnostics.bottom - native.bottom) <= 1,
-              'diagnostics end at bounded browser bottom',
+              Math.abs(frame.bottom - native.bottom) <= 1,
+              'the page frame ends at the browser bottom',
             );
+            assert(
+              viewport.top >= frame.top && viewport.bottom <= frame.bottom + 1,
+              'the page sits inside its frame',
+            );
+            const ring = await page.evaluate(() => {
+              const node = document.querySelector('.native-browser-frame');
+              const style = getComputedStyle(node);
+              return {
+                driving: node.classList.contains('driving'),
+                border: style.borderTopWidth,
+                label: node.getAttribute('aria-label'),
+              };
+            });
+            assert.equal(ring.driving, false);
+            assert.equal(ring.border, '1px');
+            assert.equal(ring.label, null);
             assert(
               viewport.height >= 80,
               'guest retains usable actual viewport',
             );
-            assert(footer.bottom <= body.bottom, 'page footer remains visible');
+            assert(frame.bottom <= body.bottom, 'the page frame stays visible');
             assert(
-              diagnostics.bottom <= body.bottom,
-              'expanded diagnostics never overflow inspector',
+              frame.bottom <= body.bottom,
+              'the page frame stays inside the inspector',
             );
             assert(
-              body.bottom - diagnostics.bottom <= 32,
+              body.bottom - frame.bottom <= 32,
               'do not weaken native blank-under-panel acceptance',
             );
             checks.push({ height, expanded, geometry });
           }
         }
+  // Circle driving the page is a ring, in both languages and both themes.
+  for (const language of ['en', 'zh-CN'])
+    for (const theme of ['dark', 'light']) {
+      await page.setViewportSize({ width: 1400, height: 684 });
+      await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
+      await page.locator('.workbench').waitFor();
+      await page.evaluate(
+        async ({ language, theme }) => {
+          (await import('/src/i18n/index.ts')).setLanguage(language);
+          (await import('/src/theme.ts')).applyTheme(theme);
+          window.__browserCaptureFixture.drive(true);
+        },
+        { language, theme },
+      );
+      const toggle = page.getByRole('button', {
+        name: language === 'en' ? 'browser panel' : '浏览器面板',
+        exact: true,
+      });
+      if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+        await toggle.click();
+      await page.evaluate(() => window.__browserCaptureFixture.drive(true));
+      const frame = page.getByTestId('browser-operating');
+      await frame.waitFor();
+      const expected =
+        language === 'en' ? 'Circle is operating' : 'Circle 正在操作';
+      assert.equal(await frame.getAttribute('aria-label'), expected);
+      assert.equal(await frame.getAttribute('title'), expected);
+      const ring = await frame.evaluate((node) => {
+        const view = document
+          .querySelector('.native-browser-viewport')
+          .getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        return {
+          driving: node.classList.contains('driving'),
+          border: getComputedStyle(node).borderTopWidth,
+          inset: view.top - box.top,
+        };
+      });
+      assert.equal(ring.driving, true);
+      assert.equal(ring.border, '4px');
+      assert(
+        ring.inset >= 3,
+        'the page covers the driving ring: ' + JSON.stringify(ring),
+      );
+      await page.mouse.move(0, 0);
+      await page.screenshot({
+        animations: 'disabled',
+        path: out + `/${language}-${theme}-1400-684-driving.png`,
+      });
+    }
   await page.setViewportSize({ width: 1400, height: 970 });
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   await page.evaluate(async () =>

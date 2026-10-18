@@ -132,7 +132,7 @@ try {
                 '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])',
                 '.native-browser',
                 '.native-browser-viewport',
-                '.native-browser-footer',
+                '.native-browser-frame',
                 '.browser-diagnostics',
               ];
               return selectors.map((selector) => {
@@ -246,8 +246,12 @@ try {
                 out +
                 `/${platform}-${width}-${height}-${mode}-${expanded ? 'expanded' : 'closed'}.png`,
             });
-            const [body, wrapper, native, viewport, footer, docked] = geometry;
+            const [body, wrapper, native, viewport, frame, docked] = geometry;
             assert.equal(docked.missing, true);
+            assert.equal(
+              await page.locator('.native-browser-footer').count(),
+              0,
+            );
             assert.equal(
               body.paddingBottom,
               0,
@@ -263,20 +267,24 @@ try {
               'native browser fills its bounded parent',
             );
             assert(
-              Math.abs(footer.bottom - native.bottom) <= 1,
-              'the page status ends at the browser bottom',
+              Math.abs(frame.bottom - native.bottom) <= 1,
+              'the page frame ends at the browser bottom',
+            );
+            assert(
+              viewport.top >= frame.top && viewport.bottom <= frame.bottom + 1,
+              'the page sits inside its frame',
             );
             assert(
               viewport.height >= 80,
               'guest retains usable actual viewport',
             );
-            assert(footer.bottom <= body.bottom, 'page footer remains visible');
+            assert(frame.bottom <= body.bottom, 'the page frame stays visible');
             assert(
-              footer.bottom <= body.bottom,
-              'the page status stays inside the inspector',
+              frame.bottom <= body.bottom,
+              'the page frame stays inside the inspector',
             );
             assert(
-              body.bottom - footer.bottom <= 32,
+              body.bottom - frame.bottom <= 32,
               'do not weaken native blank-under-panel acceptance',
             );
             checks.push({

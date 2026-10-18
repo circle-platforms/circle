@@ -632,7 +632,8 @@ export class BrowserSessions {
   }
   /**
    * Open or close Chromium's own developer tools, as Chrome's F12 does. Inspect
-   * opens them on the element under the pointer.
+   * opens them on the element under the pointer. They are always a separate
+   * window: `inspectElement` on its own docks into the page.
    */
   private chromiumDevTools(
     conversation: Conversation,
@@ -641,7 +642,8 @@ export class BrowserSessions {
   ) {
     if (tab.closed || tab.contents.isDestroyed()) return;
     const contents = tab.contents;
-    if (!point && contents.isDevToolsOpened()) {
+    // The same control again closes them, as F12 does.
+    if (contents.isDevToolsOpened()) {
       contents.closeDevTools();
       return;
     }
@@ -649,9 +651,23 @@ export class BrowserSessions {
     tab.screenshot = undefined;
     if (conversation.control === 'shared' || conversation.control === 'agent')
       this.control(conversation.id, 'take');
-    if (point)
-      contents.inspectElement(Math.round(point.x), Math.round(point.y));
-    else contents.openDevTools({ mode: 'detach', activate: true });
+    if (point) {
+      // Opening with detach is not settled on the same turn as the event.
+      // Inspecting before that docks the tools into the page, and opening
+      // them again while they are open does not undock them.
+      contents.once('devtools-opened', () => {
+        setTimeout(() => {
+          if (
+            tab.closed ||
+            contents.isDestroyed() ||
+            !contents.isDevToolsOpened()
+          )
+            return;
+          contents.inspectElement(Math.round(point.x), Math.round(point.y));
+        }, 80);
+      });
+    }
+    contents.openDevTools({ mode: 'detach', activate: true });
     this.publish(conversation.id);
   }
   private createTab(

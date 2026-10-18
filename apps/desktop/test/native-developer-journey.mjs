@@ -1138,7 +1138,9 @@ try {
       await page
         .getByRole('textbox', { name: 'browser address', exact: true })
         .press('Enter');
-      await page.getByText('native browser', { exact: true }).waitFor();
+      await page
+        .getByRole('button', { name: 'browser menu', exact: true })
+        .waitFor();
       assert.equal(await page.locator('.browser-diagnostics').count(), 0);
       const devToolsOpen = () =>
         app.evaluate(
@@ -1199,10 +1201,8 @@ try {
       await page
         .getByRole('button', { name: 'activity panel', exact: true })
         .click();
-      await page.getByRole('tab', { name: 'debug', exact: true }).click();
-      await hide('the page hides on the debug tab');
       await page.getByRole('tab', { name: 'tasks', exact: true }).click();
-      await hide('the page stays hidden on the tasks tab');
+      await hide('the page hides on the tasks tab');
       await page
         .getByRole('button', { name: 'changes panel', exact: true })
         .click();

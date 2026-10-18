@@ -714,8 +714,7 @@ try {
       'a passed certificate warning leaves no dead page in the tab history',
     );
     // The page fills the panel, also in a window as tall as the screen allows, where a
-    // page of fixed height left a gap: below the footer there is only the panel's own
-    // padding (20) and the footer's margin (10)
+    // page of fixed height left a gap under the frame.
     const blankBelow = async (height) => {
       await setViewport(app, page, { width, height });
       // The screen may hold less than asked: wait until the window has settled
@@ -738,7 +737,7 @@ try {
         return {
           height: innerHeight,
           footerGap:
-            bottom('.inspector-body') - bottom('.native-browser-footer'),
+            bottom('.inspector-body') - bottom('.native-browser-frame'),
           blank: bottom('.inspector-body') - contentBottom,
           contentBottom,
           containerBottom: bottom('.inspector-body'),
@@ -1084,14 +1083,9 @@ try {
     await page
       .getByRole('button', { name: 'activity panel', exact: true })
       .click();
-    await page.getByRole('tab', { name: 'debug', exact: true }).click();
-    await waitViews(
-      (views) => views.length > 0 && views.every((view) => !view.visible),
-      'the page stays painted on the debug tab',
-    );
     await page.getByRole('tab', { name: 'tasks', exact: true }).click();
     await waitViews(
-      (views) => views.every((view) => !view.visible),
+      (views) => views.length > 0 && views.every((view) => !view.visible),
       'the page stays painted on the tasks tab',
     );
     await page
@@ -1312,6 +1306,73 @@ try {
       /When you are done, continue here or send a message/,
     );
     await page.getByTestId('browser-user').waitFor();
+    const controlRing = () =>
+      page.evaluate(() => {
+        const node = document.querySelector('.native-browser-frame');
+        if (!node) return null;
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        const view = document
+          .querySelector('.native-browser-viewport')
+          ?.getBoundingClientRect();
+        return {
+          driving: node.classList.contains('driving'),
+          label: node.getAttribute('aria-label'),
+          title: node.getAttribute('title'),
+          border: style.borderTopWidth,
+          color: style.borderTopColor,
+          footer: !!document.querySelector('.native-browser-footer'),
+          frame: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+          view: view
+            ? { x: view.x, y: view.y, w: view.width, h: view.height }
+            : null,
+        };
+      });
+    const ringHoldsPage = (ring) => {
+      assert(ring?.view, 'the page box is missing');
+      const border = Number.parseFloat(ring.border);
+      const { frame, view } = ring;
+      assert(
+        view.x >= frame.x + border - 1 &&
+          view.y >= frame.y + border - 1 &&
+          view.x + view.w <= frame.x + frame.w - border + 1.5 &&
+          view.y + view.h <= frame.y + frame.h - border + 1.5,
+        'the page covers the control ring: ' + JSON.stringify(ring),
+      );
+    };
+    const nativePageBox = () =>
+      app.evaluate(({ BrowserWindow }) => {
+        const view = BrowserWindow.getAllWindows()[0].contentView.children.find(
+          (entry) =>
+            entry.getVisible() && entry.webContents.getURL().startsWith('http'),
+        );
+        return view ? view.getBounds() : null;
+      });
+    const yours = await controlRing();
+    assert.equal(
+      yours.footer,
+      false,
+      'the status line is still under the page',
+    );
+    assert.equal(yours.driving, false);
+    assert.equal(yours.label, 'you have the browser');
+    assert.equal(yours.title, 'you have the browser');
+    // Electron reports a CSS pixel as a fraction of a device pixel.
+    assert.ok(
+      Math.abs(Number.parseFloat(yours.border) - 1) < 0.2,
+      'ordinary ring is ' + yours.border,
+    );
+    ringHoldsPage(yours);
+    const yoursNative = await nativePageBox();
+    assert(
+      yoursNative &&
+        yoursNative.x >= Math.round(yours.frame.x) &&
+        yoursNative.y >= Math.round(yours.frame.y),
+      'the native page covers the frame: ' + JSON.stringify(yoursNative),
+    );
+    await page.screenshot({
+      path: join(output, 'browser-control-yours.png'),
+    });
     assert.equal(await page.getByTestId('browser-control').count(), 0);
     assert.equal(
       await page
@@ -1346,6 +1407,34 @@ try {
     assert.equal((await browserState(sessionId)).control, 'shared');
     await send('open the slow page');
     await page.getByTestId('browser-operating').waitFor();
+    const driving = await controlRing();
+    assert.equal(driving.driving, true);
+    assert.equal(driving.label, 'Circle is operating');
+    assert.equal(driving.title, 'Circle is operating');
+    // Device pixels snap a CSS border, so the used width is not the literal 4px.
+    assert.ok(
+      Number.parseFloat(driving.border) >
+        Number.parseFloat(yours.border) + 1,
+      'driving ring is ' + driving.border,
+    );
+    assert.notEqual(driving.color, yours.color);
+    ringHoldsPage(driving);
+    const drivingNative = await nativePageBox();
+    const inset = Number.parseFloat(driving.border);
+    assert(
+      drivingNative &&
+        drivingNative.x >= Math.round(driving.frame.x + inset) - 1 &&
+        drivingNative.y >= Math.round(driving.frame.y + inset) - 1 &&
+        drivingNative.x + drivingNative.width <=
+          Math.round(driving.frame.x + driving.frame.w - inset) + 1 &&
+        drivingNative.y + drivingNative.height <=
+          Math.round(driving.frame.y + driving.frame.h - inset) + 1,
+      'the native page covers the driving ring: ' +
+        JSON.stringify({ drivingNative, frame: driving.frame }),
+    );
+    await page.screenshot({
+      path: join(output, 'browser-control-driving.png'),
+    });
     // A click on the clear layer over the page while Circle acts
     const masked = await app.evaluate(async ({ BrowserWindow }) => {
       const views = BrowserWindow.getAllWindows()[0].contentView.children;

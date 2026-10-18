@@ -13,7 +13,7 @@ const suites = [
   ['debug', 'debug-panel-embedded.mjs', 8],
   ['github', 'github-plugin-ui.mjs', 16],
   ['recovered inputs', 'recovered-input-ui.mjs', 16],
-  ['native browser panel', 'original-browser-shell-ui.mjs', 24],
+  ['native browser panel', 'original-browser-shell-ui.mjs', 28],
   ['file headers', 'file-source-heading-ui.mjs', 16],
 ];
 

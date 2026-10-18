@@ -49,7 +49,7 @@ import {
   browserShortcut,
   type BrowserKeyAction,
 } from '../../../desktop/src/browser-controls';
-import { Button, IconButton, Status } from '../components/common';
+import { Button, IconButton } from '../components/common';
 import { BrowserDialogPanel, CertificateChoicePanel } from './BrowserDialog';
 import { t } from '../i18n';
 
@@ -129,6 +129,7 @@ export function NativeBrowser({
   // tab has an address of its own
   const [navigating, setNavigating] = useState(0);
   const [findText, setFindText] = useState('');
+  const root = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const address = useRef<HTMLInputElement>(null);
   const findField = useRef<HTMLInputElement>(null);
@@ -459,11 +460,39 @@ export function NativeBrowser({
     run(action);
   };
   // The panel has the keyboard: the browser's shortcuts are its own, even those the
-  // system's menu would take
+  // system's menu would take. Focus moving inside the panel blurs one control and
+  // focuses the next; the keyboard stays the panel's across that.
   const keys = (focused: boolean) =>
     void Promise.resolve(host.browserPage?.(id, 'keys', focused)).catch(
       () => {},
     );
+  useEffect(() => {
+    const node = root.current;
+    if (!node) return;
+    let token = 0;
+    const onFocusIn = () => {
+      token += 1;
+      keys(true);
+    };
+    const onFocusOut = () => {
+      const mark = ++token;
+      queueMicrotask(() => {
+        if (mark !== token) return;
+        const active = document.activeElement;
+        keys(!!active && node.contains(active));
+      });
+    };
+    node.addEventListener('focusin', onFocusIn);
+    node.addEventListener('focusout', onFocusOut);
+    return () => {
+      token += 1;
+      node.removeEventListener('focusin', onFocusIn);
+      node.removeEventListener('focusout', onFocusOut);
+      keys(false);
+    };
+    // `keys` reads the latest host and id; the effect is the panel's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
   // A menu opens once the page's picture is in place, so the page never covers it
   const openMenu = (which: 'main' | 'zoom', open: boolean) => {
     if (!open) {
@@ -534,20 +563,24 @@ export function NativeBrowser({
     </div>
   );
   const pageReady = opened && !failure && !dialog;
+  // Who is driving is the ring around the page, not a line under it.
+  const modelDriving =
+    !!state?.operating ||
+    state?.control === 'agent' ||
+    state?.control === 'user_pending';
+  const controlLabel =
+    state?.control === 'user'
+      ? t('you have the browser')
+      : state?.control === 'user_pending'
+        ? t('Waiting for Circle to stop…')
+        : modelDriving
+          ? t('Circle is operating')
+          : undefined;
   const findCount =
     state?.find && state.find.text === findText ? state.find : undefined;
   return (
     // One column the height of the panel: the page takes what the bars leave
-    <div
-      className="native-browser"
-      onKeyDown={onKeys}
-      onFocus={() => keys(true)}
-      onBlur={(event) => {
-        const next = event.relatedTarget;
-        if (!(next instanceof Node) || !event.currentTarget.contains(next))
-          keys(false);
-      }}
-    >
+    <div ref={root} className="native-browser" onKeyDown={onKeys}>
       <div className="browser-tabs" role="tablist">
         {state?.tabs?.length ? (
           state.tabs.map((tab) => (
@@ -694,10 +727,19 @@ export function NativeBrowser({
                 selectOnMouseUp.current = false;
               }}
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
                 if (event.key === 'Enter') {
                   event.preventDefault();
-                  event.currentTarget.blur();
-                  void navigate(url);
+                  event.stopPropagation();
+                  const field = event.currentTarget;
+                  const typed = field.value;
+                  // Blurring while Enter is still down hands the keyboard back to
+                  // the panel button that opened the browser, and that button
+                  // closes the panel before the page loads.
+                  window.setTimeout(() => {
+                    if (document.activeElement === field) field.blur();
+                  }, 0);
+                  void navigate(typed);
                 } else if (event.key === 'Escape') {
                   // As in Chrome: the page's own address again, and the field let go
                   event.preventDefault();
@@ -849,6 +891,13 @@ export function NativeBrowser({
                 </DropdownMenu.Item>
               )}
               <DropdownMenu.Separator className="dropdown-separator" />
+              {state?.operating && (
+                <DropdownMenu.Item
+                  onSelect={() => void host.browserControl(id, 'take')}
+                >
+                  {t('take over')}
+                </DropdownMenu.Item>
+              )}
               <DropdownMenu.Item
                 disabled={!opened}
                 onSelect={() => void page('devtools')}
@@ -876,33 +925,49 @@ export function NativeBrowser({
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       </div>
-      <div className="native-browser-viewport" ref={viewport}>
-        {dialog ? (
-          <BrowserDialogPanel sessionId={id} dialog={dialog} />
-        ) : choice ? (
-          <CertificateChoicePanel sessionId={id} choice={choice} />
-        ) : failure ? (
-          <div
-            className="browser-error-page"
-            data-testid="browser-load-failure"
-          >
-            <Globe size={30} />
-            <h3>{t('cannot reach this site')}</h3>
-            <p>{failure.url}</p>
-            <code>{failure.error}</code>
-            <Button onClick={() => void navigate(failure.url)}>
-              {t('reload page')}
-            </Button>
-          </div>
-        ) : !opened ? (
-          <div className="browser-empty">
-            <Globe size={22} strokeWidth={1.5} />
-            <h3>{t('browse the web')}</h3>
-            <p>{t('type a URL to open a site.')}</p>
-          </div>
-        ) : frozen ? (
-          <img className="browser-frozen" src={frozen} alt="" />
-        ) : null}
+      <div
+        className={`native-browser-frame${modelDriving ? ' driving' : ''}`}
+        data-testid={
+          state?.control === 'user'
+            ? 'browser-user'
+            : state?.control === 'user_pending'
+              ? 'browser-pending'
+              : modelDriving
+                ? 'browser-operating'
+                : 'browser-frame'
+        }
+        role={controlLabel ? 'region' : undefined}
+        aria-label={controlLabel}
+        title={controlLabel}
+      >
+        <div className="native-browser-viewport" ref={viewport}>
+          {dialog ? (
+            <BrowserDialogPanel sessionId={id} dialog={dialog} />
+          ) : choice ? (
+            <CertificateChoicePanel sessionId={id} choice={choice} />
+          ) : failure ? (
+            <div
+              className="browser-error-page"
+              data-testid="browser-load-failure"
+            >
+              <Globe size={30} />
+              <h3>{t('cannot reach this site')}</h3>
+              <p>{failure.url}</p>
+              <code>{failure.error}</code>
+              <Button onClick={() => void navigate(failure.url)}>
+                {t('reload page')}
+              </Button>
+            </div>
+          ) : !opened ? (
+            <div className="browser-empty">
+              <Globe size={22} strokeWidth={1.5} />
+              <h3>{t('browse the web')}</h3>
+              <p>{t('type a URL to open a site.')}</p>
+            </div>
+          ) : frozen ? (
+            <img className="browser-frozen" src={frozen} alt="" />
+          ) : null}
+        </div>
       </div>
       {state?.chooser && (
         // A click of Circle's opened the page's file chooser: either of you can answer it
@@ -955,33 +1020,6 @@ export function NativeBrowser({
           </Button>
         </div>
       ))}
-      <div className="native-browser-footer">
-        {state?.control === 'user' ? (
-          // What Circle waits for is said in the conversation, where the person goes on
-          <span className="browser-operating" data-testid="browser-user">
-            {t('you have the browser')}
-          </span>
-        ) : state?.control === 'user_pending' ? (
-          <span className="browser-operating" data-testid="browser-pending">
-            {t('Waiting for Circle to stop…')}
-          </span>
-        ) : state?.operating ? (
-          <span className="browser-operating" data-testid="browser-operating">
-            <span className="browser-operation-dot" />
-            {t('Circle is operating')}
-            <Button onClick={() => void host.browserControl(id, 'take')}>
-              {t('take over')}
-            </Button>
-          </span>
-        ) : (
-          <Status value={opened ? 'native browser' : 'not opened'} />
-        )}
-        {state?.title ? (
-          <span className="browser-page-title" title={state.title}>
-            {state.title}
-          </span>
-        ) : null}
-      </div>
       {!!state?.downloads?.length && (
         <ul className="browser-downloads" data-testid="browser-downloads">
           {[...state.downloads].reverse().map((download) => (

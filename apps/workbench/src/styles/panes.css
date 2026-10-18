@@ -500,11 +500,29 @@
   object-position: left top;
   pointer-events: none;
 }
-.inspector .native-browser-viewport {
-  /* Shrink with the panel so the status row stays inside the page, including
-     full view, where the column can be shorter than the bars plus the page. */
+.inspector .native-browser-frame {
+  /* Shrink with the panel so the page stays inside it, including full view,
+     where the column can be shorter than the bars plus the page. The ring is
+     this frame: the native view is the child, so the ring stays outside it. */
+  display: flex;
   flex: 1 1 180px;
+  min-width: 0;
   min-height: 80px;
+  margin: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+/* Circle is driving the page: a clear ring, softened so it is not a neon edge. */
+.inspector .native-browser-frame.driving {
+  border-width: 4px;
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+}
+.inspector .native-browser-viewport {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   margin: 0;
   border: 0;
   border-radius: 0;
@@ -530,15 +548,6 @@
   font-size: var(--ui-small);
   line-height: 1.5;
 }
-.inspector .native-browser-footer {
-  margin: 0;
-  padding: 6px 10px;
-  border-top: 1px solid var(--border);
-}
-.inspector .native-browser-footer:empty {
-  display: none;
-}
-
 /* Files: a filter field and the tree under it. */
 .inspector .files-panel {
   display: flex;

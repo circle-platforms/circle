@@ -303,10 +303,30 @@ async function chromeControls() {
           ),
       siteUrl + '/chrome',
     );
-  // Inspect opens Chromium's own developer tools on the element
+  // Inspect opens Chromium's own developer tools on the element, in their own
+  // window. Docked tools sit inside the page; a second press closes them.
+  // A detached tools window is not one of the app's BrowserWindows. Docked
+  // tools instead take part of the page: its inner width shrinks.
+  const devToolsPlace = () =>
+    app.evaluate(async ({ BrowserWindow, webContents }, prefix) => {
+      const pageContents = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().startsWith(prefix));
+      if (!pageContents?.isDevToolsOpened()) return 'closed';
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (entry) => entry.webContents === pageContents,
+      );
+      const width = view?.getBounds().width ?? 0;
+      const inner = await pageContents.executeJavaScript('window.innerWidth');
+      return width > 0 && inner < width * 0.8 ? 'docked' : 'detached';
+    }, siteUrl + '/chrome');
   await rightClick('#blank');
   await choose('Inspect');
   await until(devToolsOpen, 'Inspect opens Chromium developer tools');
+  await until(
+    async () => (await devToolsPlace()) === 'detached',
+    'Inspect opens developer tools in their own window',
+  );
   assert.equal(await page.locator('.browser-diagnostics').count(), 0);
   await key('F12');
   await until(
@@ -393,6 +413,50 @@ async function chromeControls() {
     'the other developer-tools shortcut closes them',
   );
   assert.equal(await page.locator('.browser-diagnostics').count(), 0);
+  // The same shortcuts while the address bar has the keyboard, not the page.
+  // They belong to the window, so they are sent there as the page's keys are
+  // sent to the page.
+  const panelKey = (keyCode, modifiers = []) =>
+    app.evaluate(
+      ({ BrowserWindow }, events) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents;
+        for (const event of events) contents.sendInputEvent(event);
+      },
+      [
+        { type: 'keyDown', keyCode, modifiers },
+        { type: 'keyUp', keyCode, modifiers },
+      ],
+    );
+  await address.click();
+  await panelKey('F12');
+  await until(devToolsOpen, 'F12 from the address bar opens developer tools');
+  await until(
+    async () => (await devToolsPlace()) === 'detached',
+    'F12 from the address bar opens a separate window',
+  );
+  await panelKey('F12');
+  await until(
+    async () => !(await devToolsOpen()),
+    'F12 from the address bar closes developer tools',
+  );
+  await address.focus();
+  await panelKey('I', mac ? ['alt', 'meta'] : ['control', 'shift']);
+  await until(
+    devToolsOpen,
+    'the other shortcut from the address bar opens developer tools',
+  );
+  await until(
+    async () => (await devToolsPlace()) === 'detached',
+    'the other shortcut from the address bar opens a separate window',
+  );
+  await panelKey('I', mac ? ['alt', 'meta'] : ['control', 'shift']);
+  await until(
+    async () => !(await devToolsOpen()),
+    'the other shortcut from the address bar closes developer tools',
+  );
+  checks.push(
+    'developer tools open in their own window from the address bar, and the same key closes them',
+  );
   await key('L', [command]);
   await page.waitForFunction(
     () =>
@@ -704,13 +768,26 @@ try {
   await page
     .getByRole('button', { name: 'browser panel', exact: true })
     .click({ timeout: Math.max(1, panelDeadline - Date.now()) });
+  // The first address is typed without clicking the field. Enter must load the
+  // page and leave the panel open: blurring the field on keydown used to hand
+  // the key back to the panel button, which closed the panel.
+  const firstAddress = page.getByRole('textbox', {
+    name: 'browser address',
+    exact: true,
+  });
+  await firstAddress.focus();
+  await page.keyboard.type(siteUrl);
+  await page.keyboard.press('Enter');
   await page
-    .getByRole('textbox', { name: 'browser address', exact: true })
-    .fill(siteUrl);
-  await page
-    .getByRole('textbox', { name: 'browser address', exact: true })
-    .press('Enter');
-  await page.getByText('native browser', { exact: true }).waitFor();
+    .getByRole('button', { name: 'browser menu', exact: true })
+    .waitFor();
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'browser panel', exact: true })
+      .getAttribute('aria-pressed'),
+    'true',
+    'the first Enter in the address bar closed the browser panel',
+  );
   const browserState = await waitBrowserState(
     page,
     'session1',
@@ -844,14 +921,9 @@ try {
   await page
     .getByRole('button', { name: 'activity panel', exact: true })
     .click();
-  await page.getByRole('tab', { name: 'debug', exact: true }).click();
-  await waitHttp(
-    (views) => views.length > 0 && views.every((view) => !view.visible),
-    'native page stayed on the debug tab',
-  );
   await page.getByRole('tab', { name: 'tasks', exact: true }).click();
   await waitHttp(
-    (views) => views.every((view) => !view.visible),
+    (views) => views.length > 0 && views.every((view) => !view.visible),
     'native page stayed on the tasks tab',
   );
   await page
@@ -872,7 +944,9 @@ try {
   await page
     .getByRole('button', { name: 'browser panel', exact: true })
     .click();
-  await page.getByText('native browser', { exact: true }).waitFor();
+  await page
+    .getByRole('button', { name: 'browser menu', exact: true })
+    .waitFor();
   await waitHttp(matchesBox, 'native page did not return to its box');
   await page.getByRole('button', { name: 'browser menu', exact: true }).click();
   await page.getByRole('menu').waitFor();
@@ -916,13 +990,15 @@ try {
   });
   await waitHttp(matchesBox, 'a window resize left the native page behind');
   checks.push(
-    'the native page hides with its tab, the debug, tasks and Git tabs, a closed inspector and the browser menu, and follows full view and resize',
+    'the native page hides with its tab, the tasks and Git tabs, a closed inspector and the browser menu, and follows full view and resize',
   );
   await page.getByRole('button', { name: 'files panel', exact: true }).click();
   await page
     .getByRole('button', { name: 'browser panel', exact: true })
     .click();
-  await page.getByText('native browser', { exact: true }).waitFor();
+  await page
+    .getByRole('button', { name: 'browser menu', exact: true })
+    .waitFor();
   assert.equal(
     (await page.evaluate(() => window.circleDesktop.browserState('session1')))
       .sessionId,
