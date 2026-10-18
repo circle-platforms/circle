@@ -69,7 +69,8 @@ One short imperative sentence in English, capitalised, with no prefix and no ful
 - Sign off every commit (`git commit -s`); see [Contributor terms](#contributor-terms).
 - Fill in the checklist in the template.
 - A draft pull request runs no CI; marking it ready for review starts it. Push drafts as often as you like.
-- A pull request runs `check (ubuntu-24.04)` and `check (windows-latest)`. `check (macos-15)` is skipped on the pull request and runs in the merge queue, because the organization has five macOS runners shared with `main` and releases. `gh pr merge` or **Merge when ready** adds a pull request to the queue once its checks pass; the queue runs all three on top of the pull requests ahead of it before `main` moves, and a macOS failure there takes the pull request back out.
+- The merge gate is the check and a launch of the packaged desktop application on Linux, macOS and Windows. A pull request runs `check (ubuntu-24.04)`, `check (windows-latest)`, `launch (ubuntu-24.04)` and `launch (windows-latest)`; a launch packages the application and starts it: the window, the bridge to the main process, a turn against a local model and a clean quit. `check (macos-15)` and `launch (macos-15)` are skipped on the pull request and run in the merge queue, because the organization has five macOS runners shared with `main` and releases. `gh pr merge` or **Merge when ready** adds a pull request to the queue once its checks pass; the queue runs all six on top of the pull requests ahead of it before `main` moves, and a failure there takes the pull request back out.
+- The `Desktop workbench` workflow runs the desktop journeys on a pull request that changes the application, and on `main`. They are not part of the merge gate: read their result, and fix what fails on `main` on its own.
 
 ## Security
 

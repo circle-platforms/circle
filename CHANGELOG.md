@@ -8,6 +8,16 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 - **Hooks.** A shell command in `hooks.json` can allow, deny or ask before a tool runs, check a tool's result, block the end of a turn until a loop limit, run when a session starts, or answer a permission request. A deny stands in every approval mode, including auto. An allow skips an ordinary approval and does not skip a call that always asks, a hard refusal, or read-only mode. On the gating events any non-zero exit, a timeout, or output that is not a JSON object is a deny; exit 2 is a deny too. A skill's hooks run only after that skill is loaded in the current session. A secret's value is `%NAME%` in what a hook can see. When an `after_tool` or `session_start` hook fails, the transcript keeps the error and the model is told only that the hook failed. Project hooks run only in a trusted folder. See [Hooks](docs/hooks.md).
 
+## 1.8.1 - 2026-10-18
+
+### Fixed
+
+- **The upgrade notice links to the release it names.** After a patch release the notice is still titled with the release whose changes it lists, such as 1.8.0, but its link opened the patch's notes, which do not describe them. It now opens that release's notes.
+- **Saving in the desktop editor no longer says the file changed on disk when only your own saves changed it.** When your saves kept finishing while the editor read the file back, it gave up after three reads and showed `file changed on disk; your changes are kept`. It now reads again until a read is not overtaken, and asks you to reopen the file only after 10 seconds of saves overtaking it.
+- **On macOS, a task's verification no longer fails with `Verification process cleanup failed` after its commands passed.** macOS refuses to signal a process group whose processes have all exited but are not yet cleaned up; the verification now counts that as stopped when no live process is left, as closing a session already did.
+- **The daily update check no longer takes back an update you started.** When it answered after you had chosen check now and update, settings could offer the update again while it downloaded or once it was ready, and update then downloaded it again. A check's answer now counts only when nothing else changed the update meanwhile.
+- **On Windows, the desktop update's installer no longer holds Circle's network ports while the new version installs.** Its hidden PowerShell inherited Circle's sockets and kept them until it had started Circle again, so a Circle started with `--remote-debugging-port` could come back without that port. The installer that runs is the one of the version you update from, so this applies to updates from 1.8.1 on.
+
 ## 1.8.0 - 2026-10-18
 
 ### Added

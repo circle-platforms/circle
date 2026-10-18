@@ -21,6 +21,8 @@ import {
   verifyCommandSupervisor,
   prepareNativeDependencies,
   prepareDeveloperTools,
+  downloadArchive,
+  toolCacheMismatch,
   verifyArchive,
 } from '../scripts/developer-toolchain.mjs';
 
@@ -46,6 +48,119 @@ test('developer tools reject tampered bytes before extraction or execution', asy
     /checksum mismatch/,
   );
   await assert.rejects(stat(join(dist, 'tools/gh')), { code: 'ENOENT' });
+});
+
+test('a dropped connection or a busy server is tried again, waiting longer each time; a missing file is not', async () => {
+  const bytes = Buffer.from('archive');
+  // As a runner that cannot reach github.com for a while sees it
+  const timeout = () =>
+    Object.assign(new TypeError('fetch failed'), {
+      cause: { code: 'UND_ERR_CONNECT_TIMEOUT' },
+    });
+  const answers = [
+    () => {
+      throw timeout();
+    },
+    () => new Response(null, { status: 429 }),
+    () => new Response(null, { status: 503 }),
+    () => new Response(bytes),
+  ];
+  let calls = 0;
+  const pauses = [];
+  const lines = [];
+  const quiet = {
+    pause: async (ms) => pauses.push(ms),
+    log: (line) => lines.push(line),
+  };
+  assert.deepEqual(
+    await downloadArchive('https://tools.test/a.tar.gz', {
+      ...quiet,
+      request: async () => answers[calls++](),
+    }),
+    bytes,
+  );
+  assert.equal(calls, 4);
+  assert.deepEqual(pauses, [2000, 4000, 8000]);
+  assert.equal(
+    lines[0],
+    'https://tools.test/a.tar.gz: fetch failed (UND_ERR_CONNECT_TIMEOUT); trying again in 2 s, attempt 2 of 6',
+  );
+  assert.match(lines[2], /503 .*trying again in 8 s, attempt 4 of 6/);
+
+  calls = 0;
+  pauses.length = 0;
+  await assert.rejects(
+    downloadArchive('https://tools.test/missing.tar.gz', {
+      ...quiet,
+      request: async () => {
+        calls++;
+        return new Response(null, { status: 404 });
+      },
+    }),
+    /developer tool download failed: 404 https:\/\/tools\.test\/missing\.tar\.gz/,
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(pauses, []);
+
+  // Six attempts, a minute of pauses in all, before a download that never connects fails
+  calls = 0;
+  pauses.length = 0;
+  await assert.rejects(
+    downloadArchive('https://tools.test/down.tar.gz', {
+      ...quiet,
+      request: async () => {
+        calls++;
+        throw timeout();
+      },
+    }),
+    /fetch failed/,
+  );
+  assert.equal(calls, 6);
+  assert.deepEqual(pauses, [2000, 4000, 8000, 16000, 32000]);
+});
+
+test('a tool is reused only while its folder holds exactly what its receipt lists, and says why not', async (t) => {
+  const tool = await mkdtemp(join(tmpdir(), 'circle-tool-cache-'));
+  t.after(() => rm(tool, { recursive: true, force: true }));
+  const entry = join('bin', 'gh');
+  await mkdir(join(tool, 'bin'), { recursive: true });
+  await writeFile(join(tool, entry), 'gh binary');
+  await writeFile(join(tool, 'LICENSE'), 'license');
+  const hash = (text) => createHash('sha256').update(text).digest('hex');
+  const expected = {
+    version: '2.0.0',
+    sha256: 'a'.repeat(64),
+    target: 'darwin-arm64',
+    entries: [entry],
+  };
+  // The receipt lists the files in another order than the folder does
+  const receipt = (fields = {}) =>
+    writeFile(
+      join(tool, 'circle-tool.json'),
+      JSON.stringify({
+        version: '2.0.0',
+        sha256: 'a'.repeat(64),
+        target: 'darwin-arm64',
+        format: 1,
+        files: { LICENSE: hash('license'), [entry]: hash('gh binary') },
+        ...fields,
+      }),
+    );
+  assert.equal(await toolCacheMismatch(tool, expected), 'no receipt');
+  await receipt();
+  assert.equal(await toolCacheMismatch(tool, expected), '');
+  await receipt({ version: '1.9.0' });
+  assert.equal(await toolCacheMismatch(tool, expected), 'version 1.9.0');
+  await receipt({ target: 'darwin-x64' });
+  assert.equal(await toolCacheMismatch(tool, expected), 'target darwin-x64');
+  await receipt();
+  await writeFile(join(tool, entry), 'changed');
+  await writeFile(join(tool, 'bin', 'extra'), 'extra');
+  await rm(join(tool, 'LICENSE'));
+  assert.equal(
+    await toolCacheMismatch(tool, expected),
+    `files differ: -LICENSE, ~${entry}, +${join('bin', 'extra')}`,
+  );
 });
 
 test('unsupported architecture fails explicitly instead of copying host tools', async () => {

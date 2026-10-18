@@ -266,8 +266,8 @@ let clipboardRecoveryPending = false;
 let phase = 'launch';
 let sessionId;
 let receipt;
-const until = async (predicate, label) => {
-  const deadline = Date.now() + patience(20000);
+const until = async (predicate, label, ms = 20000) => {
+  const deadline = Date.now() + patience(ms);
   while (!(await predicate().catch(() => false))) {
     assert(Date.now() < deadline, label);
     await new Promise((done) => setTimeout(done, 40));

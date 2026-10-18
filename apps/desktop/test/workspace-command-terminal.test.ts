@@ -28,6 +28,7 @@ import {
   type TerminalCommandLauncherOptions,
 } from '../src/workspace/command-terminal.ts';
 import type { CommandExecution } from '../../../src/command_process.js';
+import { signalProcessGroup } from '../../../src/process_group.js';
 
 const unix = process.platform !== 'win32';
 const supervisorPath = fileURLToPath(
@@ -1052,7 +1053,7 @@ test(
       native = (await f.terminals.list('one'))[0]!;
     f.beforeCleanup(async () => {
       if (await portOpen(port)) {
-        process.kill(-native.pid!, 'SIGKILL');
+        await signalProcessGroup(native.pid!, 'SIGKILL');
         await until(
           async () => (await f.terminals.list('one'))[0]!.status !== 'running',
           'failed startup fixture actual process exit',
