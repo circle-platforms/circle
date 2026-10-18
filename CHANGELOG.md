@@ -21,6 +21,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **Turning 开发者工具 off hides the debug tab immediately**, and the switch stays where you put it if a stale snapshot arrives.
 - **Code checks and the sidebar use the desktop language for this extension.** A refused code check says 开发者工具未开启, and the sidebar status says 就绪.
 - **A click in the editor gutter toggles a breakpoint** for a JavaScript or TypeScript file while the developer extension is on.
+- **Command output on Windows in Chinese and other languages is no longer garbled.** `cmd.exe`, PowerShell and most Windows programs write in the console's code page, such as 936 on Simplified Chinese Windows, but Circle read every command's output as UTF-8, so `ver`, `dir` and `echo 中文` reached the model, the terminal and `/jobs` as `�`. Circle now asks the console for its code page once and reads output in it; programs that write UTF-8 anyway, such as git and node, are still read as UTF-8. On every system, a character split between two pieces of output, or cut at the end of the 80 000 bytes a command result keeps, is no longer shown as `�`.
 
 ## 1.8.1 - 2026-10-18
 

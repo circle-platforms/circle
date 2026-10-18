@@ -16,6 +16,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { classifyCommand } from './approvals.js';
 import { shellEnvironment, type Sandbox } from './sandbox.js';
 import { redact } from './redact.js';
+import { decodeOutput } from './output_encoding.js';
 import type { Message } from './types.js';
 import stripAnsi from 'strip-ansi';
 import { Watch, pollWatch, stopWatch } from './watch.js';
@@ -97,14 +98,15 @@ export interface ExecuteResult {
   execution?: CommandExecution;
 }
 
-// The first `limit` bytes of an output file, as text.
+// The first `limit` bytes of an output file, as text that ends on a whole character.
 function readHead(path: string, limit: number): string {
   try {
     const fd = openSync(path, 'r');
     try {
-      const data = Buffer.alloc(Math.min(statSync(path).size, limit));
+      const size = statSync(path).size;
+      const data = Buffer.alloc(Math.min(size, limit));
       const read = readSync(fd, data, 0, data.length, 0);
-      return data.subarray(0, read).toString('utf8');
+      return decodeOutput(data.subarray(0, read), { cutEnd: size > read });
     } finally {
       closeSync(fd);
     }
@@ -131,11 +133,10 @@ export function outputTail(
     const start = Math.max(0, size - maxBytes);
     const buffer = Buffer.alloc(Math.min(size, maxBytes));
     const count = readSync(fd, buffer, 0, buffer.length, start);
-    // A tail may start in the middle of a UTF-8 character or a line.
-    let skip = 0;
-    if (start > 0)
-      while (skip < count && (buffer[skip]! & 0xc0) === 0x80) skip++;
-    const text = buffer.subarray(skip, count).toString('utf8').trimEnd();
+    // A tail may start in the middle of a character or a line.
+    const text = decodeOutput(buffer.subarray(0, count), {
+      cutStart: start > 0,
+    }).trimEnd();
     const firstNewline = text.indexOf('\n');
     return (
       start > 0 && firstNewline >= 0 ? text.slice(firstNewline + 1) : text
@@ -862,7 +863,7 @@ export class JobRegistry {
       try {
         const size = statSync(entry.path).size;
         const data = Buffer.alloc(Math.min(size, 80_000));
-        readSync(fd, data, 0, data.length, 0);
+        const read = readSync(fd, data, 0, data.length, 0);
         return {
           execution: entry.execution
             ? structuredClone(entry.execution)
@@ -870,7 +871,9 @@ export class JobRegistry {
           output:
             (awakened.length
               ? `Stopped waiting because background jobs ended: ${awakened.map((job) => `${job.id} ${job.status}`).join(', ')}. Their notices reach the next model request.`
-              : data.toString('utf8')) +
+              : decodeOutput(data.subarray(0, read), {
+                  cutEnd: size > read,
+                })) +
             (size > data.length
               ? `\nOutput continues in /background_jobs/${this.runName}/${entry.path.split(/[\\/]/).at(-1)}`
               : '') +
