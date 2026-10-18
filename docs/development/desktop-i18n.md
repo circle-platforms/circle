@@ -53,6 +53,7 @@ Each English text has its Chinese in one of the files under `apps/workbench/src/
 | command (shell) | 命令 |
 | slash command, prompt command | 斜杠命令，提示命令 |
 | skill | 技能 |
+| hook | 钩子 |
 | extension | 扩展 |
 | MCP server | MCP 服务器 |
 | job | 任务 |

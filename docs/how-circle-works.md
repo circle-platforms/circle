@@ -12,7 +12,7 @@ A message you send starts a turn. Circle builds a request from the system prompt
 
 Circle runs the tool calls one after another, except that `task` calls next to each other run at the same time, and adds the results to the conversation in the order they were made. If the model made tool calls, Circle sends another request. When the model answers without calling a tool, the turn ends and the footer shows what it cost.
 
-Some tool calls wait for you. A command, a file change or a question from the model pauses the turn until you answer the card on screen, and then the turn goes on from there. Every message and result is saved as it happens, so a crash loses at most the step that was running.
+Some tool calls wait for you. A command, a file change or a question from the model pauses the turn until you answer the card on screen, and then the turn goes on from there. Before a tool runs, and before a turn ends, Circle can run [hooks](hooks.md): shell commands you configured. A hook can allow, deny or ask, and a deny stands in every approval mode. Output from a hook after a tool, or at the start of a session, is given back to the model. Every message and result is saved as it happens, so a crash loses at most the step that was running.
 
 `esc` cancels the current turn. Circle checks for the cancel at every model and tool boundary, and a shell command that is running is ended with everything it started. [Background jobs](background-jobs.md) are not touched: they go on, and Circle tells the model when one ends, starting a turn for it when nothing else runs.
 
