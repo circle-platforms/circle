@@ -128,6 +128,56 @@ test('answers that arrive while the lock is held past the deadline are cleaned w
   await rejected;
   assert.deepEqual(readdirSync(requestsDir(root)), []);
 });
+test('an answer accepted before the deadline is delivered even when the waiting side first looks after it', async (t) => {
+  const root = scratch(t);
+  const request = createRequest(root, {
+    question: 'password',
+    key: 'KEY',
+    target_file: join(root, 'env'),
+  });
+  await submitAnswer(root, request.id, 'accepted-in-time');
+  // Another process holds the rendezvous lock until the time limit has passed.
+  const release = await lockfile.lock(requestsDir(root), {
+    lockfilePath: join(requestsDir(root), '.node-lock'),
+  });
+  const waiting = pollAnswer(
+    root,
+    request.id,
+    new AbortController().signal,
+    50,
+  );
+  await delay(150);
+  await release();
+  assert.equal(await waiting, 'accepted-in-time');
+  assert.deepEqual(readdirSync(requestsDir(root)), []);
+});
+test('a value entered after the deadline is refused, never accepted and then thrown away', async (t) => {
+  const root = scratch(t);
+  const request = createRequest(root, {
+    question: 'password',
+    key: 'KEY',
+    target_file: join(root, 'env'),
+  });
+  const release = await lockfile.lock(requestsDir(root), {
+    lockfilePath: join(requestsDir(root), '.node-lock'),
+  });
+  const waiting = pollAnswer(
+    root,
+    request.id,
+    new AbortController().signal,
+    30,
+  );
+  const timedOut = assert.rejects(waiting, SecretPromptTimeout);
+  await delay(80);
+  // Whichever side takes the lock first, the person is told the value did not arrive.
+  const late = assert.rejects(
+    submitAnswer(root, request.id, 'too-late'),
+    /gone/,
+  );
+  await release();
+  await Promise.all([timedOut, late]);
+  assert.deepEqual(readdirSync(requestsDir(root)), []);
+});
 test('target updates preserve unrelated lines, serialize writes and refuse invalid env values', async (t) => {
   const root = scratch(t);
   const target = join(root, 'env');

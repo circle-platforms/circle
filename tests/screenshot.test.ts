@@ -434,6 +434,37 @@ test('esc stops a screenshot under way and leaves no file; a minimized Windows w
   );
 });
 
+test('a Windows screenshot does not run the C# compiler: the window functions are defined in memory', async (t) => {
+  const target = join(realpathSync(scratch(t)), 'shot.png');
+  const commands: string[] = [];
+  await assert.rejects(
+    takeScreenshot({
+      app: 'figma',
+      target,
+      platform: 'win32',
+      env: {},
+      run: async (_command, args) => {
+        commands.push(args.at(-1)!);
+        return { code: 0, stdout: Buffer.from('apps:explorer\r\n') };
+      },
+    }),
+    /no window of "figma" is open/,
+  );
+  // Add-Type -TypeDefinition compiles with csc.exe on every call, which took a busy Windows
+  // runner past the minute PowerShell is given.
+  assert.doesNotMatch(
+    commands[0]!,
+    /Add-Type\s+-(TypeDefinition|MemberDefinition)/i,
+  );
+  for (const name of [
+    'SetProcessDPIAware',
+    'GetWindowRect',
+    'IsIconic',
+    'PrintWindow',
+  ])
+    assert.match(commands[0]!, new RegExp(`'${name}'`));
+  assert.match(commands[0]!, /DefinePInvokeMethod/);
+});
 test('Windows gives PowerShell a minute for a screenshot and says when it ran out of time', async (t) => {
   const root = realpathSync(scratch(t));
   const target = join(root, 'shot.png');
