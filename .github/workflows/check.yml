@@ -94,6 +94,12 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      # The pinned developer tools (Node, gh, js-debug) from an earlier run, so a build does
+      # not download them again; each is used only while its receipt matches it
+      - uses: actions/cache@v6
+        with:
+          path: apps/desktop/dist/tools
+          key: developer-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/scripts/developer-toolchain.mjs') }}
       - run: npm --prefix apps/desktop run package
         timeout-minutes: 15
       # Chromium's sandbox helper must belong to root and be setuid where unprivileged user
@@ -145,6 +151,12 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      # The pinned developer tools (Node, gh, js-debug) from an earlier run, so a build does
+      # not download them again; each is used only while its receipt matches it
+      - uses: actions/cache@v6
+        with:
+          path: apps/desktop/dist/tools
+          key: developer-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/scripts/developer-toolchain.mjs') }}
       - run: npm --prefix apps/desktop run package
         timeout-minutes: 15
       - name: Start the packaged application

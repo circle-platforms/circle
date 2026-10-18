@@ -60,7 +60,7 @@ npm ci
 npm run check
 ```
 
-Desktop checks require the desktop/workbench dependencies. Preparing pinned developer tools may download their archives once. Native UI checks share a foreground desktop and must run serially:
+Desktop checks require the desktop/workbench dependencies. Preparing pinned developer tools may download their archives once; after that a build reuses the tools in `apps/desktop/dist/tools` while their receipts match the folder, and says for each tool whether it reused it or downloads it and why. A download that cannot connect, or gets a busy answer, is tried six times over about a minute; CI keeps the folder between runs. Native UI checks share a foreground desktop and must run serially:
 
 ```sh
 npm --prefix apps/desktop ci

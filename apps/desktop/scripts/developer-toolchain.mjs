@@ -177,11 +177,18 @@ export async function verifyCommandSupervisor(dist) {
     throw Error('unprepared command supervisor resource');
 }
 // A build downloads each tool once. A dropped connection or a busy server on
-// the way must not fail it, so those are tried again; a missing file is not.
-// Every archive is checked against its SHA-256 afterwards either way.
+// the way must not fail it, so those are tried again, each time after twice the
+// pause before (2 s up to 32 s, a minute in all); a missing file is not. Every
+// archive is checked against its SHA-256 afterwards either way.
 export async function downloadArchive(
   url,
-  { attempts = 4, pauseMs = 2000, request = fetch } = {},
+  {
+    attempts = 6,
+    pauseMs = 2000,
+    request = fetch,
+    pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    log = (line) => console.error(line),
+  } = {},
 ) {
   for (let attempt = 1; ; attempt++) {
     let final = false;
@@ -194,9 +201,45 @@ export async function downloadArchive(
       throw Error(`developer tool download failed: ${response.status} ${url}`);
     } catch (error) {
       if (final || attempt >= attempts) throw error;
+      const wait = pauseMs * 2 ** (attempt - 1);
+      const cause = error.cause?.code ?? error.cause?.message;
+      log(
+        `${url}: ${error.message}${cause ? ` (${cause})` : ''}; trying again in ${wait / 1000} s, attempt ${attempt + 1} of ${attempts}`,
+      );
+      await pause(wait);
     }
-    await new Promise((resolve) => setTimeout(resolve, pauseMs * attempt));
   }
+}
+// Why the tool unpacked in `destination` cannot be used as it is, or '' when it can. Its
+// receipt names the version, the archive's SHA-256, the target and the hash of every file
+// it unpacked; anything else in the folder, or anything missing or changed, is a reason.
+export async function toolCacheMismatch(destination, expected) {
+  let cached;
+  try {
+    cached = JSON.parse(
+      await readFile(join(destination, 'circle-tool.json'), 'utf8'),
+    );
+  } catch {
+    return 'no receipt';
+  }
+  if (cached.format !== 1) return `receipt format ${cached.format}`;
+  if (cached.version !== expected.version) return `version ${cached.version}`;
+  if (cached.sha256 !== expected.sha256) return 'another archive';
+  if (cached.target !== expected.target) return `target ${cached.target}`;
+  const files = cached.files ?? {};
+  for (const entry of expected.entries)
+    if (!files[entry]) return `the receipt lists no ${entry}`;
+  const now = await fileHashes(destination);
+  const changed = [
+    ...Object.keys(files)
+      .filter((path) => now[path] !== files[path])
+      .map((path) => (now[path] === undefined ? `-${path}` : `~${path}`)),
+    ...Object.keys(now)
+      .filter((path) => files[path] === undefined)
+      .map((path) => `+${path}`),
+  ];
+  if (!changed.length) return '';
+  return `files differ: ${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ` and ${changed.length - 5} more` : ''}`;
 }
 export async function prepareDeveloperTools(
   dist,
@@ -247,31 +290,28 @@ export async function prepareDeveloperTools(
             ? join('bin', platform === 'win32' ? 'gh.exe' : 'gh')
             : join('src', 'dapDebugServer.js');
       // Only a verified receipt permits cache reuse; no system executable fallback.
-      try {
-        const cached = JSON.parse(
-          await readFile(join(destination, 'circle-tool.json'), 'utf8'),
-        );
-        if (
-          cached.version === spec.version &&
-          cached.files?.[entry] &&
-          (spec.name !== 'node' ||
-            cached.files?.[
-              join('lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
-            ]) &&
-          cached.sha256 === spec.sha256 &&
-          cached.target === target &&
-          cached.format === 1 &&
-          JSON.stringify(cached.files) ===
-            JSON.stringify(await fileHashes(destination))
-        ) {
-          if (platform !== 'win32' && spec.name !== 'js-debug')
-            await chmod(join(destination, entry), 0o755);
-          if (platform !== 'win32' && spec.name === 'node')
-            for (const tool of ['npm', 'npx'])
-              await chmod(join(destination, 'bin', tool), 0o755);
-          continue;
-        }
-      } catch {}
+      // A build says which it did, and why it downloads.
+      const mismatch = await toolCacheMismatch(destination, {
+        version: spec.version,
+        sha256: spec.sha256,
+        target,
+        entries:
+          spec.name === 'node'
+            ? [entry, join('lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')]
+            : [entry],
+      });
+      if (!mismatch) {
+        if (platform !== 'win32' && spec.name !== 'js-debug')
+          await chmod(join(destination, entry), 0o755);
+        if (platform !== 'win32' && spec.name === 'node')
+          for (const tool of ['npm', 'npx'])
+            await chmod(join(destination, 'bin', tool), 0o755);
+        console.log(`developer tool ${spec.name} ${spec.version}: reused`);
+        continue;
+      }
+      console.log(
+        `developer tool ${spec.name} ${spec.version}: downloading (${mismatch})`,
+      );
       const bytes = await fetchArchive(spec.base + spec.file);
       verifyArchive(bytes, spec.sha256);
       const archive = join(temp, spec.file);
