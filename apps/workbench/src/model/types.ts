@@ -411,6 +411,10 @@ export interface HookSetting {
   command: string;
   tools: string;
   paths: string;
+  /** The skill that ships this hook. It runs only after that skill is loaded. */
+  skill?: string;
+  /** False for a skill hook this session has not loaded. Omitted means running. */
+  active?: boolean;
 }
 export interface WorkbenchSnapshot {
   tools?: {

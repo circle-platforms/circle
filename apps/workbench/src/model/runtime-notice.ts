@@ -3,9 +3,20 @@ import type { HookNotice } from '../../../../src/hooks';
 import type { Message } from './types';
 import { t } from '../i18n';
 
-/** The transcript line for a hook. The hook's reason is not translated. */
+/** Circle's own failure words. A reason the hook wrote stays as it wrote it. */
+function hookReason(reason: string | undefined): string {
+  const text = reason?.trim() ?? '';
+  if (!text) return '';
+  if (text === 'hook timed out') return t('hook timed out');
+  if (text === 'hook output is not JSON') return t('hook output is not JSON');
+  const exited = /^hook exited (\d+)$/.exec(text);
+  if (exited?.[1]) return t('hook exited {code}', { code: exited[1] });
+  return text;
+}
+
+/** The transcript line for a hook. The hook's own reason is not translated. */
 export function formatHookNotice(notice: HookNotice): string {
-  const reason = notice.reason?.trim();
+  const reason = hookReason(notice.reason);
   const tail = reason ? ` · ${reason}` : '';
   switch (notice.kind) {
     case 'denied':

@@ -1880,6 +1880,9 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             'Hooks run shell commands you configured. A deny overrides every approval mode, including auto.',
           )}
         </p>
+        <p className="panel-note">
+          {t('A skill hook runs after that skill is loaded in this session.')}
+        </p>
         {settings.projectHooksIgnored && (
           <p className="panel-note">
             {t('Project hooks are not running until this folder is trusted.')}
@@ -1900,10 +1903,13 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                     ? t('user')
                     : hook.source === 'project'
                       ? t('project')
-                      : t('skill')}
+                      : `${t('skill')}${hook.skill ? ` ${hook.skill}` : ''}`}
                   {' · '}
                   {hook.event}
                   {hook.tools !== '*' ? ` · ${hook.tools}` : ''}
+                  {hook.active === false
+                    ? ` · ${t('waits for the skill')}`
+                    : ''}
                 </small>
               </span>
               <code>{hook.command}</code>

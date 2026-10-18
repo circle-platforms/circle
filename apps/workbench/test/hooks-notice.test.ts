@@ -32,6 +32,22 @@ test('a hook notice in zh-CN is Chinese and keeps the hook reason and tool name'
       formatHookNotice({ kind: 'blocked', reason: 'tests failed' }),
       '钩子阻止了结束 · tests failed',
     );
+    assert.equal(
+      formatHookNotice({
+        kind: 'failed',
+        name: 'lint',
+        reason: 'hook timed out',
+      }),
+      '钩子失败 · lint · 钩子超时',
+    );
+    assert.equal(
+      formatHookNotice({ kind: 'failed', reason: 'hook output is not JSON' }),
+      '钩子失败 · 钩子输出不是合法 JSON',
+    );
+    assert.equal(
+      formatHookNotice({ kind: 'failed', reason: 'hook exited 2' }),
+      '钩子失败 · 钩子退出码 2',
+    );
   } finally {
     setLanguage('en');
   }

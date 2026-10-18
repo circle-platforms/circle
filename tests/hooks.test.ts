@@ -161,6 +161,16 @@ test('project hooks load only for a trusted folder, and a skill can ship hooks',
   assert.ok(
     trusted.errors.some((error) => error.message.includes('no_such_event')),
   );
+  const runner = new HookRunner(trusted, { workspace, home });
+  assert.deepEqual(
+    runner.active().map((hook) => hook.name),
+    ['user guard', 'project guard'],
+  );
+  assert.deepEqual(
+    runner.activateSkill('lint').map((hook) => hook.name),
+    ['skill lint'],
+  );
+  assert.ok(runner.active().some((hook) => hook.skill === 'lint'));
   const many = Array.from({ length: 101 }, () => ({ command: 'true' }));
   writeJson(join(home, 'hooks.json'), {
     version: 2,
@@ -368,6 +378,10 @@ async function turn(options: {
   userHome: string;
   trusted: boolean;
   mode?: 'manual' | 'auto' | 'accept-edits';
+  plan?: boolean;
+  headless?: boolean;
+  noApprove?: boolean;
+  secrets?: Record<string, string>;
   replies: Message[];
   approve?: (call: ToolCall) => 'approve' | 'reject';
 }) {
@@ -390,6 +404,8 @@ async function turn(options: {
     session,
     policy,
     system: 'test',
+    ...(options.headless ? { headless: true } : {}),
+    ...(options.secrets ? { secrets: () => options.secrets ?? {} } : {}),
     hooks: new HookRunner(
       loadHooks({
         workspace: options.workspace,
@@ -399,12 +415,17 @@ async function turn(options: {
       }),
       { workspace: options.workspace, home: options.home },
     ),
-    approve: async (call) => {
-      asked.push(call.name);
-      const answer = options.approve?.(call) ?? 'reject';
-      return answer === 'approve' ? 'approve' : 'reject';
-    },
+    ...(options.noApprove
+      ? {}
+      : {
+          approve: async (call: ToolCall) => {
+            asked.push(call.name);
+            const answer = options.approve?.(call) ?? 'reject';
+            return answer === 'approve' ? 'approve' : 'reject';
+          },
+        }),
   });
+  if (options.plan) harness.planMode = true;
   await harness.run('go');
   return { model, asked, harness };
 }
@@ -572,6 +593,232 @@ process.stdout.write(JSON.stringify({ decision, reason }));
     ),
     /hook asked: look first/,
   );
+});
+
+test('gating output that is not JSON denies, and a non-gating failure only notifies', async (t) => {
+  const { home, workspace, userHome } = layout(t);
+  writeJson(join(home, 'hooks.json'), {
+    hooks: {
+      before_tool: [
+        { name: 'text', command: 'printf "not json"', tools: 'write_file' },
+        { name: 'quiet', command: 'true', tools: 'execute' },
+      ],
+      after_tool: [
+        {
+          name: 'lint',
+          command: 'echo lint failed >&2; exit 1',
+          tools: 'write_file',
+        },
+      ],
+      before_stop: [{ name: 'ok', command: 'true' }],
+      session_start: [{ name: 'hi', command: 'printf "hello from hook"' }],
+    },
+  });
+  const runner = new HookRunner(
+    loadHooks({ workspace, home, trusted: false, userHome }),
+    { workspace, home },
+  );
+  const denied = await runner.run({
+    event: 'before_tool',
+    sessionId: 's',
+    cwd: workspace,
+    toolName: 'write_file',
+    toolInput: {},
+  });
+  assert.equal(denied.decision, 'deny');
+  assert.equal(denied.reason, 'hook output is not JSON');
+  assert.equal(
+    uiText('hook denied write_file · hook output is not JSON', 'zh-CN'),
+    '钩子拒绝了 write_file · 钩子输出不是合法 JSON',
+  );
+  const quiet = await runner.run({
+    event: 'before_tool',
+    sessionId: 's',
+    cwd: workspace,
+    toolName: 'execute',
+    toolInput: {},
+  });
+  assert.equal(quiet.decision, 'none');
+  const empty = await runner.run({
+    event: 'before_stop',
+    sessionId: 's',
+    cwd: workspace,
+  });
+  assert.equal(empty.decision, 'none');
+  const lint = await runner.run({
+    event: 'after_tool',
+    sessionId: 's',
+    cwd: workspace,
+    toolName: 'write_file',
+    toolInput: { file_path: 'a.txt' },
+    paths: ['a.txt'],
+    toolOutput: 'wrote',
+    toolStatus: 'success',
+  });
+  assert.equal(lint.decision, 'none');
+  assert.equal(lint.context, '');
+  assert.equal(lint.notices[0]?.kind, 'failed');
+  assert.match(lint.notices[0]?.reason ?? '', /lint failed/);
+  assert.equal(
+    uiText(
+      `hook failed · lint · ${lint.notices[0]?.reason}`,
+      'zh-CN',
+    ).startsWith('钩子失败'),
+    true,
+  );
+  const started = await runner.run({
+    event: 'session_start',
+    sessionId: 's',
+    cwd: workspace,
+  });
+  assert.equal(started.decision, 'none');
+  assert.match(started.context, /hello from hook/);
+});
+
+test('an allow does not skip an always-ask, a hard refusal, or read-only mode', async (t) => {
+  const dirs = layout(t);
+  const marker = join(dirs.workspace, 'hook-ran');
+  const script = join(dirs.workspace, 'allow.mjs');
+  writeFileSync(
+    script,
+    `
+import { readFileSync, writeFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+writeFileSync(${JSON.stringify(marker)}, input.tool_name);
+process.stdout.write(JSON.stringify({ decision: 'allow', reason: 'go' }));
+`,
+  );
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: { before_tool: [{ name: 'allow', command: nodeCommand(script) }] },
+  });
+  const forced = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'manual',
+    replies: [
+      assistant('', [
+        { id: 'r', name: 'execute', args: { command: 'rm note.txt' } },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.deepEqual(forced.asked, ['execute']);
+  assert.equal(readFileSync(marker, 'utf8'), 'execute');
+  assert.match(
+    String(
+      forced.model.requests[1]!.messages.find(
+        (message) => message.role === 'tool',
+      )?.content,
+    ),
+    /rejected/,
+  );
+
+  writeFileSync(marker, '');
+  const headless = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'manual',
+    headless: true,
+    noApprove: true,
+    replies: [
+      assistant('', [
+        { id: 'r', name: 'execute', args: { command: 'rm note.txt' } },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.deepEqual(headless.asked, []);
+  assert.match(
+    String(
+      headless.model.requests[1]!.messages.find(
+        (message) => message.role === 'tool',
+      )?.content,
+    ),
+    /always asks/,
+  );
+
+  writeFileSync(marker, '');
+  const planned = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    plan: true,
+    mode: 'manual',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'note.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.equal(readFileSync(marker, 'utf8'), '');
+  assert.match(
+    String(
+      planned.model.requests[1]!.messages.find(
+        (message) => message.role === 'tool',
+      )?.content,
+    ),
+    /read-only/,
+  );
+});
+
+test('a hook sees secrets as %NAME% and the log does not contain the value', async (t) => {
+  const dirs = layout(t);
+  const secret = 'circle-secret-value-9f3a';
+  const seen = join(dirs.workspace, 'seen.json');
+  const previous = process.env.NOTE;
+  process.env.NOTE = secret;
+  t.after(() => {
+    if (previous === undefined) delete process.env.NOTE;
+    else process.env.NOTE = previous;
+  });
+  const script = join(dirs.workspace, 'see.mjs');
+  writeFileSync(
+    script,
+    `
+import { readFileSync, writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(seen)}, JSON.stringify({
+  input: readFileSync(0, 'utf8'),
+  note: process.env.NOTE ?? '',
+}));
+process.stdout.write(JSON.stringify({ decision: 'allow' }));
+`,
+  );
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      before_tool: [
+        { name: 'see', command: nodeCommand(script), tools: 'write_file' },
+      ],
+    },
+  });
+  await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    secrets: { TOKEN: secret },
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'note.txt', content: 'see %TOKEN% end' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  const got = readFileSync(seen, 'utf8');
+  assert.match(got, /%TOKEN%/);
+  assert.equal(got.includes(secret), false);
+  const log = readFileSync(join(dirs.home, 'hooks.log'), 'utf8');
+  assert.equal(log.includes(secret), false);
 });
 
 test('after a tool the hook output is fed back, and a stop hook blocks until its limit', async (t) => {
@@ -746,5 +993,90 @@ test('the runtime runs project hooks only after the folder is trusted', async (t
     untrusted.harness.messages.some(
       (message) => message.hook?.kind === 'untrusted',
     ),
+  );
+});
+
+test('a skill hook runs only after that skill is loaded in this session', async (t) => {
+  const dirs = layout(t);
+  const skill = join(dirs.workspace, '.circle', 'skills', 'lint');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(
+    join(skill, 'SKILL.md'),
+    '---\nname: lint\ndescription: Lint.\n---\n\nLint.\n',
+  );
+  const script = join(dirs.workspace, 'skill-hook.mjs');
+  writeFileSync(
+    script,
+    `process.stdout.write(JSON.stringify({ decision: 'deny', reason: 'skill gate' }));`,
+  );
+  writeJson(join(skill, 'hooks.json'), {
+    hooks: {
+      before_tool: [
+        {
+          name: 'skill gate',
+          command: nodeCommand(script),
+          tools: 'write_file',
+        },
+      ],
+    },
+  });
+  const settings = defaultSettings();
+  settings.trusted_folders = [dirs.workspace];
+  const model = new ScriptedModel([
+    {
+      message: assistant('', [
+        {
+          id: 'a',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'x' },
+        },
+      ]),
+    },
+    { message: assistant('done') },
+    {
+      message: assistant('', [
+        {
+          id: 'b',
+          name: 'write_file',
+          args: { file_path: 'b.txt', content: 'y' },
+        },
+      ]),
+    },
+    { message: assistant('done') },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: dirs.workspace,
+    home: dirs.home,
+    userHome: dirs.userHome,
+    settings,
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  runtime.setMode('auto');
+  assert.equal(
+    runtime.hookListing().find((item) => item.hook.name === 'skill gate')
+      ?.active,
+    false,
+  );
+  await runtime.harness.run('first');
+  assert.equal(readFileSync(join(dirs.workspace, 'a.txt'), 'utf8'), 'x');
+  await runtime.activateSkillHooks('lint');
+  assert.equal(
+    runtime.hookListing().find((item) => item.hook.skill === 'lint')?.active,
+    true,
+  );
+  await runtime.harness.run('second');
+  let missing = false;
+  try {
+    readFileSync(join(dirs.workspace, 'b.txt'));
+  } catch {
+    missing = true;
+  }
+  assert.equal(missing, true);
+  await runtime.newSession();
+  assert.equal(
+    runtime.hookListing().find((item) => item.hook.skill === 'lint')?.active,
+    false,
   );
 });

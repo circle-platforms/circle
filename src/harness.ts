@@ -59,6 +59,7 @@ import {
   HOOK_ASKED_LINE,
   HOOK_OUTPUT_LINE,
   type HookBatch,
+  type HookDefinition,
   type HookNotice,
   type HookRunner,
 } from './hooks.js';
@@ -1282,17 +1283,19 @@ export class Harness {
         name: hookFileLabel(error.file),
         reason: error.message,
       });
-    if (loaded.hooks.length)
+    const running = runner.active();
+    if (running.length)
       this.saveHook({
         kind: 'active',
-        count: loaded.hooks.length,
-        reason: activeHookSummary(loaded.hooks),
+        count: running.length,
+        reason: activeHookSummary(running),
       });
-    if (!loaded.hooks.some((hook) => hook.event === 'session_start')) return;
+    if (!running.some((hook) => hook.event === 'session_start')) return;
     const batch = await runner.run({
       event: 'session_start',
       sessionId: this.sessionId,
       cwd: this.options.session.workspace,
+      secrets: this.hookSecrets(),
       signal,
     });
     for (const notice of batch.notices) this.saveHook(notice);
@@ -1306,6 +1309,7 @@ export class Harness {
       event: 'before_stop',
       sessionId: this.sessionId,
       cwd: this.options.session.workspace,
+      secrets: this.hookSecrets(),
       signal,
     });
     for (const notice of batch.notices) this.saveHook(notice);
@@ -1337,10 +1341,46 @@ export class Harness {
       toolInput: args,
       paths: hookToolPaths(call.name, args),
       permissionReason,
+      secrets: this.hookSecrets(),
       signal,
     });
     for (const notice of batch.notices) this.queueHook(notice);
     return batch;
+  }
+  private hookSecrets(): Record<string, string> {
+    return this.options.secrets?.() ?? {};
+  }
+  /**
+   * A skill was loaded after the session's hooks were announced. Its hooks
+   * start now, and a session_start hook it ships runs once.
+   */
+  async skillHooksArmed(
+    hooks: HookDefinition[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!hooks.length || !this.hooksAnnounced || !this.options.hooks) return;
+    this.saveHook({
+      kind: 'active',
+      count: hooks.length,
+      reason: [...new Set(hooks.map((hook) => hook.skill ?? hook.name))].join(
+        ', ',
+      ),
+    });
+    const starting = hooks.filter((hook) => hook.event === 'session_start');
+    if (!starting.length) return;
+    const batch = await this.options.hooks.run({
+      event: 'session_start',
+      sessionId: this.sessionId,
+      cwd: this.options.session.workspace,
+      secrets: this.hookSecrets(),
+      onlyIds: starting.map((hook) => hook.id),
+      signal,
+    });
+    for (const notice of batch.notices) this.saveHook(notice);
+    if (batch.context)
+      this.hookPreface = this.hookPreface
+        ? `${this.hookPreface}\n\n${batch.context}`
+        : `Hook session_start output:\n${batch.context}`;
   }
   // A task call (its name as the tool table resolves it): its subagent can run beside others.
   private parallel(call: ToolCall): boolean {
@@ -1409,9 +1449,9 @@ export class Harness {
       const found = this.options.policy.review(call.name, resolved);
       if (found.verdict === 'DENY')
         throw new Error(found.message || found.reason);
-      // Hooks see the values that would run. A deny here stands in every
-      // approval mode, including accept-edits and auto. A hard denial above
-      // is not reconsidered.
+      // Hooks see the arguments with secret values put back to %NAME%. A deny
+      // stands in every approval mode. A hard denial above is not reconsidered.
+      // An allow can skip an ordinary card only: an always-ask stays a card.
       const before = await this.gateTool('before_tool', call, resolved, signal);
       if (before?.decision === 'deny')
         throw new Error(hookDeniedMessage(before.reason || 'hook denied'));
@@ -1421,13 +1461,14 @@ export class Harness {
       // A command the settings' allowed_commands patterns cover runs without
       // asking: in every mode, including the always-asking calls and the
       // headless run that cannot show a card. A hook deny already threw.
-      // A hook allow skips the card. A hook ask forces it, even in auto.
+      // A hook ask forces the card, even in auto. A hook allow does not.
       const settingsAllowed = this.options.policy.allowedBySettings(
         call.name,
         call.args,
       );
-      const hookAllow = before?.decision === 'allow';
+      const alwaysAsk = found.verdict === 'ASK_FORCED';
       const hookAsk = before?.decision === 'ask';
+      const hookAllow = before?.decision === 'allow' && !alwaysAsk;
       if (hookAllow) hookLine = HOOK_ALLOWED_LINE;
       const preparedRun = tool.prepare
         ? await tool.prepare(resolved, {
@@ -1462,7 +1503,7 @@ export class Harness {
           );
         if (permission?.decision === 'ask' && permission.reason)
           call = { ...call, hook_reason: permission.reason };
-        if (permission?.decision === 'allow') {
+        if (permission?.decision === 'allow' && !alwaysAsk && !hookAsk) {
           hookLine = HOOK_ALLOWED_LINE;
         } else {
           this.bus.emit('tool_waiting', {
@@ -1573,6 +1614,7 @@ export class Harness {
             paths: hookToolPaths(call.name, args),
             toolOutput: content,
             toolStatus: 'success',
+            secrets: this.hookSecrets(),
             signal,
           })
         : undefined;

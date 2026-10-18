@@ -2840,13 +2840,15 @@ export class RuntimeController {
           : {}),
         textSize: 'default',
         keybindings: {},
-        hooks: runtime.hookCatalog.hooks.map((hook) => ({
+        hooks: runtime.hookListing().map(({ hook, active }) => ({
           source: hook.source,
           event: hook.event,
           name: hook.name,
           command: hook.command,
           tools: hook.tools === '*' ? '*' : hook.tools.join(', '),
           paths: hook.paths.join(', '),
+          ...(hook.skill ? { skill: hook.skill } : {}),
+          active,
         })),
         projectHooksIgnored: runtime.hookCatalog.projectIgnored,
       },
@@ -4756,6 +4758,7 @@ export class RuntimeController {
       case 'load-skill': {
         const skill = runtime.skills.find((skill) => skill.name === p.name);
         if (!skill) throw Error('skill not found');
+        await runtime.activateSkillHooks(skill.name);
         return {
           name: skill.name,
           content: loadSkillBody(skill.name, runtime.skills),

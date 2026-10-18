@@ -7,6 +7,7 @@ import { spawn, execFile } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, posix, win32 } from 'node:path';
 import { canonicalPath } from './paths.js';
+import { redactSecrets } from './secrets.js';
 import { isHostAbsolutePath, shellEnvironment } from './sandbox.js';
 import { discoverSkills } from './skills.js';
 import { isRecord } from './settings.js';
@@ -54,6 +55,8 @@ export interface HookDefinition {
   source: HookSource;
   sourceLabel: string;
   file: string;
+  /** Set when the hook ships with a skill. It runs only after that skill is loaded. */
+  skill?: string;
 }
 
 export interface HookLoadError {
@@ -100,6 +103,10 @@ export interface HookRunRequest {
   toolOutput?: string;
   toolStatus?: 'success' | 'error';
   permissionReason?: string;
+  /** Saved secrets. Their values are written as %NAME% before the hook sees them. */
+  secrets?: Record<string, string>;
+  /** Run only these hook ids. Used when a skill is loaded after the session started. */
+  onlyIds?: string[];
   signal?: AbortSignal;
 }
 
@@ -356,6 +363,7 @@ function readHookFile(
   file: string,
   source: HookSource,
   sourceLabel: string,
+  skill?: string,
 ): { hooks: HookDefinition[]; error?: HookLoadError } {
   let raw: unknown;
   try {
@@ -422,6 +430,7 @@ function readHookFile(
         source,
         sourceLabel,
         file,
+        ...(skill ? { skill } : {}),
       });
     });
   }
@@ -453,9 +462,14 @@ export function loadHooks(options: {
 }): LoadedHooks {
   const hooks: HookDefinition[] = [];
   const errors: HookLoadError[] = [];
-  const take = (file: string, source: HookSource, label: string) => {
+  const take = (
+    file: string,
+    source: HookSource,
+    label: string,
+    skill?: string,
+  ) => {
     if (!fileExists(file)) return;
-    const read = readHookFile(file, source, label);
+    const read = readHookFile(file, source, label, skill);
     hooks.push(...read.hooks);
     if (read.error) errors.push(read.error);
   };
@@ -478,13 +492,30 @@ export function loadHooks(options: {
       projectIgnored = true;
       continue;
     }
-    take(file, 'skill', `skill:${skill.name}`);
+    take(file, 'skill', `skill:${skill.name}`, skill.name);
   }
   return { hooks, errors, projectIgnored };
 }
 
 function textField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Empty output is no opinion. Any other non-object is not hook JSON. */
+function hookStdout(stdout: string): {
+  parsed?: Record<string, unknown>;
+  invalid: boolean;
+  text: string;
+} {
+  const text = stdout.trim();
+  if (!text) return { invalid: false, text: '' };
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (isRecord(value)) return { parsed: value, invalid: false, text };
+    return { invalid: true, text };
+  } catch {
+    return { invalid: true, text };
+  }
 }
 
 function interpretOutput(
@@ -496,51 +527,59 @@ function interpretOutput(
   spawnError?: string,
 ): Pick<HookOutcome, 'decision' | 'reason' | 'context' | 'failed'> {
   const gating = GATING.has(event);
+  // A gating failure denies. Anywhere else it is only a notice: the tool
+  // result and the session keep going, and the error text is not fed back.
   const fail = (reason: string) =>
     gating
       ? { decision: 'deny' as const, reason, context: '', failed: true }
-      : { decision: 'none' as const, reason, context: reason, failed: true };
+      : { decision: 'none' as const, reason, context: '', failed: true };
   if (timedOut) return fail('hook timed out');
   if (spawnError) return fail(spawnError);
-  let parsed: Record<string, unknown> | undefined;
-  const trimmed = stdout.trim();
-  if (trimmed.startsWith('{')) {
-    try {
-      const value = JSON.parse(trimmed) as unknown;
-      if (isRecord(value)) parsed = value;
-    } catch {
-      parsed = undefined;
-    }
-  }
+  const { parsed, invalid, text } = hookStdout(stdout);
   const named = textField(parsed?.decision);
   const decision = (['allow', 'deny', 'ask'] as const).find(
     (item) => item === named,
   );
   const reason = textField(parsed?.reason) || stderr.trim().slice(0, 2000);
+  // Plain text is the hook's own message. A JSON object is not, unless it
+  // named a reason: the raw object must not become the denial text.
+  const message = reason || (parsed ? '' : text.slice(0, MAX_OUTPUT));
   const context =
     textField(parsed?.context) ||
     textField(parsed?.additional_context) ||
-    (parsed ? '' : trimmed.slice(0, MAX_OUTPUT));
+    (parsed || invalid ? '' : text.slice(0, MAX_OUTPUT));
   if (exitCode === 2) {
-    const block = reason || context || 'hook denied';
-    return { decision: 'deny', reason: block, context, failed: false };
+    if (!gating) return fail(message || 'hook exited 2');
+    return {
+      decision: 'deny',
+      reason: message || 'hook denied',
+      context: '',
+      failed: false,
+    };
   }
-  if (exitCode !== 0) {
-    const problem = reason || context || `hook exited ${exitCode ?? 'unknown'}`;
-    return fail(problem);
+  if (exitCode !== 0)
+    return fail(message || `hook exited ${exitCode ?? 'unknown'}`);
+  if (invalid) {
+    if (gating) return fail('hook output is not JSON');
+    return {
+      decision: 'none',
+      reason: '',
+      context: text.slice(0, MAX_OUTPUT),
+      failed: false,
+    };
   }
   if (gating && decision) {
     if (event === 'before_stop' && decision === 'ask')
       return {
         decision: 'deny',
         reason: reason || context || 'hook blocked stop',
-        context,
+        context: '',
         failed: false,
       };
     return {
       decision,
       reason: reason || (decision === 'deny' ? 'hook denied' : ''),
-      context,
+      context: '',
       failed: false,
     };
   }
@@ -560,12 +599,42 @@ interface CommandResult {
   error?: string;
 }
 
+function redactHookValue(
+  value: unknown,
+  secrets: Record<string, string>,
+): unknown {
+  if (!Object.keys(secrets).length) return value;
+  if (typeof value === 'string') return redactSecrets(value, secrets);
+  if (Array.isArray(value))
+    return value.map((item) => redactHookValue(item, secrets));
+  if (isRecord(value))
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        redactHookValue(item, secrets),
+      ]),
+    );
+  return value;
+}
+
+function hookEnvironment(secrets: Record<string, string>): NodeJS.ProcessEnv {
+  const env = shellEnvironment();
+  if (!Object.keys(secrets).length) return env;
+  return Object.fromEntries(
+    Object.entries(env).map(([name, value]) => [
+      name,
+      value === undefined ? undefined : redactSecrets(value, secrets),
+    ]),
+  );
+}
+
 function runHookCommand(
   command: string,
   cwd: string,
   stdin: string,
   timeoutMs: number,
   signal: AbortSignal | undefined,
+  secrets: Record<string, string> = {},
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     let stdout = '';
@@ -581,7 +650,7 @@ function runHookCommand(
     try {
       child = spawn(command, {
         cwd,
-        env: shellEnvironment(),
+        env: hookEnvironment(secrets),
         shell: true,
         detached: process.platform !== 'win32',
         windowsHide: true,
@@ -750,6 +819,8 @@ export class HookRunner {
   /** How many times each before_stop hook has blocked this session. */
   private blocks = new Map<string, number>();
   private limited = new Set<string>();
+  /** Skills loaded in this session. Their hooks stay off until then. */
+  private armed = new Set<string>();
   constructor(
     readonly loaded: LoadedHooks,
     private readonly options: {
@@ -762,8 +833,34 @@ export class HookRunner {
     },
   ) {}
 
+  private armedHook(hook: HookDefinition): boolean {
+    return hook.source !== 'skill' || this.armed.has(hook.skill ?? '');
+  }
+
+  /** Hooks that can run now. A skill hook is absent until that skill is loaded. */
   active(): HookDefinition[] {
-    return this.loaded.hooks;
+    return this.loaded.hooks.filter((hook) => this.armedHook(hook));
+  }
+
+  /** Every configured hook, including a skill hook this session has not loaded. */
+  listing(): { hook: HookDefinition; active: boolean }[] {
+    return this.loaded.hooks.map((hook) => ({
+      hook,
+      active: this.armedHook(hook),
+    }));
+  }
+
+  /**
+   * Arm one skill's hooks for this session. The first call returns those hooks;
+   * loading the same skill again does not.
+   */
+  activateSkill(name: string): HookDefinition[] {
+    const key = name.trim().toLowerCase();
+    if (!key || this.armed.has(key)) return [];
+    this.armed.add(key);
+    return this.loaded.hooks.filter(
+      (hook) => hook.source === 'skill' && hook.skill === key,
+    );
   }
 
   async run(request: HookRunRequest): Promise<HookBatch> {
@@ -774,7 +871,10 @@ export class HookRunner {
     };
     const outcomes: HookOutcome[] = [];
     const notices: HookNotice[] = [];
+    const secrets = request.secrets ?? {};
     for (const hook of this.loaded.hooks) {
+      if (request.onlyIds && !request.onlyIds.includes(hook.id)) continue;
+      if (!this.armedHook(hook)) continue;
       if (hook.event !== request.event) continue;
       if (!toolMatches(hook, request.toolName)) continue;
       if (!pathsMatch(hook, request.paths, pathOptions)) continue;
@@ -813,11 +913,11 @@ export class HookRunner {
         source: hook.source,
         source_label: hook.sourceLabel,
         tool_name: request.toolName,
-        tool_input: request.toolInput,
-        paths: canonicalPaths,
-        tool_output: request.toolOutput,
+        tool_input: redactHookValue(request.toolInput, secrets),
+        paths: redactHookValue(canonicalPaths, secrets),
+        tool_output: redactHookValue(request.toolOutput, secrets),
         tool_status: request.toolStatus,
-        permission_reason: request.permissionReason,
+        permission_reason: redactHookValue(request.permissionReason, secrets),
         ...(request.event === 'before_stop'
           ? { stop_attempt: (this.blocks.get(hook.id) ?? 0) + 1 }
           : {}),
@@ -831,6 +931,7 @@ export class HookRunner {
           stdin,
           hook.timeoutMs,
           request.signal ?? new AbortController().signal,
+          secrets,
         );
       } catch (error) {
         command = {
@@ -874,7 +975,7 @@ export class HookRunner {
         durationMs: Date.now() - started,
       };
       outcomes.push(outcome);
-      this.log(request, outcome);
+      this.log(request, outcome, secrets);
       if (
         request.event === 'before_stop' &&
         outcome.decision === 'deny' &&
@@ -896,7 +997,11 @@ export class HookRunner {
     return { ...decision, context, outcomes, notices };
   }
 
-  private log(request: HookRunRequest, outcome: HookOutcome): void {
+  private log(
+    request: HookRunRequest,
+    outcome: HookOutcome,
+    secrets: Record<string, string>,
+  ): void {
     const line = {
       ts: new Date().toISOString(),
       session_id: request.sessionId,
@@ -917,7 +1022,7 @@ export class HookRunner {
       if (!existsSync(this.options.home)) return;
       appendFileSync(
         join(this.options.home, 'hooks.log'),
-        `${JSON.stringify(line)}\n`,
+        `${redactSecrets(JSON.stringify(line), secrets)}\n`,
       );
     } catch {
       /* A log line cannot stop the hook. */

@@ -26,7 +26,7 @@ Add entries under `## Unreleased`, newest first, one line each ...
 - Give it a `name` and a `description`. Without a `name`, or with one that is not lowercase letters, digits and hyphens, the folder name is used; without a `description`, the model sees only `Skill from <folder>`.
 - The name should match the folder name.
 - The description is what Circle reads to decide whether the skill applies, so say **what it does and when to use it**. Descriptions are cut at 1,024 characters.
-- Put scripts, templates and references next to `SKILL.md` and mention them in the text by relative path. When the skill is loaded, the model is told the skill's folder, so it can find them. Circle never runs bundled scripts by itself. A `hooks.json` next to `SKILL.md` is optional and is the exception: Circle runs those commands at the hook events. See [Hooks](hooks.md#a-skill-can-ship-hooks).
+- Put scripts, templates and references next to `SKILL.md` and mention them in the text by relative path. When the skill is loaded, the model is told the skill's folder, so it can find them. Circle never runs bundled scripts by itself. A `hooks.json` next to `SKILL.md` is optional and is the exception: after this session loads the skill, Circle runs those commands at the hook events. See [Hooks](hooks.md#a-skill-can-ship-hooks).
 
 A skill is a folder below the skills folder, `skills/changelog/SKILL.md`, or one level deeper inside a folder that has no `SKILL.md` of its own, `skills/team/changelog/SKILL.md`.
 
@@ -50,19 +50,19 @@ Circle reads the skill folders again each time it builds the system prompt: when
 
 Circle looks in all of these. If two skills have the same name, the one lower in the table wins.
 
-| Folder | Scope |
-|---|---|
-| `~/.agents/skills` | You, shared with other agents |
-| `~/.claude/skills` | You, shared with Claude Code |
-| `~/.config/opencode/skills` | You, shared with OpenCode |
-| `~/.pi/agent/skills` | You, shared with pi |
-| `~/.circle/skills` | You, Circle only (in the data folder) |
-| `.agents/skills` in the workspace folder | Project |
-| `.opencode/skills` | Project |
-| `.pi/skills` | Project |
-| `.claude/skills` | Project |
-| `.circle/skills` | Project, Circle only |
-| `.agent/skills` | Project, highest priority |
+| Folder                                   | Scope                                 |
+| ---------------------------------------- | ------------------------------------- |
+| `~/.agents/skills`                       | You, shared with other agents         |
+| `~/.claude/skills`                       | You, shared with Claude Code          |
+| `~/.config/opencode/skills`              | You, shared with OpenCode             |
+| `~/.pi/agent/skills`                     | You, shared with pi                   |
+| `~/.circle/skills`                       | You, Circle only (in the data folder) |
+| `.agents/skills` in the workspace folder | Project                               |
+| `.opencode/skills`                       | Project                               |
+| `.pi/skills`                             | Project                               |
+| `.claude/skills`                         | Project                               |
+| `.circle/skills`                         | Project, Circle only                  |
+| `.agent/skills`                          | Project, highest priority             |
 
 Project skills apply once you trust the folder, and only from that folder. A parent folder's `.agents/skills` is not loaded. A skill can tell the model to do anything, so read the skills in a repository before you trust it.
 
@@ -80,4 +80,4 @@ For a skill only you use, copy it into `~/.circle/skills/<name>/`.
 
 ## A skill can ship hooks
 
-`hooks.json` in the skill folder is loaded whenever Circle can see the skill, not only after `/skill` loads its text. Hooks from a project skill run only in a trusted folder. Hooks from a skill in your own skill folders run in every folder. A skill without that file is unchanged.
+`hooks.json` in the skill folder does not run just because the skill is installed. Those commands run only after this session loads the skill, with `/skill` or the `skill` tool, and only for that session. A project skill's hooks also wait until the folder is trusted. A skill without that file is unchanged. See [Hooks](hooks.md#a-skill-can-ship-hooks).
