@@ -10,7 +10,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Fixed
 
-- **Stopping a turn while the model thinks no longer makes every later request fail.** The partial reply saved at the stop has no text, and Circle sent it as an empty message: Chat Completions gateways that require content, such as Alibaba DashScope, answered `400 The content field is a required field.`, and the Anthropic API rejected the empty message the same way. Circle 1.8.0 already left such replies out of Chat Completions requests, which these notes did not say; Anthropic requests now leave them out too, and the saved reply stays in the session. A message beside tool calls is sent with empty text instead of `null`, as DashScope's own examples do, and a tool that returned nothing is sent as `(no output)`.
+
 
 ## 1.8.1 - 2026-10-18
 

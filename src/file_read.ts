@@ -1,5 +1,22 @@
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { Readable } from 'node:stream';
+import { decodeOutput } from './output_encoding.js';
+
+// Command output as text, decoded a run of whole lines at a time (see decodeOutput).
+async function* outputText(input: Readable): AsyncGenerator<string> {
+  let pending = Buffer.alloc(0);
+  for await (const chunk of input as AsyncIterable<Buffer>) {
+    const bytes = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+    const end =
+      bytes.length > 1_048_576
+        ? bytes.length
+        : Math.max(bytes.lastIndexOf(0x0a), bytes.lastIndexOf(0x0d)) + 1;
+    pending = Buffer.from(bytes.subarray(end));
+    if (end) yield decodeOutput(bytes.subarray(0, end));
+  }
+  if (pending.length) yield decodeOutput(pending);
+}
 
 /** Same line window for a versioned text snapshot, without re-reading changing disk bytes. */
 export function readTextContentWindow(
@@ -24,16 +41,23 @@ export function readTextContentWindow(
     .join('\n');
 }
 
-/** Read a zero-based line window without loading a growing job log into memory. */
+/** Read a zero-based line window without loading a growing job log into memory.
+ * `output` reads a command's output, which may be in the console's code page. */
 export async function readTextWindow(
   path: string,
   offset: number,
   limit: number,
   signal: AbortSignal,
+  output = false,
 ): Promise<string> {
   signal.throwIfAborted();
-  const input = createReadStream(path, { encoding: 'utf8', signal });
-  const reader = createInterface({ input, crlfDelay: Infinity });
+  const input = output
+    ? createReadStream(path, { signal })
+    : createReadStream(path, { encoding: 'utf8', signal });
+  const reader = createInterface({
+    input: output ? Readable.from(outputText(input)) : input,
+    crlfDelay: Infinity,
+  });
   const window: string[] = [];
   let total = 0;
   let blank = true;
