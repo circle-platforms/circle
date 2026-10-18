@@ -184,6 +184,57 @@ try {
             )
           ).sessions.every((item) => !item.actionError),
         );
+        await page
+          .getByRole('button', { name: labels.runtime, exact: true })
+          .click();
+        const developer = page.locator('.extension-card').filter({
+          has: page.getByRole('heading', {
+            name: labels.developer,
+            exact: true,
+          }),
+        });
+        const replyLatest = async (failure = false) => {
+          const index = await page.evaluate(() => {
+            const commands = window.extensionFeedbackFixture.commands;
+            for (let i = commands.length - 1; i >= 0; i--)
+              if (commands[i].name === 'save-settings') return i;
+            return -1;
+          });
+          await reply(index, failure);
+        };
+        await developer.getByRole('checkbox').click();
+        await count(14);
+        await replyLatest();
+        await developer.getByText(labels.loading, { exact: true }).waitFor();
+        assert.equal(
+          await developer.getByText(labels.reload, { exact: true }).count(),
+          0,
+          'developer applies without a reload',
+        );
+        await page.evaluate(() =>
+          window.extensionFeedbackFixture.loadDeveloper(),
+        );
+        await developer.getByText(labels.enabled, { exact: true }).waitFor();
+        assert.equal(await developer.getByRole('checkbox').isChecked(), true);
+        await developer.getByRole('checkbox').click();
+        await count(15);
+        await replyLatest();
+        await developer.getByText(labels.disabled, { exact: true }).waitFor();
+        assert.equal(await developer.getByRole('checkbox').isChecked(), false);
+        await page.evaluate(() =>
+          window.extensionFeedbackFixture.staleDeveloper(),
+        );
+        await developer.getByText(labels.disabling, { exact: true }).waitFor();
+        assert.equal(
+          await developer.getByRole('checkbox').isChecked(),
+          false,
+          'a stale enabled snapshot must not turn the switch back on',
+        );
+        await page.evaluate(() =>
+          window.extensionFeedbackFixture.settleDeveloper(),
+        );
+        await developer.getByText(labels.disabled, { exact: true }).waitFor();
+        assert.equal(await developer.getByRole('checkbox').isChecked(), false);
         const commands = await page.evaluate(
           () => window.extensionFeedbackFixture.commands,
         );
@@ -191,7 +242,7 @@ try {
           commands
             .filter((command) => command.name === 'save-settings')
             .map((command) => command.payload.settings),
-          Array(13).fill({}),
+          Array(15).fill({}),
         );
         assert.equal(
           commands.filter((command) => command.name === 'reload').length,

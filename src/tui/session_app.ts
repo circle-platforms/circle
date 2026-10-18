@@ -926,6 +926,7 @@ export class SessionApp {
                 (message) =>
                   !message.internal ||
                   message.internal === 'job_notice' ||
+                  message.internal === 'hook_notice' ||
                   message.internal === 'interrupted',
               )
               .at(-1)?.id ?? '')
@@ -963,7 +964,7 @@ export class SessionApp {
     if (!isFolderTrusted(this.settings, this.workspace)) {
       const answer = await this.askChoice(
         'trust',
-        `${this.workspace}\nThis folder can supply instructions, skills, commands and extensions. Extensions execute code.`,
+        `${this.workspace}\nThis folder can supply instructions, skills, commands, extensions and hooks. Extensions and hooks execute code.`,
         ['trust this folder', 'quit'],
       );
       if (answer !== 'trust this folder') return false;
@@ -1223,7 +1224,9 @@ export class SessionApp {
             const visible = this.runtime!.harness.messages.filter(
               (message) =>
                 before.shown.has(message.id) &&
-                (!message.internal || message.internal === 'job_notice'),
+                (!message.internal ||
+                  message.internal === 'job_notice' ||
+                  message.internal === 'hook_notice'),
             );
             const visibleIds = new Set(visible.map((message) => message.id));
             const previous = visible.at(-1)?.id ?? '';

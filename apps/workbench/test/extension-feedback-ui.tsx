@@ -37,6 +37,16 @@ snapshot.extensions = [
     commands: [],
     events: [],
   },
+  {
+    id: 'developer',
+    name: 'developer',
+    version: '0.1.0',
+    scope: 'bundled',
+    enabled: false,
+    tools: [],
+    commands: [],
+    events: [],
+  },
 ];
 let update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
 let listener: ((value: RuntimeUpdate) => void) | undefined;
@@ -119,6 +129,37 @@ Object.assign(window, {
       }
       emit();
     },
+    loadDeveloper: () => {
+      const extension = snapshot.extensions.find(
+        (item) => item.name === 'developer',
+      );
+      if (!extension) throw Error('developer extension missing');
+      extension.enabled = true;
+      delete extension.error;
+      extension.view = { provider: 'developer', version: '0.1.0' };
+      extension.status = { text: 'ready', lamp: 'ok' };
+      emit();
+    },
+    staleDeveloper: () => {
+      const extension = snapshot.extensions.find(
+        (item) => item.name === 'developer',
+      );
+      if (!extension) throw Error('developer extension missing');
+      extension.enabled = true;
+      extension.view = { provider: 'developer', version: '0.1.0' };
+      emit();
+    },
+    settleDeveloper: () => {
+      const extension = snapshot.extensions.find(
+        (item) => item.name === 'developer',
+      );
+      if (!extension) throw Error('developer extension missing');
+      extension.enabled = false;
+      delete extension.view;
+      delete extension.status;
+      delete extension.error;
+      emit();
+    },
     labels: {
       savingOn: t('saving extension enable request'),
       savingOff: t('saving extension disable request'),
@@ -128,6 +169,8 @@ Object.assign(window, {
       saveError: t('extension setting could not be saved'),
       loadError: t('extension could not be loaded'),
       reload: t('extension setting saved; reload required'),
+      disabling: t('disabling extension'),
+      developer: t('developer extension'),
       interface: t('interface components'),
       runtime: t('runtime extensions'),
       reloadButton: t('reload'),

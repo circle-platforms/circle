@@ -677,7 +677,7 @@ export class RuntimeController {
       owner.applyThinkingChoice(level);
     }
   }
-  private synchronizeSharedSettings(settings: CircleSettings): void {
+  private synchronizeSharedSettings(settings: CircleSettings): Promise<void> {
     if (settings.extensions.github?.enabled !== true) {
       this.githubLeases.clear();
       this.githubProviderLifetime.abort();
@@ -708,6 +708,7 @@ export class RuntimeController {
         void owner.setBundledExtensionEnabled('github', true).catch(() => {});
       }
     }
+    const developerApplied = this.applyDeveloperExtension(settings);
     for (const owner of this.runtimes.values()) {
       if (
         !owner.options.localContext &&
@@ -728,6 +729,36 @@ export class RuntimeController {
         trusted_folders: [...settings.trusted_folders],
       });
     }
+    return developerApplied;
+  }
+  /** Turn the developer extension on or off in every runtime, without a reload. */
+  private applyDeveloperExtension(settings: CircleSettings): Promise<void> {
+    const enabled = settings.extensions.developer?.enabled === true;
+    const active = this.active;
+    const owners = [
+      ...this.runtimes.values(),
+      ...this.taskRuntimes.values(),
+    ].filter((owner) => !owner.isClosing);
+    owners.sort((left, right) =>
+      left === active ? -1 : right === active ? 1 : 0,
+    );
+    const pending: Promise<void>[] = [];
+    for (const owner of owners) {
+      const previous =
+        owner.options.settings.extensions.developer?.enabled === true;
+      owner.options.settings.extensions.developer = {
+        ...owner.options.settings.extensions.developer,
+        enabled,
+      };
+      if (previous === enabled) continue;
+      pending.push(
+        owner.setBundledExtensionEnabled('developer', enabled).then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+    }
+    return Promise.all(pending).then(() => undefined);
   }
   private async releaseSessionResources(
     sessionId: string,
@@ -987,6 +1018,8 @@ export class RuntimeController {
         githubConnection: this.githubConnection(),
         enforceGitHubConnection: true,
         githubEnabled: (id) => this.githubAvailable(id),
+        developerEnabled: () =>
+          loadSettings(this.home).extensions.developer?.enabled === true,
         githubInvocation: (id) => this.githubInvocation(id),
         credentialStore: this.options.credentialStore
           ? {
@@ -1453,10 +1486,14 @@ export class RuntimeController {
         this.options.dataFolder ?? this.home,
         'workspace-operations',
       ),
-      redactError: (error) =>
-        (error as { code?: string })?.code === 'DOCUMENT_CONFLICT'
-          ? 'file changed on disk; reload and compare your draft before saving'
-          : 'operation failed; inspect effects before retrying',
+      redactError: (error) => {
+        const code = (error as { code?: string })?.code;
+        if (code === 'DOCUMENT_CONFLICT')
+          return 'file changed on disk; reload and compare your draft before saving';
+        if (code === 'DEBUG_TARGET_MISSING' || code === 'DEVELOPER_TOOLS_OFF')
+          return error instanceof Error ? error.message : String(error);
+        return 'operation failed; inspect effects before retrying';
+      },
     }));
   }
   private async workspaceOperation(
@@ -2067,6 +2104,17 @@ export class RuntimeController {
           role: 'notice',
           text: '✖ Interrupted',
           interrupted: true,
+          at: new Date(node.created).toISOString(),
+        });
+        continue;
+      }
+      if (raw.internal === 'hook_notice') {
+        result.push({
+          id: node.id,
+          parentId: node.parent,
+          role: 'notice',
+          text: raw.display ?? raw.content,
+          ...(raw.hook ? { hookNotice: raw.hook } : {}),
           at: new Date(node.created).toISOString(),
         });
         continue;
@@ -2829,6 +2877,17 @@ export class RuntimeController {
           : {}),
         textSize: 'default',
         keybindings: {},
+        hooks: runtime.hookListing().map(({ hook, active }) => ({
+          source: hook.source,
+          event: hook.event,
+          name: hook.name,
+          command: hook.command,
+          tools: hook.tools === '*' ? '*' : hook.tools.join(', '),
+          paths: hook.paths.join(', '),
+          ...(hook.skill ? { skill: hook.skill } : {}),
+          active,
+        })),
+        projectHooksIgnored: runtime.hookCatalog.projectIgnored,
       },
     };
   }
@@ -3274,6 +3333,7 @@ export class RuntimeController {
         input: structuredClone(call.args),
         title: `${call.name} · ${review.reason}`,
         reason: review.reason,
+        ...(call.hook_reason ? { hookReason: call.hook_reason } : {}),
         prefix: review.prefix.length ? review.prefix.join(' ') : undefined,
         tool: call.name,
         command:
@@ -3886,7 +3946,7 @@ export class RuntimeController {
     if (command.name === 'workspace-service')
       return this.workspaceCommand(command);
     this.metadata.refresh();
-    this.synchronizeSharedSettings(loadSettings(this.home));
+    void this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
     let runtime = this.active;
     const navigation = [
@@ -4545,7 +4605,7 @@ export class RuntimeController {
               };
           }
         });
-        this.synchronizeSharedSettings(settings);
+        await this.synchronizeSharedSettings(settings);
         if (data.defaultEffort !== undefined)
           this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)
@@ -4735,6 +4795,7 @@ export class RuntimeController {
       case 'load-skill': {
         const skill = runtime.skills.find((skill) => skill.name === p.name);
         if (!skill) throw Error('skill not found');
+        await runtime.activateSkillHooks(skill.name);
         return {
           name: skill.name,
           content: loadSkillBody(skill.name, runtime.skills),

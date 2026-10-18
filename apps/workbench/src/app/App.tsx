@@ -51,6 +51,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { useRuntime } from './context';
+import { developerToolsEnabled } from '../plugins/developer';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
 import {
   historyMessages,
@@ -1018,7 +1019,8 @@ export function App() {
                 column={sourceColumn}
                 resourceOwner={fileOwner}
                 onDebugSource={
-                  runtime.mode === 'live'
+                  runtime.mode === 'live' &&
+                  developerToolsEnabled(snapshot.extensions)
                     ? (path, line) => {
                         const owner = fileOwner?.sessionId ?? session.id;
                         perform(async () => {

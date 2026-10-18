@@ -50,5 +50,48 @@ test('third-party, project, unknown and custom status content remains byte-for-b
   ];
   for (const row of rows)
     assert.equal(extensionStatusText(row), row.status!.text);
+  const developerReady = {
+    id: 'developer',
+    name: 'developer',
+    scope: 'project' as const,
+    enabled: true,
+    version: '0.1.0',
+    status: { text: 'ready', lamp: 'ok' as const },
+    view: { provider: 'developer' },
+    tools: [],
+    commands: [],
+    events: [],
+  };
+  assert.equal(extensionStatusText(developerReady), 'ready');
+  setLanguage('en');
+});
+test('the bundled developer extension ready status is interface text', () => {
+  const row: RuntimeExtension = {
+    id: 'developer',
+    name: 'developer',
+    scope: 'bundled',
+    enabled: true,
+    version: '0.1.0',
+    status: { text: 'ready', lamp: 'ok' },
+    view: { provider: 'developer', version: '0.1.0' },
+    tools: [],
+    commands: [],
+    events: [],
+  };
+  setLanguage('en');
+  assert.equal(extensionStatusText(row), 'ready');
+  setLanguage('zh-CN');
+  assert.equal(extensionStatusText(row), '就绪');
+  assert.equal(
+    extensionStatusText({
+      ...row,
+      status: { text: 'indexing', lamp: 'wait' },
+    }),
+    'indexing',
+  );
+  assert.equal(
+    extensionStatusText({ ...row, view: { provider: 'other' } }),
+    'ready',
+  );
   setLanguage('en');
 });

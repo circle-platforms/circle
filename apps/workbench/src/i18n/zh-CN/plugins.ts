@@ -26,6 +26,10 @@ export const plugins: Record<string, string> = {
   'The conversation and other components remain available.':
     '对话和其他组件仍然可用。',
   retry: '重试',
+  'developer extension': '开发者工具',
+  ready: '就绪',
+  'Node debugging and TypeScript and JavaScript language features.':
+    'Node 调试，以及 TypeScript 和 JavaScript 的语言功能。',
   hub: '枢纽',
   knowledge: '知识',
   work: '工作',

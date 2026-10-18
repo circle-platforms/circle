@@ -103,7 +103,11 @@ const server = await createServer({
                   params.after ?? { seq: 0, offset: 0 },
                 hasMore: false,
               };
-            } else if (service === 'language')
+            } else if (service === 'debug' && method === 'snapshot')
+              data = { status: 'idle', output: '', breakpoints: {} };
+            else if (service === 'debug' && method === 'setBreakpoints')
+              data = { breakpoints: [] };
+            else if (service === 'language')
               data = languages.get(id).call(method, params);
             else if (method === 'read')
               data = await documents.get(id).read(params.path);

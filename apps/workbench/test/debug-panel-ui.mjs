@@ -151,6 +151,26 @@ try {
     await page.getByLabel('program path', { exact: true }).inputValue(),
     '/fixture/source.cjs',
   );
+  await page.evaluate(() => {
+    window.addEventListener(
+      'keydown',
+      (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a')
+          event.preventDefault();
+      },
+      true,
+    );
+  });
+  const program = page.getByLabel('program path', { exact: true });
+  await program.click();
+  await program.press('Control+a');
+  assert.deepEqual(
+    await program.evaluate((input) => [
+      input.selectionStart,
+      input.selectionEnd,
+    ]),
+    [0, '/fixture/source.cjs'.length],
+  );
   assert.equal(
     await page.getByLabel('breakpoint line', { exact: true }).inputValue(),
     '12',

@@ -8,6 +8,7 @@ import { inspect } from 'node:util';
 import { CdpPipe, type CdpEvent } from '../src/browser/cdp.js';
 import { scratch } from './helpers.js';
 import { ownedStartupBrowser } from './browser-startup-fixture.js';
+import { fakeBrowser } from './browser-fake-cdp.js';
 
 for (const source of ['input', 'output'] as const)
   test(`a CDP ${source} transport error retains its original cause`, async () => {
@@ -205,5 +206,54 @@ test('show a spawn failure without native argument properties', async (t) => {
   assert.doesNotMatch(
     output,
     /spawnargs|synthetic\/private|private-fixture\.invalid/,
+  );
+});
+
+test('a browser that ends during its start is reported by how it ended, and the next action starts it again (#106)', async (t) => {
+  // As seen in CI: the protocol pipe closes at the first command, and the exit and the
+  // browser's last words arrive only after that
+  let starts = 0;
+  const fake = fakeBrowser(t, (request, browser) => {
+    if (request.method !== 'Browser.getVersion' || ++starts > 1) return;
+    browser.end('fixture: the browser could not start', 41);
+    return true;
+  });
+  await assert.rejects(
+    fake.browser.request('c', 'snapshot', {}, new AbortController().signal),
+    (error) => {
+      assert(error instanceof Error);
+      assert.match(
+        error.message,
+        /^the browser was closed \(startup Browser\.getVersion; exitCode=41; signal=unknown; /,
+      );
+      assert.match(error.message, /fixture: the browser could not start/);
+      const diagnostics = (error as any).browserStartup;
+      assert.deepEqual(diagnostics.processAtFailure, {
+        observedExit: true,
+        exitCode: 41,
+        signal: 'unknown',
+      });
+      // Circle did not signal a browser that had ended by itself
+      assert.equal(diagnostics.cleanupTerminationRequested, false);
+      assert.deepEqual(diagnostics.stderr, [
+        'fixture: the browser could not start',
+      ]);
+      return true;
+    },
+  );
+  const ended = fake.child();
+  assert.equal(ended.exitCode, 41);
+  const shown = await fake.browser.request(
+    'c',
+    'snapshot',
+    {},
+    new AbortController().signal,
+  );
+  assert.match(shown.text, /Fake page/);
+  assert.notEqual(fake.child(), ended);
+  assert.equal(
+    fake.requests.filter((request) => request.method === 'Browser.getVersion')
+      .length,
+    2,
   );
 });

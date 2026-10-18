@@ -262,6 +262,62 @@ test('browser close escalates a refused graceful termination instead of rejectin
   assert.equal(closed, true);
 });
 
+/** A Windows root whose termination is accepted, ending `endsAfter` ms later, or never. */
+function terminatingChild(endsAfter?: number) {
+  const child = liveChild() as ChildProcess & { kills: string[] };
+  child.kills = [];
+  (child as any).kill = (signal: string) => {
+    child.kills.push(signal);
+    if (endsAfter === undefined) return false;
+    setTimeout(() => {
+      (child as unknown as { exitCode: number | null }).exitCode = 1;
+      child.emit('exit', 1, null);
+    }, endsAfter);
+    return true;
+  };
+  return child;
+}
+
+async function asWindows<T>(run: () => Promise<T>): Promise<T> {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+  }
+}
+
+test('on Windows, close waits for a root whose termination was accepted to actually end (#108)', async () => {
+  // As on a busy Windows runner: taskkill succeeds, the root's own handle is terminated,
+  // and the process ends well after the exit wait close gives a browser that may refuse
+  const child = terminatingChild(400);
+  const browser = browserWithChild(child);
+  const state = browser as any;
+  const stops: boolean[] = [];
+  state.stopProcess = async (_child: ChildProcess, force: boolean) => {
+    stops.push(force);
+  };
+  await asWindows(() => browser.close());
+  assert.deepEqual(stops, [false, true]);
+  assert.deepEqual(child.kills, ['SIGKILL']);
+  assert.equal(child.exitCode, 1);
+});
+
+test('on Windows, a refused termination of the root still fails close within its bound', async () => {
+  const child = terminatingChild();
+  const browser = browserWithChild(child);
+  (browser as any).stopProcess = async () => {};
+  const started = Date.now();
+  await assert.rejects(
+    asWindows(() => browser.close()),
+    /the browser process did not stop/,
+  );
+  assert(Date.now() - started < 5000);
+  assert.deepEqual(child.kills, ['SIGKILL']);
+  assert.equal(child.exitCode, null);
+});
+
 test('refused forced browser termination retains session history until a successful deletion retry', async (t) => {
   const home = scratch(t);
   const workspace = scratch(t);
