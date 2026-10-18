@@ -23,6 +23,7 @@
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test:interface": "node test/interface.mjs",
+    "test:launch": "node test/launch-smoke.mjs",
     "test:update": "node test/update.mjs",
     "test:msi": "node test/msi-package.mjs",
     "test:extensions": "node test/extensions-native.mjs",
