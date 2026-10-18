@@ -54,6 +54,8 @@ const MAC_WINDOWS = `function run(argv) {
 // every screenshot and has taken from seconds to more than a minute on a busy machine.
 const WINDOWS_SHOT = [
   "$ErrorActionPreference = 'Stop'",
+  // Window and app names reach Circle in UTF-8, not in the console's code page.
+  '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
   'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
   "$type = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object Reflection.AssemblyName 'CircleWindow'), [Reflection.Emit.AssemblyBuilderAccess]::Run).DefineDynamicModule('CircleWindow').DefineType('CircleWindow', [Reflection.TypeAttributes]'Public, Class')",
   "foreach ($call in @(@('SetProcessDPIAware', @()), @('GetWindowRect', @([IntPtr], [int[]])), @('IsIconic', @([IntPtr])), @('PrintWindow', @([IntPtr], [IntPtr], [uint32])))) { $type.DefinePInvokeMethod($call[0], 'user32.dll', [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard, [bool], [Type[]]($call[1]), [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Auto).SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig) }",

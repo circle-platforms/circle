@@ -187,6 +187,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     (message) =>
       !message.internal ||
       message.internal === 'job_notice' ||
+      message.internal === 'hook_notice' ||
       message.internal === 'interrupted',
   );
   let hide = state.hiddenTurns;
@@ -370,6 +371,10 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     }
     if (message.internal === 'interrupted') {
       noticeBlock('✖ Interrupted');
+      return;
+    }
+    if (message.internal === 'hook_notice') {
+      noticeBlock(message.display || message.content);
       return;
     }
     if (message.internal === 'job_notice') {
