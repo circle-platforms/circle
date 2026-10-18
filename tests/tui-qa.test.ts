@@ -71,6 +71,40 @@ test('an unanswered prompt is marked interrupted once', (t) => {
     .messages(streamed.id)
     .filter((message) => message.internal === 'interrupted');
   assert.equal(after.length, 0);
+  // A turn that died while the model read its tool results is marked too.
+  const reading = store.create(home, 'model');
+  store.append(reading.id, [
+    { id: 'u4', role: 'user', content: 'look' },
+    {
+      id: 'a4',
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'call-4', name: 'read_file', args: {} }],
+    },
+    {
+      id: 't4',
+      role: 'tool',
+      tool_call_id: 'call-4',
+      name: 'read_file',
+      content: 'contents',
+    },
+  ]);
+  store.repairInterrupted(reading.id);
+  assert.equal(
+    store
+      .messages(reading.id)
+      .some((message) => message.internal === 'interrupted'),
+    false,
+    'no open turn, no mark',
+  );
+  store.noteTurn(reading.id);
+  store.repairInterrupted(reading.id);
+  store.repairInterrupted(reading.id);
+  const readingMarks = store
+    .messages(reading.id)
+    .filter((message) => message.internal === 'interrupted');
+  assert.equal(readingMarks.length, 1);
+  assert.equal(store.messages(reading.id).at(-1)?.internal, 'interrupted');
   const finished = store.create(home, 'model');
   store.append(finished.id, [
     { id: 'u3', role: 'user', content: 'done' },

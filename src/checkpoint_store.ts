@@ -984,11 +984,14 @@ export class CheckpointStore {
       return;
     }
     const last = messages.filter((message) => !message.internal).at(-1);
-    // Only a turn that died after this user message was saved and before any
-    // reply moved the head. A saved partial (`interrupted: true`), a finished
-    // reply, a shell line and a 1.6 session (no open-turn row) are left alone.
+    // Only a turn that died while the model was being asked: after this user
+    // message, or after the tool results it was about to read, were saved and
+    // before any reply moved the head. A saved partial (`interrupted: true`),
+    // a finished reply, a shell line and a 1.6 session (no open-turn row) are
+    // left alone.
     const unanswered =
-      last?.role === 'user' && !last.shell && this.turnMatches(sessionId);
+      ((last?.role === 'user' && !last.shell) || last?.role === 'tool') &&
+      this.turnMatches(sessionId);
     if (unanswered)
       this.append(sessionId, [
         {

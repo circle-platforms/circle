@@ -6,7 +6,8 @@ import { ensureHome } from './paths.js';
 
 // A lease outlives a turn: queued work, approvals and background jobs still own history.
 // proper-lockfile uses atomic mkdir and a heartbeat; no PID-based takeover is involved.
-const STALE = 30000;
+export const SESSION_LEASE_STALE_MS = 30000;
+const STALE = SESSION_LEASE_STALE_MS;
 const UPDATE = 5000;
 /** What to say when another runtime holds the session. Names the copy command. */
 export function occupiedSessionMessage(sessionId: string): string {
