@@ -23,6 +23,11 @@ import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import 'monaco-editor/languages/definitions/typescript/register';
 import 'monaco-editor/languages/definitions/javascript/register';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
+import {
+  breakpointsForPath,
+  toggleBreakpointLine,
+  type BreakpointRow,
+} from './breakpoints';
 import './native-editor.css';
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
@@ -339,6 +344,8 @@ export function NativeCodeEditor({
       accessibilitySupport: 'on',
       ariaLabel: path,
       tabSize: 2,
+      glyphMargin:
+        live && (language === 'typescript' || language === 'javascript'),
     };
     const { model: _model, ...diffOptions } = options;
     const view = diff
@@ -400,6 +407,69 @@ export function NativeCodeEditor({
         ...params,
       });
     const disposables: monaco.IDisposable[] = [];
+    if (live && (language === 'typescript' || language === 'javascript')) {
+      let lines: number[] = [];
+      let edited = false;
+      const decorations = editor.createDecorationsCollection();
+      const paint = (next: number[]) => {
+        lines = next;
+        decorations.set(
+          next.map((line) => ({
+            range: new monaco.Range(line, 1, line, 1),
+            options: { glyphMarginClassName: 'circle-breakpoint-glyph' },
+          })),
+        );
+      };
+      const fromSnapshot = (
+        breakpoints: Record<string, readonly BreakpointRow[]>,
+      ) => paint(breakpointsForPath(breakpoints, path));
+      disposables.push(
+        editor.onMouseDown((event) => {
+          const type = event.target.type;
+          if (
+            type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN &&
+            type !== monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS &&
+            type !== monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS
+          )
+            return;
+          const line = event.target.position?.lineNumber;
+          if (!line || !active) return;
+          event.event.preventDefault();
+          event.event.stopPropagation();
+          edited = true;
+          const previous = lines;
+          paint(toggleBreakpointLine(lines, line));
+          void workspaceCall(sessionId, 'debug', 'setBreakpoints', {
+            path,
+            lines,
+          }).catch(() => {
+            if (active) paint(previous);
+          });
+        }),
+      );
+      disposables.push({
+        dispose: subscribeWorkspace((event) => {
+          const snapshot = event.data.snapshot as
+            | { breakpoints?: Record<string, readonly BreakpointRow[]> }
+            | undefined;
+          if (
+            event.sessionId !== sessionId ||
+            event.service !== 'debug' ||
+            !snapshot?.breakpoints
+          )
+            return;
+          fromSnapshot(snapshot.breakpoints);
+        }),
+      });
+      void workspaceCall<{
+        breakpoints?: Record<string, readonly BreakpointRow[]>;
+      }>(sessionId, 'debug', 'snapshot')
+        .then((snapshot) => {
+          if (active && !edited) fromSnapshot(snapshot.breakpoints ?? {});
+        })
+        .catch(() => {});
+      disposables.push({ dispose: () => decorations.clear() });
+    }
     const update = () => {
       if (callbacks.current.owner !== owner) return;
       callbacks.current.onChange(model.getValue());

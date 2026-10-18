@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { realpathSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DeliveryService } from '../src/workspace/delivery.ts';
@@ -58,11 +58,18 @@ async function wait(check: () => boolean) {
     await delay(10);
   }
 }
+function withDeveloper<
+  T extends { extensions: Record<string, { enabled?: boolean }> },
+>(settings: T, enabled = true): T {
+  settings.extensions.developer = { enabled };
+  return settings;
+}
 async function setup(
   t: TestContext,
   replies: ConstructorParameters<typeof ScriptedModel>[0] = [],
   trusted = true,
   extra: Partial<ConstructorParameters<typeof RuntimeController>[0]> = {},
+  developer = true,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-controller-services-'));
   const home = join(root, 'home');
@@ -71,7 +78,10 @@ async function setup(
   await mkdir(workspace);
   execFileSync('git', ['init', '-q', workspace]);
   saveSettings(
-    trusted ? trustFolder(defaultSettings(), workspace) : defaultSettings(),
+    withDeveloper(
+      trusted ? trustFolder(defaultSettings(), workspace) : defaultSettings(),
+      developer,
+    ),
     home,
   );
   const model = new ScriptedModel(replies);
@@ -2355,4 +2365,55 @@ if ($result -eq 0 -or $result -ge $buffer.Capacity) { throw "GetShortPathName fa
   } finally {
     await controller.close();
   }
+});
+
+async function markerAdapter(t: TestContext) {
+  const scratch = await mkdtemp(join(tmpdir(), 'circle-debug-marker-'));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const marker = join(scratch, 'adapter-started');
+  const adapter = join(scratch, 'adapter.cjs');
+  await writeFile(
+    adapter,
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started');\n`,
+  );
+  return {
+    marker,
+    workspaceTools: {
+      nodeExecutable: process.execPath,
+      runtimeExecutable: process.execPath,
+      adapterPath: adapter,
+      ghPath: 'gh',
+    },
+  };
+}
+
+test('a missing debug target names the file and does not start the adapter', async (t) => {
+  const marked = await markerAdapter(t);
+  const f = await setup(t, [], true, {
+    workspaceTools: marked.workspaceTools,
+  });
+  const launch = await f.service('debug', 'launch', { program: 'missing.js' });
+  assert.equal(launch.ok, false);
+  assert.match(String(launch.error), /debug target is missing: missing\.js/);
+  assert.doesNotMatch(String(launch.error), /inspect effects/);
+  assert.equal(existsSync(marked.marker), false);
+});
+
+test('developer tools off refuses language and debug without starting the adapter', async (t) => {
+  const marked = await markerAdapter(t);
+  const f = await setup(
+    t,
+    [],
+    true,
+    { workspaceTools: marked.workspaceTools },
+    false,
+  );
+  const language = await f.service('language', 'open', { path: 'main.ts' });
+  assert.equal(language.ok, false);
+  assert.match(String(language.error), /developer tools are off/);
+  await writeFile(join(f.workspace, 'main.ts'), 'export const value = 1;\n');
+  const launch = await f.service('debug', 'launch', { program: 'main.ts' });
+  assert.equal(launch.ok, false);
+  assert.match(String(launch.error), /developer tools are off/);
+  assert.equal(existsSync(marked.marker), false);
 });

@@ -12,6 +12,7 @@ import { TasksPanel } from './TasksPanel';
 import { DeliveryCyclePanel } from './DeliveryCyclePanel';
 import { appendTerminalSelection } from '../model/terminal-context';
 import { workspaceCall } from '../model/workspace-client';
+import { developerToolsEnabled } from '../plugins/developer';
 import type { TerminalReplay } from '../../../desktop/src/workspace/terminal';
 const NativeTerminal = lazy(() =>
   import('../components/NativeTerminal').then((m) => ({
@@ -58,6 +59,7 @@ export function WorkspacePanelContents({
   onTask: (id: string) => void;
 }) {
   const { runtime, snapshot, notify } = useRuntime();
+  const showDebug = developerToolsEnabled(snapshot.extensions);
   const workspaceRoot = snapshot.workspaces.find(
     (workspace) =>
       workspace.id ===
@@ -75,10 +77,13 @@ export function WorkspacePanelContents({
     if (kind === 'activity' && selection.startsWith('task:')) select('tasks');
     else if (
       kind === 'activity' &&
+      showDebug &&
       (selection === 'debug' || debugSourceRequest)
     )
       select('debug');
-  }, [kind, selection, debugSourceRequest?.id]);
+    else if (kind === 'activity' && !showDebug && tab === 'debug')
+      select('original');
+  }, [kind, selection, debugSourceRequest?.id, showDebug, tab]);
   const tabs =
     kind === 'terminal'
       ? [
@@ -94,7 +99,7 @@ export function WorkspacePanelContents({
         : [
             { id: 'original', label: t('activity') },
             { id: 'tasks', label: t('tasks') },
-            { id: 'debug', label: t('debug') },
+            ...(showDebug ? [{ id: 'debug', label: t('debug') }] : []),
           ];
   const openExternal = (url: string) => {
     try {

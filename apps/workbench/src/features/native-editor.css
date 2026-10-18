@@ -3,6 +3,15 @@
   min-height: 150px;
   overflow: hidden;
 }
+.circle-breakpoint-glyph {
+  background: var(--negative);
+  border-radius: 50%;
+  width: 8px !important;
+  height: 8px !important;
+  margin-left: 4px;
+  margin-top: 5px;
+  cursor: pointer;
+}
 .file-view .editor-notice {
   display: flex;
   align-items: center;

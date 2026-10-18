@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { connect, type Socket } from 'node:net';
-import { realpath, stat } from 'node:fs/promises';
+import { chmod, mkdir, realpath, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 
@@ -172,6 +173,8 @@ export class WorkspaceDebugService {
     breakpoints: {},
   };
   private emptyArgument?: string;
+  /** Private directory holding the adapter socket. Absent on Windows named pipes. */
+  private socketDir?: string;
   private outputPending: Promise<void> = Promise.resolve();
   private outputFailure?: Error;
   async flushOutput() {
@@ -187,14 +190,56 @@ export class WorkspaceDebugService {
     this.options.emit?.(this.snapshot());
   }
   private async file(input: unknown) {
-    if (typeof input !== 'string') throw Error('source path is required');
+    if (typeof input !== 'string' || !input.trim())
+      throw Error('source path is required');
     const root = await realpath(this.options.workspaceRoot);
-    const resolved = await realpath(path.resolve(root, input));
-    if (resolved !== root && !resolved.startsWith(root + path.sep))
+    const resolved = path.resolve(root, input);
+    const relative = path.relative(root, resolved);
+    if (relative.startsWith('..') || path.isAbsolute(relative))
       throw Error('debug source is outside the workspace');
-    if (!(await stat(resolved)).isFile())
+    let real: string;
+    try {
+      real = await realpath(resolved);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        const shown = path.isAbsolute(input) ? relative || input : input;
+        throw Object.assign(new Error(`debug target is missing: ${shown}`), {
+          code: 'DEBUG_TARGET_MISSING',
+        });
+      }
+      throw error;
+    }
+    if (real !== root && !real.startsWith(root + path.sep))
+      throw Error('debug source is outside the workspace');
+    if (!(await stat(real)).isFile())
       throw Error('debug source must be a file');
-    return resolved;
+    return real;
+  }
+  /** A private socket, never a TCP port. Other local users cannot connect. */
+  private async adapterAddress(): Promise<string> {
+    if (process.platform === 'win32')
+      return `\\\\.\\pipe\\circle-debug-${randomUUID()}`;
+    // macOS temporary directories are too long for a Unix socket path.
+    const parent = process.platform === 'darwin' ? '/tmp' : tmpdir();
+    const dir = path.join(parent, `cd-${randomBytes(6).toString('hex')}`);
+    await mkdir(dir, { mode: 0o700 });
+    await chmod(dir, 0o700);
+    this.socketDir = dir;
+    const address = path.join(dir, 's');
+    if (Buffer.byteLength(address) > 100)
+      throw Error('debug adapter socket path is too long');
+    return address;
+  }
+  private connectSocket(address: string) {
+    return new Promise<Socket>((resolve, reject) => {
+      const socket = connect(address, () => resolve(socket));
+      socket.once('error', reject);
+    });
+  }
+  private async removeSocket() {
+    const dir = this.socketDir;
+    this.socketDir = undefined;
+    if (dir) await rm(dir, { recursive: true, force: true });
   }
   private async start() {
     if (this.adapter) throw Error('a debug session is already running');
@@ -206,9 +251,10 @@ export class WorkspaceDebugService {
       threadId: undefined,
     });
     try {
+      const address = await this.adapterAddress();
       const adapter = (this.adapter = spawn(
         this.options.nodeExecutable,
-        [this.options.adapterPath, '0', '127.0.0.1'],
+        [this.options.adapterPath, address],
         {
           cwd: this.options.workspaceRoot,
           env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
@@ -221,7 +267,7 @@ export class WorkspaceDebugService {
       adapter.stderr?.on('data', (chunk: Buffer) => {
         stderrTail = (stderrTail + chunk.toString()).slice(-4096);
       });
-      const port = await new Promise<number>((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         let text = '';
         const timer = setTimeout(
           () => reject(Error('debug adapter did not start')),
@@ -247,31 +293,32 @@ export class WorkspaceDebugService {
           );
         const data = (chunk: Buffer) => {
           text += chunk.toString();
-          const m =
-            /listening (?:on|at).*?:(\d+)/i.exec(text) ??
-            /listening at port (\d+)/i.exec(text);
-          text = text.slice(-4096);
-          if (m) {
-            cleanup();
-            resolve(+m[1]);
+          // js-debug has no handshake. A TCP announcement is refused: any local
+          // user who finds the port could act as the client.
+          if (
+            /listening at port \d+/i.test(text) ||
+            /127\.0\.0\.1:\d+/.test(text) ||
+            /0\.0\.0\.0:\d+/.test(text)
+          ) {
+            error(Error('debug adapter announced a TCP port'));
+            return;
           }
+          if (/listening/i.test(text) && text.includes(address)) {
+            cleanup();
+            resolve();
+          }
+          text = text.slice(-8192);
         };
         adapter.stdout!.on('data', data);
         adapter.once('error', error);
         adapter.once('exit', exit);
       });
       if (generation !== this.generation) throw Error('debug launch cancelled');
-      const socket = await new Promise<Socket>((resolve, reject) => {
-        const s = connect(port, '127.0.0.1', () => resolve(s));
-        s.once('error', reject);
-      });
+      const socket = await this.connectSocket(address);
       const makeConnection = (socket: Socket): DapConnection => {
         const connection = new DapConnection(socket, async (command, args) => {
           if (command === 'startDebugging') {
-            const childSocket = await new Promise<Socket>((resolve, reject) => {
-              const s = connect(port, '127.0.0.1', () => resolve(s));
-              s.once('error', reject);
-            });
+            const childSocket = await this.connectSocket(address);
             const child = makeConnection(childSocket);
             this.target = child;
             const initialized = child.initialized;
@@ -652,6 +699,7 @@ export class WorkspaceDebugService {
     }
     for (const connection of this.connections) connection.close();
     this.connections.clear();
+    await this.removeSocket();
     const adapter = this.adapter;
     this.adapter = undefined;
     if (adapter && !adapter.killed) {

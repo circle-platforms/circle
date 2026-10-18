@@ -1,4 +1,5 @@
 import { githubPlugin } from './github';
+import { developerPlugin } from './developer';
 import {
   Folder,
   FileDiff,
@@ -31,6 +32,7 @@ import { t } from '../i18n';
 // Titles and descriptions are getters so they follow the interface language when it changes.
 export const circlePlugins: WorkbenchPlugin[] = [
   githubPlugin,
+  developerPlugin,
   {
     id: 'files',
     apiVersion: 1,

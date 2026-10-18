@@ -65,7 +65,9 @@ test('native delegation reuses real agent sessions, retains child approval owner
     '-qm',
     'Create fixture',
   );
-  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.extensions.developer = { enabled: true };
+  saveSettings(settings, home);
   const modelTrace: unknown[] = [];
   const workspaceEvents: unknown[] = [];
   const handler = async (request: ModelRequest): Promise<ModelResponse> => {

@@ -11,6 +11,22 @@ import { Button, Status } from './common';
 import { DebugToolbar } from './DebugToolbar';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import './debug-panel.css';
+import { debugStatusValue } from './debug-status';
+import { shownDebugError } from './debug-error';
+import type { KeyboardEvent } from 'react';
+
+function selectField(event: KeyboardEvent<HTMLInputElement>) {
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLowerCase() === 'a'
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.select();
+  }
+}
 
 type Snapshot = {
   status: string;
@@ -120,7 +136,7 @@ export function DebugPanel({
       }
       if (current()) await copyText(chunks.join(''));
     } catch (failure) {
-      if (current()) setError(String(failure));
+      if (current()) setError(shownDebugError(failure));
     } finally {
       if (current()) setCopying(false);
     }
@@ -147,7 +163,7 @@ export function DebugPanel({
       })
       .catch((error) => {
         if (current() && sequence === refreshSequence.current)
-          setError(String(error));
+          setError(shownDebugError(error));
       });
   };
   useEffect(() => {
@@ -173,7 +189,7 @@ export function DebugPanel({
           if (current()) setFrames(result.stackFrames ?? []);
         })
         .catch((error) => {
-          if (current()) setError(String(error));
+          if (current()) setError(shownDebugError(error));
         });
     else {
       setFrames([]);
@@ -216,7 +232,7 @@ export function DebugPanel({
       })
       .catch((error) => {
         if (current() && preparedSource.current === requestKey)
-          setError(String(error));
+          setError(shownDebugError(error));
       });
   }, [sessionId, sourceRequest?.id, sourceRequest?.path, sourceRequest?.line]);
   async function act(method: string, params: Record<string, unknown> = {}) {
@@ -227,7 +243,7 @@ export function DebugPanel({
       await call(method, params);
       if (current()) await refresh();
     } catch (error) {
-      if (current()) setError(String(error));
+      if (current()) setError(shownDebugError(error));
     } finally {
       if (current()) setBusy(false);
     }
@@ -240,7 +256,7 @@ export function DebugPanel({
       const result = await call<any>('variables', { variablesReference });
       if (current()) setVariables(result.variables);
     } catch (error) {
-      if (current()) setError(String(error));
+      if (current()) setError(shownDebugError(error));
     }
   }
   async function inspect(frame: any) {
@@ -264,7 +280,7 @@ export function DebugPanel({
         if (current()) setVariables(result.variables);
       }
     } catch (error) {
-      if (current()) setError(String(error));
+      if (current()) setError(shownDebugError(error));
     }
   }
   async function evaluate() {
@@ -281,7 +297,7 @@ export function DebugPanel({
         setResult(result.result);
     } catch (error) {
       if (current() && sequence === evaluationSequence.current)
-        setError(String(error));
+        setError(shownDebugError(error));
     }
   }
   return (
@@ -293,11 +309,10 @@ export function DebugPanel({
         {!embedded && <h2>{t('project debug')}</h2>}
         <span role="status" className="debug-status">
           <Status
-            value={
-              ['idle', 'running', 'failed'].includes(state.status)
-                ? state.status
-                : (statuses[state.status] ?? state.status)
-            }
+            value={debugStatusValue(
+              state.status,
+              (status) => statuses[status] ?? status,
+            )}
           />
           {state.status === 'paused' && pauseReason(state.reason) && (
             <small>{pauseReason(state.reason)}</small>
@@ -320,6 +335,7 @@ export function DebugPanel({
           <input
             aria-label={t('program path')}
             placeholder={t('program path')}
+            onKeyDownCapture={selectField}
             value={program}
             onChange={(e) => setProgram(e.target.value)}
           />
@@ -341,6 +357,7 @@ export function DebugPanel({
             <div className="debug-argument" key={index}>
               <input
                 aria-label={`${t('program argument')} ${index + 1}`}
+                onKeyDownCapture={selectField}
                 value={argument}
                 onChange={(event) =>
                   setArgs((current) =>
@@ -376,6 +393,7 @@ export function DebugPanel({
           <div className="debug-controls">
             <input
               aria-label={t('inspector port')}
+              onKeyDownCapture={selectField}
               placeholder={t('inspector port')}
               title={t('the port given to node --inspect')}
               type="number"
@@ -400,6 +418,7 @@ export function DebugPanel({
         <div className="debug-controls">
           <input
             aria-label={t('breakpoint line')}
+            onKeyDownCapture={selectField}
             type="number"
             min="1"
             value={line}
@@ -523,6 +542,7 @@ export function DebugPanel({
       >
         <input
           aria-label={t('debug expression')}
+          onKeyDownCapture={selectField}
           placeholder={
             state.status === 'paused'
               ? t('expression to evaluate')

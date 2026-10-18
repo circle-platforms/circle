@@ -987,6 +987,8 @@ export class RuntimeController {
         githubConnection: this.githubConnection(),
         enforceGitHubConnection: true,
         githubEnabled: (id) => this.githubAvailable(id),
+        developerEnabled: () =>
+          loadSettings(this.home).extensions.developer?.enabled === true,
         githubInvocation: (id) => this.githubInvocation(id),
         credentialStore: this.options.credentialStore
           ? {
@@ -1453,10 +1455,14 @@ export class RuntimeController {
         this.options.dataFolder ?? this.home,
         'workspace-operations',
       ),
-      redactError: (error) =>
-        (error as { code?: string })?.code === 'DOCUMENT_CONFLICT'
-          ? 'file changed on disk; reload and compare your draft before saving'
-          : 'operation failed; inspect effects before retrying',
+      redactError: (error) => {
+        const code = (error as { code?: string })?.code;
+        if (code === 'DOCUMENT_CONFLICT')
+          return 'file changed on disk; reload and compare your draft before saving';
+        if (code === 'DEBUG_TARGET_MISSING' || code === 'DEVELOPER_TOOLS_OFF')
+          return error instanceof Error ? error.message : String(error);
+        return 'operation failed; inspect effects before retrying';
+      },
     }));
   }
   private async workspaceOperation(

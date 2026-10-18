@@ -292,6 +292,15 @@ const server = await createServer({
                     releaseHistory = resolve;
                   });
                 }
+              } else if (service === 'debug' && method === 'snapshot') {
+                data = { status: 'idle', output: '', breakpoints: {} };
+              } else if (service === 'debug' && method === 'setBreakpoints') {
+                data = {
+                  breakpoints: (params.lines ?? []).map((line) => ({
+                    line,
+                    verified: false,
+                  })),
+                };
               } else if (service === 'language') {
                 if (
                   method === 'request' &&

@@ -42,6 +42,11 @@ export interface WorkspaceServicesOptions {
   githubConnection?: NativeGitHubConnection;
   enforceGitHubConnection?: boolean;
   githubEnabled?: (sessionId: string) => boolean;
+  /**
+   * The bundled developer extension. Omitted means on, so a direct service
+   * test keeps today's debugger and language service. The desktop always sets it.
+   */
+  developerEnabled?: () => boolean;
   githubInvocation?: (sessionId: string) => {
     signal: AbortSignal;
     assertActive: () => void;
@@ -468,6 +473,12 @@ export class WorkspaceServices {
     result.catch(() => {});
     return result;
   }
+  private assertDeveloper() {
+    if (this.options.developerEnabled && !this.options.developerEnabled())
+      throw Object.assign(new Error('developer tools are off'), {
+        code: 'DEVELOPER_TOOLS_OFF',
+      });
+  }
   async call(
     sessionId: string,
     service: WorkspaceService,
@@ -692,6 +703,7 @@ export class WorkspaceServices {
       throw Error('unknown terminal method');
     }
     if (service === 'language') {
+      this.assertDeveloper();
       let language = this.languages.get(sessionId);
       if (!language) {
         language = new WorkspaceLanguageService(this.options.workspaceRoot, {
@@ -757,6 +769,16 @@ export class WorkspaceServices {
       return result;
     }
     if (service === 'debug') {
+      if (this.options.developerEnabled && !this.options.developerEnabled()) {
+        if (method === 'stop') {
+          await this.debuggers.get(sessionId)?.dispose();
+          this.debuggers.delete(sessionId);
+          return { status: 'idle', output: '', breakpoints: {} };
+        }
+        throw Object.assign(new Error('developer tools are off'), {
+          code: 'DEVELOPER_TOOLS_OFF',
+        });
+      }
       if (method === 'output') {
         await this.debuggers.get(sessionId)?.flushOutput();
         const throughSeq =

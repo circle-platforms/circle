@@ -56,6 +56,8 @@ To turn one off, set it in `settings.json`, or run `/extensions disable sample`:
 
 An extension shipped with Circle is off until `"enabled": true`, which `/extensions enable <name>` saves for you. `/extensions` lists it with `off · /extensions enable <name>`.
 
+**developer** (desktop label 开发者工具) is one of these. It turns on Node debugging and the TypeScript and JavaScript language service in the desktop application. While it is off, the editor still opens, highlights syntax and saves with the version check, and there is no debug tab, no debug-file button and no language service. The js-debug adapter is not started. Turn it on with `/extensions enable developer` or from **extensions → runtime extensions**, then reload. With it on, debugging and the language service behave as they do in [Developing in the window](desktop.md#developing-in-the-window).
+
 A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.0", "description": "...", "commands": ["hello"] }`. `/extensions` and the desktop application show the version and description. `commands` names slash commands the folder will register, so a bundled extension that is still off can say `/extensions enable <name>` instead of treating the command as a typo. It is optional, and an unreadable one is ignored.
 
 ## An interface in the desktop application

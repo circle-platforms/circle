@@ -686,6 +686,52 @@ try {
           .click();
     },
   );
+  await check('enable the bundled developer extension', async () => {
+    await page.evaluate(() => {
+      location.hash = '#/page/extensions';
+    });
+    await page
+      .getByRole('heading', { name: 'extensions', exact: true })
+      .waitFor();
+    await page
+      .getByRole('button', { name: 'runtime extensions', exact: true })
+      .click();
+    const card = page.locator('.extension-card').filter({
+      has: page.getByRole('heading', {
+        name: 'developer extension',
+        exact: true,
+      }),
+    });
+    const toggle = card.getByRole('checkbox', {
+      name: 'enable developer extension',
+      exact: true,
+    });
+    if (!(await toggle.isChecked())) await toggle.click();
+    await page
+      .getByText('extension setting saved; reload required', { exact: true })
+      .waitFor();
+    await page.getByRole('button', { name: 'reload', exact: true }).click();
+    await page.waitForFunction(() => {
+      const card = [...document.querySelectorAll('.extension-card')].find(
+        (item) =>
+          item.querySelector('h2')?.textContent === 'developer extension',
+      );
+      const input = card?.querySelector('input[type="checkbox"]');
+      return (
+        input instanceof HTMLInputElement &&
+        input.checked &&
+        card.textContent.includes('extension enabled')
+      );
+    });
+    await page
+      .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+      .first()
+      .click();
+    await page.waitForFunction(
+      (id) => location.hash === `#/session/${id}`,
+      sessionId,
+    );
+  });
   await check(
     'native editor semantic navigation and conflict journey',
     async () => {
