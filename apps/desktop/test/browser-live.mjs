@@ -505,13 +505,15 @@ const nativeUrls = () =>
       view.webContents.getURL(),
     ),
   );
-// Close one named tab from its own page, as a page's script does
+// Close one named tab from its own page, as a page's script does. The call
+// resolves when the page has run `window.close()`, so a refused close is
+// settled before the tab list is read.
 const closeView = (title) =>
-  app.evaluate(({ BrowserWindow }, name) => {
+  app.evaluate(async ({ BrowserWindow }, name) => {
     const views = BrowserWindow.getAllWindows()[0].contentView.children;
     const view = views.find((entry) => entry.webContents.getTitle() === name);
     if (!view) throw Error(`no tab titled ${name}`);
-    view.webContents.executeJavaScript('window.close()');
+    await view.webContents.executeJavaScript('window.close()');
   }, title);
 // The tab’s own back-forward list, as Chromium holds it
 const nativeHistory = () =>
@@ -536,6 +538,9 @@ const resultOf = async (id) => {
 };
 const textOf = async (id) => (await resultOf(id)).content;
 async function launch() {
+  // The process is ready when its debugger is listening and the first window
+  // exists. A 45s clock expired while a busy machine was still starting Electron;
+  // the message box below is the screen that says the app is up.
   app = await electron.launch({
     chromiumSandbox: true,
     executablePath:
@@ -543,11 +548,11 @@ async function launch() {
     args: [resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root)],
     cwd: root,
     env,
-    timeout: 45_000,
+    timeout: 0,
   });
   // Playwright answers a page's dialogs itself unless something listens: let Circle do it
   app.context().on('page', (nativePage) => nativePage.on('dialog', () => {}));
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: 0 });
   page.setDefaultTimeout(patience(20_000));
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
@@ -1041,8 +1046,18 @@ try {
       await page
         .getByRole('button', { name: 'full view', exact: true })
         .click();
-      await new Promise((resolve) => setTimeout(resolve, 900));
-      const whole = { dom: await domBox(), view: await viewBox() };
+      let whole;
+      await waitFor(async () => {
+        const dom = await domBox();
+        const view = await viewBox();
+        if (!dom || !view) return false;
+        whole = { dom, view };
+        return (
+          view.width > split.view.width + 40 &&
+          Math.abs(view.width - dom.width) <= 3 &&
+          Math.abs(view.height - dom.height) <= 3
+        );
+      }, 'the native page grew with the panel');
       assert(
         whole.view.width > split.view.width + 40,
         `the native page grew with the panel: ${JSON.stringify([
@@ -1058,8 +1073,18 @@ try {
       await page
         .getByRole('button', { name: 'exit full view', exact: true })
         .click();
-      await new Promise((resolve) => setTimeout(resolve, 900));
-      const back = await viewBox();
+      let back;
+      await waitFor(async () => {
+        const dom = await domBox();
+        const view = await viewBox();
+        if (!dom || !view) return false;
+        back = view;
+        return (
+          Math.abs(view.width - split.view.width) <= 3 &&
+          Math.abs(view.width - dom.width) <= 3 &&
+          Math.abs(view.height - dom.height) <= 3
+        );
+      }, 'the split took the page back');
       assert(
         Math.abs(back.width - split.view.width) <= 3,
         `the split did not take the page back: ${JSON.stringify([
@@ -1084,14 +1109,16 @@ try {
           }));
       });
     const waitViews = async (check, label) => {
-      const end = Date.now() + 5000;
       let last;
-      for (;;) {
-        last = await httpViews();
-        if (check(last)) return last;
-        if (Date.now() > end) throw Error(label + ': ' + JSON.stringify(last));
-        await new Promise((resolve) => setTimeout(resolve, 50));
+      try {
+        await waitFor(async () => {
+          last = await httpViews();
+          return check(last);
+        }, label);
+      } catch (error) {
+        throw Error(`${label}: ${JSON.stringify(last)}`, { cause: error });
       }
+      return last;
     };
     await page
       .getByRole('button', { name: 'activity panel', exact: true })
@@ -1160,7 +1187,12 @@ try {
       'the page did not return after the dialog',
     );
     const beforeResize = await viewBox();
-    await app.evaluate(({ BrowserWindow }) => {
+    const beforeDom = await domBox();
+    const beforeInner = await page.evaluate(() => ({
+      width: innerWidth,
+      height: innerHeight,
+    }));
+    const resized = await app.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
       const bounds = window.getBounds();
       window.setBounds({
@@ -1168,10 +1200,38 @@ try {
         width: Math.max(800, bounds.width - 120),
         height: Math.max(600, bounds.height - 80),
       });
+      const [width, height] = window.getContentSize();
+      return { width, height };
     });
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    const afterResize = await viewBox();
-    const afterDom = await domBox();
+    let afterResize;
+    let afterDom;
+    await waitFor(async () => {
+      const inner = await page.evaluate(() => ({
+        width: innerWidth,
+        height: innerHeight,
+      }));
+      afterResize = await viewBox();
+      afterDom = await domBox();
+      const fitted =
+        Math.abs(inner.width - resized.width) <= 2 &&
+        Math.abs(inner.height - resized.height) <= 2;
+      const unchangedWindow =
+        Math.abs(resized.width - beforeInner.width) <= 2 &&
+        Math.abs(resized.height - beforeInner.height) <= 2;
+      const domMoved =
+        !!beforeDom &&
+        !!afterDom &&
+        (Math.abs(afterDom.width - beforeDom.width) > 3 ||
+          Math.abs(afterDom.height - beforeDom.height) > 3);
+      return (
+        fitted &&
+        (domMoved || unchangedWindow) &&
+        !!afterResize &&
+        !!afterDom &&
+        Math.abs(afterResize.width - afterDom.width) <= 3 &&
+        Math.abs(afterResize.height - afterDom.height) <= 3
+      );
+    }, 'resize moved the native page with its box');
     assert(
       afterResize &&
         afterDom &&
@@ -1954,7 +2014,6 @@ try {
     // that, and so does Circle - otherwise a site that ends a side panel with
     // window.close() would empty the browser panel under the person.
     await closeView('Close fixture opener');
-    await new Promise((resolve) => setTimeout(resolve, 400));
     assert.equal(
       (await browserState(sessionId)).tabs.length,
       openerState.tabs.length,
@@ -2121,7 +2180,13 @@ try {
         password,
         role,
         formSteps[firstSubmit],
-        { expect: 'INTENTIONAL_MISSING_BROWSER_ASSERTION' },
+        // The string is absent on purpose. The default ten seconds would keep
+        // polling until the test's own wait for the model's reply had expired.
+        // One second is one look at a page that already finished submitting.
+        {
+          expect: 'INTENTIONAL_MISSING_BROWSER_ASSERTION',
+          timeout: 1,
+        },
       ],
     };
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -2197,6 +2262,14 @@ try {
     await approval('trusts an untrusted certificate')
       .getByRole('button', { name: 'allow once', exact: true })
       .click();
+    await waitFor(async () => {
+      try {
+        await resultOf('replay-failure');
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'the failed replay reached the model');
     await page.getByText('replay failure inspected', { exact: true }).waitFor();
     const failed = await textOf('replay-failure');
     assert.match(failed, /Step 7 of 7 could not be done/);
@@ -2241,12 +2314,22 @@ try {
 
     const browserBeforeFix = await browserState(sessionId);
     edited.steps[6].expect = 'Submitted admin as maintainer';
+    // The repaired step waits until the submitted page shows, up to the default.
+    delete edited.steps[6].timeout;
     await editScript(JSON.stringify(edited, null, 2) + '\n');
     await send('continue the repaired browser script from failed step seven');
     const retryApproval = approval('runs a recorded browser script');
     await retryApproval
       .getByRole('button', { name: 'allow once', exact: true })
       .click();
+    await waitFor(async () => {
+      try {
+        await resultOf('replay');
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'the repaired replay reached the model');
     await page.getByText('replay finished', { exact: true }).waitFor();
     const replayed = await textOf('replay');
     assert.match(replayed, /^Replayed "fixture form": steps 7–7 of 7 done\./);
