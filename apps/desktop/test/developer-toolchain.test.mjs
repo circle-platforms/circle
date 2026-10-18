@@ -21,6 +21,7 @@ import {
   verifyCommandSupervisor,
   prepareNativeDependencies,
   prepareDeveloperTools,
+  downloadArchive,
   verifyArchive,
 } from '../scripts/developer-toolchain.mjs';
 
@@ -46,6 +47,54 @@ test('developer tools reject tampered bytes before extraction or execution', asy
     /checksum mismatch/,
   );
   await assert.rejects(stat(join(dist, 'tools/gh')), { code: 'ENOENT' });
+});
+
+test('a dropped connection or a busy server is tried again; a missing file is not', async () => {
+  const bytes = Buffer.from('archive');
+  const answers = [
+    () => {
+      throw new TypeError('fetch failed');
+    },
+    () => new Response(null, { status: 429 }),
+    () => new Response(null, { status: 503 }),
+    () => new Response(bytes),
+  ];
+  let calls = 0;
+  assert.deepEqual(
+    await downloadArchive('https://tools.test/a.tar.gz', {
+      pauseMs: 0,
+      request: async () => answers[calls++](),
+    }),
+    bytes,
+  );
+  assert.equal(calls, 4);
+
+  calls = 0;
+  await assert.rejects(
+    downloadArchive('https://tools.test/missing.tar.gz', {
+      pauseMs: 0,
+      request: async () => {
+        calls++;
+        return new Response(null, { status: 404 });
+      },
+    }),
+    /developer tool download failed: 404 https:\/\/tools\.test\/missing\.tar\.gz/,
+  );
+  assert.equal(calls, 1);
+
+  calls = 0;
+  await assert.rejects(
+    downloadArchive('https://tools.test/down.tar.gz', {
+      attempts: 3,
+      pauseMs: 0,
+      request: async () => {
+        calls++;
+        throw new TypeError('fetch failed');
+      },
+    }),
+    /fetch failed/,
+  );
+  assert.equal(calls, 3);
 });
 
 test('unsupported architecture fails explicitly instead of copying host tools', async () => {
