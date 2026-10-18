@@ -114,8 +114,24 @@ export function WorkspacePanelContents({
       notify(String(e));
     }
   };
+  const resourceName =
+    workspaceRoot ??
+    snapshot.sessions.find((item) => item.id === sessionId)?.title ??
+    '';
   return (
     <div className={`workspace-panel-contents workspace-panel-${kind}`}>
+      {resourcesPaused && kind === 'changes' && (
+        <p
+          className="panel-note"
+          role="status"
+          style={{ overflowWrap: 'anywhere' }}
+        >
+          {t(
+            'Resources belong to {name}. Start a conversation in the selected project to make changes.',
+            { name: resourceName },
+          )}
+        </p>
+      )}
       <div
         className={
           kind === 'terminal'

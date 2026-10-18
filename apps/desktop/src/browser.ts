@@ -1714,8 +1714,13 @@ export class BrowserSessions {
   async page(idValue: unknown, action: unknown, value: unknown) {
     const id = this.validId(idValue);
     if (action === 'keys') {
-      if (value === true) this.keyTarget = id;
-      else if (this.keyTarget === id) this.keyTarget = undefined;
+      if (value === true) {
+        this.keyTarget = id;
+        // A click on the address bar has to take the keyboard from the page view.
+        // Until the window has it, the first F12 reaches neither of them.
+        if (!this.window.isDestroyed() && !this.window.webContents.isFocused())
+          this.window.webContents.focus();
+      } else if (this.keyTarget === id) this.keyTarget = undefined;
       return null;
     }
     const conversation = this.conversations.get(id);

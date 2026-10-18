@@ -217,23 +217,6 @@ export function Inspector(props: Props) {
       <div
         className={`inspector-body ${FLUSH.has(props.panel) ? 'flush' : ''}`}
       >
-        {props.resourcesPaused && (
-          <p
-            className="panel-note"
-            role="status"
-            style={{ overflowWrap: 'anywhere' }}
-          >
-            {t(
-              'Resources belong to {name}. Start a conversation in the selected project to make changes.',
-              {
-                name:
-                  snapshot.workspaces.find(
-                    (item) => item.id === session.workspaceId,
-                  )?.path ?? session.title,
-              },
-            )}
-          </p>
-        )}
         <InspectorResources {...props} sessionId={session.id} panels={panels} />
       </div>
     </aside>

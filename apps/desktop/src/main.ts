@@ -21,7 +21,11 @@ import {
   session,
   safeStorage,
 } from 'electron';
-import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
+import type {
+  MenuItemConstructorOptions,
+  WebContents,
+  WebFrameMain,
+} from 'electron';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -144,7 +148,10 @@ if (startupLocale() === 'zh-CN') {
   // It does not create the catalog: Recent and Home stay English until gtk30.mo exists.
   if (!process.env.LANGUAGE) process.env.LANGUAGE = 'zh_CN';
 }
-function checkSender(event: IpcMainInvokeEvent) {
+function checkSender(event: {
+  sender: WebContents;
+  senderFrame: WebFrameMain | null;
+}) {
   if (
     !window ||
     event.sender !== window.webContents ||
@@ -829,6 +836,18 @@ app
     handle('circle:browser-page', (id, action, value) => {
       if (!browsers) throw Error('window not ready');
       return browsers.page(id, action, value);
+    });
+    ipcMain.on('circle:browser-keys', (event, id, focused) => {
+      // sendSync waits until returnValue is set. Set it before any throw.
+      event.returnValue = null;
+      try {
+        checkSender(event);
+      } catch {
+        return;
+      }
+      if (!browsers) return;
+      // Set before the click returns, so the next key finds the panel focused.
+      void browsers.page(id, 'keys', focused).catch(() => {});
     });
     handle('circle:browser-reveal', (id, download) => {
       if (!browsers) throw Error('window not ready');

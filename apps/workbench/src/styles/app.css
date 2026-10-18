@@ -3408,6 +3408,12 @@ pre {
   box-shadow: inset 0 0 0 3px
     color-mix(in srgb, var(--accent) 72%, var(--border));
 }
+/* Quieter while a browser action waits for approval. Same width as driving. */
+.native-browser-frame.awaiting {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: inset 0 0 0 3px
+    color-mix(in srgb, var(--accent) 40%, var(--border));
+}
 .native-browser-viewport {
   position: relative;
   /* Fills the frame under the bars. The frame's border stays outside this box,

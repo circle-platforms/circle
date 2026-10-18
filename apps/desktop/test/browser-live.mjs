@@ -442,6 +442,19 @@ await script([
     call('auto-permission-ask', 'browser_click', { ref: 'e1', element: 'Ask' }),
   ]),
   answer('auto-permission-done', 'auto mode refused notifications'),
+  calls('ring-first', [
+    call('ring-first', 'browser_navigate', { url: url + 'status' }),
+  ]),
+  {
+    chunks: [{ waitForFile: join(temp, 'browser-ring-gap') }],
+    message: {
+      id: 'ring-second',
+      role: 'assistant',
+      content: '',
+      tool_calls: [call('ring-second', 'browser_snapshot', {})],
+    },
+  },
+  answer('ring-held', 'the ring stayed on'),
 ]);
 const env = {
   ...process.env,
@@ -1835,6 +1848,53 @@ try {
     await setMode('manual');
     checks.push(
       "auto mode takes the browser back once the person stops, says so to the model, and refuses a page's permission request without asking",
+    );
+    // The ring stays lit between two browser tools, while Circle is only thinking.
+    const ringGap = join(temp, 'browser-ring-gap');
+    const requestsBeforeRing = (await requests()).length;
+    await send('look twice and pause between the looks');
+    await waitFor(
+      async () => (await requests()).length >= requestsBeforeRing + 2,
+      'the model paused between browser tools',
+    );
+    await waitFor(async () => {
+      const ring = await controlRing();
+      const shown = await browserState(sessionId);
+      return (
+        ring?.driving === true &&
+        shown.operating !== true &&
+        shown.control !== 'user' &&
+        shown.control !== 'agent'
+      );
+    }, 'the ring stays on between browser tools');
+    const held = await controlRing();
+    assert.equal(held.driving, true, 'the ring went out between browser tools');
+    assert.equal(held.label, 'Circle is operating');
+    assert.notEqual((await browserState(sessionId)).operating, true);
+    assert.ok(
+      Math.abs(Number.parseFloat(held.border) - 1) < 0.2,
+      'held ring border is ' + held.border,
+    );
+    assert.ok(
+      Math.abs(Number.parseFloat(held.padding) - 3) < 0.5,
+      'held ring padding is ' + held.padding,
+    );
+    assert.notEqual(held.shadow, 'none');
+    await page
+      .getByRole('button', { name: 'browser menu', exact: true })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'take over', exact: true })
+      .waitFor();
+    await page.keyboard.press('Escape');
+    await writeFile(ringGap, 'go\n');
+    await page.getByText('the ring stayed on', { exact: true }).waitFor();
+    await waitFor(async () => {
+      const ring = await controlRing();
+      return ring?.driving === false && !ring.label;
+    }, 'the ring goes out when the turn ends');
+    checks.push(
+      'the control ring stays on between two browser tools, including while Circle is only thinking, and goes out when the turn ends',
     );
     assert.deepEqual(errors, []);
     // The address draft belongs to the shown tab, even when navigation fails before loading.

@@ -107,6 +107,9 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-control', id, action),
   browserPage: (id, action, value) =>
     ipcRenderer.invoke('circle:browser-page', id, action, value),
+  browserKeys: (id, focused) => {
+    ipcRenderer.sendSync('circle:browser-keys', id, focused);
+  },
   onBrowserKey: (listener) => {
     const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
       listener(value);

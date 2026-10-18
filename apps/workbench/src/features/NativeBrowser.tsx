@@ -33,11 +33,14 @@ import {
   addressParts,
   browserEventAddress,
   browserOpened,
+  browserRing,
   browserTabChanged,
   connectionKind,
+  currentTurnTools,
   downloadProgress,
   shownDialog,
 } from '../model/browser';
+import { visibleMessages } from '../model/state';
 import { formatChord } from '../model/shortcuts';
 import { useBrowserState } from './useBrowserState';
 import type {
@@ -114,7 +117,8 @@ export function NativeBrowser({
   onWhole?: () => void;
 } = {}) {
   const { snapshot, notify } = useRuntime();
-  const id = currentSession(snapshot).id;
+  const session = currentSession(snapshot);
+  const id = session.id;
   const state = useBrowserState(id);
   const [url, setUrl] = useState('');
   const [addressFocused, setAddressFocused] = useState(false);
@@ -461,34 +465,54 @@ export function NativeBrowser({
   };
   // The panel has the keyboard: the browser's shortcuts are its own, even those the
   // system's menu would take. Focus moving inside the panel blurs one control and
-  // focuses the next; the keyboard stays the panel's across that.
-  const keys = (focused: boolean) =>
-    void Promise.resolve(host.browserPage?.(id, 'keys', focused)).catch(
+  // focuses the next; the keyboard stays the panel's across that. Anywhere else,
+  // including the editor, those shortcuts are not the browser's.
+  const keys = (focused: boolean) => {
+    const bridge = desktopHost();
+    if (!bridge) return;
+    if (bridge.browserKeys) {
+      try {
+        bridge.browserKeys(id, focused);
+      } catch {
+        /* The panel still works if the shortcut handoff fails. */
+      }
+      return;
+    }
+    void Promise.resolve(bridge.browserPage?.(id, 'keys', focused)).catch(
       () => {},
     );
+  };
   useEffect(() => {
     const node = root.current;
     if (!node) return;
     let token = 0;
-    const onFocusIn = () => {
+    const report = (inside: boolean) => keys(inside);
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
       token += 1;
-      keys(true);
+      report(true);
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      token += 1;
+      report(event.target instanceof Node && node.contains(event.target));
     };
     const onFocusOut = () => {
       const mark = ++token;
       queueMicrotask(() => {
         if (mark !== token) return;
         const active = document.activeElement;
-        keys(!!active && node.contains(active));
+        report(!!active && active !== document.body && node.contains(active));
       });
     };
-    node.addEventListener('focusin', onFocusIn);
+    node.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('focusin', onFocusIn);
     node.addEventListener('focusout', onFocusOut);
     return () => {
       token += 1;
-      node.removeEventListener('focusin', onFocusIn);
+      node.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('focusin', onFocusIn);
       node.removeEventListener('focusout', onFocusOut);
-      keys(false);
+      report(false);
     };
     // `keys` reads the latest host and id; the effect is the panel's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -563,19 +587,24 @@ export function NativeBrowser({
     </div>
   );
   const pageReady = opened && !failure && !dialog;
-  // Who is driving is the ring around the page, not a line under it.
-  const modelDriving =
-    !!state?.operating ||
-    state?.control === 'agent' ||
-    state?.control === 'user_pending';
+  // The ring stays on for the whole time Circle's turn is using the browser,
+  // not only during the action that is on screen now.
+  const ring = browserRing({
+    control: state?.control,
+    operating: state?.operating,
+    sessionState: session.state,
+    tools: currentTurnTools(visibleMessages(session)),
+  });
   const controlLabel =
-    state?.control === 'user'
+    ring === 'user'
       ? t('you have the browser')
-      : state?.control === 'user_pending'
+      : ring === 'pending'
         ? t('Waiting for Circle to stop…')
-        : modelDriving
-          ? t('Circle is operating')
-          : undefined;
+        : ring === 'awaiting'
+          ? t('Waiting for your approval')
+          : ring === 'driving'
+            ? t('Circle is operating')
+            : undefined;
   const findCount =
     state?.find && state.find.text === findText ? state.find : undefined;
   return (
@@ -891,7 +920,7 @@ export function NativeBrowser({
                 </DropdownMenu.Item>
               )}
               <DropdownMenu.Separator className="dropdown-separator" />
-              {state?.operating && (
+              {(ring === 'driving' || ring === 'awaiting') && (
                 <DropdownMenu.Item
                   onSelect={() => void host.browserControl(id, 'take')}
                 >
@@ -926,15 +955,19 @@ export function NativeBrowser({
         </DropdownMenu.Root>
       </div>
       <div
-        className={`native-browser-frame${modelDriving ? ' driving' : ''}`}
+        className={`native-browser-frame${
+          ring === 'driving' || ring === 'pending' ? ' driving' : ''
+        }${ring === 'awaiting' ? ' awaiting' : ''}`}
         data-testid={
-          state?.control === 'user'
+          ring === 'user'
             ? 'browser-user'
-            : state?.control === 'user_pending'
+            : ring === 'pending'
               ? 'browser-pending'
-              : modelDriving
+              : ring === 'driving'
                 ? 'browser-operating'
-                : 'browser-frame'
+                : ring === 'awaiting'
+                  ? 'browser-awaiting'
+                  : 'browser-frame'
         }
         role={controlLabel ? 'region' : undefined}
         aria-label={controlLabel}

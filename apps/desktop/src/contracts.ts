@@ -175,6 +175,11 @@ export interface DesktopBridge {
     action: BrowserPageAction,
     value?: unknown,
   ) => Promise<BrowserState | string | null>;
+  /**
+   * Whether the browser panel, not the page, has the keyboard. Synchronous so the
+   * first key after a click is not lost to the page view.
+   */
+  browserKeys?: (sessionId: string, focused: boolean) => void;
   /** A browser shortcut pressed in the page, or in the panel when the system took it. */
   onBrowserKey: (listener: (event: BrowserKeyEvent) => void) => () => void;
   /** Whether the window shows dark or light: the browser's own pages follow it. */

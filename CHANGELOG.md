@@ -10,14 +10,15 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Changed
 
-- **Who has the desktop browser is the ring around the page.** The status line under the page is gone. While Circle acts, the page has an accent border (the words **Circle is operating**, or **Waiting for Circle to stop…**, are the border's tooltip and accessible name). While you have the browser the border is the ordinary one and says **you have the browser**. **take over** is in the ⋮ menu. The native page is drawn inside the ring, so the ring stays visible, and the page keeps its size when the ring thickens, so a screenshot's coordinates still land.
+- **Who has the desktop browser is the ring around the page.** The status line under the page is gone. The accent ring lights on the turn's first browser tool and stays lit until the turn ends, you take the browser, or the session stops, including while Circle is thinking and while an approval card is open (then it says **Waiting for your approval**). During an action it says **Circle is operating**, or **Waiting for Circle to stop…** after you take over. While you have the browser the border is the ordinary one and says **you have the browser**. **take over** is in the ⋮ menu for the whole time the ring is lit. The native page is drawn inside the ring, so the ring stays visible, and the page keeps its size when the ring thickens, so a screenshot's coordinates still land. The pointer mark on a click still flashes for that action only.
 
 ### Fixed
 
 - **The desktop browser page stays with its panel.** Opening a page and then switching the inspector to tasks or Git, closing the inspector, or opening a dialog or menu no longer leaves the page drawn over the conversation. The page hides with its tab and follows the panel when the window resizes or the panel goes to full view.
 - **Inspect opens Chromium's developer tools in their own window.** Choosing **Inspect** on the page used to dock the tools inside the page. They now open detached, as F12 does, and the same control closes them.
 - **The first Enter in the address bar opens the page.** It used to close the browser panel instead, until the address bar had been clicked once.
-- **F12 and ctrl+shift+I work from the address bar.** They used to need a click on the page first. They open and close the developer tools while the keyboard is anywhere in the browser panel.
+- **F12 and ctrl+shift+I work from the address bar.** They used to need a click on the page first, and the first F12 after the address bar gained focus did nothing until the field was clicked again. They open and close the developer tools while the keyboard is in the browser panel, and only then. In the editor, F12 stays go to definition.
+- **The project resources note stays on the changes panel.** On a new session it was drawn above every inspector panel, including the browser, and pushed the page down. It belongs to Changes, which is the panel that pauses until a conversation starts.
 
 ## 1.8.0 - 2026-10-18
 
