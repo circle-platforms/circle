@@ -663,7 +663,9 @@ test('CLI preserves a missing workspace lexical path while existing alias input 
 
 test("--task works in a folder of Circle's own and leaves a plain start alone", async (t) => {
   const home = scratch(t);
-  const workspace = realpathSync(scratch(t));
+  // The CLI names the workspace by its native canonical spelling, which expands a
+  // Windows runner's 8.3 short TEMP path.
+  const workspace = realpathSync.native(scratch(t));
   // Without the flag, the folder the process sits in is still the workspace.
   assert.equal(parseCli([], workspace).task, undefined);
   assert.equal(parseCli([], workspace).workspace, workspace);
