@@ -25,7 +25,7 @@ test(
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end(
         req.url === '/dialog'
-          ? '<title>Dialog page</title><output id="result">untouched</output><script>setTimeout(()=>confirm("actual confirm"),1000)</script>'
+          ? '<title>Dialog page</title><output id="result">untouched</output>'
           : '<title>Home</title><p>home</p>',
       );
     });
@@ -85,6 +85,7 @@ test(
       40000,
     );
     const send = internal.send.bind(chrome);
+    let nextDialog = 'actual confirm';
     internal.send = async (method, params, session, options) => {
       if (method === 'Page.createIsolatedWorld' && forceWorld) {
         forceWorld = false;
@@ -92,6 +93,15 @@ test(
         const tab = [...internal.conversations.get('c')!.tabs.values()].find(
           (tab) => tab.session === session,
         )!;
+        // The page's own confirm, opened now: always while this world is pending,
+        // not raced against it by a timer in the page.
+        await send(
+          'Runtime.evaluate',
+          {
+            expression: `setTimeout(() => confirm(${JSON.stringify(nextDialog)}), 0); 0`,
+          },
+          session,
+        );
         await until(() => tab.dialogs.length > 0, signal);
       }
       return send(method, params, session, options);
@@ -121,12 +131,8 @@ test(
     // Repeat with a unique mutating expression, so a late completion cannot be
     // hidden by a fresh public snapshot or a harmless title read.
     tab.world = undefined;
+    nextDialog = 'second actual confirm';
     forceWorld = true;
-    await send(
-      'Runtime.evaluate',
-      { expression: 'setTimeout(()=>confirm("second actual confirm"),50)' },
-      tab.session,
-    );
     await fixture.run(
       { phase: 'pending mutating page call stops on actual modal' },
       () =>
