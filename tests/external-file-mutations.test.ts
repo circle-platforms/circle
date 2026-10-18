@@ -16,8 +16,10 @@ import type { ToolContext } from '../src/types.js';
 import { cleanup, scratch } from './helpers.js';
 
 function fixture(t: TestContext) {
-  const workspace = realpathSync(scratch(t));
-  const external = realpathSync(scratch(t));
+  // Grants are keyed by the native canonical name the tools use. On a Windows
+  // runner TEMP is an 8.3 short name that only the native realpath expands.
+  const workspace = realpathSync.native(scratch(t));
+  const external = realpathSync.native(scratch(t));
   const file = join(external, 'granted.txt');
   const sibling = join(external, 'sibling.txt');
   const local = join(workspace, 'local.txt');
