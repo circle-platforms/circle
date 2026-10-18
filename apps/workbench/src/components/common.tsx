@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode } from 'react';
+import { useId, type InputHTMLAttributes, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, FileText, Search, X } from 'lucide-react';
 import { Button, IconButton } from './ui';
 import { t } from '../i18n';
@@ -130,13 +130,24 @@ export function Fold({
   onToggle: () => void;
   children: ReactNode;
 }) {
+  const bodyId = useId();
   return (
     <div className="fold">
-      <button className="fold-title" onClick={onToggle} aria-expanded={open}>
+      <button
+        type="button"
+        className="fold-title"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={bodyId}
+      >
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         <span>{title}</span>
       </button>
-      {open && <div className="fold-body">{children}</div>}
+      {open && (
+        <div id={bodyId} className="fold-body">
+          {children}
+        </div>
+      )}
     </div>
   );
 }
@@ -196,12 +207,16 @@ export function FileChip({
 }) {
   return (
     <span className="file-chip">
-      <button onClick={onClick}>
+      <button type="button" onClick={onClick}>
         <FileText size={12} />
         {name}
       </button>
       {onRemove && (
-        <button aria-label={t('remove {name}', { name })} onClick={onRemove}>
+        <button
+          type="button"
+          aria-label={t('remove {name}', { name })}
+          onClick={onRemove}
+        >
           <X size={11} />
         </button>
       )}

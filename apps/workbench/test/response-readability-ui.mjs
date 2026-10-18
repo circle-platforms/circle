@@ -8,6 +8,9 @@ const server = await createServer({
   server: {
     host: '127.0.0.1',
     port: 0,
+    // Acceptance must not reset App state when another editor writes a source file.
+    hmr: false,
+    watch: null,
     fs: {
       allow: [
         fileURLToPath(new URL('../../..', import.meta.url)),
@@ -177,6 +180,12 @@ try {
           await page.evaluate(() => window.readabilityFixture.copied),
           [await page.evaluate(() => window.readabilityFixture.text)],
         );
+        const draft = page.getByRole('textbox', {
+          name: language === 'en' ? 'message' : '消息',
+          exact: true,
+        });
+        await draft.fill('source navigation retained draft');
+        const draftOwner = await draft.elementHandle();
         await page.screenshot({
           path: `${output}/${language}-${theme}-${width}.png`,
         });
@@ -200,6 +209,15 @@ try {
           })
           .click();
         await table.waitFor();
+        assert.equal(
+          await draft.inputValue(),
+          'source navigation retained draft',
+        );
+        assert.equal(
+          await draftOwner.evaluate((node) => node.isConnected),
+          true,
+          'source drawer must retain the conversation composer',
+        );
         assert.deepEqual(errors, []);
         cases.push({
           language,

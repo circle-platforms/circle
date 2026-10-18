@@ -3,10 +3,12 @@ import type { Sandbox } from './sandbox.js';
 import type { Tool, ToolContext } from './types.js';
 
 export interface FileMutationSnapshot {
-  /** Canonical absolute path within the backend's granted workspace. */
+  /** Canonical absolute path in the granted workspace or an exact-file grant. */
   path: string;
   content: string | null;
   revision: string | null;
+  /** Recorded ordinary permission bits, excluding setuid/setgid/sticky. */
+  mode?: number;
 }
 
 export interface FileMutationChange {
@@ -15,10 +17,29 @@ export interface FileMutationChange {
   expectedRevision: string | null;
 }
 
+export interface FileMutationRestore extends FileMutationChange {
+  /** Original permission bits from the trusted before-image, never renderer input. */
+  mode?: number;
+}
+
 /** Optional native workspace backend. CLI file semantics stay unchanged without it. */
 export interface FileMutations {
+  /** Host-owned exact-file authority. A tool approval must never create a grant.
+   * Backends exposing this must also recheck authority in read/apply/restoreAtomic,
+   * because a grant can be revoked after preparation or before undo.
+   */
+  authorize?(
+    path: string,
+    sessionId: string,
+    access: 'read' | 'write',
+  ): void | Promise<void>;
   /** A missing file returns null content and revision; denied paths must reject. */
   read(path: string, signal: AbortSignal): Promise<FileMutationSnapshot>;
+  /** Checked all-file restore with compensation on failure; never ordinary partial apply. */
+  restoreAtomic?(
+    changes: FileMutationRestore[],
+    signal: AbortSignal,
+  ): Promise<void>;
   /** Compare all versions before writing; throw on any failure, naming committed paths. */
   apply(changes: FileMutationChange[], signal: AbortSignal): Promise<void>;
 }
@@ -49,12 +70,29 @@ export class FileMutationTools {
     return versions;
   }
 
+  /** The injected native backend owns external authority; CLI tools do not use it. */
+  async authorize(
+    path: string,
+    context: ToolContext,
+    access: 'read' | 'write',
+  ): Promise<void> {
+    context.signal.throwIfAborted();
+    this.sandbox.checkCredentialPath(path);
+    if (this.sandbox.isInside(path)) return;
+    if (!this.backend.authorize)
+      throw Error(
+        `native file access requires an explicit external file grant: ${path}`,
+      );
+    await this.backend.authorize(path, context.sessionId, access);
+    context.signal.throwIfAborted();
+  }
+
   async read(
     path: string,
     context: ToolContext,
   ): Promise<FileMutationSnapshot> {
     context.signal.throwIfAborted();
-    this.sandbox.checkCredentialPath(path);
+    await this.authorize(path, context, 'read');
     const value = await this.backend.read(path, context.signal);
     context.signal.throwIfAborted();
     if (value.content === null || value.revision === null)
@@ -69,11 +107,14 @@ export class FileMutationTools {
     requireRead = false,
   ): Promise<FileMutationSnapshot> {
     this.sandbox.checkMutablePath(path);
+    await this.authorize(path, context, 'write');
     const previous = this.session(context).get(path);
     if (requireRead && !previous)
       throw Error('read_file must be called before editing this file');
     const current = await this.backend.read(path, context.signal);
     context.signal.throwIfAborted();
+    if (!this.sandbox.isInside(path) && current.content === null)
+      throw Error(`an external file grant cannot create a new file: ${path}`);
     if (previous && previous.revision !== current.revision)
       throw Error(
         `file changed since read_file: ${path}; read it again before writing`,
@@ -88,6 +129,8 @@ export class FileMutationTools {
     context: ToolContext,
   ): Promise<void> {
     context.signal.throwIfAborted();
+    for (const change of changes)
+      await this.authorize(change.path, context, 'write');
     await this.backend.apply(changes, context.signal);
     const versions = this.session(context);
     for (const change of changes) {
@@ -157,7 +200,15 @@ export class FileMutationTools {
   ) => {
     const patch = argument(args, 'patchText');
     const snapshots = new Map<string, FileMutationSnapshot>();
-    for (const path of patchFilePaths(patch, this.sandbox))
+    const paths = patchFilePaths(patch, this.sandbox);
+    const external = paths.filter((path) => !this.sandbox.isInside(path));
+    // Workspace documents and exact-file grants use separate host transactions.
+    // Refuse mixed batches rather than imply an atomic cross-backend write.
+    if (external.length > 0 && external.length !== paths.length)
+      throw Error(
+        'native patches cannot mix workspace and external files; use separate patches',
+      );
+    for (const path of paths)
       snapshots.set(path, await this.snapshot(path, context));
     const planned = planPatch(patch, this.sandbox, (path) => {
       if (!snapshots.has(path))

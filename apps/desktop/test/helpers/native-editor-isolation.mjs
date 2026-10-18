@@ -1,3 +1,4 @@
+import { openNativeProjectFile } from './native-project-file.mjs';
 // This regression accepts the suite's existing isolated page. It never launches
 // another app or bypasses editor input/save with a document-writing RPC.
 import assert from 'node:assert/strict';
@@ -41,14 +42,7 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
       .first()
       .evaluate((node) => node.textContent.replaceAll('\u00a0', ' '));
   const open = async (name, expected) => {
-    const button = page
-      .locator('.file-tree')
-      .getByRole('button', { name, exact: true });
-    if (!(await button.isVisible()))
-      await page
-        .getByRole('button', { name: 'files panel', exact: true })
-        .click();
-    await button.click();
+    await openNativeProjectFile(page, name);
     await page
       .locator('.file-view-heading strong')
       .getByText(name, { exact: true })
@@ -60,7 +54,12 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
         return false;
       }
     }, `title and body must both belong to ${name}`);
-    await page.getByRole('button', { name: 'edit', exact: true }).click();
+    await page
+      .getByRole('button', {
+        name: /\.(md|markdown|mdown)$/i.test(name) ? 'source code' : 'edit',
+        exact: true,
+      })
+      .click();
     await until(
       async () => (await visibleText()).includes(expected),
       `edit mode keeps ${name}'s model`,

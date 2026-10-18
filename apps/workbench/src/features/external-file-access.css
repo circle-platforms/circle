@@ -1,0 +1,81 @@
+.external-file-access {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.external-file-access .panel-note {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.external-file-scope {
+  display: flex;
+  align-items: start;
+  gap: 8px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.external-file-scope > svg {
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+.external-file-scope > span {
+  min-width: 0;
+}
+.external-file-scope strong {
+  display: block;
+  color: var(--fg);
+  font-weight: 500;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+.external-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.external-file-actions .button {
+  min-height: 32px;
+  white-space: normal;
+}
+.external-file-grants {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.external-file-grant {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.external-file-grant > div {
+  min-width: 0;
+}
+.external-file-grant code {
+  font-size: var(--ui-small);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.external-file-grant small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  margin-top: 5px;
+}
+.external-file-grant .button {
+  flex: 0 0 auto;
+}
+.external-file-notice {
+  margin: 0;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+@media (max-width: 700px) {
+  .external-file-grant {
+    align-items: start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}

@@ -14,6 +14,7 @@ import { RuntimeCredentialClient } from './runtime-private-channel';
 import { workspaceToolsForWorker, workspaceRuntimePath } from './runtime-tools';
 import type { WorkspaceServiceEvent } from './workspace-protocol';
 import type { RuntimeTokenDelta } from './runtime-protocol';
+import { validatePrivateExternalFileRequest } from './runtime-external-file-channel';
 
 type Port = {
   postMessage(value: unknown): void;
@@ -80,6 +81,36 @@ const controller = new RuntimeController({
   openUrl: (url) => port.postMessage({ type: 'open-url', url }),
 });
 port.on('message', ({ data }) => {
+  if ((data as { type?: unknown })?.type === 'external-file-capability') {
+    void Promise.resolve()
+      .then(async () => {
+        const request = validatePrivateExternalFileRequest(data);
+        const result =
+          request.operation === 'grant'
+            ? await controller.grantExternalFile(
+                request.sessionId,
+                request.path!,
+                request.access!,
+              )
+            : await controller.revokeExternalFileGrant(
+                request.sessionId,
+                request.grantId!,
+              );
+        controller.publish();
+        return { id: request.id, ok: true, data: result };
+      })
+      .catch((error) => ({
+        id: String((data as { id?: unknown })?.id ?? 'invalid'),
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : 'external file capability failed',
+      }))
+      .then((reply) => port.postMessage({ type: 'reply', reply }));
+    return;
+  }
+
   if ((data as { type?: unknown })?.type === 'credential-reply') {
     credentialStore.receive(data);
     return;

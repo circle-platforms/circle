@@ -12,6 +12,7 @@ import type { Effort, Job, Model, Session, SessionMode } from '../model/types';
 import { EFFORTS, MODES, sessionMode } from '../model/state';
 import { contextPercent, formatTokens, formatWindow } from '../model/format';
 import { t, tn } from '../i18n';
+import './composer.css';
 
 export const MODE_TEXT: Record<
   SessionMode,
@@ -88,11 +89,9 @@ export function ModeMenu({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className={`dropdown mode-menu${side === 'bottom' ? ' home-menu' : ''}`}
+          className={`dropdown composer-menu mode-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
-          {...(side === 'bottom'
-            ? { avoidCollisions: false, collisionPadding: 8 }
-            : {})}
+          collisionPadding={8}
           align="start"
           sideOffset={7}
           onCloseAutoFocus={closeMenu(onCloseFocus)}
@@ -192,11 +191,9 @@ export function ModelMenu({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className={`dropdown footbar-menu${side === 'bottom' ? ' home-menu' : ''}`}
+          className={`dropdown composer-menu footbar-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
-          {...(side === 'bottom'
-            ? { avoidCollisions: false, collisionPadding: 8 }
-            : {})}
+          collisionPadding={8}
           align="end"
           sideOffset={7}
           onCloseAutoFocus={closeMenu(onCloseFocus)}
@@ -244,11 +241,9 @@ export function EffortMenu({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className={`dropdown footbar-menu effort-menu${side === 'bottom' ? ' home-menu' : ''}`}
+          className={`dropdown composer-menu footbar-menu effort-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
-          {...(side === 'bottom'
-            ? { avoidCollisions: false, collisionPadding: 8 }
-            : {})}
+          collisionPadding={8}
           align="end"
           sideOffset={7}
           onCloseAutoFocus={closeMenu(onCloseFocus)}

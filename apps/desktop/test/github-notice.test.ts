@@ -197,16 +197,27 @@ test('a same-name user extension and legacy assistant status text are not locali
     join(home, 'extensions', 'github', 'extension.mjs'),
     "export function register(api){api.registerCommand('github','user content',(_args,context)=>context.append('GitHub: connected'));}",
   );
+  const model = new ScriptedModel([
+    { message: { id: 'after-notice', role: 'assistant', content: 'done' } },
+  ]);
   const controller = new RuntimeController({
     home,
     userHome: home,
     workspace,
-    model: new ScriptedModel([]),
+    model,
     emit: () => {},
   });
   try {
     await controller.initialize();
     const runtime = getRuntime(controller);
+    runtime.store.append(runtime.session.id, [
+      {
+        id: 'legacy-assistant',
+        role: 'assistant',
+        content: 'GitHub: connected',
+      },
+    ]);
+    const storedBefore = runtime.store.messages(runtime.session.id);
     const reply = await controller.dispatch({
       id: 'user-github',
       name: 'custom-command',
@@ -218,14 +229,37 @@ test('a same-name user extension and legacy assistant status text are not locali
       .snapshot()
       .sessions.find((s) => s.id === runtime.session.id)!
       .messages.at(-1)!;
-    assert.equal(row.role, 'assistant');
+    assert.equal(row.role, 'notice', 'extension append is display-only');
+    assert.equal(row.text, 'GitHub: connected');
+    assert.deepEqual(
+      runtime.store.messages(runtime.session.id),
+      storedBefore,
+      'display-only extension output is never persisted as assistant content',
+    );
     assert.equal(row.runtimeNotice, undefined);
     setLanguage('zh-CN');
     assert.equal(formatRuntimeNotice(row), 'GitHub: connected');
+    const legacy = controller
+      .snapshot()
+      .sessions.find((s) => s.id === runtime.session.id)!
+      .messages.find(
+        (m) => m.role === 'assistant' && m.text === 'GitHub: connected',
+      )!;
+    assert.equal(legacy.role, 'assistant');
+    assert.equal(legacy.runtimeNotice, undefined);
     assert.equal(
-      formatRuntimeNotice({ ...row, role: 'notice' }),
+      formatRuntimeNotice(legacy),
       'GitHub: connected',
-      'legacy text without provenance stays verbatim',
+      'legacy assistant text without provenance stays verbatim',
+    );
+    await runtime.harness.run('continue after display notice');
+    assert.equal(model.requests.length, 1);
+    assert.equal(
+      model.requests[0]!.messages.filter(
+        (m) => m.role === 'assistant' && m.content === 'GitHub: connected',
+      ).length,
+      1,
+      'only the legacy assistant record enters model context; extension display text does not',
     );
   } finally {
     setLanguage('en');

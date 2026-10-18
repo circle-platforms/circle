@@ -294,7 +294,7 @@ export function DebugPanel({
         <span role="status" className="debug-status">
           <Status
             value={
-              ['idle', 'running', 'failed'].includes(state.status)
+              ['idle', 'running', 'stopping', 'failed'].includes(state.status)
                 ? state.status
                 : (statuses[state.status] ?? state.status)
             }
@@ -310,7 +310,7 @@ export function DebugPanel({
           action === 'pause'
             ? state.status === 'running'
             : action === 'stop'
-              ? !['idle', 'stopped'].includes(state.status)
+              ? !['idle', 'stopping', 'stopped'].includes(state.status)
               : state.status === 'paused'
         }
         onAction={(action) => void act(action)}

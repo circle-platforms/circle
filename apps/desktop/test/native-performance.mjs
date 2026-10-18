@@ -979,7 +979,9 @@ try {
     await activeFile.locator('.file-view-filename strong').textContent(),
     'README.md',
   );
-  await activeFile.getByRole('button', { name: 'edit', exact: true }).click();
+  await activeFile
+    .getByRole('button', { name: 'source code', exact: true })
+    .click();
   await activeFile.locator('.monaco-editor:visible .view-lines').waitFor();
   report.editorInputDiagnostics = [];
   for (let index = 0; index < 24; index++) {

@@ -11,6 +11,23 @@ import { applyTheme } from '../src/theme';
 setLanguage(
   new URL(location.href).searchParams.get('lang') === 'zh-CN' ? 'zh-CN' : 'en',
 );
+import * as monaco from 'monaco-editor/editor/editor.api';
+// Fixture inspection proves presentation switches preserve actual editor state.
+Object.assign(window, {
+  editorReadingState: () => {
+    const editor = monaco.editor
+      .getEditors()
+      .find((item) => item.getModel()?.uri.path.endsWith('/AGENTS.md'));
+    const model = editor?.getModel();
+    return {
+      editorId: editor?.getId(),
+      uri: model?.uri.toString(),
+      version: model?.getVersionId(),
+      selection: editor?.getSelection(),
+      content: model?.getValue(),
+    };
+  },
+});
 const { NativeCodeEditor, setEditorDocument } =
   await import('../src/features/NativeCodeEditor');
 applyTheme('dark');

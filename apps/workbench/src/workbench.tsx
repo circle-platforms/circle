@@ -6,6 +6,7 @@ import type { RuntimePort } from './model/types';
 import type { WorkbenchPlugin, ServiceRegistry } from './plugins/types';
 import { useLocale } from './i18n';
 import './styles/app.css';
+import './styles/workbench-unified.css';
 // Subscribe to language changes without replacing mounted editors and resources.
 function LocalizedApp() {
   useLocale();

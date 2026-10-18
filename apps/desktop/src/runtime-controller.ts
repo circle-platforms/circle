@@ -1,3 +1,6 @@
+import { FileRewindJournal } from '../../../src/file_rewind.js';
+import { ExternalFileGrants } from './workspace/external-file-grants';
+import { homedir } from 'node:os';
 import {
   githubStatusNotice,
   storedGitHubStatusNotice,
@@ -268,7 +271,9 @@ function changedPaths(name: string, args: Record<string, unknown>): string[] {
 function readText(path: string): string | undefined {
   try {
     if (!existsSync(path) || statSync(path).size > 256 * 1024) return undefined;
-    return new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path));
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
+      readFileSync(path),
+    );
   } catch {
     return undefined;
   }
@@ -632,6 +637,7 @@ export class RuntimeController {
     return runtime;
   }
   private selectRuntime(runtime: AgentRuntime): void {
+    this.externalSelectionEpoch++;
     const leaving = this.active;
     if (leaving && leaving !== runtime) leaving.yieldLease();
     if (!runtime.resumeLease()) {
@@ -1123,9 +1129,169 @@ export class RuntimeController {
     );
     return services;
   }
-  private fileMutations(workspace: string): FileMutations {
+  private externalFiles?: ExternalFileGrants;
+  private externalGrantOwners = new Map<string, AgentRuntime>();
+  private externalSelectionEpoch = 0;
+  private externalBlocked = new Set<string>();
+  private externalRegistry(): ExternalFileGrants {
+    const registry = (this.externalFiles ??= new ExternalFileGrants({
+      protectedRoots: [
+        this.home,
+        this.options.dataFolder ?? this.home,
+        join(homedir(), '.circle'),
+        join(homedir(), 'Library', 'Application Support', 'Circle'),
+        join(homedir(), 'Library', 'Application Support', 'Circle Beta'),
+      ],
+    }));
+    // Project credential patterns can change while an approval is pending.
+    // Apply the conservative union before every capability read/commit check.
+    registry.setCredentialFiles([
+      ...new Set(
+        [...this.runtimes.values()].flatMap(
+          (owner) =>
+            settingsForRun(this.home, owner.options.workspace).settings
+              .credential_files,
+        ),
+      ),
+    ]);
+    return registry;
+  }
+  private externalOwner(
+    sessionId: string,
+    access: 'read' | 'write',
+    selected = false,
+  ): AgentRuntime {
+    const owner = this.runtimes.get(sessionId);
+    if (
+      this.closing ||
+      this.externalBlocked.has(sessionId) ||
+      !owner ||
+      owner.session.id !== sessionId ||
+      owner.isClosing ||
+      this.runtimes.lifecycle(sessionId) !== 'open' ||
+      owner.viewOnly ||
+      this.metadata.archivedAt(sessionId) ||
+      (selected &&
+        (this.selectedSessionId !== sessionId || this.viewedSessionId))
+    )
+      throw Error(
+        'external file session is stale, read-only, archived or closed',
+      );
+    if (access === 'write' && owner.harness.planMode)
+      throw Error('external file writes are unavailable in plan mode');
+    this.trustedWorkspace(owner.options.workspace);
+    return owner;
+  }
+  /** Native parent capability path only; never a public RuntimeCommand. */
+  async grantExternalFile(
+    sessionId: string,
+    path: string,
+    access: 'read' | 'readwrite',
+  ) {
+    const permission = access === 'readwrite' ? 'write' : 'read';
+    const owner = this.externalOwner(sessionId, permission, true);
+    if (!['read', 'readwrite'].includes(access))
+      throw Error('invalid external file access');
+    owner.sandbox.checkCredentialPath(path);
+    if (owner.sandbox.isInside(path))
+      throw Error('choose a file outside this workspace');
+    const epoch = this.externalSelectionEpoch;
+    const grant = await this.externalRegistry().mint(sessionId, path, access);
+    try {
+      if (
+        epoch !== this.externalSelectionEpoch ||
+        this.externalOwner(sessionId, permission, true) !== owner
+      )
+        throw Error('session changed while selecting the external file');
+      this.externalGrantOwners.set(sessionId, owner);
+      return grant;
+    } catch (error) {
+      if (
+        this.externalRegistry()
+          .list(sessionId)
+          .some((entry) => entry.id === grant.id)
+      )
+        await this.externalRegistry().revoke(sessionId, grant.id);
+      throw error;
+    }
+  }
+  async revokeExternalFileGrant(
+    sessionId: string,
+    id: string,
+  ): Promise<{ revoked: boolean }> {
+    // Revocation is authority removal and stays available after navigation or deletion.
+    const exists =
+      this.externalFiles?.list(sessionId).some((grant) => grant.id === id) ??
+      false;
+    if (exists) await this.externalFiles!.revoke(sessionId, id);
+    return { revoked: exists };
+  }
+  private authorizeExternal(
+    owner: AgentRuntime,
+    path: string,
+    access: 'read' | 'write',
+  ) {
+    const sessionId = owner.session.id;
+    if (
+      this.externalOwner(sessionId, access) !== owner ||
+      this.externalGrantOwners.get(sessionId) !== owner
+    )
+      throw Error('external file requires a grant for this runtime owner');
+    owner.sandbox.checkCredentialPath(path);
+    if (!this.externalRegistry().allows(sessionId, path, access))
+      throw Error(
+        'external file requires an explicit current grant for this session',
+      );
+  }
+  private fileRewinds = new WeakMap<AgentRuntime, FileRewindJournal>();
+  private fileMutations(
+    workspace: string,
+    runtime: () => AgentRuntime,
+  ): FileMutations {
+    const external = (path: string) => !runtime().sandbox.isInside(path);
+    const domain = (changes: { path: string }[]) => {
+      const kinds = new Set(changes.map((change) => external(change.path)));
+      if (kinds.size > 1)
+        throw Error(
+          'mixed workspace and external file changes are unsupported; no files changed',
+        );
+      return kinds.has(true);
+    };
     return {
+      authorize: (path, sessionId, access) => {
+        const owner = runtime();
+        if (owner.session.id !== sessionId)
+          throw Error('external file grant belongs to another session');
+        this.authorizeExternal(owner, path, access);
+      },
+      restoreAtomic: async (changes, signal) => {
+        if (domain(changes)) {
+          const owner = runtime();
+          for (const change of changes)
+            this.authorizeExternal(owner, change.path, 'write');
+          return this.externalRegistry().restoreAtomic(
+            owner.session.id,
+            changes,
+            signal,
+          );
+        }
+        const documents = this.services(workspace).documents;
+        await documents.restoreAtomic(
+          changes.map((change) => ({
+            ...change,
+            path: relative(documents.root, canonicalPath(change.path))
+              .split(sep)
+              .join('/'),
+          })),
+          { signal },
+        );
+      },
       read: async (path, signal) => {
+        if (external(path)) {
+          const owner = runtime();
+          this.authorizeExternal(owner, path, 'read');
+          return this.externalRegistry().read(owner.session.id, path, signal);
+        }
         const documents = this.services(workspace).documents;
         const document = await documents.snapshot(
           relative(documents.root, canonicalPath(path)).split(sep).join('/'),
@@ -1135,9 +1301,20 @@ export class RuntimeController {
           path,
           content: document?.content ?? null,
           revision: document?.revision ?? null,
+          mode: document?.mode,
         };
       },
       apply: async (changes, signal) => {
+        if (domain(changes)) {
+          const owner = runtime();
+          for (const change of changes)
+            this.authorizeExternal(owner, change.path, 'write');
+          return this.externalRegistry().apply(
+            owner.session.id,
+            changes,
+            signal,
+          );
+        }
         const documents = this.services(workspace).documents;
         const result = await documents.applyChanges(
           changes.map((change) => ({
@@ -1846,12 +2023,16 @@ export class RuntimeController {
           .join('') +
         taskSuffix
       : undefined;
+    let runtime: AgentRuntime;
+    const fileRewind = new FileRewindJournal(
+      this.fileMutations(workspace, () => runtime),
+    );
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
         // The recovered-input panel offers a closed runtime's queue back.
         preserveQueuedInputs: true,
-        fileMutations: this.fileMutations(workspace),
+        fileMutations: fileRewind.files,
         classifyTool: bindToolResource,
         executeTool: (tool, args, context, run) =>
           this.taskResources.executeTool(
@@ -1992,7 +2173,6 @@ export class RuntimeController {
         },
       });
     // A missing/deleted session is not a reason to discard other sessions.
-    let runtime: AgentRuntime;
     try {
       runtime = create(sessionId);
     } catch (error) {
@@ -2000,6 +2180,7 @@ export class RuntimeController {
         runtime = create();
       else throw error;
     }
+    this.fileRewinds.set(runtime, fileRewind);
     runtime.bus.subscribe((event) => {
       if (task) {
         this.event(
@@ -2511,6 +2692,9 @@ export class RuntimeController {
         draft: '',
         attachments: [],
         messages: this.projectMessages(runtime, row.id, nodes),
+        fileUndoTurns: owner
+          ? this.fileRewinds.get(owner)?.availableTurns()
+          : [],
         leafId: row.head,
         branchIds,
         hiddenIds: [],
@@ -2755,12 +2939,14 @@ export class RuntimeController {
           enabled: spec.enabled !== false,
           status: pendingReload
             ? 'reload required'
-            : status
-              ? status.error
-                ? 'error'
-                : 'connected'
-              : 'not connected',
-          error: status?.error,
+            : spec.enabled === false
+              ? 'not connected'
+              : status
+                ? status.error
+                  ? 'error'
+                  : 'connected'
+                : 'not connected',
+          error: status?.error === 'disabled' ? undefined : status?.error,
           tools: runtime.mcp.tools
             .filter((tool) => status?.tools.includes(tool.name))
             .map((tool) => ({
@@ -3018,6 +3204,16 @@ export class RuntimeController {
         });
         this.notices.set(id, rows);
       }
+    }
+    if (!event.tags?.subagent) {
+      const journal = this.fileRewinds.get(runtime);
+      if (event.kind === 'run_start') {
+        const user = runtime.store
+          .tree(runtime.session.id)
+          .findLast((node) => node.message?.role === 'user');
+        if (user) journal?.beginTurn(user.id);
+      }
+      if (['run_end', 'run_error'].includes(event.kind)) journal?.endTurn();
     }
     if (event.kind === 'run_start') {
       this.activeRuns.add(id);
@@ -3578,6 +3774,8 @@ export class RuntimeController {
             'answer',
             'stop-job',
             'workspace-service',
+            'list-external-file-grants',
+            'revoke-external-file-grant',
           ].includes(command.name)
         )
           throw Error('session changed; retry from the current session');
@@ -3617,6 +3815,8 @@ export class RuntimeController {
       'delete-session',
       'workspace-service',
       'select-session',
+      'list-external-file-grants',
+      'revoke-external-file-grant',
     ].includes(command.name);
     const result = immediate ? operation() : this.mutation.then(operation);
     if (!immediate) this.mutation = result.then(() => {});
@@ -3888,6 +4088,22 @@ export class RuntimeController {
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
+    // These capability operations address their explicit owner and must never
+    // open or acquire the unrelated session currently being inspected.
+    if (command.name === 'revoke-external-file-grant')
+      return this.revokeExternalFileGrant(
+        command.sessionId ?? this.selectedSessionId,
+        text(p.id, 'grant', 200),
+      );
+    if (command.name === 'list-external-file-grants') {
+      const ownerId = command.sessionId ?? this.selectedSessionId;
+      const owner = this.externalOwner(ownerId, 'read');
+      if (this.externalGrantOwners.get(ownerId) !== owner) {
+        await this.externalFiles?.revokeSession(ownerId);
+        return [];
+      }
+      return this.externalFiles?.list(ownerId) ?? [];
+    }
     let runtime = this.active;
     const navigation = [
       'state',
@@ -3989,6 +4205,8 @@ export class RuntimeController {
       case 'begin-session': {
         const promptText = text(p.text, 'prompt');
         if (!promptText.trim()) throw Error('prompt is empty');
+        if (p.prepareOnly !== undefined && typeof p.prepareOnly !== 'boolean')
+          throw Error('invalid command preparation');
         const workspace =
           p.workspaceId === undefined
             ? this.ensureUnscoped()
@@ -4000,7 +4218,10 @@ export class RuntimeController {
         const owner = this.conversationRuntime(workspace);
         this.selectRuntime(owner);
         this.applyHomeChoices(owner, p);
-        const started = await this.submitPrompt(owner, p, true);
+        const started =
+          p.prepareOnly === true
+            ? { sessionId: owner.session.id }
+            : await this.submitPrompt(owner, p, true);
         // Home shows the notice. Starting the session from there marks it
         // seen, the same as dismissing it.
         if (this.whatsNew) {
@@ -4132,6 +4353,10 @@ export class RuntimeController {
           throw Error(
             'confirm stopping this session and its tasks before deleting it',
           );
+        for (const target of owned) this.externalBlocked.add(target);
+        await Promise.all(
+          [...owned].map((target) => this.externalFiles?.revokeSession(target)),
+        );
         const deletion = this.runtimes.delete(id, {
           confirmed: p.confirmed === true,
         });
@@ -4139,6 +4364,8 @@ export class RuntimeController {
         await deletion;
         this.metadata.set([...owned], false);
         for (const target of owned) {
+          await this.externalFiles?.revokeSession(target);
+          this.externalGrantOwners.delete(target);
           this.streams.delete(target);
           this.activeRuns.delete(target);
           this.failures.delete(target);
@@ -4184,6 +4411,12 @@ export class RuntimeController {
         if (!row || row.parent_id) throw Error('session not found');
         const archive = flag(p.archived);
         if (archive) await this.assertArchivable(id, row.workspace);
+        if (archive) {
+          this.externalBlocked.add(id);
+          await this.externalFiles?.revokeSession(id);
+          this.externalGrantOwners.delete(id);
+        }
+        if (!archive) this.externalBlocked.delete(id);
         this.metadata.set([id], archive);
         return { sessionId: id, archivedAt: this.metadata.archivedAt(id) };
       }
@@ -4195,6 +4428,11 @@ export class RuntimeController {
         if (!rows.length) throw Error('workspace not found');
         for (const row of rows)
           await this.assertArchivable(row.id, row.workspace);
+        for (const row of rows) this.externalBlocked.add(row.id);
+        for (const row of rows) {
+          await this.externalFiles?.revokeSession(row.id);
+          this.externalGrantOwners.delete(row.id);
+        }
         this.metadata.set(
           rows.map((row) => row.id),
           true,
@@ -4283,6 +4521,8 @@ export class RuntimeController {
       }
       case 'set-plan-mode':
         runtime.setPlanMode(flag(p.enabled));
+        if (flag(p.enabled))
+          await this.externalFiles?.revokeSession(runtime.session.id);
         return {};
       case 'set-auto':
         runtime.policy.setYolo(runtime.session.id, flag(p.enabled));
@@ -4290,6 +4530,8 @@ export class RuntimeController {
       case 'set-mode':
         if (!isSessionMode(p.mode)) throw Error('invalid mode');
         runtime.setMode(p.mode);
+        if (p.mode === 'plan')
+          await this.externalFiles?.revokeSession(runtime.session.id);
         return {};
       case 'configure': {
         if (
@@ -4652,6 +4894,8 @@ export class RuntimeController {
         await runtime.importSession(
           text(p.content, 'session export', 4_000_000),
         );
+        await this.externalFiles?.revokeSession(previous);
+        this.externalGrantOwners.delete(previous);
         this.runtimes.reindex(runtime, previous);
         this.workspaceSessions.set(
           runtime.options.workspace,
@@ -4824,14 +5068,30 @@ export class RuntimeController {
                     'github',
                   ),
               );
-              runtime.store.append(runtime.session.id, [
-                {
-                  id: randomUUID(),
-                  role: 'assistant',
-                  content,
-                  ...(runtimeNotice ? { runtimeNotice } : {}),
-                },
-              ]);
+              if (runtimeNotice) {
+                runtime.store.append(runtime.session.id, [
+                  {
+                    id: randomUUID(),
+                    role: 'assistant',
+                    content,
+                    runtimeNotice,
+                  },
+                ]);
+              } else {
+                // Extension append is presentation, just like its terminal
+                // notice. Only sendUserMessage may enter the model transcript.
+                const id = runtime.session.id;
+                if (this.runtimes.lifecycle(id) !== 'open') return;
+                const rows = this.notices.get(id) ?? [];
+                rows.push({
+                  id: `extension-${randomUUID()}`,
+                  after: this.store.get(id)?.head ?? null,
+                  text: content,
+                  at: new Date().toISOString(),
+                });
+                this.notices.set(id, rows);
+                this.publish();
+              }
             },
             sendUserMessage: (prompt) => {
               this.track(runtime.harness.run(prompt), runtime);
@@ -4934,6 +5194,25 @@ export class RuntimeController {
         );
         await runtime.reloadIntegrations();
         return { name, path: skillPath };
+      }
+      case 'preview-file-undo':
+      case 'restore-turn-files': {
+        if (runtime.busy || this.metadata.archivedAt(runtime.session.id))
+          throw Error(
+            'finish the running turn and restore the session before undoing files',
+          );
+        const journal = this.fileRewinds.get(runtime);
+        if (!journal) throw Error('no text-tool file history for this runtime');
+        const signal = new AbortController().signal;
+        if (command.name === 'preview-file-undo')
+          return journal.preview(text(p.turnId, 'turn'), signal);
+        if (runtime.harness.planMode)
+          throw Error('leave plan mode before restoring files');
+        const receipt = await journal.restore(
+          text(p.previewId, 'preview'),
+          signal,
+        );
+        return { restored: true, ...receipt };
       }
       case 'write-file': {
         if (
@@ -5067,6 +5346,8 @@ export class RuntimeController {
   private async closeAll(): Promise<void> {
     this.persistLocation();
     this.closing = true;
+    await this.externalFiles?.close();
+    this.externalGrantOwners.clear();
     for (const pending of this.pending.values())
       pending.reject(new Error('runtime closed'));
     this.pending.clear();

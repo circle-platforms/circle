@@ -1,3 +1,4 @@
+import { openNativeProjectFile } from './native-project-file.mjs';
 // Called by the serialized desktop suite with an already launched, isolated app.
 // This driver never launches or focuses a second application.
 import assert from 'node:assert/strict';
@@ -69,14 +70,7 @@ export async function runNativeEditorJourney({
   };
   const disk = (path) => readFile(join(workspace, path), 'utf8');
   const open = async (path) => {
-    const entry = page
-      .locator('.file-tree')
-      .getByRole('button', { name: path, exact: true });
-    if (!(await entry.isVisible())) {
-      const files = page.getByRole('button', { name: 'files', exact: true });
-      if (await files.count()) await files.first().click();
-    }
-    await entry.click();
+    await openNativeProjectFile(page, path);
     await page
       .locator('.file-view-heading strong')
       .getByText(path, { exact: true })

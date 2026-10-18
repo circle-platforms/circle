@@ -5,7 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
-  server: { host: '127.0.0.1', port: 0 },
+  server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
   logLevel: 'error',
 });
 await server.listen();
@@ -183,7 +183,9 @@ try {
       const overlay = await full();
       assert.equal(overlay.mode, 'overlay');
       assert.ok(
-        overlay.inspector.width > 250 && overlay.inspector.right <= width + 1,
+        overlay.inspector.width > 250 &&
+          overlay.inspector.left >= -1 &&
+          overlay.inspector.right <= width + 1,
       );
       assert.equal(await resource.evaluate((el) => el.isConnected), true);
       overlays.push(overlay);

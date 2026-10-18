@@ -1,6 +1,12 @@
 // Simplified Chinese for the interface words in the panels files. English is the key.
 export const panels: Record<string, string> = {
   files: '文件',
+  'external files': '外部文件',
+  '{n} file loaded': '已加载 {n} 个文件',
+  '{n} files loaded': '已加载 {n} 个文件',
+  'loading file list…': '正在加载文件列表…',
+  'file list is incomplete': '文件列表不完整',
+  'could not load file list': '无法加载文件列表',
   'Circle shell': 'Circle 终端',
   'terminal not connected': '终端未连接',
   'local workspace': '本地工作区',

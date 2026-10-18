@@ -1,4 +1,5 @@
-import { readFile, stat, lstat, readdir, realpath } from 'node:fs/promises';
+import { discoverWorkspace } from './workspace-discovery.ts';
+import { readFile, stat, lstat, realpath } from 'node:fs/promises';
 import { basename, extname, join, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { NativeFile, NativeWorkspace } from './contracts';
@@ -61,13 +62,39 @@ export async function nativeFile(
 }
 export class WorkspaceGrants {
   private roots = new Map<string, string>();
+  private rootIdentities = new Map<string, string>();
+  private rootHandles = new Map<string, string>();
+  private fileHandles = new Map<string, string>();
   private files = new Map<string, { workspaceId: string; path: string }>();
-  async open(path: string): Promise<NativeWorkspace> {
+  private pages = new Map<
+    string,
+    {
+      workspace: NativeWorkspace;
+      iterator: AsyncGenerator<string>;
+      state: { truncated: boolean };
+      check: () => void;
+      rootIdentity: string;
+    }
+  >();
+  async open(
+    path: string,
+    check: () => void = () => {},
+  ): Promise<NativeWorkspace> {
+    check();
+    // Bound abandoned chooser/list continuations and close their directory handles.
+    while (this.pages.size >= 8)
+      await this.cancel(this.pages.keys().next().value!);
     const root = await realpath(path);
-    if (!(await stat(root)).isDirectory())
-      throw Error('workspace is not a folder');
-    const id = randomUUID();
-    const result: NativeWorkspace = {
+    const info = await stat(root);
+    if (!info.isDirectory()) throw Error('workspace is not a folder');
+    const known = this.rootHandles.get(root);
+    const id =
+      known && this.rootIdentities.get(known) === `${info.dev}:${info.ino}`
+        ? known
+        : randomUUID();
+    this.rootHandles.set(root, id);
+    const state = { truncated: false };
+    const workspace: NativeWorkspace = {
       id,
       name: basename(root),
       path: root,
@@ -75,68 +102,102 @@ export class WorkspaceGrants {
       truncated: false,
     };
     this.roots.set(id, root);
-    const walk = async (folder: string, depth: number) => {
-      if (depth > 12 || result.files.length >= 2000) {
-        result.truncated = true;
-        return;
-      }
-      // One unreadable directory must not reject the folder the person confirmed.
-      let entries;
-      try {
-        entries = await readdir(folder, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (result.files.length >= 2000) {
-          result.truncated = true;
+    this.rootIdentities.set(id, `${info.dev}:${info.ino}`);
+    const cursor = randomUUID();
+    this.pages.set(cursor, {
+      workspace,
+      iterator: discoverWorkspace(root, state, check),
+      state,
+      check,
+      rootIdentity: `${info.dev}:${info.ino}`,
+    });
+    return this.nextPage(cursor, check);
+  }
+  async cancel(cursor: string): Promise<void> {
+    const page = this.pages.get(cursor);
+    this.pages.delete(cursor);
+    await page?.iterator.return(undefined);
+  }
+  async nextPage(
+    cursor: string,
+    check: () => void = () => {},
+  ): Promise<NativeWorkspace> {
+    const page = this.pages.get(cursor);
+    if (!page) throw Error('file listing cursor expired');
+    this.pages.delete(cursor);
+    const result: NativeWorkspace = {
+      ...page.workspace,
+      files: [],
+      truncated: false,
+    };
+    try {
+      page.check();
+      check();
+      const root = await realpath(result.path),
+        info = await stat(root);
+      if (
+        root !== result.path ||
+        `${info.dev}:${info.ino}` !== page.rootIdentity
+      )
+        throw Error('workspace root changed; reopen the folder');
+      let done = false;
+      for (let count = 0; count < 2000; count++) {
+        page.check();
+        check();
+        const next = await page.iterator.next();
+        if (next.done) {
+          done = true;
           break;
         }
-        if (
-          [
-            '.git',
-            'node_modules',
-            '.circle',
-            '.venv',
-            'dist',
-            'build',
-            'coverage',
-          ].includes(entry.name) ||
-          entry.isSymbolicLink()
-        )
-          continue;
-        const target = join(folder, entry.name);
-        if (entry.isDirectory()) await walk(target, depth + 1);
-        else if (entry.isFile()) {
-          const fileId = randomUUID();
-          this.files.set(fileId, { workspaceId: id, path: target });
-          const extension = extname(entry.name).slice(1);
-          result.files.push({
-            id: fileId,
-            path: relative(root, target).split('\\').join('/'),
-            language:
-              (
-                {
-                  ts: 'typescript',
-                  tsx: 'typescript',
-                  js: 'javascript',
-                  json: 'json',
-                  md: 'markdown',
-                  py: 'python',
-                } as Record<string, string>
-              )[extension] ?? 'text',
-          });
-        }
+        const target = next.value;
+        const key = `${result.id}\0${target}`;
+        const fileId = this.fileHandles.get(key) ?? randomUUID();
+        this.fileHandles.set(key, fileId);
+        this.files.set(fileId, { workspaceId: result.id, path: target });
+        const extension = extname(target).slice(1);
+        result.files.push({
+          id: fileId,
+          path: relative(root, target).split('\\').join('/'),
+          language:
+            (
+              {
+                ts: 'typescript',
+                tsx: 'typescript',
+                js: 'javascript',
+                json: 'json',
+                md: 'markdown',
+                py: 'python',
+              } as Record<string, string>
+            )[extension] ?? 'text',
+        });
       }
-    };
-    await walk(root, 0);
-    return result;
+      page.check();
+      check();
+      result.truncated = page.state.truncated;
+      result.complete = done;
+      if (!done) {
+        const nextCursor = randomUUID();
+        this.pages.set(nextCursor, page);
+        result.nextCursor = nextCursor;
+      }
+      return result;
+    } catch (error) {
+      await page.iterator.return(undefined);
+      throw error;
+    }
   }
   async read(workspaceId: string, fileId: string) {
     const root = this.roots.get(workspaceId);
     const grant = this.files.get(fileId);
     if (!root || !grant || grant.workspaceId !== workspaceId)
       throw Error('file is not granted to this workspace');
+    const rootInfo = await lstat(root);
+    if (
+      rootInfo.isSymbolicLink() ||
+      (await realpath(root)) !== root ||
+      `${rootInfo.dev}:${rootInfo.ino}` !== this.rootIdentities.get(workspaceId)
+    )
+      throw Error('workspace root changed; reopen the folder');
     if ((await lstat(grant.path)).isSymbolicLink())
       throw Error('symbolic link was not granted');
     const path = await realpath(grant.path);

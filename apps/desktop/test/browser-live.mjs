@@ -1,3 +1,4 @@
+import { openNativeProjectFile } from './helpers/native-project-file.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -1804,16 +1805,7 @@ try {
     };
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
     const editScript = async (content) => {
-      await page
-        .getByRole('button', { name: 'files panel', exact: true })
-        .click();
-      await page
-        .locator('.file-tree')
-        .getByRole('button', {
-          name: 'fixture.circle-browser.json',
-          exact: true,
-        })
-        .click();
+      await openNativeProjectFile(page, 'fixture.circle-browser.json');
       await page.getByRole('button', { name: 'edit', exact: true }).click();
       const lines = page.locator('.file-view:visible .view-lines');
       await lines.click();

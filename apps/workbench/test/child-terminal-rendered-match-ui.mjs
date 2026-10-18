@@ -10,6 +10,7 @@ import { createCommandTerminalControllerFixture } from '../../desktop/test/helpe
 import { assertRenderedTerminalMatch } from '../../desktop/test/helpers/native-terminal-rendered-match.mjs';
 const output =
   process.env.CIRCLE_CHILD_ECHO_EVIDENCE ??
+  process.env.CIRCLE_COMPONENT_UI_EVIDENCE ??
   (await mkdtemp(join(tmpdir(), 'circle-child-echo-display-')));
 await mkdir(output, { recursive: true });
 const accessibilityEnabled =
@@ -66,7 +67,7 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
   const child = await f.startChild();
   server = await createServer({
     root: fileURLToPath(new URL('..', import.meta.url)),
-    server: { host: '127.0.0.1', port: 0 },
+    server: { host: '127.0.0.1', port: 0, hmr: false, watch: null },
     logLevel: 'error',
     plugins: [
       {
@@ -192,7 +193,23 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
     return { resolved, target, panel, surface };
   };
   const { target, panel, surface } = await openOriginalChildTerminal();
-  const input = 'NATIVE_CHILD_HANDOFF_INPUT\r';
+  // The drawer can fit more columns than the old fixed echo contained. Build
+  // the exact input from the actual UI -> PTY resize receipt, not a particular
+  // panel width or a wall-clock delay. The same bytes must survive journal replay.
+  let fitEvent;
+  await f.until(() => {
+    fitEvent = f.events.findLast(
+      (event) =>
+        event.service === 'terminal' &&
+        event.resourceId === target.terminal.id &&
+        event.data.kind === 'resized' &&
+        Number.isSafeInteger(event.data.snapshot?.cols) &&
+        event.data.snapshot.cols > 0,
+    );
+    return !!fitEvent;
+  }, 'the displayed xterm fits its real PTY before constructing wrapped input');
+  const fittedCols = fitEvent.data.snapshot.cols;
+  const input = `NATIVE_CHILD_HANDOFF_INPUT_${'WRAP_'.repeat(Math.ceil((fittedCols * 2) / 5))}\r`;
   await surface.locator('.xterm-helper-textarea').focus();
   await page.keyboard.type(input.slice(0, -1));
   await page.keyboard.press('Enter');
@@ -218,6 +235,17 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
     target,
     action: 'list',
   });
+  receipt.wrapFixture = {
+    constructedFromResize: { sequence: fitEvent.seq, cols: fittedCols },
+    fittedCols: listing.value[0].cols,
+    expectedCharacters: expected.length,
+    inputCharacters: input.length - 1,
+    viewport: await page.evaluate(() => ({
+      width: innerWidth,
+      height: innerHeight,
+    })),
+    terminalBounds: await surface.boundingBox(),
+  };
   assert(
     listing.value[0].cols < expected.length,
     'fixture actually soft-wraps the complete echo',

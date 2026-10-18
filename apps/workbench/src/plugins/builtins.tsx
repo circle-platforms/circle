@@ -50,7 +50,11 @@ export const circlePlugins: WorkbenchPlugin[] = [
         },
         icon: Folder,
         component: (props) => (
-          <FilesPanel selection={props.selection} onFile={props.onFile} />
+          <FilesPanel
+            selection={props.selection}
+            onFile={props.onFile}
+            onDialog={props.onDialog}
+          />
         ),
       },
       {

@@ -41,6 +41,8 @@ export interface WorkspaceDocument {
   revision: string;
   mtime: number;
   size: number;
+  /** Ordinary permission bits captured from the same open file as content/revision. */
+  mode?: number;
 }
 
 export interface WorkspaceDocumentChange {
@@ -49,6 +51,11 @@ export interface WorkspaceDocumentChange {
   content: string | null;
   /** null explicitly means that the file must not exist yet. */
   expectedRevision: string | null;
+}
+
+export interface WorkspaceDocumentRestore extends WorkspaceDocumentChange {
+  /** Trusted journal metadata, excluding setuid/setgid/sticky bits. */
+  mode?: number;
 }
 
 export interface WorkspaceDocumentEdit extends WorkspaceDocumentChange {
@@ -94,7 +101,15 @@ export interface WorkspaceEditResult extends WorkspaceChangeResult {
   remaining: WorkspaceDocumentEdit[];
 }
 
+/** Native exact-file capabilities can narrow this service's existing root authority. */
+export interface WorkspaceDocumentAccess {
+  check(path: string): void;
+  checkFile(path: string, identity: string | null): void;
+  committed(path: string, identity: string | null): void;
+}
+
 export interface WorkspaceDocumentsOptions {
+  access?: WorkspaceDocumentAccess;
   credentialFiles?: string[];
   maxBytes?: number;
   maxFiles?: number;
@@ -132,7 +147,7 @@ const ignoredDirectories = [
   'coverage',
 ];
 const rootQueues = new Map<string, Promise<void>>();
-const decode = new TextDecoder('utf-8', { fatal: true });
+const decode = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 function missing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -150,7 +165,8 @@ function errorMessage(error: unknown): string {
 export class WorkspaceDocuments {
   readonly root: string;
   private readonly rootIdentity: string;
-  private readonly options: Required<WorkspaceDocumentsOptions>;
+  private readonly options: Required<Omit<WorkspaceDocumentsOptions, 'access'>>;
+  private readonly access?: WorkspaceDocumentAccess;
   private identities = new Map<string, string>();
   private indexed = new Map<
     string,
@@ -173,6 +189,7 @@ export class WorkspaceDocuments {
   constructor(root: string, options: WorkspaceDocumentsOptions = {}) {
     // Use the same OS resolver as fs.promises.realpath() in target(). The JS
     // resolver can retain Windows 8.3 names that the native resolver expands.
+    this.access = options.access;
     this.root = realpathSync.native(resolve(root));
     const info = statSync(this.root, { bigint: true });
     if (!info.isDirectory())
@@ -244,6 +261,7 @@ export class WorkspaceDocuments {
       /^[A-Za-z]:/.test(raw)
     )
       throw new DocumentPathError('use a workspace-relative file path');
+    this.access?.check(raw);
     const parts = raw.split('/');
     if (parts.some((part) => !part || part === '.' || part === '..'))
       throw new DocumentPathError('path traversal not allowed');
@@ -272,7 +290,9 @@ export class WorkspaceDocuments {
     for (const [index, part] of parts.entries()) {
       current = join(current, part);
       try {
-        const info = await lstat(current);
+        const info = await lstat(current, { bigint: true });
+        if (index === parts.length - 1)
+          this.access?.checkFile(raw, `${info.dev}:${info.ino}`);
         if (info.isSymbolicLink())
           throw new DocumentPathError('symbolic link was not granted');
         if (index < parts.length - 1 && !info.isDirectory())
@@ -280,12 +300,14 @@ export class WorkspaceDocuments {
         if (index < parts.length - 1) existingParent = current;
       } catch (error) {
         if (!(allowMissing && missing(error))) throw error;
+        if (index === parts.length - 1) this.access?.checkFile(raw, null);
       }
     }
     const parent = await realpath(existingParent);
     const local = relative(this.root, parent);
     if (local === '..' || local.startsWith('..' + sep) || isAbsolute(local))
       throw new DocumentPathError('file moved outside the selected workspace');
+    this.access?.check(raw);
     return { full: current, path: parts.join('/') };
   }
 
@@ -359,6 +381,8 @@ export class WorkspaceDocuments {
     );
     try {
       const before = await handle.stat({ bigint: true });
+      this.access?.check(path);
+      this.access?.checkFile(path, `${before.dev}:${before.ino}`);
       if (!before.isFile()) throw new DocumentPathError('not a regular file');
       if (before.nlink > 1n)
         throw new DocumentPathError('hard-linked files were not granted');
@@ -376,6 +400,8 @@ export class WorkspaceDocuments {
         throw new TornReadError(
           `file changed while reading: ${path}; read it again`,
         );
+      this.access?.check(path);
+      this.access?.checkFile(path, `${after.dev}:${after.ino}`);
       const content = decode.decode(bytes);
       if (content.includes('\0'))
         throw Error('binary files cannot be edited as text');
@@ -392,6 +418,7 @@ export class WorkspaceDocuments {
         revision,
         mtime: Number(after.mtimeMs),
         size: bytes.length,
+        mode: Number(after.mode & 0o777n),
       };
     } finally {
       await handle.close();
@@ -463,7 +490,8 @@ export class WorkspaceDocuments {
   private async stage(
     edit: WorkspaceDocumentEdit,
     signal?: AbortSignal,
-  ): Promise<{ full: string; temporary: string }> {
+    restoreMode?: number,
+  ): Promise<{ full: string; temporary: string; identity: string }> {
     const { full } = await this.target(edit.path, true);
     await mkdir(dirname(full), { recursive: true });
     await this.target(edit.path, true);
@@ -478,20 +506,24 @@ export class WorkspaceDocuments {
         throw error;
       },
     );
-    const handle = await open(temporary, 'wx', originalMode ?? 0o600);
+    const desiredMode = restoreMode ?? originalMode;
+    const handle = await open(temporary, 'wx', desiredMode ?? 0o600);
+    let identity: string;
     try {
       await handle.writeFile(edit.content, { encoding: 'utf8', signal });
       // Creation applies umask. Reapply only an existing file's mode; new files
       // must retain the user's creation mask rather than gaining permissions.
-      if (originalMode !== undefined) await handle.chmod(originalMode);
+      if (desiredMode !== undefined) await handle.chmod(desiredMode);
       await handle.sync();
+      const stagedStat = await handle.stat({ bigint: true });
+      identity = `${stagedStat.dev}:${stagedStat.ino}`;
     } catch (error) {
       await handle.close();
       await rm(temporary, { force: true });
       throw error;
     }
     await handle.close();
-    return { full, temporary };
+    return { full, temporary, identity };
   }
 
   async save(
@@ -509,7 +541,9 @@ export class WorkspaceDocuments {
         // close to the atomic replacement as the filesystem permits.
         await this.check(edit, options.signal);
         options.signal?.throwIfAborted();
+        this.access?.check(path);
         await rename(staged.temporary, staged.full);
+        this.access?.committed(path, staged.identity);
         return await this.readWritten(staged.full, path, content);
       } finally {
         await rm(staged.temporary, { force: true });
@@ -528,102 +562,189 @@ export class WorkspaceDocuments {
     edits: WorkspaceDocumentChange[],
     options: { signal?: AbortSignal } = {},
   ): Promise<WorkspaceChangeResult> {
-    return this.serial(async () => {
-      const applied: WorkspaceDocument[] = [];
-      const committedPaths: string[] = [];
-      const staged: { full: string; temporary?: string }[] = [];
-      let result: WorkspaceChangeResult | undefined;
-      let active = 0;
-      try {
-        if (new Set(edits.map((edit) => edit.path)).size !== edits.length)
-          throw new DocumentPathError('a batch may edit each file only once');
-        // Validate every document before creating staging files or changing one.
-        for (const [index, edit] of edits.entries()) {
-          active = index;
-          await this.check(edit, options.signal);
-        }
-        for (const [index, edit] of edits.entries()) {
-          active = index;
-          staged.push(
-            edit.content === null
-              ? { full: (await this.target(edit.path)).full }
-              : await this.stage(
-                  { ...edit, content: edit.content },
-                  options.signal,
-                ),
-          );
-        }
-        for (const [index, edit] of edits.entries()) {
-          active = index;
-          await this.check(edit, options.signal);
-        }
-        for (const [index, edit] of edits.entries()) {
-          active = index;
-          await this.check(edit, options.signal);
-          options.signal?.throwIfAborted();
-          if (edit.content === null) await unlink(staged[index]!.full);
-          else await rename(staged[index]!.temporary!, staged[index]!.full);
-          committedPaths.push(edit.path);
-          // Once replacement happened, report it even if cancellation arrives.
-          if (edit.content !== null)
-            applied.push(
-              await this.readWritten(
-                staged[index]!.full,
-                edit.path,
-                edit.content,
+    return this.serial(
+      () => this.applyChangesUnlocked(edits, options),
+      options.signal,
+    );
+  }
+
+  private async applyChangesUnlocked(
+    edits: WorkspaceDocumentChange[],
+    options: { signal?: AbortSignal; restoreModes?: Map<string, number> } = {},
+  ): Promise<WorkspaceChangeResult> {
+    const applied: WorkspaceDocument[] = [];
+    const committedPaths: string[] = [];
+    const staged: { full: string; temporary?: string; identity?: string }[] =
+      [];
+    let result: WorkspaceChangeResult | undefined;
+    let active = 0;
+    try {
+      if (new Set(edits.map((edit) => edit.path)).size !== edits.length)
+        throw new DocumentPathError('a batch may edit each file only once');
+      // Validate every document before creating staging files or changing one.
+      for (const [index, edit] of edits.entries()) {
+        active = index;
+        await this.check(edit, options.signal);
+      }
+      for (const [index, edit] of edits.entries()) {
+        active = index;
+        staged.push(
+          edit.content === null
+            ? { full: (await this.target(edit.path)).full }
+            : await this.stage(
+                { ...edit, content: edit.content },
+                options.signal,
+                options.restoreModes?.get(edit.path),
               ),
-            );
-        }
-        result = {
-          status: 'applied',
-          applied,
-          committedPaths,
-          failures: [],
-          remaining: [],
-        };
-        return result;
-      } catch (error) {
-        const failure: WorkspaceEditFailure = {
-          path: edits[active]?.path ?? '',
-          kind:
-            error instanceof DocumentConflictError
-              ? 'conflict'
-              : options.signal?.aborted
-                ? 'cancelled'
-                : error instanceof DocumentPathError
-                  ? 'invalid'
-                  : 'io',
-          message: errorMessage(error),
-          ...(error instanceof DocumentConflictError
-            ? { current: error.current }
-            : {}),
-        };
-        const committed = new Set(committedPaths);
-        result = {
-          status: committedPaths.length ? 'partial' : 'rejected',
-          applied,
-          committedPaths,
-          failures: [failure],
-          remaining: edits.filter((edit) => !committed.has(edit.path)),
-        };
-        return result;
-      } finally {
-        const cleanup = await Promise.allSettled(
-          staged.map(({ temporary }) =>
-            temporary ? rm(temporary, { force: true }) : Promise.resolve(),
-          ),
         );
-        for (const [index, outcome] of cleanup.entries()) {
-          if (outcome.status !== 'rejected') continue;
-          if (!result) throw outcome.reason;
-          result.status = committedPaths.length ? 'partial' : 'rejected';
-          result.failures.push({
-            path: relative(this.root, staged[index]!.full).split(sep).join('/'),
-            kind: 'io',
-            message: `could not remove staged file ${basename(staged[index]!.temporary!)}: ${errorMessage(outcome.reason)}`,
-          });
+      }
+      for (const [index, edit] of edits.entries()) {
+        active = index;
+        await this.check(edit, options.signal);
+      }
+      for (const [index, edit] of edits.entries()) {
+        active = index;
+        await this.check(edit, options.signal);
+        options.signal?.throwIfAborted();
+        this.access?.check(edit.path);
+        if (edit.content === null) await unlink(staged[index]!.full);
+        else await rename(staged[index]!.temporary!, staged[index]!.full);
+        committedPaths.push(edit.path);
+        this.access?.committed(
+          edit.path,
+          edit.content === null ? null : staged[index]!.identity!,
+        );
+        // Once replacement happened, report it even if cancellation arrives.
+        if (edit.content !== null)
+          applied.push(
+            await this.readWritten(
+              staged[index]!.full,
+              edit.path,
+              edit.content,
+            ),
+          );
+      }
+      result = {
+        status: 'applied',
+        applied,
+        committedPaths,
+        failures: [],
+        remaining: [],
+      };
+      return result;
+    } catch (error) {
+      const failure: WorkspaceEditFailure = {
+        path: edits[active]?.path ?? '',
+        kind:
+          error instanceof DocumentConflictError
+            ? 'conflict'
+            : options.signal?.aborted
+              ? 'cancelled'
+              : error instanceof DocumentPathError
+                ? 'invalid'
+                : 'io',
+        message: errorMessage(error),
+        ...(error instanceof DocumentConflictError
+          ? { current: error.current }
+          : {}),
+      };
+      const committed = new Set(committedPaths);
+      result = {
+        status: committedPaths.length ? 'partial' : 'rejected',
+        applied,
+        committedPaths,
+        failures: [failure],
+        remaining: edits.filter((edit) => !committed.has(edit.path)),
+      };
+      return result;
+    } finally {
+      const cleanup = await Promise.allSettled(
+        staged.map(({ temporary }) =>
+          temporary ? rm(temporary, { force: true }) : Promise.resolve(),
+        ),
+      );
+      for (const [index, outcome] of cleanup.entries()) {
+        if (outcome.status !== 'rejected') continue;
+        if (!result) throw outcome.reason;
+        result.status = committedPaths.length ? 'partial' : 'rejected';
+        result.failures.push({
+          path: relative(this.root, staged[index]!.full).split(sep).join('/'),
+          kind: 'io',
+          message: `could not remove staged file ${basename(staged[index]!.temporary!)}: ${errorMessage(outcome.reason)}`,
+        });
+      }
+    }
+  }
+
+  /** A rewind is one guarded transaction; ordinary batches retain partial-result semantics. */
+  async restoreAtomic(
+    edits: WorkspaceDocumentRestore[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    return this.serial(async () => {
+      const restoreModes = new Map<string, number>();
+      for (const edit of edits) {
+        if (edit.mode === undefined) continue;
+        if (!Number.isInteger(edit.mode) || edit.mode < 0 || edit.mode > 0o777)
+          throw new DocumentPathError('invalid original file permissions');
+        if (edit.content !== null) restoreModes.set(edit.path, edit.mode);
+      }
+      const before = new Map<string, WorkspaceDocument | null>();
+      for (const edit of edits)
+        before.set(edit.path, await this.check(edit, options.signal));
+      const result = await this.applyChangesUnlocked(edits, {
+        ...options,
+        restoreModes,
+      });
+      if (result.status === 'applied') return;
+      const compensationFailures: string[] = [];
+      for (const path of [...result.committedPaths].reverse()) {
+        try {
+          const original = before.get(path)!;
+          const current = await this.current(path);
+          const written = result.applied.find(
+            (document) => document.path === path,
+          );
+          const edit = edits.find((edit) => edit.path === path)!;
+          // Never compensate over an outside writer, even on the failure path.
+          if (
+            edit.content === null
+              ? current !== null
+              : !written || current?.revision !== written.revision
+          )
+            throw Error('file changed during failed restore');
+          const recovery = await this.applyChangesUnlocked(
+            [
+              {
+                path,
+                content: original?.content ?? null,
+                expectedRevision: current?.revision ?? null,
+              },
+            ],
+            {
+              restoreModes:
+                original?.mode === undefined
+                  ? undefined
+                  : new Map([[path, original.mode]]),
+            },
+          );
+          if (recovery.status !== 'applied')
+            throw Error(
+              recovery.failures.map((failure) => failure.message).join('; '),
+            );
+        } catch (error) {
+          compensationFailures.push(`${path}: ${errorMessage(error)}`);
         }
       }
+      throw Object.assign(
+        Error(
+          `file undo failed: ${result.failures.map((failure) => failure.message).join('; ')}; ${compensationFailures.length ? 'compensation incomplete: ' + compensationFailures.join('; ') : 'no file contents left restored'}`,
+        ),
+        {
+          committedPaths: result.committedPaths,
+          compensationFailures,
+        },
+      );
     }, options.signal);
   }
 

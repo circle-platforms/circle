@@ -93,6 +93,18 @@ export function buildMcpConnections(
         );
     }
     if (!connection) continue;
+    if (item.enabled === false) {
+      // A disabled later entry still overrides an earlier server with the same
+      // name. Never construct a transport or expose tools for either entry.
+      connections.delete(name);
+      skipped.push({
+        name,
+        connection: connection.command || connection.url || '',
+        tools: [],
+        error: 'disabled',
+      });
+      continue;
+    }
     // The later of two servers with one name is used; the earlier is reported.
     const earlier = connections.get(name);
     if (earlier) {
@@ -349,7 +361,7 @@ export class McpManager {
       this.status
         .map(
           (server) =>
-            `  · ${server.name}  ${server.connection}${server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
+            `  · ${server.name}  ${server.connection}${server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
         )
         .join('\n')
     );

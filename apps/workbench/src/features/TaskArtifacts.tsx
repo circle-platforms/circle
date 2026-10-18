@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { TaskArtifact } from '../../../desktop/src/workspace/task-store';
 import { workspaceCall } from '../model/workspace-client';
 import { Button, DataBlock } from '../components/common';
@@ -41,6 +41,20 @@ export function TaskArtifacts({
   attempt: number;
 }) {
   const request = useRef(0);
+  const listRequest = useRef(0);
+  useEffect(() => {
+    request.current++;
+    listRequest.current++;
+    setOpen(false);
+    setArtifacts([]);
+    setValue(null);
+    setError('');
+    setBusy(false);
+    return () => {
+      request.current++;
+      listRequest.current++;
+    };
+  }, [sessionId, taskId, attempt]);
   const [open, setOpen] = useState(false);
   const [artifacts, setArtifacts] = useState<TaskArtifact[]>([]);
   const [value, setValue] = useState<ArtifactPage | null>(null);
@@ -74,6 +88,7 @@ export function TaskArtifacts({
       <Button
         aria-expanded={open}
         onClick={() => {
+          const operation = ++listRequest.current;
           const next = !open;
           setOpen(next);
           if (next) {
@@ -84,12 +99,15 @@ export function TaskArtifacts({
               'artifacts',
               { id: taskId },
             )
-              .then((records) =>
-                setArtifacts(
-                  records.filter((record) => record.attempt === attempt),
-                ),
-              )
-              .catch((reason) => setError(String(reason)));
+              .then((records) => {
+                if (operation === listRequest.current)
+                  setArtifacts(
+                    records.filter((record) => record.attempt === attempt),
+                  );
+              })
+              .catch((reason) => {
+                if (operation === listRequest.current) setError(String(reason));
+              });
           }
         }}
       >
@@ -102,6 +120,7 @@ export function TaskArtifacts({
               <Button
                 key={artifact.id}
                 disabled={busy}
+                aria-pressed={value?.id === artifact.id}
                 onClick={() => void load(artifact.id)}
               >
                 {artifactLabel(artifact.kind)}
@@ -114,6 +133,9 @@ export function TaskArtifacts({
                 title={artifactLabel(value.kind)}
                 value={value.content}
               />
+              <p className="task-artifact-identity">
+                <code>{value.sha256}</code>
+              </p>
               {value.truncated && (
                 <p role="status">
                   {t('only part is shown; load the rest before you review')}

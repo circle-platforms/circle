@@ -261,3 +261,185 @@ test('token deltas hydrate runtimeState without publishing full snapshots and de
     assert.equal(supervisor.state().snapshot.sessions.length, 0);
     assert.equal(deltas, 1);
   }));
+
+test('runtime exit retires stale execution claims and rejects further commands without inventing completion', () =>
+  fixture(async (supervisor, child) => {
+    const running = {
+      id: 'running',
+      state: 'waiting',
+      turn: { verb: 'working', startedAt: 1, waited: 0, tokens: 4 },
+      queue: [{ id: 'q', text: 'not sent', kind: 'follow-up' }],
+      messages: [
+        {
+          id: 'tool',
+          role: 'tool',
+          text: 'partial',
+          tool: {
+            id: 'call',
+            name: 'shell',
+            status: 'running',
+            output: 'partial',
+          },
+        },
+      ],
+    };
+    const idle = { id: 'idle', state: 'idle', messages: [], queue: [] };
+    child.emit('message', {
+      type: 'update',
+      update: {
+        seq: 2,
+        connected: true,
+        snapshot: {
+          sessions: [running, idle],
+          runtime: { connected: true, configured: true },
+          agents: [
+            {
+              id: 'a',
+              status: 'completed',
+              task: { runtimeState: 'running', state: 'running' },
+            },
+          ],
+          jobs: [
+            { id: 'j', state: 'running' },
+            { id: 'finished', state: 'completed' },
+          ],
+          interactions: [
+            { id: 'approve', status: 'pending' },
+            { id: 'old', status: 'recorded' },
+          ],
+          requests: [],
+        },
+      },
+    });
+    const command = supervisor.command({
+      id: 'in-flight',
+      name: 'state',
+      payload: {},
+    });
+    const rejected = assert.rejects(command, /runtime exited/);
+    child.emit('exit', 9);
+    await rejected;
+    const state = supervisor.state();
+    assert.equal(state.connected, false);
+    assert.equal(state.snapshot.sessions[0].state, 'paused');
+    assert.equal(state.snapshot.sessions[0].turn, undefined);
+    assert.equal(
+      state.snapshot.sessions[0].messages[0].tool?.status,
+      'unknown',
+    );
+    assert.equal(state.snapshot.sessions[0].messages[0].text, 'partial');
+    assert.equal(
+      state.snapshot.sessions[0].queue.length,
+      1,
+      'unsent queue is preserved for explicit recovery',
+    );
+    assert.equal(state.snapshot.sessions[1].state, 'idle');
+    assert.equal(state.snapshot.jobs[0].state, 'interrupted');
+    assert.equal(state.snapshot.jobs[1].state, 'completed');
+    assert.equal(state.snapshot.agents[0].status, 'unknown');
+    assert.deepEqual(
+      state.snapshot.interactions.map((row) => row.id),
+      ['old'],
+    );
+    await assert.rejects(
+      supervisor.command({ id: 'later', name: 'abort', payload: {} }),
+      /disconnected/,
+    );
+    assert.equal(running.state, 'waiting', 'source snapshot is immutable');
+  }));
+
+test('public runtime commands cannot smuggle the native file-capability message tag', () =>
+  fixture(async (supervisor, child) => {
+    const done = supervisor.command({
+      id: 'public-with-private-tag',
+      name: 'state',
+      payload: {},
+      type: 'external-file-capability',
+      operation: 'grant',
+      sessionId: 'owner',
+      path: '/synthetic/external.txt',
+      access: 'readwrite',
+    } as Parameters<Supervisor['command']>[0]);
+    const sent = child.sent.at(-1)!;
+    assert.deepEqual(sent, {
+      id: 'public-with-private-tag',
+      name: 'state',
+      payload: {},
+      sessionId: 'owner',
+    });
+    child.emit('message', { type: 'reply', reply: { id: sent.id, ok: true } });
+    await done;
+  }));
+
+test('native picker grants and revokes use a separate private worker envelope', () =>
+  fixture(async (supervisor, child) => {
+    const pending = supervisor.grantExternalFile(
+      'owner',
+      '/synthetic/external.txt',
+      'readwrite',
+    );
+    const sent = child.sent.at(-1)!;
+    assert.equal(sent.type, 'external-file-capability');
+    assert.equal(sent.operation, 'grant');
+    assert.equal(sent.name, undefined);
+    const grant = {
+      id: 'capability-id',
+      sessionId: 'owner',
+      path: '/synthetic/external.txt',
+      access: 'readwrite',
+    };
+    child.emit('message', {
+      type: 'reply',
+      reply: { id: sent.id, ok: true, data: grant },
+    });
+    assert.deepEqual(await pending, grant);
+    const revoke = supervisor.revokeExternalFileGrant('owner', grant.id);
+    const request = child.sent.at(-1)!;
+    assert.equal(request.operation, 'revoke');
+    assert.equal(request.grantId, grant.id);
+    child.emit('message', {
+      type: 'reply',
+      reply: { id: request.id, ok: true, data: { revoked: true } },
+    });
+    assert.deepEqual(await revoke, { revoked: true });
+  }));
+
+test('a native grant receipt arriving after timeout is revoked before it can become untracked authority', async (t) =>
+  fixture(async (supervisor, child) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const pending = supervisor.grantExternalFile(
+        'owner',
+        '/synthetic/external.txt',
+        'read',
+      );
+      const sent = child.sent.at(-1)!;
+      const rejected = assert.rejects(pending, /timed out/);
+      t.mock.timers.tick(30_000);
+      await rejected;
+      child.emit('message', {
+        type: 'reply',
+        reply: {
+          id: sent.id,
+          ok: true,
+          data: {
+            id: 'late-capability',
+            sessionId: 'owner',
+            path: '/synthetic/external.txt',
+            access: 'read',
+          },
+        },
+      });
+      const revoke = child.sent.at(-1)!;
+      assert.equal(revoke.type, 'external-file-capability');
+      assert.equal(revoke.operation, 'revoke');
+      assert.equal(revoke.grantId, 'late-capability');
+      child.emit('message', {
+        type: 'reply',
+        reply: { id: revoke.id, ok: true, data: { revoked: true } },
+      });
+      await settle();
+    } finally {
+      t.mock.timers.reset();
+    }
+  }));

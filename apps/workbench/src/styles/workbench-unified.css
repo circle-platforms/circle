@@ -1,0 +1,66 @@
+/* Shared workbench rhythm. Colour stays derived from applyTheme()/palette().
+   These selectors deliberately exclude Monaco, terminal and syntax tokens. */
+:root {
+  --workbench-space-1: 4px;
+  --workbench-space-2: 8px;
+  --workbench-space-3: 12px;
+  --workbench-space-4: 16px;
+  --workbench-radius: 10px;
+  --workbench-control-height: 30px;
+  --workbench-section-border: var(--border);
+  --workbench-section-background: var(--surface);
+  --workbench-secondary: var(--muted);
+}
+.page-heading {
+  align-items: flex-start;
+  gap: var(--workbench-space-4);
+}
+.page-heading h1 {
+  font-weight: 550;
+  letter-spacing: -0.015em;
+}
+.page-heading p {
+  line-height: 1.6;
+  max-width: 68ch;
+}
+.button {
+  min-height: var(--workbench-control-height);
+  border-radius: var(--radius);
+  gap: 6px;
+}
+.button[aria-pressed='true'] {
+  background: var(--active);
+  color: var(--fg);
+}
+.search-field {
+  min-height: var(--workbench-control-height);
+  border-radius: var(--radius);
+}
+.search-field > svg {
+  flex: 0 0 auto;
+}
+.fold-title {
+  min-height: var(--workbench-control-height);
+  width: 100%;
+  text-align: left;
+  gap: var(--workbench-space-2);
+}
+.page :is(.empty-state, .data-block),
+.task-panel .task-operations.panel-section {
+  border-radius: var(--workbench-radius);
+}
+.page :is(.empty-state, .data-block) {
+  min-width: 0;
+}
+.facts dd,
+.file-chip {
+  min-width: 0;
+}
+.facts dd {
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-row-chevron {
+    transition: none;
+  }
+}

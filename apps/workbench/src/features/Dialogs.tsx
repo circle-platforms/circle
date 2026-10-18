@@ -1,3 +1,4 @@
+import { ExternalFileAccessPanel } from './ExternalFileAccess';
 import { desktopHost, saveExport } from '../host';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -64,6 +65,7 @@ const NAMES: Record<DialogId, () => string> = {
   exit: () => t('close session'),
   secret: () => t('secret input'),
   'job-stop': () => t('stop background job'),
+  'external-files': () => t('external file access'),
 };
 // Who wrote a message in the session tree.
 const ROLE_TEXT: Record<string, () => string> = {
@@ -618,6 +620,7 @@ export function DialogHost({
         dialog ?? '',
       )}
     >
+      {dialog === 'external-files' && <ExternalFileAccessPanel />}
       {dialog === 'rename' && (
         <form
           className="form-stack"

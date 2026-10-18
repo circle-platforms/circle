@@ -38,6 +38,12 @@ const ZH_CN: Record<string, string> = {
   'Bring All to Front': '前置全部窗口',
   'import a session': '导入会话',
   'choose files': '选择文件',
+  'allow one external file': '授权一个外部文件',
+  'allow read': '允许读取',
+  'allow read and write': '允许读写',
+  'choose one file for this session to read': '选择允许此会话读取的一个文件',
+  'choose one file for this session to read and write':
+    '选择允许此会话读写的一个文件',
   'session or text': '会话或文本',
   'supported files': '支持的文件',
   'Circle could not stop its runtime': 'Circle 无法停止运行时',

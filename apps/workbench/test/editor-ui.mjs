@@ -398,7 +398,14 @@ const server = await createServer({
   ],
   root,
   cacheDir: join(languageData, 'vite-cache'),
-  server: { port: 0, strictPort: false, host: '127.0.0.1' },
+  // Test the captured module graph; concurrent source edits must not reset fixtures.
+  server: {
+    port: 0,
+    strictPort: false,
+    host: '127.0.0.1',
+    hmr: false,
+    watch: null,
+  },
 });
 let browser;
 try {
@@ -1290,7 +1297,51 @@ try {
         .textContent()
     ).includes('import'),
   );
-  await switched.getByRole('button', { name: 'edit', exact: true }).click();
+  await switched
+    .getByRole('button', { name: 'source code', exact: true })
+    .click();
+  const rulesBeforeReading = readFileSync(join(workspace, 'AGENTS.md'), 'utf8');
+  await appendTo('rules B draft\n');
+  const retainedEditor = await switched
+    .locator('.native-code-editor')
+    .elementHandle();
+  const nativeSelection = await switched.evaluate(() =>
+    window.editorReadingState(),
+  );
+  await switched.getByRole('button', { name: 'reading', exact: true }).click();
+  await switched
+    .getByRole('region', { name: 'document reading view' })
+    .getByRole('heading', { name: 'isolated project instructions' })
+    .waitFor();
+  assert.match(
+    await switched
+      .getByRole('region', { name: 'document reading view' })
+      .textContent(),
+    /rules B draft/,
+  );
+  assert.equal(
+    readFileSync(join(workspace, 'AGENTS.md'), 'utf8'),
+    rulesBeforeReading,
+    'reading a dirty buffer does not write it to disk',
+  );
+  await switched.getByText('unsaved changes', { exact: true }).waitFor();
+  await switched
+    .getByRole('button', { name: 'source code', exact: true })
+    .click();
+  assert.equal(
+    await switched
+      .locator('.native-code-editor')
+      .evaluate((node, retained) => node === retained, retainedEditor),
+    true,
+    'reading/source retains the mounted editor and its model',
+  );
+  assert.deepEqual(
+    await switched.evaluate(() => window.editorReadingState()),
+    nativeSelection,
+    'reading/source preserves model identity, version, buffer and selection',
+  );
+  await switched.locator('.native-code-editor .view-lines').first().click();
+  await switched.keyboard.press(`${modifier}+End`);
   await appendTo('rules B saved\n');
   await switched.keyboard.press(`${modifier}+s`);
   await diskUntil('AGENTS.md', (text) => text.includes('rules B saved'));
@@ -1340,7 +1391,16 @@ try {
         .getByText(path, { exact: true })
         .waitFor();
       await batch
-        .getByRole('button', { name: zh ? '编辑' : 'edit', exact: true })
+        .getByRole('button', {
+          name: path.endsWith('.md')
+            ? zh
+              ? '源码'
+              : 'source code'
+            : zh
+              ? '编辑'
+              : 'edit',
+          exact: true,
+        })
         .click();
       await batch.locator('.native-code-editor .view-lines').first().click();
       await batch.keyboard.press(`${modifier}+End`);

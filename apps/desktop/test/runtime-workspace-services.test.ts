@@ -23,6 +23,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import { AgentRuntime } from '../../../src/runtime.ts';
+import type { FileMutations } from '../../../src/file_mutations.ts';
 import {
   defaultSettings,
   trustFolder,
@@ -2291,16 +2292,32 @@ if ($result -eq 0 -or $result -ge $buffer.Capacity) { throw "GetShortPathName fa
   try {
     const read = await document('read', { path: 'nested/current.ts' });
     assert.equal(read.ok, true, read.error);
-    const mutations = (controller as any).fileMutations(canonical);
-    const aliasedRead = await mutations.read(join(alias, 'nested/current.ts'));
+    // The native backend is bound to the actual runtime, whose sandbox decides
+    // whether an alias is internal or needs this session's exact-file grant.
+    const owner: AgentRuntime = (controller as any).runtimes.get(
+      controller.snapshot().activeSessionId,
+    );
+    assert.ok(owner instanceof AgentRuntime);
+    const signal = new AbortController().signal;
+    const mutations: FileMutations = (controller as any).fileMutations(
+      canonical,
+      () => owner,
+    );
+    const aliasedRead = await mutations.read(
+      join(alias, 'nested/current.ts'),
+      signal,
+    );
     assert.equal(aliasedRead.revision, (read.data as any).revision);
-    await mutations.apply([
-      {
-        path: join(alias, 'nested/by-alias.ts'),
-        content: 'export const alias = true;\n',
-        expectedRevision: null,
-      },
-    ]);
+    await mutations.apply(
+      [
+        {
+          path: join(alias, 'nested/by-alias.ts'),
+          content: 'export const alias = true;\n',
+          expectedRevision: null,
+        },
+      ],
+      signal,
+    );
     assert.equal(
       await readFile(join(canonical, 'nested/by-alias.ts'), 'utf8'),
       'export const alias = true;\n',
@@ -2339,15 +2356,39 @@ if ($result -eq 0 -or $result -ge $buffer.Capacity) { throw "GetShortPathName fa
     );
     await assert.rejects(
       () =>
-        mutations.apply([
-          {
-            path: join(f.root, 'outside.ts'),
-            content: 'escape',
-            expectedRevision: null,
-          },
-        ]),
-      /outside|invalid|workspace|path/i,
+        mutations.apply(
+          [
+            {
+              path: join(alias, 'nested/current.ts'),
+              content: 'must not overwrite a newer revision',
+              expectedRevision: aliasedRead.revision,
+            },
+          ],
+          signal,
+        ),
+      /revision|changed|conflict/i,
     );
+    assert.equal(
+      await readFile(join(canonical, 'nested/current.ts'), 'utf8'),
+      'export const current = 1;\n',
+    );
+    await assert.rejects(
+      () =>
+        mutations.apply(
+          [
+            {
+              path: join(f.root, 'outside.ts'),
+              content: 'escape',
+              expectedRevision: null,
+            },
+          ],
+          signal,
+        ),
+      /external file requires a grant/i,
+    );
+    await assert.rejects(readFile(join(f.root, 'outside.ts')), {
+      code: 'ENOENT',
+    });
     assert.equal(
       await readFile(join(canonical, 'nested/created.ts'), 'utf8'),
       'export const created = 42;\n',

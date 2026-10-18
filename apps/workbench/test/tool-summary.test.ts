@@ -207,3 +207,15 @@ test('follow-up proposals are informational while only successful adoption sched
         /scheduled agents|proposed follow-up tasks/,
       );
 });
+
+test('a multi-file patch summary counts its distinct actual targets rather than one tool call', () => {
+  const patch = call('apply_patch', 'waiting');
+  patch.tool!.input.patchText =
+    '*** Begin Patch\n*** Update File: a.txt\n@@\n-before\n+after\n*** Add File: b.txt\n+new\n*** End Patch';
+  assert.equal(toolSummary([patch]).text, 'waiting to edit 2 files');
+  patch.tool!.status = 'success';
+  assert.equal(
+    toolSummary([patch, edit('success', 'a.txt')]).text,
+    'edited 2 files',
+  );
+});

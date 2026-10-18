@@ -14,6 +14,7 @@ import { TASK_LIMITS_CHANGED } from './TaskLimitsSettings';
 import { PendingOperations } from './PendingOperations';
 import { TaskArtifacts } from './TaskArtifacts';
 import { TaskReviewForm } from './TaskReviewForm';
+import { TaskEvidence } from './TaskEvidence';
 import { t, tn } from '../i18n';
 import './task-panel.css';
 
@@ -366,6 +367,7 @@ export function TasksPanel({
                 />
               </summary>
               <div className="task-detail">
+                <TaskEvidence task={task} />
                 <p className="task-instruction">{task.spec.prompt}</p>
                 {task.spec.acceptanceCriteria.length > 0 && (
                   <details className="task-technical">

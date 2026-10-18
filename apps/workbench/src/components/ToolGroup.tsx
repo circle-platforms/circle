@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { useSessionDisclosure } from '../model/presentation';
 import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
 import type { Message, Session } from '../model/types';
@@ -6,6 +6,7 @@ import { toolSummary } from '../model/tool-summary';
 import { TurnClock } from './TurnClock';
 import { ToolMessage } from './ToolMessage';
 import { t, tn } from '../i18n';
+import '../features/conversation-requests.css';
 
 export { toolSummary };
 
@@ -34,9 +35,10 @@ export function ToolGroup({
 }) {
   const tools = rows.flatMap((row) => (row.tool ? [row.tool] : []));
   // A call with no result in an old session stays 'unknown'; only these are live.
-  const busy = tools.some((tool) =>
-    ['running', 'waiting'].includes(tool.status),
-  );
+  const runningTool = tools.some((tool) => tool.status === 'running');
+  const waiting = tools.some((tool) => tool.status === 'waiting');
+  const busy = runningTool || waiting;
+  const detailsId = useId();
   // These lines already say rejected or failed. The badge is for other tools.
   const failed = tools.filter(
     (tool) =>
@@ -63,13 +65,22 @@ export function ToolGroup({
   const summary = toolSummary(rows);
   const running = tools.find((tool) => tool.status === 'running');
   return (
-    <div className="tool-group" data-busy={busy || undefined}>
+    <div
+      className="tool-group"
+      data-busy={busy || undefined}
+      data-waiting={waiting || undefined}
+    >
       <button
         className="tool-summary"
         aria-expanded={open}
+        aria-controls={open ? detailsId : undefined}
         onClick={() => setOpen(!open)}
       >
-        {(busy || turn) && <LoaderCircle size={13} className="spin" />}
+        {waiting ? (
+          <i className="attention-dot" aria-label={t('waiting for you')} />
+        ) : runningTool || turn ? (
+          <LoaderCircle size={13} className="spin" />
+        ) : null}
         <span>{summary.text}</span>
         {(summary.added > 0 || summary.removed > 0) && (
           <span className="diff-count">
@@ -102,7 +113,7 @@ export function ToolGroup({
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
       {open && (
-        <div className="tool-group-calls">
+        <div id={detailsId} className="tool-group-calls">
           {rows.map((row) =>
             row.tool ? (
               <div key={row.id} data-message-id={row.id}>

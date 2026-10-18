@@ -166,7 +166,17 @@ export function NativeBrowser({
     let disposed = false;
     const update = () => {
       const rect = viewport.current?.getBoundingClientRect();
-      if (disposed || !rect || rect.width < 1 || rect.height < 1) return;
+      if (disposed) return;
+      if (!rect || rect.width < 1 || rect.height < 1) {
+        // Folding or changing drawer modes hides a resource without closing it.
+        // Native surfaces do not inherit DOM visibility: explicitly release the
+        // page's bounds and keyboard ownership while retaining its tab/session.
+        void host.browserHide(id).catch(() => {});
+        void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
+          () => {},
+        );
+        return;
+      }
       const ownDialog = viewport.current?.closest('[role="dialog"]');
       const blockingDialog = [
         ...document.querySelectorAll('[role="dialog"]'),

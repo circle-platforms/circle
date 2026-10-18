@@ -278,6 +278,24 @@ try {
     await review.locator('#task-review-task .task-instruction').textContent(),
     'Review task summary\nComplete task instruction remains available after expanding the activity row.',
   );
+  await review.locator('.task-evidence > summary').click();
+  assert.match(
+    await review.locator('.task-evidence').textContent(),
+    /Original regression failed/,
+  );
+  assert.match(
+    await review.locator('.task-evidence').textContent(),
+    /exit code: 1/,
+  );
+  assert.match(
+    await review.locator('.task-evidence').textContent(),
+    /needs review/,
+  );
+  assert.equal(
+    await review.locator('.task-evidence .status-success').count(),
+    0,
+    'worker results never synthesize passed verification',
+  );
   const confirm = review.getByRole('button', {
     name: 'confirm reviewed criteria',
     exact: true,

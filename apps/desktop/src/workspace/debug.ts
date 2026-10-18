@@ -142,6 +142,8 @@ export interface DebugOptions {
   adapterPath: string;
   emit?: (snapshot: DebugSnapshot) => void;
   output?: (text: string) => Promise<void>;
+  /** Close only PTYs created for this debugger before reporting completion. */
+  stopTerminals?: () => Promise<void>;
   runInTerminal?: (args: {
     args: string[];
     cwd: string;
@@ -149,7 +151,14 @@ export interface DebugOptions {
   }) => Promise<{ processId: number; shellProcessId?: number }>;
 }
 export interface DebugSnapshot {
-  status: 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'failed';
+  status:
+    | 'idle'
+    | 'starting'
+    | 'running'
+    | 'paused'
+    | 'stopping'
+    | 'stopped'
+    | 'failed';
   threadId?: number;
   pauseId?: number;
   reason?: string;
@@ -164,6 +173,7 @@ export class WorkspaceDebugService {
   private target?: DapConnection;
   private generation = 0;
   private launched = false;
+  private stopping?: Promise<void>;
   private resumeEntry = false;
   private connections = new Set<DapConnection>();
   private state: DebugSnapshot = {
@@ -436,6 +446,7 @@ export class WorkspaceDebugService {
       return this.snapshot();
     }
     if (method === 'launch' || method === 'attach') {
+      if (this.stopping) throw Error('a debug session is stopping');
       if (this.adapter && ['stopped', 'failed'].includes(this.state.status))
         await this.stop();
       const program =
@@ -622,54 +633,84 @@ export class WorkspaceDebugService {
     }
     return (this.target ?? this.dap).request(method, args);
   }
-  async stop() {
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    const stopping = this.stopResources();
+    this.stopping = stopping;
+    void stopping
+      .finally(() => {
+        if (this.stopping === stopping) this.stopping = undefined;
+      })
+      .catch(() => {});
+    return stopping;
+  }
+  private async stopResources() {
     this.generation++;
     this.resumeEntry = false;
-    this.publish({
-      status: 'stopped',
-      threadId: undefined,
-      adapterPid: undefined,
-    });
+    this.publish({ status: 'stopping', threadId: undefined });
     const dap = this.dap;
     this.dap = undefined;
     const target = this.target;
     this.target = undefined;
-    if (target) {
-      try {
-        await Promise.race([
-          target.request('disconnect', { terminateDebuggee: this.launched }),
-          new Promise((resolve) => setTimeout(resolve, 1000)),
-        ]);
-      } catch {}
-    }
-    if (dap) {
-      try {
-        await Promise.race([
-          dap.request('disconnect', { terminateDebuggee: this.launched }),
-          new Promise((resolve) => setTimeout(resolve, 1000)),
-        ]);
-      } catch {}
-    }
-    for (const connection of this.connections) connection.close();
-    this.connections.clear();
-    const adapter = this.adapter;
-    this.adapter = undefined;
-    if (adapter && !adapter.killed) {
-      adapter.kill();
-      await new Promise<void>((resolve) => {
-        if (adapter.exitCode !== null || adapter.signalCode !== null) {
-          resolve();
-          return;
-        }
-        const timer = setTimeout(() => {
-          adapter.kill('SIGKILL');
-          resolve();
-        }, 1000);
-        adapter.once('exit', () => {
+    try {
+      for (const connection of new Set([target, dap])) {
+        if (!connection) continue;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            connection.request('disconnect', {
+              terminateDebuggee: this.launched,
+            }),
+            new Promise((resolve) => {
+              timer = setTimeout(resolve, 1000);
+            }),
+          ]);
+        } catch {
+          // A successful disconnect may close the transport before its response.
+          // Process and owned terminal cleanup below are the completion barrier.
+        } finally {
           clearTimeout(timer);
-          resolve();
-        });
-      });
+        }
+      }
+      for (const connection of this.connections) connection.close();
+      this.connections.clear();
+      try {
+        const adapter = this.adapter;
+        if (
+          adapter &&
+          adapter.exitCode === null &&
+          adapter.signalCode === null
+        ) {
+          await new Promise<void>((resolve, reject) => {
+            const done = (error?: Error) => {
+              clearTimeout(force);
+              clearTimeout(deadline);
+              adapter.off('exit', exited);
+              adapter.off('error', failed);
+              error ? reject(error) : resolve();
+            };
+            const exited = () => done();
+            const failed = (error: Error) => done(error);
+            const force = setTimeout(() => adapter.kill('SIGKILL'), 1000);
+            const deadline = setTimeout(
+              () => done(Error('debug adapter did not exit')),
+              3000,
+            );
+            adapter.once('exit', exited);
+            adapter.once('error', failed);
+            adapter.kill();
+          });
+        }
+        this.adapter = undefined;
+      } finally {
+        // The debuggee still belongs to us if the adapter cannot acknowledge
+        // termination. Always close its owned PTYs before returning failure.
+        await this.options.stopTerminals?.();
+      }
+      this.publish({ status: 'stopped', adapterPid: undefined });
+    } catch (error) {
+      this.publish({ status: 'failed', reason: String(error) });
+      throw error;
     }
   }
   async dispose() {

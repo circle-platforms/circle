@@ -57,13 +57,15 @@ const bridge: DesktopBridge = {
     return () => ipcRenderer.removeListener('circle:workspace-event', handler);
   },
   chooseFiles: (purpose) => ipcRenderer.invoke('circle:choose-files', purpose),
+  requestExternalFileGrant: (sessionId, access) =>
+    ipcRenderer.invoke('circle:request-external-file-grant', sessionId, access),
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
   revealWorkspace: (workspaceId) =>
     ipcRenderer.invoke('circle:reveal-workspace', workspaceId),
   readWorkspaceFile: (workspaceId, fileId) =>
     ipcRenderer.invoke('circle:read-workspace-file', workspaceId, fileId),
-  listWorkspace: (workspaceId) =>
-    ipcRenderer.invoke('circle:list-workspace', workspaceId),
+  listWorkspace: (workspaceId, cursor) =>
+    ipcRenderer.invoke('circle:list-workspace', workspaceId, cursor),
   setLanguage: (locale) => ipcRenderer.invoke('circle:set-language', locale),
   saveFile: (options) => ipcRenderer.invoke('circle:save-file', options),
   copyText: (text) => ipcRenderer.invoke('circle:copy-text', text),

@@ -1,5 +1,9 @@
 // Simplified Chinese for the interface words in the pages files. English is the key.
 export const pages: Record<string, string> = {
+  'search settings': '搜索设置',
+  'settings sections': '设置分组',
+  'no matching settings': '没有匹配的设置',
+  navigation: '导航',
   'invalid extension setting': '扩展设置无效',
   'saving extension enable request': '正在保存启用请求',
   'saving extension disable request': '正在保存停用请求',

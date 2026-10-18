@@ -45,7 +45,7 @@ const manager = new TerminalManager(
 const receipts = [];
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
-  server: { host: '127.0.0.1', port: 0 },
+  server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
   logLevel: 'error',
   plugins: [
     {
@@ -174,6 +174,9 @@ try {
         const id = created[0].id;
         const input = panel.locator(`#terminal-${id} .xterm-helper-textarea`);
         await input.waitFor({ state: 'attached' });
+        await panel
+          .locator(`#terminal-${id} .xterm-screen`)
+          .waitFor({ state: 'visible' });
         const original = await input.elementHandle();
         const samples = [];
         // Observe real rendered frames, rather than fitting a terminal into a fixed-height component fixture.

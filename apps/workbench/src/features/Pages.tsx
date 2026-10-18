@@ -1,3 +1,4 @@
+import { SettingsNavigation } from './SettingsNavigation';
 import {
   setTerminalAccessibility,
   useTerminalAccessibilityChoice,
@@ -113,6 +114,7 @@ function CustomizeTabs({ page }: { page: string }) {
           key={id}
           to={'/page/' + id}
           className={page === id ? 'active' : ''}
+          aria-current={page === id ? 'page' : undefined}
         >
           {NAVIGATION.find((item) => item.id === id)!.label()}
         </NavLink>
@@ -1715,342 +1717,361 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           : 'Preferences here apply to this frontend preview.'
       }
     >
-      <section className="settings-block first">
-        <h2>{t('appearance')}</h2>
-        <div className="setting-row">
-          <span>{t('theme')}</span>
-          <div className="segmented" role="group" aria-label={t('theme')}>
-            {(['auto', 'light', 'dark'] as const).map((theme) => (
-              <button
-                key={theme}
-                aria-pressed={settings.theme === theme}
-                className={settings.theme === theme ? 'active' : ''}
-                onClick={() =>
-                  save((value) => {
-                    value.theme = theme;
-                  })
-                }
-              >
-                {THEME_LABELS[theme]()}
-              </button>
-            ))}
+      <SettingsNavigation>
+        <section className="settings-block first">
+          <h2>{t('appearance')}</h2>
+          <div className="setting-row">
+            <span>{t('theme')}</span>
+            <div className="segmented" role="group" aria-label={t('theme')}>
+              {(['auto', 'light', 'dark'] as const).map((theme) => (
+                <button
+                  key={theme}
+                  aria-pressed={settings.theme === theme}
+                  className={settings.theme === theme ? 'active' : ''}
+                  onClick={() =>
+                    save((value) => {
+                      value.theme = theme;
+                    })
+                  }
+                >
+                  {THEME_LABELS[theme]()}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="setting-row">
-          <span>{t('text size')}</span>
-          <div className="segmented" role="group" aria-label={t('text size')}>
-            {textSizes.map((size) => (
-              <button
-                key={size}
-                aria-pressed={settings.textSize === size}
-                className={settings.textSize === size ? 'active' : ''}
-                style={{ fontSize: TEXT_SIZES[size][0] + 'px' }}
-                onClick={() =>
-                  save((value) => {
-                    value.textSize = size;
-                  })
-                }
-              >
-                {TEXT_SIZE_LABELS[size]()}
-              </button>
-            ))}
+          <div className="setting-row">
+            <span>{t('text size')}</span>
+            <div className="segmented" role="group" aria-label={t('text size')}>
+              {textSizes.map((size) => (
+                <button
+                  key={size}
+                  aria-pressed={settings.textSize === size}
+                  className={settings.textSize === size ? 'active' : ''}
+                  style={{ fontSize: TEXT_SIZES[size][0] + 'px' }}
+                  onClick={() =>
+                    save((value) => {
+                      value.textSize = size;
+                    })
+                  }
+                >
+                  {TEXT_SIZE_LABELS[size]()}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="setting-row">
-          <span>{t('language')}</span>
-          <div className="segmented" role="group" aria-label={t('language')}>
-            {LANGUAGES.map((language) => (
-              <button
-                key={language}
-                aria-pressed={languageChoice() === language}
-                className={languageChoice() === language ? 'active' : ''}
-                onClick={() => setLanguage(language, localStorage)}
-              >
-                {language === 'system'
-                  ? t('follow system')
-                  : language === 'zh-CN'
-                    ? '简体中文'
-                    : 'English'}
-              </button>
-            ))}
+          <div className="setting-row">
+            <span>{t('language')}</span>
+            <div className="segmented" role="group" aria-label={t('language')}>
+              {LANGUAGES.map((language) => (
+                <button
+                  key={language}
+                  aria-pressed={languageChoice() === language}
+                  className={languageChoice() === language ? 'active' : ''}
+                  onClick={() => setLanguage(language, localStorage)}
+                >
+                  {language === 'system'
+                    ? t('follow system')
+                    : language === 'zh-CN'
+                      ? '简体中文'
+                      : 'English'}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="setting-row">
-          <span>{t('terminal screen reader')}</span>
-          <div
-            className="segmented"
-            role="group"
-            aria-label={t('terminal screen reader')}
-          >
-            {(['auto', 'always'] as const).map((value) => (
-              <button
-                key={value}
-                aria-pressed={terminalAccessibility === value}
-                className={terminalAccessibility === value ? 'active' : ''}
-                onClick={() => setTerminalAccessibility(value)}
-              >
-                {value === 'auto' ? t('follow system') : t('always on')}
-              </button>
-            ))}
-          </div>
-        </div>
-        <Switch
-          label={t('hide thinking in new sessions')}
-          checked={settings.hideThinking}
-          onChange={(checked) =>
-            save((value) => {
-              value.hideThinking = checked;
-            })
-          }
-        />
-      </section>
-      <section className="settings-block">
-        <h2>GitHub</h2>
-        <NavLink to="/page/extensions?plugin=github">
-          {t('manage GitHub plugin')}
-        </NavLink>
-      </section>
-      <section className="settings-block">
-        <h2>{t('session defaults')}</h2>
-        <div className="setting-row">
-          <span>{t('model')}</span>
-          <code>{settings.defaultModel}</code>
-          <Button onClick={() => onDialog('connect')}>
-            {snapshot.runtime?.configured
-              ? t('change connection')
-              : t('connect a model')}
-          </Button>
-        </div>
-        <div className="setting-row">
-          <span>{t('double Esc')}</span>
-          <div className="segmented" role="group" aria-label={t('double Esc')}>
-            {(
-              [
-                ['tree', () => t('open the session tree')],
-                ['fork', () => t('fork the session')],
-                ['none', () => t('nothing')],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                aria-pressed={settings.doubleEscape === value}
-                className={settings.doubleEscape === value ? 'active' : ''}
-                onClick={() =>
-                  save((draft) => {
-                    draft.doubleEscape = value;
-                  })
-                }
-              >
-                {label()}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="setting-row">
-          <span>{t('thinking depth')}</span>
-          <div
-            className="segmented"
-            role="group"
-            aria-label={t('thinking depth')}
-          >
-            {(['default', ...EFFORTS] as Effort[]).map((value) => (
-              <button
-                key={value}
-                aria-pressed={settings.defaultEffort === value}
-                className={settings.defaultEffort === value ? 'active' : ''}
-                onClick={() =>
-                  save((draft) => {
-                    draft.defaultEffort = value;
-                  })
-                }
-              >
-                {EFFORT_TEXT[value].label()}
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-      {runtime.mode === 'live' && desktopHost() && snapshot.activeSessionId && (
-        <TaskLimitsSettings sessionId={snapshot.activeSessionId} />
-      )}
-      <section className="settings-block">
-        <h2>{t('default workspace')}</h2>
-        <div className="setting-row">
-          <span>
-            {t('folder')}
-            <small>{settings.workspaceFolder}</small>
-          </span>
-          {runtime.mode === 'live' && (
-            <Button
-              onClick={() =>
-                perform(async () => {
-                  if (await setDefaultWorkspace(runtime))
-                    notify(t('default workspace changed'));
-                })
-              }
+          <div className="setting-row">
+            <span>{t('terminal screen reader')}</span>
+            <div
+              className="segmented"
+              role="group"
+              aria-label={t('terminal screen reader')}
             >
-              {t('change…')}
+              {(['auto', 'always'] as const).map((value) => (
+                <button
+                  key={value}
+                  aria-pressed={terminalAccessibility === value}
+                  className={terminalAccessibility === value ? 'active' : ''}
+                  onClick={() => setTerminalAccessibility(value)}
+                >
+                  {value === 'auto' ? t('follow system') : t('always on')}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Switch
+            label={t('hide thinking in new sessions')}
+            checked={settings.hideThinking}
+            onChange={(checked) =>
+              save((value) => {
+                value.hideThinking = checked;
+              })
+            }
+          />
+        </section>
+        <section className="settings-block">
+          <h2>GitHub</h2>
+          <NavLink to="/page/extensions?plugin=github">
+            {t('manage GitHub plugin')}
+          </NavLink>
+        </section>
+        <section className="settings-block">
+          <h2>{t('session defaults')}</h2>
+          <div className="setting-row">
+            <span>{t('model')}</span>
+            <code>{settings.defaultModel}</code>
+            <Button onClick={() => onDialog('connect')}>
+              {snapshot.runtime?.configured
+                ? t('change connection')
+                : t('connect a model')}
             </Button>
+          </div>
+          <div className="setting-row">
+            <span>{t('double Esc')}</span>
+            <div
+              className="segmented"
+              role="group"
+              aria-label={t('double Esc')}
+            >
+              {(
+                [
+                  ['tree', () => t('open the session tree')],
+                  ['fork', () => t('fork the session')],
+                  ['none', () => t('nothing')],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  aria-pressed={settings.doubleEscape === value}
+                  className={settings.doubleEscape === value ? 'active' : ''}
+                  onClick={() =>
+                    save((draft) => {
+                      draft.doubleEscape = value;
+                    })
+                  }
+                >
+                  {label()}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="setting-row">
+            <span>{t('thinking depth')}</span>
+            <div
+              className="segmented"
+              role="group"
+              aria-label={t('thinking depth')}
+            >
+              {(['default', ...EFFORTS] as Effort[]).map((value) => (
+                <button
+                  key={value}
+                  aria-pressed={settings.defaultEffort === value}
+                  className={settings.defaultEffort === value ? 'active' : ''}
+                  onClick={() =>
+                    save((draft) => {
+                      draft.defaultEffort = value;
+                    })
+                  }
+                >
+                  {EFFORT_TEXT[value].label()}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+        {runtime.mode === 'live' &&
+          desktopHost() &&
+          snapshot.activeSessionId && (
+            <TaskLimitsSettings sessionId={snapshot.activeSessionId} />
           )}
-        </div>
-        <p className="panel-note">
-          {t(
-            'changing the folder does not move your files; the new folder still needs trust',
-          )}
-        </p>
-        {settings.oldWorkspaceFolder && (
+        <section className="settings-block">
+          <h2>{t('default workspace')}</h2>
+          <div className="setting-row">
+            <span>
+              {t('folder')}
+              <small>{settings.workspaceFolder}</small>
+            </span>
+            {runtime.mode === 'live' && (
+              <Button
+                onClick={() =>
+                  perform(async () => {
+                    if (await setDefaultWorkspace(runtime))
+                      notify(t('default workspace changed'));
+                  })
+                }
+              >
+                {t('change…')}
+              </Button>
+            )}
+          </div>
           <p className="panel-note">
             {t(
-              'the old default folder {path} keeps its sessions until you delete it by hand',
-              { path: settings.oldWorkspaceFolder },
+              'changing the folder does not move your files; the new folder still needs trust',
             )}
           </p>
-        )}
-      </section>
-      <section className="settings-block">
-        <h2>{t('workspace trust')}</h2>
-        {snapshot.workspaces
-          .filter((workspace) => !taskFolders.has(workspace.id))
-          .map((workspace) => (
-            <div className="setting-row" key={workspace.id}>
-              <span>
-                {workspaceLabel(workspace)}
-                <small>{workspace.path}</small>
-              </span>
-              <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
-              <Button onClick={() => onDialog('trust', workspace.id)}>
-                {t('review')}
-              </Button>
-            </div>
-          ))}
-      </section>
-      <section className="settings-block">
-        <h2>{t('protected files')}</h2>
-        <label className="field-label" htmlFor="credential-patterns">
-          {t('additional file patterns')}
-        </label>
-        <textarea
-          id="credential-patterns"
-          className="input short"
-          value={settings.credentialFiles.join('\n')}
-          onChange={(event) =>
-            save((value) => {
-              value.credentialFiles = event.target.value
-                .split('\n')
-                .filter(Boolean);
-            })
-          }
-        />
-        <p className="panel-note">
-          {t(
-            "Circle's built-in protections remain in force when a runtime is connected.",
+          {settings.oldWorkspaceFolder && (
+            <p className="panel-note">
+              {t(
+                'the old default folder {path} keeps its sessions until you delete it by hand',
+                { path: settings.oldWorkspaceFolder },
+              )}
+            </p>
           )}
-        </p>
-      </section>
-      <section className="settings-block">
-        <NetworkStatus />
-      </section>
-      <VariablesSettings />
-      <section className="settings-block">
-        <h2>{t('keyboard')}</h2>
-        <Button onClick={() => onDialog('hotkeys')}>
-          {t('view shortcuts')}
-        </Button>
-        <KeybindingsEditor />
-      </section>
-      {runtime.mode === 'preview' && (
+        </section>
         <section className="settings-block">
-          <h2>launch options</h2>
-          <textarea
-            aria-label="launch arguments"
-            className="input short"
-            value={launch}
-            onChange={(event) => setLaunch(event.target.value)}
-          />
-          <Button
-            onClick={() => {
-              runtime.request('launch-options', { arguments: launch });
-              notify('launch draft saved; no process started');
-            }}
-          >
-            save launch draft
+          <h2>{t('workspace trust')}</h2>
+          {snapshot.workspaces
+            .filter((workspace) => !taskFolders.has(workspace.id))
+            .map((workspace) => (
+              <div className="setting-row" key={workspace.id}>
+                <span>
+                  {workspaceLabel(workspace)}
+                  <small>{workspace.path}</small>
+                </span>
+                <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
+                <Button onClick={() => onDialog('trust', workspace.id)}>
+                  {t('review')}
+                </Button>
+              </div>
+            ))}
+        </section>
+        <section className="settings-block">
+          <h2>{t('external file access')}</h2>
+          <p className="panel-note">
+            {t(
+              'Exact-file permissions belong to the current session, not global preferences.',
+            )}
+          </p>
+          <Button onClick={() => onDialog('external-files')}>
+            {t('manage external file access')}
           </Button>
         </section>
-      )}
-      <section className="settings-block">
-        <h2>{t('extensions')}</h2>
-        <p className="panel-note">
-          {t(
-            'Turn an extension on here. Open its pages under interface components.',
-          )}
-        </p>
-        {snapshot.extensions.length ? (
-          snapshot.extensions.map((extension) => (
-            <div className="setting-row" key={extension.id}>
-              <span>
-                {platformTitle(extension.name)} · {scopeLabel(extension.scope)}{' '}
-                · {extension.version}
-              </span>
-              <Switch
-                label={t('enable {name}', {
-                  name: platformTitle(extension.name),
-                })}
-                checked={extensionSwitch.checked(
-                  extension.name,
-                  extension.enabled,
-                )}
-                onChange={(enabled) =>
-                  extensionSwitch.setEnabled(extension.name, enabled)
-                }
-              />
-            </div>
-          ))
-        ) : (
-          <p className="panel-note">{t('no extensions yet')}</p>
-        )}
-        <Button onClick={() => navigate('/page/extensions')}>
-          {t('open extensions')}
-        </Button>
-      </section>
-      <section className="settings-block">
-        <h2>{t('about')}</h2>
-        <Facts
-          values={{
-            [t('version')]: VERSION,
-            [t('runtime')]: snapshot.runtime?.connected
-              ? t('connected')
-              : t('not connected'),
-            [t('host')]: desktopHost()
-              ? t('desktop application')
-              : 'browser layout preview',
-            [t('data')]:
-              runtime.mode === 'live'
-                ? t('Circle desktop data folder')
-                : 'this browser only',
-          }}
-        />
-        <Switch
-          label={t('check for updates')}
-          checked={settings.updateCheck}
-          onChange={(checked) =>
-            save((value) => {
-              value.updateCheck = checked;
-            })
-          }
-        />
-        {desktopHost() ? (
-          <UpdateControl />
-        ) : (
-          <Button
-            onClick={() => {
-              runtime.request('check-update');
-              notify('update check requires the desktop application');
-            }}
-          >
-            {t('check now')}
+        <section className="settings-block">
+          <h2>{t('protected files')}</h2>
+          <label className="field-label" htmlFor="credential-patterns">
+            {t('additional file patterns')}
+          </label>
+          <textarea
+            id="credential-patterns"
+            className="input short"
+            value={settings.credentialFiles.join('\n')}
+            onChange={(event) =>
+              save((value) => {
+                value.credentialFiles = event.target.value
+                  .split('\n')
+                  .filter(Boolean);
+              })
+            }
+          />
+          <p className="panel-note">
+            {t(
+              "Circle's built-in protections remain in force when a runtime is connected.",
+            )}
+          </p>
+        </section>
+        <section className="settings-block">
+          <NetworkStatus />
+        </section>
+        <VariablesSettings />
+        <section className="settings-block">
+          <h2>{t('keyboard')}</h2>
+          <Button onClick={() => onDialog('hotkeys')}>
+            {t('view shortcuts')}
           </Button>
+          <KeybindingsEditor />
+        </section>
+        {runtime.mode === 'preview' && (
+          <section className="settings-block">
+            <h2>launch options</h2>
+            <textarea
+              aria-label="launch arguments"
+              className="input short"
+              value={launch}
+              onChange={(event) => setLaunch(event.target.value)}
+            />
+            <Button
+              onClick={() => {
+                runtime.request('launch-options', { arguments: launch });
+                notify('launch draft saved; no process started');
+              }}
+            >
+              save launch draft
+            </Button>
+          </section>
         )}
-      </section>
+        <section className="settings-block">
+          <h2>{t('extensions')}</h2>
+          <p className="panel-note">
+            {t(
+              'Turn an extension on here. Open its pages under interface components.',
+            )}
+          </p>
+          {snapshot.extensions.length ? (
+            snapshot.extensions.map((extension) => (
+              <div className="setting-row" key={extension.id}>
+                <span>
+                  {platformTitle(extension.name)} ·{' '}
+                  {scopeLabel(extension.scope)} · {extension.version}
+                </span>
+                <Switch
+                  label={t('enable {name}', {
+                    name: platformTitle(extension.name),
+                  })}
+                  checked={extensionSwitch.checked(
+                    extension.name,
+                    extension.enabled,
+                  )}
+                  onChange={(enabled) =>
+                    extensionSwitch.setEnabled(extension.name, enabled)
+                  }
+                />
+              </div>
+            ))
+          ) : (
+            <p className="panel-note">{t('no extensions yet')}</p>
+          )}
+          <Button onClick={() => navigate('/page/extensions')}>
+            {t('open extensions')}
+          </Button>
+        </section>
+        <section className="settings-block">
+          <h2>{t('about')}</h2>
+          <Facts
+            values={{
+              [t('version')]: VERSION,
+              [t('runtime')]: snapshot.runtime?.connected
+                ? t('connected')
+                : t('not connected'),
+              [t('host')]: desktopHost()
+                ? t('desktop application')
+                : 'browser layout preview',
+              [t('data')]:
+                runtime.mode === 'live'
+                  ? t('Circle desktop data folder')
+                  : 'this browser only',
+            }}
+          />
+          <Switch
+            label={t('check for updates')}
+            checked={settings.updateCheck}
+            onChange={(checked) =>
+              save((value) => {
+                value.updateCheck = checked;
+              })
+            }
+          />
+          {desktopHost() ? (
+            <UpdateControl />
+          ) : (
+            <Button
+              onClick={() => {
+                runtime.request('check-update');
+                notify('update check requires the desktop application');
+              }}
+            >
+              {t('check now')}
+            </Button>
+          )}
+        </section>
+      </SettingsNavigation>
     </Page>
   );
 }

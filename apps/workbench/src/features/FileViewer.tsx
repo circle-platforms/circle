@@ -32,6 +32,7 @@ import {
   setEditorDocument,
 } from './NativeCodeEditor';
 import type { EditorDocument } from './NativeCodeEditor';
+import { Markdown } from '../components/Markdown';
 import type { SourceResourceOwner } from '../model/source-resource-owner';
 type SaveFlight = {
   queued?: { all: boolean; restore: boolean };
@@ -194,6 +195,10 @@ export function FileViewer({
   const [document, setDocument] = useState<EditorDocument | null>(null);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const identity = JSON.stringify([workspaceId, session.id, path]);
+  const markdown = /\.(md|markdown|mdown)$/i.test(path);
+  // Reading is a presentation of the retained editor buffer, never another document.
+  const [readingOwner, setReadingOwner] = useState<string | null>(null);
+  const reading = markdown && readingOwner === identity;
   const currentIdentity = useRef(identity);
   currentIdentity.current = identity;
   const [value, setValue] = useState(
@@ -384,14 +389,15 @@ export function FileViewer({
     setPath(next);
     const anchor = requestedPath.match(/#L(\d+)(?:C(\d+))?$/);
     const row = line ?? (anchor ? Number(anchor[1]) : undefined);
-    if (row)
+    if (row) {
+      setReadingOwner(null);
       setSelection({
         startLineNumber: row,
         startColumn: column ?? Number(anchor?.[2] ?? 1),
         endLineNumber: row,
         endColumn: column ?? Number(anchor?.[2] ?? 1),
       });
-    else setSelection(undefined);
+    } else setSelection(undefined);
   }, [requestedPath, line, column]);
   useEffect(() => {
     let active = true;
@@ -800,6 +806,7 @@ export function FileViewer({
   const navigate = async (target: string, range?: IRange) => {
     setSelection(range);
     setMode('edit');
+    setReadingOwner(null);
     setPath(target);
     await onSourceNavigate?.(
       target,
@@ -1304,13 +1311,28 @@ export function FileViewer({
             <button
               key={item}
               type="button"
-              className={mode === item ? 'active' : ''}
-              aria-pressed={mode === item}
-              onClick={() => setMode(item)}
+              className={!reading && mode === item ? 'active' : ''}
+              aria-pressed={!reading && mode === item}
+              onClick={() => {
+                setReadingOwner(null);
+                setMode(item);
+              }}
             >
-              {MODE_LABEL[item](readOnly)}
+              {item === 'edit' && markdown
+                ? t('source code')
+                : MODE_LABEL[item](readOnly)}
             </button>
           ))}
+          {markdown && (
+            <button
+              type="button"
+              className={reading ? 'active' : ''}
+              aria-pressed={reading}
+              onClick={() => setReadingOwner(identity)}
+            >
+              {t('reading')}
+            </button>
+          )}
         </div>
         <span
           className={`file-view-state${dirty ? ' dirty' : ''}`}
@@ -1364,6 +1386,7 @@ export function FileViewer({
             <Button
               onClick={() => {
                 setMode('diff');
+                setReadingOwner(null);
                 setDocument(conflict);
                 setEditorDocument(workspaceId, conflict);
                 setError(
@@ -1377,27 +1400,42 @@ export function FileViewer({
           )}
         </div>
       )}
-      <NativeCodeEditor
-        key={`${workspaceId}:${path}`}
-        workspaceId={workspaceId}
-        sessionId={session.id}
-        path={path}
-        value={value}
-        original={
-          document.content !== value ? document.content : projected?.original
-        }
-        language={language}
-        readOnly={readOnly}
-        diff={mode === 'diff'}
-        live={live}
-        selection={selection}
-        onChange={changed}
-        // As the save button: a conflict or a missing file is settled first.
-        onSave={() => {
-          if (!conflict && !missing) perform(() => save());
-        }}
-        onNavigate={navigate}
-      />
+      <div className="file-source-editor" hidden={reading}>
+        <NativeCodeEditor
+          key={`${workspaceId}:${path}`}
+          workspaceId={workspaceId}
+          sessionId={session.id}
+          path={path}
+          value={value}
+          original={
+            document.content !== value ? document.content : projected?.original
+          }
+          language={language}
+          readOnly={readOnly}
+          diff={mode === 'diff'}
+          live={live}
+          visible={!reading}
+          selection={selection}
+          onChange={changed}
+          // As the save button: a conflict or a missing file is settled first.
+          onSave={() => {
+            if (!conflict && !missing) perform(() => save());
+          }}
+          onNavigate={navigate}
+        />
+      </div>
+      {markdown && (
+        <div
+          key={identity}
+          className="file-markdown-reading"
+          hidden={!reading}
+          role="region"
+          aria-label={t('document reading view')}
+          tabIndex={0}
+        >
+          <Markdown text={value} />
+        </div>
+      )}
       <footer className="file-view-footer">
         <span>
           {language} · {tn(value.split('\n').length, '{n} line', '{n} lines')}
