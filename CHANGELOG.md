@@ -4,13 +4,17 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
-### Removed
+### Added
 
-- **Circle's own browser developer tools.** The desktop browser panel no longer docks a console, network list, storage, debugger or viewport of its own. **developer tools** in the ⋮ menu, **Inspect**, and F12, ctrl+shift+I or ⌥⌘I open Chromium's developer tools in their own window. The model's browser tools are unchanged.
+- **Hooks.** A shell command in `hooks.json` can allow, deny or ask before a tool runs, check a tool's result, block the end of a turn until a loop limit, run when a session starts, or answer a permission request. A deny stands in every approval mode, including auto. An allow skips an ordinary approval and does not skip a call that always asks, a hard refusal, or read-only mode. On the gating events any non-zero exit, a timeout, or output that is not a JSON object is a deny; exit 2 is a deny too. A skill's hooks run only after that skill is loaded in the current session. A secret's value is `%NAME%` in what a hook can see. When an `after_tool` or `session_start` hook fails, the transcript keeps the error and the model is told only that the hook failed. Project hooks run only in a trusted folder. See [Hooks](docs/hooks.md).
 
 ### Changed
 
 - **Who has the desktop browser is the ring around the page.** The status line under the page is gone. The accent ring lights on the turn's first browser tool and stays lit until the turn ends, you take the browser, or the session stops, including while Circle is thinking and while an approval card is open (then it says **Waiting for your approval**). During an action it says **Circle is operating**, or **Waiting for Circle to stop…** after you take over. While you have the browser the border is the ordinary one and says **you have the browser**. **take over** is in the ⋮ menu for the whole time the ring is lit. The native page is drawn inside the ring, so the ring stays visible, and the page keeps its size when the ring thickens, so a screenshot's coordinates still land. The pointer mark on a click still flashes for that action only.
+
+### Removed
+
+- **Circle's own browser developer tools.** The desktop browser panel no longer docks a console, network list, storage, debugger or viewport of its own. **developer tools** in the ⋮ menu, **Inspect**, and F12, ctrl+shift+I or ⌥⌘I open Chromium's developer tools in their own window. The model's browser tools are unchanged.
 
 ### Fixed
 

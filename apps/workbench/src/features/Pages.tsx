@@ -1874,6 +1874,50 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         <TaskLimitsSettings sessionId={snapshot.activeSessionId} />
       )}
       <section className="settings-block">
+        <h2>{t('hooks')}</h2>
+        <p className="panel-note">
+          {t(
+            'Hooks run shell commands you configured. A deny overrides every approval mode, including auto.',
+          )}
+        </p>
+        <p className="panel-note">
+          {t('A skill hook runs after that skill is loaded in this session.')}
+        </p>
+        {settings.projectHooksIgnored && (
+          <p className="panel-note">
+            {t('Project hooks are not running until this folder is trusted.')}
+          </p>
+        )}
+        {(settings.hooks ?? []).length === 0 ? (
+          <p className="panel-note">{t('no hooks')}</p>
+        ) : (
+          settings.hooks!.map((hook) => (
+            <div
+              className="setting-row"
+              key={`${hook.source}:${hook.event}:${hook.name}:${hook.command}`}
+            >
+              <span>
+                {hook.name}
+                <small>
+                  {hook.source === 'user'
+                    ? t('user')
+                    : hook.source === 'project'
+                      ? t('project')
+                      : `${t('skill')}${hook.skill ? ` ${hook.skill}` : ''}`}
+                  {' · '}
+                  {hook.event}
+                  {hook.tools !== '*' ? ` · ${hook.tools}` : ''}
+                  {hook.active === false
+                    ? ` · ${t('waits for the skill')}`
+                    : ''}
+                </small>
+              </span>
+              <code>{hook.command}</code>
+            </div>
+          ))
+        )}
+      </section>
+      <section className="settings-block">
         <h2>{t('default workspace')}</h2>
         <div className="setting-row">
           <span>
