@@ -115,9 +115,11 @@ import { isSessionBrowser } from '../model/browser';
 import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
 import {
   effectiveBindings,
+  DESKTOP_QUICK_OPEN_CHORD,
   DESKTOP_SEARCH_CHORD,
   DESKTOP_SETTINGS_CHORD,
   formatChord,
+  isChord,
   isDesktopNewSession,
   isDesktopSearch,
   isDesktopSettings,
@@ -857,12 +859,7 @@ export function App() {
         restoreSearchFocus.current = true;
         setQuickOpen(false);
         setSearchOpen(true);
-      } else if (
-        (event.metaKey || event.ctrlKey) &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === 'p' &&
-        !document.querySelector('[role="dialog"]')
-      ) {
+      } else if (isChord(event, DESKTOP_QUICK_OPEN_CHORD)) {
         event.preventDefault();
         searchReturnFocus.current =
           document.activeElement instanceof HTMLElement

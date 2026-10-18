@@ -11,7 +11,17 @@ runtime.request = (kind, payload) => {
   requests.push({ kind, payload });
   return original(kind, payload);
 };
-Object.assign(window, { editRuntime: runtime, editRequests: requests });
+const commands: string[] = [];
+const command = runtime.command.bind(runtime);
+runtime.command = (name, ...rest) => {
+  commands.push(name);
+  return command(name, ...rest);
+};
+Object.assign(window, {
+  editRuntime: runtime,
+  editRequests: requests,
+  editCommands: commands,
+});
 createRoot(document.getElementById('root')!).render(
   <CircleWorkbench runtime={runtime} plugins={circlePlugins} />,
 );

@@ -8,6 +8,7 @@ import {
   chordFromEvent,
   effectiveBindings,
   formatChord,
+  normalizeChord,
   validateKeybindings,
   type KeyAction,
 } from '../model/shortcuts';
@@ -73,14 +74,17 @@ export function KeybindingsEditor() {
       ).find(
         ([action, keys]) =>
           action !== capturing &&
-          (typeof keys === 'string' ? [keys] : keys).includes(chord),
+          (typeof keys === 'string' ? [keys] : keys).some(
+            (key) => normalizeChord(key) === chord,
+          ),
       );
       if (taken) {
         notify(t('that key is already used'));
         return;
       }
       const next = { ...saved };
-      if (KEY_ACTIONS[capturing] === chord) delete next[capturing];
+      if (normalizeChord(KEY_ACTIONS[capturing]) === chord)
+        delete next[capturing];
       else next[capturing] = chord;
       try {
         const parsed = validateKeybindings(next);

@@ -240,11 +240,11 @@ A key named there does that action everywhere, in a card or a list too, and no l
 | `secret.enter` | `alt+k` |
 | `newline` | `ctrl+j` |
 | `job.background` | `ctrl+b` |
-| `sidebar.toggle` | desktop `ctrl+b` |
+| `sidebar.toggle` | desktop `ctrl+b` (⌘B on macOS) |
 
 Key names are written as on this page: `ctrl+k`, `alt+up`, `shift+tab`, `f1` to `f12`. `/hotkeys` lists the default keys.
 
-The desktop application uses its own defaults for a few actions: `ctrl+b` shows or hides the sidebar, `alt+b` backgrounds a job, `ctrl+alt+s` enters a secret, `alt+c` copies the last answer, `ctrl+shift+m` opens the model list and `alt+m` cycles models. Search is `ctrl+k` from anywhere. `ctrl+r` (`history.search`) opens that same search; it is the terminal's history-search key and is kept on the desktop on purpose. The keys in the table above are the terminal's, except `sidebar.toggle`, which is desktop only. The desktop browser panel has Chrome's keys while it or its page has the keyboard; they are listed under [Using the browser panel](desktop.md#using-the-browser-panel) and cannot be changed.
+The desktop application uses its own defaults for a few actions: `ctrl+b` shows or hides the sidebar, `alt+b` backgrounds a job, `ctrl+alt+s` enters a secret, `alt+c` copies the last answer, `ctrl+shift+m` opens the model list and `alt+m` cycles models. Search is `ctrl+k` from anywhere. On macOS the desktop keeps ⌘ and Control apart: the terminal's `ctrl` keys are the Control key there, as in the terminal, while the sidebar, find, the model list and search take ⌘ (⌘B, ⌘F, ⇧⌘M, ⌘K), and every other ⌘ key is the system's, such as ⌘C to copy and ⌘V to paste. Text fields keep their own editing keys; see [Keys and text fields](desktop.md#keys-and-text-fields). `ctrl+r` (`history.search`) opens that same search; it is the terminal's history-search key and is kept on the desktop on purpose. The keys in the table above are the terminal's, except `sidebar.toggle`, which is desktop only. The desktop browser panel has Chrome's keys while it or its page has the keyboard; they are listed under [Using the browser panel](desktop.md#using-the-browser-panel) and cannot be changed.
 
 ## Which key wins
 

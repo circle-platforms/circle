@@ -188,7 +188,7 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(formatChord('f3'), 'f3');
   assert.equal(formatChord('f12'), 'f12');
   assert.equal(formatChord('F2'), 'F2');
-  assert.equal(DESKTOP_SEARCH_CHORD, 'ctrl+k');
+  assert.equal(DESKTOP_SEARCH_CHORD, 'mod+k');
   assert.equal(formatChord(DESKTOP_SEARCH_CHORD), 'Ctrl+K');
   assert.equal(formatChord('ctrl+r'), 'Ctrl+R');
   const key = (
@@ -205,7 +205,7 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(key('k', { ctrl: true }), true);
   assert.equal(key('k', { meta: true }), true);
   assert.equal(key('p', { ctrl: true, shift: true }), false);
-  assert.equal(DESKTOP_SETTINGS_CHORD, 'ctrl+,');
+  assert.equal(DESKTOP_SETTINGS_CHORD, 'mod+,');
   assert.equal(formatChord(DESKTOP_SETTINGS_CHORD), 'Ctrl+,');
   const comma = (
     name: string,

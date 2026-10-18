@@ -277,7 +277,7 @@ try {
         'closed inspector is actually hidden',
       );
       await composer.focus();
-      await page.keyboard.press('Control+p');
+      await page.keyboard.press('ControlOrMeta+p');
       const search = page.getByRole('textbox', {
         name: 'global search',
         exact: true,
