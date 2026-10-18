@@ -1,3 +1,4 @@
+import { patience } from './patience.mjs';
 import assert from 'node:assert/strict';
 /** Uses the current isolated app; file and inspector navigation use the original shell. */
 export async function runNativeKeyboardJourney({
@@ -99,11 +100,15 @@ export async function runNativeKeyboardJourney({
     true,
     'original Inspector toggles retain the same editor instance',
   );
-  assert.equal(
-    await editor.locator('.view-lines').first().textContent(),
-    text,
-    'Inspector cannot replace source contents',
-  );
+  // The editor sits in the work drawer, so it lays its lines out again once the
+  // drawer is shown; read the contents when that has settled.
+  let shown;
+  for (const deadline = Date.now() + patience(10000); Date.now() < deadline;) {
+    shown = await editor.locator('.view-lines').first().textContent();
+    if (shown === text) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(shown, text, 'Inspector cannot replace source contents');
   assert.deepEqual(
     await selection(),
     selected,
