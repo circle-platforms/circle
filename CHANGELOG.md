@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.8.1 - 2026-10-18
+
 ### Fixed
 
 - **The upgrade notice links to the release it names.** After a patch release the notice is still titled with the release whose changes it lists, such as 1.8.0, but its link opened the patch's notes, which do not describe them. It now opens that release's notes.
