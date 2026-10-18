@@ -1,8 +1,3 @@
-import type {
-  BrowserDiagnosticEvent,
-  BrowserDiagnosticRequest,
-  BrowserDiagnosticResult,
-} from './browser-diagnostics-contracts';
 import type { WorkspaceServiceEvent } from './workspace-protocol';
 
 export interface NativeFile {
@@ -110,13 +105,6 @@ export interface DesktopBridge {
   ) => Promise<void>;
   /** Opens a human-requested HTTPS link; credentials are never accepted. */
   openExternal?: (url: string) => Promise<void>;
-  onBrowserDiagnosticEvent?: (
-    listener: (event: BrowserDiagnosticEvent) => void,
-  ) => () => void;
-  browserDiagnostics?: (
-    sessionId: string,
-    request: BrowserDiagnosticRequest,
-  ) => Promise<BrowserDiagnosticResult>;
   browserState: (sessionId: string) => Promise<BrowserState>;
   browserNavigate: (sessionId: string, url: string) => Promise<BrowserState>;
   browserBounds: (
@@ -178,8 +166,9 @@ export interface DesktopBridge {
   onBrowserEvent: (listener: (state: BrowserState) => void) => () => void;
   /**
    * What the person does to the shown page from the panel: stop loading, zoom, find in
-   * the page, switch to the next or previous tab, a still picture of the page to show
-   * while a menu covers it, and whether the panel has the keyboard.
+   * the page, switch to the next or previous tab, open or close Chromium's developer
+   * tools, a still picture of the page to show while a menu covers it, and whether the
+   * panel has the keyboard.
    */
   browserPage: (
     sessionId: string,
@@ -197,7 +186,15 @@ export interface DesktopBridge {
 }
 
 export type BrowserPageAction =
-  'stop' | 'zoom' | 'find' | 'find-stop' | 'tab' | 'snapshot' | 'keys';
+  | 'stop'
+  | 'zoom'
+  | 'find'
+  | 'find-stop'
+  | 'tab'
+  | 'devtools'
+  | 'inspect'
+  | 'snapshot'
+  | 'keys';
 export interface BrowserKeyEvent {
   /** `browser:<session>`, as BrowserState names it. */
   sessionId: string;
@@ -249,6 +246,8 @@ export interface BrowserState {
   zoom?: number;
   /** Find in the shown tab's page: what is sought, the current match and how many. */
   find?: { text: string; active: number; matches: number };
+  /** Chromium's own developer tools are open on the shown tab. */
+  devTools?: boolean;
 }
 export type BrowserControl = 'shared' | 'agent' | 'user_pending' | 'user';
 /** A site asks for a client certificate: only the person chooses one, or none. */

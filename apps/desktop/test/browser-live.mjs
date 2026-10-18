@@ -626,6 +626,17 @@ try {
       /Circle proceeded, approved by the user/,
     );
     assert.match(await textOf('proceed'), /Local browser form/);
+    const hiddenPages = await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return window.contentView.children
+        .filter((view) => view.webContents.getURL().startsWith('http'))
+        .map((view) => view.getVisible());
+    });
+    assert(
+      hiddenPages.length > 0 && hiddenPages.every((visible) => !visible),
+      'the native page stays painted while the narrow panel is closed: ' +
+        JSON.stringify(hiddenPages),
+    );
     checks.push(
       "in a narrow window the browser panel stays closed while Circle uses the browser, so Circle's cards and the input box stay in reach, and Circle acts in the closed panel all the same",
     );
@@ -1012,32 +1023,161 @@ try {
       });
     const split = { dom: await domBox(), view: await viewBox() };
     assert(split.dom && split.view, 'the browser page is shown in the panel');
-    await page.getByRole('button', { name: 'full view', exact: true }).click();
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    const whole = { dom: await domBox(), view: await viewBox() };
-    assert(
-      whole.view.width > split.view.width + 40,
-      `the native page grew with the panel: ${JSON.stringify([
-        split.view,
-        whole.view,
-      ])}`,
+    if (
+      await page.getByRole('button', { name: 'full view', exact: true }).count()
+    ) {
+      await page
+        .getByRole('button', { name: 'full view', exact: true })
+        .click();
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const whole = { dom: await domBox(), view: await viewBox() };
+      assert(
+        whole.view.width > split.view.width + 40,
+        `the native page grew with the panel: ${JSON.stringify([
+          split.view,
+          whole.view,
+        ])}`,
+      );
+      assert(
+        Math.abs(whole.view.width - whole.dom.width) <= 3 &&
+          Math.abs(whole.view.height - whole.dom.height) <= 3,
+        `the native page left its box: ${JSON.stringify(whole)}`,
+      );
+      await page
+        .getByRole('button', { name: 'exit full view', exact: true })
+        .click();
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const back = await viewBox();
+      assert(
+        Math.abs(back.width - split.view.width) <= 3,
+        `the split did not take the page back: ${JSON.stringify([
+          split.view,
+          back,
+        ])}`,
+      );
+      checks.push(
+        'the full view carries the native browser page across the workspace and back, in step with its box',
+      );
+    }
+    // Switching the inspector, closing it, a dialog and a resize must take the
+    // native page with them. A hidden tab used to leave the WebContentsView painted.
+    const httpViews = () =>
+      app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0];
+        return window.contentView.children
+          .filter((view) => view.webContents.getURL().startsWith('http'))
+          .map((view) => ({
+            visible: view.getVisible(),
+            bounds: view.getBounds(),
+          }));
+      });
+    const waitViews = async (check, label) => {
+      const end = Date.now() + 5000;
+      let last;
+      for (;;) {
+        last = await httpViews();
+        if (check(last)) return last;
+        if (Date.now() > end) throw Error(label + ': ' + JSON.stringify(last));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+    await page
+      .getByRole('button', { name: 'activity panel', exact: true })
+      .click();
+    await page.getByRole('tab', { name: 'debug', exact: true }).click();
+    await waitViews(
+      (views) => views.length > 0 && views.every((view) => !view.visible),
+      'the page stays painted on the debug tab',
     );
-    assert(
-      Math.abs(whole.view.width - whole.dom.width) <= 3 &&
-        Math.abs(whole.view.height - whole.dom.height) <= 3,
-      `the native page left its box: ${JSON.stringify(whole)}`,
+    await page.getByRole('tab', { name: 'tasks', exact: true }).click();
+    await waitViews(
+      (views) => views.every((view) => !view.visible),
+      'the page stays painted on the tasks tab',
     );
     await page
-      .getByRole('button', { name: 'exit full view', exact: true })
+      .getByRole('button', { name: 'changes panel', exact: true })
       .click();
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    const back = await viewBox();
+    await page.getByRole('tab', { name: 'git', exact: true }).click();
+    await waitViews(
+      (views) => views.every((view) => !view.visible),
+      'the page stays painted on Git',
+    );
+    await page
+      .getByRole('button', { name: 'close inspector', exact: true })
+      .click();
+    await waitViews(
+      (views) => views.every((view) => !view.visible),
+      'the page stays painted after the inspector closes',
+    );
+    await page
+      .getByRole('button', { name: 'browser panel', exact: true })
+      .click();
+    await waitViews(
+      (views) => views.some((view) => view.visible),
+      'the page did not return with the browser panel',
+    );
+    await page
+      .getByRole('button', { name: 'browser menu', exact: true })
+      .click();
+    await page.getByRole('menu').waitFor();
+    await waitViews(
+      (views) => views.length > 0 && views.every((view) => !view.visible),
+      'the page stays painted under the browser menu',
+    );
+    await page.keyboard.press('Escape');
+    await page.getByRole('menu').waitFor({ state: 'detached' });
+    await waitViews(
+      (views) => views.some((view) => view.visible),
+      'the page did not return after the menu',
+    );
+    await app.evaluate(({ Menu }) =>
+      Menu.getApplicationMenu()
+        .items.find((item) => item.label === 'view')
+        .submenu.items.find((item) => item.label === 'session tree')
+        .click(),
+    );
+    const tree = page.getByRole('dialog', {
+      name: 'session tree',
+      exact: true,
+    });
+    await tree.waitFor();
+    await waitViews(
+      (views) => views.every((view) => !view.visible),
+      'the page stays painted under a dialog',
+    );
+    await tree
+      .getByRole('button', { name: 'close dialog', exact: true })
+      .click();
+    await waitViews(
+      (views) => views.some((view) => view.visible),
+      'the page did not return after the dialog',
+    );
+    const beforeResize = await viewBox();
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      const bounds = window.getBounds();
+      window.setBounds({
+        ...bounds,
+        width: Math.max(800, bounds.width - 120),
+        height: Math.max(600, bounds.height - 80),
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const afterResize = await viewBox();
+    const afterDom = await domBox();
     assert(
-      Math.abs(back.width - split.view.width) <= 3,
-      `the split did not take the page back: ${JSON.stringify([split.view, back])}`,
+      afterResize &&
+        afterDom &&
+        Math.abs(afterResize.width - afterDom.width) <= 3 &&
+        Math.abs(afterResize.height - afterDom.height) <= 3,
+      `resize left the native page: ${JSON.stringify({
+        beforeResize,
+        afterResize,
+        afterDom,
+      })}`,
     );
     checks.push(
-      'the full view carries the native browser page across the workspace and back, in step with its box',
+      'the native page hides when its tab, the debug tab, tasks, Git, the inspector, a menu or a dialog covers it, and follows a window resize',
     );
 
     await send('open the unavailable local port');

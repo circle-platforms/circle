@@ -19,7 +19,6 @@ export const COMPONENT_SUITES = Object.freeze([
   'git-owner-ui.mjs',
   'tool-text-output-ui.mjs',
   'debug-panel-ui.mjs',
-  'browser-diagnostics-ui.mjs',
   'keyboard-navigation-ui.mjs',
   'paste-default-ui.mjs',
   'native-editable-shortcuts-ui.mjs',

@@ -501,7 +501,10 @@
   pointer-events: none;
 }
 .inspector .native-browser-viewport {
-  flex: 1 0 200px;
+  /* Shrink with the panel so the status row stays inside the page, including
+     full view, where the column can be shorter than the bars plus the page. */
+  flex: 1 1 180px;
+  min-height: 80px;
   margin: 0;
   border: 0;
   border-radius: 0;

@@ -1,4 +1,3 @@
-import { validateBrowserDiagnosticRequest } from './browser-diagnostics-contracts';
 import {
   EncryptedCredentialStore,
   nativeHttpsUrl,
@@ -440,11 +439,6 @@ async function createWindow() {
     // How the person handed over the browser: auto mode takes it back by itself
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
-    (event) => {
-      if (window && !window.isDestroyed())
-        window.webContents.send('circle:browser-diagnostic-event', event);
-    },
-    join(dataPath, 'browser-diagnostics'),
   );
   browsers.sendKey = (event) => {
     if (window && !window.isDestroyed())
@@ -454,12 +448,6 @@ async function createWindow() {
   // the window sees them: while the browser panel has the keyboard, they are its.
   window.webContents.on('before-input-event', (event, input) =>
     browsers?.windowKey(event, input),
-  );
-  window.webContents.on('did-start-loading', () =>
-    browsers?.clearDiagnosticSubscriptions(),
-  );
-  window.webContents.on('render-process-gone', () =>
-    browsers?.clearDiagnosticSubscriptions(),
   );
   runtime?.onSessionCleanup(async (id) => {
     await browsers?.deleteSession(id);
@@ -787,21 +775,6 @@ app
     handle('circle:open-external', async (value) => {
       const url = nativeHttpsUrl(value);
       if (!fixtureProfile) await shell.openExternal(url);
-    });
-    handle('circle:browser-diagnostics', (id, value) => {
-      if (!browsers || !runtime) throw Error('window not ready');
-      if (typeof id !== 'string') throw Error('invalid browser session');
-      const snapshot = runtime.state().snapshot;
-      const session = snapshot.sessions.find((row) => row.id === id);
-      if (!session) throw Error('browser session not found');
-      const request = validateBrowserDiagnosticRequest(value);
-      if (
-        !['read', 'watch', 'log'].includes(request.action) &&
-        !snapshot.workspaces.find((row) => row.id === session.workspaceId)
-          ?.trusted
-      )
-        throw Error('trust the workspace before changing page diagnostics');
-      return browsers.diagnostics(id, request);
     });
     handle('circle:browser-state', (id) => {
       if (!browsers) throw Error('window not ready');

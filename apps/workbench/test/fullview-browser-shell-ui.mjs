@@ -108,8 +108,6 @@ try {
           await page
             .getByRole('button', { name: 'browser menu', exact: true })
             .waitFor();
-          // Developer tools take no room until asked for, as in Chrome. They
-          // stay open across the loop's in-page route changes.
           if (!sawClosedTools) {
             assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             sawClosedTools = true;
@@ -120,24 +118,8 @@ try {
               .click();
             await page.locator('.inspector-full .inspector').waitFor();
           }
-          for (const expanded of [false, true]) {
-            const shown =
-              (await page.locator('.browser-diagnostics').count()) > 0;
-            if (expanded && !shown) {
-              await page
-                .getByRole('button', { name: 'browser menu', exact: true })
-                .click();
-              await page
-                .getByRole('menuitem', { name: 'developer tools' })
-                .click();
-              await page.locator('.browser-diagnostics').waitFor();
-            } else if (!expanded && shown)
-              await page
-                .getByRole('button', {
-                  name: 'close developer tools',
-                  exact: true,
-                })
-                .click();
+          for (const expanded of [false]) {
+            assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             await page.evaluate(
               () =>
                 new Promise((r) =>
@@ -265,9 +247,7 @@ try {
                 `/${platform}-${width}-${height}-${mode}-${expanded ? 'expanded' : 'closed'}.png`,
             });
             const [body, wrapper, native, viewport, footer, docked] = geometry;
-            // Closed, the footer is the last row; open, the developer tools are
-            assert.equal(!!docked.missing, !expanded);
-            const diagnostics = docked.missing ? footer : docked;
+            assert.equal(docked.missing, true);
             assert.equal(
               body.paddingBottom,
               0,
@@ -283,8 +263,8 @@ try {
               'native browser fills its bounded parent',
             );
             assert(
-              Math.abs(diagnostics.bottom - native.bottom) <= 1,
-              'diagnostics end at bounded browser bottom',
+              Math.abs(footer.bottom - native.bottom) <= 1,
+              'the page status ends at the browser bottom',
             );
             assert(
               viewport.height >= 80,
@@ -292,11 +272,11 @@ try {
             );
             assert(footer.bottom <= body.bottom, 'page footer remains visible');
             assert(
-              diagnostics.bottom <= body.bottom,
-              'expanded diagnostics never overflow inspector',
+              footer.bottom <= body.bottom,
+              'the page status stays inside the inspector',
             );
             assert(
-              body.bottom - diagnostics.bottom <= 32,
+              body.bottom - footer.bottom <= 32,
               'do not weaken native blank-under-panel acceptance',
             );
             checks.push({
@@ -315,13 +295,6 @@ try {
               .locator('.inspector-full')
               .waitFor({ state: 'detached' });
           }
-          const pair = checks.filter((item) => !item.phase).slice(-2);
-          assert(
-            pair[0].geometry[3].height > pair[1].geometry[3].height ||
-              (Math.abs(pair[0].geometry[3].height - 80) <= 1 &&
-                Math.abs(pair[1].geometry[3].height - 80) <= 1),
-            'expanded diagnostics consume available guest height up to the original 80px minimum',
-          );
         }
   assert.deepEqual(errors, [], 'full application renders without page errors');
   console.log(

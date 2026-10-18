@@ -1,4 +1,3 @@
-import { BrowserDiagnostics } from './BrowserDiagnostics';
 import {
   useEffect,
   useRef,
@@ -78,6 +77,22 @@ const tabTitle = (tab: BrowserTab) =>
       ? tab.url
       : t('new tab');
 
+/**
+ * The page's box when that box is on screen. A hidden tab, a closed inspector or a
+ * collapsed column has none, and the native view must not keep its last rectangle.
+ */
+function laidOutBrowserViewport(node: HTMLElement): DOMRect | null {
+  if (!node.isConnected || node.closest('[hidden]')) return null;
+  const style = getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden') return null;
+  const rect = node.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  if (rect.bottom <= 0 || rect.right <= 0) return null;
+  const view = document.documentElement.getBoundingClientRect();
+  if (rect.top >= view.height || rect.left >= view.width) return null;
+  return rect;
+}
+
 const platform = () =>
   document.documentElement.dataset.desktop ??
   (/Mac/.test(navigator.platform) ? 'darwin' : 'other');
@@ -110,8 +125,6 @@ export function NativeBrowser({
   const frozenRef = useRef<string | null>(null);
   const [menu, setMenu] = useState<'' | 'main' | 'zoom'>('');
   const [finding, setFinding] = useState(false);
-  // Chrome's developer tools, docked under the page: closed until asked for
-  const [devtools, setDevtools] = useState(false);
   // A navigation the panel asked for is under way: its first page loads before the
   // tab has an address of its own
   const [navigating, setNavigating] = useState(0);
@@ -160,17 +173,22 @@ export function NativeBrowser({
     setUrl('');
     setCapture(null);
     setFrozenPicture(null);
-    setDevtools(false);
     let froze = false;
     let freezing = false;
     let disposed = false;
     const update = () => {
-      const rect = viewport.current?.getBoundingClientRect();
-      if (disposed || !rect || rect.width < 1 || rect.height < 1) return;
-      const ownDialog = viewport.current?.closest('[role="dialog"]');
+      const node = viewport.current;
+      const rect = node ? laidOutBrowserViewport(node) : null;
+      // Hidden, collapsed, or zero-size: the native view must leave the window.
+      // Returning here used to keep the last WebContentsView painted on top.
+      if (disposed || !node || !rect) {
+        void host.browserHide(id);
+        return;
+      }
+      const ownDialog = node.closest('[role="dialog"]');
       const blockingDialog = [
         ...document.querySelectorAll('[role="dialog"]'),
-      ].some((dialog) => !dialog.contains(viewport.current));
+      ].some((dialog) => !dialog.contains(node));
       // A menu open anywhere in the window may reach over the page: the page steps
       // aside while it is open, its picture in its place
       const menuOpen = !!document.querySelector('[role="menu"]');
@@ -212,18 +230,44 @@ export function NativeBrowser({
         .catch(() => {});
     };
     updateBounds.current = update;
-    const observer = new ResizeObserver(update);
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        update();
+      });
+    };
+    const observer = new ResizeObserver(schedule);
     if (viewport.current) observer.observe(viewport.current);
-    const dialogs = new MutationObserver(update);
-    dialogs.observe(document.body, { childList: true, subtree: true });
-    addEventListener('resize', update);
-    addEventListener('scroll', update, true);
+    const dialogs = new MutationObserver(schedule);
+    dialogs.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        'hidden',
+        'style',
+        'class',
+        'data-state',
+        'data-inspector-mode',
+        'open',
+        'aria-hidden',
+      ],
+    });
+    const seen = new IntersectionObserver(schedule);
+    if (viewport.current) seen.observe(viewport.current);
+    addEventListener('resize', schedule);
+    addEventListener('scroll', schedule, true);
+    update();
     return () => {
       disposed = true;
+      if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
       dialogs.disconnect();
-      removeEventListener('resize', update);
-      removeEventListener('scroll', update, true);
+      seen.disconnect();
+      removeEventListener('resize', schedule);
+      removeEventListener('scroll', schedule, true);
       captureGeneration.current++;
       void host.browserHide(id);
       void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
@@ -231,6 +275,11 @@ export function NativeBrowser({
       );
     };
   }, [id]);
+  // Full view moves the same panel to another box. Measure after that move.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => updateBounds.current());
+    return () => cancelAnimationFrame(frame);
+  }, [whole]);
   useEffect(() => {
     setCapture(null);
   }, [id, state?.tab, state?.url]);
@@ -325,7 +374,8 @@ export function NativeBrowser({
       })
       .catch(() => notify(t('navigation failed')));
   const page = (
-    action: 'stop' | 'zoom' | 'find' | 'find-stop' | 'tab',
+    action:
+      'stop' | 'zoom' | 'find' | 'find-stop' | 'tab' | 'devtools' | 'inspect',
     value?: unknown,
   ) =>
     Promise.resolve(host.browserPage?.(id, action, value))
@@ -377,8 +427,7 @@ export function NativeBrowser({
     else if (action === 'next-tab') void page('tab', 'next');
     else if (action === 'previous-tab') void page('tab', 'previous');
     else if (action === 'stop') void page('stop');
-    else if (action === 'devtools') setDevtools((open) => !open);
-    else if (action === 'inspect') setDevtools(true);
+    else if (action === 'devtools' || action === 'inspect') void page(action);
   };
   const runRef = useRef(run);
   runRef.current = run;
@@ -802,10 +851,12 @@ export function NativeBrowser({
               <DropdownMenu.Separator className="dropdown-separator" />
               <DropdownMenu.Item
                 disabled={!opened}
-                onSelect={() => setDevtools((open) => !open)}
+                onSelect={() => void page('devtools')}
               >
                 <span>
-                  {devtools ? t('close developer tools') : t('developer tools')}
+                  {state?.devTools
+                    ? t('close developer tools')
+                    : t('developer tools')}
                 </span>
                 <kbd aria-hidden="true">
                   {platform() === 'darwin'
@@ -931,14 +982,6 @@ export function NativeBrowser({
           </span>
         ) : null}
       </div>
-      {opened && devtools && (
-        <BrowserDiagnostics
-          sessionId={id}
-          tab={state?.tab}
-          url={state?.url ?? url}
-          onClose={() => setDevtools(false)}
-        />
-      )}
       {!!state?.downloads?.length && (
         <ul className="browser-downloads" data-testid="browser-downloads">
           {[...state.downloads].reverse().map((download) => (

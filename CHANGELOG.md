@@ -4,6 +4,14 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Removed
+
+- **Circle's own browser developer tools.** The desktop browser panel no longer docks a console, network list, storage, debugger or viewport of its own. **developer tools** in the ⋮ menu, **Inspect**, and F12, ctrl+shift+I or ⌥⌘I open Chromium's developer tools in their own window. The model's browser tools are unchanged.
+
+### Fixed
+
+- **The desktop browser page stays with its panel.** Opening a page and then switching the inspector to debug, tasks or Git, closing the inspector, or opening a dialog or menu no longer leaves the page drawn over the conversation. The page hides with its tab and follows the panel when the window resizes or the panel goes to full view.
+
 ## 1.8.0 - 2026-10-18
 
 ### Added

@@ -170,21 +170,11 @@ try {
               exact: true,
             })
             .waitFor();
-          // Developer tools take no room until asked for, as in Chrome. They
-          // stay open across the loop's in-page route changes.
+          // Circle does not dock its own developer tools under the page.
           if (!sawClosedTools) {
             assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             sawClosedTools = true;
           }
-          assert.equal(
-            await page
-              .getByRole('button', {
-                name: language === 'en' ? 'page diagnostics' : '页面诊断',
-                exact: true,
-              })
-              .count(),
-            0,
-          );
           const iconSizes = await page
             .locator('.native-browser .icon-button')
             .evaluateAll((buttons) =>
@@ -200,32 +190,8 @@ try {
                 }),
             );
           for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
-          for (const expanded of [false, true]) {
-            const shown =
-              (await page.locator('.browser-diagnostics').count()) > 0;
-            if (expanded && !shown) {
-              await page
-                .getByRole('button', {
-                  name: language === 'en' ? 'browser menu' : '浏览器菜单',
-                  exact: true,
-                })
-                .click();
-              await page
-                .getByRole('menuitem', {
-                  name: language === 'en' ? 'developer tools' : '开发工具',
-                })
-                .click();
-              await page.locator('.browser-diagnostics').waitFor();
-            } else if (!expanded && shown)
-              await page
-                .getByRole('button', {
-                  name:
-                    language === 'en'
-                      ? 'close developer tools'
-                      : '关闭开发工具',
-                  exact: true,
-                })
-                .click();
+          for (const expanded of [false]) {
+            assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             // Locale changes may load CJK fonts after React commits. Capture the
             // browser beside a settled conversation at its explicit end position.
             await page.evaluate(async () => {
@@ -274,9 +240,8 @@ try {
                 `/${language}-${theme}-${width}-${height}-${expanded ? 'expanded' : 'closed'}.png`,
             });
             const [body, wrapper, native, viewport, footer, docked] = geometry;
-            // Closed, the footer is the last row; open, the developer tools are
-            assert.equal(!!docked.missing, !expanded);
-            const diagnostics = docked.missing ? footer : docked;
+            assert.equal(docked.missing, true);
+            const diagnostics = footer;
             assert.equal(
               body.paddingBottom,
               0,
@@ -310,11 +275,6 @@ try {
             );
             checks.push({ height, expanded, geometry });
           }
-          const pair = checks.slice(-2);
-          assert(
-            pair[0].geometry[3].height > pair[1].geometry[3].height,
-            'expanded diagnostics resize the actual guest within the same fixed parent',
-          );
         }
   await page.setViewportSize({ width: 1400, height: 970 });
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
