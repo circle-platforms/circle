@@ -23,6 +23,20 @@ test(
       logLevel: 'error',
     });
     await server.listen();
+    // Compile the window's whole module graph, lazy panels included, before the
+    // browser starts: the 10 s limits below are for the interface, not for a slow
+    // runner's first on-demand compile (Intel macOS took longer than that).
+    const warmed = new Set<string>();
+    const warm = async (url: string): Promise<void> => {
+      if (warmed.has(url)) return;
+      warmed.add(url);
+      await server.transformRequest(url);
+      const node = await server.moduleGraph.getModuleByUrl(url);
+      await Promise.all(
+        [...(node?.importedModules ?? [])].map((child) => warm(child.url)),
+      );
+    };
+    await warm('/src/main.tsx');
     const browser = await chromium.launch({
       ...browserOptions,
       headless: true,
