@@ -707,10 +707,7 @@ try {
       exact: true,
     });
     if (!(await toggle.isChecked())) await toggle.click();
-    await page
-      .getByText('extension setting saved; reload required', { exact: true })
-      .waitFor();
-    await page.getByRole('button', { name: 'reload', exact: true }).click();
+    // The developer extension applies at once; no reload is asked for.
     await page.waitForFunction(() => {
       const card = [...document.querySelectorAll('.extension-card')].find(
         (item) =>

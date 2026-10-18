@@ -1,8 +1,11 @@
 // A real Electron window: the Edit menu's selectAll role takes Ctrl+A before
 // the field's keydown. The production menu item has no accelerator.
+// Linux CI starts Xvfb with no window manager (workbench.yml, and xvfb-run in
+// the release job). xdotool windowactivate needs _NET_ACTIVE_WINDOW and fails
+// there. webContents.sendInputEvent reaches before-input-event, which is
+// where Electron matches a menu accelerator on Linux, without that focus.
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -77,7 +80,6 @@ app.whenReady().then(async () => {
       seen.push({ type: input.type, control: input.control, meta: input.meta, prevented: event.defaultPrevented });
   });
   globalThis.inputSeen = () => seen.splice(0);
-  globalThis.windowId = () => window.getNativeWindowHandle().readUInt32LE(0);
   await window.loadFile(${JSON.stringify(pageFile)});
   window.focus();
   window.webContents.focus();
@@ -104,23 +106,17 @@ try {
       length: input.value.length,
       saw: window.sawSelectAll,
     }));
-  const hasXdotool = spawnSync('xdotool', ['version']).status === 0;
   const nativeChord = async () => {
-    if (!hasXdotool) {
-      await page.keyboard.press('Control+a');
-      return;
-    }
-    const id = String(await app.evaluate(() => globalThis.windowId()));
-    if (!id || id === '0') throw Error('window id missing');
-    const activate = spawnSync('xdotool', ['windowactivate', '--sync', id], {
-      encoding: 'utf8',
+    await page.locator('#program').evaluate((input) => input.focus());
+    await app.evaluate(({ BrowserWindow }) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents;
+      for (const type of ['keyDown', 'char', 'keyUp'])
+        contents.sendInputEvent({
+          type,
+          keyCode: 'A',
+          modifiers: ['control'],
+        });
     });
-    if (activate.status !== 0)
-      throw Error(activate.stderr || 'could not focus the window');
-    const key = spawnSync('xdotool', ['key', '--clearmodifiers', 'ctrl+a'], {
-      encoding: 'utf8',
-    });
-    if (key.status !== 0) throw Error(key.stderr || 'could not press Ctrl+A');
   };
   const press = async (mode) => {
     await app.evaluate((_, mode) => globalThis.setMenu(mode), mode);
