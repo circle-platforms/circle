@@ -1,11 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  writeFile,
+  rm,
+  stat,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WorkspaceDebugService } from '../src/workspace/debug.ts';
+import {
+  WorkspaceDebugService,
+  adapterEnvironment,
+  adapterSocketParent,
+} from '../src/workspace/debug.ts';
 import { patience } from './helpers/patience.mjs';
 
 const nodeExecutable = process.env.CIRCLE_JS_DEBUG_NODE ?? process.execPath;
@@ -47,6 +58,39 @@ test(
         'paused',
         JSON.stringify(service.snapshot()),
       );
+      if (process.platform === 'linux' && service.snapshot().adapterPid) {
+        const cmdline = await readFile(
+          `/proc/${service.snapshot().adapterPid}/cmdline`,
+        );
+        assert.equal(cmdline.includes(Buffer.from('127.0.0.1')), false);
+        assert.ok(cmdline.includes(0));
+      }
+      if (process.platform !== 'win32') {
+        const pid = service.snapshot().adapterPid;
+        assert.equal(typeof pid, 'number');
+        const parent = adapterSocketParent();
+        for (const shared of new Set([tmpdir(), parent])) {
+          const leaked = (await readdir(shared)).filter((name) =>
+            name.startsWith(`node-cdp.${pid}-`),
+          );
+          assert.deepEqual(leaked, []);
+        }
+        const found: string[] = [];
+        for (const name of await readdir(parent)) {
+          if (!/^cd-[0-9a-f]{12}$/.test(name)) continue;
+          const dir = path.join(parent, name);
+          const info = await stat(dir);
+          if ((info.mode & 0o777) !== 0o700) continue;
+          for (const entry of await readdir(dir)) {
+            if (entry.startsWith(`node-cdp.${pid}-`))
+              found.push(path.join(dir, entry));
+          }
+        }
+        assert.ok(
+          found.length > 0,
+          `node-cdp socket for ${pid} was not inside a private directory`,
+        );
+      }
       const stack = await service.handle('stackTrace');
       assert.ok(stack.stackFrames.length > 0);
       const scopes = await service.handle('scopes', {
@@ -93,6 +137,17 @@ test('rejects sources outside workspace and malformed launches without spawning'
     await assert.rejects(
       service.handle('launch', { program: outside, args: [1] }),
       /outside/,
+    );
+    await assert.rejects(
+      service.handle('launch', { program: 'missing.js' }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'DEBUG_TARGET_MISSING');
+        assert.match(
+          (error as Error).message,
+          /debug target is missing: missing\.js/,
+        );
+        return true;
+      },
     );
     assert.equal(service.snapshot().status, 'idle');
   } finally {
@@ -378,13 +433,107 @@ test(
   },
 );
 
+test(
+  'the adapter temp directory receives the node-cdp socket path',
+  {
+    // Windows uses named pipes for both and has no private socket directory.
+    skip: process.platform === 'win32' && 'no Unix socket directory on Windows',
+  },
+  async () => {
+    const parent = await mkdtemp(
+      path.join(adapterSocketParent(), 'circle-debug-cdp-'),
+    );
+    const socketDir = path.join(parent, 'cd-abcdef123456');
+    const { mkdir, chmod } = await import('node:fs/promises');
+    const { spawn } = await import('node:child_process');
+    await mkdir(socketDir, { mode: 0o700 });
+    await chmod(socketDir, 0o700);
+    const env = adapterEnvironment(
+      { ...process.env, TMPDIR: parent },
+      socketDir,
+    );
+    assert.equal(env.TMPDIR, socketDir);
+    assert.equal(env.TEMP, socketDir);
+    assert.equal(env.ELECTRON_RUN_AS_NODE, '1');
+    const child = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const os=require('os');const path=require('path');const net=require('net');const fs=require('fs');const dir=os.tmpdir();const sock=path.join(dir,'node-cdp.'+process.pid+'-abcd-0.sock');net.createServer().listen(sock,()=>{process.stdout.write(JSON.stringify({dir,sock,mode:fs.statSync(sock).mode&511,parent:fs.statSync(dir).mode&511}))});`,
+      ],
+      { env, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    try {
+      const output = await new Promise<string>((resolve, reject) => {
+        let text = '';
+        const timer = setTimeout(
+          () => reject(Error('socket probe timed out: ' + text)),
+          patience(5000),
+        );
+        child.stdout.on('data', (chunk) => {
+          text += chunk.toString();
+          if (text.includes('}')) {
+            clearTimeout(timer);
+            resolve(text);
+          }
+        });
+        child.once('exit', (code) => {
+          clearTimeout(timer);
+          reject(Error('probe exited ' + code + ': ' + text));
+        });
+      });
+      const report = JSON.parse(output) as {
+        dir: string;
+        sock: string;
+        mode: number;
+        parent: number;
+      };
+      assert.equal(report.dir, socketDir);
+      assert.equal(report.parent, 0o700);
+      assert.match(
+        report.sock,
+        /\/cd-abcdef123456\/node-cdp\.\d+-abcd-0\.sock$/,
+      );
+    } finally {
+      child.kill();
+      await rm(parent, { recursive: true, force: true });
+    }
+  },
+);
+
+test('an adapter that announces a TCP port is refused and not left listening', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-tcp-'));
+  const adapter = path.join(root, 'adapter.cjs');
+  await writeFile(path.join(root, 'fixture.cjs'), '');
+  await writeFile(
+    adapter,
+    `const net=require('net');const server=net.createServer();server.listen(0,'127.0.0.1',()=>console.log('Debug server listening at 127.0.0.1:'+server.address().port));setInterval(()=>{},1000);`,
+  );
+  const service = new WorkspaceDebugService({
+    workspaceRoot: root,
+    nodeExecutable: process.execPath,
+    adapterPath: adapter,
+  });
+  try {
+    await assert.rejects(
+      service.handle('launch', { program: 'fixture.cjs' }),
+      /TCP port/,
+    );
+    assert.equal(service.snapshot().status, 'failed');
+    assert.equal(service.snapshot().adapterPid, undefined);
+  } finally {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('adapter launch rejection cleans up and leaves a recoverable failed state', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-rejected-'));
   const adapter = path.join(root, 'adapter.cjs');
   await writeFile(path.join(root, 'fixture.cjs'), '');
   await writeFile(
     adapter,
-    `const net=require('net');const server=net.createServer(s=>{let buffer=Buffer.alloc(0);let seq=0;const send=m=>{const b=JSON.stringify({seq:++seq,...m});s.write('Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b)};s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){let end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;let len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;let m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);send({type:'response',request_seq:m.seq,command:m.command,success:m.command!=='launch',message:m.command==='launch'?'fixture launch rejected':undefined,body:{}});if(m.command==='initialize')send({type:'event',event:'initialized',body:{}});}})}).listen(0,'127.0.0.1',()=>console.log('Debug server listening at 127.0.0.1:'+server.address().port));`,
+    `const net=require('net');const server=net.createServer(s=>{let buffer=Buffer.alloc(0);let seq=0;const send=m=>{const b=JSON.stringify({seq:++seq,...m});s.write('Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b)};s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){let end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;let len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;let m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);send({type:'response',request_seq:m.seq,command:m.command,success:m.command!=='launch',message:m.command==='launch'?'fixture launch rejected':undefined,body:{}});if(m.command==='initialize')send({type:'event',event:'initialized',body:{}});}})}).listen(process.argv[2],()=>console.log('Debug server listening at '+process.argv[2]));`,
   );
   const service = new WorkspaceDebugService({
     workspaceRoot: root,
@@ -415,7 +564,7 @@ test(
     await writeFile(path.join(root, 'fixture.cjs'), '');
     await writeFile(
       adapter,
-      `const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize')s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(0,'127.0.0.1',function(){console.log('Debug server listening at 127.0.0.1:'+this.address().port)});`,
+      `const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize')s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(process.argv[2],function(){console.log('Debug server listening at '+process.argv[2])});`,
     );
     const service = new WorkspaceDebugService({
       workspaceRoot: root,
@@ -595,7 +744,7 @@ test(
       path.join(tmpdir(), 'circle-debug-output-generation-'),
     );
     const adapter = path.join(root, 'adapter.cjs');
-    const source = `const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize')s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(0,'127.0.0.1',function(){console.log('Debug server listening at 127.0.0.1:'+this.address().port)});`;
+    const source = `const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize')s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(process.argv[2],function(){console.log('Debug server listening at '+process.argv[2])});`;
     await writeFile(
       adapter,
       source.replace(
@@ -691,7 +840,7 @@ test(
     // Blocking writes: a pipe nobody reads would stop this adapter from replying.
     await writeFile(
       adapter,
-      `const fs=require('fs');const flood=fd=>{const b=Buffer.alloc(1<<20,101);let o=0;while(o<b.length){try{o+=fs.writeSync(fd,b,o)}catch(e){if(e.code!=='EAGAIN')throw e}}};const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize'){flood(2);flood(1);s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));}else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(0,'127.0.0.1',function(){console.log('Debug server listening at 127.0.0.1:'+this.address().port)});`,
+      `const fs=require('fs');const flood=fd=>{const b=Buffer.alloc(1<<20,101);let o=0;while(o<b.length){try{o+=fs.writeSync(fd,b,o)}catch(e){if(e.code!=='EAGAIN')throw e}}};const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize'){flood(2);flood(1);s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));}else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(process.argv[2],function(){console.log('Debug server listening at '+process.argv[2])});`,
     );
     const service = new WorkspaceDebugService({
       workspaceRoot: root,

@@ -806,11 +806,18 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Three plain components, GitHub, and the hub interface with the four platform
-  // objects, all paired with a runtime extension the preview does not have, so off.
-  assert.equal(await page.getByRole('checkbox').count(), 9);
+  // Three plain components, GitHub, the developer extension, and the hub
+  // interface with the four platform objects. Paired ones stay off in preview.
+  assert.equal(await page.getByRole('checkbox').count(), 10);
   // Each switch is named by the interface's shown title.
-  for (const id of ['GitHub', 'knowledge', 'work', 'execution', 'methods'])
+  for (const id of [
+    'GitHub',
+    'developer extension',
+    'knowledge',
+    'work',
+    'execution',
+    'methods',
+  ])
     assert.equal(
       await page
         .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })

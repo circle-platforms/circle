@@ -8,6 +8,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 - **Hooks.** A shell command in `hooks.json` can allow, deny or ask before a tool runs, check a tool's result, block the end of a turn until a loop limit, run when a session starts, or answer a permission request. A deny stands in every approval mode, including auto. An allow skips an ordinary approval and does not skip a call that always asks, a hard refusal, or read-only mode. On the gating events any non-zero exit, a timeout, or output that is not a JSON object is a deny; exit 2 is a deny too. A skill's hooks run only after that skill is loaded in the current session. A secret's value is `%NAME%` in what a hook can see. When an `after_tool` or `session_start` hook fails, the transcript keeps the error and the model is told only that the hook failed. Project hooks run only in a trusted folder. See [Hooks](docs/hooks.md).
 
+### Changed
+
+- **Node debugging and TypeScript/JavaScript language features are the bundled developer extension**, labelled 开发者工具. It is off until you turn it on from the extensions page or with `/extensions enable developer`. The desktop switch applies at once. While it is off there is no debug tab and no debug-file button, the js-debug adapter is not started, and the editor has no go to definition, rename or diagnostics. The editor still opens, highlights syntax and saves with the version check. With the extension on, debugging and the language service behave as before.
+
 ### Fixed
 
 - **On Windows, closing the terminal browser no longer says it did not stop when it was still ending.** After Windows accepted the browser's termination, Circle waited 3 seconds for it to end and then said `the browser process did not stop; retry closing the session`, and deleting the session failed; on a busy machine the browser ended seconds later. Circle now waits up to 20 seconds for a browser whose termination Windows accepted, and still reports one that does not end.

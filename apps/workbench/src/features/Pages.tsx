@@ -13,6 +13,10 @@ import {
   platformDescription,
   platformTitle,
 } from '../plugins/labels';
+import {
+  phaseAfterExtensionSave,
+  reconcileExtensionAction,
+} from './extension-actions';
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
@@ -1135,52 +1139,11 @@ function ExtensionsPage() {
     let changed = false;
     const next = { ...actions };
     for (const [name, action] of Object.entries(actions)) {
-      if (
-        action.phase !== 'waiting' &&
-        action.phase !== 'complete' &&
-        action.phase !== 'load-error'
-      )
-        continue;
       const extension = snapshot.extensions.find((item) => item.name === name);
-      if (!extension) continue;
-      if (action.phase === 'complete') {
-        if (extension.enabled !== action.target) {
-          delete next[name];
-          changed = true;
-          continue;
-        }
-        if (
-          !action.target ||
-          (!extension.error &&
-            (name !== 'github' ||
-              (extension.view as { provider?: string } | undefined)
-                ?.provider === 'github'))
-        )
-          continue;
-        if (!extension.error) {
-          next[name] = { ...action, phase: 'waiting' };
-          changed = true;
-          continue;
-        }
-      }
-      if (action.target && extension.enabled && extension.error) {
-        if (action.phase === 'load-error' && action.error === extension.error)
-          continue;
-        next[name] = { ...action, phase: 'load-error', error: extension.error };
-        changed = true;
-      } else if (
-        (!action.target && !extension.enabled && !extension.view) ||
-        (action.target &&
-          extension.enabled &&
-          !extension.error &&
-          (name === 'github'
-            ? (extension.view as { provider?: string } | undefined)
-                ?.provider === 'github'
-            : action.reloaded))
-      ) {
-        next[name] = { ...action, phase: 'complete' };
-        changed = true;
-      }
+      const resolved = reconcileExtensionAction(name, action, extension);
+      if (resolved === 'keep' || resolved === action) continue;
+      next[name] = resolved;
+      changed = true;
     }
     if (changed)
       setActions((current) => {
@@ -1215,12 +1178,7 @@ function ExtensionsPage() {
         [name]: {
           target,
           revision,
-          phase:
-            runtime.mode === 'preview'
-              ? 'preview'
-              : target && name !== 'github'
-                ? 'reload'
-                : 'waiting',
+          phase: phaseAfterExtensionSave(runtime.mode, name, target),
         },
       }));
     } catch (error) {
