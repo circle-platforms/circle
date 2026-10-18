@@ -675,6 +675,45 @@ test('gating output that is not JSON denies, and a non-gating failure only notif
   assert.match(started.context, /hello from hook/);
 });
 
+test('a failed after_tool hook notifies without giving the model its error text', async (t) => {
+  const dirs = layout(t);
+  writeFileSync(join(dirs.workspace, 'note.txt'), 'hello');
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      after_tool: [
+        {
+          name: 'lint',
+          command: 'echo private lint detail >&2; exit 1',
+          tools: 'read_file',
+        },
+      ],
+    },
+  });
+  const run = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    replies: [
+      assistant('', [
+        { id: 'r', name: 'read_file', args: { file_path: 'note.txt' } },
+      ]),
+      assistant('done'),
+    ],
+  });
+  // What the model reads is each message's content; display is the person's.
+  const seen = run.model.requests[1]!.messages.map((message) =>
+    String(message.content),
+  ).join('\n');
+  assert.match(seen, /hook failed · lint/);
+  assert.doesNotMatch(seen, /private lint detail/);
+  const stored = run.harness.messages.find(
+    (message) => message.hook?.kind === 'failed',
+  );
+  assert.match(stored?.display ?? '', /private lint detail/);
+  assert.match(stored?.content ?? '', /hook failed · lint/);
+  assert.doesNotMatch(stored?.content ?? '', /private lint detail/);
+});
+
 test('an allow does not skip an always-ask, a hard refusal, or read-only mode', async (t) => {
   const dirs = layout(t);
   const marker = join(dirs.workspace, 'hook-ran');

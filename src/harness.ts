@@ -1248,11 +1248,16 @@ export class Harness {
   }
   private queueHook(notice: HookNotice): void {
     const text = hookNoticeText(notice);
+    // A failed hook's error text is for the person; the model only learns it failed.
+    const told =
+      notice.kind === 'failed'
+        ? hookNoticeText({ ...notice, reason: undefined })
+        : text;
     this.hookNotes.push({
       id: randomUUID(),
       role: 'user',
       internal: 'hook_notice',
-      content: `<system-reminder data-source="circle-hooks">\n${text}\n</system-reminder>`,
+      content: `<system-reminder data-source="circle-hooks">\n${told}\n</system-reminder>`,
       display: text,
       hook: notice,
     });

@@ -6,7 +6,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Added
 
-- **Hooks.** A shell command in `hooks.json` can allow, deny or ask before a tool runs, check a tool's result, block the end of a turn until a loop limit, run when a session starts, or answer a permission request. A deny stands in every approval mode, including auto. An allow skips an ordinary approval and does not skip a call that always asks, a hard refusal, or read-only mode. On the gating events any non-zero exit, a timeout, or output that is not a JSON object is a deny; exit 2 is a deny too. A skill's hooks run only after that skill is loaded in the current session. A secret's value is `%NAME%` in what a hook can see. Project hooks run only in a trusted folder. See [Hooks](docs/hooks.md).
+- **Hooks.** A shell command in `hooks.json` can allow, deny or ask before a tool runs, check a tool's result, block the end of a turn until a loop limit, run when a session starts, or answer a permission request. A deny stands in every approval mode, including auto. An allow skips an ordinary approval and does not skip a call that always asks, a hard refusal, or read-only mode. On the gating events any non-zero exit, a timeout, or output that is not a JSON object is a deny; exit 2 is a deny too. A skill's hooks run only after that skill is loaded in the current session. A secret's value is `%NAME%` in what a hook can see. When an `after_tool` or `session_start` hook fails, the transcript keeps the error and the model is told only that the hook failed. Project hooks run only in a trusted folder. See [Hooks](docs/hooks.md).
 
 ## 1.8.0 - 2026-10-18
 
