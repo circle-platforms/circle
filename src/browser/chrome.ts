@@ -272,6 +272,8 @@ const NAVIGATE_TIMEOUT = 30_000;
 /** How long the browser has to start: a new profile on a busy Windows machine has taken 20 s. */
 const START_TIMEOUT = 60_000;
 const TASKKILL_TIMEOUT = 3000;
+/** How long a browser whose pipe closed during its start has for its exit to arrive. */
+const STARTUP_END_WAIT = 1000;
 /** How long a Windows root whose termination was accepted has to finish ending. */
 const TERMINATED_EXIT_TIMEOUT = 20_000;
 const BLANK = 'about:blank';
@@ -421,6 +423,9 @@ export class ChromeBrowser implements BrowserPort {
         eventsEnabled: true,
       });
     } catch (error) {
+      // A browser that ends during its start closes the pipe before its exit and its
+      // last words reach Circle (#106). Wait a moment for them before Circle signals it.
+      if (cdp.closed) await this.startupEnd(child);
       // Freeze what was actually observed before our cleanup signal changes it.
       // A closed protocol pipe alone does not establish that the process exited.
       const processAtFailure = {
@@ -458,6 +463,33 @@ export class ChromeBrowser implements BrowserPort {
       );
     }
     return cdp;
+  }
+  /**
+   * Resolves once a browser whose pipe closed during its start has exited and its stderr
+   * has ended, or after a moment if it has not: one still running is stopped after this.
+   */
+  private async startupEnd(child: ChildProcess): Promise<void> {
+    const limit = Math.min(
+      STARTUP_END_WAIT,
+      Math.max(1, this.options.closeTimeout ?? STARTUP_END_WAIT),
+    );
+    const stderr = child.stderr;
+    await Promise.all([
+      this.waitForExit(child, limit),
+      !stderr || stderr.readableEnded || stderr.destroyed
+        ? undefined
+        : new Promise<void>((resolve) => {
+            const done = () => {
+              clearTimeout(timer);
+              stderr.off('end', done);
+              stderr.off('close', done);
+              resolve();
+            };
+            const timer = setTimeout(done, limit);
+            stderr.once('end', done);
+            stderr.once('close', done);
+          }),
+    ]);
   }
   /** The browser exited, or the person closed its last window: it starts again when asked. */
   private gone(cdp: CdpPipe) {
