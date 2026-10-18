@@ -28,6 +28,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import originalFs from 'original-fs';
 import { join, dirname, basename } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { WorkspaceGrants, nativeFile } from './files';
 import { selectedFolder } from './folder-dialog';
 import { attention } from './attention';
@@ -518,6 +519,19 @@ app
         const path = assetPath(rendererRoot, request.url);
         if (!(await stat(path)).isFile())
           return new Response('not found', { status: 404 });
+        // Diagnostics only (this branch): the previous way, for comparison.
+        if (process.env.CIRCLE_DIAG_STREAM_ASSETS === '1') {
+          const response = await net.fetch(pathToFileURL(path).href);
+          const headers = new Headers(response.headers);
+          headers.set(
+            'Content-Security-Policy',
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+          );
+          return new Response(response.body, {
+            status: response.status,
+            headers,
+          });
+        }
         return new Response(await readFile(path), {
           status: 200,
           headers: {

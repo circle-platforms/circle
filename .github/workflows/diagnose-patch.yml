@@ -7,9 +7,50 @@ on:
 permissions:
   contents: read
 jobs:
-  windows:
+  win-ab:
     runs-on: windows-2025
-    timeout-minutes: 150
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/workbench/package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm --prefix apps/workbench ci
+      - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/desktop run package
+      - name: Start-up stress under load, files streamed and read whole
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # The runtime tests alongside load the machine as a CI job does.
+          $load = Start-Process cmd -ArgumentList '/c', "npm --prefix apps/desktop run test:runtime > `"$env:RUNNER_TEMP\load.log`" 2>&1" -PassThru -WindowStyle Hidden
+          $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
+          $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
+          $env:STRESS_RUNS = '200'
+          $env:STRESS_VARIANTS = 'stream,whole'
+          $env:STRESS_OUTPUT = "$env:RUNNER_TEMP\startup-ab"
+          node apps/desktop/test/diagnostics/startup-stress.mjs
+          "load still running: $(-not $load.HasExited)"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: diagnose-win-ab
+          path: |
+            ${{ runner.temp }}/startup-ab.json
+            ${{ runner.temp }}/load.log
+  win-sockets:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CIRCLE_NATIVE_JOURNEY_WEB_DEBUG: '1'
+      CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC: '1'
+      CIRCLE_NATIVE_JOURNEY_PUSH: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -27,104 +68,54 @@ jobs:
         shell: pwsh
         run: |
           $log = "$env:RUNNER_TEMP\tcp.log"
+          netsh int ipv4 show dynamicport tcp | Out-String | Add-Content $log
           $script = "$env:RUNNER_TEMP\sample.ps1"
           @'
           param($log)
           while ($true) {
-            $rows = Get-NetTCPConnection -ErrorAction SilentlyContinue
+            $rows = @(Get-NetTCPConnection -ErrorAction SilentlyContinue)
+            $states = $rows | Group-Object State | ForEach-Object { "$($_.Name)=$($_.Count)" }
             $wait = @($rows | Where-Object State -eq 'TimeWait')
-            $top = $wait | Group-Object RemotePort | Sort-Object Count -Descending | Select-Object -First 4 | ForEach-Object { "$($_.Name)x$($_.Count)" }
-            $local = $wait | Group-Object LocalPort | Measure-Object
-            "{0} time_wait={1} established={2} bound={3} top_remote={4}" -f (Get-Date -Format o), $wait.Count, @($rows | Where-Object State -eq 'Established').Count, @($rows).Count, ($top -join ',') | Add-Content $log
-            Start-Sleep -Seconds 10
+            $remote = $wait | Group-Object RemotePort | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object { "$($_.Name)x$($_.Count)" }
+            $owners = $rows | Where-Object OwningProcess -gt 4 | Group-Object OwningProcess | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object {
+              $name = (Get-Process -Id $_.Name -ErrorAction SilentlyContinue).ProcessName
+              "$name/$($_.Name)x$($_.Count)"
+            }
+            "{0} total={1} {2} wait_remote={3} owners={4}" -f (Get-Date -Format o), $rows.Count, ($states -join ' '), ($remote -join ','), ($owners -join ',') | Add-Content $log
+            Start-Sleep -Seconds 5
           }
           '@ | Set-Content $script
           Start-Process pwsh -ArgumentList '-NoProfile', '-File', $script, $log -WindowStyle Hidden
-          "MARK sampler started $(Get-Date -Format o)" | Add-Content $log
-      - name: Runtime tests
+      - name: The workbench job's steps, in its order
         continue-on-error: true
         shell: pwsh
         run: |
-          "MARK runtime start $(Get-Date -Format o)" | Add-Content "$env:RUNNER_TEMP\tcp.log"
-          npm --prefix apps/desktop run test:runtime
-          "MARK runtime end $(Get-Date -Format o)" | Add-Content "$env:RUNNER_TEMP\tcp.log"
-      - run: npm --prefix apps/desktop run package
-      - name: Packaged desktop and live checks
-        continue-on-error: true
-        shell: bash
-        run: |
-          echo "MARK live start $(date -u +%FT%TZ)" >> "$RUNNER_TEMP/tcp.log"
-          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-win32-x64"
-          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/Circle-win32-x64/Circle.exe"
-          npm --prefix apps/desktop run test:desktop || echo "MARK test:desktop failed" >> "$RUNNER_TEMP/tcp.log"
-          npm --prefix apps/desktop run test:live || echo "MARK test:live failed" >> "$RUNNER_TEMP/tcp.log"
-          echo "MARK live end $(date -u +%FT%TZ)" >> "$RUNNER_TEMP/tcp.log"
-      - name: Packaged start-up stress
-        continue-on-error: true
-        shell: bash
-        run: |
-          echo "MARK stress start $(date -u +%FT%TZ)" >> "$RUNNER_TEMP/tcp.log"
-          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-win32-x64"
-          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/Circle-win32-x64/Circle.exe"
-          STRESS_RUNS=25 STRESS_OUTPUT="$RUNNER_TEMP/startup-stress" node apps/desktop/test/diagnostics/startup-stress.mjs
-          echo "MARK stress end $(date -u +%FT%TZ)" >> "$RUNNER_TEMP/tcp.log"
+          $log = "$env:RUNNER_TEMP\tcp.log"
+          function Mark($text) { "MARK $text $(Get-Date -Format o)" | Add-Content $log }
+          Mark 'runtime'
+          npm --prefix apps/desktop run test:runtime; Mark "runtime exit=$LASTEXITCODE"
+          npm --prefix apps/desktop run package; Mark "package exit=$LASTEXITCODE"
+          node apps/desktop/test/developer-toolchain-smoke.mjs; Mark "toolchain-smoke exit=$LASTEXITCODE"
+          node apps/desktop/test/developer-debug-smoke.mjs; Mark "debug-smoke exit=$LASTEXITCODE"
+          npm --prefix apps/desktop run test:desktop; Mark "dev test:desktop exit=$LASTEXITCODE"
+          node apps/desktop/test/native-developer-journey.mjs; Mark "dev journey exit=$LASTEXITCODE"
+          node apps/desktop/test/browser-address.mjs; Mark "dev browser-address exit=$LASTEXITCODE"
+          $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
+          $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
+          node apps/desktop/test/developer-toolchain-smoke.mjs; Mark "packaged toolchain-smoke exit=$LASTEXITCODE"
+          node apps/desktop/test/developer-debug-smoke.mjs; Mark "packaged debug-smoke exit=$LASTEXITCODE"
+          npm --prefix apps/desktop run test:desktop; Mark "packaged test:desktop exit=$LASTEXITCODE"
+          node apps/desktop/test/browser-address.mjs; Mark "packaged browser-address exit=$LASTEXITCODE"
+          node apps/desktop/test/native-developer-journey.mjs; Mark "packaged journey exit=$LASTEXITCODE"
       - name: Summary
         if: always()
         shell: pwsh
         run: |
           Get-Content "$env:RUNNER_TEMP\tcp.log" | Select-String 'MARK' | ForEach-Object { $_.Line }
-          $peak = Get-Content "$env:RUNNER_TEMP\tcp.log" | Select-String 'time_wait=(\d+)' | Sort-Object { [int]$_.Matches[0].Groups[1].Value } -Descending | Select-Object -First 5
-          $peak | ForEach-Object { $_.Line }
+          Get-Content "$env:RUNNER_TEMP\tcp.log" | Select-String 'total=(\d+)' | Sort-Object { [int]$_.Matches[0].Groups[1].Value } -Descending | Select-Object -First 5 | ForEach-Object { $_.Line }
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: diagnose-windows
+          name: diagnose-win-sockets
           path: |
             ${{ runner.temp }}/tcp.log
-            ${{ runner.temp }}/startup-stress.json
-            apps/desktop/artifacts/
-  intel:
-    runs-on: macos-15-intel
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24.21.0'
-          cache: npm
-      - run: npm ci
-      - name: Repeat the PTY group tests, idle and under load
-        continue-on-error: true
-        shell: bash
-        run: |
-          out="$RUNNER_TEMP/pty"
-          mkdir -p "$out"
-          for mode in idle load; do
-            load=()
-            if [ "$mode" = load ]; then
-              for n in 1 2 3; do yes > /dev/null & load+=($!); done
-            fi
-            for i in $(seq 1 15); do
-              start=$(date +%s)
-              npx tsx --test --test-timeout=120000 tests/command-pty-group.test.ts > "$out/$mode-$i.log" 2>&1 &
-              pid=$!
-              snapped=0
-              while kill -0 $pid 2>/dev/null; do
-                elapsed=$(( $(date +%s) - start ))
-                if [ $elapsed -ge 60 ] && [ $snapped = 0 ]; then
-                  ps -A -o pid,ppid,pgid,stat,etime,command > "$out/$mode-$i-ps-at-60s.txt"
-                  snapped=1
-                fi
-                if [ $elapsed -ge 300 ]; then kill -9 $pid; echo "KILLED $mode $i"; break; fi
-                sleep 1
-              done
-              wait $pid; code=$?
-              echo "$mode $i exit=$code seconds=$(( $(date +%s) - start )) $(grep -E '^ℹ (pass|fail)' "$out/$mode-$i.log" | tr '\n' ' ')"
-            done
-            for p in "${load[@]}"; do kill $p; done
-          done
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: diagnose-intel
-          path: ${{ runner.temp }}/pty
