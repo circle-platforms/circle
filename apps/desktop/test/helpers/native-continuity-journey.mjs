@@ -3,6 +3,7 @@ import { readFile, writeFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { openNativeTerminalInspector } from './native-terminal-journey.mjs';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
+import { saveWithShortcut } from './native-editor-save.mjs';
 const selectedText = 'CIRCLE_NATIVE_CONTEXT_中文';
 const terminalFile = 'native-continuity-terminal.cjs';
 const otherFile = 'native-continuity-manual.txt';
@@ -597,12 +598,14 @@ export async function runNativeChildSourceJourney({
           .includes(fixture.changedOther.trim()),
       'manual edit reaches actual Monaco buffer',
     );
-    await page.keyboard.press('ControlOrMeta+s');
-    await until(
+    await saveWithShortcut(
+      page,
+      'ControlOrMeta',
       async () =>
         (await readFile(join(workspace, fixture.otherFile), 'utf8')) ===
         fixture.changedOther,
       'another parent file actually saves',
+      file,
     );
     assert.equal(
       await readFile(join(workspace, sourcePath), 'utf8'),

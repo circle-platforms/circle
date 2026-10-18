@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { patience } from './patience.mjs';
+import { saveWithShortcut } from './native-editor-save.mjs';
 export const interactionFile = 'editor-keyboard-interactions.ts';
 export const interactionSource =
   'const referenceTarget = 1;\nconsole.log(referenceTarget);\nexport {};\n';
@@ -130,12 +131,14 @@ export async function runNativeEditorInteractions({ page, workspace, output }) {
       interactionSource,
       'accepted completion stays unsaved',
     );
-    await page.keyboard.press(`${modifier}+s`);
     const expected =
       'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uniqueMember';
-    await until(
+    await saveWithShortcut(
+      page,
+      modifier,
       async () => (await disk()) === expected,
       'accepted completion must save exact disk bytes',
+      page.locator('.file-view:visible'),
     );
     observed.final = await disk();
     await frame('native-editor-interactions-final');

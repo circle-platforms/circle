@@ -310,8 +310,9 @@ export async function runNativeEditorJourney({
     before,
     'corrected unsaved content still stays off disk',
   );
-  await page.keyboard.press(`${modifier}+s`);
-  await until(
+  await saveWithShortcut(
+    page,
+    modifier,
     async () => (await disk(main)) === before + fixedSuffix,
     'manual diagnostic repair saves exact expected disk bytes',
   );

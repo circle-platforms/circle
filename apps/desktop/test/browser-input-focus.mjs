@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
+import { patience } from './helpers/patience.mjs';
 
 // One diagnostic experiment, not a substitute for the production adapter's tests.
 // Every combination uses identical real CDP arguments, with both clients attached.
@@ -213,7 +214,7 @@ try {
             contentsFocused: inputWindow.webContents.isFocused(),
           }));
         row.window = await windowState();
-        const focusDeadline = Date.now() + 1000;
+        const focusDeadline = Date.now() + patience(1000);
         while (
           mode === 'visible-focused' &&
           !(

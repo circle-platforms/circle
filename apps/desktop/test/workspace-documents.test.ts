@@ -29,6 +29,7 @@ import {
   type WorkspaceDocument,
   type WorkspaceFilesSnapshot,
 } from '../src/workspace/documents.ts';
+import { patience } from './helpers/patience.mjs';
 
 async function fixture(t: TestContext) {
   const scratch = await mkdtemp(join(tmpdir(), 'circle-workspace-documents-'));
@@ -691,7 +692,7 @@ test('watch delivers independent subscribers, detects external edits, and closes
   });
   await Promise.all([a.ready, b.ready]);
   await writeFile(join(root, 'created.txt'), 'external file');
-  const deadline = Date.now() + 3000;
+  const deadline = Date.now() + patience(3000);
   while (
     !first.some((snapshot) =>
       snapshot.files.some((file) => file.path === 'created.txt'),

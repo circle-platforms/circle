@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
+import { patience } from './helpers/patience.mjs';
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'circle-diagnostics-'));
@@ -212,7 +213,9 @@ try {
   assert.equal(result.state.owner, 'devtools');
   // Keep the original 250ms + 50×50ms budget, but wait for actual frontend
   // readiness and its visible Resume control. Input sent during load can vanish.
-  const resumeDeadline = Date.now() + 2750;
+  // DevTools builds these controls after its page loads; a slow runner needs
+  // several seconds. The loop ends once the guest prints its result.
+  const resumeDeadline = Date.now() + patience(10000);
   let frontendObservation;
   let clickedResume = false;
   while (Date.now() < resumeDeadline) {

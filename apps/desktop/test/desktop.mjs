@@ -423,7 +423,13 @@ async function chromeControls() {
   const stop = page.getByRole('button', { name: 'stop loading', exact: true });
   await stop.waitFor();
   await stop.click();
-  await until(async () => !(await state()).loading, 'loading stopped', 3000);
+  await until(
+    async () => !(await state()).loading,
+    'loading stopped',
+    patience(3000),
+  );
+  // Stopped, not finished: the slow page answers only after four seconds.
+  assert.notEqual((await state()).title, 'slow');
   // Stopped by the person, the page is no failure
   assert.equal((await state()).failure, undefined);
   assert.equal(await page.getByTestId('browser-load-failure').count(), 0);

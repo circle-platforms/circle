@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { patience } from './patience.mjs';
 export async function runNativeBrowserStream({
   page,
   sessionId,
@@ -17,9 +18,9 @@ export async function runNativeBrowserStream({
   await results.hover();
   await page.mouse.wheel(0, 100_000);
   await results.evaluate(
-    (node) =>
+    (node, budget) =>
       new Promise((resolve, reject) => {
-        const deadline = Date.now() + 3000;
+        const deadline = Date.now() + budget;
         const settled = () =>
           node.scrollHeight - node.scrollTop - node.clientHeight < 2
             ? resolve()
@@ -28,6 +29,7 @@ export async function runNativeBrowserStream({
               : requestAnimationFrame(settled);
         settled();
       }),
+    patience(3000),
   );
   await page.evaluate((sessionId) => {
     const events = new Map(),
