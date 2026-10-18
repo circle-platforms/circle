@@ -30,7 +30,6 @@ export const COMPONENT_SUITES = Object.freeze([
   'tool-text-output-ui.mjs',
   'debug-panel-ui.mjs',
   'native-tools-drawer-ui.mjs',
-  'browser-diagnostics-ui.mjs',
   'keyboard-navigation-ui.mjs',
   'paste-default-ui.mjs',
   'native-editable-shortcuts-ui.mjs',

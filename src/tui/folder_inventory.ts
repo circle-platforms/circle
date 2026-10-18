@@ -11,7 +11,13 @@ import { discoverSkills } from '../skills.js';
 import { displayPath } from './status_rows.js';
 
 export interface FolderItem {
-  kind: 'instructions' | 'skills' | 'commands' | 'extensions' | 'settings';
+  kind:
+    | 'instructions'
+    | 'skills'
+    | 'commands'
+    | 'extensions'
+    | 'settings'
+    | 'hooks';
   count: number;
   where: string;
   names: string[];
@@ -100,6 +106,14 @@ export function folderInventory(workspace: string): FolderItem[] {
       where: shown(settings),
       names: [],
     });
+  const hooks = join(folder, '.circle', 'hooks.json');
+  if (existsSync(hooks) && statSync(hooks).isFile())
+    items.push({
+      kind: 'hooks',
+      count: 1,
+      where: shown(hooks),
+      names: [],
+    });
   return items;
 }
 
@@ -107,6 +121,6 @@ export function folderInventory(workspace: string): FolderItem[] {
 // `3 in .circle/skills`.
 export function folderItemText(item: FolderItem): string {
   if (item.kind === 'instructions') return item.names.join(', ');
-  if (item.kind === 'settings') return item.where;
+  if (item.kind === 'settings' || item.kind === 'hooks') return item.where;
   return `${item.count} in ${item.where}`;
 }

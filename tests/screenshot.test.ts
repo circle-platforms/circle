@@ -344,6 +344,11 @@ test('screenshot says what to do: an app with no window, a terminal that may not
     '-NonInteractive',
     '-Command',
   ]);
+  // PowerShell writes the app names in UTF-8, which Circle reads, not in the console's code page.
+  assert.match(
+    calls[0]![4]!,
+    /^\$ErrorActionPreference = 'Stop'; \[Console\]::OutputEncoding = \[Text\.Encoding\]::UTF8;/,
+  );
   await assert.rejects(
     takeScreenshot({
       app: 'figma',

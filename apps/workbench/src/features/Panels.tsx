@@ -11,7 +11,14 @@ import { agentActivityText, agentState } from '../model/activity';
 import { NativeBrowser } from './NativeBrowser';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 import {
   FileText,
   FileCode,
@@ -129,6 +136,11 @@ export function PanelButtons({
     ...panels.map(({ panel: item }) => item),
     { id: 'terminal', title: t('terminal'), icon: Terminal },
   ];
+  // The click that opens a panel must not leave that button focused. The next
+  // Enter (the address bar's) would otherwise activate it and close the panel.
+  const blurAfterPress = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button === 0) event.currentTarget.blur();
+  };
   return (
     <nav className="drawer-mode-toolbar" aria-label={t('work drawer')}>
       {modes.map((item) => (
@@ -140,6 +152,7 @@ export function PanelButtons({
           onClick={() =>
             open && panel === item.id ? onClose() : onPanel(item.id)
           }
+          onPointerUp={blurAfterPress}
         >
           <item.icon size={15} aria-hidden />
           <span>{item.title}</span>
@@ -202,23 +215,6 @@ export function Inspector(props: Props) {
       <div
         className={`inspector-body ${FLUSH.has(props.panel) ? 'flush' : ''}`}
       >
-        {props.resourcesPaused && (
-          <p
-            className="panel-note"
-            role="status"
-            style={{ overflowWrap: 'anywhere' }}
-          >
-            {t(
-              'Resources belong to {name}. Start a conversation in the selected project to make changes.',
-              {
-                name:
-                  snapshot.workspaces.find(
-                    (item) => item.id === session.workspaceId,
-                  )?.path ?? session.title,
-              },
-            )}
-          </p>
-        )}
         <InspectorResources
           {...props}
           sessionId={session.id}

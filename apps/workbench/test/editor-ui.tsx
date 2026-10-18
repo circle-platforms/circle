@@ -166,6 +166,16 @@ if (nativeFixture) {
   runtime.change((state) => {
     const session = currentSession(state);
     session.readOnly = false;
+    state.extensions.push({
+      id: 'developer',
+      name: 'developer',
+      version: '0.1.0',
+      scope: 'bundled',
+      enabled: true,
+      tools: [],
+      commands: [],
+      events: [],
+    });
     state.files = [
       {
         id: 'fixture-main',

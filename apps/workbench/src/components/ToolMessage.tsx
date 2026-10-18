@@ -108,7 +108,17 @@ const SEARCH_PROVIDER = 'Provider: DuckDuckGo';
 function shownToolOutput(text: string): string {
   return text
     .replaceAll(SEARCH_PROVIDER, t(SEARCH_PROVIDER))
-    .replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA));
+    .replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA))
+    .replaceAll('Hook denied this call:', t('Hook denied this call:'))
+    .replaceAll(
+      'Hook asked before this call:',
+      t('Hook asked before this call:'),
+    )
+    .replaceAll('Hook allowed this call.', t('Hook allowed this call.'))
+    .replaceAll('Hook session_start output:', t('Hook session_start output:'))
+    .replace(/Hook output \(([^)]+)\):/g, (_match, name: string) =>
+      t('Hook output ({name}):', { name }),
+    );
 }
 export function ToolMessage({
   tool,

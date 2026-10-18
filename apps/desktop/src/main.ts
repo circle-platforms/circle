@@ -1,11 +1,10 @@
 import { NativeExternalFilePicker } from './external-file-picker';
-import { validateBrowserDiagnosticRequest } from './browser-diagnostics-contracts';
 import {
   EncryptedCredentialStore,
   nativeHttpsUrl,
 } from './encrypted-credentials';
 import { BrowserSessions } from './browser';
-import { devToolsMenuShortcut } from './menu-shortcuts';
+import { devToolsMenuShortcut, selectAllMenuItem } from './menu-shortcuts';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { validateRuntimeCommand } from './runtime-protocol';
 import {
@@ -23,7 +22,11 @@ import {
   session,
   safeStorage,
 } from 'electron';
-import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
+import type {
+  MenuItemConstructorOptions,
+  WebContents,
+  WebFrameMain,
+} from 'electron';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -148,7 +151,10 @@ if (startupLocale() === 'zh-CN') {
   // It does not create the catalog: Recent and Home stay English until gtk30.mo exists.
   if (!process.env.LANGUAGE) process.env.LANGUAGE = 'zh_CN';
 }
-function checkSender(event: IpcMainInvokeEvent) {
+function checkSender(event: {
+  sender: WebContents;
+  senderFrame: WebFrameMain | null;
+}) {
   if (
     !window ||
     event.sender !== window.webContents ||
@@ -241,7 +247,9 @@ function configureMenu() {
         role('cut', 'Cut'),
         role('copy', 'Copy'),
         role('paste', 'Paste'),
-        role('selectAll', 'Select All'),
+        // No accelerator: the selectAll role takes Ctrl/Cmd+A and selects the
+        // page instead of the focused field.
+        selectAllMenuItem(text('Select All')),
       ],
     },
     {
@@ -443,11 +451,6 @@ async function createWindow() {
     // How the person handed over the browser: auto mode takes it back by itself
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
-    (event) => {
-      if (window && !window.isDestroyed())
-        window.webContents.send('circle:browser-diagnostic-event', event);
-    },
-    join(dataPath, 'browser-diagnostics'),
   );
   browsers.sendKey = (event) => {
     if (window && !window.isDestroyed())
@@ -457,12 +460,6 @@ async function createWindow() {
   // the window sees them: while the browser panel has the keyboard, they are its.
   window.webContents.on('before-input-event', (event, input) =>
     browsers?.windowKey(event, input),
-  );
-  window.webContents.on('did-start-loading', () =>
-    browsers?.clearDiagnosticSubscriptions(),
-  );
-  window.webContents.on('render-process-gone', () =>
-    browsers?.clearDiagnosticSubscriptions(),
   );
   runtime?.onSessionCleanup(async (id) => {
     await browsers?.deleteSession(id);
@@ -911,21 +908,6 @@ app
       const url = nativeHttpsUrl(value);
       if (!fixtureProfile) await shell.openExternal(url);
     });
-    handle('circle:browser-diagnostics', (id, value) => {
-      if (!browsers || !runtime) throw Error('window not ready');
-      if (typeof id !== 'string') throw Error('invalid browser session');
-      const snapshot = runtime.state().snapshot;
-      const session = snapshot.sessions.find((row) => row.id === id);
-      if (!session) throw Error('browser session not found');
-      const request = validateBrowserDiagnosticRequest(value);
-      if (
-        !['read', 'watch', 'log'].includes(request.action) &&
-        !snapshot.workspaces.find((row) => row.id === session.workspaceId)
-          ?.trusted
-      )
-        throw Error('trust the workspace before changing page diagnostics');
-      return browsers.diagnostics(id, request);
-    });
     handle('circle:browser-state', (id) => {
       if (!browsers) throw Error('window not ready');
       return browsers.state(id);
@@ -979,6 +961,18 @@ app
     handle('circle:browser-page', (id, action, value) => {
       if (!browsers) throw Error('window not ready');
       return browsers.page(id, action, value);
+    });
+    ipcMain.on('circle:browser-keys', (event, id, focused) => {
+      // sendSync waits until returnValue is set. Set it before any throw.
+      event.returnValue = null;
+      try {
+        checkSender(event);
+      } catch {
+        return;
+      }
+      if (!browsers) return;
+      // Set before the click returns, so the next key finds the panel focused.
+      void browsers.page(id, 'keys', focused).catch(() => {});
     });
     handle('circle:browser-reveal', (id, download) => {
       if (!browsers) throw Error('window not ready');

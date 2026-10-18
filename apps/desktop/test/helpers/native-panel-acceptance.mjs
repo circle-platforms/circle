@@ -144,9 +144,9 @@ export async function runNativePanelAcceptance({
     },
     {
       kind: 'browser',
-      root: '.browser-diagnostics',
-      en: 'storage key',
-      zh: '存储键',
+      root: '.native-browser',
+      en: 'browser address',
+      zh: '浏览器地址',
     },
   ];
   try {

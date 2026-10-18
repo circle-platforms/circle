@@ -1,4 +1,3 @@
-import { BrowserDiagnostics } from './BrowserDiagnostics';
 import {
   useEffect,
   useRef,
@@ -34,11 +33,14 @@ import {
   addressParts,
   browserEventAddress,
   browserOpened,
+  browserRing,
   browserTabChanged,
   connectionKind,
+  currentTurnTools,
   downloadProgress,
   shownDialog,
 } from '../model/browser';
+import { visibleMessages } from '../model/state';
 import { formatChord } from '../model/shortcuts';
 import { useBrowserState } from './useBrowserState';
 import type {
@@ -50,7 +52,7 @@ import {
   browserShortcut,
   type BrowserKeyAction,
 } from '../../../desktop/src/browser-controls';
-import { Button, IconButton, Status } from '../components/common';
+import { Button, IconButton } from '../components/common';
 import { BrowserDialogPanel, CertificateChoicePanel } from './BrowserDialog';
 import { t } from '../i18n';
 
@@ -78,6 +80,22 @@ const tabTitle = (tab: BrowserTab) =>
       ? tab.url
       : t('new tab');
 
+/**
+ * The page's box when that box is on screen. A hidden tab, a closed inspector or a
+ * collapsed column has none, and the native view must not keep its last rectangle.
+ */
+function laidOutBrowserViewport(node: HTMLElement): DOMRect | null {
+  if (!node.isConnected || node.closest('[hidden]')) return null;
+  const style = getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden') return null;
+  const rect = node.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  if (rect.bottom <= 0 || rect.right <= 0) return null;
+  const view = document.documentElement.getBoundingClientRect();
+  if (rect.top >= view.height || rect.left >= view.width) return null;
+  return rect;
+}
+
 const platform = () =>
   document.documentElement.dataset.desktop ??
   (/Mac/.test(navigator.platform) ? 'darwin' : 'other');
@@ -99,7 +117,8 @@ export function NativeBrowser({
   onWhole?: () => void;
 } = {}) {
   const { snapshot, notify } = useRuntime();
-  const id = currentSession(snapshot).id;
+  const session = currentSession(snapshot);
+  const id = session.id;
   const state = useBrowserState(id);
   const [url, setUrl] = useState('');
   const [addressFocused, setAddressFocused] = useState(false);
@@ -110,12 +129,11 @@ export function NativeBrowser({
   const frozenRef = useRef<string | null>(null);
   const [menu, setMenu] = useState<'' | 'main' | 'zoom'>('');
   const [finding, setFinding] = useState(false);
-  // Chrome's developer tools, docked under the page: closed until asked for
-  const [devtools, setDevtools] = useState(false);
   // A navigation the panel asked for is under way: its first page loads before the
   // tab has an address of its own
   const [navigating, setNavigating] = useState(0);
   const [findText, setFindText] = useState('');
+  const root = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const address = useRef<HTMLInputElement>(null);
   const findField = useRef<HTMLInputElement>(null);
@@ -160,27 +178,28 @@ export function NativeBrowser({
     setUrl('');
     setCapture(null);
     setFrozenPicture(null);
-    setDevtools(false);
     let froze = false;
     let freezing = false;
     let disposed = false;
     const update = () => {
-      const rect = viewport.current?.getBoundingClientRect();
-      if (disposed) return;
-      if (!rect || rect.width < 1 || rect.height < 1) {
-        // Folding or changing drawer modes hides a resource without closing it.
-        // Native surfaces do not inherit DOM visibility: explicitly release the
-        // page's bounds and keyboard ownership while retaining its tab/session.
+      const node = viewport.current;
+      const rect = node ? laidOutBrowserViewport(node) : null;
+      // Hidden, collapsed, zero-size, or a drawer mode that folds the page: the
+      // native view must leave the window. Returning here used to keep the last
+      // WebContentsView painted on top. Native surfaces do not inherit DOM
+      // visibility, so also release the page's keyboard ownership while
+      // retaining its tab and session.
+      if (disposed || !node || !rect) {
         void host.browserHide(id).catch(() => {});
         void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
           () => {},
         );
         return;
       }
-      const ownDialog = viewport.current?.closest('[role="dialog"]');
+      const ownDialog = node.closest('[role="dialog"]');
       const blockingDialog = [
         ...document.querySelectorAll('[role="dialog"]'),
-      ].some((dialog) => !dialog.contains(viewport.current));
+      ].some((dialog) => !dialog.contains(node));
       // A menu open anywhere in the window may reach over the page: the page steps
       // aside while it is open, its picture in its place
       const menuOpen = !!document.querySelector('[role="menu"]');
@@ -222,18 +241,44 @@ export function NativeBrowser({
         .catch(() => {});
     };
     updateBounds.current = update;
-    const observer = new ResizeObserver(update);
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        update();
+      });
+    };
+    const observer = new ResizeObserver(schedule);
     if (viewport.current) observer.observe(viewport.current);
-    const dialogs = new MutationObserver(update);
-    dialogs.observe(document.body, { childList: true, subtree: true });
-    addEventListener('resize', update);
-    addEventListener('scroll', update, true);
+    const dialogs = new MutationObserver(schedule);
+    dialogs.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        'hidden',
+        'style',
+        'class',
+        'data-state',
+        'data-inspector-mode',
+        'open',
+        'aria-hidden',
+      ],
+    });
+    const seen = new IntersectionObserver(schedule);
+    if (viewport.current) seen.observe(viewport.current);
+    addEventListener('resize', schedule);
+    addEventListener('scroll', schedule, true);
+    update();
     return () => {
       disposed = true;
+      if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
       dialogs.disconnect();
-      removeEventListener('resize', update);
-      removeEventListener('scroll', update, true);
+      seen.disconnect();
+      removeEventListener('resize', schedule);
+      removeEventListener('scroll', schedule, true);
       captureGeneration.current++;
       void host.browserHide(id);
       void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
@@ -241,6 +286,11 @@ export function NativeBrowser({
       );
     };
   }, [id]);
+  // Full view moves the same panel to another box. Measure after that move.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => updateBounds.current());
+    return () => cancelAnimationFrame(frame);
+  }, [whole]);
   useEffect(() => {
     setCapture(null);
   }, [id, state?.tab, state?.url]);
@@ -335,7 +385,8 @@ export function NativeBrowser({
       })
       .catch(() => notify(t('navigation failed')));
   const page = (
-    action: 'stop' | 'zoom' | 'find' | 'find-stop' | 'tab',
+    action:
+      'stop' | 'zoom' | 'find' | 'find-stop' | 'tab' | 'devtools' | 'inspect',
     value?: unknown,
   ) =>
     Promise.resolve(host.browserPage?.(id, action, value))
@@ -387,8 +438,7 @@ export function NativeBrowser({
     else if (action === 'next-tab') void page('tab', 'next');
     else if (action === 'previous-tab') void page('tab', 'previous');
     else if (action === 'stop') void page('stop');
-    else if (action === 'devtools') setDevtools((open) => !open);
-    else if (action === 'inspect') setDevtools(true);
+    else if (action === 'devtools' || action === 'inspect') void page(action);
   };
   const runRef = useRef(run);
   runRef.current = run;
@@ -420,11 +470,59 @@ export function NativeBrowser({
     run(action);
   };
   // The panel has the keyboard: the browser's shortcuts are its own, even those the
-  // system's menu would take
-  const keys = (focused: boolean) =>
-    void Promise.resolve(host.browserPage?.(id, 'keys', focused)).catch(
+  // system's menu would take. Focus moving inside the panel blurs one control and
+  // focuses the next; the keyboard stays the panel's across that. Anywhere else,
+  // including the editor, those shortcuts are not the browser's.
+  const keys = (focused: boolean) => {
+    const bridge = desktopHost();
+    if (!bridge) return;
+    if (bridge.browserKeys) {
+      try {
+        bridge.browserKeys(id, focused);
+      } catch {
+        /* The panel still works if the shortcut handoff fails. */
+      }
+      return;
+    }
+    void Promise.resolve(bridge.browserPage?.(id, 'keys', focused)).catch(
       () => {},
     );
+  };
+  useEffect(() => {
+    const node = root.current;
+    if (!node) return;
+    let token = 0;
+    const report = (inside: boolean) => keys(inside);
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      token += 1;
+      report(true);
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      token += 1;
+      report(event.target instanceof Node && node.contains(event.target));
+    };
+    const onFocusOut = () => {
+      const mark = ++token;
+      queueMicrotask(() => {
+        if (mark !== token) return;
+        const active = document.activeElement;
+        report(!!active && active !== document.body && node.contains(active));
+      });
+    };
+    node.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('focusin', onFocusIn);
+    node.addEventListener('focusout', onFocusOut);
+    return () => {
+      token += 1;
+      node.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('focusin', onFocusIn);
+      node.removeEventListener('focusout', onFocusOut);
+      report(false);
+    };
+    // `keys` reads the latest host and id; the effect is the panel's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
   // A menu opens once the page's picture is in place, so the page never covers it
   const openMenu = (which: 'main' | 'zoom', open: boolean) => {
     if (!open) {
@@ -495,20 +593,29 @@ export function NativeBrowser({
     </div>
   );
   const pageReady = opened && !failure && !dialog;
+  // The ring stays on for the whole time Circle's turn is using the browser,
+  // not only during the action that is on screen now.
+  const ring = browserRing({
+    control: state?.control,
+    operating: state?.operating,
+    sessionState: session.state,
+    tools: currentTurnTools(visibleMessages(session)),
+  });
+  const controlLabel =
+    ring === 'user'
+      ? t('you have the browser')
+      : ring === 'pending'
+        ? t('Waiting for Circle to stop…')
+        : ring === 'awaiting'
+          ? t('Waiting for your approval')
+          : ring === 'driving'
+            ? t('Circle is operating')
+            : undefined;
   const findCount =
     state?.find && state.find.text === findText ? state.find : undefined;
   return (
     // One column the height of the panel: the page takes what the bars leave
-    <div
-      className="native-browser"
-      onKeyDown={onKeys}
-      onFocus={() => keys(true)}
-      onBlur={(event) => {
-        const next = event.relatedTarget;
-        if (!(next instanceof Node) || !event.currentTarget.contains(next))
-          keys(false);
-      }}
-    >
+    <div ref={root} className="native-browser" onKeyDown={onKeys}>
       <div className="browser-tabs" role="tablist">
         {state?.tabs?.length ? (
           state.tabs.map((tab) => (
@@ -655,10 +762,19 @@ export function NativeBrowser({
                 selectOnMouseUp.current = false;
               }}
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
                 if (event.key === 'Enter') {
                   event.preventDefault();
-                  event.currentTarget.blur();
-                  void navigate(url);
+                  event.stopPropagation();
+                  const field = event.currentTarget;
+                  const typed = field.value;
+                  // Blurring while Enter is still down hands the keyboard back to
+                  // the panel button that opened the browser, and that button
+                  // closes the panel before the page loads.
+                  window.setTimeout(() => {
+                    if (document.activeElement === field) field.blur();
+                  }, 0);
+                  void navigate(typed);
                 } else if (event.key === 'Escape') {
                   // As in Chrome: the page's own address again, and the field let go
                   event.preventDefault();
@@ -810,12 +926,21 @@ export function NativeBrowser({
                 </DropdownMenu.Item>
               )}
               <DropdownMenu.Separator className="dropdown-separator" />
+              {(ring === 'driving' || ring === 'awaiting') && (
+                <DropdownMenu.Item
+                  onSelect={() => void host.browserControl(id, 'take')}
+                >
+                  {t('take over')}
+                </DropdownMenu.Item>
+              )}
               <DropdownMenu.Item
                 disabled={!opened}
-                onSelect={() => setDevtools((open) => !open)}
+                onSelect={() => void page('devtools')}
               >
                 <span>
-                  {devtools ? t('close developer tools') : t('developer tools')}
+                  {state?.devTools
+                    ? t('close developer tools')
+                    : t('developer tools')}
                 </span>
                 <kbd aria-hidden="true">
                   {platform() === 'darwin'
@@ -835,33 +960,53 @@ export function NativeBrowser({
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       </div>
-      <div className="native-browser-viewport" ref={viewport}>
-        {dialog ? (
-          <BrowserDialogPanel sessionId={id} dialog={dialog} />
-        ) : choice ? (
-          <CertificateChoicePanel sessionId={id} choice={choice} />
-        ) : failure ? (
-          <div
-            className="browser-error-page"
-            data-testid="browser-load-failure"
-          >
-            <Globe size={30} />
-            <h3>{t('cannot reach this site')}</h3>
-            <p>{failure.url}</p>
-            <code>{failure.error}</code>
-            <Button onClick={() => void navigate(failure.url)}>
-              {t('reload page')}
-            </Button>
-          </div>
-        ) : !opened ? (
-          <div className="browser-empty">
-            <Globe size={22} strokeWidth={1.5} />
-            <h3>{t('browse the web')}</h3>
-            <p>{t('type a URL to open a site.')}</p>
-          </div>
-        ) : frozen ? (
-          <img className="browser-frozen" src={frozen} alt="" />
-        ) : null}
+      <div
+        className={`native-browser-frame${
+          ring === 'driving' || ring === 'pending' ? ' driving' : ''
+        }${ring === 'awaiting' ? ' awaiting' : ''}`}
+        data-testid={
+          ring === 'user'
+            ? 'browser-user'
+            : ring === 'pending'
+              ? 'browser-pending'
+              : ring === 'driving'
+                ? 'browser-operating'
+                : ring === 'awaiting'
+                  ? 'browser-awaiting'
+                  : 'browser-frame'
+        }
+        role={controlLabel ? 'region' : undefined}
+        aria-label={controlLabel}
+        title={controlLabel}
+      >
+        <div className="native-browser-viewport" ref={viewport}>
+          {dialog ? (
+            <BrowserDialogPanel sessionId={id} dialog={dialog} />
+          ) : choice ? (
+            <CertificateChoicePanel sessionId={id} choice={choice} />
+          ) : failure ? (
+            <div
+              className="browser-error-page"
+              data-testid="browser-load-failure"
+            >
+              <Globe size={30} />
+              <h3>{t('cannot reach this site')}</h3>
+              <p>{failure.url}</p>
+              <code>{failure.error}</code>
+              <Button onClick={() => void navigate(failure.url)}>
+                {t('reload page')}
+              </Button>
+            </div>
+          ) : !opened ? (
+            <div className="browser-empty">
+              <Globe size={22} strokeWidth={1.5} />
+              <h3>{t('browse the web')}</h3>
+              <p>{t('type a URL to open a site.')}</p>
+            </div>
+          ) : frozen ? (
+            <img className="browser-frozen" src={frozen} alt="" />
+          ) : null}
+        </div>
       </div>
       {state?.chooser && (
         // A click of Circle's opened the page's file chooser: either of you can answer it
@@ -914,41 +1059,6 @@ export function NativeBrowser({
           </Button>
         </div>
       ))}
-      <div className="native-browser-footer">
-        {state?.control === 'user' ? (
-          // What Circle waits for is said in the conversation, where the person goes on
-          <span className="browser-operating" data-testid="browser-user">
-            {t('you have the browser')}
-          </span>
-        ) : state?.control === 'user_pending' ? (
-          <span className="browser-operating" data-testid="browser-pending">
-            {t('Waiting for Circle to stop…')}
-          </span>
-        ) : state?.operating ? (
-          <span className="browser-operating" data-testid="browser-operating">
-            <span className="browser-operation-dot" />
-            {t('Circle is operating')}
-            <Button onClick={() => void host.browserControl(id, 'take')}>
-              {t('take over')}
-            </Button>
-          </span>
-        ) : (
-          <Status value={opened ? 'native browser' : 'not opened'} />
-        )}
-        {state?.title ? (
-          <span className="browser-page-title" title={state.title}>
-            {state.title}
-          </span>
-        ) : null}
-      </div>
-      {opened && devtools && (
-        <BrowserDiagnostics
-          sessionId={id}
-          tab={state?.tab}
-          url={state?.url ?? url}
-          onClose={() => setDevtools(false)}
-        />
-      )}
       {!!state?.downloads?.length && (
         <ul className="browser-downloads" data-testid="browser-downloads">
           {[...state.downloads].reverse().map((download) => (

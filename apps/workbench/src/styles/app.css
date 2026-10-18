@@ -3390,72 +3390,50 @@ pre {
   flex-direction: column;
   min-height: 100%;
 }
+.native-browser-frame {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  /* Reserved for the ring. Driving paints into it; the width never changes,
+     so the page keeps its size and a screenshot stays valid. */
+  padding: 3px;
+  border-radius: 6px;
+  background: var(--bg);
+}
+.native-browser-frame.driving {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  box-shadow: inset 0 0 0 3px
+    color-mix(in srgb, var(--accent) 72%, var(--border));
+}
+/* Quieter while a browser action waits for approval. Same width as driving. */
+.native-browser-frame.awaiting {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: inset 0 0 0 3px
+    color-mix(in srgb, var(--accent) 40%, var(--border));
+}
 .native-browser-viewport {
   position: relative;
-  /* Fills the panel under the bars, so nothing is left blank below the footer */
-  flex: 1 0 320px;
-  margin: 12px -5px 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  /* Fills the frame under the bars. The frame's border stays outside this box,
+     which is where the native page is drawn. */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
   background: var(--bg);
   overflow: hidden;
 }
-.native-browser-footer {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: var(--ui-tiny);
-  /* One height for every state ("take over" is a button), so the page never resizes. */
-  height: 28px;
-  margin: 10px 0;
-  color: var(--muted);
-}
-.native-browser-footer code {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: var(--ui-tiny);
-}
-.native-browser-footer > .status {
-  flex: none;
-}
-.native-browser-footer > .browser-page-title {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.native-browser-footer > .status + .browser-page-title::before {
-  content: '·';
-  margin-right: 7px;
-}
-.browser-insecure,
-.browser-operating {
+.browser-insecure {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-}
-.browser-insecure {
   color: var(--attention);
   font-size: var(--ui-tiny);
-}
-.browser-operating {
-  color: var(--accent);
-}
-.browser-operation-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: browser-operation-pulse 1.6s ease-in-out infinite;
-}
-@keyframes browser-operation-pulse {
-  50% {
-    opacity: 0.4;
-  }
 }
 .browser-error-page {
   position: absolute;
@@ -5269,12 +5247,6 @@ pre {
 .browser-control small {
   color: var(--secondary);
 }
-.browser-operating .button {
-  margin-left: 6px;
-  padding: 2px 8px;
-  font-size: var(--ui-tiny);
-}
-
 /* The work drawer has resource modes, then an optional index belonging to that mode. */
 .drawer-mode-toolbar {
   display: flex;

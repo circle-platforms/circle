@@ -49,6 +49,8 @@ export function platformTitle(id: string, fallback = id): string {
       return t('execution');
     case 'methods':
       return t('methods');
+    case 'developer':
+      return t('developer extension');
     default:
       return fallback;
   }

@@ -52,7 +52,6 @@ test('the component gate preserves prior journeys and includes each native regre
     'recovered-input-ui.mjs',
     'git-continuity-ui.mjs',
     'debug-panel-ui.mjs',
-    'browser-diagnostics-ui.mjs',
     'keyboard-navigation-ui.mjs',
   ];
   assert.deepEqual(
@@ -166,7 +165,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'tool-text-output-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 59);
+  assert.equal(new Set(COMPONENT_SUITES).size, 58);
 });
 
 test('task configuration recovery remains a required component journey', () => {

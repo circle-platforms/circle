@@ -395,3 +395,52 @@ test('a native backend without exact-file capability cannot fall back to raw ext
   );
   assert.equal(reads, 0);
 });
+
+test('with a native file backend, read_file still reads Circle offloaded results and job logs', async (t) => {
+  const workspace = realpathSync.native(scratch(t));
+  const offload = realpathSync.native(scratch(t));
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(join(offload, 'large_tool_results'), { recursive: true });
+  mkdirSync(join(offload, 'background_jobs', 'j1'), { recursive: true });
+  writeFileSync(join(offload, 'large_tool_results', 'r1.txt'), 'large\n');
+  writeFileSync(join(offload, 'background_jobs', 'j1', 'output'), 'job\n');
+  const outside = realpathSync.native(scratch(t));
+  writeFileSync(join(outside, 'other.txt'), 'other\n');
+  // A desktop backend: nothing outside the workspace without a grant.
+  const backend: FileMutations = {
+    authorize(path) {
+      throw Error(`external file grant is missing or revoked: ${path}`);
+    },
+    async read(path) {
+      throw Error(`backend read ${path}`);
+    },
+    async apply() {
+      throw Error('no writes');
+    },
+  };
+  const tools = buildTools(new Sandbox(workspace, offload), {
+    fileMutations: backend,
+  });
+  const read = tools.find((entry) => entry.name === 'read_file')!;
+  const context: ToolContext = {
+    sessionId: 's',
+    signal: new AbortController().signal,
+  };
+  assert.match(
+    String(
+      await read.run({ file_path: '/large_tool_results/r1.txt' }, context),
+    ),
+    /large/,
+  );
+  assert.match(
+    String(
+      await read.run({ file_path: '/background_jobs/j1/output' }, context),
+    ),
+    /job/,
+  );
+  // Anything else outside still needs a grant.
+  await assert.rejects(
+    read.run({ file_path: join(outside, 'other.txt') }, context),
+    /grant is missing or revoked/,
+  );
+});

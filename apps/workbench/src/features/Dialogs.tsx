@@ -1111,7 +1111,7 @@ export function DialogHost({
           <p className="dialog-paragraph">{workspace.path}</p>
           <p className="dialog-paragraph">
             {t(
-              "Circle can load this workspace's instructions, skills, commands, settings and extensions after you trust it. Extensions run code in the runtime.",
+              "Circle can load this workspace's instructions, skills, commands, settings, extensions and hooks after you trust it. Extensions and hooks run code.",
             )}
           </p>
           {workspace.instructions.map((item) => (
@@ -1430,6 +1430,11 @@ export function InteractionDialog({
                 : 'sample request'}
             </span>
           </div>
+          {item.hookReason && (
+            <p className="panel-note">
+              {t('hook')} · {item.hookReason}
+            </p>
+          )}
           {item.tool?.startsWith('browser_') ? (
             <BrowserApproval input={item.input} />
           ) : item.command ? (

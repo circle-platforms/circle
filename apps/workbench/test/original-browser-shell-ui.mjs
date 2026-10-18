@@ -61,6 +61,11 @@ try {
         ];
         for (const listener of listeners) listener({ ...state });
       },
+      drive: (driving) => {
+        state.operating = driving;
+        state.control = driving ? 'agent' : 'shared';
+        for (const listener of listeners) listener({ ...state });
+      },
     };
     window.circleDesktop = new Proxy(
       {
@@ -170,21 +175,11 @@ try {
               exact: true,
             })
             .waitFor();
-          // Developer tools take no room until asked for, as in Chrome. They
-          // stay open across the loop's in-page route changes.
+          // Circle does not dock its own developer tools under the page.
           if (!sawClosedTools) {
             assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             sawClosedTools = true;
           }
-          assert.equal(
-            await page
-              .getByRole('button', {
-                name: language === 'en' ? 'page diagnostics' : '页面诊断',
-                exact: true,
-              })
-              .count(),
-            0,
-          );
           const iconSizes = await page
             .locator('.native-browser .icon-button')
             .evaluateAll((buttons) =>
@@ -200,32 +195,8 @@ try {
                 }),
             );
           for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
-          for (const expanded of [false, true]) {
-            const shown =
-              (await page.locator('.browser-diagnostics').count()) > 0;
-            if (expanded && !shown) {
-              await page
-                .getByRole('button', {
-                  name: language === 'en' ? 'browser menu' : '浏览器菜单',
-                  exact: true,
-                })
-                .click();
-              await page
-                .getByRole('menuitem', {
-                  name: language === 'en' ? 'developer tools' : '开发工具',
-                })
-                .click();
-              await page.locator('.browser-diagnostics').waitFor();
-            } else if (!expanded && shown)
-              await page
-                .getByRole('button', {
-                  name:
-                    language === 'en'
-                      ? 'close developer tools'
-                      : '关闭开发工具',
-                  exact: true,
-                })
-                .click();
+          for (const expanded of [false]) {
+            assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             // Locale changes may load CJK fonts after React commits. Capture the
             // browser beside a settled conversation at its explicit end position.
             await page.evaluate(async () => {
@@ -242,7 +213,7 @@ try {
                 '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])',
                 '.native-browser',
                 '.native-browser-viewport',
-                '.native-browser-footer',
+                '.native-browser-frame',
                 '.browser-diagnostics',
               ];
               return selectors.map((selector) => {
@@ -273,10 +244,13 @@ try {
                 out +
                 `/${language}-${theme}-${width}-${height}-${expanded ? 'expanded' : 'closed'}.png`,
             });
-            const [body, wrapper, native, viewport, footer, docked] = geometry;
-            // Closed, the footer is the last row; open, the developer tools are
-            assert.equal(!!docked.missing, !expanded);
-            const diagnostics = docked.missing ? footer : docked;
+            const [body, wrapper, native, viewport, frame, docked] = geometry;
+            assert.equal(docked.missing, true);
+            assert.equal(
+              await page.locator('.native-browser-footer').count(),
+              0,
+              'the status line under the page is gone',
+            );
             assert.equal(
               body.paddingBottom,
               0,
@@ -292,30 +266,156 @@ try {
               'native browser fills its bounded parent',
             );
             assert(
-              Math.abs(diagnostics.bottom - native.bottom) <= 1,
-              'diagnostics end at bounded browser bottom',
+              Math.abs(frame.bottom - native.bottom) <= 1,
+              'the page frame ends at the browser bottom',
             );
+            assert(
+              viewport.top >= frame.top && viewport.bottom <= frame.bottom + 1,
+              'the page sits inside its frame',
+            );
+            const ring = await page.evaluate(() => {
+              const node = document.querySelector('.native-browser-frame');
+              const style = getComputedStyle(node);
+              return {
+                driving: node.classList.contains('driving'),
+                border: style.borderTopWidth,
+                label: node.getAttribute('aria-label'),
+              };
+            });
+            assert.equal(ring.driving, false);
+            assert.equal(ring.border, '1px');
+            assert.equal(ring.label, null);
             assert(
               viewport.height >= 80,
               'guest retains usable actual viewport',
             );
-            assert(footer.bottom <= body.bottom, 'page footer remains visible');
+            assert(frame.bottom <= body.bottom, 'the page frame stays visible');
             assert(
-              diagnostics.bottom <= body.bottom,
-              'expanded diagnostics never overflow inspector',
+              frame.bottom <= body.bottom,
+              'the page frame stays inside the inspector',
             );
             assert(
-              body.bottom - diagnostics.bottom <= 32,
+              body.bottom - frame.bottom <= 32,
               'do not weaken native blank-under-panel acceptance',
             );
             checks.push({ height, expanded, geometry });
           }
-          const pair = checks.slice(-2);
-          assert(
-            pair[0].geometry[3].height > pair[1].geometry[3].height,
-            'expanded diagnostics resize the actual guest within the same fixed parent',
-          );
         }
+  // Thickening the ring must not move or resize the page. A screenshot's
+  // coordinates are taken before Circle clicks.
+  await page.setViewportSize({ width: 1400, height: 684 });
+  await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
+  await page.locator('.workbench').waitFor();
+  await page.evaluate(async () => {
+    await (await import('/src/i18n/index.ts')).setLanguage('en');
+    window.__browserCaptureFixture.drive(false);
+  });
+  {
+    const toggle = page.getByRole('button', {
+      name: 'browser panel',
+      exact: true,
+    });
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+      await toggle.click();
+    await page
+      .getByRole('button', { name: 'browser menu', exact: true })
+      .waitFor();
+  }
+  const pageBox = () =>
+    page.evaluate(() => {
+      const frame = document
+        .querySelector('.native-browser-frame')
+        .getBoundingClientRect();
+      const view = document
+        .querySelector('.native-browser-viewport')
+        .getBoundingClientRect();
+      const round = (value) => Math.round(value);
+      return {
+        x: round(view.x),
+        y: round(view.y),
+        w: round(view.width),
+        h: round(view.height),
+        inset: round(view.x - frame.x),
+      };
+    });
+  const idlePage = await pageBox();
+  assert.ok(idlePage.w > 50 && idlePage.h > 50, 'the page has a box');
+  await page.evaluate(() => window.__browserCaptureFixture.drive(true));
+  await page.getByTestId('browser-operating').waitFor();
+  const drivingPage = await pageBox();
+  assert.deepEqual(
+    drivingPage,
+    idlePage,
+    'the control ring resized the page: ' +
+      JSON.stringify({ idle: idlePage, driving: drivingPage }),
+  );
+  await page.evaluate(() => window.__browserCaptureFixture.drive(false));
+  await page.getByTestId('browser-frame').waitFor();
+  const restoredPage = await pageBox();
+  assert.deepEqual(
+    restoredPage,
+    idlePage,
+    'giving the browser back resized the page: ' +
+      JSON.stringify({ idle: idlePage, restored: restoredPage }),
+  );
+  checks.push({
+    scenario: 'the control ring does not resize the page',
+    status: 'passed',
+  });
+  // Circle driving the page is a ring, in both languages and both themes.
+  for (const language of ['en', 'zh-CN'])
+    for (const theme of ['dark', 'light']) {
+      await page.setViewportSize({ width: 1400, height: 684 });
+      await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
+      await page.locator('.workbench').waitFor();
+      await page.evaluate(
+        async ({ language, theme }) => {
+          (await import('/src/i18n/index.ts')).setLanguage(language);
+          (await import('/src/theme.ts')).applyTheme(theme);
+          window.__browserCaptureFixture.drive(true);
+        },
+        { language, theme },
+      );
+      const toggle = page.getByRole('button', {
+        name: language === 'en' ? 'browser panel' : '浏览器面板',
+        exact: true,
+      });
+      if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+        await toggle.click();
+      await page.evaluate(() => window.__browserCaptureFixture.drive(true));
+      const frame = page.getByTestId('browser-operating');
+      await frame.waitFor();
+      const expected =
+        language === 'en' ? 'Circle is operating' : 'Circle 正在操作';
+      assert.equal(await frame.getAttribute('aria-label'), expected);
+      assert.equal(await frame.getAttribute('title'), expected);
+      const ring = await frame.evaluate((node) => {
+        const view = document
+          .querySelector('.native-browser-viewport')
+          .getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        return {
+          driving: node.classList.contains('driving'),
+          border: getComputedStyle(node).borderTopWidth,
+          padding: getComputedStyle(node).paddingTop,
+          shadow: getComputedStyle(node).boxShadow,
+          inset: view.top - box.top,
+        };
+      });
+      assert.equal(ring.driving, true);
+      assert.equal(ring.border, '1px');
+      assert.equal(ring.padding, '3px');
+      assert.notEqual(ring.shadow, 'none');
+      assert(
+        ring.inset >= 3,
+        'the page covers the driving ring: ' + JSON.stringify(ring),
+      );
+      await page.mouse.move(0, 0);
+      await page.screenshot({
+        animations: 'disabled',
+        path: out + `/${language}-${theme}-1400-684-driving.png`,
+      });
+    }
   await page.setViewportSize({ width: 1400, height: 970 });
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   await page.evaluate(async () =>

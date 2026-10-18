@@ -197,7 +197,9 @@ try {
     );
     return !browser.loading && browser.title === 'extension link fixture';
   }, 'browser panel opened the link');
-  await page.getByText('native browser', { exact: true }).waitFor();
+  await page
+    .getByRole('button', { name: 'browser menu', exact: true })
+    .waitFor();
   assert.equal(
     await page
       .getByRole('textbox', { name: 'browser address', exact: true })

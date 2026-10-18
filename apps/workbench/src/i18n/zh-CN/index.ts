@@ -7,7 +7,6 @@ import { agentTools } from './agent-tools.ts';
 import { taskPanel } from './task-panel.ts';
 import { developer } from './developer.ts';
 import { terminal } from './terminal.ts';
-import { browserDiagnostics } from './browser-diagnostics.ts';
 import { debug } from './debug.ts';
 import { editor } from './editor.ts';
 import { app } from './app.ts';
@@ -31,7 +30,6 @@ export const ZH_CN: Record<string, string> = {
   ...nativeGit,
   ...developer,
   ...terminal,
-  ...browserDiagnostics,
   ...debug,
   ...common,
   ...editor,

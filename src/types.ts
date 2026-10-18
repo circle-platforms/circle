@@ -4,6 +4,8 @@ export interface ToolCall {
   args: Record<string, unknown>;
   raw_args?: string;
   argument_error?: string;
+  /** Set when a hook asked for a decision. Not part of what the model sent. */
+  hook_reason?: string;
 }
 export interface Usage {
   input_tokens: number;
@@ -50,6 +52,8 @@ export interface Message {
   content: string;
   /** A desktop host-authored notice; content itself remains unchanged in history. */
   runtimeNotice?: import('./runtime_notice.js').GitHubRuntimeNotice;
+  /** A deterministic hook's transcript line. The model reads `content`, not this. */
+  hook?: import('./hooks.js').HookNotice;
   attachments?: MediaAttachment[];
   shell?: { id?: string; command: string; output: string; exit_code: number };
   thinking?: string;

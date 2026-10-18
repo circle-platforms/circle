@@ -11,8 +11,10 @@ import {
 import { Tooltip } from 'radix-ui';
 import type { IRange } from 'monaco-editor';
 import { useRuntime } from '../app/context';
+import { developerToolsEnabled } from '../plugins/developer';
 import { currentSession } from '../model/state';
 import { Button, IconButton, Status } from '../components/common';
+import { shownDebugError } from '../components/debug-error';
 import { dateLocale, t, tn } from '../i18n';
 import { copyText } from '../host';
 import type { WorkspaceServiceEvent } from '../../../desktop/src/workspace-protocol';
@@ -264,6 +266,7 @@ export function FileViewer({
   const [moved, setMoved] = useState<EditorDocument | null>(null);
   const [bufferCount, setBufferCount] = useState(0);
   const live = runtime.mode === 'live';
+  const languageFeatures = live && developerToolsEnabled(snapshot.extensions);
   useEffect(() => {
     if (!resourceOwner || !live) return;
     return connectWorkspaceStreams(workspaceId, session.id, (error) =>
@@ -610,7 +613,7 @@ export function FileViewer({
     return () => window.removeEventListener('circle-language-project', update);
   }, [workspaceId]);
   useEffect(() => {
-    if (!live || !languageDetailsOpen) return;
+    if (!languageFeatures || !languageDetailsOpen) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -649,9 +652,14 @@ export function FileViewer({
       active = false;
       clearTimeout(timer);
     };
-  }, [live, languageDetailsOpen, owner, session.id, path]);
+  }, [languageFeatures, languageDetailsOpen, owner, session.id, path]);
   const controlLanguage = async (method: 'stop' | 'restart') => {
-    if (!live || readOnly || owner.busy || languageOwner.current !== owner)
+    if (
+      !languageFeatures ||
+      readOnly ||
+      owner.busy ||
+      languageOwner.current !== owner
+    )
       return;
     owner.busy = true;
     const sequence = ++owner.sequence;
@@ -704,7 +712,7 @@ export function FileViewer({
   };
   const readDiagnosticHistory = async () => {
     if (
-      !live ||
+      !languageFeatures ||
       historyPending.current === owner ||
       languageOwner.current !== owner
     )
@@ -768,13 +776,14 @@ export function FileViewer({
     }
   };
   useEffect(() => {
-    if (!live || !languageDetailsOpen || !diagnosticHistoryOpen) return;
+    if (!languageFeatures || !languageDetailsOpen || !diagnosticHistoryOpen)
+      return;
     if (!history.loaded) void readDiagnosticHistory();
     return subscribeWorkspace((event) => {
       if (languageOwner.current === owner && acceptsDiagnostic(event))
         appendDiagnostics([event]);
     });
-  }, [live, languageDetailsOpen, diagnosticHistoryOpen, owner]);
+  }, [languageFeatures, languageDetailsOpen, diagnosticHistoryOpen, owner]);
   const copyDiagnostic = async (
     batch: ReturnType<typeof diagnosticBatches>[number],
   ) => {
@@ -1046,7 +1055,7 @@ export function FileViewer({
       </div>
     );
   const dirty = value !== document.content;
-  const codeChecks = (live || !!projectErrors.length) && (
+  const codeChecks = languageFeatures && (
     <details
       className={`editor-project-diagnostics${projectErrors.length ? ' attention' : ''}`}
       role={projectErrors.length ? 'alert' : undefined}
@@ -1168,7 +1177,7 @@ export function FileViewer({
             <span role="alert">{t('could not update code checks')}</span>
             <details>
               <summary>{t('details')}</summary>
-              <pre>{languageViewCurrent.error}</pre>
+              <pre>{shownDebugError(languageViewCurrent.error)}</pre>
             </details>
           </div>
         )}
@@ -1208,7 +1217,7 @@ export function FileViewer({
                             {typeof problem.startLineNumber === 'number' &&
                               `${t('line {line}', { line: problem.startLineNumber })} · `}
                             {typeof problem.message === 'string'
-                              ? problem.message
+                              ? shownDebugError(problem.message)
                               : ''}
                           </li>
                         ))}
@@ -1254,7 +1263,7 @@ export function FileViewer({
                 </span>
                 <details>
                   <summary>{t('details')}</summary>
-                  <pre>{history.error}</pre>
+                  <pre>{shownDebugError(history.error)}</pre>
                 </details>
               </div>
             )}
@@ -1282,7 +1291,7 @@ export function FileViewer({
                 {problem.path}
               </Button>
             )}{' '}
-            {problem.message}
+            {shownDebugError(problem.message)}
           </span>
         ))}
       </div>
@@ -1413,7 +1422,7 @@ export function FileViewer({
           language={language}
           readOnly={readOnly}
           diff={mode === 'diff'}
-          live={live}
+          live={languageFeatures}
           visible={!reading}
           selection={selection}
           onChange={changed}

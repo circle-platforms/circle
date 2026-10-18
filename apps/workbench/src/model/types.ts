@@ -102,6 +102,8 @@ export interface Message {
   runtimeNotice?: import('../../../../src/runtime_notice').GitHubRuntimeNotice;
   /** A runtime notice, separate from user/model text, for interface translation. */
   planCompleted?: number;
+  /** A deterministic hook notice. The reason is the hook's own words. */
+  hookNotice?: import('../../../../src/hooks.js').HookNotice;
   /** A core completion diagnostic; arbitrary model/provider text stays untranslated. */
   completionFailure?: ModelCompletionFailureCode;
   /** The user stopped this reply, or a crash saved no reply. */
@@ -296,6 +298,8 @@ export interface Interaction {
   prefix?: string;
   /** Why the core asks, in its words. */
   reason?: string;
+  /** A hook asked for this approval. The reason is the hook's own words. */
+  hookReason?: string;
   choices?: string[];
   multiple?: boolean;
   status: 'pending' | 'recorded';
@@ -398,6 +402,22 @@ export interface Settings {
   oldWorkspaceFolder?: string;
   textSize: TextSize;
   keybindings: Record<string, string | string[]>;
+  /** Hooks the connected runtime would run. Empty when none are configured. */
+  hooks?: HookSetting[];
+  /** A project hooks file is present and the folder is not trusted. */
+  projectHooksIgnored?: boolean;
+}
+export interface HookSetting {
+  source: 'user' | 'project' | 'skill';
+  event: string;
+  name: string;
+  command: string;
+  tools: string;
+  paths: string;
+  /** The skill that ships this hook. It runs only after that skill is loaded. */
+  skill?: string;
+  /** False for a skill hook this session has not loaded. Omitted means running. */
+  active?: boolean;
 }
 export interface WorkbenchSnapshot {
   tools?: {

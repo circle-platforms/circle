@@ -165,9 +165,13 @@ try {
       'Home cannot mutate the previous owner through its retained panel',
     );
     assert(
-      (await page.locator('.inspector [role=status]').innerText()).includes(
-        repos.get('a').root,
-      ),
+      (
+        await page
+          .locator('.inspector')
+          .getByRole('status')
+          .filter({ hasText: repos.get('a').root })
+          .innerText()
+      ).includes(repos.get('a').root),
     );
     assert.equal(
       await delivery
