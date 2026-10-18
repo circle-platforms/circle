@@ -52,6 +52,7 @@ test(
         method: string,
         params: Record<string, unknown>,
         session?: string,
+        options?: Record<string, unknown>,
       ) => Promise<any>;
       evaluate: <T>(
         tab: Tab,
@@ -84,7 +85,7 @@ test(
       40000,
     );
     const send = internal.send.bind(chrome);
-    internal.send = async (method, params, session) => {
+    internal.send = async (method, params, session, options) => {
       if (method === 'Page.createIsolatedWorld' && forceWorld) {
         forceWorld = false;
         held++;
@@ -93,7 +94,7 @@ test(
         )!;
         await until(() => tab.dialogs.length > 0, signal);
       }
-      return send(method, params, session);
+      return send(method, params, session, options);
     };
     forceWorld = true;
     const opened = await fixture.run(
