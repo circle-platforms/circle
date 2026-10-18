@@ -21,11 +21,19 @@ export async function readNativeRecoverySession(state, page, sessionId) {
     if (!entry) return {};
     if ('draft' in entry && typeof entry.draft !== 'string')
       throw Error('persisted recovery draft is invalid');
-    if ('attachments' in entry && !Array.isArray(entry.attachments))
+    // Attachments are kept apart from the view; an earlier version kept them in it
+    const text = localStorage.getItem('circle.workbench.live.attachments.v1');
+    const stored = text === null ? undefined : new Map(JSON.parse(text));
+    const attachments = stored?.has(id)
+      ? stored.get(id)
+      : 'attachments' in entry
+        ? entry.attachments
+        : stored && [];
+    if (attachments !== undefined && !Array.isArray(attachments))
       throw Error('persisted recovery attachments are invalid');
     return {
       ...('draft' in entry ? { draft: entry.draft } : {}),
-      ...('attachments' in entry ? { attachments: entry.attachments } : {}),
+      ...(attachments !== undefined ? { attachments } : {}),
     };
   }, sessionId);
   return { ...session, ...view };

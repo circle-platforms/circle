@@ -46,10 +46,12 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **A secret you enter is no longer thrown away as `no value was entered before the deadline`.** When the machine was slow, a value could be accepted, so the question card closed, and then refused because the waiting side looked at it only after its time was up. A value entered in time is now always used, and one entered too late is refused when you enter it. Waiting for the answer also no longer competes with entering it.
 - **On Windows, stopping a command just after it started no longer leaves the program it started running.** `taskkill` ends the command's process tree as it finds it, so a program the shell was starting at that moment kept running and could keep the workspace folder in use. Circle now also ends what the stopped shell started while it ran.
 - **On Windows, a screenshot no longer waits for the C# compiler.** Each screenshot compiled a small helper with `Add-Type`, which took from seconds to more than the minute PowerShell is given on a busy machine, so the screenshot, or the answer that an app has no window open, ended with `PowerShell did not finish the screenshot in 60 seconds`. The helper's four Windows functions are now defined in memory without compiling.
-
 - **A disabled MCP server stays disconnected.**
 - **When the desktop's Circle runtime exits, running turns and tools are shown as stopped**, and stopping the debugger waits until its program and terminals have closed before it says stopped.
 - **Code checks follow the project's `tsconfig.json` options.**
+- **Typing after pasting a large picture into the desktop composer is no longer slow.** The window saved the whole picture again, several megabytes, with every keystroke of the draft. It now saves the picture once, when it is attached, and the draft and its pictures still come back after a restart.
+- **A desktop session with pictures in it no longer slows every update.** The desktop read and parsed every stored message of every session, pictures included, each time it updated the window. It now reads a message once and then only the messages written since, including those the terminal writes.
+
 ## 1.8.1 - 2026-10-18
 
 ### Fixed
