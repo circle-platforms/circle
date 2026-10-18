@@ -9,16 +9,21 @@
 // What it saw goes to artifacts/launch-smoke/, and is kept when a check fails.
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { existsSync, openSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { patience } from './helpers/patience.mjs';
 import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
+// Node runs the TypeScript source directly: both files use only erasable syntax.
+import {
+  readWindowsProcessRecords,
+  windowsProcessQuery,
+} from '../../../src/windows_process_query.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const appPath = process.env.CIRCLE_DESKTOP_APP_PATH;
@@ -121,18 +126,22 @@ const output = openSync(log, 'a');
 // Everything still running from the package, for the evidence and the last check
 const leftovers = () => {
   try {
-    if (process.platform === 'win32')
-      return execFileSync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-Command',
-          `@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${resolve(appPath).replace(/'/g, "''")}', [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { '{0} {1}' -f $_.ProcessId, $_.Name }) -join [Environment]::NewLine`,
-        ],
-        { encoding: 'utf8', timeout: 30000 },
-      )
-        .split(/\r?\n/)
-        .filter(Boolean);
+    if (process.platform === 'win32') {
+      // Circle's own bounded native query: PowerShell's Win32_Process query can
+      // take longer than 30 s on a busy runner (#176, #115).
+      const query = windowsProcessQuery([], true);
+      const result = spawnSync(process.execPath, query.args, {
+        encoding: 'utf8',
+        timeout: 30000,
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0)
+        throw Error(`process query exited ${result.status}: ${result.stderr}`);
+      const root = resolve(appPath).toLowerCase();
+      return readWindowsProcessRecords(result.stdout)
+        .entries.filter((entry) => entry.path.toLowerCase().startsWith(root))
+        .map((entry) => `${entry.pid} ${basename(entry.path)}`);
+    }
     return execFileSync('ps', ['-axo', 'pid=,command='], {
       encoding: 'utf8',
       timeout: 30000,
