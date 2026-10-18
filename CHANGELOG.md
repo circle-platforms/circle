@@ -6,14 +6,16 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Changed
 
-- **Node debugging and TypeScript/JavaScript language features are the bundled developer extension**, labelled 开发者工具. It is off until you turn it on from the extensions page or with `/extensions enable developer`. While it is off there is no debug tab and no debug-file button, the js-debug adapter is not started, and the editor has no go to definition, rename or diagnostics. The editor still opens, highlights syntax and saves with the version check. With the extension on, debugging and the language service behave as before.
+- **Node debugging and TypeScript/JavaScript language features are the bundled developer extension**, labelled 开发者工具. It is off until you turn it on from the extensions page or with `/extensions enable developer`. The desktop switch applies at once. While it is off there is no debug tab and no debug-file button, the js-debug adapter is not started, and the editor has no go to definition, rename or diagnostics. The editor still opens, highlights syntax and saves with the version check. With the extension on, debugging and the language service behave as before.
 
 ### Fixed
 
-- **The debug adapter no longer accepts connections on a TCP port.** It listens on a private socket in a directory mode 0700 (a randomly named pipe on Windows). Circle refuses an adapter that announces a TCP port. On Windows, a user who can read the process command line or enumerate pipes may still reach that pipe; see [Known issues](docs/known-issues.md#desktop-application).
+- **The debug adapter no longer accepts connections on a TCP port.** It listens on a private socket in a directory mode 0700 (a randomly named pipe on Windows). Circle refuses an adapter that announces a TCP port. js-debug's `node-cdp` socket is created in that same directory on macOS and Linux. On Windows both stay named pipes; see [Known issues](docs/known-issues.md#desktop-application).
 - **A missing debug target names the file.** The desktop says so in Chinese (找不到调试目标：…).
-- **Ctrl+A selects the text in the debug target field.**
+- **Ctrl+A selects the text in the debug target field.** The desktop Edit menu no longer takes that key.
 - **The debug status reads 未在调试 while nothing is being debugged**, including after a session has stopped.
+- **Turning 开发者工具 off hides the debug tab immediately**, and the switch stays where you put it if a stale snapshot arrives.
+- **Code checks and the sidebar use the desktop language for this extension.** A refused code check says 开发者工具未开启, and the sidebar status says 就绪.
 - **A click in the editor gutter toggles a breakpoint** for a JavaScript or TypeScript file while the developer extension is on.
 
 ## 1.8.0 - 2026-10-18

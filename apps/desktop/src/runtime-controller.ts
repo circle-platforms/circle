@@ -677,7 +677,7 @@ export class RuntimeController {
       owner.applyThinkingChoice(level);
     }
   }
-  private synchronizeSharedSettings(settings: CircleSettings): void {
+  private synchronizeSharedSettings(settings: CircleSettings): Promise<void> {
     if (settings.extensions.github?.enabled !== true) {
       this.githubLeases.clear();
       this.githubProviderLifetime.abort();
@@ -708,6 +708,7 @@ export class RuntimeController {
         void owner.setBundledExtensionEnabled('github', true).catch(() => {});
       }
     }
+    const developerApplied = this.applyDeveloperExtension(settings);
     for (const owner of this.runtimes.values()) {
       if (
         !owner.options.localContext &&
@@ -728,6 +729,36 @@ export class RuntimeController {
         trusted_folders: [...settings.trusted_folders],
       });
     }
+    return developerApplied;
+  }
+  /** Turn the developer extension on or off in every runtime, without a reload. */
+  private applyDeveloperExtension(settings: CircleSettings): Promise<void> {
+    const enabled = settings.extensions.developer?.enabled === true;
+    const active = this.active;
+    const owners = [
+      ...this.runtimes.values(),
+      ...this.taskRuntimes.values(),
+    ].filter((owner) => !owner.isClosing);
+    owners.sort((left, right) =>
+      left === active ? -1 : right === active ? 1 : 0,
+    );
+    const pending: Promise<void>[] = [];
+    for (const owner of owners) {
+      const previous =
+        owner.options.settings.extensions.developer?.enabled === true;
+      owner.options.settings.extensions.developer = {
+        ...owner.options.settings.extensions.developer,
+        enabled,
+      };
+      if (previous === enabled) continue;
+      pending.push(
+        owner.setBundledExtensionEnabled('developer', enabled).then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+    }
+    return Promise.all(pending).then(() => undefined);
   }
   private async releaseSessionResources(
     sessionId: string,
@@ -3892,7 +3923,7 @@ export class RuntimeController {
     if (command.name === 'workspace-service')
       return this.workspaceCommand(command);
     this.metadata.refresh();
-    this.synchronizeSharedSettings(loadSettings(this.home));
+    void this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
     let runtime = this.active;
     const navigation = [
@@ -4551,7 +4582,7 @@ export class RuntimeController {
               };
           }
         });
-        this.synchronizeSharedSettings(settings);
+        await this.synchronizeSharedSettings(settings);
         if (data.defaultEffort !== undefined)
           this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)

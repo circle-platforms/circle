@@ -1,11 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  writeFile,
+  rm,
+  stat,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WorkspaceDebugService } from '../src/workspace/debug.ts';
+import {
+  WorkspaceDebugService,
+  adapterEnvironment,
+} from '../src/workspace/debug.ts';
 import { patience } from './helpers/patience.mjs';
 
 const nodeExecutable = process.env.CIRCLE_JS_DEBUG_NODE ?? process.execPath;
@@ -53,6 +63,30 @@ test(
         );
         assert.equal(cmdline.includes(Buffer.from('127.0.0.1')), false);
         assert.ok(cmdline.includes(0));
+      }
+      if (process.platform !== 'win32') {
+        const pid = service.snapshot().adapterPid;
+        assert.equal(typeof pid, 'number');
+        const parent = tmpdir();
+        const leaked = (await readdir(parent)).filter((name) =>
+          name.startsWith(`node-cdp.${pid}-`),
+        );
+        assert.deepEqual(leaked, []);
+        const found: string[] = [];
+        for (const name of await readdir(parent)) {
+          if (!/^cd-[0-9a-f]{12}$/.test(name)) continue;
+          const dir = path.join(parent, name);
+          const info = await stat(dir);
+          if ((info.mode & 0o777) !== 0o700) continue;
+          for (const entry of await readdir(dir)) {
+            if (entry.startsWith(`node-cdp.${pid}-`))
+              found.push(path.join(dir, entry));
+          }
+        }
+        assert.ok(
+          found.length > 0,
+          `node-cdp socket for ${pid} was not inside a private directory`,
+        );
       }
       const stack = await service.handle('stackTrace');
       assert.ok(stack.stackFrames.length > 0);
@@ -395,6 +429,59 @@ test(
     }
   },
 );
+
+test('the adapter temp directory receives the node-cdp socket path', async () => {
+  const parent = await mkdtemp(path.join(tmpdir(), 'circle-debug-cdp-'));
+  const socketDir = path.join(parent, 'cd-abcdef123456');
+  const { mkdir, chmod } = await import('node:fs/promises');
+  const { spawn } = await import('node:child_process');
+  await mkdir(socketDir, { mode: 0o700 });
+  await chmod(socketDir, 0o700);
+  const env = adapterEnvironment({ ...process.env, TMPDIR: parent }, socketDir);
+  assert.equal(env.TMPDIR, socketDir);
+  assert.equal(env.TEMP, socketDir);
+  assert.equal(env.ELECTRON_RUN_AS_NODE, '1');
+  const child = spawn(
+    process.execPath,
+    [
+      '-e',
+      `const os=require('os');const path=require('path');const net=require('net');const fs=require('fs');const dir=os.tmpdir();const sock=path.join(dir,'node-cdp.'+process.pid+'-abcd-0.sock');net.createServer().listen(sock,()=>{process.stdout.write(JSON.stringify({dir,sock,mode:fs.statSync(sock).mode&511,parent:fs.statSync(dir).mode&511}))});`,
+    ],
+    { env, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  try {
+    const output = await new Promise<string>((resolve, reject) => {
+      let text = '';
+      const timer = setTimeout(
+        () => reject(Error('socket probe timed out: ' + text)),
+        patience(5000),
+      );
+      child.stdout.on('data', (chunk) => {
+        text += chunk.toString();
+        if (text.includes('}')) {
+          clearTimeout(timer);
+          resolve(text);
+        }
+      });
+      child.once('exit', (code) => {
+        clearTimeout(timer);
+        reject(Error('probe exited ' + code + ': ' + text));
+      });
+    });
+    const report = JSON.parse(output) as {
+      dir: string;
+      sock: string;
+      mode: number;
+      parent: number;
+    };
+    assert.equal(report.dir, socketDir);
+    assert.equal(report.parent, 0o700);
+    assert.match(report.sock, /\/cd-abcdef123456\/node-cdp\.\d+-abcd-0\.sock$/);
+  } finally {
+    child.kill();
+    await rm(parent, { recursive: true, force: true });
+  }
+});
 
 test('an adapter that announces a TCP port is refused and not left listening', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-tcp-'));

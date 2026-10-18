@@ -6,6 +6,19 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 
+/** js-debug reads TMPDIR once at process start for its node-cdp socket. */
+export function adapterEnvironment(
+  base: NodeJS.ProcessEnv,
+  socketDir?: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ELECTRON_RUN_AS_NODE: '1' };
+  if (!socketDir) return env;
+  env.TMPDIR = socketDir;
+  env.TMP = socketDir;
+  env.TEMP = socketDir;
+  return env;
+}
+
 /** Content-Length framed DAP transport. A failed connection rejects every waiter. */
 export class DapConnection extends EventEmitter {
   readonly initialized: Promise<void>;
@@ -257,7 +270,11 @@ export class WorkspaceDebugService {
         [this.options.adapterPath, address],
         {
           cwd: this.options.workspaceRoot,
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+          // js-debug opens node-cdp.<pid>-….sock with os.tmpdir() captured at
+          // startup. That file is mode 755. The private directory is mode 0700,
+          // so the socket stays unreachable to other users. On Windows the
+          // adapter hard-codes a named pipe and ignores these variables.
+          env: adapterEnvironment(process.env, this.socketDir),
           stdio: ['ignore', 'pipe', 'pipe'],
         },
       ));

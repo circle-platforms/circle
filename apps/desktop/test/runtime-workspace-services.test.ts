@@ -2399,6 +2399,41 @@ test('a missing debug target names the file and does not start the adapter', asy
   assert.equal(existsSync(marked.marker), false);
 });
 
+test('saving the developer extension applies it without a reload', async (t) => {
+  const f = await setup(t, [], true, {}, false);
+  const refused = await f.service('language', 'open', { path: 'main.ts' });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error), /developer tools are off/);
+  const enabled = await f.call('save-settings', {
+    settings: {},
+    extensions: [{ name: 'developer', enabled: true }],
+  });
+  assert.equal(enabled.ok, true, String(enabled.error));
+  const on = f.controller
+    .snapshot()
+    .extensions.find((item) => item.name === 'developer');
+  assert.equal(on?.enabled, true);
+  assert.equal(
+    (on?.view as { provider?: string } | undefined)?.provider,
+    'developer',
+  );
+  const opened = await f.service('language', 'open', { path: 'main.ts' });
+  assert.doesNotMatch(String(opened.error ?? ''), /developer tools are off/);
+  const disabled = await f.call('save-settings', {
+    settings: {},
+    extensions: [{ name: 'developer', enabled: false }],
+  });
+  assert.equal(disabled.ok, true, String(disabled.error));
+  const off = f.controller
+    .snapshot()
+    .extensions.find((item) => item.name === 'developer');
+  assert.equal(off?.enabled, false);
+  assert.equal(off?.view, undefined);
+  const again = await f.service('language', 'open', { path: 'main.ts' });
+  assert.equal(again.ok, false);
+  assert.match(String(again.error), /developer tools are off/);
+});
+
 test('developer tools off refuses language and debug without starting the adapter', async (t) => {
   const marked = await markerAdapter(t);
   const f = await setup(

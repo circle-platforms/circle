@@ -14,6 +14,7 @@ import { useRuntime } from '../app/context';
 import { developerToolsEnabled } from '../plugins/developer';
 import { currentSession } from '../model/state';
 import { Button, IconButton, Status } from '../components/common';
+import { shownDebugError } from '../components/debug-error';
 import { dateLocale, t, tn } from '../i18n';
 import { copyText } from '../host';
 import type { WorkspaceServiceEvent } from '../../../desktop/src/workspace-protocol';
@@ -1164,7 +1165,7 @@ export function FileViewer({
             <span role="alert">{t('could not update code checks')}</span>
             <details>
               <summary>{t('details')}</summary>
-              <pre>{languageViewCurrent.error}</pre>
+              <pre>{shownDebugError(languageViewCurrent.error)}</pre>
             </details>
           </div>
         )}
@@ -1204,7 +1205,7 @@ export function FileViewer({
                             {typeof problem.startLineNumber === 'number' &&
                               `${t('line {line}', { line: problem.startLineNumber })} · `}
                             {typeof problem.message === 'string'
-                              ? problem.message
+                              ? shownDebugError(problem.message)
                               : ''}
                           </li>
                         ))}
@@ -1250,7 +1251,7 @@ export function FileViewer({
                 </span>
                 <details>
                   <summary>{t('details')}</summary>
-                  <pre>{history.error}</pre>
+                  <pre>{shownDebugError(history.error)}</pre>
                 </details>
               </div>
             )}
@@ -1278,7 +1279,7 @@ export function FileViewer({
                 {problem.path}
               </Button>
             )}{' '}
-            {problem.message}
+            {shownDebugError(problem.message)}
           </span>
         ))}
       </div>

@@ -4,7 +4,7 @@ import {
   nativeHttpsUrl,
 } from './encrypted-credentials';
 import { BrowserSessions } from './browser';
-import { devToolsMenuShortcut } from './menu-shortcuts';
+import { devToolsMenuShortcut, selectAllMenuItem } from './menu-shortcuts';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { validateRuntimeCommand } from './runtime-protocol';
 import {
@@ -238,7 +238,9 @@ function configureMenu() {
         role('cut', 'Cut'),
         role('copy', 'Copy'),
         role('paste', 'Paste'),
-        role('selectAll', 'Select All'),
+        // No accelerator: the selectAll role takes Ctrl/Cmd+A and selects the
+        // page instead of the focused field.
+        selectAllMenuItem(text('Select All')),
       ],
     },
     {

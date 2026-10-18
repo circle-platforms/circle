@@ -24,7 +24,14 @@ function selectField(event: KeyboardEvent<HTMLInputElement>) {
   ) {
     event.preventDefault();
     event.stopPropagation();
-    event.currentTarget.select();
+    const input = event.currentTarget;
+    const apply = () => {
+      if (input.isConnected && document.activeElement === input)
+        input.setSelectionRange(0, input.value.length);
+    };
+    apply();
+    queueMicrotask(apply);
+    requestAnimationFrame(apply);
   }
 }
 
