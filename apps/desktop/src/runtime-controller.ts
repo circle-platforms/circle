@@ -47,6 +47,12 @@ import {
   SessionOccupiedError,
 } from '../../../src/session_lock.js';
 import { CheckpointStore } from '../../../src/checkpoint_store.js';
+import {
+  isTaskWorkspace,
+  newTaskName,
+  tasksRoot,
+  taskWorkspace,
+} from '../../../src/paths.js';
 import type {
   ChatModel,
   ToolCall,
@@ -67,6 +73,7 @@ import {
   withConnection,
   isFolderTrusted,
   trustFolder,
+  untrustFolder,
   isReady,
   keepsSavedKey,
   writePrivateJson,
@@ -98,6 +105,12 @@ import type {
   UploadApproval,
 } from '../../../src/browser/protocol.js';
 import { sizeText } from '../../../src/browser/files.js';
+import {
+  terminalTools,
+  runtimeTerminalOptions,
+  type TerminalPort,
+} from '../../../src/terminal/tools.js';
+import type { TerminalHostKeyApproval } from '../../../src/terminal/protocol.js';
 import {
   loadSecrets,
   removeSecret,
@@ -316,6 +329,8 @@ export interface ControllerOptions {
   openUrl?: (url: string) => void;
   /** The conversation browsers in the main process; without it there are no browser tools. */
   browser?: BrowserPort;
+  /** The conversation device terminals in the main process. */
+  terminal?: TerminalPort;
   beforeDelete?: (sessionId: string) => Promise<void>;
 }
 
@@ -586,6 +601,84 @@ export class RuntimeController {
       return undefined;
     }
   }
+  // Where a task that belongs to no project gets a folder of its own. The built-in one
+  // sits inside the data folder, as the scratch folder does; a folder the person points at
+  // may not expose the app's own data, for the same reason the default workspace may not.
+  private tasksPath(): string {
+    return tasksRoot(this.home);
+  }
+  private tasksRootFor(settings: CircleSettings): string {
+    const built = this.tasksPath();
+    if (!settings.task_folder) return built;
+    try {
+      const target = realpathSync.native(settings.task_folder);
+      if (!statSync(target).isDirectory()) return built;
+      return target === built || this.acceptableDefaultFolder(target)
+        ? target
+        : built;
+    } catch {
+      return built;
+    }
+  }
+  // Whether a workspace is where the app falls back to rather than a project the person
+  // opened: the default workspace, the folder no-project conversations shared before,
+  // or one of the task folders before it.
+  private isDefaultWorkspace(
+    current: string,
+    settings: CircleSettings,
+  ): boolean {
+    const fallback = this.defaultWorkspace(settings).folder;
+    // The fallback folder may not exist yet, and home may sit behind a link: compare
+    // both spellings, and never fail a command over a path that is simply missing.
+    let same = current === fallback;
+    if (!same) {
+      try {
+        same = current === realpathSync.native(fallback);
+      } catch {
+        /* Nothing to compare against yet. */
+      }
+    }
+    return (
+      same ||
+      this.isUnscoped(current) ||
+      isTaskWorkspace(current, this.tasksRootFor(settings))
+    );
+  }
+  /**
+   * A task that belongs to no project gets a folder of its own under the task folder,
+   * trusted as Circle's own scratch folder is, so its files and its history sit apart
+   * and it can be deleted whole.
+   */
+  private taskFolder(): string {
+    const settings = loadSettings(this.home);
+    const folder = taskWorkspace(newTaskName(), this.tasksRootFor(settings));
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const resolved = realpathSync.native(folder);
+    if (!isFolderTrusted(settings, resolved))
+      saveSettingsChange(this.home, (saved) => {
+        Object.assign(saved, trustFolder(saved, resolved));
+      });
+    return resolved;
+  }
+  /**
+   * The runtime for a new session started where no project is. Nothing happens when
+   * the person is working in a project: a new session there stays in it. The runtime
+   * made for a fresh task folder opens on a conversation of its own, which is the new
+   * session.
+   */
+  private async projectlessTask(
+    runtime: AgentRuntime,
+    previous: string,
+  ): Promise<AgentRuntime | undefined> {
+    const current = runtime.options.workspace;
+    if (!this.isDefaultWorkspace(current, loadSettings(this.home)))
+      return undefined;
+    const owner = this.runtimes.create(this.taskFolder());
+    // The extensions the person had running come along, as for any new session.
+    await this.carryExtensions(owner, previous);
+    this.selectRuntime(owner);
+    return owner;
+  }
   private defaultWorkspace(settings: CircleSettings): {
     folder: string;
     stale?: string;
@@ -722,6 +815,15 @@ export class RuntimeController {
         !owner.isClosing
       ) {
         owner.options.localContext = true;
+        this.pendingTrustReloads.add(owner);
+      }
+      if (
+        owner.options.localContext &&
+        !isFolderTrusted(settings, owner.options.workspace) &&
+        !owner.isClosing
+      ) {
+        // The click that took a folder away takes its code out of the run too.
+        owner.options.localContext = false;
         this.pendingTrustReloads.add(owner);
       }
       Object.assign(owner.options.settings, {
@@ -2166,6 +2268,13 @@ export class RuntimeController {
                 ...runtimeBrowserOptions(() => runtime),
               }).map((tool) => bindToolResource(tool, 'browser'))
             : []),
+          ...(this.options.terminal
+            ? terminalTools(this.options.terminal, {
+                confirm: (_sessionId, approval, signal, callId) =>
+                  this.confirmHostKey(runtime, approval, signal, callId),
+                ...runtimeTerminalOptions(() => runtime),
+              })
+            : []),
         ],
         approve: (call, signal, origin) =>
           this.approve(
@@ -2673,6 +2782,7 @@ export class RuntimeController {
     const savedSettings = loadSettings(this.home);
     const inspecting = !!this.viewedSessionId;
     const defaultFolder = this.defaultWorkspace(savedSettings);
+    const taskRoot = this.tasksRootFor(savedSettings);
     // The open conversation is listed before its first message.
     const rows = this.store.list(undefined, false, true);
     const paths = [
@@ -2830,10 +2940,12 @@ export class RuntimeController {
           isFolderTrusted(savedSettings, this.taskWorkspaces.get(path) ?? path),
         origin: 'native' as const,
         // The default circle folder is a project the person can pick. Scratch is
-        // only the separate folder used by "work without a project".
-        kind: this.isUnscoped(path)
-          ? ('scratch' as const)
-          : ('project' as const),
+        // work without one: a task's own folder, or the shared unscoped folder.
+        kind:
+          this.isUnscoped(path) || isTaskWorkspace(path, taskRoot)
+            ? ('scratch' as const)
+            : ('project' as const),
+        ...(isTaskWorkspace(path, taskRoot) ? { task: true } : {}),
         instructions:
           !inspecting &&
           this.validWorkspaceRoot(path) &&
@@ -3040,7 +3152,7 @@ export class RuntimeController {
                 : 'Approval is enforced by the Circle core.',
             schema: tool.parameters,
           })),
-      uiPlugins: ['files', 'activity', 'browser'],
+      uiPlugins: ['files', 'activity', 'browser', 'devices'],
       openUrl: this.openRequest,
       ...(this.whatsNew ? { whatsNew: this.whatsNew } : {}),
       settings: {
@@ -3061,6 +3173,7 @@ export class RuntimeController {
         ...(defaultFolder.stale
           ? { oldWorkspaceFolder: defaultFolder.stale }
           : {}),
+        taskFolder: taskRoot,
         textSize: 'default',
         keybindings: {},
         hooks: runtime.hookListing().map(({ hook, active }) => ({
@@ -3606,6 +3719,43 @@ export class RuntimeController {
         ? 'always'
         : 'reject';
   }
+  /** A device whose SSH host key nobody has trusted: the person decides, auto mode trusts once. */
+  private async confirmHostKey(
+    runtime: AgentRuntime,
+    approval: TerminalHostKeyApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'always' | 'reject' | 'auto'> {
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'auto';
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'terminal_connect',
+        title: 'terminal_connect · trusts an unknown device key',
+        reason: 'trusts an unknown device host key',
+        target: approval.host,
+        input: {
+          host: approval.host,
+          key_type: approval.keyType || 'unknown',
+          sha256: approval.fingerprint,
+        },
+        // Only a device on this network can be trusted for good.
+        choices: [
+          'approve',
+          ...(approval.privateHost ? ['always'] : []),
+          'reject',
+        ],
+      },
+      signal,
+    );
+    return answer === 'approve'
+      ? 'once'
+      : answer === 'always'
+        ? 'always'
+        : 'reject';
+  }
   private async confirmCoordinate(
     runtime: AgentRuntime,
     approval: CoordinateApproval,
@@ -3990,15 +4140,6 @@ export class RuntimeController {
       return false;
     }
   }
-  private ensureUnscoped(): string {
-    const folder = this.unscopedPath();
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const resolved = realpathSync.native(folder);
-    saveSettingsChange(this.home, (saved) => {
-      Object.assign(saved, trustFolder(saved, resolved));
-    });
-    return resolved;
-  }
   private workspaceById(id: string): string {
     for (const row of this.store.list(undefined, true))
       if (identity(row.workspace) === id) return row.workspace;
@@ -4269,7 +4410,8 @@ export class RuntimeController {
           throw Error('invalid command preparation');
         const workspace =
           p.workspaceId === undefined
-            ? this.ensureUnscoped()
+            ? // Work with no project: the first message opens in a task folder of its own.
+              this.taskFolder()
             : this.workspaceById(text(p.workspaceId, 'workspace', 200));
         if (!isFolderTrusted(loadSettings(this.home), workspace))
           throw Error('trust the workspace before running Circle');
@@ -4332,6 +4474,11 @@ export class RuntimeController {
       case 'new-session': {
         this.workspaceRoot(this.selectedWorkspace);
         const previous = this.selectedSessionId;
+        // Work with no project of its own gets a task folder; a project keeps its
+        // own sessions together. The draft conversation the app fell back to is not
+        // this task's, so it stays where it was, ready for the next loose question.
+        const task = await this.projectlessTask(runtime, previous);
+        if (task) return { sessionId: task.session.id };
         if ((await this.unusedSession(previous)) && !this.viewedSessionId)
           return { sessionId: previous };
         const owner = this.runtimes.create(this.selectedWorkspace);
@@ -4485,7 +4632,9 @@ export class RuntimeController {
         const rows = this.store
           .list(undefined, false, true)
           .filter((row) => identity(row.workspace) === workspaceId);
-        if (!rows.length) throw Error('workspace not found');
+        // A folder that only holds archived sessions is still one the settings page
+        // can name, so ask workspaceById before deciding there is nothing to hide.
+        this.workspaceById(workspaceId);
         for (const row of rows)
           await this.assertArchivable(row.id, row.workspace);
         for (const row of rows) this.externalBlocked.add(row.id);
@@ -4704,8 +4853,11 @@ export class RuntimeController {
         return {};
       }
       case 'trust': {
-        if (p.enabled !== true)
+        // Both answers are a deliberate click: trusting loads a folder's code,
+        // revoking it takes that away again.
+        if (typeof p.enabled !== 'boolean')
           throw Error('explicit trust confirmation required');
+        const enabled = p.enabled;
         // Home can ask to trust the project in the menu while another session
         // is the one open. The id names that project; otherwise it is the open one.
         const folder =
@@ -4713,7 +4865,10 @@ export class RuntimeController {
             ? runtime.options.workspace
             : this.workspaceById(text(p.workspaceId, 'workspace', 200));
         const settings = saveSettingsChange(this.home, (saved) => {
-          Object.assign(saved, trustFolder(saved, folder));
+          Object.assign(
+            saved,
+            enabled ? trustFolder(saved, folder) : untrustFolder(saved, folder),
+          );
         });
         this.synchronizeSharedSettings(settings);
         const reloads: Promise<void>[] = [];
@@ -4726,7 +4881,7 @@ export class RuntimeController {
             reloads.push(this.reloadTrustedRuntime(owner));
           }
         await Promise.all(reloads);
-        return {};
+        return { workspaceId: identity(folder), trusted: enabled };
       }
       case 'save-settings': {
         const data = p.settings as Record<string, unknown>;
@@ -4735,7 +4890,8 @@ export class RuntimeController {
             throw Error('invalid settings');
           if (
             data.workspaceFolder !== undefined ||
-            data.oldWorkspaceFolder !== undefined
+            data.oldWorkspaceFolder !== undefined ||
+            data.taskFolder !== undefined
           )
             throw Error(
               'the default workspace only changes through the native folder dialog',
@@ -5035,6 +5191,22 @@ export class RuntimeController {
           workspaceId: identity(workspace),
           sessionId: owner.session.id,
         };
+      }
+      case 'set-task-folder': {
+        // The path comes from the native dialog, as the default workspace's does.
+        const folder = realpathSync.native(text(p.path, 'workspace', 8000));
+        if (!statSync(folder).isDirectory())
+          throw Error('the task folder must be a folder');
+        const built = this.tasksPath();
+        if (folder !== built && !this.acceptableDefaultFolder(folder))
+          throw Error(
+            'the task folder may not be the Circle data folder, a folder inside it or a folder that holds it',
+          );
+        saveSettingsChange(this.home, (settings) => {
+          // Choosing Circle's own tasks folder again resets the default.
+          settings.task_folder = folder === built ? '' : folder;
+        });
+        return { taskFolder: this.tasksRootFor(loadSettings(this.home)) };
       }
       case 'load-skill': {
         const skill = runtime.skills.find((skill) => skill.name === p.name);

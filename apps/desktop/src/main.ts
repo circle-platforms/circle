@@ -5,6 +5,8 @@ import {
 } from './encrypted-credentials';
 import { BrowserSessions } from './browser';
 import { devToolsMenuShortcut, selectAllMenuItem } from './menu-shortcuts';
+import { TerminalPanelHost } from './terminal';
+import { loadSecrets } from '../../../src/secrets.js';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { validateRuntimeCommand } from './runtime-protocol';
 import {
@@ -51,7 +53,12 @@ import {
   trustedAppUrl,
   validSaveName,
 } from './policy';
-import type { DesktopAction, DesktopInfo, UpdateAction } from './contracts';
+import type {
+  DesktopAction,
+  DesktopInfo,
+  TerminalEvent,
+  UpdateAction,
+} from './contracts';
 import { installation, Updater } from './updater';
 import { circleAppVersion } from './circle-version';
 import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
@@ -109,6 +116,7 @@ const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
 let browsers: BrowserSessions | null = null;
 let browserClosePending: Promise<void> = Promise.resolve();
+let terminals: TerminalPanelHost | null = null;
 // Certificate exceptions live only in this application process, across window recreation.
 const browserCertificates = new Map<string, Set<string>>();
 let runtime: RuntimeSupervisor | undefined;
@@ -469,6 +477,21 @@ async function createWindow() {
     if (!browsers) throw Error('the browser is closed');
     return browsers.agent(request, signal);
   });
+  terminals = new TerminalPanelHost(
+    (event: TerminalEvent) =>
+      window?.webContents.send('circle:terminal-event', event),
+    join(dataPath, 'runtime-home'),
+    join(dataPath, 'terminal-host-keys.json'),
+    (name) => loadSecrets(join(dataPath, 'runtime-home'))[name] ?? '',
+    // Plan mode does not hand a console over, as it does not hand the browser over
+    (id) =>
+      runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
+  );
+  runtime?.onTerminalCleanup(async (id) => terminals?.releaseSession(id));
+  runtime?.onTerminal((request, signal) => {
+    if (!terminals) throw Error('the terminal host is closed');
+    return terminals.agent(request, signal);
+  });
   window.webContents.setWindowOpenHandler(({ url }) => {
     const allowed = safeExternalUrl(url);
     if (allowed && !fixtureProfile) void shell.openExternal(allowed);
@@ -485,6 +508,7 @@ async function createWindow() {
   });
   window.once('ready-to-show', () => window?.show());
   window.on('close', () => {
+    terminals?.close();
     if (!browsers) return;
     browserClosePending = Promise.all([
       browserClosePending,
@@ -500,6 +524,7 @@ async function createWindow() {
   });
   window.on('closed', () => {
     browsers = null;
+    terminals = null;
     window = null;
   });
   await window.loadURL('circle://workbench/index.html');
@@ -596,6 +621,7 @@ app
         for (const id of runtimeSessions)
           if (!current.has(id)) {
             void browsers?.deleteSession(id).catch(() => {});
+            void terminals?.releaseSession(id);
             browserCertificates.delete(id);
           }
         runtimeSessions = current;
@@ -613,7 +639,8 @@ app
       const command = validateRuntimeCommand(value);
       if (
         command.name === 'open-workspace' ||
-        command.name === 'set-default-workspace'
+        command.name === 'set-default-workspace' ||
+        command.name === 'set-task-folder'
       ) {
         const path = workspaceSelections.get(
           String(command.payload.workspaceGrant),
@@ -977,6 +1004,52 @@ app
     handle('circle:browser-reveal', (id, download) => {
       if (!browsers) throw Error('window not ready');
       shell.showItemInFolder(browsers.downloadPath(id, download));
+    });
+    handle('circle:terminal-state', (id) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.state(id);
+    });
+    handle('circle:terminal-profiles', () => terminals?.profiles() ?? []);
+    handle('circle:terminal-snapshot', (id, session) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.snapshot(id, session);
+    });
+    handle('circle:terminal-connect', (id, profile) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.connect(id, profile);
+    });
+    handle('circle:terminal-connect-target', (id, target) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.connectTarget(id, target);
+    });
+    handle('circle:terminal-host-key', (id, decision) => {
+      if (!terminals) throw Error('window not ready');
+      if (!['once', 'always', 'reject'].includes(String(decision)))
+        throw Error('invalid host key answer');
+      return terminals.hostKey(
+        id,
+        String(decision) as 'once' | 'always' | 'reject',
+      );
+    });
+    handle('circle:terminal-disconnect', (id, session) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.disconnect(id, session);
+    });
+    handle('circle:terminal-attach', (id, session) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.attach(id, session);
+    });
+    handle('circle:terminal-detach', (id, session) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.detach(id, session);
+    });
+    handle('circle:terminal-input', (id, session, text) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.input(id, session, text);
+    });
+    handle('circle:terminal-resize', (id, session, cols, rows) => {
+      if (!terminals) throw Error('window not ready');
+      terminals.resize(id, session, cols, rows);
     });
     updater.subscribe((state) =>
       window?.webContents.send('circle:update', state),

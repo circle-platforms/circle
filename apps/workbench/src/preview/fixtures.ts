@@ -522,6 +522,7 @@ export function createFixtures(): WorkbenchSnapshot {
       'files',
       'activity',
       'browser',
+      'devices',
       'knowledge',
       'work',
       'execution',

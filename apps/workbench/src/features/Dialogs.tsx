@@ -1136,6 +1136,7 @@ export function DialogHost({
                   if (runtime.mode === 'live') {
                     await runtime.request('trust-workspace', {
                       enabled: true,
+                      // The folder this row is about, which need not be the active one.
                       workspaceId: workspace.id,
                     });
                     onClose();

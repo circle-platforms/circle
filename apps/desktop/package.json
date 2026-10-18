@@ -19,7 +19,7 @@
     "test:websearch": "node test/native-websearch.mjs",
     "test:sessions": "node test/session-management.mjs && node test/parallel-sessions.mjs",
     "test:clipboard": "node test/system-clipboard.mjs",
-    "test:desktop": "node --test test/browser-state.test.mjs test/desktop-readiness.test.mjs test/session-failure.test.mjs && node test/select-all-field.mjs && node test/desktop.mjs && node test/frame-readiness.mjs && node test/browser-page.mjs && node test/browser-lifecycle.mjs && node test/browser-address.mjs && npm run test:mode-tools",
+    "test:desktop": "node --test test/browser-state.test.mjs test/desktop-readiness.test.mjs test/session-failure.test.mjs && node test/select-all-field.mjs && node test/desktop.mjs && node test/frame-readiness.mjs && node test/browser-page.mjs && node test/browser-lifecycle.mjs && node test/browser-address.mjs && node test/terminal-panel.mjs && npm run test:mode-tools",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test:interface": "node test/interface.mjs",

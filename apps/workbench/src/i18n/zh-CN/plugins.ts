@@ -130,4 +130,9 @@ export const plugins: Record<string, string> = {
   start: '启动',
   stop: '停止',
   unmapped: '未映射',
+  // the device terminal pane and its plugin
+  'device terminals': '设备终端',
+  'device terminal pane': '设备终端面板',
+  'SSH and Telnet consoles shared with Circle.':
+    '与 Circle 共享的 SSH 和 Telnet 控制台。',
 };

@@ -189,6 +189,14 @@ A record keeps these keys while a card waits under it: `esc` leaves the record i
 
 On a job's page (from `/jobs`): `esc` goes back to the list, `ctrl+k` stops the job (after a card asks) or removes one that has ended, and the mouse wheel scrolls. Other keys do nothing there, except `ctrl+c` and `ctrl+z`.
 
+## Device terminals
+
+A device terminal's page (from `/terminals`, or one the model hands you) has two states.
+
+While you are only looking at it: `enter` or `a` attaches and hands the keys to the device, `pageup` `pagedown` `home` `end` scroll its screen, `esc` leaves the page, `ctrl+d` cuts the console after a card asks, and the mouse wheel scrolls. `ctrl+c` and `ctrl+z` work there as anywhere.
+
+While you are attached, every key goes to the device — `enter`, `esc`, its arrows, its `ctrl+c` — and only **`ctrl+]`** gives the keys back to Circle; the page stays open. A paste reaches the device too. While you hold the console the model's actions on it wait. When a card other than the handoff's own needs you, the page lets go of the keys and closes until you answer. See [Device terminals](tools.md#device-terminals).
+
 ## Mouse
 
 | Action | Effect |
@@ -246,6 +254,8 @@ Key names are written as on this page: `ctrl+k`, `alt+up`, `shift+tab`, `f1` to 
 
 The desktop application uses its own defaults for a few actions: `ctrl+b` shows or hides the sidebar, `alt+b` backgrounds a job, `ctrl+alt+s` enters a secret, `alt+c` copies the last answer, `ctrl+shift+m` opens the model list and `alt+m` cycles models. Search is `ctrl+k` from anywhere. `ctrl+r` (`history.search`) opens that same search; it is the terminal's history-search key and is kept on the desktop on purpose. The keys in the table above are the terminal's, except `sidebar.toggle`, which is desktop only. The desktop browser panel has Chrome's keys while it or its page has the keyboard; they are listed under [Using the browser panel](desktop.md#using-the-browser-panel) and cannot be changed.
 
+The desktop application records these keys for you instead: settings → keyboard lists every action, and [the page there](desktop.md#keyboard) keeps its own copy of what you record. It does not read or write `keybindings.json`.
+
 ## Which key wins
 
-When several places could take a key, the first of these does: a subagent's record, a card, a list, find, search, a selection, the subagent strip, a job's page, `alt+k`, `ctrl+d` on an empty box, the completion list, the other global keys, then the input box. A card passes on the control keys it does not use, which is why `ctrl+c` still stops a turn while a card is up and plain letters do not.
+When several places could take a key, the first of these does: an attached device terminal, a subagent's record, a card, a list, find, search, a selection, the subagent strip, a job's page, `alt+k`, `ctrl+d` on an empty box, the completion list, the other global keys, then the input box. A card passes on the control keys it does not use, which is why `ctrl+c` still stops a turn while a card is up and plain letters do not.

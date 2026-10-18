@@ -1668,66 +1668,208 @@ pre {
   font-size: var(--ui-small);
   line-height: 1.8;
 }
-.terminal-pane {
-  height: 210px;
-  min-height: 100px;
-  flex-shrink: 0;
+/* Device terminals: the conversation's consoles, painted by xterm.js. The panel sits
+ * flush in the inspector and owns its scroll; only the screen column stretches. */
+.device-terminal {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
   font-family: var(--mono);
 }
-.terminal-pane header {
-  height: 37px;
-  flex-shrink: 0;
+/* The panel's own toolbar: a new connection, and what the open console offers. */
+.terminal-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 13px;
+  /* A narrow panel wraps the controls instead of clipping the last one off. */
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
-  font-family: inherit;
+  flex-shrink: 0;
+}
+/* Seen whole there is room for the whole profile list, not just its header. */
+.workspace-content.whole .terminal-profiles {
+  max-height: none;
+}
+.terminal-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+/* A quick connect, as SecureCRT's: the fields share a row and wrap when narrow. */
+.terminal-connect {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.terminal-connect label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--ui-tiny);
+  color: var(--muted);
+}
+.terminal-connect input,
+.terminal-connect select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: var(--ui-small);
+  font-family: var(--mono);
+}
+.terminal-connect .panel-note,
+.terminal-connect .field-problem,
+.terminal-connect .dialog-actions {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+/* Open consoles as tabs across the top of the screen, as SecureCRT lists them. */
+.terminal-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: var(--subtle);
+  font-size: var(--ui-tiny);
+  cursor: pointer;
+}
+.terminal-tab.active {
+  background: var(--surface);
+  border-color: var(--accent);
+}
+.terminal-tab .lamp {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.terminal-tab .lamp-connecting {
+  background: var(--accent);
+}
+.terminal-tab .lamp-ready {
+  background: var(--secondary);
+}
+.terminal-tab .lamp-wait {
+  background: var(--logo-gradient);
+}
+.terminal-tab .lamp-error {
+  background: var(--negative);
+}
+.terminal-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-tab-close {
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.terminal-tab-close:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.terminal-ask,
+.terminal-handoff {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
   font-size: var(--ui-small);
 }
-.terminal-pane header > span,
-.terminal-pane header > div {
-  display: flex;
-  gap: 9px;
-  align-items: center;
+.terminal-ask code {
+  font-size: var(--ui-tiny);
+  color: var(--secondary);
+  word-break: break-all;
 }
-.terminal-pane small {
+.terminal-ask > div,
+.terminal-handoff > button {
+  margin-left: auto;
+}
+.terminal-ask > div {
+  display: flex;
+  gap: 7px;
+}
+.terminal-screen {
+  flex: 1;
+  min-height: 100px;
+  overflow: hidden;
+  padding: 6px 4px 0 10px;
+}
+.terminal-screen .xterm {
+  height: 100%;
+}
+/* Saved profiles stay listed while nothing is open, so a person can start one. */
+.terminal-profiles {
+  border-top: 1px solid var(--border);
+  padding: 9px 13px 11px;
+  flex-shrink: 0;
+  max-height: 34%;
+  overflow: auto;
+}
+.terminal-profiles h3 {
+  margin: 0 0 7px;
+  font-size: var(--ui-tiny);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.terminal-profile {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 5px 4px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.terminal-profile:hover {
+  background: var(--hover);
+}
+.terminal-profile small {
   color: var(--muted);
   font-size: var(--ui-tiny);
 }
-.terminal-pane > pre {
-  padding: 12px 15px;
-  margin: 0;
-  flex: 1;
-  overflow: auto;
-  min-height: 0;
-  font-size: var(--code-size);
-  color: var(--secondary);
-  line-height: 1.7;
-}
-.terminal-pane form {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 7px 13px;
-  border-top: 1px solid var(--border);
-}
-.terminal-pane input {
-  border: 0;
-  outline: 0;
-  padding: 2px 0;
-  flex: 1;
-  background: none;
-  font-family: var(--mono);
-  font-size: var(--code-size);
-}
-.terminal-pane input:focus-visible {
-  outline: 0;
-}
+
 .file-view,
 .agent-record {
   display: flex;
@@ -4874,6 +5016,9 @@ pre {
   padding: 0;
   display: flex;
   flex-direction: column;
+  /* The terminal lays itself out by flex; a scroll bar here would push its
+     profile list below the fold and read as a stray line under the screen. */
+  overflow: hidden;
 }
 .terminal-pane.embedded {
   flex: 1;
@@ -5457,4 +5602,184 @@ button.drawer-summary-row:hover {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+/* ------------------------------------------------------------------ *
+ * The settings page: a switch, a pattern list, a key, and the trust  *
+ * a server's certificate is checked against.                         *
+ * ------------------------------------------------------------------ */
+
+/* A setting's switch fills its row: the words at the start, the knob at the end,
+   both on the row's own centre line like every other row's control. */
+.setting-row > .toggle {
+  flex: 1;
+  gap: 18px;
+  padding: 0;
+  justify-content: space-between;
+}
+
+/* A line that tells the person a change was refused, or what must happen next. */
+.field-problem,
+.error-text {
+  margin: 9px 0 0;
+  font-size: var(--ui-small);
+  line-height: 1.7;
+  color: var(--negative);
+}
+
+/* protected files */
+.pattern-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 13px 0 4px;
+}
+.pattern-add .input {
+  flex: 1;
+}
+.pattern-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.pattern-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.pattern-list code {
+  font-size: var(--code-size);
+  overflow-wrap: anywhere;
+}
+.pattern-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+.pattern-chips code {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--subtle);
+  color: var(--secondary);
+  font-size: var(--ui-tiny);
+}
+
+/* keyboard */
+.key-actions {
+  margin: 15px 0;
+  border-top: 1px solid var(--border);
+}
+.key-actions-head,
+.key-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px 132px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--ui-small);
+}
+.key-actions-head {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.key-action > span {
+  min-width: 0;
+}
+.key-action > span small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.key-action kbd {
+  justify-self: start;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--subtle);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+}
+.key-action kbd.waiting {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.key-action-buttons {
+  display: flex;
+  gap: 7px;
+  justify-self: end;
+}
+
+/* network trust */
+.network-status summary {
+  cursor: pointer;
+  font-size: var(--ui-small);
+  color: var(--secondary);
+}
+.network-status summary:hover {
+  color: var(--fg);
+}
+.network-status > p {
+  max-width: 850px;
+}
+.source-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ui-small);
+}
+.source-table thead th {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  font-weight: 500;
+}
+.source-table th,
+.source-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.source-table tbody th {
+  font-weight: 400;
+}
+.source-table th code {
+  font-size: var(--ui-small);
+}
+.source-table th small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.source-table td {
+  text-align: right;
+  white-space: nowrap;
+  color: var(--secondary);
+}
+
+@media (max-width: 760px) {
+  .key-actions-head {
+    display: none;
+  }
+  .key-action {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 7px;
+  }
+  .key-action kbd {
+    grid-column: 1;
+    justify-self: start;
+  }
+  .key-action-buttons {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .pattern-add {
+    flex-wrap: wrap;
+  }
 }

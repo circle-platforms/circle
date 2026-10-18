@@ -121,6 +121,7 @@ export function KeybindingsEditor() {
         </div>
       ))}
       {(Object.keys(KEY_ACTIONS) as KeyAction[]).map((action) => {
+        const label = LABELS[action]();
         const keys = bindings[action]!;
         const chord = typeof keys === 'string' ? keys : keys[0]!;
         const custom = Object.hasOwn(saved, action);
@@ -133,12 +134,18 @@ export function KeybindingsEditor() {
                 : formatChord(chord)}
             </kbd>
             <Button
+              aria-label={
+                capturing === action
+                  ? t('stop recording for {action}', { action: label })
+                  : t('change the key for {action}', { action: label })
+              }
               onClick={() => setCapturing(capturing === action ? null : action)}
             >
               {capturing === action ? t('cancel') : t('change…')}
             </Button>
             {custom && (
               <Button
+                aria-label={t('reset the key for {action}', { action: label })}
                 onClick={() =>
                   perform(() =>
                     runtime.change((state) => {

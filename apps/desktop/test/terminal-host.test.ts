@@ -1,0 +1,254 @@
+// The desktop main process's terminal host: a real Telnet console on 127.0.0.1 driven
+// through the same object main.ts wires to the supervisor and the preload bridge. The
+// renderer is not in the room: what is tested is what it would see and may ask for.
+import test, { type TestContext } from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer, type Socket } from 'node:net';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { TerminalPanelHost } from '../src/terminal.ts';
+import {
+  saveProfiles,
+  type TerminalProfile,
+} from '../../../src/terminal/profiles.ts';
+import type { TerminalEvent } from '../src/contracts.ts';
+
+async function until(check: () => boolean, description: string) {
+  const end = Date.now() + 8000;
+  while (!check()) {
+    if (Date.now() > end) throw Error(`timed out: ${description}`);
+    await delay(10);
+  }
+}
+
+/** One console server: greets a newcomer and records the lines it is given. */
+async function consoleServer(t: TestContext) {
+  const typed: string[] = [];
+  let banner = 'TELNET banner\r\ncon> ';
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('error', () => {});
+    socket.on('close', () => sockets.delete(socket));
+    // Strip telnet negotiation (IAC <cmd>, IAC SB ... IAC SE), keeping only typed data,
+    // so a NAWS size byte never masquerades as a character.
+    let negotiation = Buffer.alloc(0);
+    let input = '';
+    const strip = (chunk: Buffer): number[] => {
+      const bytes = Buffer.concat([negotiation, chunk]);
+      const out: number[] = [];
+      let at = 0;
+      while (at < bytes.length) {
+        const byte = bytes[at]!;
+        if (byte !== 255) {
+          out.push(byte);
+          at += 1;
+          continue;
+        }
+        const start = at;
+        const command = bytes[at + 1];
+        if (command === undefined) break;
+        at += 2;
+        if (command === 255) {
+          out.push(255);
+          continue;
+        }
+        if (command === 250) {
+          let end = -1;
+          for (let scan = at; scan < bytes.length - 1; scan++)
+            if (bytes[scan] === 255 && bytes[scan + 1] === 240) {
+              end = scan + 2;
+              break;
+            }
+          if (end === -1) {
+            at = start; // an unfinished sub-negotiation: keep it for the next packet
+            break;
+          }
+          at = end;
+          continue;
+        }
+        if (bytes[at] === undefined) {
+          at = start;
+          break;
+        }
+        at += 1;
+      }
+      negotiation =
+        at < bytes.length ? Buffer.from(bytes.subarray(at)) : Buffer.alloc(0);
+      return out;
+    };
+    socket.on('data', (raw: Buffer) => {
+      input += Buffer.from(strip(raw)).toString('utf8');
+      let cut = input.search(/[\r\n]/);
+      while (cut !== -1) {
+        typed.push(input.slice(0, cut).trim());
+        input = input.slice(cut + 1);
+        cut = input.search(/[\r\n]/);
+      }
+    });
+    socket.write(Buffer.from(banner, 'utf8'));
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const address = server.address();
+  if (!address || typeof address !== 'object')
+    throw Error('no fixture address');
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+  return {
+    port: address.port,
+    typed,
+    setBanner: (text: string) => {
+      banner = text;
+    },
+  };
+}
+
+async function makeHost(
+  t: TestContext,
+  profiles: TerminalProfile[],
+): Promise<{ panel: TerminalPanelHost; events: TerminalEvent[] }> {
+  const root = await mkdtemp(join(tmpdir(), 'circle-terminal-host-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const home = join(root, 'runtime-home');
+  await mkdir(home, { recursive: true });
+  saveProfiles(join(home, 'terminal-sessions.json'), profiles);
+  const events: TerminalEvent[] = [];
+  const panel = new TerminalPanelHost(
+    (event) => events.push(event),
+    home,
+    join(root, 'terminal-host-keys.json'),
+    () => '',
+    () => 'manual',
+  );
+  t.after(() => panel.close());
+  return { panel, events };
+}
+
+test('a panel connect opens a real console; bytes arrive batched and only the holder types', async (t) => {
+  const device = await consoleServer(t);
+  const profile: TerminalProfile = {
+    name: 'rack',
+    transport: 'telnet',
+    host: '127.0.0.1',
+    port: device.port,
+    cols: 80,
+    rows: 24,
+  };
+  const { panel, events } = await makeHost(t, [profile]);
+  const state = await panel.connect('c1', 'rack');
+  const row = state.sessions[0]!;
+  assert.equal(row.state, 'ready');
+  assert.equal(row.target, `127.0.0.1:${device.port}`);
+  // the banner reached the renderer as one data batch
+  await until(
+    () => events.some((event) => event.kind === 'data'),
+    'a data event',
+  );
+  const data = events.find((event) => event.kind === 'data')!;
+  assert(data.kind === 'data');
+  assert.equal(data.session, row.id);
+  assert.match(
+    Buffer.from(data.bytes, 'base64').toString('utf8'),
+    /TELNET banner/,
+  );
+  // typing before attaching changes nothing on the wire
+  assert.equal(panel.input('c1', row.id, 'whois'), false);
+  // (a deepEqual with an empty-array literal would narrow typed to never[])
+  assert.equal(device.typed.length, 0);
+  // the person takes it; their keys reach the device
+  const held = panel.attach('c1', row.id);
+  assert.equal(held.sessions[0]!.held, 'attach');
+  assert.equal(panel.input('c1', row.id, 'show clock\r'), true);
+  await until(() => device.typed.includes('show clock'), 'the typed line');
+  // while the person holds it, the model's next action waits
+  let parkedDone = false;
+  const parked = panel
+    .agent(
+      {
+        id: 'park-1',
+        sessionId: 'c1',
+        action: 'send',
+        args: { session: row.id, text: 'model line', enter: true },
+      },
+      new AbortController().signal,
+    )
+    .then((result) => {
+      parkedDone = true;
+      return result;
+    });
+  await delay(120);
+  assert.equal(parkedDone, false);
+  panel.detach('c1', row.id);
+  await parked;
+  assert.ok(device.typed.includes('model line'));
+  // sizes reach the console; a delete releases it
+  panel.resize('c1', row.id, 100, 30);
+  assert.deepEqual(
+    [panel.state('c1').sessions[0]!.cols, panel.state('c1').sessions[0]!.rows],
+    [100, 30],
+  );
+  await panel.releaseSession('c1');
+  assert.equal(panel.state('c1').sessions.length, 0);
+});
+
+test('an agent request from the runtime drives the same host and reports state', async (t) => {
+  const device = await consoleServer(t);
+  device.setBanner('press return\r\n');
+  const { panel, events } = await makeHost(t, []);
+  const result = await panel.agent(
+    {
+      id: 'a1',
+      sessionId: 'c2',
+      action: 'connect',
+      args: { host: '127.0.0.1', transport: 'telnet', port: device.port },
+    },
+    new AbortController().signal,
+  );
+  assert.match(result.text, /^Connected: t1/);
+  assert.equal(result.host, `127.0.0.1:${device.port}`);
+  const read = await panel.agent(
+    { id: 'a2', sessionId: 'c2', action: 'read', args: { session: 't1' } },
+    new AbortController().signal,
+  );
+  assert.match(read.text, /press return/);
+  const send = await panel.agent(
+    {
+      id: 'a3',
+      sessionId: 'c2',
+      action: 'send',
+      args: { session: 't1', text: 'show ver', enter: true },
+    },
+    new AbortController().signal,
+  );
+  assert.match(send.text, /t1 ·/);
+  assert.ok(device.typed.includes('show ver'));
+  // the changes reached the renderer as state events for the right conversation
+  const states = events.filter(
+    (event): event is Extract<TerminalEvent, { kind: 'state' }> =>
+      event.kind === 'state',
+  );
+  assert.ok(states.length > 0);
+  assert.equal(states.at(-1)!.state.conversation, 'c2');
+});
+
+test('the bridge refuses strangers: ids are gated before anything reads or writes', async (t) => {
+  const { panel } = await makeHost(t, []);
+  for (const bad of ['', 'x'.repeat(121), 'not an id', '../etc']) {
+    assert.throws(() => panel.state(bad), /invalid conversation/);
+    assert.throws(
+      () => panel.input('c1', bad, 'x'),
+      /invalid terminal/,
+      `session ${JSON.stringify(bad)}`,
+    );
+  }
+  assert.throws(
+    () => panel.input('c1', 't1', {} as unknown as string),
+    /invalid terminal input/,
+  );
+  panel.resize('c1', 't1', 0, 9999); // out-of-bounds sizes are dropped, not thrown
+  assert.equal(panel.snapshot('c1', 't9'), '');
+});

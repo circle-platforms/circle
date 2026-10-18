@@ -53,6 +53,12 @@ export interface CircleSettings {
    * terminal ignores it, and a project may not set it.
    */
   workspace_folder: string;
+  /**
+   * Where a task that belongs to no project gets a folder of its own; ""
+   * is `tasks` inside the data folder. The desktop and `circle --task`
+   * use it; a project may not set it.
+   */
+  task_folder: string;
   /** Named values, written %NAME% in a tool's arguments; the model also reads them. */
   variables: Record<string, string>;
   [key: string]: unknown;
@@ -85,6 +91,7 @@ export const defaultSettings = (): CircleSettings => ({
   double_escape: 'tree',
   hide_thinking: false,
   workspace_folder: '',
+  task_folder: '',
   variables: {},
 });
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -161,6 +168,9 @@ export function loadSettingsFromDict(
     typeof raw.workspace_folder === 'string' ? raw.workspace_folder.trim() : '';
   settings.workspace_folder =
     folder.length && folder.length <= 4096 ? folder : '';
+  const tasks =
+    typeof raw.task_folder === 'string' ? raw.task_folder.trim() : '';
+  settings.task_folder = tasks.length && tasks.length <= 4096 ? tasks : '';
   settings.variables = Object.fromEntries(
     Object.entries(isRecord(raw.variables) ? raw.variables : {}).filter(
       ([name, value]) =>
@@ -350,6 +360,18 @@ export function trustFolder(
   const copy = structuredClone(settings);
   const target = normalizeWorkspace(workspace);
   if (!copy.trusted_folders.includes(target)) copy.trusted_folders.push(target);
+  return copy;
+}
+/** Takes away a folder's trust: Circle stops reading anything from it again. */
+export function untrustFolder(
+  settings: CircleSettings,
+  workspace: string,
+): CircleSettings {
+  const copy = structuredClone(settings);
+  const target = normalizeWorkspace(workspace);
+  copy.trusted_folders = copy.trusted_folders.filter(
+    (folder) => normalizeWorkspace(folder) !== target,
+  );
   return copy;
 }
 export function withConnection(

@@ -3,6 +3,7 @@ import { extensionStatusText } from '../model/extension-status';
 import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -334,13 +335,33 @@ export function Sidebar({
     topSessions,
     aimed?.id ?? null,
   );
+  const latest = (id: string) =>
+    Math.max(
+      0,
+      ...snapshot.sessions
+        .filter((session) => session.workspaceId === id && !session.archivedAt)
+        .map(activityAt),
+    );
+  // Projects first; the folders of tasks with no project come last, under their
+  // own heading, so a loose task is not dressed up as a project.
+  const taskFolders = snapshot.workspaces
+    .filter(
+      (workspace) =>
+        workspace.task &&
+        visibleSessions(topSessions).some(
+          (session) =>
+            session.workspaceId === workspace.id && !session.archivedAt,
+        ),
+    )
+    .sort((a, b) => latest(b.id) - latest(a.id));
+  const listed = [...projects, ...taskFolders];
   const recent = recentSessions(topSessions);
   const recentShown = collapsed.includes(RECENT)
     ? []
     : all.includes(RECENT)
       ? recent
       : recent.slice(0, RECENT_SHOWN);
-  const groups = projects.map((workspace) => {
+  const groups = listed.map((workspace) => {
     const sessions = visibleSessions(topSessions)
       .filter(
         (session) =>
@@ -816,63 +837,72 @@ export function Sidebar({
             )}
           </section>
         )}
-        {groups.map(({ workspace, sessions, shown }) => {
+        {groups.map(({ workspace, sessions, shown }, at) => {
           const label = workspaceLabel(workspace, snapshot.agents);
           const open = all.includes(workspace.id);
           const isAimed = aimed?.id === workspace.id;
           const folded = collapsed.includes(workspace.id);
+          const firstTask = workspace.task && !groups[at - 1]?.workspace?.task;
           return (
-            <section className="project" key={workspace.id}>
-              <div
-                className={`project-header${isAimed ? ' aimed' : ''}`}
-                title={workspace.path}
-                onPointerMove={(event) =>
-                  pointRow('header', { x: event.clientX, y: event.clientY })
-                }
-                onPointerLeave={() => leaveRow('header')}
-              >
-                <button
-                  className="project-name"
-                  aria-expanded={!folded}
-                  onClick={() => toggle(workspace.id, collapsed, setCollapsed)}
-                >
-                  {/* The folder opens with the group, the way a file list does. */}
-                  {folded ? <Folder size={13} /> : <FolderOpen size={13} />}
-                  <span>{label}</span>
-                </button>
-                <div className="project-actions">
-                  <IconButton
-                    label={t('new session in {name}', { name: label })}
-                    tipOpen={scrollClosed ? false : undefined}
-                    onClick={() => newSession(workspace.id)}
-                  >
-                    <Plus size={13} />
-                  </IconButton>
-                  <WorkspaceMenu
-                    workspace={{ ...workspace, name: label }}
-                    tipOpen={scrollClosed ? false : undefined}
-                    onNew={() => newSession(workspace.id)}
-                    onCollapseAll={() =>
-                      setCollapsed([
-                        ...(recent.length > 0 ? [RECENT] : []),
-                        ...projects.map((item) => item.id),
-                      ])
-                    }
-                  />
-                </div>
-              </div>
-              {sessionRows(shown, workspace.id)}
-              {!collapsed.includes(workspace.id) && sessions.length > SHOWN && (
-                <button
-                  className="text-button show-more"
-                  onClick={() => toggle(workspace.id, all, setAll)}
-                >
-                  {open
-                    ? t('show less')
-                    : t('show {n} more', { n: sessions.length - SHOWN })}
-                </button>
+            <Fragment key={workspace.id}>
+              {firstTask && (
+                <div className="section-label">{t('no project')}</div>
               )}
-            </section>
+              <section className="project">
+                <div
+                  className={`project-header${isAimed ? ' aimed' : ''}`}
+                  title={workspace.path}
+                  onPointerMove={(event) =>
+                    pointRow('header', { x: event.clientX, y: event.clientY })
+                  }
+                  onPointerLeave={() => leaveRow('header')}
+                >
+                  <button
+                    className="project-name"
+                    aria-expanded={!folded}
+                    onClick={() =>
+                      toggle(workspace.id, collapsed, setCollapsed)
+                    }
+                  >
+                    {/* The folder opens with the group, the way a file list does. */}
+                    {folded ? <Folder size={13} /> : <FolderOpen size={13} />}
+                    <span>{label}</span>
+                  </button>
+                  <div className="project-actions">
+                    <IconButton
+                      label={t('new session in {name}', { name: label })}
+                      tipOpen={scrollClosed ? false : undefined}
+                      onClick={() => newSession(workspace.id)}
+                    >
+                      <Plus size={13} />
+                    </IconButton>
+                    <WorkspaceMenu
+                      workspace={{ ...workspace, name: label }}
+                      tipOpen={scrollClosed ? false : undefined}
+                      onNew={() => newSession(workspace.id)}
+                      onCollapseAll={() =>
+                        setCollapsed([
+                          ...(recent.length > 0 ? [RECENT] : []),
+                          ...listed.map((item) => item.id),
+                        ])
+                      }
+                    />
+                  </div>
+                </div>
+                {sessionRows(shown, workspace.id)}
+                {!collapsed.includes(workspace.id) &&
+                  sessions.length > SHOWN && (
+                    <button
+                      className="text-button show-more"
+                      onClick={() => toggle(workspace.id, all, setAll)}
+                    >
+                      {open
+                        ? t('show less')
+                        : t('show {n} more', { n: sessions.length - SHOWN })}
+                    </button>
+                  )}
+              </section>
+            </Fragment>
           );
         })}
         {desktopHost() && (

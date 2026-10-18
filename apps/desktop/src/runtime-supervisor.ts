@@ -20,10 +20,20 @@ import {
   type BrowserRequest,
   type BrowserResult,
 } from '../../../src/browser/protocol.js';
+import {
+  validateTerminalRequest,
+  type TerminalReply,
+  type TerminalRequest,
+  type TerminalResult,
+} from '../../../src/terminal/protocol.js';
 export type BrowserHandler = (
   request: BrowserRequest,
   signal: AbortSignal,
 ) => Promise<BrowserResult>;
+export type TerminalHandler = (
+  request: TerminalRequest,
+  signal: AbortSignal,
+) => Promise<TerminalResult>;
 
 /** One app-owned core process survives renderer reloads and closes actual jobs on quit. */
 export class RuntimeSupervisor {
@@ -50,10 +60,13 @@ export class RuntimeSupervisor {
   private credentialStore?: RuntimeCredentialStore;
   private credentialRequests = new Map<string, Promise<unknown>>();
   private completedCredentialRequests = new Set<string>();
-  // The runtime's browser requests under way, to stop when it says so or exits
+  // The runtime's browser and terminal requests under way, to stop when it says so or exits
   private browserRequests = new Map<string, AbortController>();
   private browserHandler?: BrowserHandler;
+  private terminalRequests = new Map<string, AbortController>();
+  private terminalHandler?: TerminalHandler;
   private sessionCleanup?: (sessionId: string) => Promise<void>;
+  private terminalCleanup?: (sessionId: string) => Promise<void>;
   constructor(
     readonly home: string,
     readonly directory: string,
@@ -140,6 +153,11 @@ export class RuntimeSupervisor {
             this.releaseSession(message.id, message.sessionId);
           if (message.type === 'browser-cancel')
             this.browserRequests.get(String(message.id))?.abort();
+          if (message.type === 'terminal') this.terminal(message.request);
+          if (message.type === 'terminal-release')
+            this.releaseTerminal(message.id, message.sessionId);
+          if (message.type === 'terminal-cancel')
+            this.terminalRequests.get(String(message.id))?.abort();
           if (message.type === 'update' && message.update) {
             if (!this.tokenBuffer.acceptFull(message.update)) return;
             this.latest = message.update;
@@ -181,6 +199,8 @@ export class RuntimeSupervisor {
           this.completedCredentialRequests.clear();
           for (const request of this.browserRequests.values()) request.abort();
           this.browserRequests.clear();
+          for (const request of this.terminalRequests.values()) request.abort();
+          this.terminalRequests.clear();
           const error = Error(`Circle runtime exited (${code})`);
           for (const pending of this.pending.values()) {
             clearTimeout(pending.timer);
@@ -273,6 +293,10 @@ export class RuntimeSupervisor {
   onBrowser(handler: BrowserHandler) {
     this.browserHandler = handler;
   }
+  /** Who carries out the runtime's device-terminal requests: the window's consoles. */
+  onTerminal(handler: TerminalHandler) {
+    this.terminalHandler = handler;
+  }
   onSessionCleanup(handler: (sessionId: string) => Promise<void>) {
     this.sessionCleanup = handler;
   }
@@ -324,6 +348,10 @@ export class RuntimeSupervisor {
       });
     this.credentialRequests.set(id, operation);
   }
+  /** The same cleanup for the device consoles of a deleted conversation. */
+  onTerminalCleanup(handler: (sessionId: string) => Promise<void>) {
+    this.terminalCleanup = handler;
+  }
   private releaseSession(id: unknown, sessionId: unknown) {
     if (
       typeof id !== 'string' ||
@@ -360,6 +388,42 @@ export class RuntimeSupervisor {
           }),
       );
   }
+  private releaseTerminal(id: unknown, sessionId: unknown) {
+    if (
+      typeof id !== 'string' ||
+      id.length > 200 ||
+      typeof sessionId !== 'string' ||
+      sessionId.length > 200
+    )
+      return;
+    if (!this.latest?.snapshot.sessions.some((row) => row.id === sessionId)) {
+      this.terminalReply({
+        id,
+        ok: false,
+        error: 'session not found for terminal cleanup',
+      });
+      return;
+    }
+    void Promise.resolve()
+      .then(() => this.terminalCleanup?.(sessionId))
+      .then(
+        () =>
+          this.terminalReply({
+            id,
+            ok: true,
+            data: { text: 'session terminals closed' },
+          }),
+        (error) =>
+          this.terminalReply({
+            id,
+            ok: false,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'session terminal cleanup failed',
+          }),
+      );
+  }
   private browser(value: unknown) {
     let request: BrowserRequest;
     try {
@@ -392,6 +456,43 @@ export class RuntimeSupervisor {
   private reply(reply: BrowserReply) {
     this.browserRequests.delete(reply.id);
     this.child?.postMessage({ type: 'browser-reply', reply });
+  }
+  private terminal(value: unknown) {
+    let request: TerminalRequest;
+    try {
+      request = validateTerminalRequest(value);
+    } catch (error) {
+      const id = (value as { id?: unknown })?.id;
+      if (typeof id === 'string')
+        this.terminalReply({ id, ok: false, error: String(error) });
+      return;
+    }
+    const handler = this.terminalHandler;
+    if (!handler) {
+      this.terminalReply({
+        id: request.id,
+        ok: false,
+        error: 'the terminal host is closed',
+      });
+      return;
+    }
+    const controller = new AbortController();
+    this.terminalRequests.set(request.id, controller);
+    void Promise.resolve()
+      .then(() => handler(request, controller.signal))
+      .then(
+        (data) => this.terminalReply({ id: request.id, ok: true, data }),
+        (error) =>
+          this.terminalReply({
+            id: request.id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      );
+  }
+  private terminalReply(reply: TerminalReply) {
+    this.terminalRequests.delete(reply.id);
+    this.child?.postMessage({ type: 'terminal-reply', reply });
   }
   state() {
     if (!this.latest) throw Error('runtime not ready');

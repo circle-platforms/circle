@@ -200,6 +200,52 @@ export interface DesktopBridge {
   browserKeys?: (sessionId: string, focused: boolean) => void;
   /** A browser shortcut pressed in the page, or in the panel when the system took it. */
   onBrowserKey: (listener: (event: BrowserKeyEvent) => void) => () => void;
+  /** The conversation's device consoles, its saved profiles, and who holds each. */
+  terminalState: (sessionId: string) => Promise<TerminalState>;
+  terminalProfiles: () => Promise<TerminalProfileRow[]>;
+  /** The recent raw bytes of a console, so a newly opened view can paint it at once. */
+  terminalSnapshot: (sessionId: string, session: string) => Promise<string>;
+  /** The person connects a saved profile from the panel. */
+  terminalConnect: (
+    sessionId: string,
+    profile: string,
+  ) => Promise<TerminalState>;
+  /** The person connects a device by address, with no saved profile. */
+  terminalConnectTarget: (
+    sessionId: string,
+    target: TerminalTargetRow,
+  ) => Promise<TerminalState>;
+  /** The person answers a device's unknown host key for that panel connect. */
+  terminalHostKey: (
+    sessionId: string,
+    decision: 'once' | 'always' | 'reject',
+  ) => Promise<TerminalState>;
+  terminalDisconnect: (
+    sessionId: string,
+    session: string,
+  ) => Promise<TerminalState>;
+  /** The person takes a console's keys, or gives them back to Circle. */
+  terminalAttach: (
+    sessionId: string,
+    session: string,
+  ) => Promise<TerminalState>;
+  terminalDetach: (
+    sessionId: string,
+    session: string,
+  ) => Promise<TerminalState>;
+  /** What the person types while they hold the console. */
+  terminalInput: (
+    sessionId: string,
+    session: string,
+    text: string,
+  ) => Promise<boolean>;
+  terminalResize: (
+    sessionId: string,
+    session: string,
+    cols: number,
+    rows: number,
+  ) => Promise<void>;
+  onTerminalEvent: (listener: (event: TerminalEvent) => void) => () => void;
   /** Whether the window shows dark or light: the browser's own pages follow it. */
   setTheme: (dark: boolean) => Promise<void>;
   onAction: (listener: (action: DesktopAction) => void) => () => void;
@@ -352,6 +398,56 @@ export interface BrowserCapture extends BrowserState {
   attempts: number;
   retryErrors: string[];
 }
+// The device terminals of one conversation: its consoles, the person's saved profiles, and
+// who holds each. Raw device bytes come as a separate event, in coalesced batches, so the
+// panel's own emulator paints what the device sent.
+export interface TerminalSessionRow {
+  id: string;
+  name: string;
+  target: string;
+  transport: 'ssh' | 'telnet';
+  state: 'connecting' | 'ready' | 'closed' | 'error';
+  detail: string;
+  /** '', 'handoff' (the model offered it) or 'attach' (the person took it). */
+  held: string;
+  quiet: number;
+  cols: number;
+  rows: number;
+}
+/** A device reached by address from the panel: a telnet console answers its own
+ * login; ssh signs in only where a saved profile says how. */
+export interface TerminalTargetRow {
+  transport: 'ssh' | 'telnet';
+  host: string;
+  port?: number;
+  user?: string;
+}
+export interface TerminalProfileRow {
+  name: string;
+  transport: 'ssh' | 'telnet';
+  target: string;
+  user: string;
+}
+/** A host key the person must answer before a panel connect can go through. */
+export interface TerminalHostKeyAsk {
+  token: string;
+  host: string;
+  keyType: string;
+  fingerprint: string;
+  privateHost: boolean;
+}
+export interface TerminalState {
+  /** `terminal:`+conversation, the way the browser routes its events. */
+  sessionId: string;
+  conversation: string;
+  sessions: TerminalSessionRow[];
+  profiles: TerminalProfileRow[];
+  pendingKey?: TerminalHostKeyAsk & { profile: string };
+  handoff?: { session: string; reason: string };
+}
+export type TerminalEvent =
+  | { kind: 'state'; state: TerminalState }
+  | { kind: 'data'; conversation: string; session: string; bytes: string };
 import type {
   RuntimeCommand,
   RuntimeReply,
