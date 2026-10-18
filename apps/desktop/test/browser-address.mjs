@@ -87,16 +87,32 @@ try {
       exact: true,
     });
     const loadedUrl = `${siteUrl}?theme=${theme}`;
+    const loaded = (state) =>
+      state.url === loadedUrl &&
+      !state.loading &&
+      state.title === 'Circle address fixture';
+    // A Windows runner that has opened many connections can briefly run out
+    // of sockets (ERR_NO_BUFFER_SPACE). The browser shows that failure, as it
+    // should; reload once, as a person would.
+    const outOfSockets = (state) =>
+      !state.loading &&
+      state.failure?.url === loadedUrl &&
+      /^ERR_(NO_BUFFER_SPACE|INSUFFICIENT_RESOURCES)$/.test(
+        state.failure.error,
+      );
     await address.fill(loadedUrl);
     await address.press('Enter');
-    await waitBrowserState(
+    const first = await waitBrowserState(
       page,
       'session1',
-      (state) =>
-        state.url === loadedUrl &&
-        !state.loading &&
-        state.title === 'Circle address fixture',
+      (state) => loaded(state) || outOfSockets(state),
     );
+    if (!loaded(first)) {
+      await page
+        .getByRole('button', { name: 'reload page', exact: true })
+        .click();
+      await waitBrowserState(page, 'session1', loaded);
+    }
     for (const target of [
       'file:///circle-invalid-address-fixture.txt',
       'invalid://fixture',
