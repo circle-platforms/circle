@@ -5,15 +5,21 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   endStranded,
+  loadChildrenApi,
   strandedChildren,
   type WindowsChildrenApi,
 } from '../src/windows_stranded.js';
 
 const shell = { pid: 100, started: 10_000, ended: 20_000 };
 const api = (
-  processes: { pid: number; parent: number; started?: number }[],
+  processes: { pid: number; parent: number; started?: number; name?: string }[],
 ): WindowsChildrenApi => ({
-  processes: () => processes.map(({ pid, parent }) => ({ pid, parent })),
+  processes: () =>
+    processes.map(({ pid, parent, name }) => ({
+      pid,
+      parent,
+      name: name ?? 'node.exe',
+    })),
   started: (pid) => processes.find((entry) => entry.pid === pid)?.started,
 });
 
@@ -33,10 +39,15 @@ test('a program a stopped Windows shell started while it ran is found, and no ot
         { pid: 204, parent: 100 },
         { pid: 205, parent: 7, started: 15_000 },
         { pid: 100, parent: 100, started: 15_000 },
+        // The console host Windows started for the shell belongs to the console, not to the
+        // command: it ends by itself once nothing uses that console.
+        { pid: 206, parent: 100, started: 10_010, name: 'conhost.exe' },
+        { pid: 207, parent: 100, started: 10_010, name: 'CONHOST.EXE' },
+        { pid: 208, parent: 100, started: 15_000, name: 'cmd.exe' },
       ]),
       shell,
     ),
-    [200, 201],
+    [200, 201, 208],
   );
 });
 
@@ -90,9 +101,28 @@ test(
       if (alive()) process.kill(orphan);
     });
     assert.ok(alive(), 'the program outlived its shell');
+    // What the ended shell left: its program and, without a console to inherit, the console
+    // host Windows started for it.
+    const left = (await loadChildrenApi())
+      .processes()
+      .filter((entry) => entry.parent === shellProcess.pid);
+    const names = JSON.stringify(left);
+    assert.ok(
+      left.some((entry) => entry.pid === orphan),
+      `the program is listed: ${names}`,
+    );
+    assert.ok(
+      left.every(
+        (entry) =>
+          entry.pid === orphan || entry.name.toLowerCase() === 'conhost.exe',
+      ),
+      `nothing else was left: ${names}`,
+    );
+    // Only the command's program is ended.
     assert.deepEqual(
       await endStranded({ pid: shellProcess.pid!, started, ended }),
       [orphan],
+      names,
     );
     while (alive()) await delay(20);
   },
