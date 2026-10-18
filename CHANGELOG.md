@@ -47,6 +47,9 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **On Windows, stopping a command just after it started no longer leaves the program it started running.** `taskkill` ends the command's process tree as it finds it, so a program the shell was starting at that moment kept running and could keep the workspace folder in use. Circle now also ends what the stopped shell started while it ran.
 - **On Windows, a screenshot no longer waits for the C# compiler.** Each screenshot compiled a small helper with `Add-Type`, which took from seconds to more than the minute PowerShell is given on a busy machine, so the screenshot, or the answer that an app has no window open, ended with `PowerShell did not finish the screenshot in 60 seconds`. The helper's four Windows functions are now defined in memory without compiling.
 
+- **A disabled MCP server stays disconnected.**
+- **When the desktop's Circle runtime exits, running turns and tools are shown as stopped**, and stopping the debugger waits until its program and terminals have closed before it says stopped.
+- **Code checks follow the project's `tsconfig.json` options.**
 ## 1.8.1 - 2026-10-18
 
 ### Fixed
