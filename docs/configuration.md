@@ -25,12 +25,13 @@ The data folder is `~/.circle`. Set `CIRCLE_HOME` to use another location, and r
 | `extension_data/` | A folder for each extension that asked for one (`api.dataDir`). |
 | `exports/`, `shares/` | Output of `/export`, `/copy` (fallback) and `/share`. |
 | `skills/` | Your [skills](skills.md). |
+| `hooks.json` | Your [hooks](hooks.md). A project's hooks are `.circle/hooks.json`, and they run only in a trusted folder. |
 | `commands/`, `prompts/` | Your [custom commands](custom-commands.md). |
 | `extensions/` | Your [extensions](extensions.md). |
 | `AGENTS.md` and friends | Your personal [instruction files](#instruction-files). |
 | `keybindings.json` | Your own keys for Circle's actions. See [Keyboard and mouse](keybindings.md#your-own-keys). |
 
-Circle creates most of these when it first needs them. It keeps no log file.
+Circle creates most of these when it first needs them. Hook runs are appended to `hooks.log`; see [Hooks](hooks.md#the-log).
 
 ## Instruction files
 
@@ -76,6 +77,7 @@ Inside a project, Circle looks in these folders. Circle works only in a folder y
 | `.circle/AGENTS.md`, `.agent/AGENTS.md` | Instructions |
 | `.circle/SYSTEM.md`, `.circle/APPEND_SYSTEM.md` | The [system prompt](#system-prompt) for this project |
 | `.circle/settings.json` | [Settings for this project](settings.md#project-settings) |
+| `.circle/hooks.json` | [Hooks for this project](hooks.md). They run only after you trust the folder. |
 
 Trusting a folder writes nothing into it. The trusted folders are listed in `settings.json` in the data folder.
 
@@ -85,4 +87,4 @@ Circle reads the folders of other agents, so what you set up once works in sever
 
 ## Reload
 
-`/reload` re-reads `settings.json`, the project's settings, `keybindings.json` and the model credentials, reconnects MCP servers, reloads extensions, and rebuilds the model and the system prompt, which re-reads the instruction files and the skills. It does not re-read `credential_files`. It is refused while a turn is running.
+`/reload` re-reads `settings.json`, the project's settings, `hooks.json`, `keybindings.json` and the model credentials, reconnects MCP servers, reloads extensions, and rebuilds the model and the system prompt, which re-reads the instruction files and the skills. It does not run `session_start` hooks again, and it does not re-read `credential_files`. It is refused while a turn is running.

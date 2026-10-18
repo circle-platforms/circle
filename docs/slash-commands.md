@@ -82,7 +82,7 @@ See [Choose a model](models.md).
 | `/skill [name] [args]` | `/skills` | List skills, or load one into the conversation for your next message. `/skill:name` also works. |
 | `/mcp [reload]` | | List MCP servers and tools, or reconnect them. |
 | `/extensions [reload]` | `/ext` | List extensions, or reload them. |
-| `/reload` | | Re-read `settings.json` (yours and the project's) and `keybindings.json`, reconnect MCP servers, reload extensions and rebuild the agent. |
+| `/reload` | | Re-read `settings.json` (yours and the project's), `hooks.json` and `keybindings.json`, reconnect MCP servers, reload extensions and rebuild the agent. `session_start` hooks are not run again. |
 | `/init [focus]` | | Ask Circle to write `AGENTS.md` for the project. |
 
 ## Help and exit

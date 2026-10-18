@@ -15,7 +15,8 @@ import {
   type LampState,
   type RGB,
 } from '../theme.js';
-import { stringWidth, truncate } from '../string_width.js';
+import { pad, stringWidth, truncate } from '../string_width.js';
+import { uiText } from '../../locale.js';
 
 export const LOGO_ROWS = 3; // the ring is this tall
 export const LOGO_COLUMNS = 7; // and this wide: a cell is about twice as tall as it is wide
@@ -185,13 +186,14 @@ export function welcomeRows(width: number, info: WelcomeInfo): string[] {
   } else rows.push(...identity.map((text) => ` ${text}`));
   if (info.items.length) {
     rows.push('');
+    const label = (item: WelcomeItem) => uiText(item.kind);
     const nameW =
-      Math.max(...info.items.map((item) => stringWidth(item.kind))) + 2;
+      Math.max(...info.items.map((item) => stringWidth(label(item)))) + 2;
     const valueW = Math.max(4, width - 3 - nameW - 1);
     for (const item of info.items) {
       const lit = item.state !== 'none';
       rows.push(
-        ` ${statusLight(item.state)} ${lit ? p.dim : p.faint}${item.kind.padEnd(nameW)}${p.reset}` +
+        ` ${statusLight(item.state)} ${lit ? p.dim : p.faint}${pad(label(item), nameW)}${p.reset}` +
           `${lit ? p.text : p.faint}${truncate(item.text, valueW)}${p.reset}`,
       );
       if (item.state === 'error')

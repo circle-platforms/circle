@@ -41,7 +41,7 @@ export interface ToolHooks {
     args: Record<string, unknown>,
     context: ToolContext,
   ) => Promise<string>;
-  skill?: (name: string) => Promise<string>;
+  skill?: (name: string, signal?: AbortSignal) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
   /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
@@ -471,7 +471,8 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       'skill',
       'read',
       schema({ name: text('Skill name') }, ['name']),
-      async (args) => hooks.skill!(string(args, 'name')),
+      async (args, context) =>
+        hooks.skill!(string(args, 'name'), context.signal),
     );
   if (hooks.compact)
     add(
