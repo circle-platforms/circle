@@ -214,12 +214,18 @@ fi
 // The installer for Windows, given a JSON plan: waits for Circle and its other processes to end,
 // runs the .msi, which replaces the installed copy, and starts Circle again.
 // Circle starts it with -Start and waits: it starts itself again with Start-Process, hidden
-// and apart from Circle's processes, with its own console and its output in <plan>.out and
-// <plan>.err, and returns. A copy started straight from Circle did not outlive it.
+// and apart from Circle's processes, with its own console, and returns. A copy started
+// straight from Circle did not outlive it.
+// The first copy inherits every handle of Circle's that can be inherited, Chromium's sockets
+// among them. Start-Process without redirection passes none of them to the second copy; with
+// redirection it did, and that copy held them, the --remote-debugging-port listener among
+// them, until it had started Circle again, which then could not listen on the port. What
+// fails outside the steps the log names goes to <plan>.err.
 export const WINDOWS_INSTALLER = String.raw`param([string]$Plan, [switch]$Start)
 $ErrorActionPreference = 'Stop'
+trap { Add-Content -LiteralPath "$Plan.err" -Value "$(Get-Date -Format o) $_"; break }
 if ($Start) {
-  Start-Process powershell.exe -WindowStyle Hidden -RedirectStandardOutput "$Plan.out" -RedirectStandardError "$Plan.err" -ArgumentList @(
+  Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
     ('"{0}"' -f $MyInvocation.MyCommand.Path), ('"{0}"' -f $Plan))
   exit 0
@@ -339,9 +345,9 @@ export class Updater {
     return this.current;
   }
   /**
-   * Removes what an installed update left. On Windows the installer that started this copy can
-   * still hold its output files for a moment while it exits; what stays locked is removed at the
-   * next update, and the update is reported either way.
+   * Removes what an installed update left. On Windows the installer of Circle 1.8.0 or earlier,
+   * which redirected its output, can still hold those files for a moment while it exits; what
+   * stays locked is removed at the next update, and the update is reported either way.
    */
   private async clear(path: string): Promise<void> {
     for (let attempt = 1; ; attempt++) {

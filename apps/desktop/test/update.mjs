@@ -12,6 +12,7 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
+import { connect } from 'node:net';
 import { cp, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { existsSync, createReadStream, openSync } from 'node:fs';
 import { join, relative, basename, resolve, dirname } from 'node:path';
@@ -89,7 +90,6 @@ const check = (name) => {
 const evidence = async () => {
   for (const file of [
     join(temp, 'data', 'updates', 'install.log'),
-    join(temp, 'data', 'updates', 'install.json.out'),
     join(temp, 'data', 'updates', 'install.json.err'),
     join(temp, 'application.log'),
     join(temp, 'data', 'DevToolsActivePort'),
@@ -307,8 +307,26 @@ try {
         ).catch((error) => String(error)),
       )}`,
     );
-  await within(browser.close(), 10000).catch(() => {});
   check('the application quits for the installer');
+  // Its sockets close with it. On Windows an installer that had inherited them held them
+  // while the package went in, and the copy it then started could not listen on the port.
+  const listening = () =>
+    new Promise((resolve) => {
+      const socket = connect(port, '127.0.0.1');
+      socket.once('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once('error', () => resolve(false));
+    });
+  const closedBy = Date.now() + 3000;
+  while (await listening()) {
+    if (Date.now() > closedBy)
+      throw Error(`port ${port} still listens after Circle quit`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  await within(browser.close(), 10000).catch(() => {});
+  check('its debugging port closes with it');
 
   if (setuid) {
     const updates = join(temp, 'data', 'updates');
