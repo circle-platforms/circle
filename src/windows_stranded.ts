@@ -49,7 +49,17 @@ export function strandedChildren(
     });
 }
 
-export async function loadChildrenApi(): Promise<WindowsChildrenApi> {
+let childrenApi: Promise<WindowsChildrenApi> | undefined;
+/** The process list, loaded once: koffi refuses to define its struct type twice. */
+export function loadChildrenApi(): Promise<WindowsChildrenApi> {
+  childrenApi ??= loadChildrenApiOnce().catch((error: unknown) => {
+    childrenApi = undefined;
+    throw error;
+  });
+  return childrenApi;
+}
+
+async function loadChildrenApiOnce(): Promise<WindowsChildrenApi> {
   const { default: koffi } = await import('koffi');
   const kernel = koffi.load(
     join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'kernel32.dll'),
