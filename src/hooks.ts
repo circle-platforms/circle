@@ -604,6 +604,9 @@ function runHookCommand(
     };
     child.stdout?.on('data', take('out'));
     child.stderr?.on('data', take('err'));
+    // A command that exits without reading its input closes the pipe. The
+    // write then fails asynchronously with EPIPE, which must not crash Circle.
+    child.stdin?.on('error', () => {});
     try {
       child.stdin?.end(stdin);
     } catch {

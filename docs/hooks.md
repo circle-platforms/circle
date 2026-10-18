@@ -103,7 +103,7 @@ Circle writes one JSON object to standard input:
 
 `tool_input` is the arguments after variables are filled in, so a secret's value is in it. The hook runs as you. `paths` are canonical (symlinks resolved through `canonicalPath`). `tool_output` and `tool_status` are set for `after_tool`. `permission_reason` is set for `permission_request`. `stop_attempt` is set for `before_stop` and starts at 1.
 
-The command's standard output and standard error are kept up to 100,000 characters.
+The command's standard output and standard error are kept up to 100,000 characters. A command that exits before it reads the input is still judged by its exit code. Closing the pipe does not stop Circle.
 
 ## How Circle reads the result
 

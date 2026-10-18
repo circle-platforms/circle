@@ -336,6 +336,31 @@ test('a gating hook that times out or exits badly denies, and the secret environ
   assert.match(leaked.reason, /hidden/);
 });
 
+test('a hook that exits without reading its input denies instead of crashing on EPIPE', async (t) => {
+  const { home, workspace, userHome } = layout(t);
+  writeJson(join(home, 'hooks.json'), {
+    hooks: {
+      before_tool: [{ name: 'deaf', command: 'echo broken hook >&2; exit 1' }],
+    },
+  });
+  const runner = new HookRunner(
+    loadHooks({ workspace, home, trusted: false, userHome }),
+    { workspace, home },
+  );
+  // Larger than a pipe buffer, so the write is still pending when the
+  // command exits and the pipe closes.
+  const result = await runner.run({
+    event: 'before_tool',
+    sessionId: 's',
+    cwd: workspace,
+    toolName: 'write_file',
+    toolInput: { file_path: 'a.txt', content: 'x'.repeat(1 << 20) },
+    paths: ['a.txt'],
+  });
+  assert.equal(result.decision, 'deny');
+  assert.match(result.reason, /broken hook/);
+});
+
 async function turn(options: {
   t: { after(fn: () => void | Promise<void>): void };
   home: string;
