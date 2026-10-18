@@ -176,6 +176,42 @@ const msiInstallation = (root: string): Installation => {
     asset: (version) => `circle-desktop-${version}-windows-x64.msi`,
   };
 };
+// The Windows installer as Circle runs it, except that each process it starts is noted in
+// `record` as "<pid> <file>": its second copy, the package and Circle again.
+const recordingStarts = (script: string, record: string) =>
+  script.replace(
+    "$ErrorActionPreference = 'Stop'",
+    `$ErrorActionPreference = 'Stop'
+function Start-Process {
+  [CmdletBinding()]
+  param([Parameter(Position=0)][string]$FilePath, [string]$WorkingDirectory,
+    [string[]]$ArgumentList, [switch]$Wait, [switch]$PassThru,
+    [string]$RedirectStandardOutput, [string]$RedirectStandardError, [string]$WindowStyle)
+  $PSBoundParameters['PassThru'] = $true
+  $process = Microsoft.PowerShell.Management\\Start-Process @PSBoundParameters
+  Add-Content -LiteralPath '${record.replaceAll("'", "''")}' -Value ('{0} {1}' -f $process.Id, $FilePath)
+  if ($PassThru) { $process }
+}`,
+  );
+const startedProcesses = (record: string) =>
+  existsSync(record)
+    ? // A line still being written is not read
+      [...readFileSync(record, 'utf8').matchAll(/^(\d+) (.+?)\r?\n/gm)].map(
+        ([, pid, file]) => ({ pid: Number(pid), file: file! }),
+      )
+    : [];
+// Signal 0 only asks; a process that exists but is not ours answers EPERM
+const running = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+// The installer gives Circle two minutes to quit and its other processes one more; past
+// that, and the start of two PowerShell copies, it has hung.
+const INSTALLER_LIMIT = (120 + 60 + 30) * 1000;
 
 test('an update is checked, downloaded, checked against its checksum, handed to the installer and reported', async (t) => {
   const root = scratch(t);
@@ -250,8 +286,41 @@ test('an update is checked, downloaded, checked against its checksum, handed to 
     // copy waits for Circle, runs the package and starts Circle again
     plan.pid = 2 ** 30;
     writeFileSync(args.at(-2)!, JSON.stringify(plan));
+    const record = join(root, 'started processes');
+    const script = args[args.indexOf('-File') + 1]!;
+    writeFileSync(
+      script,
+      recordingStarts(readFileSync(script, 'utf8'), record),
+    );
     assert.equal(spawnSync(command, args, { stdio: 'inherit' }).status, 0);
-    await until(() => existsSync(join(root, 'started')));
+    // The copy that returned has started the installer. It is done when it has ended,
+    // however long a busy runner takes, and so is the Circle it started.
+    const progress = () =>
+      JSON.stringify({
+        started: startedProcesses(record),
+        log: existsSync(join(folder, 'install.log'))
+          ? readFileSync(join(folder, 'install.log'), 'utf8')
+          : null,
+        errors: existsSync(`${args.at(-2)}.err`)
+          ? readFileSync(`${args.at(-2)}.err`, 'utf8')
+          : null,
+      });
+    const [installer] = startedProcesses(record);
+    assert.match(installer?.file ?? '', /^powershell\.exe$/i, progress());
+    const ended = async (pid: number) => {
+      try {
+        await until(() => !running(pid), INSTALLER_LIMIT);
+      } catch {
+        assert.fail(`process ${pid} still runs: ${progress()}`);
+      }
+    };
+    await ended(installer!.pid);
+    const relaunched = startedProcesses(record).find(
+      ({ file }) => file === found.executable,
+    );
+    assert.ok(relaunched, `Circle was not started again: ${progress()}`);
+    await ended(relaunched.pid);
+    assert.ok(existsSync(join(root, 'started')), progress());
     assert.match(
       readFileSync(join(root, 'msiexec-ran'), 'utf8'),
       /\/i ".+circle-desktop-1\.1\.0-windows-x64\.msi" \/passive \/norestart/,
