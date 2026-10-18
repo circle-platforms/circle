@@ -134,7 +134,9 @@ export function noticeFor(
     },
     items: items.map((item) => item.text),
     linkLabel: { en: 'full release notes', 'zh-CN': '完整的发布说明' },
-    link: releaseNotesUrl(version),
+    // The notes of the release the title names. A later patch release adds
+    // no item of its own, and its page does not describe these.
+    link: releaseNotesUrl(versions.at(-1)!),
     dismiss: { en: 'dismiss', 'zh-CN': '知道了' },
   };
 }

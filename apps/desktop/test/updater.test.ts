@@ -443,6 +443,47 @@ test(
   },
 );
 
+test('a daily check that answers late does not take back a download the user started', async (t) => {
+  const root = scratch(t);
+  const msi = 'an installer package';
+  const releases = await release(t, '1.1.0', {
+    [INSTALLER]: msi,
+    [`${INSTALLER}.sha256`]: `${sha(msi)}  ${INSTALLER}\n`,
+  });
+  // The daily check's question waits on the network; the user's check is answered at once
+  let answerDaily: (version: string) => void = () => {};
+  let asked = 0;
+  const updater = new Updater({
+    version: '1.0.0',
+    home: join(root, 'home'),
+    folder: join(root, 'updates'),
+    installation: msiInstallation(root),
+    releases,
+    latest: () =>
+      ++asked === 1
+        ? new Promise<string>((resolve) => (answerDaily = resolve))
+        : Promise.resolve('1.1.0'),
+    launch: () => assert.fail('nothing to install'),
+    quit: () => assert.fail('nothing to install'),
+  });
+  const seen: string[] = [];
+  updater.subscribe((state) => seen.push(state.phase));
+  const daily = updater.check(false);
+  assert.deepEqual(await updater.check(), {
+    phase: 'available',
+    version: '1.1.0',
+  });
+  assert.deepEqual(await updater.download(), {
+    phase: 'ready',
+    version: '1.1.0',
+  });
+  answerDaily('1.1.0');
+  assert.deepEqual(await daily, { phase: 'ready', version: '1.1.0' });
+  assert.deepEqual(updater.state, { phase: 'ready', version: '1.1.0' });
+  assert.equal(seen.at(-1), 'ready');
+  assert.equal(asked, 2);
+});
+
 test('a download that does not match its checksum is not installed', async (t) => {
   const root = scratch(t);
   const releases = await release(t, '1.1.0', {

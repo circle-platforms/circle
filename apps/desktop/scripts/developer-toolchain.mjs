@@ -176,21 +176,34 @@ export async function verifyCommandSupervisor(dist) {
   )
     throw Error('unprepared command supervisor resource');
 }
+// A build downloads each tool once. A dropped connection or a busy server on
+// the way must not fail it, so those are tried again; a missing file is not.
+// Every archive is checked against its SHA-256 afterwards either way.
+export async function downloadArchive(
+  url,
+  { attempts = 4, pauseMs = 2000, request = fetch } = {},
+) {
+  for (let attempt = 1; ; attempt++) {
+    let final = false;
+    try {
+      const response = await request(url, {
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (response.ok) return Buffer.from(await response.arrayBuffer());
+      final = ![408, 429].includes(response.status) && response.status < 500;
+      throw Error(`developer tool download failed: ${response.status} ${url}`);
+    } catch (error) {
+      if (final || attempt >= attempts) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pauseMs * attempt));
+  }
+}
 export async function prepareDeveloperTools(
   dist,
   {
     platform = process.platform,
     arch = process.arch,
-    fetchArchive = async (url) => {
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(120_000),
-      });
-      if (!response.ok)
-        throw Error(
-          `developer tool download failed: ${response.status} ${url}`,
-        );
-      return Buffer.from(await response.arrayBuffer());
-    },
+    fetchArchive = downloadArchive,
   } = {},
 ) {
   const target = `${platform}-${arch}`;

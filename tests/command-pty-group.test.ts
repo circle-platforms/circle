@@ -34,6 +34,7 @@ import {
   type CommandPtyGroupProcessHandle,
 } from '../src/command_process.js';
 import { scratch, cleanup } from './helpers.js';
+import { signalProcessGroup } from '../src/process_group.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -247,9 +248,10 @@ function transport(
     const actualStop = () =>
       (stop ??= (async () => {
         if (child.pid && groupAlive(child.pid)) {
-          process.kill(-child.pid, 'SIGTERM');
+          await signalProcessGroup(child.pid, 'SIGTERM');
           await delay(25);
-          if (groupAlive(child.pid)) process.kill(-child.pid, 'SIGKILL');
+          if (groupAlive(child.pid))
+            await signalProcessGroup(child.pid, 'SIGKILL');
         }
         await closed;
         await actualEmpty;
