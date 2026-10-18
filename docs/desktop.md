@@ -35,7 +35,7 @@ New session, in the sidebar, on a folder, on the sessions page, or from the file
 
 After the first turn the model names the session with a short summary of its first message, the same request as the terminal's. Until that title arrives the row says new session, and the trimmed message is not used as the title. A short line such as hi is its own title. A refused or failed request leaves the row as new session and says title failed in the conversation. A network failure says could not reach the endpoint, and that request is tried once more. A title that only repeats the question is asked for once more and otherwise leaves the session untitled. A name you give a session is kept. Opening an older session asks again when the stored title is still the short first message, a cut of it, several messages stuck together, or a title that reads as work already done.
 
-Ctrl+N and new session take the keyboard from a sidebar row and put the cursor in the home composer before the next key, so the next keys are the message; they go after a draft the home composer kept. Search is Ctrl+K. Ctrl+R opens the same search; that is the history-search key, kept on purpose.
+Ctrl+N (⌘N on macOS) and new session take the keyboard from a sidebar row and put the cursor in the home composer before the next key, so the next keys are the message; they go after a draft the home composer kept. Search is Ctrl+K (⌘K). Ctrl+R (⌃R on macOS) opens the same search; that is the history-search key, kept on purpose.
 
 Archiving hides a session from the sidebar. All sessions → archived sessions shows it again; its history stays readable, and restore conversation enables the composer. Until restored, it cannot change the saved branch, labels or conversation mode. A fork or clone can start a separate conversation from it. Archive state is kept in desktop metadata, without deleting the folder or changing the terminal's checkpoint history.
 
@@ -147,6 +147,16 @@ While the panel has the keyboard, ⌘W closes the tab rather than the window, an
 ## Under the input box
 
 As in Claude: on the left, + to attach files and the mode; on the right, the model and the thinking depth, each a menu, and a ring for the context. The ring fills as the context of the last answer fills the model's window, orange from 70% and red from 90%. Click it for the terminal footer's numbers — tokens sent and received over the whole session, the estimated cost from the model's published prices, the share read from the cache — and to compact the conversation or open the session's details. While jobs run, the ring carries their count. Unknown values read `N/A`.
+
+## Keys and text fields
+
+Text fields keep the system's editing keys. On macOS ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z and ⇧⌘Z, ⌘ with an arrow, ⌥← and ⌥→, and ⌘⌫ do in the input box and every other field what they do in any Mac application; on Windows and Linux Ctrl with C, V, X, A and Z do the same.
+
+Circle's own keys in the input box are the terminal's, listed in [Keyboard and mouse](keybindings.md). On macOS they are Control keys, as in the terminal: ⌃C clears the draft, ⌃D on an empty box asks to close the session, ⌃T shows or hides thinking, ⌃O expands tool details, ⌃G opens the larger editor, ⌃R opens search and ⌃Q queues a follow-up. ⌘ is left to the system, apart from the window's own commands: ⌘K search, ⌘P quick open of a file, ⌘N new session, ⌘O open folder, ⌘, settings, ⌘B the sidebar, ⌘F find in the conversation and ⇧⌘M the model list. On Windows and Linux all of these are Ctrl.
+
+Where the two meet, the field wins. With text selected in the input box, Ctrl+C copies instead of clearing. Ctrl+Z in a text field is the field's undo, not suspend. Ctrl+D over a draft deletes the character after the cursor, as in the terminal; only on an empty box does it ask to close. In any other text field, such as a rename box, a settings field, the editor or the terminal panel, Circle's keys do nothing but `esc`.
+
+A right-click in a text field offers **Cut**, **Copy**, **Paste** and **Select All**; on selected text, **Copy**. Elsewhere in the window there is no menu. The menu follows the application's language. Settings → keyboard gives an action another key; a key recorded with ⌘ on macOS stays a ⌘ key.
 
 ## Outside the window
 

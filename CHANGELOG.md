@@ -48,10 +48,11 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **A secret you enter is no longer thrown away as `no value was entered before the deadline`.** When the machine was slow, a value could be accepted, so the question card closed, and then refused because the waiting side looked at it only after its time was up. A value entered in time is now always used, and one entered too late is refused when you enter it. Waiting for the answer also no longer competes with entering it.
 - **On Windows, stopping a command just after it started no longer leaves the program it started running.** `taskkill` ends the command's process tree as it finds it, so a program the shell was starting at that moment kept running and could keep the workspace folder in use. Circle now also ends what the stopped shell started while it ran.
 - **On Windows, a screenshot no longer waits for the C# compiler.** Each screenshot compiled a small helper with `Add-Type`, which took from seconds to more than the minute PowerShell is given on a busy machine, so the screenshot, or the answer that an app has no window open, ended with `PowerShell did not finish the screenshot in 60 seconds`. The helper's four Windows functions are now defined in memory without compiling.
-
 - **A disabled MCP server stays disconnected.**
 - **When the desktop's Circle runtime exits, running turns and tools are shown as stopped**, and stopping the debugger waits until its program and terminals have closed before it says stopped.
 - **Code checks follow the project's `tsconfig.json` options.**
+- **Text fields in the desktop keep the system's editing keys** (#155). On macOS ⌘ no longer stands for Control: ⌘C copies instead of clearing the draft, ⌘V pastes, and ⌘D, ⌘T, ⌘O, ⌘G, ⌘R and ⌘Q no longer ask to close the session or run one of Circle's actions. The terminal's keys are the Control key there, as in the terminal; the window's own commands (⌘K, ⌘P, ⌘N, ⌘O, ⌘,, ⌘B, ⌘F, ⇧⌘M) keep ⌘. On every system ctrl+d over a draft deletes forward instead of asking to close, and Circle's keys other than `esc` no longer act from another text field, such as a rename box or a settings field. A right-click in a text field now offers Cut, Copy, Paste and Select All, and Copy on selected text, in the window's language. See [Keys and text fields](docs/desktop.md#keys-and-text-fields).
+
 ## 1.8.1 - 2026-10-18
 
 ### Fixed

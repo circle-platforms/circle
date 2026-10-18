@@ -905,14 +905,14 @@ export function NativeBrowser({
                 onSelect={() => void tabs('new').then(focusAddress)}
               >
                 <span>{t('new tab')}</span>
-                <kbd aria-hidden="true">{formatChord('ctrl+t')}</kbd>
+                <kbd aria-hidden="true">{formatChord('mod+t')}</kbd>
               </DropdownMenu.Item>
               <DropdownMenu.Separator className="dropdown-separator" />
               {zoomRow}
               <DropdownMenu.Separator className="dropdown-separator" />
               <DropdownMenu.Item disabled={!pageReady} onSelect={openFind}>
                 <span>{t('find…')}</span>
-                <kbd aria-hidden="true">{formatChord('ctrl+f')}</kbd>
+                <kbd aria-hidden="true">{formatChord('mod+f')}</kbd>
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 disabled={!pageReady}
@@ -944,7 +944,7 @@ export function NativeBrowser({
                 </span>
                 <kbd aria-hidden="true">
                   {platform() === 'darwin'
-                    ? formatChord('alt+ctrl+i')
+                    ? formatChord('alt+mod+i')
                     : formatChord('ctrl+shift+i')}
                 </kbd>
               </DropdownMenu.Item>
@@ -954,7 +954,7 @@ export function NativeBrowser({
                 onSelect={() => run('close-tab')}
               >
                 <span>{t('close tab')}</span>
-                <kbd aria-hidden="true">{formatChord('ctrl+w')}</kbd>
+                <kbd aria-hidden="true">{formatChord('mod+w')}</kbd>
               </DropdownMenu.Item>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
