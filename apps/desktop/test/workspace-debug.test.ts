@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import {
   WorkspaceDebugService,
   adapterEnvironment,
+  adapterSocketParent,
 } from '../src/workspace/debug.ts';
 import { patience } from './helpers/patience.mjs';
 
@@ -67,11 +68,13 @@ test(
       if (process.platform !== 'win32') {
         const pid = service.snapshot().adapterPid;
         assert.equal(typeof pid, 'number');
-        const parent = tmpdir();
-        const leaked = (await readdir(parent)).filter((name) =>
-          name.startsWith(`node-cdp.${pid}-`),
-        );
-        assert.deepEqual(leaked, []);
+        const parent = adapterSocketParent();
+        for (const shared of new Set([tmpdir(), parent])) {
+          const leaked = (await readdir(shared)).filter((name) =>
+            name.startsWith(`node-cdp.${pid}-`),
+          );
+          assert.deepEqual(leaked, []);
+        }
         const found: string[] = [];
         for (const name of await readdir(parent)) {
           if (!/^cd-[0-9a-f]{12}$/.test(name)) continue;
@@ -431,7 +434,9 @@ test(
 );
 
 test('the adapter temp directory receives the node-cdp socket path', async () => {
-  const parent = await mkdtemp(path.join(tmpdir(), 'circle-debug-cdp-'));
+  const parent = await mkdtemp(
+    path.join(adapterSocketParent(), 'circle-debug-cdp-'),
+  );
   const socketDir = path.join(parent, 'cd-abcdef123456');
   const { mkdir, chmod } = await import('node:fs/promises');
   const { spawn } = await import('node:child_process');
