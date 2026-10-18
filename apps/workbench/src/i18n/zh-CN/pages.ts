@@ -1,5 +1,11 @@
 // Simplified Chinese for the interface words in the pages files. English is the key.
 export const pages: Record<string, string> = {
+  hooks: '钩子',
+  'no hooks': '没有钩子',
+  'Hooks run shell commands you configured. A deny overrides every approval mode, including auto.':
+    '钩子会运行你配置的终端命令。拒绝会覆盖所有审批模式，包括自动模式。',
+  'Project hooks are not running until this folder is trusted.':
+    '在信任此文件夹之前，项目钩子不会运行。',
   'invalid extension setting': '扩展设置无效',
   'saving extension enable request': '正在保存启用请求',
   'saving extension disable request': '正在保存停用请求',

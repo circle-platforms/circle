@@ -28,6 +28,8 @@ const ZH: Record<string, string> = {
   [DATABASE_BUSY_MESSAGE]:
     '数据库正忙 · 另一个 Circle 正在使用此数据文件夹。请稍候再启动',
   [DATABASE_WAIT_STATUS]: '正在等待数据库…',
+  hook: '钩子',
+  hooks: '钩子',
 };
 
 /** Chinese when LANG, LC_ALL or LANGUAGE says so; otherwise English. */
@@ -66,11 +68,34 @@ export function uiText(
     );
   if (occupied)
     return `已在另一终端打开 · 只读 · circle --fork ${occupied[1]} 可复制到此处`;
-  return text
+  return translateHooks(text)
     .replaceAll('Provider: DuckDuckGo', ZH['Provider: DuckDuckGo']!)
     .replaceAll(
       'Native search unavailable: search quota exceeded',
       ZH['Native search unavailable: search quota exceeded']!,
     )
     .replaceAll('search quota exceeded', ZH['search quota exceeded']!);
+}
+
+/** Hook lines. The hook's own reason stays as it wrote it. */
+function translateHooks(text: string): string {
+  return text
+    .replaceAll('Hook denied this call:', '钩子拒绝了此次调用：')
+    .replaceAll('Hook asked before this call:', '钩子在调用前要求确认：')
+    .replaceAll('Hook allowed this call.', '钩子允许了此次调用。')
+    .replaceAll('Hook session_start output:', '钩子会话开始输出：')
+    .replaceAll(
+      'A hook blocked the end of this turn:',
+      '钩子阻止了本回合结束：',
+    )
+    .replace(/Hook output \(([^)]+)\):/g, '钩子输出（$1）：')
+    .replace(/^hook denied (\S+)/, '钩子拒绝了 $1')
+    .replace(/^hook asked (\S+)/, '钩子要求确认 $1')
+    .replace(/^hook allowed (\S+)/, '钩子允许了 $1')
+    .replace(/^hook blocked stop/, '钩子阻止了结束')
+    .replace(/^hook stop limit/, '钩子已达到阻止上限')
+    .replace(/^hook failed/, '钩子失败')
+    .replace(/^hooks active/, '钩子已启用')
+    .replace(/^project hooks need trust$/, '项目钩子需要先信任文件夹')
+    .replace(/^hook /, '钩子 ');
 }

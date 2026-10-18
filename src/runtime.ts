@@ -78,6 +78,7 @@ import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
+import { HookRunner, loadHooks } from './hooks.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -286,6 +287,11 @@ export class AgentRuntime {
   }
   // Read again with every system prompt, see systemPrompt().
   skills: SkillInfo[] = [];
+  private hookRunner?: HookRunner;
+  /** The hooks this session would run. Reloaded with the harness. */
+  get hookCatalog() {
+    return this.ensureHooks().loaded;
+  }
   readonly mcp: McpManager;
   readonly lsp: LspManager;
   readonly context: ContextManager;
@@ -770,6 +776,8 @@ export class AgentRuntime {
                   this.options.approve!(call, signal, origin),
                 )
             : undefined,
+          hooks: this.ensureHooks(),
+          sessionHooks: false,
           headless: this.options.headless,
           approvalSessionId: parentSessionId,
           priceUsage: (model, usage) =>
@@ -855,6 +863,7 @@ export class AgentRuntime {
       bus: this.bus,
       headless: this.options.headless,
       approve: this.options.approve,
+      hooks: this.ensureHooks(),
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
       beforeRun: async (signal) => {
@@ -1264,6 +1273,29 @@ export class AgentRuntime {
     }, 0);
     this.toolsCheck.unref?.();
   }
+  private ensureHooks(): HookRunner {
+    if (!this.hookRunner) {
+      const trusted = isFolderTrusted(
+        this.options.settings,
+        this.options.workspace,
+      );
+      this.hookRunner = new HookRunner(
+        loadHooks({
+          workspace: this.options.workspace,
+          home: this.options.home,
+          trusted,
+          userHome: this.options.userHome,
+        }),
+        { workspace: this.options.workspace, home: this.options.home },
+      );
+    }
+    return this.hookRunner;
+  }
+  /** Read hooks again. /reload uses this so a changed file applies to the next call. */
+  reloadHooks(): void {
+    this.hookRunner = undefined;
+    if (this.harness) this.harness.options.hooks = this.ensureHooks();
+  }
   async reloadIntegrations(): Promise<void> {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
@@ -1274,6 +1306,7 @@ export class AgentRuntime {
       this.options.modelOverride,
     ).settings;
     this.policy.setAllowedCommands(this.options.settings.allowed_commands);
+    this.reloadHooks();
     this.integrationsReady = undefined;
     await this.initialize();
   }
@@ -1650,6 +1683,7 @@ export class AgentRuntime {
     this.store.claimSession(session.id, (error) => this.ownershipLost(error));
     this.session = session;
     this.todos = [];
+    this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
     this.applyDefaultMode();
@@ -1673,6 +1707,7 @@ export class AgentRuntime {
     this.store.repairStaleTitles();
     const repaired = this.store.get(session.id);
     if (repaired) this.session = repaired;
+    this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
     this.applyDefaultMode();
@@ -1695,6 +1730,7 @@ export class AgentRuntime {
       const previous = this.session.id;
       this.store.claimSession(session.id, (error) => this.ownershipLost(error));
       this.session = session;
+      this.hookRunner = undefined;
       this.harness = this.createHarness(this.options.model);
       this.todos = restoredTodos(this.harness.messages);
       this.applyDefaultMode();

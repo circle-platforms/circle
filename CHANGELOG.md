@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **Hooks.** A shell command in `hooks.json` can allow, deny or ask before a tool runs, check a tool's result, block the end of a turn until a loop limit, run when a session starts, or answer a permission request. A deny stands in every approval mode, including auto. Project hooks run only in a trusted folder, and the transcript and the desktop settings show which hooks are active. See [Hooks](docs/hooks.md).
+
 ## 1.8.0 - 2026-10-18
 
 ### Added

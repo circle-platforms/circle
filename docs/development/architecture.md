@@ -83,6 +83,7 @@ handled as signature errors, and signature errors do not disable thinking.
 | `questions.ts` | The `question` tool and its answers. |
 | `secret_prompt.ts` | Secret requests: the files a task and Circle exchange, and writing the value into its target file. |
 | `approvals.ts` | Sorts commands and tool calls, keeps the session's rules and decides what needs your answer. |
+| `hooks.ts` | Declarative hooks: `hooks.json` for you, a trusted project and an optional skill, the shell protocol, and decisions that override the approval mode. |
 | `sandbox.ts` | Resolves paths (including `/conversation_history/`, `/large_tool_results/` and `/background_jobs/`, which live in the data folder), refuses credential files, runs commands with secret variables stripped from their environment, and stops their process groups. It is a policy boundary, not an operating-system sandbox. |
 | `redact.ts` | Hides passwords and tokens in command and job output. |
 | `secrets.ts` | Variables and saved secrets written `%NAME%`: `secrets.json`, putting values into a call's arguments after its approval, and turning a secret's value back into `%NAME%` in what the model reads. |

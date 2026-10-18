@@ -49,6 +49,19 @@ import {
   completionFailure,
   ModelCompletionFailure,
 } from './model_completion.js';
+import {
+  activeHookSummary,
+  hookDeniedMessage,
+  hookFileLabel,
+  hookNoticeText,
+  hookToolPaths,
+  HOOK_ALLOWED_LINE,
+  HOOK_ASKED_LINE,
+  HOOK_OUTPUT_LINE,
+  type HookBatch,
+  type HookNotice,
+  type HookRunner,
+} from './hooks.js';
 import type {
   InputPayload,
   StoredInput,
@@ -152,6 +165,13 @@ export interface HarnessOptions {
   inspect?: boolean;
   /** The turn and its queued follow-ups have finished, whether or not they succeeded. */
   settled?: () => void;
+  /**
+   * Deterministic hooks for this session. Absent in tests that do not set
+   * them. Subagents share the runner but do not start or stop the session.
+   */
+  hooks?: HookRunner;
+  /** False for a subagent: tool hooks still run, session start and stop do not. */
+  sessionHooks?: boolean;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -161,6 +181,10 @@ export interface QueuedMessage {
   attachments?: MediaAttachment[];
 }
 export class Harness {
+  /** Text from session_start, added to the system prompt without replacing it. */
+  hookPreface = '';
+  private hooksAnnounced = false;
+  private hookNotes: Message[] = [];
   private promptFileAllowed(path: string): boolean {
     const name = path.replaceAll('\\', '/').split('/').at(-1)!;
     return !this.options.policy.credentialFiles.some((pattern) =>
@@ -987,6 +1011,7 @@ export class Harness {
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
+        if (step === 0) await this.announceHooks(signal);
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
         this.step = stepControl;
@@ -1021,6 +1046,7 @@ export class Harness {
           const response = await this.model.complete({
             system:
               this.system +
+              (this.hookPreface ? `\n\n${this.hookPreface}` : '') +
               (this.readOnly
                 ? this.options.planFileMutation
                   ? '\nRead-only mode: inspect and plan; only plan.md or plan files may be changed, subject to approval. Do not run shell commands.'
@@ -1100,6 +1126,7 @@ export class Harness {
           if (!calls.length) {
             answer = response.message.content;
             if (this.steering.length) continue;
+            if (await this.blockStop(signal)) continue;
             this.bus.emit('run_end', {
               payload: { answer },
               usage: { ...usage },
@@ -1127,6 +1154,7 @@ export class Harness {
             );
             for (const outcome of settled)
               if (outcome.status === 'rejected') throw outcome.reason;
+            this.flushHookNotes();
             index = end;
           }
           stepSignal.throwIfAborted();
@@ -1217,6 +1245,103 @@ export class Harness {
       throw failure;
     }
   }
+  private queueHook(notice: HookNotice): void {
+    const text = hookNoticeText(notice);
+    this.hookNotes.push({
+      id: randomUUID(),
+      role: 'user',
+      internal: 'hook_notice',
+      content: `<system-reminder data-source="circle-hooks">\n${text}\n</system-reminder>`,
+      display: text,
+      hook: notice,
+    });
+  }
+  private flushHookNotes(): void {
+    const notes = this.hookNotes;
+    if (!notes.length) return;
+    this.hookNotes = [];
+    for (const note of notes) this.save(note);
+    this.bus.emit('info', {
+      payload: { hook_notice: true, count: notes.length },
+    });
+  }
+  private saveHook(notice: HookNotice): void {
+    this.queueHook(notice);
+    this.flushHookNotes();
+  }
+  private async announceHooks(signal: AbortSignal): Promise<void> {
+    if (this.hooksAnnounced || this.options.sessionHooks === false) return;
+    this.hooksAnnounced = true;
+    const runner = this.options.hooks;
+    if (!runner) return;
+    const loaded = runner.loaded;
+    if (loaded.projectIgnored) this.saveHook({ kind: 'untrusted' });
+    for (const error of loaded.errors)
+      this.saveHook({
+        kind: 'failed',
+        name: hookFileLabel(error.file),
+        reason: error.message,
+      });
+    if (loaded.hooks.length)
+      this.saveHook({
+        kind: 'active',
+        count: loaded.hooks.length,
+        reason: activeHookSummary(loaded.hooks),
+      });
+    if (!loaded.hooks.some((hook) => hook.event === 'session_start')) return;
+    const batch = await runner.run({
+      event: 'session_start',
+      sessionId: this.sessionId,
+      cwd: this.options.session.workspace,
+      signal,
+    });
+    for (const notice of batch.notices) this.saveHook(notice);
+    if (batch.context)
+      this.hookPreface = `Hook session_start output:\n${batch.context}`;
+  }
+  private async blockStop(signal: AbortSignal): Promise<boolean> {
+    if (this.options.sessionHooks === false || !this.options.hooks)
+      return false;
+    const batch = await this.options.hooks.run({
+      event: 'before_stop',
+      sessionId: this.sessionId,
+      cwd: this.options.session.workspace,
+      signal,
+    });
+    for (const notice of batch.notices) this.saveHook(notice);
+    if (batch.decision !== 'deny') return false;
+    const reason = batch.reason || 'hook blocked stop';
+    this.save({
+      id: randomUUID(),
+      role: 'user',
+      internal: 'hook_notice',
+      content: `<system-reminder data-source="circle-hooks">\nA hook blocked the end of this turn: ${reason}\nFix the problem and finish the task. Do not stop while the hook blocks.\n</system-reminder>`,
+      display: hookNoticeText({ kind: 'blocked', reason }),
+      hook: { kind: 'blocked', reason },
+    });
+    return true;
+  }
+  private async gateTool(
+    event: 'before_tool' | 'permission_request',
+    call: ToolCall,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+    permissionReason?: string,
+  ): Promise<HookBatch | undefined> {
+    if (!this.options.hooks) return undefined;
+    const batch = await this.options.hooks.run({
+      event,
+      sessionId: this.sessionId,
+      cwd: this.options.session.workspace,
+      toolName: call.name,
+      toolInput: args,
+      paths: hookToolPaths(call.name, args),
+      permissionReason,
+      signal,
+    });
+    for (const notice of batch.notices) this.queueHook(notice);
+    return batch;
+  }
   // A task call (its name as the tool table resolves it): its subagent can run beside others.
   private parallel(call: ToolCall): boolean {
     try {
@@ -1284,13 +1409,26 @@ export class Harness {
       const found = this.options.policy.review(call.name, resolved);
       if (found.verdict === 'DENY')
         throw new Error(found.message || found.reason);
+      // Hooks see the values that would run. A deny here stands in every
+      // approval mode, including accept-edits and auto. A hard denial above
+      // is not reconsidered.
+      const before = await this.gateTool('before_tool', call, resolved, signal);
+      if (before?.decision === 'deny')
+        throw new Error(hookDeniedMessage(before.reason || 'hook denied'));
+      if (before?.decision === 'ask' && before.reason)
+        call = { ...call, hook_reason: before.reason };
+      let hookLine = '';
       // A command the settings' allowed_commands patterns cover runs without
       // asking: in every mode, including the always-asking calls and the
-      // headless run that cannot show a card.
+      // headless run that cannot show a card. A hook deny already threw.
+      // A hook allow skips the card. A hook ask forces it, even in auto.
       const settingsAllowed = this.options.policy.allowedBySettings(
         call.name,
         call.args,
       );
+      const hookAllow = before?.decision === 'allow';
+      const hookAsk = before?.decision === 'ask';
+      if (hookAllow) hookLine = HOOK_ALLOWED_LINE;
       const preparedRun = tool.prepare
         ? await tool.prepare(resolved, {
             signal,
@@ -1300,7 +1438,7 @@ export class Harness {
           })
         : undefined;
       signal.throwIfAborted();
-      if (
+      const wouldAsk =
         !settingsAllowed &&
         tool.effect !== 'read' &&
         tool.approval !== false &&
@@ -1309,33 +1447,53 @@ export class Harness {
           resolved,
           this.options.approvalSessionId ?? this.sessionId,
         ) ||
-          (this.options.headless && found.verdict === 'ASK_FORCED'))
-      ) {
-        this.bus.emit('tool_waiting', {
-          payload: { ...call, reason: found.reason },
-        });
-        if (!this.options.approve)
+          (this.options.headless && found.verdict === 'ASK_FORCED'));
+      if (!hookAllow && (hookAsk || wouldAsk)) {
+        const permission = await this.gateTool(
+          'permission_request',
+          call,
+          resolved,
+          signal,
+          found.reason,
+        );
+        if (permission?.decision === 'deny')
           throw new Error(
-            found.verdict === 'ASK_FORCED'
-              ? 'not run: this operation always asks'
-              : 'not run: needs --yolo or approval',
+            hookDeniedMessage(permission.reason || 'hook denied'),
           );
-        const decision = await this.options.approve(call, signal);
-        signal.throwIfAborted();
-        const reason =
-          typeof decision === 'string' ? '' : decision.message.trim();
-        if (
-          !this.options.policy.remember(
-            this.options.approvalSessionId ?? this.sessionId,
-            call.name,
-            call.args,
-            typeof decision === 'string' ? decision : decision.decision,
+        if (permission?.decision === 'ask' && permission.reason)
+          call = { ...call, hook_reason: permission.reason };
+        if (permission?.decision === 'allow') {
+          hookLine = HOOK_ALLOWED_LINE;
+        } else {
+          this.bus.emit('tool_waiting', {
+            payload: { ...call, reason: call.hook_reason || found.reason },
+          });
+          if (!this.options.approve)
+            throw new Error(
+              found.verdict === 'ASK_FORCED'
+                ? 'not run: this operation always asks'
+                : 'not run: needs --yolo or approval',
+            );
+          const decision = await this.options.approve(call, signal);
+          if (call.hook_reason)
+            hookLine = `${HOOK_ASKED_LINE} ${call.hook_reason}`;
+          signal.throwIfAborted();
+          const reason =
+            typeof decision === 'string' ? '' : decision.message.trim();
+          if (
+            !this.options.policy.remember(
+              this.options.approvalSessionId ?? this.sessionId,
+              call.name,
+              call.args,
+              typeof decision === 'string' ? decision : decision.decision,
+            )
           )
-        )
-          throw new Error(
-            'The user rejected this tool call.' +
-              (reason ? ` The user said: ${reason}` : ''),
-          );
+            throw new Error(
+              'The user rejected this tool call.' +
+                (call.hook_reason ? ` A hook asked: ${call.hook_reason}` : '') +
+                (reason ? ` The user said: ${reason}` : ''),
+            );
+        }
       }
       signal.throwIfAborted();
       if (
@@ -1404,6 +1562,28 @@ export class Harness {
         : await guardedTool.run(args, context);
       if (typeof content !== 'string') throw new Error('tool must return text');
       signal.throwIfAborted();
+      if (hookLine) content = `${hookLine}\n\n${content}`;
+      const after = this.options.hooks
+        ? await this.options.hooks.run({
+            event: 'after_tool',
+            sessionId: this.sessionId,
+            cwd: this.options.session.workspace,
+            toolName: call.name,
+            toolInput: args,
+            paths: hookToolPaths(call.name, args),
+            toolOutput: content,
+            toolStatus: 'success',
+            signal,
+          })
+        : undefined;
+      if (after) {
+        for (const notice of after.notices) this.queueHook(notice);
+        const reported = after.outcomes.filter((item) => item.context);
+        if (reported.length)
+          content += `\n\n${HOOK_OUTPUT_LINE} (${reported
+            .map((item) => item.hook.name)
+            .join(', ')}):\n${after.context}`;
+      }
     } catch (error) {
       status = 'error';
       recoverable = error instanceof RecoverableToolError;
