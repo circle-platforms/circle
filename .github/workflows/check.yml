@@ -1,6 +1,8 @@
 name: Check
-# Pull requests and the merge queue. A push to main is checked by the release workflow, which runs
-# the same check on all six release targets, so it is not repeated here.
+# Pull requests and the merge queue: the merge gate. A push to main is checked by the release
+# workflow, which runs the same check on all six release targets, so it is not repeated here.
+# The gate is the check and a launch of the packaged desktop application on each system; the
+# full desktop journeys run in the Desktop workbench workflow and do not gate a merge.
 on:
   pull_request:
     # ready_for_review: a draft runs nothing, and marking it ready runs the check
@@ -61,3 +63,100 @@ jobs:
       - run: npm run check
       - run: npm run format:check
       - run: node dist/cli.js --version
+  # The desktop application, packaged and started as a person starts it: the window, the bridge
+  # to the main process, a turn against a local model and a clean quit
+  # (apps/desktop/test/launch-smoke.mjs). It takes seconds once the package is built.
+  launch:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            app: Circle-linux-x64
+            executable: Circle-linux-x64/Circle
+          - os: windows-latest
+            app: Circle-win32-x64
+            executable: Circle-win32-x64/Circle.exe
+    name: launch (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/workbench/package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm --prefix apps/workbench ci
+      - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/desktop run package
+        timeout-minutes: 15
+      # Chromium's sandbox helper must belong to root and be setuid where unprivileged user
+      # namespaces are restricted (Ubuntu 24.04 and later); xvfb-run gives the window a display
+      - name: Prepare the Linux display and Chromium sandbox
+        if: runner.os == 'Linux'
+        timeout-minutes: 8
+        run: |
+          timeout 180 sudo apt-get update -o Acquire::Retries=1
+          timeout 240 sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
+          helper="apps/desktop/out/${{ matrix.app }}/chrome-sandbox"
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
+      - name: Start the packaged application
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
+          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a npm --prefix apps/desktop run test:launch
+          else
+            npm --prefix apps/desktop run test:launch
+          fi
+      - uses: actions/upload-artifact@v7
+        if: failure() || cancelled()
+        with:
+          name: launch-smoke-${{ matrix.os }}-${{ github.run_attempt }}
+          path: apps/desktop/artifacts/launch-smoke/
+          if-no-files-found: ignore
+          retention-days: 7
+  launch-macos:
+    # On the merge queue only, as check (macos-15) is
+    name: launch (macos-15)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 30
+    # The same steps as launch above
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/workbench/package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm --prefix apps/workbench ci
+      - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/desktop run package
+        timeout-minutes: 15
+      - name: Start the packaged application
+        timeout-minutes: 8
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-darwin-arm64/Circle.app"
+          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Contents/MacOS/Circle"
+          npm --prefix apps/desktop run test:launch
+      - uses: actions/upload-artifact@v7
+        if: failure() || cancelled()
+        with:
+          name: launch-smoke-macos-15-${{ github.run_attempt }}
+          path: apps/desktop/artifacts/launch-smoke/
+          if-no-files-found: ignore
+          retention-days: 7
