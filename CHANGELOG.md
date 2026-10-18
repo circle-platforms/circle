@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **Hooks.** A shell command in `hooks.json` can allow, deny or ask before a tool runs, check a tool's result, block the end of a turn until a loop limit, run when a session starts, or answer a permission request. A deny stands in every approval mode, including auto. An allow skips an ordinary approval and does not skip a call that always asks, a hard refusal, or read-only mode. On the gating events any non-zero exit, a timeout, or output that is not a JSON object is a deny; exit 2 is a deny too. A skill's hooks run only after that skill is loaded in the current session. A secret's value is `%NAME%` in what a hook can see. When an `after_tool` or `session_start` hook fails, the transcript keeps the error and the model is told only that the hook failed. Project hooks run only in a trusted folder. See [Hooks](docs/hooks.md).
+
 ### Fixed
 
 - **A terminal browser page that stops answering no longer holds the conversation.** Every command Circle sends the browser now has a deadline, and ends at once when its tab closes or its page crashes, so the model gets an error that names the command and the tab, such as `the browser did not answer Page.enable for tab t1 in 15 s`, and its next browser action runs. Before, a hung or crashed page could leave a turn waiting with no end: taking on the window's first tab, cancelling a download you did not keep, stopping a failed load and reading a crashed page had no limit. A first tab that never answers is let go and the action goes on in a new tab. A crashed page says so until it is loaded again. A download whose cancel the browser does not confirm is told as such, and what it wrote is deleted when it ends.

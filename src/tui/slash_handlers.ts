@@ -1306,7 +1306,7 @@ function jobs(host: CommandHost, args: string): void {
   if (host.state.picker) host.followJobs(host.state.picker, rows);
 }
 
-function skill(host: CommandHost, args: string): void {
+async function skill(host: CommandHost, args: string): Promise<void> {
   const runtime = host.runtime;
   const skills = discoverSkills(host.workspace, host.home);
   const token = args.trim();
@@ -1336,6 +1336,7 @@ function skill(host: CommandHost, args: string): void {
     host.fail(`Error: ${reason(error)}`);
     return;
   }
+  await runtime.activateSkillHooks(name);
   // Into the conversation without a turn: the model reads it with your next message.
   runtime.store.append(runtime.session.id, [
     {
