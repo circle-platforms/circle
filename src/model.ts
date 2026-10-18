@@ -46,6 +46,9 @@ import {
   anthropicContent,
 } from './model_media.js';
 import { orderModeToolResults } from './tool_history.js';
+// What a Chat Completions tool row says when the tool returned no text. Strict
+// gateways such as DashScope reject a message whose content is empty.
+const EMPTY_TOOL_RESULT = '(no output)';
 export const EFFORT_LEVELS = [
   'minimal',
   'low',
@@ -325,23 +328,26 @@ export class GatewayModel implements ChatModel {
       // Chat Completions allows media only in user content. Keep the complete
       // tool-result batch together, then project its media into a user item.
       if (message.role !== 'tool') flushToolMedia();
-      if (message.role === 'system')
-        messages.push({ role: 'system', content: message.content });
-      else if (message.role === 'tool') {
+      if (message.role === 'system') {
+        if (message.content.trim())
+          messages.push({ role: 'system', content: message.content });
+      } else if (message.role === 'tool') {
         messages.push({
           role: 'tool',
-          content: commandExecutionModelContent(message),
+          content: commandExecutionModelContent(message) || EMPTY_TOOL_RESULT,
           tool_call_id: message.tool_call_id!,
         });
         toolMedia.push(...(message.attachments ?? []));
       } else if (message.role === 'assistant') {
         // A thinking-only/interrupted turn has no Chat Completions content.
-        // Preserve it in history, but do not send a bare assistant null: unlike
-        // tool-call turns, compatible gateways require content for these rows.
-        if (!message.content && !message.tool_calls?.length) continue;
+        // Preserve it in history, but do not send it: there is nothing to say.
+        if (!message.content?.trim() && !message.tool_calls?.length) continue;
+        // Content is a string on every row, '' beside tool calls. OpenAI takes
+        // '' as it takes null; strict gateways such as DashScope reject null
+        // ("The content field is a required field") and accept ''.
         messages.push({
           role: 'assistant',
-          content: message.content || null,
+          content: message.content || '',
           ...(message.tool_calls?.length
             ? {
                 tool_calls: message.tool_calls.map((call) => ({
@@ -355,7 +361,13 @@ export class GatewayModel implements ChatModel {
               }
             : {}),
         });
-      } else
+      } else if (
+        !message.attachments?.length &&
+        !commandExecutionModelContent(message).trim()
+      )
+        // An empty prompt says nothing, and strict gateways reject it.
+        continue;
+      else
         messages.push({
           role: 'user',
           content: message.attachments?.length
@@ -609,7 +621,8 @@ export class GatewayModel implements ChatModel {
         content = message.provider_content
           ? ([...message.provider_content] as ContentBlockParam[])
           : [
-              ...(message.content
+              // Anthropic rejects a text block of only white space.
+              ...(message.content?.trim()
                 ? [{ type: 'text' as const, text: message.content }]
                 : []),
               ...(message.tool_calls ?? []).map((call) => ({
@@ -626,6 +639,10 @@ export class GatewayModel implements ChatModel {
           message.attachments,
         );
       }
+      // A thinking-only partial saved when a turn was stopped, or an empty
+      // prompt, has no block to send, and Anthropic rejects an empty message.
+      // It stays in history.
+      if (!content.length) continue;
       const previous = messages.at(-1);
       if (previous?.role === role && Array.isArray(previous.content))
         previous.content.push(...content);
