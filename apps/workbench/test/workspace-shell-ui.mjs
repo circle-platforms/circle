@@ -93,7 +93,9 @@ async function platformFonts(page, selector) {
       selector,
     });
     const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId });
-    return fonts.map((font) => font.familyName);
+    // A family name can be the system's localized one (蘋方-簡 for PingFang SC); the
+    // PostScript name is the same in every language.
+    return fonts.map((font) => `${font.familyName} (${font.postScriptName})`);
   } finally {
     await cdp.detach();
   }
@@ -101,8 +103,8 @@ async function platformFonts(page, selector) {
 // The system's own face: SF Pro on macOS, Segoe UI Variable on Windows 11 and Segoe UI
 // before it, with PingFang or Microsoft YaHei for Chinese. Linux keeps its own.
 const SYSTEM_FACES = {
-  darwin: { latin: /^(\.SF|SF Pro)/, chinese: /^PingFang/ },
-  win32: { latin: /^Segoe UI/, chinese: /^Microsoft YaHei/ },
+  darwin: { latin: /\((\.SFNS|SFPro)/, chinese: /\(PingFang/ },
+  win32: { latin: /Segoe ?UI/i, chinese: /\(MicrosoftYaHei/i },
 }[process.platform];
 async function checkFaces(page, zh) {
   if (!SYSTEM_FACES) return;
