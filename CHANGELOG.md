@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **A desktop task that needs review can be sent back with a reason.** The decision, with your reason and the attempt and patch you were shown, is recorded on that attempt, and the task runs again as a new attempt in a fresh worktree from the same commit. Its worker is told the reason after the task's own instruction and acceptance criteria, and so is the worker of every later attempt. The attempt sent back keeps its worktree and results; tasks waiting for it keep waiting. The tasks service does this; the window has no control for it yet.
+
 ## 1.9.0 - 2026-10-19
 
 ### Added

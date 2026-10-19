@@ -35,7 +35,13 @@ test('native workflow capabilities and recovery use explicit service routes', ()
       'evaluate',
     ],
     git: ['snapshot', 'applyPatch', 'conflictContinue', 'conflictAbort'],
-    tasks: ['createIntegration', 'mergeCandidates', 'settings'],
+    tasks: [
+      'createIntegration',
+      'mergeCandidates',
+      'settings',
+      'review',
+      'reject',
+    ],
     delivery: ['login', 'ready'],
   })) {
     for (const method of operations)

@@ -112,6 +112,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'createIntegration',
     'mergeCandidates',
     'review',
+    'reject',
     'artifacts',
     'readArtifact',
   ]),

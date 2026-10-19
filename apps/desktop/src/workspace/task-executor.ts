@@ -167,11 +167,25 @@ export async function captureTaskChanges(
     await rm(temporary, { recursive: true, force: true });
   }
 }
+/** What a person said about earlier attempts; this attempt began again from the baseline. */
+function sentBack(task: TaskRecord): string[] {
+  if (!task.sentBack?.length) return [];
+  return [
+    [
+      ...task.sentBack.map(
+        (decision) =>
+          `Attempt ${decision.expectedAttempt} was sent back by a person: ${decision.reason}`,
+      ),
+      'This attempt starts again from the baseline commit, without the changes that were sent back. Address every reason above; the instruction and acceptance criteria still apply.',
+    ].join('\n'),
+  ];
+}
 function prompt(task: TaskRecord, context: TaskExecutionContext): string {
   return [
     `Task ${task.spec.id}, attempt ${task.attempt}.`,
     task.spec.prompt,
     `Acceptance criteria:\n${task.spec.acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion}`).join('\n')}`,
+    ...sentBack(task),
     `Access: ${context.access}. Baseline commit: ${task.spec.baseline}. Work only in this task workspace.`,
     task.spec.sessionId && context.proposeTasks
       ? 'Do not spawn subagents or merge into another workspace. When follow-up work is needed, use native_tasks_propose to record a structured proposal for the coordinator. A proposal does not start any work or grant permissions; never try to adopt or enqueue tasks yourself.'

@@ -22,6 +22,7 @@ import {
   type Json,
   type TaskArtifact,
   type TaskResource,
+  type TaskSendBack,
   type TaskSpec,
 } from './collaboration.js';
 import {
@@ -489,6 +490,8 @@ export class TaskService {
         return this.readArtifact(params);
       case 'review':
         return this.serial(() => this.review(params));
+      case 'reject':
+        return this.serial(() => this.reject(params));
       case 'settings':
         if (params.limits === undefined)
           return this.serial(async () => this.scheduler.getLimits());
@@ -834,7 +837,12 @@ export class TaskService {
       byteLength: bytes.length,
     };
   }
-  private async review(params: Record<string, unknown>): Promise<TaskRecord> {
+  /** The task attempt and candidate patch a person was shown when they decided. */
+  private reviewVersion(params: Record<string, unknown>): {
+    id: string;
+    expectedAttempt: number;
+    expectedPatchSha256: string;
+  } {
     const id = string(params.id, 'task id'),
       expectedPatchSha256 = string(
         params.expectedPatchSha256,
@@ -847,6 +855,74 @@ export class TaskService {
       !/^[0-9a-f]{64}$/.test(expectedPatchSha256)
     )
       throw new Error('invalid task review version');
+    return {
+      id,
+      expectedAttempt: Number(expectedAttempt),
+      expectedPatchSha256,
+    };
+  }
+  /** The shown attempt's changes, once its patch file and its worktree still match what was shown. */
+  private async displayedChanges(
+    task: TaskRecord,
+    expectedAttempt: number,
+    expectedPatchSha256: string,
+  ): Promise<TaskChanges> {
+    const changes = (task.result as { changes?: TaskChanges } | undefined)
+      ?.changes;
+    if (
+      task.state !== 'needs_review' ||
+      task.attempt !== expectedAttempt ||
+      changes?.sha256 !== expectedPatchSha256 ||
+      !task.worktree
+    )
+      throw new Error('task review is stale; reload the task and its patch');
+    const acceptedPatch = await readFile(changes.patchPath);
+    if (
+      createHash('sha256').update(acceptedPatch).digest('hex') !==
+      expectedPatchSha256
+    )
+      throw new Error('task patch changed after it was displayed');
+    const temporary = await mkdtemp(
+      join(dirname(changes.patchPath), 'review-'),
+    );
+    try {
+      const current = await captureTaskChanges(task, task.worktree, temporary);
+      if (
+        current.head !== changes.head ||
+        current.sha256 !== expectedPatchSha256
+      )
+        throw new Error('task worktree changed after its patch was displayed');
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+    return changes;
+  }
+  /** A person's decision, kept as an artifact of the attempt it was about. */
+  private async reviewArtifact(
+    task: TaskRecord,
+    changes: TaskChanges,
+    decision: unknown,
+  ): Promise<TaskArtifact> {
+    const path = join(
+        dirname(changes.patchPath),
+        `human-review-${randomUUID()}.json`,
+      ),
+      body = JSON.stringify(decision, null, 2) + '\n';
+    await writeFile(path, body, { mode: 0o600 });
+    return {
+      id: randomUUID(),
+      taskId: task.spec.id,
+      attempt: task.attempt,
+      baseline: task.spec.baseline,
+      path,
+      sha256: createHash('sha256').update(body).digest('hex'),
+      kind: 'human-review',
+      createdAt: Date.now(),
+    };
+  }
+  private async review(params: Record<string, unknown>): Promise<TaskRecord> {
+    const { id, expectedAttempt, expectedPatchSha256 } =
+      this.reviewVersion(params);
     const task = this.scheduler.get(id);
     if (!task) throw new Error('unknown task');
     if (!Array.isArray(params.checks) || params.checks.length > 1000)
@@ -895,60 +971,27 @@ export class TaskService {
       JSON.stringify(previous.review.checks) === JSON.stringify(checks)
     )
       return task;
-    if (
-      task.state !== 'needs_review' ||
-      task.attempt !== expectedAttempt ||
-      previous?.changes?.sha256 !== expectedPatchSha256 ||
-      !task.worktree
-    )
-      throw new Error('task review is stale; reload the task and its patch');
-    const changes = previous.changes;
-    const acceptedPatch = await readFile(changes.patchPath);
-    if (
-      createHash('sha256').update(acceptedPatch).digest('hex') !==
-      expectedPatchSha256
-    )
-      throw new Error('task patch changed after it was displayed');
-    const directory = dirname(changes.patchPath),
-      temporary = await mkdtemp(join(directory, 'review-'));
-    try {
-      const current = await captureTaskChanges(task, task.worktree, temporary);
-      if (
-        current.head !== changes.head ||
-        current.sha256 !== expectedPatchSha256
-      )
-        throw new Error('task worktree changed after its patch was displayed');
-    } finally {
-      await rm(temporary, { recursive: true, force: true });
-    }
+    const changes = await this.displayedChanges(
+      task,
+      expectedAttempt,
+      expectedPatchSha256,
+    );
     const reviewed = {
       reviewer: 'human',
       at: Date.now(),
-      expectedAttempt: Number(expectedAttempt),
+      expectedAttempt,
       expectedPatchSha256,
       head: changes.head,
       checks,
     };
-    const path = join(directory, `human-review-${randomUUID()}.json`),
-      body = JSON.stringify(reviewed, null, 2) + '\n';
-    await writeFile(path, body, { mode: 0o600 });
-    const artifact: TaskArtifact = {
-      id: randomUUID(),
-      taskId: id,
-      attempt: task.attempt,
-      baseline: task.spec.baseline,
-      path,
-      sha256: createHash('sha256').update(body).digest('hex'),
-      kind: 'human-review',
-      createdAt: Date.now(),
-    };
+    const artifact = await this.reviewArtifact(task, changes, reviewed);
     const result = {
       ...previous,
       verdict: 'passed',
       reason: 'all acceptance criteria were explicitly reviewed by a person',
       review: reviewed,
       checks: [
-        ...(previous.checks ?? []),
+        ...(previous?.checks ?? []),
         ...checks.map((check) => ({
           ...check,
           status: 'passed',
@@ -958,11 +1001,69 @@ export class TaskService {
       ],
     };
     return this.scheduler.acceptHumanReview(id, {
-      expectedAttempt: Number(expectedAttempt),
+      expectedAttempt,
       expectedPatchSha256,
       checks,
       result: result as unknown as Json,
       artifact,
+    });
+  }
+  /**
+   * A person sends the shown attempt back with a reason, under the same checks
+   * as a passing review. The task runs again as a new attempt, as a retry
+   * runs it, and that attempt's worker is told the reason.
+   */
+  private async reject(params: Record<string, unknown>): Promise<TaskRecord> {
+    const { id, expectedAttempt, expectedPatchSha256 } =
+      this.reviewVersion(params);
+    const reason = string(
+      params.reason,
+      'reason for sending the task back',
+      8192,
+    ).trim();
+    const task = this.scheduler.get(id);
+    if (!task) throw new Error('unknown task');
+    // The same decision again, after it took effect, starts no other attempt.
+    const sent = (
+      this.scheduler
+        .attempts(id)
+        .find((record) => record.attempt === expectedAttempt)?.result as
+        { review?: Partial<TaskSendBack> } | undefined
+    )?.review;
+    if (
+      sent?.reviewer === 'human' &&
+      sent.decision === 'rejected' &&
+      sent.expectedPatchSha256 === expectedPatchSha256 &&
+      sent.reason === reason
+    )
+      return task;
+    const changes = await this.displayedChanges(
+      task,
+      expectedAttempt,
+      expectedPatchSha256,
+    );
+    const decision: TaskSendBack = {
+      reviewer: 'human',
+      decision: 'rejected',
+      expectedAttempt,
+      expectedPatchSha256,
+      head: changes.head,
+      reason,
+      at: Date.now(),
+    };
+    const artifact = await this.reviewArtifact(task, changes, decision);
+    return this.scheduler.rejectHumanReview(id, {
+      decision,
+      result: {
+        ...(task.result as Record<string, Json>),
+        verdict: 'failed',
+        reason: 'a person sent this attempt back',
+        review: decision as unknown as Json,
+      },
+      artifact,
+      allowedResources: taskResourceGrants(
+        this.options.allowedResources ?? TASK_RESOURCES,
+      ),
     });
   }
   private integration(): Promise<TaskIntegrator> {
