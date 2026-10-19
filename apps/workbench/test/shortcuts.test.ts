@@ -171,3 +171,34 @@ test('in a terminal the window takes no key on Windows and Linux, and only ⌘ c
   assert.equal(isDesktopSearch(press('k', { ctrl: true }), false), true);
   assert.equal(isDesktopSearch(press('k', { meta: true }), true), true);
 });
+
+test('on macOS an Option chord is the key pressed, not the character it types', () => {
+  const bindings = effectiveBindings({});
+  const option = (key: string, code: string) => ({
+    key,
+    code,
+    ctrlKey: false,
+    altKey: true,
+    shiftKey: false,
+    metaKey: false,
+  });
+  // ⌥P types π, ⌥B ∫, ⌥M µ, ⌥C ç: each is still its alt chord
+  assert.equal(chordFromEvent(option('π', 'KeyP'), true), 'alt+p');
+  assert.equal(
+    matchingAction(option('π', 'KeyP'), bindings, true),
+    'plan.focus',
+  );
+  assert.equal(chordFromEvent(option('∫', 'KeyB'), true), 'alt+b');
+  assert.equal(chordFromEvent(option('µ', 'KeyM'), true), 'alt+m');
+  assert.equal(chordFromEvent(option('¡', 'Digit1'), true), 'alt+1');
+  // elsewhere Ctrl+Alt is AltGr typing a character, which stays that character
+  assert.equal(
+    chordFromEvent({ ...option('@', 'KeyQ'), ctrlKey: true }, false),
+    'ctrl+alt+@',
+  );
+  // and a key without Option is read as before
+  assert.equal(
+    chordFromEvent({ ...option('p', 'KeyP'), altKey: false }, true),
+    'p',
+  );
+});

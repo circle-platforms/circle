@@ -60,6 +60,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'task-review-ui.mjs',
   'gutter-marks-ui.mjs',
   'task-limits-recovery-ui.mjs',
+  'overview-actions-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */

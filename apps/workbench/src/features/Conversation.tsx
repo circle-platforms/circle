@@ -313,8 +313,9 @@ export function Conversation({
     field.focus({ preventScroll: true });
     field.setSelectionRange(field.value.length, field.value.length);
   }, [session.draft, session.id]);
-  const latestView = useRef({ session, onDialog, onPanel });
-  latestView.current = { session, onDialog, onPanel };
+  // The window's key handler is set up once per session: it reads what is current here.
+  const latestView = useRef({ session, onDialog, onPanel, onCommand });
+  latestView.current = { session, onDialog, onPanel, onCommand };
   const matches = useMemo(
     () =>
       !find
@@ -552,11 +553,13 @@ export function Conversation({
         if (commands[mapped]) act(() => runtime.command(commands[mapped]!));
         else if (mapped === 'find') setFinding((value) => !value);
         // The plan is a step of the overview's "in progress" card.
-        else if (mapped === 'plan.focus') onPanel('overview');
+        else if (mapped === 'plan.focus')
+          latestView.current.onPanel('overview');
         // history.search is ctrl+r. It opens the same search as ctrl+k.
-        else if (mapped === 'history.search') onCommand();
-        else if (mapped === 'exit') onDialog('exit');
-        else if (mapped === 'secret.enter') onDialog('secret');
+        else if (mapped === 'history.search') latestView.current.onCommand();
+        else if (mapped === 'exit') latestView.current.onDialog('exit');
+        else if (mapped === 'secret.enter')
+          latestView.current.onDialog('secret');
         else if (mapped === 'suspend' || mapped === 'job.background') {
           runtime.request(mapped === 'suspend' ? 'suspend' : 'background');
           notify(
