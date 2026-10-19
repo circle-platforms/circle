@@ -46,7 +46,7 @@ npm --prefix apps/desktop run package:beta
 
 It leaves `out/Circle (beta)-<os>-<arch>/` (on macOS `Circle (beta).app`, signed again ad hoc) and no archive. The beta has a bundle id of its own (`com.qingshanfeihu.circle.beta`) and a data folder of its own, `Circle (beta)` under the application-data directory, so it shares no settings, credentials or sessions with the release and both can run at once. It does not update itself, as the release would take its place; check now links to the release page. Copy it where you like, such as `/Applications/Circle (beta).app`.
 
-The desktop package includes the renderer, Circle runtime/dependencies, prompts, model metadata, icon, license and third-party notices. It needs no globally installed Node or Circle executable. Build dependencies are pinned in the repository and application lockfiles.
+The desktop package includes the renderer, Circle runtime/dependencies, prompts, the [skills that ship with Circle](../../docs/skills.md#built-in-skills), model metadata, icon, license and third-party notices. It needs no globally installed Node or Circle executable. Build dependencies are pinned in the repository and application lockfiles.
 
 ## Components
 

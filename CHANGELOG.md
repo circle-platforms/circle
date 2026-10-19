@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **Circle ships with a skill of its own, `create-pr`.** Ask Circle to open a pull request, or load it with `/skill create-pr`: it checks the branch and `gh auth status` first, and says to run `gh auth login` when the GitHub CLI is missing or not logged in. It commits only the files that belong to the work, in the repository's own commit style, on a branch other than the default one, pushes it and opens a draft pull request, or updates the one already open. It never merges or force-pushes without asking, and ends with the pull request's number and URL. A skill of the same name in any skill folder replaces it. `/skill` marks it `(Built-in)` and the desktop's skills page marks it bundled. See [Built-in skills](https://circle-platforms.github.io/circle/skills/#built-in-skills).
+
 ## 1.9.0 - 2026-10-19
 
 ### Added

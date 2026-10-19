@@ -8,7 +8,12 @@ import {
 // A small release directory whose program prints its version, for installer tests.
 export function fixture(base: string, version: string): string {
   const root = join(base, 'release-' + version);
-  for (const directory of ['runtime', 'app/dist/data', 'app/dist/prompts'])
+  for (const directory of [
+    'runtime',
+    'app/dist/data',
+    'app/dist/prompts',
+    'app/dist/builtin_skills/create-pr',
+  ])
     mkdirSync(join(root, directory), { recursive: true });
   cpSync(
     process.execPath,
@@ -39,6 +44,10 @@ export function fixture(base: string, version: string): string {
   writeFileSync(
     join(root, 'app/dist/prompts/circle_guidelines.md'),
     'fixture guidelines',
+  );
+  writeFileSync(
+    join(root, 'app/dist/builtin_skills/create-pr/SKILL.md'),
+    '---\nname: create-pr\ndescription: fixture skill\n---\n',
   );
   const manifest: ReleaseManifest = {
     schema: 'circle-release/v1',

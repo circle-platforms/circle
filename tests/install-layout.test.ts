@@ -7,6 +7,7 @@ import {
   readFileSync,
   existsSync,
   chmodSync,
+  rmSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -98,6 +99,25 @@ test('upgrades preserve settings, credentials and session bytes; corrupted and i
   writeFileSync(join(incomplete, 'release.json'), JSON.stringify(manifest));
   assert.throws(() => activateRelease(incomplete, prefix, bin), /file list/);
   assert.equal(activeVersion(prefix), '0.2.0');
+});
+test('a release without the skills that ship with Circle is refused, even with a manifest that lists what is there', (t) => {
+  const base = scratch(t);
+  const root = fixture(base, '0.1.0');
+  rmSync(join(root, 'app/dist/builtin_skills'), { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(root, 'release.json'), 'utf8'));
+  manifest.files = fileInventory(root);
+  writeFileSync(join(root, 'release.json'), JSON.stringify(manifest));
+  assert.throws(
+    () => validateRelease(root),
+    /release is missing app\/dist\/builtin_skills\/create-pr\/SKILL\.md/,
+  );
+  const prefix = join(base, 'install');
+  assert.throws(
+    () => activateRelease(root, prefix, join(base, 'bin')),
+    /release is missing app\/dist\/builtin_skills/,
+  );
+  assert.equal(activeVersion(prefix), undefined);
+  assert.equal(existsSync(join(prefix, 'versions', '0.1.0')), false);
 });
 test('existing version conflicts and invalid pointer values are diagnosed instead of activating another program', (t) => {
   const base = scratch(t);

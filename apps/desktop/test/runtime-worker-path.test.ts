@@ -25,6 +25,7 @@ import {
 } from '../../../src/settings.ts';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import { workspaceRuntimePath } from '../src/runtime-tools.ts';
+import { copyRuntimeAssets } from '../scripts/runtime-assets.mjs';
 
 test('worker runtime PATH preparation preserves original entries and is idempotent', () => {
   const original = process.env.PATH;
@@ -163,12 +164,7 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
         js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
       },
     });
-    for (const folder of ['prompts', 'data'])
-      await cp(
-        fileURLToPath(new URL(`../../../src/${folder}`, import.meta.url)),
-        join(app, folder),
-        { recursive: true },
-      );
+    await copyRuntimeAssets(app);
     const wrapper = `let listener,started=false;Object.defineProperty(process,'parentPort',{value:{on(n,cb){listener=cb},postMessage(m){if(m.type==='update'&&!started){started=true;queueMicrotask(()=>listener({data:{id:'auto',name:'set-auto',sessionId:m.update.snapshot.activeSessionId,payload:{enabled:true}}}));}if(m.type==='reply'&&m.reply.id==='auto'){queueMicrotask(()=>listener({data:{id:'prompt',name:'prompt',payload:{text:'Run the nested npm fixture'}}}));}if(m.type==='update'&&m.update.snapshot.sessions.some(s=>s.messages.some(v=>v.text==='worker npm done'))){queueMicrotask(()=>listener({data:{id:'finish',name:'close',payload:{}}}));}if(m.type==='reply'&&m.reply.id==='finish'){console.log('WORKER_NPM_DONE');process.exit(0);}}}});await import(${JSON.stringify(pathToFileURL(bundle).href)});`;
     const systemPath =
       process.platform === 'win32'

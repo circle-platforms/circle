@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { Resvg } from '@resvg/resvg-js';
 import { execFileSync } from 'node:child_process';
 import { buildBundledExtensions, shareExtensionError } from './extensions.mjs';
+import { copyRuntimeAssets } from './runtime-assets.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 // ssh2 loads two optional native accelerators, each inside a try/catch: the
 // `cpu-features` package and its own sshcrypto.node, built by npm on a machine that
@@ -50,10 +51,7 @@ await build({
     ...nativeModules,
   ],
 });
-await cp(join(root, '../../src/prompts'), join(dist, 'prompts'), {
-  recursive: true,
-});
-await cp(join(root, '../../src/data'), join(dist, 'data'), { recursive: true });
+await copyRuntimeAssets(dist);
 await buildBundledExtensions(dist);
 await build({
   entryPoints: [join(root, 'src/main.ts')],

@@ -1,6 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -44,6 +44,45 @@ async function setup(t: TestContext) {
   });
   return { workspace, controller, call };
 }
+
+test('the skill that ships with Circle is listed as bundled until a project skill of the same name replaces it', async (t) => {
+  const { workspace, controller, call } = await setup(t);
+  const shipped = controller
+    .snapshot()
+    .skills.find((skill) => skill.name === 'create-pr');
+  assert.ok(shipped, 'create-pr is listed');
+  assert.equal(shipped.scope, 'bundled');
+  assert.match(
+    shipped.path,
+    /[\\/]builtin_skills[\\/]create-pr[\\/]SKILL\.md$/,
+  );
+  assert.match(shipped.content, /^<skill_content name="create-pr">/);
+  assert.match(shipped.content, /gh pr create --draft/);
+  const created = await call('create-skill', {
+    name: 'create-pr',
+    description: 'Our own pull requests',
+    body: 'Use the release train.',
+  });
+  assert.equal(created.ok, true, created.error);
+  const replaced = controller
+    .snapshot()
+    .skills.filter((skill) => skill.name === 'create-pr');
+  assert.equal(replaced.length, 1);
+  assert.equal(replaced[0]!.scope, 'project');
+  assert.equal(replaced[0]!.description, 'Our own pull requests');
+  assert.ok(
+    replaced[0]!.path.endsWith(
+      join('.circle', 'skills', 'create-pr', 'SKILL.md'),
+    ),
+  );
+  assert.match(replaced[0]!.content, /Use the release train\./);
+  assert.ok(
+    (await readFile(replaced[0]!.path, 'utf8')).includes(
+      'Use the release train.',
+    ),
+  );
+  assert.ok(replaced[0]!.path.startsWith(await realpath(workspace)));
+});
 
 test('create-skill writes a project skill and lists it after reload', async (t) => {
   const { workspace, controller, call } = await setup(t);

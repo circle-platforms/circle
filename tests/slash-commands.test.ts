@@ -22,6 +22,7 @@ import {
   variableCopy,
 } from '../src/tui/slash_commands.js';
 import { ScriptedModel } from '../src/testing.js';
+import { parseFrontmatter } from '../src/skills.js';
 import {
   defaultSettings,
   loadCredentials,
@@ -53,6 +54,8 @@ async function session(
     settings?: CircleSettings;
     home?: string;
     workspace?: string;
+    /** In place of the machine's home, for its user skill folders. */
+    userHome?: string;
     headless?: boolean;
     modelOverride?: string;
     integrations?: boolean;
@@ -73,6 +76,7 @@ async function session(
   await app.attach({
     workspace,
     home,
+    userHome: options.userHome,
     settings,
     model,
     headless: options.headless ?? true,
@@ -701,6 +705,62 @@ test('/skill loads a skill into the conversation without starting a turn', async
   );
   assert.match(loaded.content, /Always answer in haiku\./);
   assert.equal(model.requests[0]!.messages.at(-1)!.content, 'write a poem');
+});
+
+test('/skill lists the skill that ships with Circle as built-in, loads it, and lists a project skill of the same name in its place', async (t) => {
+  const workspace = scratch(t);
+  const userHome = scratch(t);
+  const shipped = parseFrontmatter(
+    readFileSync(
+      join(process.cwd(), 'src', 'builtin_skills', 'create-pr', 'SKILL.md'),
+      'utf8',
+    ),
+  );
+  const { app, model } = await session(t, [answer('ok')], {
+    workspace,
+    userHome,
+  });
+  await app.submit('/skill');
+  let list = app.state.notices.at(-1)!;
+  const rows = list.split('\n');
+  assert.deepEqual(rows.slice(0, 2), ['Skills:', '']);
+  assert.deepEqual(rows.slice(-2), ['', 'Load with /skill <name>']);
+  assert.ok(
+    rows.includes(
+      `  ${'create-pr'.padEnd(20)} ${shipped.meta.description!.slice(0, 80)} (Built-in)`,
+    ),
+    list,
+  );
+  // No skill folder of this session's has any: each row is one that ships with Circle.
+  assert.ok(
+    rows.slice(2, -2).every((row) => row.endsWith(' (Built-in)')),
+    list,
+  );
+  await app.submit('/skill create-pr');
+  assert.equal(app.state.notices.at(-1), 'Loaded skill `create-pr`');
+  await app.submit('open a pull request');
+  const loaded = model.requests[0]!.messages.find(
+    (message) => message.internal === 'skill',
+  )!;
+  assert.match(
+    loaded.content,
+    /^\[Circle system\] Skill `create-pr` loaded via \/skill\./,
+  );
+  assert.ok(loaded.content.includes(shipped.body.trim()));
+  mkdirSync(join(workspace, '.circle', 'skills', 'create-pr'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(workspace, '.circle', 'skills', 'create-pr', 'SKILL.md'),
+    '---\nname: create-pr\ndescription: Our own pull requests\n---\nUse the release train.\n',
+  );
+  await app.submit('/skill');
+  list = app.state.notices.at(-1)!;
+  assert.match(
+    list,
+    /\n {2}create-pr {12}Our own pull requests \(Project Circle\)\n/,
+  );
+  assert.equal(list.includes('(Built-in)'), false);
 });
 
 test('/name, /session, /approvals, /themes and /effort answer in the transcript', async (t) => {

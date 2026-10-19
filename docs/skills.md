@@ -37,7 +37,7 @@ Circle puts each skill's name and description in the system prompt. When a task 
 You can also load one yourself:
 
 ```text
-/skill                     list the skills Circle can see
+/skill                     list the skills Circle can see, and where each comes from
 /skill changelog           load one for the rest of the conversation
 /skill:changelog v0.2.0    load it and pass an argument
 ```
@@ -46,12 +46,19 @@ A skill loaded this way is added to the conversation without starting a turn; th
 
 Circle reads the skill folders again each time it builds the system prompt: when a session starts, on `/new`, `/resume`, `/reload`, a change of model or thinking depth, and `/plan`. The list in the prompt and the model's `skill` tool always come from the same reading. `/skill` reads them each time, so a skill added during a session can be loaded at once.
 
+## Built-in skills
+
+Circle ships with one skill of its own, `create-pr`. It commits the work, pushes the branch and opens a draft pull request with the GitHub CLI (`gh`), or updates the one already open for the branch. It first checks `git status`, the branch, the default branch and `gh auth status`, and when `gh` is missing or not logged in it stops and tells you to run `gh auth login`. It never opens a pull request from the default branch, stages only the files that belong to the work, and never merges or force-pushes without asking. It ends with the pull request's number and URL. Ask Circle to open a pull request, or load it with `/skill create-pr`.
+
+Built-in skills come with the program itself, in its `builtin_skills` folder, so they change when Circle is updated. They are the lowest-priority source: a skill of the same name in any of the folders below replaces one. To change `create-pr`, put your own `create-pr/SKILL.md` in one of them, starting from a copy of Circle's (`src/builtin_skills/create-pr/SKILL.md` in its repository). `/skill` marks a built-in skill `(Built-in)`, and the desktop application's skills page marks it bundled.
+
 ## Where skills live
 
 Circle looks in all of these. If two skills have the same name, the one lower in the table wins.
 
 | Folder                                   | Scope                                 |
 | ---------------------------------------- | ------------------------------------- |
+| Shipped with Circle (`builtin_skills`)   | Built-in, lowest priority             |
 | `~/.agents/skills`                       | You, shared with other agents         |
 | `~/.claude/skills`                       | You, shared with Claude Code          |
 | `~/.config/opencode/skills`              | You, shared with OpenCode             |

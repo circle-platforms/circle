@@ -29,7 +29,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `harness.ts` | The loop: one model request, then the tool calls it asked for, until the model stops. Steering messages are read before the next request; follow-ups start a new turn when one ends. `task` calls next to each other run together, other calls one after another. |
 | `system_prompt.ts` | Builds the system prompt from `prompts/`, the instruction files, skills, `SYSTEM.md` and `APPEND_SYSTEM.md`. |
 | `memory_sources.ts` | Finds the instruction files (`AGENTS.md`, `CLAUDE.md` and the like) for a folder. |
-| `skills.ts` | Finds skills in the user, project and `.agents/skills` folders and loads their text. |
+| `skills.ts` | Finds skills in the built-in, user, project and `.agents/skills` folders and loads their text. The built-in ones are in `builtin_skills/` beside the module itself, the lowest-priority source. |
 | `commands.ts` | Custom commands: finds them and expands their templates. |
 | `mentions.ts` | `@file` in a message (bare, quoted or with escaped spaces): attaches the file, completes paths for the input box, and reads a paste of dropped image files. |
 | `events.ts` | The event bus. A subscriber that throws cannot stop the agent. |
@@ -170,6 +170,7 @@ handled as signature errors, and signature errors do not disable thinking.
 
 - `src/prompts/`: the system prompts per model family, the tool descriptions, the subagent and summary prompts, and the `/init` template.
 - `src/data/`: the models.dev snapshot and the provider profiles, compressed.
+- `src/builtin_skills/`: the skills that ship with Circle, one folder each (`create-pr`). `scripts/copy-assets.ts` copies them to `dist/builtin_skills`, and the desktop build (`apps/desktop/scripts/runtime-assets.mjs`) puts them beside its bundled runtime, inside `app.asar` once packaged. A release without them fails its check (`install_layout.ts`).
 - `scripts/`: building and smoke-testing release packages, the release script, copying assets into `dist/`, and `update-models-dev.ts` (refreshes `src/data/models_dev.json.gz`; run it before a release).
 - `tests/`: one `*.test.ts` file per area, run with Node's test runner through `tsx`. They drive `ScriptedModel` or a local HTTP gateway and need no network.
 
