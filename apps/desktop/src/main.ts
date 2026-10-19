@@ -620,10 +620,19 @@ async function createWindow() {
     // Plan mode does not hand a console over, as it does not hand the browser over
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
+    // The person's own terminal tabs are the runtime's, where their shells are
+    (conversation, session, action) =>
+      runtime
+        ? runtime.terminalTabControl(conversation, session, action)
+        : Promise.reject(Error('the runtime is not connected')),
   );
   popouts = new Popouts<BrowserWindow>({
     create: createPopoutWindow,
     onChange: (event) => broadcast('circle:popout-event', event),
+  });
+  runtime?.onTerminalTabs((update) => {
+    if (update === 'gone') terminals?.tabsGone();
+    else terminals?.tabsChanged(update.conversation, update.rows);
   });
   runtime?.onTerminalCleanup(async (id) => terminals?.releaseSession(id));
   runtime?.onTerminal((request, signal) => {
@@ -1218,13 +1227,22 @@ app
       if (!terminals) throw Error('window not ready');
       return terminals.disconnect(id, session);
     });
+    // A `local:` session is one of the person's own terminal tabs, held in the runtime
     handle('circle:terminal-attach', (id, session) => {
       if (!terminals) throw Error('window not ready');
-      return terminals.attach(id, session);
+      return terminals.isTab(session)
+        ? terminals.tab(id, session, 'take')
+        : terminals.attach(id, session);
     });
     handle('circle:terminal-detach', (id, session) => {
       if (!terminals) throw Error('window not ready');
-      return terminals.detach(id, session);
+      return terminals.isTab(session)
+        ? terminals.tab(id, session, 'return')
+        : terminals.detach(id, session);
+    });
+    handle('circle:terminal-stop', (id, session) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.tab(id, session, 'stop');
     });
     handle('circle:terminal-input', (id, session, text) => {
       if (!terminals) throw Error('window not ready');

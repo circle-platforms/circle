@@ -233,7 +233,11 @@ export interface DesktopBridge {
     sessionId: string,
     session: string,
   ) => Promise<TerminalState>;
-  /** The person takes a console's keys, or gives them back to Circle. */
+  /**
+   * The person takes a console's keys, or gives them back to Circle. For one of their
+   * own terminal tabs (`local:<id>`, a LocalTerminalRow's `id`) taking it means Circle's
+   * read or wait on it ends at once and its typing is refused until it is given back.
+   */
   terminalAttach: (
     sessionId: string,
     session: string,
@@ -242,6 +246,12 @@ export interface DesktopBridge {
     sessionId: string,
     session: string,
   ) => Promise<TerminalState>;
+  /**
+   * The person stops what Circle is doing on one of their terminal tabs (`local:<id>`)
+   * without taking it: the action under way, and any waiting behind it, ends with an
+   * error the model reads. Nothing is typed into the tab by stopping.
+   */
+  terminalStop?: (sessionId: string, session: string) => Promise<TerminalState>;
   /** What the person types while they hold the console. */
   terminalInput: (
     sessionId: string,
@@ -461,6 +471,28 @@ export interface TerminalHostKeyAsk {
   fingerprint: string;
   privateHost: boolean;
 }
+/**
+ * What Circle is doing with one of the person's own terminal tabs: `waiting` while an
+ * approval for it is open, `operating` while one of its tool actions runs on it, `held`
+ * while the person has it (taken, or handed over by Circle), and `idle` otherwise.
+ */
+export type LocalTerminalState = 'idle' | 'waiting' | 'operating' | 'held';
+/** One running shell of the conversation's terminal tabs, as Circle sees it. */
+export interface LocalTerminalRow {
+  /** How the model's terminal tools name it, and the `session` the commands take. */
+  id: string;
+  /** The terminal service's id: the `id` of its TerminalSnapshot. */
+  terminal: string;
+  /** Its tab is named "terminal N" by this, as terminalTabNumbers numbers it. */
+  ordinal: number;
+  state: LocalTerminalState;
+  /** The person allowed Circle's first command here in this conversation. */
+  allowed: boolean;
+  /** Who has it while `held`: the person took it, or Circle handed it over. */
+  held?: 'attach' | 'handoff';
+  /** Why Circle handed it over, in Circle's words. */
+  reason?: string;
+}
 export interface TerminalState {
   /** `terminal:`+conversation, the way the browser routes its events. */
   sessionId: string;
@@ -469,6 +501,8 @@ export interface TerminalState {
   profiles: TerminalProfileRow[];
   pendingKey?: TerminalHostKeyAsk & { profile: string };
   handoff?: { session: string; reason: string };
+  /** The conversation's running terminal tabs (shells, no background commands). */
+  local?: LocalTerminalRow[];
 }
 /** The parts of the drawer that can live in a window of their own. */
 export type PopoutKind = 'browser' | 'terminal';

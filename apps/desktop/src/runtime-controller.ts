@@ -107,7 +107,12 @@ import {
   runtimeTerminalOptions,
   type TerminalPort,
 } from '../../../src/terminal/tools.js';
-import type { TerminalHostKeyApproval } from '../../../src/terminal/protocol.js';
+import {
+  isLocalTerminal,
+  type TerminalHostKeyApproval,
+} from '../../../src/terminal/protocol.js';
+import { LocalTerminals, type LocalTerminalControl } from './local-terminals';
+import type { LocalTerminalRow } from './contracts';
 import {
   loadSecrets,
   removeSecret,
@@ -326,6 +331,11 @@ export interface ControllerOptions {
   browser?: BrowserPort;
   /** The conversation device terminals in the main process. */
   terminal?: TerminalPort;
+  /**
+   * What Circle is doing with a conversation's own terminal tabs changed: the window's
+   * terminal state carries it (TerminalState.local).
+   */
+  emitTerminalTabs?: (conversation: string, rows: LocalTerminalRow[]) => void;
   beforeDelete?: (sessionId: string) => Promise<void>;
 }
 
@@ -348,6 +358,23 @@ export class RuntimeController {
   private runtimes = new SessionRuntimeManager((workspace, sessionId) =>
     this.createRuntime(workspace, sessionId),
   );
+  // The person's own terminal tabs, as the model's terminal tools reach them, and what
+  // the window was last told of each conversation's
+  private readonly terminalTabs = new LocalTerminals({
+    host: (conversation) => this.terminalTabHost(conversation),
+    changed: (conversation) => this.terminalTabsChanged(conversation),
+    mode: (conversation) =>
+      (
+        this.runtimes.get(conversation) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === conversation,
+        )
+      )?.mode,
+    waiting: (conversation) =>
+      new Set(this.terminalTabApprovals().get(conversation) ?? []),
+  });
+  private terminalTabRows = new Map<string, string>();
+  private terminalTabWaits = new Map<string, string>();
   private workspaceSessions = new Map<string, string>();
   private readonly store: CheckpointStore;
   // The last link an extension asked to open; the window opens each id once.
@@ -852,6 +879,10 @@ export class RuntimeController {
     if (errors.length)
       throw new AggregateError(errors, 'session task cleanup failed');
     for (const [id, root] of owned) {
+      // Circle lets go of the conversation's terminal tabs before their shells close
+      this.terminalTabs.release(id);
+      this.terminalTabRows.delete(id);
+      this.terminalTabWaits.delete(id);
       await this.workspaceServices
         .get(this.workspaceRoots.get(root)?.canonical ?? root)
         ?.releaseSession(id);
@@ -1098,11 +1129,70 @@ export class RuntimeController {
         onPersistenceError: (error) => this.workspaceFailure(root, error),
       });
       this.workspaceServices.set(root, services);
+      this.terminalTabs.watch(services.terminals);
     }
     services.setCredentialFiles(
       settingsForRun(this.home, root).settings.credential_files,
     );
     return services;
+  }
+  /** The terminal service of a conversation's folder, if one was opened; never opens one. */
+  private terminalTabHost(conversation: string) {
+    const row = this.store.get(conversation);
+    const root = row && this.workspaceRoots.get(row.workspace)?.canonical;
+    return root ? this.workspaceServices.get(root)?.terminals : undefined;
+  }
+  /** The window is told what Circle does with a conversation's tabs, when that changed. */
+  private terminalTabsChanged(conversation: string): void {
+    if (this.closing) return;
+    const rows = this.terminalTabs.rows(conversation);
+    const shown = JSON.stringify(rows);
+    if (this.terminalTabRows.get(conversation) === shown) return;
+    this.terminalTabRows.set(conversation, shown);
+    this.options.emitTerminalTabs?.(conversation, rows);
+  }
+  /** The tabs each conversation's open approvals are for, as `local:<id>`. */
+  private terminalTabApprovals(): Map<string, string[]> {
+    const waits = new Map<string, string[]>();
+    for (const { row } of this.pending.values()) {
+      const terminal =
+        row.kind === 'approval' ? row.input?.terminal : undefined;
+      if (isLocalTerminal(terminal))
+        waits.set(row.sessionId, [
+          ...(waits.get(row.sessionId) ?? []),
+          terminal,
+        ]);
+    }
+    return waits;
+  }
+  /** An approval for a tab opened or closed: its state is `waiting`, or no longer. */
+  private refreshTerminalTabWaits(): void {
+    const waits = this.terminalTabApprovals();
+    for (const conversation of new Set([
+      ...waits.keys(),
+      ...this.terminalTabWaits.keys(),
+    ])) {
+      const now = JSON.stringify((waits.get(conversation) ?? []).sort());
+      if ((this.terminalTabWaits.get(conversation) ?? '[]') === now) continue;
+      if (now === '[]') this.terminalTabWaits.delete(conversation);
+      else this.terminalTabWaits.set(conversation, now);
+      this.terminalTabsChanged(conversation);
+    }
+  }
+  /**
+   * The person takes one of their terminal tabs (`take`), hands it back (`return`) or
+   * stops what Circle does on it (`stop`), from the window. The answer is the
+   * conversation's tabs as they are now.
+   */
+  async terminalTabControl(
+    conversation: string,
+    session: string,
+    action: LocalTerminalControl,
+  ): Promise<LocalTerminalRow[]> {
+    if (!this.store.get(conversation)) throw Error('session not found');
+    const rows = await this.terminalTabs.control(conversation, session, action);
+    this.terminalTabRows.set(conversation, JSON.stringify(rows));
+    return rows;
   }
   private externalFiles?: ExternalFileGrants;
   private externalGrantOwners = new Map<string, AgentRuntime>();
@@ -1937,6 +2027,13 @@ export class RuntimeController {
         }
         return service.call(id, request.method, request.params);
       });
+    // What the person types in a tab Circle is operating takes it over, before it lands
+    if (request.service === 'terminal' && request.method === 'write')
+      this.terminalTabs.typed(
+        id,
+        String(request.params?.id ?? request.params?.terminalId ?? ''),
+        String(request.params?.data ?? ''),
+      );
     return this.workspaceOperation(command, workspace, request, () =>
       this.services(workspace).call(
         id,
@@ -2081,9 +2178,11 @@ export class RuntimeController {
               }).map((tool) => bindToolResource(tool, 'browser'))
             : []),
           ...(this.options.terminal
-            ? terminalTools(this.options.terminal, {
+            ? terminalTools(this.terminalTabs.port(this.options.terminal), {
                 confirm: (_sessionId, approval, signal, callId) =>
                   this.confirmHostKey(runtime, approval, signal, callId),
+                // The person's own terminal tabs, beside the device consoles
+                tabs: this.terminalTabs,
                 ...runtimeTerminalOptions(() => runtime),
               })
             : []),
@@ -3152,6 +3251,7 @@ export class RuntimeController {
       event,
     };
     this.options.emit(update);
+    this.refreshTerminalTabWaits();
     return update;
   }
   private event(
@@ -5402,6 +5502,7 @@ export class RuntimeController {
     for (const pending of this.pending.values())
       pending.reject(new Error('runtime closed'));
     this.pending.clear();
+    this.terminalTabs.close();
     await Promise.all(
       [...this.taskServices.values()].map((service) => service.close()),
     );

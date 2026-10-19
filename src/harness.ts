@@ -1439,7 +1439,7 @@ export class Harness {
       let resolved = expandVariables(raw, { ...variables, ...secrets }, used);
       call = { ...call, args: expandVariables(raw, variables) };
       // After the arguments were checked, from the values: the model cannot give these itself
-      const facts = tool.approvalFacts?.(resolved, this.sessionId);
+      const facts = tool.approvalFacts?.(resolved, this.sessionId, call.args);
       if (facts) {
         call = { ...call, args: { ...call.args, ...facts } };
         resolved = { ...resolved, ...facts };
@@ -1471,7 +1471,10 @@ export class Harness {
         call.name,
         call.args,
       );
-      const alwaysAsk = found.verdict === 'ASK_FORCED';
+      // A first write to one of the person's terminal tabs asks as well, in every mode
+      const alwaysAsk =
+        found.verdict === 'ASK_FORCED' ||
+        this.options.policy.firstUse(call.name, resolved);
       const hookAsk = before?.decision === 'ask';
       const hookAllow = before?.decision === 'allow' && !alwaysAsk;
       if (hookAllow) hookLine = HOOK_ALLOWED_LINE;

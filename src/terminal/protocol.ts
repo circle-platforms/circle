@@ -55,6 +55,13 @@ export interface TerminalReply {
   error?: string;
   data?: TerminalResult;
 }
+/**
+ * How the tools name one of the person's own terminal tabs in the desktop application:
+ * `local:` and the id the terminal service gives it. Device consoles are `t1`, `t2`….
+ */
+export const LOCAL_TERMINAL = 'local:';
+export const isLocalTerminal = (session: unknown): session is string =>
+  typeof session === 'string' && session.startsWith(LOCAL_TERMINAL);
 // The keys `press` knows, as the bytes a terminal console expects with no special modes
 // on: control bytes, carriage return, and the arrow keys' normal-mode sequences.
 export const TERMINAL_KEYS: Record<string, string> = {

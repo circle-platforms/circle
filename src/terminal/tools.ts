@@ -8,6 +8,7 @@ import type { Effect, Tool, ToolContext } from '../types.js';
 import type { AgentRuntime } from '../runtime.js';
 import { standsIn } from '../secrets.js';
 import {
+  isLocalTerminal,
   TERMINAL_KEYS,
   type TerminalAction,
   type TerminalApproval,
@@ -144,11 +145,45 @@ export type TerminalConfirm = (
   callId?: string,
 ) => Promise<'once' | 'always' | 'reject' | 'auto'>;
 
+/**
+ * The person's own terminal tabs, where the host has them (the desktop application): what
+ * a write to one types and runs, for its approval. It throws for a call that cannot run,
+ * so no card is shown for it.
+ */
+export interface TerminalTabFacts {
+  facts(
+    conversation: string,
+    action: TerminalAction,
+    args: Record<string, unknown>,
+    shown: Record<string, unknown>,
+  ): Record<string, unknown>;
+}
+
 export interface TerminalToolOptions {
   confirm?: TerminalConfirm;
   /** The person's saved device profiles, read the way the manager reads them. */
   profiles?: () => TerminalProfile[];
+  /** The person's terminal tabs, as `local:<id>` sessions beside the devices. */
+  tabs?: TerminalTabFacts;
 }
+
+// What the tools say of the person's terminal tabs, where the host has them.
+const TAB_NOTES: Record<string, string> = {
+  terminal_sessions:
+    "\n- In the desktop application it also lists the user's own terminal tabs on this computer, as `local:<id>` and the name their tab has (`terminal 1`). The same tools read, wait on, type in and press keys in them.",
+  terminal_send:
+    "\n- In one of the user's terminal tabs (`local:…`) the first thing you type asks the user. After that a line you send with Enter, or with a line break, is approved like an `execute` command, by the same rules; typing without Enter does not ask. Text there takes no control characters: press keys with terminal_press. If the user takes the tab over, typing is refused until they hand it back.",
+  terminal_press:
+    "\n- In one of the user's terminal tabs (`local:…`) the first key asks the user. After that Enter and Ctrl_D run the line at the prompt and are approved like an `execute` command; other keys do not ask.",
+  terminal_read:
+    "\n- One of the user's terminal tabs reads the same way, without asking. While the user has taken it over, the result says so and shows nothing.",
+  terminal_wait:
+    '\n- If the user takes one of their terminal tabs over while you wait on it, the wait ends at once and says so.',
+  terminal_disconnect:
+    "\n- The user's own terminal tabs (`local:…`) are theirs: they cannot be closed from here.",
+  terminal_handoff:
+    "\n- One of the user's terminal tabs (`local:…`) can be handed over the same way.",
+};
 
 // Device words that can wipe what a device holds: one of them in a sent line asks every
 // time, rule aside, the way deleting files does. Whole words only: `reset` inside a path
@@ -180,7 +215,7 @@ export function terminalTools(
   port: TerminalPort,
   options: TerminalToolOptions = {},
 ): Tool[] {
-  const { confirm, profiles = () => [] } = options;
+  const { confirm, profiles = () => [], tabs } = options;
   // Each conversation's devices: the host of every session the model has seen, and the
   // last one, kept from each result like the browser keeps the site of its page
   const hosts = new Map<string, Map<string, string>>();
@@ -284,13 +319,20 @@ export function terminalTools(
     required: string[] = [],
   ): Tool => ({
     name,
-    description: loadToolPrompt(name),
+    description: loadToolPrompt(name) + (tabs ? (TAB_NOTES[name] ?? '') : ''),
     effect,
     subagents: false,
     ...(effect === 'read'
       ? {}
       : {
-          approvalFacts: (args: Record<string, unknown>, sessionId: string) => {
+          approvalFacts: (
+            args: Record<string, unknown>,
+            sessionId: string,
+            shown?: Record<string, unknown>,
+          ) => {
+            // A terminal tab's write is judged by what it types and runs
+            if (tabs && isLocalTerminal(args.session))
+              return tabs.facts(sessionId, action, args, shown ?? args);
             const host = hostFor(action, args, sessionId);
             // What the line can destroy on the device, from the text as it will run
             // (secrets already expanded); only the matched word is ever named
@@ -317,7 +359,9 @@ export function terminalTools(
   });
   const session = {
     type: 'string',
-    description: 'The terminal of this conversation, such as t1',
+    description: tabs
+      ? "The terminal of this conversation: a device such as t1, or one of the user's terminal tabs as local:<id>"
+      : 'The terminal of this conversation, such as t1',
   };
   return [
     tool('terminal_sessions', 'sessions', 'read', {}),

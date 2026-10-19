@@ -615,3 +615,80 @@ test('quitting while a restart waits for stale leases cancels it', async (t) => 
   );
   assert(Date.now() - started < 30_000, 'close did not wait for the restart');
 });
+
+test('what the runtime says of the terminal tabs reaches the window only when it is well formed, and a tab action is the runtime’s to answer', async (t) => {
+  const logFile = await scratchLog(t);
+  await fixture(
+    async (supervisor, child) => {
+      const updates: unknown[] = [];
+      supervisor.onTerminalTabs((update) => updates.push(update));
+      const row = {
+        id: 'local:abc',
+        terminal: 'abc',
+        ordinal: 1,
+        state: 'operating',
+        allowed: true,
+      };
+      child.emit('message', {
+        type: 'terminal-tabs',
+        conversation: 'c1',
+        rows: [row],
+      });
+      // a row whose id is not its terminal's, or a conversation that is not an id
+      child.emit('message', {
+        type: 'terminal-tabs',
+        conversation: 'c1',
+        rows: [{ ...row, id: 'local:other' }],
+      });
+      child.emit('message', {
+        type: 'terminal-tabs',
+        conversation: '../c1',
+        rows: [row],
+      });
+      assert.deepEqual(updates, [{ conversation: 'c1', rows: [row] }]);
+      const taken = supervisor.terminalTabControl('c1', 'local:abc', 'take');
+      const controls = () =>
+        child.sent.filter((message) => message.type === 'terminal-tab-control');
+      assert.deepEqual(
+        { ...controls()[0], id: undefined },
+        {
+          type: 'terminal-tab-control',
+          id: undefined,
+          conversation: 'c1',
+          session: 'local:abc',
+          action: 'take',
+        },
+      );
+      const held = { ...row, state: 'held', held: 'attach' };
+      child.emit('message', {
+        type: 'terminal-tab-reply',
+        id: controls()[0]!.id,
+        ok: true,
+        rows: [held],
+      });
+      assert.deepEqual(await taken, [held]);
+      const refused = supervisor.terminalTabControl('c1', 'local:abc', 'stop');
+      child.emit('message', {
+        type: 'terminal-tab-reply',
+        id: controls()[1]!.id,
+        ok: false,
+        error: 'no terminal local:abc in this conversation',
+      });
+      await assert.rejects(
+        refused,
+        /no terminal local:abc in this conversation/,
+      );
+      // the runtime ends: the action under way fails and the window forgets the tabs
+      const pending = supervisor.terminalTabControl(
+        'c1',
+        'local:abc',
+        'return',
+      );
+      child.emit('exit', 1);
+      await assert.rejects(pending, /the runtime stopped/);
+      assert.equal(updates.at(-1), 'gone');
+    },
+    { logFile, restartDelayMs: 60_000 },
+    configured,
+  );
+});
