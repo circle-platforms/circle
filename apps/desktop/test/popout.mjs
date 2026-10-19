@@ -523,7 +523,10 @@ try {
     },
     timeout: 60000,
   });
-  await liveApp.evaluate(() => {
+  await liveApp.evaluate(({ app }) => {
+    // UI Automation and screen readers can enable this on Windows. Exercise the
+    // same input path rather than depending on the person's accessibility state.
+    app.setAccessibilitySupportEnabled(true);
     globalThis.mainProcessErrors = [];
     process.on('uncaughtException', (error) =>
       globalThis.mainProcessErrors.push(String(error)),
@@ -628,9 +631,12 @@ try {
     .click();
   const input = liveTerminal.locator('.xterm-helper-textarea');
   await input.waitFor({ timeout: patience(20000) });
+  await liveTerminal.locator('.xterm-accessibility').waitFor();
   const mark = `CIRCLE_POPOUT_MARK_${Date.now()}`;
   await input.focus();
-  await liveTerminal.keyboard.insertText(`echo ${mark}`);
+  // xterm intentionally ignores insertText's input-only event in screen-reader
+  // mode. Actual typing includes key events, as the person's keyboard does.
+  await liveTerminal.keyboard.type(`echo ${mark}`);
   await liveTerminal.keyboard.press('Enter');
   // Find reads what the shell has printed when it is asked, so it waits for the mark's
   // own line of output, which a slow shell prints later.
