@@ -140,7 +140,6 @@ export interface Session {
       follow: boolean;
       anchor?: { messageId: string; offset: number };
     };
-    planCollapsed?: boolean;
     disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
     toolTabs?: Record<string, 'input' | 'output'>;
   };

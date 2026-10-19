@@ -163,7 +163,6 @@ test('session presentation survives background snapshots and switching without r
     ];
     target.presentation = {
       scroll: { top: 123, follow: false },
-      planCollapsed: true,
       disclosures: { 'thinking:a': { open: true, defaultOpen: false } },
       toolTabs: { 'a-tool': 'input' },
     };
@@ -195,7 +194,6 @@ test('session presentation survives background snapshots and switching without r
   assert.equal(restored.attachments[0]!.content, 'A bytes');
   assert.deepEqual(restored.presentation?.scroll, { top: 123, follow: false });
   assert.equal(restored.presentation?.disclosures?.['thinking:a']?.open, true);
-  assert.equal(restored.presentation?.planCollapsed, true);
   assert.equal(restored.presentation?.toolTabs?.['a-tool'], 'input');
   assert.equal(restored.messages.at(-1)!.text, 'new saved answer');
   assert.equal(

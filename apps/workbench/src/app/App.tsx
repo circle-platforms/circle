@@ -43,7 +43,6 @@ import {
   Sun,
   Moon,
   X,
-  ChevronLeft,
   Users,
   FileText,
   Command,
@@ -71,13 +70,9 @@ import {
   IconButton,
   Modal,
   SearchInput,
-  Status,
-  Facts,
   DataBlock,
   EmptyState,
 } from '../components/common';
-import { Markdown } from '../components/Markdown';
-import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
 import { Home } from '../features/Home';
 import { homePath, openHome, startPath } from '../features/home-selection';
@@ -94,7 +89,6 @@ import {
 } from '../model/workspace-client';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { SourceNavigation } from '../components/SourceNavigation';
-import { agentState } from '../model/activity';
 import {
   agentSourceOwner,
   type SourceResourceOwner,
@@ -404,7 +398,12 @@ export function App() {
         )
       : null;
     if (drawer !== null) setDrawerNow(drawer);
-    handle.resize(clusterWidth({ overviewShown, drawer }));
+    // The panel takes its new limits as it renders; asked at once, it would still hold
+    // the old ones and keep the column at the least width the drawer can have.
+    const frame = requestAnimationFrame(() =>
+      handle.resize(clusterWidth({ overviewShown, drawer })),
+    );
+    return () => cancelAnimationFrame(frame);
   }, [overviewShown, drawerSplit, modeKey, narrow, whole, groupWidth === 0]);
   // The changes card's button: Circle loads the create-pr skill and does it.
   const startPullRequest = (action: 'create' | 'update') =>
@@ -1079,9 +1078,6 @@ export function App() {
     location.pathname,
     location.search,
   ]);
-  const activeAgent = snapshot.agents.find(
-    (item) => item.id === agent && item.sessionId === session.id,
-  );
   const pluginPage = pluginPages.find((item) => item.page.id === page);
   const installedPage = registry.plugins.find((plugin) =>
     plugin.pages?.some((item) => item.id === page),

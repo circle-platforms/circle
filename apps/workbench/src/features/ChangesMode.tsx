@@ -26,7 +26,7 @@ const LETTER_TITLE = {
 function Counts({ row }: { row: ChangeRow }) {
   if (row.added === null && row.removed === null) return null;
   return (
-    <span className="change-counts">
+    <span className="changes-counts">
       {!!row.added && <span className="add">+{row.added}</span>}
       {!!row.removed && <span className="del">−{row.removed}</span>}
     </span>
@@ -166,12 +166,12 @@ export function ChangesMode({
         </p>
       ) : (
         <>
-          <ul className="change-list" aria-label={t('changed files')}>
+          <ul className="changes-list" aria-label={t('changed files')}>
             {rows.map((row) => (
               <li key={row.path}>
                 <button
                   type="button"
-                  className="change-row"
+                  className="changes-row"
                   aria-current={row.path === current?.path || undefined}
                   title={row.path}
                   onClick={() => setChosen(row.path)}
@@ -183,9 +183,9 @@ export function ChangesMode({
                   >
                     {row.letter}
                   </span>
-                  <span className="change-name">{row.name}</span>
+                  <span className="changes-name">{row.name}</span>
                   {row.folder && (
-                    <small className="change-folder">{row.folder}</small>
+                    <small className="changes-folder">{row.folder}</small>
                   )}
                   <Counts row={row} />
                 </button>
@@ -193,7 +193,7 @@ export function ChangesMode({
             ))}
           </ul>
           {current && (
-            <div className="change-file">
+            <div className="changes-file">
               <header>
                 <span
                   className="overview-letter"
@@ -202,7 +202,7 @@ export function ChangesMode({
                 >
                   {current.letter}
                 </span>
-                <span className="change-path" title={current.path}>
+                <span className="changes-path" title={current.path}>
                   {current.path}
                 </span>
                 {current.letter !== 'D' && (
@@ -212,7 +212,7 @@ export function ChangesMode({
                   </Button>
                 )}
               </header>
-              <div className="change-diff">
+              <div className="changes-diff">
                 {diff ? (
                   <DiffBlock diff={diff} compact />
                 ) : scope === 'all' && live ? (

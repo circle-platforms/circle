@@ -1060,40 +1060,6 @@ pre {
   font-size: inherit;
   color: inherit;
 }
-.plan {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin: 0 0 10px;
-  font-size: var(--ui-small);
-  flex-shrink: 0;
-}
-.plan-title {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  padding: 8px 12px;
-  color: var(--secondary);
-  font-size: var(--ui-tiny);
-}
-.plan-title > span:last-child {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-}
-.plan-items {
-  position: relative;
-  padding: 0 12px;
-  /* Whole rows, so none is cut in half; the space under them is a margin, outside the
-     scrolled rows. The step under way is scrolled into sight. */
-  margin-bottom: 9px;
-  max-height: calc(4 * (1.8em + 4px));
-  overflow: auto;
-}
-.plan-items:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
 .archive-banner {
   display: flex;
   align-items: center;
@@ -1103,35 +1069,6 @@ pre {
   color: var(--secondary);
   border-top: 1px solid var(--border);
   font-size: var(--ui-small);
-}
-.plan-items > div {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  line-height: 1.8;
-  padding: 2px 0;
-  color: var(--secondary);
-}
-.plan-items > div > span {
-  width: 12px;
-  display: grid;
-  place-items: center;
-}
-.plan-items i {
-  width: 5px;
-  height: 5px;
-  border: 1px solid var(--muted);
-  border-radius: 50%;
-}
-.plan-items .completed {
-  color: var(--muted);
-}
-.plan-items .running {
-  color: var(--fg);
-}
-.plan-items .running i {
-  background: var(--accent);
-  border-color: var(--accent);
 }
 .interaction-summary {
   display: flex;
@@ -1206,40 +1143,6 @@ pre {
   text-overflow: ellipsis;
   color: var(--muted);
   font-size: var(--ui-tiny);
-}
-.running-strip {
-  border-top: 1px solid var(--border);
-  margin-top: 3px;
-  max-height: 91px;
-  overflow: auto;
-  padding-top: 5px;
-}
-.running-strip button {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  gap: 8px;
-  font-size: var(--ui-tiny);
-  padding: 4px 1px;
-  text-align: left;
-  color: var(--muted);
-}
-.running-strip button > span:not(.status):not(.agent-dot) {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.running-strip strong {
-  font-weight: 500;
-  color: var(--secondary);
-}
-.agent-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--accent);
 }
 .attachment-strip,
 .message-attachments {
@@ -1668,139 +1571,6 @@ pre {
   font-size: var(--ui-small);
   line-height: 1.8;
 }
-/* Device terminals: the conversation's consoles, painted by xterm.js. The panel sits
- * flush in the inspector and owns its scroll; only the screen column stretches. */
-.device-terminal {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  font-family: var(--mono);
-}
-/* The panel's own toolbar: a new connection, and what the open console offers. */
-.terminal-toolbar {
-  display: flex;
-  align-items: center;
-  /* A narrow panel wraps the controls instead of clipping the last one off. */
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-/* Seen whole there is room for the whole profile list, not just its header. */
-.workspace-content.whole .terminal-profiles {
-  max-height: none;
-}
-.terminal-status {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.terminal-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-/* A quick connect, as SecureCRT's: the fields share a row and wrap when narrow. */
-.terminal-connect {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 8px;
-  padding: 10px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.terminal-connect label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: var(--ui-tiny);
-  color: var(--muted);
-}
-.terminal-connect input,
-.terminal-connect select {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg);
-  color: var(--fg);
-  font-size: var(--ui-small);
-  font-family: var(--mono);
-}
-.terminal-connect .panel-note,
-.terminal-connect .field-problem,
-.terminal-connect .dialog-actions {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-/* Open consoles as tabs across the top of the screen, as SecureCRT lists them. */
-.terminal-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 6px 8px 0;
-  overflow-x: auto;
-  flex-shrink: 0;
-}
-.terminal-tab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 190px;
-  padding: 5px 8px;
-  border: 1px solid var(--border);
-  border-bottom: 0;
-  border-radius: 6px 6px 0 0;
-  background: var(--subtle);
-  font-size: var(--ui-tiny);
-  cursor: pointer;
-}
-.terminal-tab.active {
-  background: var(--surface);
-  border-color: var(--accent);
-}
-.terminal-tab .lamp {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--muted);
-  flex-shrink: 0;
-}
-.terminal-tab .lamp-connecting {
-  background: var(--accent);
-}
-.terminal-tab .lamp-ready {
-  background: var(--secondary);
-}
-.terminal-tab .lamp-wait {
-  background: var(--logo-gradient);
-}
-.terminal-tab .lamp-error {
-  background: var(--negative);
-}
-.terminal-tab-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.terminal-tab-close {
-  display: grid;
-  place-items: center;
-  padding: 2px;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.terminal-tab-close:hover {
-  background: var(--hover);
-  color: var(--fg);
-}
 .terminal-ask,
 .terminal-handoff {
   display: flex;
@@ -1824,50 +1594,6 @@ pre {
 .terminal-ask > div {
   display: flex;
   gap: 7px;
-}
-.terminal-screen {
-  flex: 1;
-  min-height: 100px;
-  overflow: hidden;
-  padding: 6px 4px 0 10px;
-}
-.terminal-screen .xterm {
-  height: 100%;
-}
-/* Saved profiles stay listed while nothing is open, so a person can start one. */
-.terminal-profiles {
-  border-top: 1px solid var(--border);
-  padding: 9px 13px 11px;
-  flex-shrink: 0;
-  max-height: 34%;
-  overflow: auto;
-}
-.terminal-profiles h3 {
-  margin: 0 0 7px;
-  font-size: var(--ui-tiny);
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.terminal-profile {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  width: 100%;
-  padding: 5px 4px;
-  border: 0;
-  background: none;
-  color: var(--fg);
-  font: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-.terminal-profile:hover {
-  background: var(--hover);
-}
-.terminal-profile small {
-  color: var(--muted);
-  font-size: var(--ui-tiny);
 }
 
 .file-view,
@@ -3195,12 +2921,6 @@ pre {
   }
   .usage-bar i {
     display: none;
-  }
-  .running-strip {
-    max-height: 46px;
-  }
-  .plan-items {
-    max-height: calc(3 * (1.8em + 4px));
   }
   .tool-head {
     gap: 6px;
@@ -4841,53 +4561,6 @@ pre {
   margin: 5px 4px;
   background: var(--border);
 }
-.context-ring {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 28px;
-  border-radius: 7px;
-}
-.context-ring:hover,
-.context-ring[data-state='open'] {
-  background: var(--hover);
-}
-.context-ring svg {
-  transform: rotate(-90deg);
-}
-.context-ring circle {
-  fill: none;
-  stroke-width: 2.2;
-}
-.context-ring .track {
-  stroke: var(--border);
-}
-.context-ring .fill {
-  stroke: var(--muted);
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.3s ease;
-}
-.context-ring.high .fill {
-  stroke: var(--attention);
-}
-.context-ring.full .fill {
-  stroke: var(--negative);
-}
-.ring-badge {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  border-radius: 7px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 9px;
-  line-height: 13px;
-  text-align: center;
-}
 .popover {
   z-index: 95;
   min-width: 240px;
@@ -4898,45 +4571,7 @@ pre {
   box-shadow: 0 10px 30px color-mix(in srgb, var(--fg) 14%, transparent);
   font-size: var(--ui-small);
 }
-.usage-popover dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 7px 18px;
-  margin: 0 0 10px;
-}
-.usage-popover dt {
-  color: var(--muted);
-}
-.usage-popover dd {
-  margin: 0;
-  text-align: right;
-  font-family: var(--mono);
-}
-.usage-popover dd.high {
-  color: var(--attention);
-}
-.usage-popover dd.full {
-  color: var(--negative);
-}
-.usage-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-.usage-actions button {
-  padding: 6px 8px;
-  border-radius: 6px;
-  text-align: left;
-  color: var(--secondary);
-}
-.usage-actions button:hover {
-  background: var(--hover);
-  color: var(--fg);
-}
 .interaction-summary,
-.plan,
 .queue {
   border-radius: 12px;
 }

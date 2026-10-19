@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { DropdownMenu, Popover } from 'radix-ui';
+import { DropdownMenu } from 'radix-ui';
 import {
   Check,
   ChevronDown,
@@ -8,10 +7,9 @@ import {
   ListChecks,
   Zap,
 } from 'lucide-react';
-import type { Effort, Job, Model, Session, SessionMode } from '../model/types';
+import type { Effort, Model, Session, SessionMode } from '../model/types';
 import { EFFORTS, MODES, sessionMode } from '../model/state';
-import { contextPercent, formatTokens, formatWindow } from '../model/format';
-import { t, tn } from '../i18n';
+import { t } from '../i18n';
 import './composer.css';
 
 export const MODE_TEXT: Record<
@@ -275,115 +273,5 @@ export function EffortMenu({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
-  );
-}
-
-/**
- * The context as a ring at the end of the footbar, as Claude shows it: how full the
- * window is after the last answer, orange from 70% and red from 90%. Its popover has
- * the terminal footer's numbers (tokens, cost, cache) and the session's actions.
- */
-export function ContextRing({
-  session,
-  jobs,
-  onCompact,
-  onJobs,
-  onDetails,
-}: {
-  session: Session;
-  jobs: Job[];
-  onCompact: () => void;
-  onJobs: () => void;
-  onDetails: () => void;
-}) {
-  const meters = session.meters;
-  const running = jobs.filter((job) => job.state === 'running').length;
-  const percent = contextPercent(meters?.contextInput, meters?.contextWindow);
-  const level =
-    percent === null
-      ? ''
-      : percent >= 90
-        ? 'full'
-        : percent >= 70
-          ? 'high'
-          : '';
-  const cache =
-    meters?.cache ??
-    (meters && meters.input
-      ? `${((Math.min(meters.cacheRead, meters.input) / meters.input) * 100).toFixed(1)}%`
-      : 'N/A');
-  const context =
-    meters && meters.contextInput !== null
-      ? meters.contextWindow
-        ? `${formatTokens(meters.contextInput)} / ${formatWindow(meters.contextWindow)} (${Math.round(percent ?? 0)}%)`
-        : `${formatTokens(meters.contextInput)} / N/A`
-      : 'N/A';
-  const radius = 6.5;
-  const around = 2 * Math.PI * radius;
-  return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <button
-          className={`context-ring ${level}`}
-          aria-label={t('context and usage')}
-          title={t('context {value}', { value: context })}
-        >
-          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
-            <circle className="track" cx="9" cy="9" r={radius} />
-            <circle
-              className="fill"
-              cx="9"
-              cy="9"
-              r={radius}
-              strokeDasharray={around}
-              strokeDashoffset={
-                around * (1 - Math.min(100, percent ?? 0) / 100)
-              }
-            />
-          </svg>
-          {running > 0 && <span className="ring-badge">{running}</span>}
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          className="popover usage-popover"
-          side="top"
-          align="end"
-          sideOffset={8}
-        >
-          <dl>
-            <dt>{t('context')}</dt>
-            <dd className={level}>{context}</dd>
-            <dt>{t('tokens')}</dt>
-            <dd>
-              {meters
-                ? `↑ ${meters.inputUnknown ? 'N/A' : formatTokens(meters.input)} · ↓ ${formatTokens(meters.output)}`
-                : 'N/A'}
-            </dd>
-            <dt>{t('cost')}</dt>
-            <dd title={t('estimated from the model’s published prices')}>
-              {meters?.cost ?? 'N/A'}
-            </dd>
-            <dt>{t('cache')}</dt>
-            <dd>{cache === 'N/A' ? t('cache N/A') : cache}</dd>
-          </dl>
-          <div className="usage-actions">
-            <Popover.Close asChild>
-              <button onClick={onCompact}>{t('compact context')}</button>
-            </Popover.Close>
-            {running > 0 && (
-              <Popover.Close asChild>
-                <button onClick={onJobs}>
-                  {tn(running, '{n} job running', '{n} jobs running')}
-                </button>
-              </Popover.Close>
-            )}
-            <Popover.Close asChild>
-              <button onClick={onDetails}>{t('session details')}</button>
-            </Popover.Close>
-          </div>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
   );
 }

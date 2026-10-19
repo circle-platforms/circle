@@ -36,7 +36,7 @@
 .changes-mode > .panel-note {
   margin: 4px 16px;
 }
-.change-list {
+.changes-list {
   display: flex;
   flex: none;
   flex-direction: column;
@@ -48,7 +48,7 @@
   border-bottom: 1px solid var(--border);
   list-style: none;
 }
-.change-row {
+.changes-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -60,23 +60,23 @@
   text-align: left;
   white-space: nowrap;
 }
-.change-row:hover {
+.changes-row:hover {
   background: var(--hover);
 }
-.change-row[aria-current] {
+.changes-row[aria-current] {
   background: var(--active);
 }
-.change-row .overview-letter,
-.change-file .overview-letter {
+.changes-row .overview-letter,
+.changes-file .overview-letter {
   flex: none;
 }
-.change-name {
+.changes-name {
   flex: none;
   max-width: 60%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.change-folder {
+.changes-folder {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -84,7 +84,7 @@
   font-size: var(--ui-tiny, 11px);
   text-overflow: ellipsis;
 }
-.change-counts {
+.changes-counts {
   display: flex;
   flex: none;
   gap: 6px;
@@ -92,20 +92,20 @@
   font-family: var(--mono);
   font-size: var(--ui-small);
 }
-.change-counts .add {
+.changes-counts .add {
   color: var(--accent);
 }
-.change-counts .del {
+.changes-counts .del {
   color: var(--negative);
 }
-.change-file {
+.changes-file {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
   padding: 0 16px;
 }
-.change-file > header {
+.changes-file > header {
   display: flex;
   flex: none;
   align-items: center;
@@ -113,14 +113,14 @@
   padding: 10px 0 6px;
   font-size: var(--ui-size);
 }
-.change-path {
+.changes-path {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.change-diff {
+.changes-diff {
   flex: 1;
   min-height: 0;
   overflow: auto;

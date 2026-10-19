@@ -34,4 +34,12 @@ export const workspace: Record<string, string> = {
   'reading the difference…': '正在读取差异…',
   'skills are not available here': '这里不能使用技能',
   'stop subagent': '停止子代理',
+  address: '地址',
+  'close terminal': '关闭终端',
+  'connect new device': '连接新设备',
+  'connect new device…': '连接新设备…',
+  'connect to a device': '连接设备',
+  'new local terminal': '新建本地终端',
+  'new terminal or device': '新建终端或连接设备',
+  'terminal {n}': '终端 {n}',
 };
