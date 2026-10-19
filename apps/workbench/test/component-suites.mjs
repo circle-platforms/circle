@@ -38,7 +38,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'runtime-failure-ui.mjs',
   'session-navigation-ui.mjs',
   'response-readability-ui.mjs',
-  'inspector-width-ui.mjs',
+  'workspace-layout-ui.mjs',
   'agent-source-return-ui.mjs',
   'agent-source-owner-ui.mjs',
   'native-terminal-context-ui.mjs',
@@ -119,7 +119,7 @@ export async function runComponentSuites({
       CIRCLE_FAILURE_UI_EVIDENCE: join(directory, 'runtime-failure'),
       CIRCLE_SESSION_NAV_EVIDENCE: join(directory, 'session-navigation'),
       CIRCLE_RESPONSE_UI_EVIDENCE: join(directory, 'response-readability'),
-      CIRCLE_INSPECTOR_WIDTH_EVIDENCE: join(directory, 'inspector-width'),
+      CIRCLE_WORKSPACE_LAYOUT_EVIDENCE: join(directory, 'workspace-layout'),
     };
     const child = spawn(process.execPath, [...nodeArguments, file], {
       cwd: root,

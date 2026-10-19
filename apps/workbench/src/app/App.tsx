@@ -1548,6 +1548,14 @@ export function App() {
                     id="inspector"
                     panelRef={clusterPanel}
                     groupResizeBehavior="preserve-pixel-size"
+                    // What the drawer is, as laid out: the handle and its keys start from it.
+                    onResize={(size) => {
+                      if (narrow || whole || !drawerSplit) return;
+                      const width = Math.round(
+                        size.inPixels - (overviewShown ? OVERVIEW_WIDTH : 0),
+                      );
+                      if (width >= MIN_DRAWER) setDrawerNow(width);
+                    }}
                     minSize={
                       narrow
                         ? 0
