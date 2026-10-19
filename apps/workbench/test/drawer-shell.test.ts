@@ -38,7 +38,10 @@ test(
       page.setDefaultTimeout(10000);
       const errors: string[] = [];
       page.on('pageerror', (error) => errors.push(String(error)));
-      await page.goto(server.resolvedUrls!.local[0]!);
+      // Loading the window's 200 modules is setup too: on a busy Intel runner it
+      // passed 10 s with nothing left to compile (#185). The composer appearing is
+      // the interface's first step.
+      await page.goto(server.resolvedUrls!.local[0]!, { timeout: 0 });
       const composer = page.locator('.composer textarea');
       await composer.waitFor();
       await composer.fill('draft retained while reading a source document');
