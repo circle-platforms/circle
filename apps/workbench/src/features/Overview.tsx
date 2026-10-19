@@ -352,7 +352,7 @@ export function Overview({
           onToggle={() => toggle('progress')}
           summary={progressSummary}
         >
-          {progress.plan?.current && (
+          {progress.plan && (
             <Row end={t('plan')}>
               <Dot state="run" />
               <span className="overview-name">
