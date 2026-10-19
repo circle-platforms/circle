@@ -215,3 +215,19 @@ test('owned snapshots cannot be changed by caller mutation, and retained events 
     new TextEncoder().encode(JSON.stringify(store.snapshot(key))).byteLength,
   );
 });
+test('a checkpoint holding events of services an earlier version had restores, so a reload need not replay everything again', () => {
+  const store = new WorkspaceStreamStore();
+  // the journal of a folder used by 1.9.0 still holds automatic delivery's events
+  assert.equal(
+    store.apply({ ...event(1), service: 'cycles' as never, resourceId: 'c1' }),
+    'applied',
+  );
+  assert.equal(store.apply(event(2)), 'applied');
+  const reloaded = new WorkspaceStreamStore();
+  assert.equal(reloaded.restore(store.checkpoint()), true);
+  assert.deepEqual(reloaded.cursor, store.cursor);
+  // a service no version had is still refused
+  const strange = store.checkpoint();
+  strange.resources[0]!.events[0]!.service = 'unknown' as never;
+  assert.equal(new WorkspaceStreamStore().restore(strange), false);
+});
