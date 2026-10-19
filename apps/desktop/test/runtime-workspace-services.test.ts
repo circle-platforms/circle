@@ -636,7 +636,11 @@ test('a replaced trusted root cannot redirect an existing session into another t
   assert.equal(initial.ok, true);
   const revision = (initial.data as any).revision;
   await moveAside(f.workspace);
-  await symlink(other, f.workspace, 'dir');
+  await symlink(
+    other,
+    f.workspace,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
   for (const [service, method, params] of [
     ['documents', 'read', { path: 'marker.txt' }],
     [

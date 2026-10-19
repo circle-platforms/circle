@@ -57,6 +57,15 @@ const validSession = (value: unknown): string => {
     throw Error('invalid terminal');
   return value;
 };
+// A saved profile's display name follows profiles.ts, not the session-id grammar.
+const validProfile = (value: unknown): string => {
+  if (
+    typeof value !== 'string' ||
+    !/^[^\s\x00-\x1f\x7f][^\x00-\x1f\x7f]{0,99}$/.test(value)
+  )
+    throw Error('invalid terminal profile');
+  return value;
+};
 // A quick connect names a device, not a profile: the same shape the tools take,
 // checked here because the bridge is not trusted input.
 interface TerminalTargetArgs extends Record<string, unknown> {
@@ -210,7 +219,7 @@ export class TerminalPanelHost {
     profile: unknown,
   ): Promise<TerminalState> {
     const own = validConversation(conversation);
-    const name = validSession(profile);
+    const name = validProfile(profile);
     const stop = new AbortController();
     let result = await this.manager.request(
       own,

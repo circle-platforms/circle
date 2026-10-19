@@ -203,6 +203,7 @@ export class TaskService {
   private readonly scheduler: CollaborationScheduler;
   private readonly workspace: string;
   private readonly canonicalWorkspace: string;
+  private readonly canonicalDataDir: string;
   private readonly settingsPath: string;
   private readonly pending = new Set<Promise<unknown>>();
   private readonly records = new Map<string, TaskRecord>();
@@ -218,6 +219,7 @@ export class TaskService {
     this.workspace = realpathSync(options.workspace);
     this.canonicalWorkspace = realpathSync.native(options.workspace);
     mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
+    this.canonicalDataDir = realpathSync.native(options.dataDir);
     if (options.resources && !options.settingsPath)
       throw new Error('shared task resources require a shared settings path');
     if (options.settingsPath && !isAbsolute(options.settingsPath))
@@ -766,7 +768,20 @@ export class TaskService {
     ])
       if (root)
         try {
-          roots.push(await realpath(root));
+          const withinData = relative(this.options.dataDir, root);
+          const expected =
+            !isAbsolute(withinData) &&
+            withinData !== '..' &&
+            !withinData.startsWith('../') &&
+            !withinData.startsWith('..\\')
+              ? join(this.canonicalDataDir, withinData)
+              : relative(this.workspace, root) === ''
+                ? this.canonicalWorkspace
+                : root;
+          const current = await realpath(root);
+          // A replaced resource directory must not redefine the boundary. Resolve
+          // the configured data-directory alias once, before any task can run.
+          if (relative(expected, current) === '') roots.push(current);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }

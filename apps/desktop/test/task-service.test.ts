@@ -4,11 +4,12 @@ import {
   mkdir,
   readFile,
   realpath,
+  rename,
   symlink,
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
@@ -1345,82 +1346,108 @@ test('human acceptance binds every criterion to the displayed attempt, actual he
   assert.equal(service.getTask('reviewed')!.state, 'needs_review');
 });
 
-test('artifact viewer verifies ledger ownership and bytes, paginates Unicode and rejects symlink escapes', async (t) => {
-  const workspace = scratch(t),
-    dataDir = scratch(t),
-    outside = scratch(t);
-  await repository(workspace);
-  const content = 'A😀中B';
-  const service = new TaskService({
-    workspace,
-    dataDir,
-    emit: () => {},
-    createRuntime: async (record, ctx) => {
-      const home = join(dataDir, 'homes', record.spec.id);
-      await mkdir(home, { recursive: true });
-      return new AgentRuntime({
-        workspace: ctx.worktree,
-        home,
-        userHome: home,
-        model: new ScriptedModel([{ message: message('done') }]),
-        settings: trustFolder(defaultSettings(), ctx.worktree),
-        headless: true,
-        bundledExtensions: false,
-        screenshot: false,
-      });
-    },
-    verify: async (_record, ctx) => {
-      const path = join(ctx.artifactDirectory, 'proof.log');
-      await writeFile(path, content);
-      return [
-        {
-          criterion: 'actual file',
-          status: 'passed',
-          source: 'inspection',
-          evidence: 'source was inspected',
-          artifactPaths: [path],
-        },
-      ];
-    },
-  });
-  cleanup(t, () => service.close());
-  await service.call('parent', 'enqueue', {
-    operationId: 'artifact',
-    tasks: [task('artifact')],
-  });
-  await until(async () => service.getTask('artifact')?.state === 'succeeded');
-  const artifacts = (await service.call('parent', 'artifacts', {
-    id: 'artifact',
-  })) as { id: string; kind: string; path: string }[];
-  const proof = artifacts.find((artifact) => artifact.kind === 'verification')!;
-  const read = (offset = 0) =>
-    service.call('parent', 'readArtifact', {
+for (const linkKind of process.platform === 'win32'
+  ? ['directory']
+  : ['file', 'directory'])
+  test(`artifact viewer verifies ledger ownership and bytes, paginates Unicode and rejects symlink escapes (${linkKind} link)`, async (t) => {
+    const workspace = scratch(t),
+      canonicalData = scratch(t),
+      dataDir = join(scratch(t), 'data-alias'),
+      outside = scratch(t);
+    await repository(workspace);
+    await symlink(
+      canonicalData,
+      dataDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const content = 'A😀中B';
+    const service = new TaskService({
+      workspace,
+      dataDir,
+      emit: () => {},
+      createRuntime: async (record, ctx) => {
+        const home = join(dataDir, 'homes', record.spec.id);
+        await mkdir(home, { recursive: true });
+        return new AgentRuntime({
+          workspace: ctx.worktree,
+          home,
+          userHome: home,
+          model: new ScriptedModel([{ message: message('done') }]),
+          settings: trustFolder(defaultSettings(), ctx.worktree),
+          headless: true,
+          bundledExtensions: false,
+          screenshot: false,
+        });
+      },
+      verify: async (_record, ctx) => {
+        const path = join(ctx.artifactDirectory, 'proof.log');
+        await writeFile(path, content);
+        return [
+          {
+            criterion: 'actual file',
+            status: 'passed',
+            source: 'inspection',
+            evidence: 'source was inspected',
+            artifactPaths: [path],
+          },
+        ];
+      },
+    });
+    cleanup(t, () => service.close());
+    await service.call('parent', 'enqueue', {
+      operationId: 'artifact',
+      tasks: [task('artifact')],
+    });
+    await until(async () => service.getTask('artifact')?.state === 'succeeded');
+    const artifacts = (await service.call('parent', 'artifacts', {
       id: 'artifact',
-      artifactId: proof.id,
-      offset,
-      limit: 2,
-    }) as Promise<{ content: string; truncated: boolean; nextOffset?: number }>;
-  const first = await read();
-  assert.equal(first.content, 'A');
-  assert.equal(first.truncated, true);
-  const second = await read(first.nextOffset!);
-  assert.equal(second.content, '😀');
-  const third = await read(second.nextOffset!);
-  assert.equal(third.content, '中B');
-  assert.equal(third.truncated, false);
-  await assert.rejects(read(2), /splits a character/);
-  await assert.rejects(
-    service.call('parent', 'readArtifact', {
-      id: 'artifact',
-      artifactId: proof.id,
-      path: '/private',
-    }),
-    /cannot select artifact paths/,
-  );
-  await writeFile(proof.path, 'changed');
-  await assert.rejects(read(), /changed after it was recorded/);
-  await writeFile(join(outside, 'same.txt'), content);
-  await unlink(proof.path);
-  await symlink(join(outside, 'same.txt'), proof.path);
-  await assert.rejects(read(), /outside its owned/);
-});
+    })) as { id: string; kind: string; path: string }[];
+    const proof = artifacts.find(
+      (artifact) => artifact.kind === 'verification',
+    )!;
+    const read = (offset = 0) =>
+      service.call('parent', 'readArtifact', {
+        id: 'artifact',
+        artifactId: proof.id,
+        offset,
+        limit: 2,
+      }) as Promise<{
+        content: string;
+        truncated: boolean;
+        nextOffset?: number;
+      }>;
+    const first = await read();
+    assert.equal(first.content, 'A');
+    assert.equal(first.truncated, true);
+    const second = await read(first.nextOffset!);
+    assert.equal(second.content, '😀');
+    const third = await read(second.nextOffset!);
+    assert.equal(third.content, '中B');
+    assert.equal(third.truncated, false);
+    await assert.rejects(read(2), /splits a character/);
+    await assert.rejects(
+      service.call('parent', 'readArtifact', {
+        id: 'artifact',
+        artifactId: proof.id,
+        path: '/private',
+      }),
+      /cannot select artifact paths/,
+    );
+    await writeFile(proof.path, 'changed');
+    await assert.rejects(read(), /changed after it was recorded/);
+    await writeFile(join(outside, 'same.txt'), content);
+    await unlink(proof.path);
+    if (linkKind === 'directory') {
+      // Redirect the recorded file's parent through a real junction: the bytes
+      // still match, so only the ownership boundary can reject the read.
+      const parent = dirname(proof.path);
+      await writeFile(join(outside, basename(proof.path)), content);
+      await rename(parent, parent + '-original');
+      await symlink(
+        outside,
+        parent,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } else await symlink(join(outside, 'same.txt'), proof.path);
+    await assert.rejects(read(), /outside its owned/);
+  });

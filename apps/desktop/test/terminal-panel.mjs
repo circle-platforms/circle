@@ -75,12 +75,20 @@ await new Promise((done) => server.listen(0, '127.0.0.1', done));
 const devicePort = server.address().port;
 
 // The saved profile the panel lists and connects.
+const longProfile =
+  'a synthetic console with a very long name for Windows ellipsis verification';
 await writeFile(
   join(dataDir, 'runtime-home', 'terminal-sessions.json'),
   JSON.stringify({
     sessions: [
       {
         name: 'rack',
+        transport: 'telnet',
+        host: '127.0.0.1',
+        port: devicePort,
+      },
+      {
+        name: longProfile,
         transport: 'telnet',
         host: '127.0.0.1',
         port: devicePort,
@@ -301,6 +309,25 @@ try {
     );
   if (!/invalid conversation/.test(gated))
     failures.push(`a bad conversation id was not gated: ${gated}`);
+  // Saved display names are content, including spaces. The menu must connect the
+  // actual profile, and its long tab keeps a close control beside the ellipsis.
+  await page.getByRole('button', { name: 'new terminal or device' }).click();
+  await page.getByRole('menuitem').filter({ hasText: longProfile }).click();
+  const longTab = page.locator('.term-tab').filter({ hasText: longProfile });
+  await longTab.waitFor();
+  const connected = await page.evaluate(
+    (id) => window.circleDesktop.terminalState(id),
+    session,
+  );
+  assert.equal(connected.sessions.at(-1).name, longProfile);
+  assert.equal(connected.sessions.at(-1).state, 'ready');
+  const label = await longTab.locator('.term-tab-label').evaluate((node) => ({
+    overflow: getComputedStyle(node).textOverflow,
+    clipped: node.scrollWidth > node.clientWidth,
+  }));
+  assert.deepEqual(label, { overflow: 'ellipsis', clipped: true });
+  await longTab.getByRole('button', { name: /^disconnect / }).click();
+  await longTab.waitFor({ state: 'hidden' });
 } catch (error) {
   failures.push(error instanceof Error ? error.message : String(error));
 } finally {

@@ -538,14 +538,6 @@ test('the gh the application ships keeps a github.com sign-in signed in when the
         'gho_brokenbrokenbroken0000000000000',
       ),
   );
-  const enterpriseOnly = await config(
-    'enterprise-only',
-    account(
-      'ghe.example.invalid',
-      'other',
-      'gho_brokenbrokenbroken0000000000000',
-    ),
-  );
   // The reader runs gh with the application's environment: this test's own, for now.
   const saved = { ...process.env };
   t.after(() => {
@@ -577,8 +569,9 @@ test('the gh the application ships keeps a github.com sign-in signed in when the
   const offline = await read();
   assert.equal(offline.access, 'unreachable');
   assert.equal(offline.current, null);
-  process.env.GH_CONFIG_DIR = enterpriseOnly;
-  assert.equal((await read()).access, 'signed-out');
+  // GH_CONFIG_DIR does not isolate the operating system's credential store.
+  // The no-github.com-account case belongs to ghWorld above, where it can be
+  // measured without depending on (or reading) the person's native sign-in.
 });
 
 /** A `gh` for a workflow run whose first jobs failed while one still runs. */

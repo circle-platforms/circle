@@ -42,6 +42,7 @@ import { spawn } from 'node:child_process';
 import originalFs from 'original-fs';
 import { join, dirname, basename } from 'node:path';
 import { WorkspaceGrants, nativeFile } from './files';
+import { WorkspaceListings } from './workspace-listings';
 import { selectedFolder } from './folder-dialog';
 import { attention } from './attention';
 import {
@@ -982,9 +983,9 @@ app
     });
     // The files of the folder the runtime works in, when it is trusted: the app's own
     // workspace, or one you opened and trusted. Reads still go through granted handles.
-    let listing:
-      { sessionId: string; workspaceId: string; cursor?: string } | undefined;
-    handle('circle:list-workspace', async (workspaceId, cursor) => {
+    const listings = new WorkspaceListings(grants);
+    const listingWindows = new WeakSet<BrowserWindow>();
+    handleFrom('circle:list-workspace', async (from, workspaceId, cursor) => {
       if (
         !runtime ||
         typeof workspaceId !== 'string' ||
@@ -1000,6 +1001,7 @@ app
         const current = runtime!.state().snapshot;
         if (
           !runtime!.connected ||
+          from.isDestroyed() ||
           current.activeSessionId !== sessionId ||
           current.sessions.find((row) => row.id === sessionId)?.workspaceId !==
             workspaceId ||
@@ -1014,32 +1016,20 @@ app
           workspaceId
       )
         return null;
-      assertActive();
-      if (
-        cursor &&
-        (!listing ||
-          listing.sessionId !== sessionId ||
-          listing.workspaceId !== workspaceId ||
-          listing.cursor !== cursor)
-      )
-        throw Error('file listing cursor is not owned by this session');
-      if (!cursor && listing?.cursor) await grants.cancel(listing.cursor);
-      const owner = {
+      if (!listingWindows.has(from)) {
+        listingWindows.add(from);
+        from.once('closed', () => {
+          void listings.close(from).catch((error) => console.error(error));
+        });
+      }
+      const listed = await listings.list(
+        from,
         sessionId,
         workspaceId,
-        cursor: undefined as string | undefined,
-      };
-      if (!cursor) listing = owner;
-      const selected = listing!;
-      const check = () => {
-        assertActive();
-        if (listing !== selected) throw Error('file listing was superseded');
-      };
-      const listed = cursor
-        ? await grants.nextPage(cursor, check)
-        : await grants.open(workspace.path, check);
-      check();
-      selected.cursor = listed.nextCursor;
+        workspace.path,
+        cursor,
+        assertActive,
+      );
       workspaceSelections.set(listed.id, listed.path);
       return listed;
     });
