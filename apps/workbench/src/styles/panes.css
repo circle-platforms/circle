@@ -229,6 +229,15 @@
 .inspector .native-browser .browser-address > .icon-button:disabled {
   opacity: 0.4;
 }
+/* "take over" stands in the row as tall as the address field, so the page does not move
+   when Circle starts or stops driving. */
+.inspector .native-browser .browser-address > .button {
+  flex: none;
+  height: 28px;
+  min-height: 0;
+  margin-block: 0;
+  padding-block: 0;
+}
 .inspector .browser-url {
   position: relative;
   display: flex;

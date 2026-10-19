@@ -19,9 +19,10 @@ export function usePopouts(): ReadonlySet<string> {
         return next;
       }),
     );
-    void host.popouts().then(
+    // A host that cannot say which windows are open has none: nothing here may stop the app.
+    void Promise.resolve(host.popouts?.()).then(
       (list) => {
-        if (!current) return;
+        if (!current || !Array.isArray(list)) return;
         setOpen(
           (known) =>
             new Set([
