@@ -94,7 +94,11 @@ import {
   agentSourceOwner,
   type SourceResourceOwner,
 } from '../model/source-resource-owner';
-import { Inspector, PanelButtons } from '../features/Panels';
+import {
+  Inspector,
+  PanelButtons,
+  type DrawerSelection,
+} from '../features/Panels';
 import { DrawerHandle } from '../features/DrawerHandle';
 import { popoutKey, usePopouts } from '../model/popouts';
 import { Overview } from '../features/Overview';
@@ -270,7 +274,12 @@ export function App() {
   const [drawerNow, setDrawerNow] = useState(openingWidth('changes'));
   // A panel the person wants to see whole, for as long as they want it there.
   const [fullView, setFullView] = useState(false);
-  const [selection, setSelection] = useState('');
+  // What the drawer was last asked to show, with the mode it was asked of: each mode reads
+  // only what was meant for it, so opening one does not move what another shows.
+  const [selection, setSelection] = useState<DrawerSelection>({
+    panel: 'files',
+    value: '',
+  });
   const [file, setFile] = useState<string | null>(null);
   const [fileOwner, setFileOwner] = useState<SourceResourceOwner>();
   const sourceOpener = useRef(
@@ -334,7 +343,7 @@ export function App() {
     commandReturnFocus.current = trigger ? { origin, trigger } : undefined;
     setCommandTerminal({ viewSessionId, requestId: request, resolved: reply });
     setPanel('terminal');
-    setSelection('');
+    setSelection({ panel: 'terminal', value: '' });
     showDrawer();
   };
   const openCommandTerminal = (
@@ -354,7 +363,7 @@ export function App() {
     setAgent(id);
     if (id) {
       setPanel('agents');
-      setSelection(id);
+      setSelection({ panel: 'agents', value: id });
       showDrawer();
     }
   };
@@ -671,7 +680,7 @@ export function App() {
       return;
     }
     setPanel(kind);
-    setSelection(choice);
+    setSelection({ panel: kind, value: choice });
     // The button alone keeps the subagent that is open, as the files button keeps its file.
     if (kind === 'agents' && choice) setAgent(choice);
     showDrawer();

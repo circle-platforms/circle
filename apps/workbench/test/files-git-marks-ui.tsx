@@ -82,7 +82,7 @@ function Drawer() {
     <Inspector
       panel="files"
       visible={visible}
-      selection=""
+      selection={{ panel: 'files', value: '' }}
       onPanel={none}
       onClose={none}
       onFile={none}

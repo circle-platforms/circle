@@ -329,6 +329,54 @@ try {
         await composer.inputValue(),
         'Workspace shell preserved draft',
       );
+      // The list the changes mode was left on stays while another mode is used: a
+      // subagent opened in the meantime is not something to show here.
+      const scope = (name) =>
+        page
+          .locator('.changes-mode')
+          .getByRole('button', { name, exact: true });
+      await scope('all uncommitted').click();
+      await scope('this session').click();
+      assert.equal(
+        await scope('this session').getAttribute('aria-pressed'),
+        'true',
+      );
+      await button(page, 'subagents', false).click();
+      await page.locator('.agent-row').first().click();
+      await page.locator('.agent-detail').waitFor();
+      await page
+        .getByRole('button', { name: 'close subagent', exact: true })
+        .click();
+      await page.locator('.agent-detail').waitFor({ state: 'detached' });
+      await button(page, 'changes', false).click();
+      await page.locator('.changes-mode').waitFor({ state: 'visible' });
+      assert.equal(
+        await scope('this session').getAttribute('aria-pressed'),
+        'true',
+        `opening a subagent leaves the changes mode on this session (${width}px)`,
+      );
+      // What is meant for the changes mode still reaches it: a file of the overview's
+      // outputs opens there, chosen, in the list that has it.
+      if (width > 1050) {
+        await scope('all uncommitted').click();
+        await button(page, 'changes', false).click();
+        await page
+          .locator('section.overview-card[aria-labelledby="overview-outputs"]')
+          .locator('.overview-row')
+          .filter({ hasText: 'connection.ts' })
+          .click();
+        await page.locator('.changes-mode').waitFor({ state: 'visible' });
+        assert.equal(
+          await page
+            .locator('.changes-row[aria-current="true"]')
+            .getAttribute('title'),
+          'src/connection.ts',
+        );
+        assert.equal(
+          await scope('this session').getAttribute('aria-pressed'),
+          'true',
+        );
+      }
       await button(page, 'changes', false).click();
       await captureModes(page, 'en', theme, width);
       await page.evaluate(async () => {

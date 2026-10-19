@@ -41,6 +41,12 @@ import { IconButton, SearchInput } from '../components/common';
 
 /** The narrowest a drawer can be and show a file with the tree beside it. */
 const DOCUMENT_AND_TREE = 620;
+/** What the drawer was asked to show, such as a file or an address, and the mode it was
+ * asked of. */
+export interface DrawerSelection {
+  panel: PanelId;
+  value: string;
+}
 interface Props {
   fileView?: ReactNode;
   filePath?: string;
@@ -53,7 +59,8 @@ interface Props {
   popped?: ReadonlySet<string>;
   /** Take the browser or the terminal out into a window of its own. */
   onPopOut?: (kind: 'browser' | 'terminal') => void;
-  selection: string;
+  /** Each mode is given only what was meant for it, and nothing else's. */
+  selection: DrawerSelection;
   onPanel: (panel: PanelId, selection?: string) => void;
   onClose: () => void;
   onFile: (path: string, line?: number, column?: number) => void;
@@ -221,11 +228,12 @@ function InspectorResources(
     <>
       {[...ids].map((id) => {
         const item = props.panels.find((item) => item.panel.id === id);
+        const own = props.selection.panel === id ? props.selection.value : '';
         const resourceSelection =
           id === 'files' &&
           (!props.fileOwnerKey || props.fileOwnerKey === props.sessionId)
-            ? (props.filePath ?? props.selection)
-            : props.selection;
+            ? (props.filePath ?? own)
+            : own;
         const original =
           id === 'agents' ? (
             <AgentsMode
@@ -345,7 +353,7 @@ export function FilesPanel({
   visible,
   onFile,
   onDialog,
-}: Pick<Props, 'selection' | 'onFile' | 'visible'> &
+}: { selection: string } & Pick<Props, 'onFile' | 'visible'> &
   Partial<Pick<Props, 'onDialog'>>) {
   const { snapshot, runtime } = useRuntime();
   const session = currentSession(snapshot);
@@ -516,9 +524,7 @@ export function FilesPanel({
     </div>
   );
 }
-export function BrowserPanel({
-  selection,
-}: Partial<Pick<Props, 'selection'>> = {}) {
+export function BrowserPanel({ selection }: { selection?: string } = {}) {
   return desktopHost() ? (
     <NativeBrowser target={selection} />
   ) : (
