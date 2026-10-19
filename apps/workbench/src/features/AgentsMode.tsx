@@ -173,7 +173,6 @@ export function AgentsMode({
                   key={item.message.id}
                   message={item.message}
                   showThinking={session.showThinking}
-                  onAttachment={() => {}}
                 />
               ),
             )}

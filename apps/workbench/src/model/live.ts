@@ -871,7 +871,6 @@ export class LiveRuntime implements RuntimePort {
         'save-secret': 'save-secret',
         'remove-secret': 'remove-secret',
         'create-skill': 'create-skill',
-        execute: 'shell',
       };
       if (kind === 'export-session') {
         const data = (await this.native(
@@ -1195,7 +1194,9 @@ export class LiveRuntime implements RuntimePort {
       await native('reload');
       return { notice: t('Circle integrations reloaded') };
     }
-    if (name === 'jobs') return { panel: 'activity', selection: args };
+    // Background commands are tabs of the terminal, beside its shells and device consoles.
+    if (name === 'jobs' || name === 'terminals')
+      return { panel: 'terminal', selection: args };
     if (name === 'copy') return { effect: 'copy' };
     if (name === 'import') return { effect: 'import' };
     if (name === 'init') {

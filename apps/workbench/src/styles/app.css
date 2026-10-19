@@ -1369,44 +1369,7 @@ pre {
   line-height: 1.8;
   margin-bottom: 12px;
 }
-.change-summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  padding: 14px;
-  border-radius: 7px;
-  margin-bottom: 15px;
-}
-.change-summary strong {
-  font-size: var(--ui-small);
-}
-.change-summary p {
-  font-size: var(--ui-tiny);
-  color: var(--muted);
-  margin-top: 5px;
-}
-.change-file {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  text-align: left;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--border);
-}
-.change-file > span {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--ui-small);
-}
-.change-file small {
-  display: block;
-  color: var(--muted);
-  margin-top: 5px;
-  font-size: var(--ui-tiny);
-}
+
 .facts {
   margin: 10px 0;
   font-size: var(--ui-small);
@@ -1430,14 +1393,7 @@ pre {
   flex: 1;
   color: var(--secondary);
 }
-.context-workspace-path {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-}
+
 .facts-note dd {
   flex: none;
 }
@@ -1479,11 +1435,7 @@ pre {
   overflow: auto;
   color: var(--secondary);
 }
-.attachment-image {
-  max-width: 100%;
-  border-radius: 6px;
-  margin-top: 10px;
-}
+
 .activity-row {
   display: flex;
   align-items: center;
@@ -1516,25 +1468,7 @@ pre {
   max-width: 70px;
   font-size: var(--ui-tiny);
 }
-.job-detail h3 {
-  font-size: var(--ui-small);
-  line-height: 1.7;
-  margin: 15px 0 7px;
-}
-.job-detail > pre {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 12px;
-  font-size: var(--code-size);
-  line-height: 1.7;
-}
-.detail-actions {
-  display: flex;
-  gap: 7px;
-  flex-wrap: wrap;
-  margin-top: 12px;
-}
+
 .browser-address {
   display: flex;
   align-items: center;
@@ -1596,15 +1530,13 @@ pre {
   gap: 7px;
 }
 
-.file-view,
-.agent-record {
+.file-view {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
 }
-.file-view-heading,
-.agent-record > header {
+.file-view-heading {
   height: 59px;
   flex-shrink: 0;
   display: flex;
@@ -1732,14 +1664,7 @@ pre {
   border: 1px solid var(--border);
   border-radius: 7px;
 }
-.agent-record-body {
-  padding: 22px 30px;
-  overflow: auto;
-}
-.agent-record-body > h2 {
-  font-size: var(--ui-large);
-  font-weight: 600;
-}
+
 .welcome {
   display: flex;
   align-items: center;
@@ -3920,18 +3845,7 @@ pre {
 .tool-content > .diff-block {
   margin-bottom: 8px;
 }
-.change-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-.change-file small.added {
-  color: var(--accent);
-}
-.change-file small.deleted {
-  color: var(--negative);
-}
+
 .preview-status[data-state='ready'] i {
   background: var(--accent);
 }
@@ -4251,17 +4165,6 @@ pre {
 .topbar-actions .icon-button.active {
   background: var(--active);
   color: var(--fg);
-}
-.inspector-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 44px;
-  padding: 0 10px 0 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--ui-small);
-  font-weight: 600;
-  text-transform: none;
 }
 
 /* The transcript: Circle writes plain text, your messages are bubbles on the right. */
@@ -4658,16 +4561,7 @@ pre {
      profile list below the fold and read as a stray line under the screen. */
   overflow: hidden;
 }
-.terminal-pane.embedded {
-  flex: 1;
-  height: auto;
-  min-height: 0;
-  border-top: 0;
-  background: var(--bg);
-}
-.terminal-pane header[hidden] {
-  display: none;
-}
+
 .shortcut-table {
   width: 100%;
   border-collapse: collapse;
@@ -4739,11 +4633,7 @@ pre {
   color: var(--muted);
   font-size: var(--ui-tiny);
 }
-.inspector-title h2 {
-  margin: 0;
-  font-size: inherit;
-  font-weight: inherit;
-}
+
 /* In a narrow window the side panel lies over the conversation on the right. */
 .workspace-content {
   position: relative;
@@ -4782,11 +4672,6 @@ pre {
 .inspector-overlay > .inspector {
   flex: 1;
   min-height: 0;
-}
-.inspector-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
 }
 
 /* The application's own update: a line and its next step in settings, a chip in the sidebar. */
@@ -5077,97 +4962,7 @@ pre {
 .topbar-actions {
   min-width: 0;
 }
-.work-drawer-overview .inspector-body {
-  padding: 12px;
-}
-.drawer-overview-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-.drawer-summary-card {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  padding: 10px 12px;
-  font-size: var(--ui-small);
-}
-.drawer-summary-card > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  list-style: none;
-}
-.drawer-summary-card > summary::-webkit-details-marker {
-  display: none;
-}
-.drawer-summary-card > summary::after {
-  content: '›';
-  color: var(--muted);
-}
-.drawer-summary-card[open] > summary::after {
-  transform: rotate(90deg);
-}
-.drawer-summary-card > summary > span {
-  margin-left: auto;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.drawer-summary-card[open] > summary {
-  margin-bottom: 8px;
-}
-.drawer-summary-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  padding: 5px 0;
-  text-align: left;
-}
-button.drawer-summary-row:hover {
-  color: var(--accent);
-}
-.drawer-summary-row > span {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.drawer-summary-row small {
-  color: var(--muted);
-  font-size: var(--ui-tiny);
-}
-.drawer-summary-row > span > small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.drawer-summary-card progress {
-  width: 100%;
-  height: 4px;
-  accent-color: var(--accent);
-}
-.drawer-output {
-  margin-block: 5px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.drawer-output > summary {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  cursor: pointer;
-}
-.drawer-output > summary > small {
-  margin-left: auto;
-  color: var(--muted);
-}
-.drawer-output img {
-  max-width: 100%;
-}
+
 .drawer-document {
   display: flex;
   flex-direction: column;

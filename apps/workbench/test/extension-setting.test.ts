@@ -86,15 +86,15 @@ test('extension row requests preserve an existing conversation failure', async (
     runtimeState: async () => update,
     runtimeCommand: async (command: RuntimeCommand) => ({
       id: command.id,
-      ok: command.name !== 'shell',
-      ...(command.name === 'shell'
+      ok: command.name !== 'compact',
+      ...(command.name === 'compact'
         ? { error: 'prior conversation command failed' }
         : {}),
     }),
   } as unknown as DesktopBridge;
   const runtime = new LiveRuntime(host, update);
   await assert.rejects(
-    runtime.request('execute', { command: 'synthetic failed command' }),
+    runtime.request('compact', {}),
     /prior conversation command failed/,
   );
   const prior = runtime

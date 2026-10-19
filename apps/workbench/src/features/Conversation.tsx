@@ -46,6 +46,7 @@ import {
 } from './BrowserDialog';
 import { useBrowserState } from './useBrowserState';
 import { InlineRequest } from './InlineRequest';
+import { useSources } from '../components/SourceNavigation';
 import { TaskReviewCard } from './TaskReviewCard';
 import { EffortMenu, ModeMenu, ModelMenu, MODE_TEXT } from './Composer';
 import { nextMode, sessionMode } from '../model/state';
@@ -174,6 +175,7 @@ export function Conversation({
   setFinding,
 }: Props) {
   const { snapshot, runtime, perform, act, notify } = useRuntime();
+  const sources = useSources();
   const session = currentSession(snapshot);
   const { registry, enabled } = usePlugins();
   const contributions = registry.widgets(enabled, 'composerActions');
@@ -750,7 +752,12 @@ export function Conversation({
               </button>
               <div className="welcome-context">
                 {workspace.instructions.map((item) => (
-                  <button key={item.name} onClick={() => onPanel('context')}>
+                  <button
+                    key={item.name}
+                    disabled={!item.path}
+                    title={item.path}
+                    onClick={() => item.path && onFile(item.path)}
+                  >
                     <FileText size={13} />
                     {item.name}
                   </button>
@@ -846,7 +853,6 @@ export function Conversation({
                         <MessageView
                           message={item.message}
                           showThinking={session.showThinking}
-                          onAttachment={() => onPanel('context')}
                         />
                         {item.message.role === 'user' &&
                           session.fileUndoTurns?.includes(item.message.id) && (
@@ -1333,7 +1339,7 @@ export function Conversation({
                   <FileChip
                     key={file.id}
                     name={file.name}
-                    onClick={() => onPanel('context', file.id)}
+                    onClick={() => sources?.openAttachment(file)}
                     onRemove={() =>
                       perform(() => {
                         const target = runtime

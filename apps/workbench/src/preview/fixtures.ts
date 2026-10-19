@@ -628,9 +628,7 @@ export function createFixtures(): WorkbenchSnapshot {
     },
     uiPlugins: [
       'files',
-      'activity',
       'browser',
-      'devices',
       'knowledge',
       'work',
       'execution',

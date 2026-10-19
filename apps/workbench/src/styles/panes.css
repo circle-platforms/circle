@@ -16,34 +16,14 @@
 .inspector[data-inspector-whole-button] {
   --header-end: 64px;
 }
-.inspector .inspector-title {
-  gap: 2px;
-  height: 40px;
-  padding: 0 6px 0 8px;
-  font-weight: 500;
-  border-bottom-color: transparent;
-}
-.inspector .inspector-title-name {
-  flex: 1;
-  min-width: 0;
-  padding-left: 6px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.inspector .inspector-actions {
-  gap: 2px;
-}
-.inspector .inspector-title .icon-button,
+
 .inspector .panel-header-actions .icon-button,
-.inspector .native-terminal-toolbar > .icon-button,
 .inspector .browser-tabs > .icon-button {
   width: 26px;
   height: 26px;
   border-radius: 6px;
   color: var(--muted);
 }
-.inspector .inspector-title .icon-button:hover:not(:disabled),
 .inspector .panel-header-actions .icon-button:hover:not(:disabled) {
   color: var(--fg);
 }
@@ -59,19 +39,8 @@
 ) {
   background: var(--bg);
 }
-.inspector:is(
-    [data-inspector-panel='terminal'],
-    [data-inspector-panel='browser'],
-    [data-inspector-panel='files']
-  )
-  .inspector-title {
-  border-bottom-color: transparent;
-}
+
 .inspector .inspector-body.flush .native-browser > .browser-tabs,
-.inspector
-  .inspector-body.flush
-  .native-terminal.embedded
-  > .native-terminal-toolbar,
 .inspector .inspector-body.flush .files-panel > .panel-header-name {
   position: absolute;
   z-index: 1;
@@ -101,22 +70,6 @@
   white-space: nowrap;
 }
 
-.inspector .workspace-panel-contents > .panel-header-tabs {
-  position: absolute;
-  z-index: 1;
-  top: 6px;
-  left: 8px;
-  right: calc(var(--header-end) + 2px);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 28px;
-  margin: 0;
-  padding: 0;
-  background: none;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
 .inspector .panel-header-tabs > button {
   flex-shrink: 0;
   height: 28px;
@@ -144,49 +97,6 @@
   height: 26px;
   padding: 0;
   border-radius: 6px;
-}
-
-/* Terminal tabs in the header row */
-.inspector
-  .inspector-body.flush
-  .native-terminal.embedded
-  > .native-terminal-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  right: calc(var(--header-end) + 60px);
-  height: 28px;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-}
-.inspector .native-terminal-toolbar .native-terminal-tabs {
-  flex: 0 1 auto;
-  gap: 2px;
-  padding: 0;
-  background: none;
-  scrollbar-width: none;
-}
-.inspector .native-terminal-tabs.segmented > button.active {
-  box-shadow: none;
-}
-.inspector .native-terminal-tabs > button {
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: calc(var(--ui-size) - 0.5px);
-  font-weight: 500;
-}
-.inspector .native-terminal-tabs > button:hover {
-  background: var(--hover);
-  color: var(--fg);
-}
-.inspector .native-terminal-tabs > button.active {
-  color: var(--fg);
-}
-.inspector .native-terminal-tabs > button.active:not(:only-child) {
-  background: var(--hover);
 }
 
 /* The terminal itself: the screen to the edges, a quiet bar under it. */
@@ -220,38 +130,13 @@
   outline: none;
   box-shadow: none;
 }
-.inspector .native-terminal-bar .native-terminal-search .icon-button,
-.inspector .native-terminal-actions .icon-button {
+.inspector .native-terminal-bar .native-terminal-search .icon-button {
   width: 26px;
   height: 26px;
   border-radius: 6px;
   color: var(--muted);
 }
-.inspector .native-terminal-actions .icon-button:hover:not(:disabled) {
-  color: var(--fg);
-}
-.inspector .native-terminal-actions .icon-button:disabled {
-  opacity: 0.4;
-}
-.inspector .native-terminal-actions {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  margin-left: auto;
-}
-.inspector .native-terminal-status {
-  gap: 10px;
-  padding: 0 10px 5px;
-  border-top: 0;
-  font-size: var(--ui-tiny);
-}
-.inspector .native-terminal-title {
-  padding: 0 8px;
-  color: var(--fg);
-  font-size: calc(var(--ui-size) - 0.5px);
-  font-weight: 500;
-  white-space: nowrap;
-}
+
 .inspector .native-terminal-surfaces:empty {
   display: none;
 }
