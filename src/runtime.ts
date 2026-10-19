@@ -835,6 +835,7 @@ export class AgentRuntime {
               backgroundLog = log;
               return runChild(signal);
             },
+            session.id,
           );
           return `In background: ${jobLine(job)}. The subagent report will arrive as a notice; do not poll or sleep.`;
         }

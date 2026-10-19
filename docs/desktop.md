@@ -116,7 +116,7 @@ The changes mode is one list of files, each with a letter, **M** for changed, **
 
 ### Subagents
 
-The subagents mode lists the conversation's subagents, those at work and those finished, each with its name, what Circle sent it to do, and while it runs how long it has. A click opens its own conversation beside the list, widening the drawer to 760 pixels; the sidebar folds if the window needs the room, and comes back when the subagent is closed. The heading names it and says what it was sent to do, with **stop** for a subagent running in the background, **full view** and **×**. A request a subagent asks, such as a command to approve, is a card in the main conversation with the subagent's name on it, and the list marks the subagent as waiting.
+The subagents mode lists the conversation's subagents, those at work and those finished, each with its name and what Circle sent it to do; one that runs in the background also shows how long it has run, and keeps that time in the finished list. A click opens its own conversation beside the list, widening the drawer to 760 pixels; the sidebar folds if the window needs the room, and comes back when the subagent is closed. The heading names it and says what it was sent to do, with **stop** for a subagent running in the background, **full view** and **×**. A request a subagent asks, such as a command to approve, is a card in the main conversation with the subagent's name on it, and the list marks the subagent as waiting.
 
 ### Tasks
 
