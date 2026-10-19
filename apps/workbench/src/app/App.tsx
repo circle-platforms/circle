@@ -209,14 +209,13 @@ export function App() {
   const [panel, setPanel] = useState<PanelId>('files');
   // The browser and the terminal can be in windows of their own, one for each conversation.
   const popped = usePopouts();
+  // This conversation's, as a value: another conversation's window leaves it as it was.
+  const poppedKey = (['browser', 'terminal'] as const)
+    .filter((kind) => popped.has(popoutKey(kind, session.id)))
+    .join(' ');
   const poppedModes = useMemo(
-    () =>
-      new Set(
-        (['browser', 'terminal'] as const).filter((kind) =>
-          popped.has(popoutKey(kind, session.id)),
-        ),
-      ),
-    [popped, session.id],
+    () => new Set(poppedKey.split(' ').filter(Boolean)),
+    [poppedKey],
   );
   const popOut = (kind: 'browser' | 'terminal') => {
     const host = desktopHost();
@@ -678,6 +677,11 @@ export function App() {
   // input box are: there it stays closed until the person opens it.
   const browserOperating = useRef(false);
   const onPage = location.pathname.startsWith('/page/');
+  // Whether a panel may open is read as each event comes. Only another conversation
+  // starts what was seen over: a page, a narrow window or a window popped out or put back
+  // change whether it opens, not whether a start or a console is new.
+  const autoOpen = useRef({ onPage, narrow, poppedModes });
+  autoOpen.current = { onPage, narrow, poppedModes };
   useEffect(() => {
     const host = desktopHost();
     if (!host) return;
@@ -686,13 +690,14 @@ export function App() {
       if (!isSessionBrowser(state, session.id)) return;
       const started = !!state.operating && !browserOperating.current;
       browserOperating.current = !!state.operating;
+      const { onPage, narrow, poppedModes } = autoOpen.current;
       if (started && !onPage && !narrow && !poppedModes.has('browser')) {
         setPanel('browser');
         setInspectorOpen(true);
       }
     };
     return host.onBrowserEvent(show);
-  }, [session.id, onPage, narrow, poppedModes]);
+  }, [session.id]);
   // The same courtesy for a device console: when Circle opens one, its panel opens too,
   // once per appearance and never over another page or a narrow window.
   const terminalCount = useRef(0);
@@ -705,13 +710,14 @@ export function App() {
         return;
       const opened = event.state.sessions.length > terminalCount.current;
       terminalCount.current = event.state.sessions.length;
+      const { onPage, narrow, poppedModes } = autoOpen.current;
       if (opened && !onPage && !narrow && !poppedModes.has('terminal')) {
         setPanel('terminal');
         setInspectorOpen(true);
       }
     };
     return host.onTerminalEvent(show);
-  }, [session.id, onPage, narrow, poppedModes]);
+  }, [session.id]);
   const openSource = async (
     path: string,
     line?: number,

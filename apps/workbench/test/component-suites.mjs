@@ -60,6 +60,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'task-review-ui.mjs',
   'gutter-marks-ui.mjs',
   'files-git-marks-ui.mjs',
+  'drawer-auto-open-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */

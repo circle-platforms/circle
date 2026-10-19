@@ -9,11 +9,13 @@ export function usePopouts(): ReadonlySet<string> {
     const host = desktopHost();
     if (!host?.onPopoutEvent) return;
     let current = true;
-    // Told before asked, so a window that opens meanwhile is not lost.
+    // Told before asked, so a window that opens meanwhile is not lost. An event that
+    // changes nothing keeps the same set, so nothing that depends on it starts over.
     const stop = host.onPopoutEvent((event) =>
       setOpen((known) => {
-        const next = new Set(known);
         const key = popoutKey(event.kind, event.sessionId);
+        if (known.has(key) === event.open) return known;
+        const next = new Set(known);
         if (event.open) next.add(key);
         else next.delete(key);
         return next;
@@ -23,13 +25,12 @@ export function usePopouts(): ReadonlySet<string> {
     void Promise.resolve(host.popouts?.()).then(
       (list) => {
         if (!current || !Array.isArray(list)) return;
-        setOpen(
-          (known) =>
-            new Set([
-              ...known,
-              ...list.map((one) => popoutKey(one.kind, one.sessionId)),
-            ]),
-        );
+        setOpen((known) => {
+          const keys = list.map((one) => popoutKey(one.kind, one.sessionId));
+          return keys.every((key) => known.has(key))
+            ? known
+            : new Set([...known, ...keys]);
+        });
       },
       () => {},
     );
