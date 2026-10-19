@@ -102,6 +102,7 @@ import {
   type BrowserContextCommand,
   type BrowserKeyAction,
 } from './browser-controls';
+import { PanelKeys, windowShortcut } from './browser-keys';
 import {
   buildPalette,
   palette,
@@ -359,8 +360,11 @@ export class BrowserSessions {
   private dark = nativeTheme.shouldUseDarkColors;
   /** Hands a browser shortcut to the window, which does it as its panel's buttons do. */
   sendKey: (event: BrowserKeyEvent) => void = () => {};
-  // The conversation whose browser panel has the window's keyboard
-  private keyTarget?: string;
+  // For each window, the conversation whose browser panel has that window's keyboard
+  private panelKeys = new PanelKeys<BrowserWindow>((id) => {
+    const conversation = this.conversations.get(id);
+    return conversation ? this.hostOf(conversation) : undefined;
+  });
   constructor(
     private window: BrowserWindow,
     private emit: (state: BrowserState) => void = () => {},
@@ -398,12 +402,19 @@ export class BrowserSessions {
    */
   moveToWindow(idValue: unknown, target: BrowserWindow | null) {
     const id = this.validId(idValue);
-    const conversation = this.conversations.get(id);
     const next = target && !target.isDestroyed() ? target : this.window;
+    // A browser with no page yet goes too: the pages it opens are that window's.
+    const conversation =
+      this.conversations.get(id) ??
+      (next !== this.window && !this.closed && !this.deletedSessions.has(id)
+        ? this.conversation(id)
+        : undefined);
     if (!conversation) return;
     const previous = this.hostOf(conversation);
     conversation.window = next === this.window ? undefined : next;
     if (previous === next) return;
+    // The panel the pages left had the keyboard for them; the new window's says for itself.
+    this.panelKeys.forgetConversation(id);
     const views = [
       ...[...conversation.tabs.values()].map((tab) => tab.view),
       ...(conversation.mask ? [conversation.mask] : []),
@@ -1750,33 +1761,42 @@ export class BrowserSessions {
     );
   }
   /**
-   * A key the window is about to get. While the browser panel has the keyboard, the
-   * browser's shortcuts are its own, before the menu's (⌘W would close the window).
-   * Escape stays the field's.
+   * A key a window of the application is about to get. While that window's browser panel
+   * has the keyboard, the browser's shortcuts are its own, before the menu's (⌘W would
+   * close the window). Any other window keeps its keys. Escape stays the field's.
    */
-  windowKey(event: { preventDefault: () => void }, input: Input) {
-    if (input.type !== 'keyDown' || !this.keyTarget) return;
-    const conversation = this.conversations.get(this.keyTarget);
-    if (!conversation) return;
-    const action = browserShortcut(input, process.platform);
-    if (!action || action === 'stop') return;
+  windowKey(
+    event: { preventDefault: () => void },
+    input: Input,
+    from: BrowserWindow,
+  ) {
+    const action = windowShortcut(input, process.platform);
+    if (!action) return;
+    const id = this.panelKeys.holder(from);
+    if (!id) return;
     event.preventDefault();
-    this.sendKey({ sessionId: 'browser:' + conversation.id, action });
+    this.sendKey({ sessionId: 'browser:' + id, action });
+  }
+  /**
+   * Whether the browser panel of the window `from` has that window's keyboard; see
+   * DesktopBridge.browserKeys. Only the window that shows the conversation's pages takes
+   * it; any window may let it go.
+   */
+  keys(idValue: unknown, focused: unknown, from: BrowserWindow) {
+    const id = this.validId(idValue);
+    if (!this.panelKeys.report(from, id, focused === true)) return;
+    // A click on the address bar has to take the keyboard from the page view.
+    // Until the window has it, the first F12 reaches neither of them.
+    if (!from.isDestroyed() && !from.webContents.isFocused())
+      from.webContents.focus();
+  }
+  /** A window's page went away, closed or reloaded: its panel has the keyboard no more. */
+  windowGone(window: BrowserWindow) {
+    this.panelKeys.forgetWindow(window);
   }
   /** What the person does to the shown page from the panel; see DesktopBridge.browserPage. */
   async page(idValue: unknown, action: unknown, value: unknown) {
     const id = this.validId(idValue);
-    if (action === 'keys') {
-      if (value === true) {
-        this.keyTarget = id;
-        // A click on the address bar has to take the keyboard from the page view.
-        // Until the window has it, the first F12 reaches neither of them.
-        const host = this.windowOf(id);
-        if (!host.isDestroyed() && !host.webContents.isFocused())
-          host.webContents.focus();
-      } else if (this.keyTarget === id) this.keyTarget = undefined;
-      return null;
-    }
     const conversation = this.conversations.get(id);
     const tab = conversation?.active
       ? conversation.tabs.get(conversation.active)
@@ -3530,6 +3550,7 @@ export class BrowserSessions {
   /** Retire only this conversation; other sessions keep their pages and approvals. */
   async deleteSession(id: string): Promise<void> {
     this.deletedSessions.add(id);
+    this.panelKeys.forgetConversation(id);
     const conversation = this.conversations.get(id);
     if (!conversation) return;
     clearInterval(conversation.autoReturn);

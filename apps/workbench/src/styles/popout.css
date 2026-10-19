@@ -8,6 +8,14 @@ html[data-popout] #root {
   height: 100%;
   background: var(--bg);
 }
+/* A notice sits on the mode's own bar, on one line: under that bar a browser's page is
+   drawn over the window and would hide it. */
+html[data-popout] .toast {
+  top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .popout-empty {
   margin: 0;
   padding: 24px;
