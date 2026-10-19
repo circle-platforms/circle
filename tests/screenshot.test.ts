@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { PNG } from 'pngjs';
@@ -465,6 +472,121 @@ test('a Windows screenshot does not run the C# compiler: the window functions ar
     assert.match(commands[0]!, new RegExp(`'${name}'`));
   assert.match(commands[0]!, /DefinePInvokeMethod/);
 });
+test('a Windows window is measured in its own DPI awareness, so a window that is not DPI aware fills the picture at display scaling', async (t) => {
+  const target = join(realpathSync(scratch(t)), 'shot.png');
+  const commands: string[] = [];
+  await assert.rejects(
+    takeScreenshot({
+      app: 'legacy',
+      target,
+      platform: 'win32',
+      env: {},
+      run: async (_command, args) => {
+        commands.push(args.at(-1)!);
+        return { code: 0, stdout: Buffer.from('apps:explorer\r\n') };
+      },
+    }),
+    /no window of "legacy" is open/,
+  );
+  const command = commands[0]!;
+  // Both return a DPI_AWARENESS_CONTEXT handle, not a BOOL
+  for (const name of [
+    'GetWindowDpiAwarenessContext',
+    'SetThreadDpiAwarenessContext',
+  ])
+    assert.match(command, new RegExp(`@\\('${name}', \\[IntPtr\\], `));
+  const [windowBranch, screenBranch] = command.split('} else {');
+  // The process stays DPI aware, so the main screen is copied in its pixels; only this
+  // thread takes the window's awareness, and before the window is measured for the bitmap
+  assert.ok(
+    command.indexOf('$window::SetProcessDPIAware()') <
+      command.indexOf('if ($app)'),
+  );
+  assert.doesNotMatch(screenBranch!, /DpiAwareness/);
+  const steps = [
+    '$window::SetThreadDpiAwarenessContext($window::GetWindowDpiAwarenessContext($found.MainWindowHandle))',
+    '$window::GetWindowRect($found.MainWindowHandle, $rect)',
+    'New-Object Drawing.Bitmap ($rect[2] - $rect[0]), ($rect[3] - $rect[1])',
+    '$window::PrintWindow($found.MainWindowHandle, $dc, 2)',
+  ].map((step) => windowBranch!.indexOf(step));
+  assert.ok(
+    steps.every((at) => at >= 0),
+    'each step is in the window branch',
+  );
+  assert.deepEqual(
+    [...steps].sort((a, b) => a - b),
+    steps,
+  );
+  // A Windows without per-thread awareness (before 10 1607) still takes the window as before
+  assert.match(
+    windowBranch!,
+    /try \{ \$window::SetThreadDpiAwarenessContext\([^;]*\| Out-Null \} catch \{ \}; \$rect = /,
+  );
+});
+
+test(
+  'on Windows a window that is not DPI aware is taken whole: its picture is its own size with no empty part',
+  { skip: process.platform !== 'win32', timeout: 120_000 },
+  async (t) => {
+    const title = `circle-shot-${process.pid}-${Date.now()}`;
+    // A borderless window, all of it one colour, made on a thread that is not DPI aware
+    const host = spawn(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        [
+          "$ErrorActionPreference = 'Stop'",
+          'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
+          "$type = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object Reflection.AssemblyName 'CircleShotHost'), [Reflection.Emit.AssemblyBuilderAccess]::Run).DefineDynamicModule('CircleShotHost').DefineType('CircleShotHost', [Reflection.TypeAttributes]'Public, Class')",
+          "$type.DefinePInvokeMethod('SetThreadDpiAwarenessContext', 'user32.dll', [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard, [IntPtr], [Type[]]@([IntPtr]), [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Auto).SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)",
+          '$dpi = $type.CreateType()',
+          '$dpi::SetThreadDpiAwarenessContext([IntPtr](-1)) | Out-Null',
+          '$form = New-Object Windows.Forms.Form',
+          `$form.Text = '${title}'`,
+          "$form.FormBorderStyle = 'None'",
+          "$form.StartPosition = 'Manual'",
+          '$form.Location = New-Object Drawing.Point 80, 80',
+          '$form.ClientSize = New-Object Drawing.Size 320, 200',
+          '$form.BackColor = [Drawing.Color]::Lime',
+          '$form.TopMost = $true',
+          "$form.Add_Shown({ $form.Refresh(); [Console]::Out.WriteLine('shown'); [Console]::Out.Flush() })",
+          '[Windows.Forms.Application]::Run($form)',
+        ].join('; '),
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    cleanup(t, () => {
+      host.kill();
+    });
+    await new Promise<void>((resolve, reject) => {
+      let said = '';
+      host.stdout!.on('data', (chunk: Buffer) => {
+        said += chunk.toString('utf8');
+        if (said.includes('shown')) resolve();
+      });
+      host.once('exit', (code) =>
+        reject(new Error(`the window host ended with ${code}`)),
+      );
+    });
+    const target = join(realpathSync(scratch(t)), 'shot.png');
+    await takeScreenshot({ app: title, target });
+    const picture = PNG.sync.read(readFileSync(target));
+    assert.deepEqual([picture.width, picture.height], [320, 200]);
+    const at = (x: number, y: number) => [
+      ...picture.data.subarray((y * 320 + x) * 4, (y * 320 + x) * 4 + 3),
+    ];
+    for (const [x, y] of [
+      [4, 4],
+      [315, 4],
+      [4, 195],
+      [315, 195],
+      [160, 100],
+    ])
+      assert.deepEqual(at(x!, y!), [0, 255, 0], `pixel ${x},${y}`);
+  },
+);
 test('Windows gives PowerShell a minute for a screenshot and says when it ran out of time', async (t) => {
   const root = realpathSync(scratch(t));
   const target = join(root, 'shot.png');
