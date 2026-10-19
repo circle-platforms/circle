@@ -235,6 +235,45 @@ test('an agent request from the runtime drives the same host and reports state',
   assert.equal(states.at(-1)!.state.conversation, 'c2');
 });
 
+test('saved profile display names with spaces, Unicode and the full allowed length connect and carry real input', async (t) => {
+  const device = await consoleServer(t);
+  const names = [
+    'a synthetic console with a long display name',
+    '本地 console',
+    'x'.repeat(100),
+  ];
+  const { panel } = await makeHost(
+    t,
+    names.map((name) => ({
+      name,
+      transport: 'telnet',
+      host: '127.0.0.1',
+      port: device.port,
+      cols: 80,
+      rows: 24,
+    })),
+  );
+  assert.deepEqual(
+    panel.profiles().map((profile) => profile.name),
+    names,
+  );
+  for (const [index, name] of names.entries()) {
+    const state = await panel.connect('c1', name);
+    const row = state.sessions.at(-1)!;
+    assert.equal(row.state, 'ready');
+    panel.attach('c1', row.id);
+    const mark = `profile-${index}`;
+    assert.equal(panel.input('c1', row.id, mark + '\r'), true);
+    await until(
+      () => device.typed.includes(mark),
+      'the profile console receives input',
+    );
+  }
+  for (const name of ['', ' leading', 'bad\nname', 'x'.repeat(101), null])
+    await assert.rejects(panel.connect('c1', name), /invalid terminal profile/);
+  assert.equal(panel.state('c1').sessions.length, names.length);
+});
+
 test('the bridge refuses strangers: ids are gated before anything reads or writes', async (t) => {
   const { panel } = await makeHost(t, []);
   for (const bad of ['', 'x'.repeat(121), 'not an id', '../etc']) {
