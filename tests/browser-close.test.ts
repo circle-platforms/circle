@@ -409,6 +409,26 @@ test('on Windows, another taskkill failure is still kept with the live root, whi
   assert.equal(child.exitCode, null);
 });
 
+test('on Windows, observed taskkill exit 255 for access denied retains the live root regardless of output language', async () => {
+  // Real taskkill /T /F against an owned Node with PROCESS_TERMINATE denied
+  // returned 255 on Windows 11. It must never be classified as process-not-found.
+  for (const message of ['Access is denied.', '拒绝访问。']) {
+    const child = terminatingChild(30);
+    const browser = browserWithChild(child);
+    const denied = Object.assign(new Error(message), { code: 255 });
+    (browser as any).taskkill = async () => {
+      throw denied;
+    };
+    await assert.rejects(
+      asWindows(() => browser.close()),
+      denied,
+    );
+    assert.deepEqual(child.kills, []);
+    assert.equal(child.exitCode, null);
+    assert.ok((browser as any).ownedRoots.has(child));
+  }
+});
+
 test('refused forced browser termination retains session history until a successful deletion retry', async (t) => {
   const home = scratch(t);
   const workspace = scratch(t);
