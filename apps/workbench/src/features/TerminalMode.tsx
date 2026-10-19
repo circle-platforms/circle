@@ -7,6 +7,7 @@ import { useRuntime } from '../app/context';
 import { t } from '../i18n';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { appendTerminalSelection } from '../model/terminal-context';
+import { useAddToDraft } from '../app/draft';
 import { workspaceCall } from '../model/workspace-client';
 import type { TerminalReplay } from '../../../desktop/src/workspace/terminal';
 
@@ -29,6 +30,8 @@ export function TerminalMode({
   visible: boolean;
 }) {
   const { runtime } = useRuntime();
+  // In a window of its own, the message box is the main window's.
+  const addToDraft = useAddToDraft();
   return (
     <div className="terminal-mode">
       <Suspense fallback={<p role="status">{t('loading terminal…')}</p>}>
@@ -40,27 +43,31 @@ export function TerminalMode({
             onExitCommandTerminal={onExitCommandTerminal}
             active={visible}
             onAddToDraft={(capture) =>
-              appendTerminalSelection(runtime, capture, () =>
-                commandTerminal
-                  ? commandTerminalRequest(
-                      commandTerminal.viewSessionId,
-                      commandTerminal.resolved.target,
-                      () => {},
-                    )<TerminalReplay>('replay', {
-                      id: capture.terminalId,
-                      afterSequence: capture.outputSequence,
-                      limit: 1,
-                    })
-                  : workspaceCall<TerminalReplay>(
-                      capture.sourceSessionId,
-                      'terminal',
-                      'replay',
-                      {
+              appendTerminalSelection(
+                runtime,
+                capture,
+                () =>
+                  commandTerminal
+                    ? commandTerminalRequest(
+                        commandTerminal.viewSessionId,
+                        commandTerminal.resolved.target,
+                        () => {},
+                      )<TerminalReplay>('replay', {
                         id: capture.terminalId,
                         afterSequence: capture.outputSequence,
                         limit: 1,
-                      },
-                    ),
+                      })
+                    : workspaceCall<TerminalReplay>(
+                        capture.sourceSessionId,
+                        'terminal',
+                        'replay',
+                        {
+                          id: capture.terminalId,
+                          afterSequence: capture.outputSequence,
+                          limit: 1,
+                        },
+                      ),
+                addToDraft,
               )
             }
           />

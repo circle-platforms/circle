@@ -35,6 +35,7 @@ import type {
   WebContents,
   WebFrameMain,
 } from 'electron';
+import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -72,10 +73,12 @@ import { channelOf } from './channel';
 import {
   Popouts,
   type PopoutHooks,
+  validPopoutAddress,
   validPopoutKind,
   validPopoutSession,
   validPopoutTitle,
 } from './popouts';
+import { validPopoutAttachment } from './popout-attachment';
 // A release, or a beta that package:beta wrote into the packaged package.json
 const channel = channelOf(
   (() => {
@@ -129,6 +132,13 @@ const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
 // The browser and the terminal can leave the drawer for a window of their own.
 let popouts: Popouts<BrowserWindow> | null = null;
+// The address each browser window is to open next, until its page takes it.
+const popoutAddresses = new Map<BrowserWindow, string>();
+// What a window of its own put into a message box, waiting for the main window's answer
+const attachmentAnswers = new Map<
+  string,
+  { to: WebContents; answer: (saved: boolean, error: string) => void }
+>();
 let browsers: BrowserSessions | null = null;
 let browserClosePending: Promise<void> = Promise.resolve();
 let terminals: TerminalPanelHost | null = null;
@@ -184,10 +194,11 @@ function appWindows(): BrowserWindow[] {
 function broadcast(channel: string, ...args: unknown[]) {
   for (const one of appWindows()) one.webContents.send(channel, ...args);
 }
+/** The application's window that sent a message, or a throw for anything else. */
 function checkSender(event: {
   sender: WebContents;
   senderFrame: WebFrameMain | null;
-}) {
+}): BrowserWindow {
   const own = appWindows().find((one) => one.webContents === event.sender);
   if (
     !own ||
@@ -196,6 +207,7 @@ function checkSender(event: {
     !trustedAppUrl(event.senderFrame.url)
   )
     throw Error('untrusted IPC sender');
+  return own;
 }
 function handle(channel: string, handler: (...args: unknown[]) => unknown) {
   ipcMain.handle(channel, (event, ...args) => {
@@ -206,12 +218,11 @@ function handle(channel: string, handler: (...args: unknown[]) => unknown) {
 /** Like `handle`, for a handler that has to know which window asked. */
 function handleFrom(
   channel: string,
-  handler: (sender: WebContents, ...args: unknown[]) => unknown,
+  handler: (from: BrowserWindow, ...args: unknown[]) => unknown,
 ) {
-  ipcMain.handle(channel, (event, ...args) => {
-    checkSender(event);
-    return handler(event.sender, ...args);
-  });
+  ipcMain.handle(channel, (event, ...args) =>
+    handler(checkSender(event), ...args),
+  );
 }
 const sendAction = (action: DesktopAction) =>
   window?.webContents.send('circle:action', action);
@@ -494,18 +505,22 @@ function installWindowChrome(target: BrowserWindow) {
   });
   target.webContents.on(
     'did-start-navigation',
-    (_event, _url, _inPlace, mainFrame) => {
+    (_event, _url, inPlace, mainFrame) => {
       if (mainFrame) externalFilePicker.invalidate();
+      // A page that loads again has no browser panel with the keyboard, until it says so.
+      if (mainFrame && !inPlace) browsers?.windowGone(target);
     },
   );
   target.webContents.on('will-navigate', (event, url) => {
     if (!trustedAppUrl(url)) event.preventDefault();
   });
   // The system's menu takes some of the browser's keys (⌘W closes the window) before
-  // the window sees them: while the browser panel has the keyboard, they are its.
+  // the window sees them: while this window's browser panel has the keyboard, they are
+  // its. Keys typed in another window are that window's.
   target.webContents.on('before-input-event', (event, input) =>
-    browsers?.windowKey(event, input),
+    browsers?.windowKey(event, input, target),
   );
+  target.once('closed', () => browsers?.windowGone(target));
 }
 /**
  * A window for one mode of the drawer: the browser or the terminal of a conversation, in
@@ -546,11 +561,17 @@ async function createPopoutWindow(
   popout.on('page-title-updated', (event) => event.preventDefault());
   installWindowChrome(popout);
   if (kind === 'browser') browsers?.moveToWindow(sessionId, popout);
-  // Before it is gone, so its pages are not lost with it
+  // Before it is gone, so its pages are not lost with it. From here the window is gone for
+  // the application: pressing its mode again makes a new one.
   popout.on('close', () => {
     if (kind === 'browser') browsers?.moveToWindow(sessionId, null);
+    popoutAddresses.delete(popout);
+    hooks.closing();
   });
-  popout.once('closed', hooks.closed);
+  popout.once('closed', () => {
+    popoutAddresses.delete(popout);
+    hooks.closed();
+  });
   popout.once('ready-to-show', () => popout.show());
   await popout.loadURL(
     `circle://workbench/index.html#/popout/${kind}/${sessionId}`,
@@ -1120,29 +1141,94 @@ app
     });
     // Only the window that has a conversation's pages places them: the drawer of the main
     // window keeps its hands off while the browser is in a window of its own.
-    handleFrom('circle:browser-bounds', (sender, id, bounds, visible) => {
+    handleFrom('circle:browser-bounds', (from, id, bounds, visible) => {
       if (!browsers) throw Error('window not ready');
-      if (browsers.windowOf(id).webContents !== sender)
-        return browsers.state(id);
+      if (browsers.windowOf(id) !== from) return browsers.state(id);
       return browsers.bounds(id, bounds, visible);
     });
-    handleFrom('circle:browser-hide', (sender, id) => {
-      if (browsers && browsers.windowOf(id).webContents === sender)
-        browsers.hide(id);
+    handleFrom('circle:browser-hide', (from, id) => {
+      if (browsers && browsers.windowOf(id) === from) browsers.hide(id);
     });
-    handle('circle:popout-open', async (kind, id, title) => {
+    // The main window's drawer opens the windows, and may give the browser's an address.
+    handleFrom('circle:popout-open', async (from, kind, id, title, address) => {
       if (!popouts) throw Error('window not ready');
-      await popouts.open(
-        validPopoutKind(kind),
-        validPopoutSession(id),
-        validPopoutTitle(title),
-      );
+      if (from !== window) throw Error('untrusted IPC sender');
+      const mode = validPopoutKind(kind);
+      const sessionId = validPopoutSession(id);
+      const name = validPopoutTitle(title);
+      if (address !== undefined && mode !== 'browser')
+        throw Error('invalid address');
+      const url =
+        address === undefined ? undefined : validPopoutAddress(address);
+      await popouts.open(mode, sessionId, name);
+      const opened = popouts.window(mode, sessionId);
+      if (!url || !opened || opened.isDestroyed()) return;
+      // Its page takes it when it starts, or now when it is up.
+      popoutAddresses.set(opened, url);
+      opened.webContents.send('circle:popout-address');
+    });
+    handleFrom('circle:popout-address', (from) => {
+      if (popouts?.owner(from)?.kind !== 'browser') return null;
+      const url = popoutAddresses.get(from) ?? null;
+      popoutAddresses.delete(from);
+      return url;
     });
     handle('circle:popout-dock', (kind, id) => {
       popouts?.dock(validPopoutKind(kind), validPopoutSession(id));
     });
     handle('circle:popout-dock-all', () => popouts?.dockAll());
     handle('circle:popouts', () => popouts?.list() ?? []);
+    // A window of its own puts a screenshot or a terminal selection into its conversation's
+    // message box. That box is the main window's, which adds it as the drawer would and
+    // answers whether it could save it with the draft.
+    handleFrom('circle:popout-attach', (from, id, value) => {
+      const owner = popouts?.owner(from);
+      if (!owner) throw Error('untrusted IPC sender');
+      const sessionId = validPopoutSession(id);
+      if (sessionId !== owner.sessionId) throw Error('invalid conversation');
+      const attachment = validPopoutAttachment(owner.kind, value);
+      const target = window;
+      if (!target || target.isDestroyed()) throw Error('window not ready');
+      const request = randomUUID();
+      return new Promise<boolean>((resolve, reject) => {
+        const answer = (saved: boolean, error: string) => {
+          clearTimeout(timer);
+          attachmentAnswers.delete(request);
+          if (error) reject(Error(error));
+          else resolve(saved);
+        };
+        const timer = setTimeout(
+          () => answer(false, 'the main window did not answer'),
+          15_000,
+        );
+        attachmentAnswers.set(request, { to: target.webContents, answer });
+        target.webContents.send('circle:popout-attachment', {
+          request,
+          sessionId,
+          attachment,
+        });
+      });
+    });
+    ipcMain.on(
+      'circle:popout-attachment-answer',
+      (event, request, saved, error) => {
+        try {
+          checkSender(event);
+        } catch {
+          return;
+        }
+        const pending =
+          typeof request === 'string'
+            ? attachmentAnswers.get(request)
+            : undefined;
+        // Only the window the attachment was given to answers for it.
+        if (!pending || pending.to !== event.sender) return;
+        pending.answer(
+          saved === true,
+          typeof error === 'string' ? error.slice(0, 300) : '',
+        );
+      },
+    );
     handle('circle:browser-capture', (id) => {
       if (!browsers) throw Error('window not ready');
       return browsers.capture(id);
@@ -1180,22 +1266,26 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.control(id, action);
     });
-    handle('circle:browser-page', (id, action, value) => {
+    handleFrom('circle:browser-page', (from, id, action, value) => {
       if (!browsers) throw Error('window not ready');
+      // Whether a panel has the keyboard is for the window it is in.
+      if (action === 'keys') {
+        browsers.keys(id, value, from);
+        return null;
+      }
       return browsers.page(id, action, value);
     });
     ipcMain.on('circle:browser-keys', (event, id, focused) => {
       // sendSync waits until returnValue is set. Set it before any throw.
       event.returnValue = null;
       try {
-        checkSender(event);
+        const from = checkSender(event);
+        // Set before the click returns, so the next key finds the panel focused.
+        browsers?.keys(id, focused, from);
       } catch {
-        return;
+        // A sender or a conversation that is not one: nothing changes hands, and the
+        // main process carries on.
       }
-      if (!browsers) return;
-      // Set before the click returns, so the next key finds the panel focused.
-      if (browsers.windowOf(id).webContents === event.sender)
-        void browsers.page(id, 'keys', focused).catch(() => {});
     });
     handle('circle:browser-reveal', (id, download) => {
       if (!browsers) throw Error('window not ready');

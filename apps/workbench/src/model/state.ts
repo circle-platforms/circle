@@ -199,6 +199,48 @@ interface StoragePort {
   setItem: (key: string, value: string) => void;
   removeItem: (key: string) => void;
 }
+/** The preview as it was stored, when it can be read. */
+function storedPreview(storage?: StoragePort): WorkbenchSnapshot | undefined {
+  try {
+    const raw = storage?.getItem(STORAGE_KEY);
+    if (!raw) return undefined;
+    const data = JSON.parse(raw);
+    if (
+      data.version === 1 &&
+      [
+        'sessions',
+        'workspaces',
+        'files',
+        'jobs',
+        'agents',
+        'interactions',
+        'requests',
+        'skills',
+        'models',
+        'mcp',
+        'extensions',
+        'commands',
+        'approvalRules',
+        'uiPlugins',
+      ].every((key) => Array.isArray(data[key])) &&
+      data.sessions.length &&
+      data.settings
+    )
+      return data as WorkbenchSnapshot;
+  } catch {
+    /* Fall back to isolated sample data. */
+  }
+  return undefined;
+}
+/** What the preview never keeps across a load: auto mode, hidden messages, undo. */
+function fresh(snapshot: WorkbenchSnapshot): WorkbenchSnapshot {
+  for (const session of snapshot.sessions) {
+    session.auto = false;
+    session.hiddenIds = [];
+    session.undoStack = [];
+  }
+  return snapshot;
+}
 /** A browser-only model for exercising UI behavior. It never runs the Circle runtime. */
 export class PreviewRuntime implements RuntimePort {
   readonly mode = 'preview' as const;
@@ -208,44 +250,16 @@ export class PreviewRuntime implements RuntimePort {
   private storage?: StoragePort;
   constructor(storage?: StoragePort) {
     this.storage = storage;
-    let value: WorkbenchSnapshot | undefined;
-    try {
-      const raw = storage?.getItem(STORAGE_KEY);
-      if (raw) {
-        const data = JSON.parse(raw);
-        if (
-          data.version === 1 &&
-          [
-            'sessions',
-            'workspaces',
-            'files',
-            'jobs',
-            'agents',
-            'interactions',
-            'requests',
-            'skills',
-            'models',
-            'mcp',
-            'extensions',
-            'commands',
-            'approvalRules',
-            'uiPlugins',
-          ].every((key) => Array.isArray(data[key])) &&
-          data.sessions.length &&
-          data.settings
-        )
-          value = data;
-      }
-    } catch {
-      /* Fall back to isolated sample data. */
-    }
-    this.snapshot = value ?? createFixtures();
-    for (const session of this.snapshot.sessions) {
-      session.auto = false;
-      session.hiddenIds = [];
-      session.undoStack = [];
-    }
+    this.snapshot = fresh(storedPreview(storage) ?? createFixtures());
   }
+  // Another window wrote the preview: a window that only reads it shows it as it is now.
+  storageChanged = (key: string | null) => {
+    if (key !== null && key !== STORAGE_KEY) return;
+    const value = storedPreview(this.storage);
+    if (!value) return;
+    this.snapshot = fresh(value);
+    for (const listener of this.listeners) listener();
+  };
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
