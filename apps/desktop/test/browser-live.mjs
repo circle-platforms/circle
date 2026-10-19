@@ -1099,8 +1099,8 @@ try {
         'the full view carries the native browser page across the workspace and back, in step with its box',
       );
     }
-    // Switching the inspector, closing it, a dialog and a resize must take the
-    // native page with them. A hidden tab used to leave the WebContentsView painted.
+    // Another mode of the drawer, closing the drawer, a menu, a dialog and a resize must
+    // take the native page with them. A hidden tab used to leave the WebContentsView painted.
     const httpViews = () =>
       app.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0];
@@ -1123,32 +1123,33 @@ try {
       }
       return last;
     };
-    await page
-      .getByRole('button', { name: 'activity panel', exact: true })
-      .click();
-    await page.getByRole('tab', { name: 'tasks', exact: true }).click();
+    // The drawer shows one mode at a time: another mode's button takes the browser's place.
+    const modeButton = (name) =>
+      page.getByRole('button', { name: `${name} panel`, exact: true });
+    await modeButton('subagents').click();
+    await page.getByRole('list', { name: 'subagents', exact: true }).waitFor();
     await waitViews(
       (views) => views.length > 0 && views.every((view) => !view.visible),
-      'the page stays painted on the tasks tab',
+      'the page stays painted on the subagents mode',
     );
+    await modeButton('changes').click();
     await page
-      .getByRole('button', { name: 'changes panel', exact: true })
-      .click();
-    await page.getByRole('tab', { name: 'git', exact: true }).click();
+      .locator('[data-inspector-resource="changes"]:not([hidden])')
+      .waitFor();
     await waitViews(
       (views) => views.every((view) => !view.visible),
-      'the page stays painted on Git',
+      'the page stays painted on the changes mode',
     );
+    // A mode has no title bar: its own button pressed again closes the drawer.
+    await modeButton('changes').click();
     await page
-      .getByRole('button', { name: 'close inspector', exact: true })
-      .click();
+      .getByRole('complementary', { name: 'work drawer', exact: true })
+      .waitFor({ state: 'hidden' });
     await waitViews(
       (views) => views.every((view) => !view.visible),
-      'the page stays painted after the inspector closes',
+      'the page stays painted after the drawer closes',
     );
-    await page
-      .getByRole('button', { name: 'browser panel', exact: true })
-      .click();
+    await modeButton('browser').click();
     await waitViews(
       (views) => views.some((view) => view.visible),
       'the page did not return with the browser panel',
@@ -1247,7 +1248,45 @@ try {
       })}`,
     );
     checks.push(
-      'the native page hides when its tab, tasks, Git, the inspector, a menu or a dialog covers it, and follows a window resize',
+      "the native page hides when another mode of the drawer, the drawer's closing, a menu or a dialog covers it, and follows a window resize",
+    );
+    // The screenshot Circle took is a small picture under its tool line, the very PNG the
+    // model got. A click shows it large, to copy or to keep, over the page.
+    const shot = screenshot.attachments.find(
+      (row) => row.filename === 'browser.png',
+    );
+    const thumb = page
+      .getByRole('button', { name: 'enlarge browser.png', exact: true })
+      .last();
+    assert.equal(
+      await thumb.locator('img').getAttribute('src'),
+      `data:image/png;base64,${shot.data}`,
+    );
+    await thumb.click();
+    const large = page.getByRole('dialog', {
+      name: 'browser.png',
+      exact: true,
+    });
+    for (const name of ['copy image', 'save to file'])
+      await large.getByRole('button', { name, exact: true }).waitFor();
+    assert.equal(
+      await large.locator('.lightbox > img').getAttribute('src'),
+      `data:image/png;base64,${shot.data}`,
+    );
+    await waitViews(
+      (views) => views.every((view) => !view.visible),
+      'the page stays painted under the large picture',
+    );
+    await large
+      .getByRole('button', { name: 'close dialog', exact: true })
+      .click();
+    await large.waitFor({ state: 'detached' });
+    await waitViews(
+      (views) => views.some((view) => view.visible),
+      'the page did not return after the large picture',
+    );
+    checks.push(
+      'the screenshot Circle took is a small picture in the conversation, the PNG the model got, which opens large with copy image and save to file while the native page steps aside',
     );
 
     await send('open the unavailable local port');
@@ -1943,21 +1982,20 @@ try {
       'held ring padding is ' + held.padding,
     );
     assert.notEqual(held.shadow, 'none');
-    await page
-      .getByRole('button', { name: 'browser menu', exact: true })
-      .click();
-    await page
-      .getByRole('menuitem', { name: 'take over', exact: true })
-      .waitFor();
-    await page.keyboard.press('Escape');
+    // While the ring is lit the person can take the browser: a button beside the address.
+    const takeOver = page
+      .locator('.browser-address')
+      .getByRole('button', { name: 'take over', exact: true });
+    await takeOver.waitFor();
     await writeFile(ringGap, 'go\n');
     await page.getByText('the ring stayed on', { exact: true }).waitFor();
     await waitFor(async () => {
       const ring = await controlRing();
       return ring?.driving === false && !ring.label;
     }, 'the ring goes out when the turn ends');
+    await takeOver.waitFor({ state: 'detached' });
     checks.push(
-      'the control ring stays on between two browser tools, including while Circle is only thinking, and goes out when the turn ends',
+      'the control ring stays on between two browser tools, including while Circle is only thinking, with take over beside the address, and both go when the turn ends',
     );
     assert.deepEqual(errors, []);
     // The address draft belongs to the shown tab, even when navigation fails before loading.
@@ -1973,10 +2011,31 @@ try {
     assert.equal(rejectedAddress.url, priorBrowser.url);
     assert.equal(rejectedAddress.tab, priorBrowser.tab);
     await page.getByRole('button', { name: 'new tab', exact: true }).click();
-    await waitFor(
-      async () => (await draftAddress.inputValue()) === '',
-      'new tab clears failed address draft',
-    );
+    let draftShown;
+    try {
+      await waitFor(
+        async () => (draftShown = await draftAddress.inputValue()) === '',
+        'new tab clears failed address draft',
+      );
+    } catch (error) {
+      // Every address field in the window, shown or not, with what it holds
+      const fields = await page.evaluate(() =>
+        [
+          ...document.querySelectorAll('input[aria-label="browser address"]'),
+        ].map((field) => ({
+          value: field.value,
+          focused: document.activeElement === field,
+          shown: field.checkVisibility(),
+          hiddenBy: field.closest('[hidden]')?.className ?? null,
+        })),
+      );
+      throw Error(
+        `${error.message}: the address read ${JSON.stringify(draftShown)}, fields ${JSON.stringify(fields)}, browser ${JSON.stringify(
+          await browserState(sessionId),
+        )}`,
+        { cause: error },
+      );
+    }
     await page.evaluate(
       ({ id, tab }) => window.circleDesktop.browserTabs(id, 'select', tab),
       { id: sessionId, tab: priorBrowser.tab },

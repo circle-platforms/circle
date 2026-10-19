@@ -29,7 +29,7 @@ These choices follow Electron's [security recommendations](https://www.electronj
 
 ## Plugins
 
-The same `WorkbenchPlugin` declaration is used for the Circle file/activity/browser components and B/C/D/E. A declaration includes an ID, version, interface version, dependencies and page/panel/context/composer contributions. Registration rejects conflicts and dependency cycles. React rendering errors are contained at a component boundary.
+The same `WorkbenchPlugin` declaration is used for the Circle files, changes and browser components and B/C/D/E. A declaration includes an ID, version, interface version, dependencies and page/panel/context/composer contributions. Registration rejects conflicts and dependency cycles. React rendering errors are contained at a component boundary.
 
 Current modules are reviewed first-party code, bundled with the application. UI disablement hides contributions; it is not code unloading. A future third-party distribution channel needs its own trust and isolation design. Circle runtime extensions and workbench UI components are separate mechanisms.
 

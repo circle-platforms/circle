@@ -58,8 +58,3 @@
 .facts dd {
   overflow-wrap: anywhere;
 }
-@media (prefers-reduced-motion: reduce) {
-  .task-row-chevron {
-    transition: none;
-  }
-}

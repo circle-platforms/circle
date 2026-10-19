@@ -61,6 +61,8 @@ export type LocalTerminalControl = 'take' | 'return' | 'stop';
 // How much of a tab's recent output its screen is drawn from when Circle first looks
 const RECENT_OUTPUT = 256_000;
 const MAX_TEXT = 65_536;
+// The most of Circle's handoff reason the window's state carries
+const MAX_REASON = 2_000;
 // What xterm answers by itself and the window passes on as input: cursor position and
 // device attribute reports, focus changes, colour, mode and status reports. None of it
 // is the person typing.
@@ -74,11 +76,11 @@ const RUNS_LINE = new Set(['Enter', 'Ctrl_D']);
 
 /** The line at a tab's prompt, as far as Circle can tell what the shell will run. */
 interface Line {
-  /** What Circle typed on it since it last ran, as the card shows it. */
+  /** What Circle typed on it since it last ran, as it runs (secrets' values included). */
   text: string;
   /** Nothing else changed it: no editing key, nothing the person typed. */
   clean: boolean;
-  /** Where Circle's typing on it began, on the screen. */
+  /** Where typing on it began, Circle's or the person's, on the screen: past the prompt. */
   start?: { row: number; col: number };
   /** Counts every change, to tell a line that changed after its approval was asked. */
   version: number;
@@ -233,8 +235,10 @@ export class LocalTerminals implements TerminalTabFacts {
   /**
    * What a write to a tab types and runs, for its approval: `terminal`, its tab number
    * (`ordinal`), whether this is its `first_use` in the conversation, and the `command`
-   * the shell will run when the write runs a line. `typed` is the text as the card shows
-   * it, secrets as `%NAME%`.
+   * the shell will run when the write runs a line, with `uncertain` when that line was read
+   * off the screen without knowing where its prompt ends. `typed` is the text it types.
+   * All are read from the values the write runs with; the card shows each secret's value
+   * back as its name.
    */
   facts(
     conversation: string,
@@ -263,16 +267,19 @@ export class LocalTerminals implements TerminalTabFacts {
         ? line.text
         : this.onScreen(this.tabs.get(key(conversation, terminal)), line);
     if (action === 'send') {
-      const text = String(shown.text ?? args.text ?? '');
+      checkText(String(shown.text ?? ''));
+      const text = String(args.text ?? '');
       checkText(text);
-      checkText(String(args.text ?? ''));
       const plain = text.replace(/\r\n?/g, '\n');
       facts.typed = plain;
       if (args.enter === true || plain.includes('\n'))
         facts.command = (before() + plain).replace(/\n+$/, '');
     } else if (RUNS_LINE.has(String(args.key ?? ''))) facts.command = before();
-    if (facts.command !== undefined) own.asked.set(terminal, line.version);
-    else own.asked.delete(terminal);
+    if (facts.command !== undefined) {
+      own.asked.set(terminal, line.version);
+      // Read off the screen from its first column: the prompt may be part of it
+      if (!line.clean && !line.start) facts.uncertain = true;
+    } else own.asked.delete(terminal);
     return facts;
   }
   /**
@@ -281,8 +288,15 @@ export class LocalTerminals implements TerminalTabFacts {
    */
   typed(conversation: string, terminal: string, data: string): void {
     if (!terminal || !data || AUTOMATIC_REPLY.test(data)) return;
-    personTyped(this.line(this.own(conversation), terminal), data);
+    const line = this.line(this.own(conversation), terminal);
     const tab = this.tabs.get(key(conversation, terminal));
+    // Where the person starts a line is where the prompt ends: the keys have not reached
+    // the shell yet, so the cursor is still there
+    if (tab && !line.text && line.clean && !line.start) {
+      const buffer = tab.session.screen.buffer.active;
+      line.start = { row: buffer.baseY + buffer.cursorY, col: buffer.cursorX };
+    }
+    personTyped(line, data);
     if (!tab || tab.session.held) return;
     if (this.conversations.get(conversation)?.active.has(terminal))
       this.sessions.attach(conversation, tab.session.id);
@@ -307,7 +321,7 @@ export class LocalTerminals implements TerminalTabFacts {
       own.handoffs.get(terminal)?.resolve();
     } else {
       const reason = Error(
-        `the user stopped your action on ${this.name(host, conversation, terminal)}`,
+        `the user stopped your action on ${this.name(host, conversation, terminal)}; what you had typed there may already have run, so read the tab before you send again`,
       );
       for (const controller of own.active.get(terminal) ?? [])
         controller.abort(reason);
@@ -325,7 +339,11 @@ export class LocalTerminals implements TerminalTabFacts {
     return list.filter(running).map((snapshot) => {
       const id = terminalTabSession(snapshot.id);
       const held = this.tabs.get(key(conversation, snapshot.id))?.session.held;
-      const reason = own?.handoffs.get(snapshot.id)?.reason;
+      const given = own?.handoffs.get(snapshot.id)?.reason;
+      const reason =
+        given && given.length > MAX_REASON
+          ? given.slice(0, MAX_REASON - 1) + '…'
+          : given;
       return {
         id,
         terminal: snapshot.id,

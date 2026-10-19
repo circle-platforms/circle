@@ -63,7 +63,10 @@ async function canBind(port) {
     if (server.listening) await new Promise((done) => server.close(done));
   }
 }
-/** Open the original terminal Inspector without toggling an already open panel closed. */
+/**
+ * Open the work drawer's terminal mode without toggling an already open mode closed.
+ * A stand-in drawer of the earlier layout, which still has a terminal tab, works too.
+ */
 export async function openNativeTerminalInspector(page) {
   const toggle = page.getByRole('button', {
     name: 'terminal panel',
@@ -71,12 +74,44 @@ export async function openNativeTerminalInspector(page) {
   });
   if ((await toggle.getAttribute('aria-pressed')) !== 'true')
     await toggle.click();
-  await page.locator('#inspector-terminal-tab-terminal').click();
+  const tab = page.locator('#inspector-terminal-tab-terminal');
+  if (await tab.count()) await tab.click();
   const panel = page.locator(
-    '#inspector-terminal-terminal .native-terminal:visible',
+    ':is([data-inspector-resource="terminal"], #inspector-terminal-terminal) .native-terminal:visible',
   );
   await panel.waitFor();
   return panel;
+}
+/** Make a shell from the + menu at the end of the terminal tabs. */
+export async function chooseNewLocalTerminal(page, panel) {
+  await panel
+    .getByRole('button', { name: 'new terminal or device', exact: true })
+    .click();
+  // The item is disabled while another terminal action runs; a click waits for it.
+  await page.getByRole('menuitem', { name: /^new local terminal/ }).click();
+}
+/**
+ * Choose what the tab in front can be told to do from its ⋮ menu: find in terminal, add
+ * selection to chat, copy complete output, restart, interrupt command, start service.
+ * A disabled item is waited for until it is enabled.
+ */
+export async function chooseTerminalAction(page, panel, name) {
+  await panel
+    .getByRole('button', { name: 'terminal menu', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name, exact: true }).click();
+}
+/** Whether an item of the ⋮ menu is enabled; the menu is closed again afterwards. */
+export async function terminalActionEnabled(page, panel, name) {
+  await panel
+    .getByRole('button', { name: 'terminal menu', exact: true })
+    .click();
+  const item = page.getByRole('menuitem', { name, exact: true });
+  await item.waitFor();
+  const enabled = (await item.getAttribute('aria-disabled')) !== 'true';
+  await page.keyboard.press('Escape');
+  await item.waitFor({ state: 'detached' });
+  return enabled;
 }
 /** Requires English interface, an active granted session, and clipboard preservation by the parent driver. */
 export async function runNativeTerminalJourney({
@@ -167,6 +202,15 @@ export async function runNativeTerminalJourney({
   const panel = await openNativeTerminalInspector(page);
   const selectedTab = (id) =>
     panel.locator(`[role="tab"][aria-controls="terminal-${id}"]`);
+  // A tab's × stops what runs in it and takes the tab out of the row. The filter's
+  // locator is evaluated inside each tab, so it does not repeat the panel.
+  const closeButton = (id) =>
+    panel
+      .locator('.term-tab')
+      .filter({
+        has: page.locator(`[role="tab"][aria-controls="terminal-${id}"]`),
+      })
+      .locator('.term-tab-x');
   const select = async (id) => {
     await selectedTab(id).click();
     await until(
@@ -177,27 +221,17 @@ export async function runNativeTerminalJourney({
   };
   const create = async () => {
     const prior = new Set((await list()).map((terminal) => terminal.id));
-    const button = panel.getByRole('button', {
-      name: 'new terminal',
-      exact: true,
-    });
     let terminal;
-    const appeared = async () =>
-      Boolean(
-        (terminal = (await list()).find((terminal) => !prior.has(terminal.id))),
-      );
-    // A click that lands while the panel re-renders can be lost (seen once on
-    // the packaged Linux app). Click again only when no create is in flight,
-    // which keeps the button disabled; otherwise wait for that create.
-    for (let attempt = 0; attempt < 3 && !terminal; attempt++) {
-      await button.click();
-      const deadline = Date.now() + patience(8000);
-      while (Date.now() < deadline && !(await appeared()))
-        await page.waitForTimeout(40);
-      if (!terminal && !(await button.isEnabled()))
-        await until(appeared, 'new real terminal created');
-    }
-    assert.ok(terminal, 'new real terminal created');
+    await chooseNewLocalTerminal(page, panel);
+    await until(
+      async () =>
+        Boolean(
+          (terminal = (await list()).find(
+            (terminal) => !prior.has(terminal.id),
+          )),
+        ),
+      'new real terminal created',
+    );
     created.push(terminal.id);
     await selectedTab(terminal.id).waitFor();
     return terminal;
@@ -224,9 +258,8 @@ export async function runNativeTerminalJourney({
     await page.keyboard.press(
       process.platform === 'darwin' ? 'Meta+f' : 'Control+f',
     );
-    assert.equal(
-      await find.evaluate((element) => document.activeElement === element),
-      true,
+    await until(
+      () => find.evaluate((element) => document.activeElement === element),
       'find shortcut focuses the existing terminal search',
     );
     await find.fill(line(1));
@@ -264,9 +297,7 @@ export async function runNativeTerminalJourney({
       'real xterm search, no-match feedback, keyboard focus and selected-match copy',
     );
     phase = 'copy complete output';
-    await panel
-      .getByRole('button', { name: 'copy complete output', exact: true })
-      .click();
+    await chooseTerminalAction(page, panel, 'copy complete output');
     let copied;
     await until(async () => {
       copied = await clipboard.readText();
@@ -285,17 +316,13 @@ export async function runNativeTerminalJourney({
     const second = await create();
     phase = 'independent terminal buffers';
     await select(first.id);
-    await panel
-      .getByRole('button', { name: 'copy complete output', exact: true })
-      .click();
+    await chooseTerminalAction(page, panel, 'copy complete output');
     await until(
       async () => (await clipboard.readText()).includes(line(600)),
       'first terminal retains its output after tab switch',
     );
     await select(second.id);
-    await panel
-      .getByRole('button', { name: 'copy complete output', exact: true })
-      .click();
+    await chooseTerminalAction(page, panel, 'copy complete output');
     await until(
       async () => !(await clipboard.readText()).includes(prefix),
       'second terminal has an independent output buffer',
@@ -314,9 +341,7 @@ export async function runNativeTerminalJourney({
     await screenshot('terminal-independent-tabs');
     const port = await freePort();
     phase = 'start managed service';
-    await panel
-      .getByRole('button', { name: 'start service', exact: true })
-      .click();
+    await chooseTerminalAction(page, panel, 'start service');
     const dialog = page.getByRole('dialog', {
       name: 'start service',
       exact: true,
@@ -380,24 +405,22 @@ export async function runNativeTerminalJourney({
     assert.equal(actual.marker, serviceMarker);
     assert.deepEqual(actual.args, ['space argument', '']);
     assert.deepEqual(service.command.args, args);
-    await screenshot('terminal-managed-service-ready');
-    phase = 'stop managed service and release port';
-    await panel
-      .getByRole('button', { name: 'stop service', exact: true })
-      .click();
-    await until(
-      async () =>
-        (await list()).find((terminal) => terminal.id === service.id)
-          ?.serviceState === 'stopped',
-      'managed service stops after confirmation',
+    // The service has a tab of its own, in front, named as the form named it.
+    assert.equal(
+      await selectedTab(service.id).getAttribute('aria-selected'),
+      'true',
     );
-    await until(() => canBind(port), 'actual service port is released');
-    await screenshot('terminal-managed-service-stopped-port-free');
+    assert.equal(
+      (await selectedTab(service.id).innerText()).trim(),
+      'native journey service',
+    );
+    await screenshot('terminal-managed-service-ready');
     const previous = service;
+    const previousProcess = actual.pid;
     phase = 'restart managed service';
-    await panel
-      .getByRole('button', { name: 'restart service', exact: true })
-      .click();
+    // Restarting stops the running process, then starts the same service again: the new
+    // process can only listen on the port once the old one has given it back.
+    await chooseTerminalAction(page, panel, 'restart service');
     await until(
       async () =>
         Boolean(
@@ -408,29 +431,36 @@ export async function runNativeTerminalJourney({
           )),
         ),
       'service restart becomes ready',
+      40000,
     );
     created.push(service.id);
     assert.equal(service.serviceId, previous.serviceId);
     assert.notEqual(service.id, previous.id);
     assert.notEqual(service.epoch, previous.epoch);
-    actual = await response();
-    assert.equal(actual.pid, service.pid);
-    assert.deepEqual(actual.args, ['space argument', '']);
     assert.equal(
       (await list()).find((terminal) => terminal.id === previous.id)
         .serviceState,
       'stopped',
     );
+    actual = await response();
+    assert.equal(actual.pid, service.pid);
+    assert.notEqual(actual.pid, previousProcess);
+    assert.deepEqual(actual.args, ['space argument', '']);
     await screenshot('terminal-managed-service-restarted-same-identity');
-    checks.push(
-      'UI service argv, actual HTTP readiness, stop port release, and restart preserve service identity with a new process epoch',
-    );
-    await panel
-      .getByRole('button', { name: 'stop service', exact: true })
-      .click();
+    phase = 'stop managed service and release port';
+    // The service tab's × stops it and closes the tab.
+    await closeButton(service.id).click();
     await until(
-      () => canBind(port),
-      'restarted service port is released after UI stop',
+      async () =>
+        (await list()).find((terminal) => terminal.id === service.id)
+          ?.serviceState === 'stopped',
+      'managed service stops from its tab',
+    );
+    await until(() => canBind(port), 'actual service port is released');
+    await selectedTab(service.id).waitFor({ state: 'detached' });
+    await screenshot('terminal-managed-service-stopped-port-free');
+    checks.push(
+      'UI service argv, actual HTTP readiness, restart keeps the service identity with a new process epoch after releasing the port, and the tab stops it and releases the port',
     );
     service = undefined;
     const receipt = {
@@ -495,21 +525,17 @@ export async function runNativeTerminalJourney({
     }
     throw error;
   } finally {
-    // UI-only cleanup. The parent app teardown remains the owner if the renderer fails.
+    // UI-only cleanup: each owned tab's ×. The parent app teardown remains the owner if
+    // the renderer fails.
     const failures = [];
     for (const id of created.reverse()) {
       try {
         const terminal = (await list()).find((terminal) => terminal.id === id);
         if (terminal && ['running', 'stopping'].includes(terminal.status)) {
-          await select(id);
-          const stop = panel.getByRole('button', {
-            name:
-              terminal.kind === 'service' ? 'stop service' : 'stop terminal',
-            exact: true,
-          });
-          // A stop the journey already asked for keeps its button disabled
-          // until the process tree has exited, which is slow on Windows.
-          if (await stop.isEnabled()) await stop.click();
+          // A stop already asked for keeps the tab until the process tree has
+          // exited, which is slow on Windows.
+          if (terminal.status === 'running' && (await closeButton(id).count()))
+            await closeButton(id).click();
           await until(
             async () =>
               !['running', 'stopping'].includes(

@@ -4,6 +4,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
 import { assertRenderedTerminalMatch } from './native-terminal-rendered-match.mjs';
+import { terminalActionEnabled } from './native-terminal-journey.mjs';
 
 export const childCommandParentPrompt =
   'NATIVE_CHILD_COMMAND_HANDOFF: delegate one owned interactive command';
@@ -177,58 +178,104 @@ async function call(
   if (requireSuccess) assert.equal(reply.ok, true, JSON.stringify(reply));
   return requireSuccess ? reply.data : reply;
 }
+// A conversation's row in the sidebar. The sidebar folds itself for a document in the
+// drawer; the person can always show it again.
+async function sessionRow(page, id) {
+  const row = page.locator(
+    `.sidebar .session-link[href="#/session/${id}"]:visible`,
+  );
+  if (!(await row.count()))
+    await page
+      .getByRole('button', { name: 'show or hide the sidebar', exact: true })
+      .click();
+  return row.first();
+}
 async function selectParent(page, id, state, until) {
-  await page
-    .locator(`.sidebar .session-link[href="#/session/${id}"]`)
-    .first()
-    .click();
+  await (await sessionRow(page, id)).click();
   await until(
     async () => (await state()).activeSessionId === id,
     'the true parent conversation is selected',
   );
-  const main = page
-    .locator('.agent-record:visible')
-    .getByRole('button', { name: 'main', exact: true });
-  if (await main.isVisible()) await main.click();
   await composer(page).waitFor();
 }
-async function openAgent(page, parentId, agentId, state) {
+/**
+ * A task is a conversation of its own. The sidebar folds it under the conversation that
+ * started it: a click lists the tasks, a click on one opens it.
+ */
+async function openTask(page, parentId, taskId, state, until) {
   const snapshot = await state();
-  assert.equal(snapshot.activeSessionId, parentId);
   const agent = snapshot.agents.find(
-    (item) => item.id === agentId && item.sessionId === parentId,
+    (item) => item.id === taskId && item.sessionId === parentId,
   );
   assert(
-    agent && agent.resourceSessionId === agentId,
+    agent && agent.resourceSessionId === taskId,
     'the original parent maps a real child resource session',
   );
-  const groups = page.locator('.main-stack .conversation:visible .tool-group');
-  await groups.first().waitFor();
-  for (const group of await groups.all())
-    if (
-      (await group
-        .locator(':scope > .tool-summary')
-        .getAttribute('aria-expanded')) !== 'true'
-    )
-      await group.locator(':scope > .tool-summary').click();
   const link = page
-    .locator('.main-stack .tool-agent-links button')
-    .filter({ has: page.getByText(agent.name, { exact: true }) });
-  await link.waitFor();
-  assert.equal(
-    await link.count(),
-    1,
-    'the original task tool card owns exactly this agent entry',
-  );
+    .locator(`.sidebar .session-link[href="#/session/${taskId}"]`)
+    .first();
+  if (!(await link.isVisible())) {
+    await sessionRow(page, parentId);
+    const toggle = page
+      .locator(
+        `.sidebar .session-row:has(> .session-link[href="#/session/${parentId}"]) + .session-tasks-toggle`,
+      )
+      .first();
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true')
+      await toggle.click();
+  }
   await link.click();
-  const record = page.locator('.agent-record:visible');
-  await record.getByText(agent.id, { exact: true }).waitFor();
-  return { agent, record };
+  await until(
+    async () => (await state()).activeSessionId === taskId,
+    'the task conversation is open',
+  );
+  const conversation = page.locator('.main-stack .conversation:visible');
+  await conversation.waitFor();
+  return { agent, conversation };
 }
-async function commandCard(page, record) {
-  const card = record
+/**
+ * A task's reviewer is not a row of the sidebar; search reaches its conversation, named
+ * `review: ` and the task's instruction.
+ */
+async function openReviewer(page, parentId, reviewerId, state, until) {
+  const snapshot = await state();
+  const agent = snapshot.agents.find(
+    (item) => item.id === reviewerId && item.sessionId === parentId,
+  );
+  assert(agent, 'the original parent maps the real reviewer session');
+  const title = snapshot.sessions.find((item) => item.id === reviewerId)?.title;
+  assert(
+    title?.startsWith('review: '),
+    'the reviewer has its own conversation',
+  );
+  await page.keyboard.press('ControlOrMeta+k');
+  const search = page.getByRole('textbox', {
+    name: 'global search',
+    exact: true,
+  });
+  await search.fill(title);
+  await page
+    .locator('.search-results button')
+    .filter({ has: page.locator('strong').getByText(title, { exact: true }) })
+    .click();
+  await until(
+    async () => (await state()).activeSessionId === reviewerId,
+    'the reviewer conversation is open',
+  );
+  const conversation = page.locator('.main-stack .conversation:visible');
+  await conversation.waitFor();
+  return { agent, conversation };
+}
+/** One call of a conversation, unfolded: its group, then the call itself. */
+async function toolCall(page, conversation, name) {
+  for (const summary of await conversation
+    .locator('.tool-group > .tool-summary')
+    .all())
+    if ((await summary.getAttribute('aria-expanded')) !== 'true')
+      await summary.click();
+  const card = conversation
     .locator('.tool-call')
-    .filter({ has: page.locator('.tool-head code[title="execute"]') });
+    .filter({ has: page.locator(`.tool-head code[title="${name}"]`) });
   assert.equal(await card.count(), 1);
   const head = card.locator('.tool-head');
   if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
@@ -309,18 +356,18 @@ export async function runNativeChildCommandHandoffJourney({
       async () => (await sessionView(page, ownerId)).draft === parentDraft,
       'parent unsent draft is durably present in the original composer',
     );
-    let opened = await openAgent(page, ownerId, worker.runtimeSessionId, state);
+    // The task's request waits in its own conversation, which the sidebar opens.
+    let opened = await openTask(
+      page,
+      ownerId,
+      worker.runtimeSessionId,
+      state,
+      until,
+    );
     assert.equal(
       opened.agent.readOnly,
       false,
       'the write worker does not pretend to have readonly source authority',
-    );
-    await opened.record
-      .getByRole('button', { name: 'open task conversation', exact: true })
-      .click();
-    await until(
-      async () => (await state()).activeSessionId === worker.runtimeSessionId,
-      'approval navigation selects the real child session',
     );
     await approve(
       page,
@@ -345,7 +392,13 @@ export async function runNativeChildCommandHandoffJourney({
     );
     await selectParent(page, ownerId, state, until);
     assert.equal(await composer(page).inputValue(), parentDraft);
-    opened = await openAgent(page, ownerId, worker.runtimeSessionId, state);
+    opened = await openTask(
+      page,
+      ownerId,
+      worker.runtimeSessionId,
+      state,
+      until,
+    );
     target = (
       await call(page, ownerId, 'terminal', 'resolveCommand', {
         sourceSessionId: worker.runtimeSessionId,
@@ -354,7 +407,7 @@ export async function runNativeChildCommandHandoffJourney({
     ).target;
     assert(target, 'real child execute receipt resolves');
     assert.equal(target.executionSessionId, worker.runtimeSessionId);
-    const card = await commandCard(page, opened.record);
+    const card = await toolCall(page, opened.conversation, 'execute');
     await card
       .getByRole('button', { name: 'open in terminal', exact: true })
       .click();
@@ -400,9 +453,8 @@ export async function runNativeChildCommandHandoffJourney({
     await page.screenshot({
       path: join(output, 'child-command-handoff-live.png'),
     });
-    await terminal
-      .getByRole('button', { name: 'stop terminal', exact: true })
-      .click();
+    // A command Circle runs is stopped from the end of the tab row, while it runs.
+    await terminal.getByRole('button', { name: 'stop', exact: true }).click();
     await until(async () => {
       const result = await call(page, ownerId, 'terminal', 'command', {
         target,
@@ -430,28 +482,13 @@ export async function runNativeChildCommandHandoffJourney({
     }, 'the true independent reviewer finishes at a human review boundary');
     const reviewer = worker.reviewers[0];
     assert.notEqual(reviewer.sessionId, worker.runtimeSessionId);
-    await opened.record
-      .getByRole('button', { name: 'main', exact: true })
-      .click();
-    opened = await openAgent(page, ownerId, reviewer.sessionId, state);
-    assert.equal(opened.agent.task.role, 'reviewer');
-    assert.equal(opened.agent.readOnly, true);
-    const source = opened.record
-      .locator('.tool-call')
-      .filter({ has: page.locator('.tool-head code[title="read_file"]') });
-    assert.equal(await source.count(), 1);
-    const sourceHead = source.locator('.tool-head');
-    if ((await sourceHead.getAttribute('aria-expanded')) !== 'true')
-      await sourceHead.click();
-    await source
-      .getByRole('button', { name: 'open file', exact: true })
-      .click();
-    const file = page.locator('.file-view:visible');
-    await file.locator('.file-source-readonly').waitFor();
-    assert.equal(
-      await file.getByRole('button', { name: 'save', exact: true }).isEnabled(),
-      false,
+    const reviewerAgent = (await state()).agents.find(
+      (item) => item.id === reviewer.sessionId && item.sessionId === ownerId,
     );
+    assert.equal(reviewerAgent?.task?.role, 'reviewer');
+    assert.equal(reviewerAgent.readOnly, true);
+    // The reviewer reads the candidate in a worktree of its own and cannot save there.
+    // How its conversation shows that source is checked by runNativeReviewerSourceJourney.
     const doc = await call(page, reviewer.sessionId, 'documents', 'read', {
       path: fixture.paths.source,
     });
@@ -478,13 +515,7 @@ export async function runNativeChildCommandHandoffJourney({
       );
     assert.equal(await text(reviewer.workspace), fixture.source);
     assert.equal(await text(workspace), fixture.source);
-    await page.screenshot({
-      path: join(output, 'child-command-readonly-reviewer-source.png'),
-    });
-    await page.getByRole('button', { name: 'close file', exact: true }).click();
-    await opened.record
-      .getByRole('button', { name: 'main', exact: true })
-      .click();
+    await selectParent(page, ownerId, state, until);
     assert.equal(await composer(page).inputValue(), parentDraft);
     assert.equal(
       await optionalRead(worker.worktree, fixture.paths.starts),
@@ -495,6 +526,7 @@ export async function runNativeChildCommandHandoffJourney({
       ownerId,
       workerSessionId: worker.runtimeSessionId,
       reviewerSessionId: reviewer.sessionId,
+      reviewerWorkspace: reviewer.workspace,
       childWorktree: worker.worktree,
       target,
       pid,
@@ -505,11 +537,11 @@ export async function runNativeChildCommandHandoffJourney({
       source: fixture.source,
     });
     receipt.checks.push(
-      'original native_tasks tool card opens its actual child',
+      'the sidebar opens the actual task conversation the parent scheduled',
       'approval uses the real child conversation',
       'same original child PTY receives exact native bytes once',
       'parent unsent draft and same-name parent files remain unchanged',
-      'distinct real readonly reviewer source rejects saving',
+      'the distinct real readonly reviewer cannot save its source',
     );
     return receipt;
   } catch (error) {
@@ -545,6 +577,93 @@ export async function runNativeChildCommandHandoffJourney({
   }
 }
 
+/**
+ * A task's reviewer reads the candidate and cannot change it. Its conversation, which search
+ * reaches, shows the source it read as read-only, with nothing to save. Call after
+ * runNativeChildCommandHandoffJourney passed.
+ */
+export async function runNativeReviewerSourceJourney({
+  page,
+  parentSessionId: returnSessionId,
+  state,
+  until,
+  output,
+  previous,
+}) {
+  assert.equal(previous.status, 'passed');
+  const receipt = {
+    status: 'running',
+    reviewerSessionId: previous.reviewerSessionId,
+  };
+  const returnDraft = await composer(page).inputValue();
+  try {
+    const opened = await openReviewer(
+      page,
+      previous.ownerId,
+      previous.reviewerSessionId,
+      state,
+      until,
+    );
+    assert.equal(opened.agent.task.role, 'reviewer');
+    assert.equal(opened.agent.readOnly, true);
+    const source = await toolCall(page, opened.conversation, 'read_file');
+    await source
+      .getByRole('button', { name: 'open file', exact: true })
+      .click();
+    const file = page.locator('.file-view:visible');
+    await file
+      .locator('.file-view-heading strong')
+      .getByText(previous.paths.source, { exact: true })
+      .waitFor();
+    await page.screenshot({
+      path: join(output, 'child-command-readonly-reviewer-source.png'),
+    });
+    receipt.shown = {
+      readOnlyLabel: await file.locator('.file-source-readonly').count(),
+      saveEnabled: await file
+        .getByRole('button', { name: 'save', exact: true })
+        .isEnabled(),
+      mode: await file
+        .locator('.file-view-toolbar [aria-pressed="true"]')
+        .first()
+        .textContent(),
+    };
+    await file.locator('.file-source-readonly').waitFor();
+    assert.equal(
+      await file.getByRole('button', { name: 'save', exact: true }).isEnabled(),
+      false,
+      'the reviewer source offers nothing to save',
+    );
+    // A reviewer worktree is a Git checkout, which writes CRLF on Windows.
+    assert.equal(
+      (
+        await readFile(
+          join(previous.reviewerWorkspace, previous.paths.source),
+          'utf8',
+        )
+      ).replace(/\r\n/g, '\n'),
+      previous.source,
+    );
+    receipt.status = 'passed';
+    return receipt;
+  } catch (error) {
+    receipt.status = 'failed';
+    receipt.error = String(error);
+    throw error;
+  } finally {
+    try {
+      const close = page
+        .locator('.file-view')
+        .getByRole('button', { name: 'close file', exact: true });
+      if (await close.isVisible()) await close.click();
+      await selectParent(page, returnSessionId, state, until);
+      assert.equal(await composer(page).inputValue(), returnDraft);
+    } finally {
+      await save(output, 'reviewer-source-receipt.json', receipt);
+    }
+  }
+}
+
 /** Call after the driver's existing real application quit/relaunch, not a renderer reload. */
 export async function runNativeChildCommandAfterRestart({
   page,
@@ -569,11 +688,12 @@ export async function runNativeChildCommandAfterRestart({
     assert(await gone(previous.pid), 'the original child process remains gone');
     await selectParent(page, previous.ownerId, state, until);
     assert.equal(await composer(page).inputValue(), previous.parentDraft);
-    const opened = await openAgent(
+    const opened = await openTask(
       page,
       previous.ownerId,
       previous.workerSessionId,
       state,
+      until,
     );
     const resolution = await call(
       page,
@@ -594,7 +714,7 @@ export async function runNativeChildCommandAfterRestart({
       addToDraft: false,
     });
     await (
-      await commandCard(page, opened.record)
+      await toolCall(page, opened.conversation, 'execute')
     )
       .getByRole('button', { name: 'open in terminal', exact: true })
       .click();
@@ -609,16 +729,13 @@ export async function runNativeChildCommandAfterRestart({
       text: 'CHILD_HANDOFF_ECHO:' + childCommandInput.trimEnd(),
       until,
     });
+    // History offers neither a stop nor a restart, which would run the command again.
     assert.equal(
-      await terminal
-        .getByRole('button', { name: 'restart terminal', exact: true })
-        .isEnabled(),
-      false,
+      await terminal.getByRole('button', { name: 'stop', exact: true }).count(),
+      0,
     );
     assert.equal(
-      await terminal
-        .getByRole('button', { name: 'stop terminal', exact: true })
-        .isEnabled(),
+      await terminalActionEnabled(page, terminal, 'restart terminal'),
       false,
     );
     const denied = await call(

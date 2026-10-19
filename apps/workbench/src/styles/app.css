@@ -1259,20 +1259,6 @@ pre {
   flex: 1;
   min-height: 0;
 }
-.inspector-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 19px 0 15px;
-}
-.inspector-heading h2 {
-  font-size: var(--ui-small);
-  font-weight: 600;
-}
-.inspector-heading > span {
-  font-size: var(--ui-tiny);
-  color: var(--muted);
-}
 .search-field {
   display: flex;
   align-items: center;
@@ -4587,13 +4573,6 @@ pre {
   border-radius: 5px;
   background: var(--subtle);
   color: var(--fg);
-}
-/* A panel's name is in the inspector's own header; its heading keeps only the counts. */
-.inspector-body .inspector-heading h2 {
-  display: none;
-}
-.inspector-body .inspector-heading {
-  justify-content: flex-end;
 }
 /* A badge keeps its own width in rows whose spans grow. */
 .record-main > span.badge,

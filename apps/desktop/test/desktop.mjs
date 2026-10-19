@@ -197,7 +197,8 @@ async function chromeControls() {
     async () => (await state()).title === 'Chrome controls fixture',
     'chrome fixture loaded',
   );
-  // The icon the page names shows in its tab, read by the main process
+  // The icon the page names belongs to its tab, read by the main process. With one tab
+  // there is no row of tabs; the icon shows once a second tab brings the row (below).
   await until(
     async () =>
       (await state()).tabs
@@ -205,8 +206,11 @@ async function chromeControls() {
         ?.favicon?.startsWith('data:image/png;base64,'),
     'the page icon in its tab',
   );
-  await page.locator('.browser-tab.active .browser-tab-icon img').waitFor();
-  checks.push('a tab shows the icon its page names');
+  assert.equal(
+    await page.locator('.browser-tabs').count(),
+    0,
+    'one tab shows no row of tabs',
+  );
 
   assert.deepEqual(await rightClick('#blank'), [
     'Back',
@@ -232,6 +236,15 @@ async function chromeControls() {
   }, 'the link in a new tab');
   // Behind the shown tab, as Chrome opens it
   assert.equal(opened.tab, before.tab);
+  // Two tabs bring the row of tabs, and the shown one has the icon its page names
+  await page.locator('.browser-tab.active .browser-tab-icon img').waitFor();
+  assert.equal(
+    await page
+      .locator('.browser-tab.active .browser-tab-icon img')
+      .getAttribute('src'),
+    opened.tabs.find((tab) => tab.active).favicon,
+  );
+  checks.push('a tab shows the icon its page names');
   // The person's clipboard is put back afterwards
   const clipboardBefore = await app.evaluate(({ clipboard }) =>
     clipboard.readText(),
@@ -585,10 +598,11 @@ async function chromeControls() {
     );
   }
   const last = (await state()).tab;
-  const closeTab = page.getByRole('button', { name: 'close tab', exact: true });
-  // The strip can still show the tabs closed above for a frame or two.
-  await until(async () => (await closeTab.count()) === 1, 'one tab shown');
-  await closeTab.click();
+  // One tab has no row of tabs (the row can still show the tabs closed above for a
+  // frame or two): the ⋮ menu closes it, as ⌘W does
+  await page.locator('.browser-tabs').waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'browser menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'close tab', exact: true }).click();
   const fresh = await until(async () => {
     const value = await state();
     return value.tabs.length === 1 && value.tab !== last ? value : undefined;
@@ -952,48 +966,62 @@ try {
         )
     );
   };
-  await page
-    .getByRole('button', { name: 'activity panel', exact: true })
-    .click();
-  await page.getByRole('tab', { name: 'tasks', exact: true }).click();
-  await waitHttp(
-    (views) => views.length > 0 && views.every((view) => !view.visible),
-    'native page stayed on the tasks tab',
-  );
-  await page
-    .getByRole('button', { name: 'changes panel', exact: true })
-    .click();
-  await page.getByRole('tab', { name: 'git', exact: true }).click();
-  await waitHttp(
-    (views) => views.every((view) => !view.visible),
-    'native page stayed on Git',
-  );
-  await page
-    .getByRole('button', { name: 'close inspector', exact: true })
-    .click();
-  await waitHttp(
-    (views) => views.every((view) => !view.visible),
-    'native page stayed after the inspector closed',
-  );
-  await page
-    .getByRole('button', { name: 'browser panel', exact: true })
-    .click();
-  await page
-    .getByRole('button', { name: 'browser menu', exact: true })
-    .waitFor();
+  // The page is a native view over the window: it shows only while the browser is the
+  // mode on screen, in the browser's box, and hides for another mode, a closed drawer
+  // and the browser's own menu.
+  const hiddenViews = (views) =>
+    views.length > 0 && views.every((view) => !view.visible);
+  const modeButton = (name) =>
+    page.getByRole('button', { name: `${name} panel`, exact: true });
+  const browserMenu = page.getByRole('button', {
+    name: 'browser menu',
+    exact: true,
+  });
+  for (const mode of ['changes', 'subagents']) {
+    await modeButton(mode).click();
+    await waitHttp(hiddenViews, `native page stayed over the ${mode} mode`);
+    assert.equal(await modeButton(mode).getAttribute('aria-pressed'), 'true');
+  }
+  await modeButton('browser').click();
+  await browserMenu.waitFor();
   await waitHttp(matchesBox, 'native page did not return to its box');
-  await page.getByRole('button', { name: 'browser menu', exact: true }).click();
-  await page.getByRole('menu').waitFor();
-  await waitHttp(
-    (views) => views.length > 0 && views.every((view) => !view.visible),
-    'native page stayed under the browser menu',
+  // A second press on the browser's button closes the drawer
+  await modeButton('browser').click();
+  await waitHttp(hiddenViews, 'native page stayed after the drawer closed');
+  assert.equal(
+    await modeButton('browser').getAttribute('aria-pressed'),
+    'false',
   );
+  await modeButton('browser').click();
+  await browserMenu.waitFor();
+  await waitHttp(matchesBox, 'native page did not come back with the drawer');
+  // So does Esc in the drawer
+  await browserMenu.focus();
+  await page.keyboard.press('Escape');
+  await waitHttp(hiddenViews, 'native page stayed after Esc closed the drawer');
+  assert.equal(
+    await modeButton('browser').getAttribute('aria-pressed'),
+    'false',
+  );
+  await modeButton('browser').click();
+  await browserMenu.waitFor();
+  await waitHttp(matchesBox, 'native page did not come back after Esc');
+  await browserMenu.click();
+  await page.getByRole('menu').waitFor();
+  await waitHttp(hiddenViews, 'native page stayed under the browser menu');
   await page.keyboard.press('Escape');
   await page.getByRole('menu').waitFor({ state: 'detached' });
   await waitHttp(matchesBox, 'native page did not return after the menu');
-  if (
-    await page.getByRole('button', { name: 'full view', exact: true }).count()
-  ) {
+  // The browser offers the full view beside the conversation; a narrow window (1050
+  // pixels or less) lays the mode over the conversation and offers none
+  const narrowWindow = await page.evaluate(
+    () => matchMedia('(max-width: 1050px)').matches,
+  );
+  assert.equal(
+    await page.getByRole('button', { name: 'full view', exact: true }).count(),
+    narrowWindow ? 0 : 1,
+  );
+  if (!narrowWindow) {
     const before = await httpViews();
     const beforeWidth = Math.max(
       0,
@@ -1024,7 +1052,7 @@ try {
   });
   await waitHttp(matchesBox, 'a window resize left the native page behind');
   checks.push(
-    'the native page hides with its tab, the tasks and Git tabs, a closed inspector and the browser menu, and follows full view and resize',
+    'the native page hides for another mode, a drawer closed by its button or Esc and the browser menu, and follows full view and resize',
   );
   await page.getByRole('button', { name: 'files panel', exact: true }).click();
   await page
@@ -1095,14 +1123,17 @@ try {
   await route('/session/session1');
   await page.screenshot({ path: join(output, 'desktop-dark.png') });
   checks.push('native window in light and dark palettes');
-  if (
-    await page
-      .getByRole('button', { name: 'close inspector', exact: true })
-      .isVisible()
-  )
-    await page
-      .getByRole('button', { name: 'close inspector', exact: true })
-      .click();
+  // Close the drawer, which lies over the conversation in a narrow window: a second
+  // press on the shown mode's button
+  for (const mode of ['files', 'changes', 'browser', 'subagents', 'terminal']) {
+    const button = page.getByRole('button', {
+      name: `${mode} panel`,
+      exact: true,
+    });
+    if ((await button.getAttribute('aria-pressed')) === 'true')
+      await button.click();
+  }
+  await page.locator('.inspector').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: 'attach files', exact: true }).click();
   await page.getByRole('button', { name: 'note.md', exact: true }).waitFor();
   const attached = await page.evaluate(
@@ -1285,13 +1316,13 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Each switch is named by the interface's shown title.
+  // Each switch is named by the interface's shown title. The activity and device
+  // terminal components went with their panels: the overview and the terminal mode are
+  // Circle's own.
   const expectedInterfaces = [
     'GitHub',
     'file and diff inspector',
-    'activity inspector',
     'browser pane',
-    'device terminal pane',
     'hub',
     'knowledge',
     'work',
@@ -1456,9 +1487,10 @@ try {
       2,
     ) + '\n',
   );
-  // New session is the home view. Its panel buttons are hidden, and the
-  // inspector keeps whichever panel the session had open. The resources note
-  // belongs to changes, so it must not sit on the browser there.
+  // New session is the home view. Its mode buttons are hidden, and the drawer keeps
+  // whichever mode the session had open. (The note that the drawer's resources belonged
+  // to the session's project went with the Git panel that could commit from there: the
+  // changes mode authors nothing.)
   const sessionHash = new URL(page.url()).hash.replace(/^#/, '');
   const browserToggle = page.getByRole('button', {
     name: 'browser panel',
@@ -1471,32 +1503,19 @@ try {
   await page.locator('.home').waitFor();
   await page.locator('.inspector[data-inspector-panel="browser"]').waitFor();
   assert.equal(
-    await page
-      .locator('.inspector[data-inspector-panel="browser"]')
-      .getByRole('status')
-      .filter({ hasText: 'Resources belong to' })
-      .count(),
+    await page.locator('.drawer-mode-toolbar').count(),
     0,
-    'the project resources note is shown in the browser panel',
+    'the home view shows the mode buttons',
   );
   if (sessionHash) await route(sessionHash);
   await page
     .getByRole('heading', { name: 'look at hello', exact: true })
     .waitFor();
-  await page
-    .getByRole('button', { name: 'changes panel', exact: true })
-    .click();
-  await route('/home');
-  await page.locator('.home').waitFor();
-  await page
-    .locator('.inspector[data-inspector-panel="changes"]')
-    .getByRole('status')
-    .filter({ hasText: 'Resources belong to' })
-    .waitFor();
+  await browserToggle.waitFor();
+  assert.equal(await browserToggle.getAttribute('aria-pressed'), 'true');
   checks.push(
-    'the project resources note stays on the changes panel and off the browser',
+    'the home view hides the mode buttons and the drawer keeps the mode the session had open',
   );
-  if (sessionHash) await route(sessionHash);
   console.log(
     JSON.stringify({ checks: checks.length, errors, packaged: info.packaged }),
   );

@@ -163,6 +163,59 @@ try {
     await page.close();
   }
   {
+    // The parent's link to the task opens the task's own conversation, with its card; the
+    // task's reviewer has no card, and a file opened there is read-only, as the runtime
+    // keeps it.
+    const { page, errors } = await open(browser, 'light', 'en');
+    const parentId = await page.evaluate(() => window.taskReviewFixture.parent);
+    await page.evaluate((id) => {
+      location.hash = `/session/${id}`;
+    }, parentId);
+    await page.locator('.task-review-card').waitFor({ state: 'detached' });
+    const group = page
+      .locator('.tool-group')
+      .filter({ hasText: 'scheduled agents' })
+      .last();
+    await group.locator('.tool-summary').click();
+    await group
+      .locator('.tool-agent-links')
+      .getByRole('button', { name: /add a regression for the close boundary/ })
+      .click();
+    await page.waitForFunction(() =>
+      location.hash.endsWith('/session/task-session'),
+    );
+    await page.locator('.task-review-card').waitFor();
+    assert.equal(
+      await page.getByRole('list', { name: 'subagents' }).count(),
+      0,
+      'the link does not open an empty subagents mode',
+    );
+    await page.evaluate(() => {
+      location.hash = '/session/reviewer-session';
+    });
+    await page.locator('.task-review-card').waitFor({ state: 'detached' });
+    await page.getByRole('textbox', { name: 'message' }).focus();
+    await page.keyboard.press('ControlOrMeta+p');
+    const search = page.getByRole('textbox', {
+      name: 'global search',
+      exact: true,
+    });
+    await search.fill('README.md');
+    await search.press('Enter');
+    const view = page.locator('.file-view');
+    await view.waitFor();
+    await view.getByText('read-only', { exact: true }).waitFor();
+    assert.equal(
+      await view
+        .getByRole('button', { name: 'save', exact: true })
+        .isDisabled(),
+      true,
+    );
+    await page.screenshot({ path: `${output}/reviewer-source-light-en.png` });
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
     // The files link shows what the task changed, in the changes mode.
     const { page, errors } = await open(browser, 'light', 'zh-CN');
     const card = page.locator('.task-review-card');
