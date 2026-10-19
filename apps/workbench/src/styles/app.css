@@ -1552,6 +1552,9 @@ pre {
   align-items: center;
   gap: 9px;
 }
+.file-view-heading > .mode-toolbar-end {
+  margin-left: 0;
+}
 .file-view-heading strong {
   font-weight: 500;
 }

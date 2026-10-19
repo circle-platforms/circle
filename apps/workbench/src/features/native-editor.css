@@ -179,3 +179,36 @@
   margin-inline: auto;
   overflow-wrap: anywhere;
 }
+
+/* Where the file differs from the last commit, beside the line numbers: orange for a
+   changed line, blue for a new one, and a red triangle where lines were deleted. */
+.monaco-editor .change-mark::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 1px;
+}
+.monaco-editor .change-mark-changed::before {
+  background: var(--attention);
+}
+.monaco-editor .change-mark-added::before {
+  background: var(--accent);
+}
+.monaco-editor .change-mark-deleted::before,
+.monaco-editor .change-mark-deleted-below::before {
+  top: -4px;
+  bottom: auto;
+  width: 0;
+  height: 0;
+  border-radius: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--negative);
+}
+.monaco-editor .change-mark-deleted-below::before {
+  top: auto;
+  bottom: -4px;
+}

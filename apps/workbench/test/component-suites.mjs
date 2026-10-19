@@ -57,6 +57,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'terminal-mode-ui.mjs',
   'screenshot-thumb-ui.mjs',
   'task-review-ui.mjs',
+  'gutter-marks-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */

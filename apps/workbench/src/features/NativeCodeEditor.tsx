@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
+import type { GutterMark } from '../model/gutter-marks';
 import { applyMonacoLocale } from './monaco-locale';
 import * as monaco from 'monaco-editor/editor/editor.api';
 // Monaco 0.57 exposes this runtime service entry without TypeScript declarations.
@@ -168,6 +169,34 @@ export function retainedModel(
   return model;
 }
 type Range = monaco.IRange;
+/**
+ * The marks beside the line numbers, as decorations the editor moves with the text. A
+ * deletion past the last line is drawn under it.
+ */
+function markDecorations(
+  marks: GutterMark[],
+  model: monaco.editor.ITextModel,
+): monaco.editor.IModelDeltaDecoration[] {
+  const last = model.getLineCount();
+  return marks.flatMap((mark) => {
+    const below = mark.kind === 'deleted' && mark.start > last;
+    if (mark.start > last && !below) return [];
+    return [
+      {
+        range: new monaco.Range(
+          Math.min(mark.start, last),
+          1,
+          Math.min(mark.end, last),
+          1,
+        ),
+        options: {
+          isWholeLine: true,
+          linesDecorationsClassName: `change-mark change-mark-${below ? 'deleted-below' : mark.kind}`,
+        },
+      },
+    ];
+  });
+}
 export function NativeCodeEditor({
   workspaceId,
   sessionId,
@@ -178,6 +207,7 @@ export function NativeCodeEditor({
   readOnly,
   diff,
   selection,
+  marks,
   onChange,
   onSave,
   visible = true,
@@ -192,6 +222,11 @@ export function NativeCodeEditor({
   diff: boolean;
   visible?: boolean;
   selection?: Range;
+  /**
+   * Where the text differs from the last commit. Set when given; left as the editor has
+   * moved them while it is not, as for text with changes of its own that are not saved.
+   */
+  marks?: GutterMark[];
   onChange: (value: string) => void;
   onSave: () => void;
 }) {
@@ -214,6 +249,11 @@ export function NativeCodeEditor({
   } | null>(null);
   const callbacks = useRef({ owner, onChange, onSave });
   callbacks.current = { owner, onChange, onSave };
+  const gutter = useRef<monaco.editor.IEditorDecorationsCollection | null>(
+    null,
+  );
+  const latestMarks = useRef(marks);
+  latestMarks.current = marks;
   useLayoutEffect(() => {
     if (!container.current) return;
     applyMonacoLocale();
@@ -364,6 +404,11 @@ export function NativeCodeEditor({
       editor.revealRangeInCenter(selection);
     }
     activeEditor.current = { owner, editor, selectionIdentity };
+    // The diff view has its own colours; marks are for the file itself.
+    const marked = diff ? null : editor.createDecorationsCollection([]);
+    gutter.current = marked;
+    if (marked && latestMarks.current)
+      marked.set(markDecorations(latestMarks.current, model));
     if (visibility.current) editor.focus();
     editor.addCommand(
       monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
@@ -378,12 +423,19 @@ export function NativeCodeEditor({
     update();
     return () => {
       if (activeEditor.current?.editor === editor) activeEditor.current = null;
+      if (gutter.current === marked) gutter.current = null;
+      marked?.clear();
       states.set(uri, editor.saveViewState());
       disposables.forEach((item) => item.dispose());
       view.dispose();
       themeWatcher.disconnect();
     };
   }, [workspaceId, sessionId, path, language, readOnly, diff]);
+  // New marks replace the old ones; the editor has already moved the old ones with the text.
+  useLayoutEffect(() => {
+    const model = monaco.editor.getModel(editorUri(workspaceId, path));
+    if (marks && model) gutter.current?.set(markDecorations(marks, model));
+  }, [marks, workspaceId, path]);
   // Revealing a retained source view restores focus without replacing its model.
   useLayoutEffect(() => {
     if (visible) {

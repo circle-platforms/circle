@@ -23,7 +23,10 @@ import {
 } from './NativeCodeEditor';
 import type { EditorDocument } from './NativeCodeEditor';
 import { Markdown } from '../components/Markdown';
+import { gitFilePatch } from '../model/git-changes';
+import { gutterMarks, type GutterMark } from '../model/gutter-marks';
 import type { SourceResourceOwner } from '../model/source-resource-owner';
+import { ModeButtons } from './mode-chrome';
 type SaveFlight = {
   queued?: { all: boolean; restore: boolean };
   writes: Map<string, string>;
@@ -70,10 +73,8 @@ export function FileViewer({
     (item) => item.path === path && item.workspaceId === workspaceId,
   );
   // Files open editable in place; "diff" compares with the disk or git
-  // original only when asked, as a changed file does by default.
-  const [mode, setMode] = useState<'diff' | 'edit'>(
-    projected?.status ? 'diff' : 'edit',
-  );
+  // original only when asked. The changes mode is where a file's difference is read.
+  const [mode, setMode] = useState<'diff' | 'edit'>('edit');
   const [document, setDocument] = useState<EditorDocument | null>(null);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const identity = JSON.stringify([workspaceId, session.id, path]);
@@ -96,6 +97,7 @@ export function FileViewer({
   const [missing, setMissing] = useState(false);
   const [moved, setMoved] = useState<EditorDocument | null>(null);
   const [bufferCount, setBufferCount] = useState(0);
+  const [marks, setMarks] = useState<GutterMark[]>([]);
   const live = runtime.mode === 'live';
   useEffect(() => {
     if (!resourceOwner || !live) return;
@@ -298,6 +300,23 @@ export function FileViewer({
       window.removeEventListener('circle-editor-persistence-error', failure);
     };
   }, [workspaceId]);
+  // Where the file on disk differs from the last commit, read again when its text changes
+  // on disk: a save, the model's edit or another program's.
+  const diskRevision = document?.revision;
+  useEffect(() => setMarks([]), [session.id, path]);
+  useEffect(() => {
+    if (!live || diskRevision === undefined) return;
+    let current = true;
+    void gitFilePatch(session.id, path).then(
+      ({ text }) => {
+        if (current) setMarks(gutterMarks(text));
+      },
+      () => {},
+    );
+    return () => {
+      current = false;
+    };
+  }, [live, session.id, path, diskRevision]);
   useEffect(() => {
     if (!live) return;
     let alive = true;
@@ -656,9 +675,12 @@ export function FileViewer({
       <section className="file-view">
         <header className="file-view-heading">
           {sourceHeading}
-          <IconButton label={t('close file')} onClick={onClose}>
-            <X size={15} />
-          </IconButton>
+          <span className="mode-toolbar-end">
+            <ModeButtons />
+            <IconButton label={t('close file')} onClick={onClose}>
+              <X size={15} />
+            </IconButton>
+          </span>
         </header>
         <div className="empty-state" role="status">
           {t('loading file')}
@@ -678,9 +700,12 @@ export function FileViewer({
     <section className="file-view">
       <header className="file-view-heading">
         {sourceHeading}
-        <IconButton label={t('close file')} onClick={onClose}>
-          <X size={15} />
-        </IconButton>
+        <span className="mode-toolbar-end">
+          <ModeButtons />
+          <IconButton label={t('close file')} onClick={onClose}>
+            <X size={15} />
+          </IconButton>
+        </span>
       </header>
       <div className="file-view-toolbar">
         <div className="segmented" role="group" aria-label={t('file view')}>
@@ -792,6 +817,9 @@ export function FileViewer({
           diff={mode === 'diff'}
           visible={!reading}
           selection={selection}
+          // The marks are for the text on disk: while the buffer has edits of its own the
+          // editor keeps the ones it has, moved with the text.
+          marks={dirty ? undefined : marks}
           onChange={changed}
           // As the save button: a conflict or a missing file is settled first.
           onSave={() => {
