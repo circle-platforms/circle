@@ -23,6 +23,24 @@ test('workspace service dispatch admits explicit capabilities only', () => {
     { service: 'debug', method: 'launch' },
     { service: 'debug', method: 'setBreakpoints' },
     { service: 'language', method: 'request' },
+    // The window no longer stages, commits, pushes, merges or publishes.
+    ...[
+      'stage',
+      'unstage',
+      'applyHunk',
+      'discard',
+      'commit',
+      'push',
+      'applyPatch',
+      'conflictContinue',
+      'conflictAbort',
+      'continueMerge',
+      'abortMerge',
+    ].map((method) => ({ service: 'git', method })),
+    ...['publish', 'retry', 'ready'].map((method) => ({
+      service: 'delivery',
+      method,
+    })),
   ]) {
     assert.throws(() => validateWorkspaceRequest(value));
   }
@@ -32,7 +50,7 @@ test('native workflow capabilities and recovery use explicit service routes', ()
   for (const [service, operations] of Object.entries({
     inputs: ['list', 'resolve'],
     events: ['replay'],
-    git: ['snapshot', 'applyPatch', 'conflictContinue', 'conflictAbort'],
+    git: ['snapshot', 'changes', 'diff'],
     tasks: [
       'createIntegration',
       'mergeCandidates',
@@ -40,7 +58,7 @@ test('native workflow capabilities and recovery use explicit service routes', ()
       'review',
       'reject',
     ],
-    delivery: ['login', 'ready'],
+    delivery: ['login'],
   })) {
     for (const method of operations)
       assert.equal(

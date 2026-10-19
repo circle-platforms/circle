@@ -53,25 +53,16 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'list',
     'replay',
   ]),
+  // The window reads Git; staging, committing, pushing and merging are Circle's, in the
+  // conversation, so the window cannot ask for them.
   git: new Set([
     'status',
     'snapshot',
     'changes',
-    'applyPatch',
-    'conflictContinue',
-    'conflictAbort',
     'diff',
-    'stage',
-    'unstage',
-    'applyHunk',
-    'discard',
-    'commit',
-    'push',
     'branches',
     'history',
     'commitDiff',
-    'continueMerge',
-    'abortMerge',
   ]),
   tasks: new Set([
     'enqueue',
@@ -89,15 +80,8 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'artifacts',
     'readArtifact',
   ]),
-  delivery: new Set([
-    'status',
-    'publish',
-    'checks',
-    'logs',
-    'retry',
-    'login',
-    'ready',
-  ]),
+  // Publishing a pull request is Circle's, through the GitHub tools or the create-pr skill.
+  delivery: new Set(['status', 'checks', 'logs', 'login']),
   pulls: new Set(['overview', 'failedLog']),
 };
 
