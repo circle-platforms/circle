@@ -43,6 +43,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **A desktop session whose deletion fails can be deleted again.** When the cleanup before deleting a session failed, the session stayed on **stopping work before deletion…**, with **delete session** unavailable, until Circle restarted. It now says it could not be deleted and why, keeps its history, and **delete session** retries the cleanup.
 - **The desktop browser's ring no longer flashes when you send a message after a turn that used the browser.** For a moment after sending, before the new turn began, the ring lit as if Circle were operating, with **take over** beside the address, because the last turn's browser tools were still the newest. The ring now waits for the turn to begin.
 - **A screenshot of a named Windows app is the whole window under display scaling.** At 200% a window that is not DPI aware filled only the upper-left quarter of its picture and the rest was black. Circle now measures the window in its own DPI awareness, so the picture is the size the window draws itself at.
+- **Saving a file in the desktop editor on Windows waits for a program that is reading it.** When a virus scan or Git had the file open at the moment you saved, Windows refused to replace it and the editor said **operation failed; inspect effects before retrying** without saving. The save now waits up to two seconds for the file to be let go, checking each time that nothing else changed it.
 
 ## 1.9.0 - 2026-10-19
 

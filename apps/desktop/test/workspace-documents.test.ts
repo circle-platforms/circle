@@ -17,7 +17,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -27,15 +27,19 @@ import {
   TornReadError,
   WorkspaceDocuments,
   type WorkspaceDocument,
+  type WorkspaceDocumentsOptions,
   type WorkspaceFilesSnapshot,
 } from '../src/workspace/documents.ts';
 import { patience } from './helpers/patience.mjs';
 
-async function fixture(t: TestContext) {
+async function fixture(
+  t: TestContext,
+  options: WorkspaceDocumentsOptions = {},
+) {
   const scratch = await mkdtemp(join(tmpdir(), 'circle-workspace-documents-'));
   const root = join(scratch, 'workspace');
   await mkdir(root);
-  const documents = new WorkspaceDocuments(root);
+  const documents = new WorkspaceDocuments(root, options);
   t.after(async () => {
     documents.close();
     await rm(scratch, { recursive: true, force: true });
@@ -797,3 +801,150 @@ test('a write landing just after a save is not reported as the save, so the next
   const next = await documents.save('main.ts', 'ours\n', disk.revision);
   assert.equal(next.revision, (await documents.read('main.ts')).revision);
 });
+
+// A program that has the file open, as a virus scan or Git reading it does: Windows
+// refuses to replace the file until it lets go. `refuse` names the refusal, if any.
+function holdFile(
+  t: TestContext,
+  documents: WorkspaceDocuments,
+  refuse: (attempt: number) => Promise<string | undefined>,
+) {
+  const service = documents as unknown as {
+    commit: (...args: unknown[]) => Promise<void>;
+  };
+  const commit = service.commit.bind(documents);
+  let attempts = 0;
+  t.mock.method(service, 'commit', async (...args: unknown[]) => {
+    const code = await refuse(++attempts);
+    if (code) throw Object.assign(Error(`${code}: the file is held`), { code });
+    return commit(...args);
+  });
+  return () => attempts;
+}
+
+test('on Windows a save and a batch wait a moment for a program that holds the file', async (t) => {
+  const { root, documents } = await fixture(t, { platform: 'win32' });
+  await writeFile(join(root, 'main.ts'), 'original\n');
+  const first = await documents.read('main.ts');
+  const refusals = ['EBUSY', 'EPERM', 'EACCES'];
+  const attempts = holdFile(t, documents, async () => refusals.shift());
+  const saved = await documents.save('main.ts', 'ours\n', first.revision);
+  assert.equal(attempts(), 4);
+  assert.equal(saved.content, 'ours\n');
+  assert.equal(await readFile(join(root, 'main.ts'), 'utf8'), 'ours\n');
+  refusals.push('EBUSY');
+  const batch = await documents.applyChanges([
+    { path: 'main.ts', content: 'batch\n', expectedRevision: saved.revision },
+  ]);
+  assert.equal(batch.status, 'applied');
+  assert.equal(attempts(), 6);
+  assert.equal(await readFile(join(root, 'main.ts'), 'utf8'), 'batch\n');
+  assert.deepEqual(await readdir(root), ['main.ts']);
+});
+
+test('a write while a save waits for a held file is a conflict and stays on disk', async (t) => {
+  const { root, documents } = await fixture(t, { platform: 'win32' });
+  await writeFile(join(root, 'main.ts'), 'original\n');
+  const first = await documents.read('main.ts');
+  // The program that holds the file writes it before it lets go.
+  const attempts = holdFile(t, documents, async (attempt) => {
+    if (attempt > 1) return undefined;
+    await writeFile(join(root, 'main.ts'), 'external\n');
+    return 'EPERM';
+  });
+  await assert.rejects(
+    documents.save('main.ts', 'ours\n', first.revision),
+    DocumentConflictError,
+  );
+  assert.equal(attempts(), 1);
+  assert.equal(await readFile(join(root, 'main.ts'), 'utf8'), 'external\n');
+  assert.deepEqual(await readdir(root), ['main.ts']);
+});
+
+test('a file held longer than a save waits fails the save, and only Windows waits', async (t) => {
+  for (const platform of ['win32', 'linux'] as const) {
+    const { root, documents } = await fixture(t, { platform });
+    await writeFile(join(root, 'main.ts'), 'original\n');
+    const first = await documents.read('main.ts');
+    const attempts = holdFile(t, documents, async () => 'EBUSY');
+    await assert.rejects(documents.save('main.ts', 'ours\n', first.revision), {
+      code: 'EBUSY',
+    });
+    if (platform === 'win32') assert.ok(attempts() > 1);
+    else assert.equal(attempts(), 1);
+    assert.equal(await readFile(join(root, 'main.ts'), 'utf8'), 'original\n');
+    assert.deepEqual(await readdir(root), ['main.ts']);
+  }
+});
+
+test(
+  'a save on Windows waits while another program has the file open without letting it be replaced',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const { scratch, root, documents } = await fixture(t);
+    const file = join(root, 'main.ts');
+    await writeFile(file, 'original\n');
+    const first = await documents.read('main.ts');
+    // Others may read and write the file while it is open, but not replace it.
+    const holder = spawn(
+      join(
+        process.env.SystemRoot ?? 'C:\\Windows',
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe',
+      ),
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "$f = [IO.File]::Open($env:CIRCLE_HELD_FILE, 'Open', 'Read', 'ReadWrite'); [Console]::Out.WriteLine('held'); [void][Console]::In.ReadLine(); $f.Close()",
+      ],
+      {
+        env: { ...process.env, CIRCLE_HELD_FILE: file },
+        stdio: ['pipe', 'pipe', 'inherit'],
+      },
+    );
+    t.after(() => {
+      holder.kill();
+    });
+    await new Promise<void>((done, fail) => {
+      let output = '';
+      holder.stdout.on('data', (chunk) => {
+        output += chunk;
+        if (output.includes('held')) done();
+      });
+      holder.once('exit', (code) =>
+        fail(Error(`the program holding the file exited with ${code}`)),
+      );
+    });
+    const probe = join(scratch, 'probe.ts');
+    await writeFile(probe, 'original\n');
+    const refused = await rename(probe, file).then(
+      () => undefined,
+      (error: NodeJS.ErrnoException) => error.code,
+    );
+    if (!refused)
+      return t.skip('this Windows replaces a file another program has open');
+    t.diagnostic(`a plain replacement was refused with ${refused}`);
+    const service = documents as unknown as {
+      commit: (...args: unknown[]) => Promise<void>;
+    };
+    const commit = service.commit.bind(documents);
+    let refusals = 0;
+    // The program lets go once the save has met it.
+    t.mock.method(service, 'commit', async (...args: unknown[]) => {
+      try {
+        return await commit(...args);
+      } catch (error) {
+        if (!refusals++) holder.stdin.write('\n');
+        throw error;
+      }
+    });
+    const saved = await documents.save('main.ts', 'ours\n', first.revision);
+    assert.ok(refusals > 0);
+    assert.equal(saved.content, 'ours\n');
+    assert.equal(await readFile(file, 'utf8'), 'ours\n');
+    assert.deepEqual(await readdir(root), ['main.ts']);
+  },
+);
