@@ -210,8 +210,24 @@ try {
       .getByText('source.ts', { exact: true })
       .first()
       .waitFor();
-    // At 800 pixels the sidebar stays and the drawer lies over the conversation beside
-    // it, too narrow for the file and the tree: the file has the drawer to itself.
+    // At 800 pixels the drawer lies over the conversation, and the sidebar folds for the
+    // file, which then has the room for the tree beside it.
+    await page.waitForFunction(() => {
+      const drawer = document.querySelector('.work-drawer');
+      const index = document.querySelector(
+        '.drawer-document.has-file .drawer-context-index',
+      );
+      return (
+        !!document.querySelector('.workbench.sidebar-collapsed') &&
+        !!drawer &&
+        drawer.getBoundingClientRect().width >= 790 &&
+        !!index &&
+        !index.hidden
+      );
+    });
+    // Narrower still, the drawer is too narrow for the file and the tree: the file has
+    // the drawer to itself.
+    await page.setViewportSize({ width: 600, height: 950 });
     await page.waitForFunction(() => {
       const drawer = document.querySelector('.work-drawer');
       const content = document.querySelector(

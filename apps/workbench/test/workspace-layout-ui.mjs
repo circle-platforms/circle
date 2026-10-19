@@ -453,6 +453,33 @@ try {
       .waitFor();
     await page.getByRole('button', { name: 'close file', exact: true }).click();
     await settled('nothing over it again', (g) => !g.overview && !g.drawer);
+    // Narrow, but with the sidebar still beside the workspace: a file that is open over
+    // the conversation takes the sidebar's room too, and gives it back when it closes.
+    await page.setViewportSize({ width: 900, height: 950 });
+    await settled(
+      'the sidebar beside a narrow workspace',
+      (g) => g.group.width < 700 && !g.drawer,
+    );
+    await input.focus();
+    await page.keyboard.press('ControlOrMeta+p');
+    await search.fill('task-model');
+    await search.press('Enter');
+    const narrowFile = await settled(
+      'the file over the conversation, with the sidebar folded',
+      (g) => g.mode === 'overlay' && g.drawer && g.drawer.width >= 890,
+    );
+    assert.ok(narrowFile.drawer.right <= 901);
+    assert.equal(
+      await page.locator('.workbench.sidebar-collapsed').count(),
+      1,
+      'the sidebar folded for the file in a narrow window',
+    );
+    await page.getByRole('button', { name: 'close file', exact: true }).click();
+    await settled(
+      'the sidebar back beside the narrow workspace',
+      (g) => g.group.width < 700,
+    );
+    assert.equal(await page.locator('.workbench.sidebar-collapsed').count(), 0);
     await page.setViewportSize({ width: 1680, height: 950 });
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })

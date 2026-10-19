@@ -519,6 +519,15 @@ export function App() {
     wantedDrawer,
     sidebarCollapsed,
   ]);
+  // A narrow window lays the drawer over the conversation, beside the sidebar until the
+  // window is narrower still. A file or a subagent that is open there takes the sidebar's
+  // room too when the drawer is narrower than it wants, and gives it back when it closes.
+  const [narrowFolded, setNarrowFolded] = useState(false);
+  useEffect(() => {
+    if (!narrow || !drawerSplit || !drawerOpened) setNarrowFolded(false);
+    else if (groupWidth > 0 && groupWidth < (wantedDrawer ?? 0))
+      setNarrowFolded(true);
+  }, [narrow, drawerSplit, drawerOpened, groupWidth, wantedDrawer]);
   // The changes card's button: Circle loads the create-pr skill and does it.
   const startPullRequest = (action: 'create' | 'update') =>
     perform(async () => {
@@ -1443,7 +1452,7 @@ export function App() {
     <SourceNavigation onFile={onFile}>
       <Tooltip.Provider delayDuration={300}>
         <div
-          className={`workbench${sidebarCollapsed && !narrow ? ' sidebar-collapsed' : ''}`}
+          className={`workbench${(sidebarCollapsed && !narrow) || narrowFolded ? ' sidebar-collapsed' : ''}`}
         >
           {desktopHost() && <div className="desktop-drag-region" />}
           <div className="desktop-sidebar" ref={sidebarElement}>
