@@ -7,6 +7,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 ### Fixed
 
 - **A program a Windows command started through another `cmd` is ended.** With `cmd /c start /b node …`, the inner `cmd` ended at once and its program kept running out of reach of `taskkill`: stopping the job, cancelling the command or leaving Circle left it running and its folder could not be removed. Circle now puts each command's shell in a Windows Job object and follows its whole tree, and stopping a job that is already marked done ends what its command left running instead of doing nothing.
+- **Ctrl+K in a desktop terminal is the shell's on Windows and Linux.** With the keyboard in the terminal panel or a device console, Ctrl+K opened search and also sent ^K to the shell; Ctrl+P and Ctrl+B opened quick open and hid the sidebar the same way. These keys now reach only the terminal, once. On macOS ⌘K, ⌘P and ⌘B still work from a terminal.
 
 ## 1.9.0 - 2026-10-19
 

@@ -126,6 +126,7 @@ import {
   isDesktopSearch,
   isDesktopSettings,
   matchingAction,
+  terminalOwnsKey,
 } from '../model/shortcuts';
 function useNarrow() {
   return useSyncExternalStore(
@@ -871,6 +872,8 @@ export function App() {
     const handle = (event: KeyboardEvent) => {
       if (document.documentElement.dataset.keyCapture) return;
       if (document.querySelector('[role="dialog"]')) return;
+      // Keys typed in a terminal are the shell's: Ctrl+K there is ^K, not search.
+      if (terminalOwnsKey(event)) return;
       if (isDesktopSearch(event)) {
         event.preventDefault();
         searchReturnFocus.current =
@@ -892,8 +895,9 @@ export function App() {
         setSearchOpen(true);
         return;
       }
-      // Capture, and no check of the focused field: the rename box and the
-      // composer stop the bubble, and Linux has no menu accelerator for this.
+      // Capture, and no check of the focused field but a terminal (above): the
+      // rename box and the composer stop the bubble, and Linux has no menu
+      // accelerator for this.
       if (isDesktopSettings(event)) {
         event.preventDefault();
         navigate('/page/settings');

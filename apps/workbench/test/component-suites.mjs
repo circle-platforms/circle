@@ -33,6 +33,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'keyboard-navigation-ui.mjs',
   'paste-default-ui.mjs',
   'native-editable-shortcuts-ui.mjs',
+  'terminal-window-keys-ui.mjs',
   'windowed-mount-ui.mjs',
   'native-terminal-search-ui.mjs',
   'original-shell-ui.mjs',

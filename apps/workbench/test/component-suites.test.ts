@@ -89,6 +89,7 @@ test('the component gate preserves prior journeys and includes each native regre
           'agent-source-return-ui.mjs',
           'agent-source-owner-ui.mjs',
           'native-terminal-context-ui.mjs',
+          'terminal-window-keys-ui.mjs',
           'terminal-selection-preview-ui.mjs',
           'file-source-heading-ui.mjs',
           'sidebar-workspace-label-ui.mjs',
@@ -143,6 +144,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'agent-source-return-ui.mjs',
     'agent-source-owner-ui.mjs',
     'native-terminal-context-ui.mjs',
+    'terminal-window-keys-ui.mjs',
     'terminal-selection-preview-ui.mjs',
     'file-source-heading-ui.mjs',
     'sidebar-workspace-label-ui.mjs',
@@ -165,7 +167,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'tool-text-output-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 58);
+  assert.equal(new Set(COMPONENT_SUITES).size, 59);
 });
 
 test('task configuration recovery remains a required component journey', () => {
