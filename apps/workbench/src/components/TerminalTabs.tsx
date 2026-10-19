@@ -41,7 +41,8 @@ export function TerminalTabs({
   selected: string;
   /** The drawer is showing this mode. */
   active: boolean;
-  onSelect: (key: string) => void;
+  /** A tab chosen, by the keyboard on the row or otherwise. */
+  onSelect: (key: string, fromKeyboard?: boolean) => void;
   /** The button that makes a terminal or reaches a device. */
   menu?: ReactNode;
   /** Buttons for the selected tab: shown only when there is something to press. */
@@ -120,7 +121,7 @@ export function TerminalTabs({
                   if (!next) return;
                   event.preventDefault();
                   event.stopPropagation();
-                  onSelect(next.key);
+                  onSelect(next.key, true);
                   requestAnimationFrame(() =>
                     strip.current
                       ?.querySelectorAll<HTMLElement>('[role="tab"]')

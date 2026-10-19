@@ -116,6 +116,7 @@
 }
 /* A terminal that waits for you is ringed in orange, one Circle works in in blue. */
 .term-frame {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -124,6 +125,21 @@
   border: 2px solid transparent;
   border-radius: 8px;
   overflow: hidden;
+}
+/* Find lies over the screen at its top right, so opening it never changes the terminal's
+   size and with it the rows the program draws. */
+.term-frame > .native-terminal-bar,
+.inspector .term-frame > .native-terminal-bar {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 2;
+  width: min(380px, calc(100% - 24px));
+  padding: 2px 4px 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--fg) 10%, transparent);
 }
 .term-frame[data-frame='wait'] {
   border-color: var(--attention);

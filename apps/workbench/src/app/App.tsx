@@ -1253,6 +1253,20 @@ export function App() {
     [() => t('undo on screen'), () => act(() => runtime.command('undo'))],
     [() => t('redo on screen'), () => act(() => runtime.command('redo'))],
   ] as const;
+  // Closing the drawer, by its mode's button or esc: a command's terminal still on its way
+  // does not open it again, and what opened that terminal has the keyboard back.
+  const closeDrawer = () => {
+    commandRequest.current++;
+    setInspectorOpen(false);
+    const previous = commandReturnFocus.current;
+    if (
+      panel === 'terminal' &&
+      commandTerminal &&
+      previous?.origin === commandOrigin.current &&
+      previous.trigger.isConnected
+    )
+      previous.trigger.focus({ preventScroll: true });
+  };
   const inspector = (
     <NativeResourceBoundary name={t('inspector')} resetKey={panel}>
       <Inspector
@@ -1275,18 +1289,7 @@ export function App() {
         }}
         selection={selection}
         onPanel={onPanel}
-        onClose={() => {
-          commandRequest.current++;
-          setInspectorOpen(false);
-          const previous = commandReturnFocus.current;
-          if (
-            panel === 'terminal' &&
-            commandTerminal &&
-            previous?.origin === commandOrigin.current &&
-            previous.trigger.isConnected
-          )
-            previous.trigger.focus({ preventScroll: true });
-        }}
+        onClose={closeDrawer}
         onFile={onFile}
         onAgentFile={onAgentFile}
         agent={agent}
@@ -1466,7 +1469,7 @@ export function App() {
                     overviewShown={overviewShown}
                     onOverview={toggleOverview}
                     onPanel={(id) => onPanel(id)}
-                    onClose={() => setInspectorOpen(false)}
+                    onClose={closeDrawer}
                     popped={poppedModes}
                   />
                 )}
@@ -1540,7 +1543,7 @@ export function App() {
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {
                   if (whole) setFullView(false);
-                  else if (inspectorVisible) setInspectorOpen(false);
+                  else if (inspectorVisible) closeDrawer();
                   else if (narrow && overviewOverlay) setOverviewOverlay(false);
                 }
               }}
@@ -1646,7 +1649,7 @@ export function App() {
                         className="inspector-resource-host"
                         hidden={!drawerSplit}
                         onKeyDown={(event) => {
-                          if (event.key === 'Escape') setInspectorOpen(false);
+                          if (event.key === 'Escape') closeDrawer();
                         }}
                       />
                     </div>

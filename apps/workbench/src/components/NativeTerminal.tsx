@@ -328,6 +328,15 @@ export function NativeTerminal({
       job.kind === 'command' && job.terminal ? [job.terminal.id] : [],
     ),
   );
+  // A command's tab is named by its command: the terminal knows it when Circle wrote it
+  // with variables, and the job always does.
+  const jobTitles = new Map(
+    appSnapshot.jobs.flatMap((job) =>
+      job.kind === 'command' && job.terminal
+        ? [[job.terminal.id, job.title] as const]
+        : [],
+    ),
+  );
   const visible = terminals.filter(
     (item) =>
       item.sessionId === sessionId &&
@@ -635,6 +644,7 @@ export function NativeTerminal({
   };
 
   const openSearchRef = useRef(() => {});
+  const wantsFind = useRef(false);
   const openSearch = () => {
     if (searchInput.current) {
       searchInput.current.focus();
@@ -681,11 +691,13 @@ export function NativeTerminal({
       ? `local:${selected.id}`
       : '';
   const selectDevice = (id: string) => setDeviceChosen(id);
-  const selectTab = (key: string) => {
+  const selectTab = (key: string, fromKeyboard = false) => {
     if (key.startsWith('dev:')) return selectDevice(key.slice(4));
     const id = key.slice(6);
     setDeviceChosen('');
-    focusTarget.current = id;
+    // A click hands the keyboard to the terminal; arrows keep it on the tab row, so the
+    // next arrow moves along the row instead of reaching a shell.
+    focusTarget.current = fromKeyboard ? null : id;
     setSelected((previous) => ({ ...previous, [sessionId]: id }));
   };
   const closeTab = (id: string) =>
@@ -710,7 +722,9 @@ export function NativeTerminal({
         (!running && ((item.exitCode ?? 0) !== 0 || !!item.signal));
       const named = command || item.kind === 'service';
       const label = command
-        ? (item.managedCommand?.displayCommand ?? item.label)
+        ? (item.managedCommand?.displayCommand ??
+          jobTitles.get(item.id) ??
+          item.label)
         : named
           ? item.label
           : t('terminal {n}', { n: numbers.get(item.id) ?? 0 });
@@ -831,6 +845,14 @@ export function NativeTerminal({
             className="dropdown term-menu"
             align="end"
             sideOffset={6}
+            // Find opens once the menu has handed the keyboard back to its button: opened
+            // while the menu closes, the keyboard would land on the button after it.
+            onCloseAutoFocus={(event) => {
+              if (!wantsFind.current) return;
+              event.preventDefault();
+              wantsFind.current = false;
+              openSearch();
+            }}
           >
             {deviceSelected ? (
               <DropdownMenu.Item
@@ -841,7 +863,11 @@ export function NativeTerminal({
             ) : (
               inFront && (
                 <>
-                  <DropdownMenu.Item onSelect={openSearch}>
+                  <DropdownMenu.Item
+                    onSelect={() => {
+                      wantsFind.current = true;
+                    }}
+                  >
                     {t('find in terminal')}
                   </DropdownMenu.Item>
                   {onAddToDraft && (
@@ -1160,66 +1186,66 @@ export function NativeTerminal({
             />
           )}
         </div>
-      </div>
-      {inFront && searchOpen && (
-        <div className="native-terminal-bar">
-          <div className="native-terminal-search find-bar">
-            <input
-              ref={(node) => {
-                searchInput.current = node;
-                if (node && focusSearch.current) {
-                  focusSearch.current = false;
-                  node.focus();
-                }
-              }}
-              aria-label={t('find in terminal')}
-              placeholder={t('find in terminal')}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              value={query}
-              onChange={(event) => {
-                searchRequest.current++;
-                setQuery(event.target.value);
-                setFound(true);
-              }}
-              onKeyDown={(event) => {
-                event.stopPropagation();
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void find(event.shiftKey);
-                }
-                if (event.key === 'Escape') {
-                  event.preventDefault();
-                  closeSearch();
-                }
-              }}
-            />
-            {!found && <span role="status">{t('no matches')}</span>}
-            <IconButton
-              label={t('previous match')}
-              disabled={!query}
-              onClick={() => {
-                void find(true);
-              }}
-            >
-              <ArrowUp size={14} />
-            </IconButton>
-            <IconButton
-              label={t('next match')}
-              disabled={!query}
-              onClick={() => {
-                void find(false);
-              }}
-            >
-              <ArrowDown size={14} />
-            </IconButton>
-            <IconButton label={t('close search')} onClick={closeSearch}>
-              <X size={14} />
-            </IconButton>
+        {inFront && searchOpen && (
+          <div className="native-terminal-bar">
+            <div className="native-terminal-search find-bar">
+              <input
+                ref={(node) => {
+                  searchInput.current = node;
+                  if (node && focusSearch.current) {
+                    focusSearch.current = false;
+                    node.focus();
+                  }
+                }}
+                aria-label={t('find in terminal')}
+                placeholder={t('find in terminal')}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                value={query}
+                onChange={(event) => {
+                  searchRequest.current++;
+                  setQuery(event.target.value);
+                  setFound(true);
+                }}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void find(event.shiftKey);
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closeSearch();
+                  }
+                }}
+              />
+              {!found && <span role="status">{t('no matches')}</span>}
+              <IconButton
+                label={t('previous match')}
+                disabled={!query}
+                onClick={() => {
+                  void find(true);
+                }}
+              >
+                <ArrowUp size={14} />
+              </IconButton>
+              <IconButton
+                label={t('next match')}
+                disabled={!query}
+                onClick={() => {
+                  void find(false);
+                }}
+              >
+                <ArrowDown size={14} />
+              </IconButton>
+              <IconButton label={t('close search')} onClick={closeSearch}>
+                <X size={14} />
+              </IconButton>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
       <Modal
         open={serviceOpen}
         onOpenChange={setServiceOpen}
