@@ -4,7 +4,11 @@ import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { openNativeTerminalInspector } from '../../desktop/test/helpers/native-terminal-journey.mjs';
+import {
+  chooseTerminalMenu,
+  openTerminalFind,
+  openTerminalMode,
+} from './helpers/terminal-mode.mjs';
 const output = process.env.CIRCLE_TERMINAL_SEARCH_EVIDENCE;
 if (output) await mkdir(output, { recursive: true });
 const server = await createServer({
@@ -39,8 +43,8 @@ try {
   });
   for (const profile of [
     { name: 'standalone-light', embedded: false, theme: 'light', width: 1200 },
-    { name: 'inspector-light', embedded: true, theme: 'light', width: 420 },
-    { name: 'inspector-dark', embedded: true, theme: 'dark', width: 420 },
+    { name: 'drawer-light', embedded: true, theme: 'light', width: 420 },
+    { name: 'drawer-dark', embedded: true, theme: 'dark', width: 420 },
   ])
     for (const scenario of [
       'search waits for real xterm parsed output',
@@ -64,9 +68,9 @@ try {
             }),
         );
         if (profile.embedded) {
-          await openNativeTerminalInspector(page);
-          // A repeated request must not close the original toggle-based Inspector.
-          await openNativeTerminalInspector(page);
+          await openTerminalMode(page);
+          // A repeated request must not close the toggle-based drawer mode.
+          await openTerminalMode(page);
           assert.equal(
             await page
               .getByRole('button', { name: 'terminal panel', exact: true })
@@ -74,15 +78,8 @@ try {
             'true',
           );
         }
-        // Find opens on demand from the terminal bar.
-        await page
-          .getByRole('button', { name: 'find in terminal', exact: true })
-          .click();
-        const find = page.getByRole('textbox', {
-          name: 'find in terminal',
-          exact: true,
-        });
-        await find.waitFor();
+        // Find opens on demand from the terminal's ⋮ menu.
+        const find = await openTerminalFind(page, page);
         await page.waitForFunction(
           () => window.__terminalFixture.requests() > 0,
         );
@@ -124,9 +121,7 @@ try {
             await page.getByText('no matches', { exact: true }).isVisible(),
             false,
           );
-          await page
-            .getByRole('button', { name: 'copy complete output', exact: true })
-            .click();
+          await chooseTerminalMenu(page, 'copy complete output');
           await page.waitForFunction(() =>
             window.__terminalFixture
               .copied()
@@ -145,7 +140,7 @@ try {
             await page
               .getByRole('button', { name: 'terminal panel', exact: true })
               .click();
-            await openNativeTerminalInspector(page);
+            await openTerminalMode(page);
             assert.equal(
               await input.evaluate(
                 (element) =>
@@ -153,7 +148,7 @@ try {
                   element === document.querySelector('.xterm-helper-textarea'),
               ),
               true,
-              'hiding the original Inspector must preserve the mounted terminal',
+              'closing the drawer mode must preserve the mounted terminal',
             );
             assert.equal(
               await page
@@ -167,7 +162,7 @@ try {
                 .getByRole('heading')
                 .count(),
               0,
-              'embedded terminal inherits the original Inspector heading',
+              'the drawer mode has no title of its own',
             );
             assert.equal(
               await page
@@ -176,18 +171,17 @@ try {
                   (element) => element.scrollWidth <= element.clientWidth,
                 ),
               true,
-              'narrow original Inspector must not introduce horizontal page overflow',
+              'a narrow drawer must not introduce horizontal page overflow',
             );
-            assert.ok(
-              await page
-                .locator('.native-terminal .segmented button.active')
-                .count(),
-              'terminal tabs use the original segmented control',
+            // The terminals are tabs of one row; the one in front is selected.
+            const tab = page.locator(
+              '.native-terminal .term-tabs[role="tablist"] .term-tab.on [role="tab"][aria-selected="true"]',
             );
-            assert.ok(
-              await page.locator('.native-terminal .status').count(),
-              'terminal state uses the original status component',
-            );
+            assert.equal(await tab.count(), 1);
+            assert.equal((await tab.textContent()).trim(), 'terminal 1');
+            // A shell at rest has no dot; its state is in its tooltip.
+            assert.equal(await tab.getAttribute('title'), '/fixture · running');
+            assert.equal(await tab.locator('.term-dot').count(), 0);
             await page.waitForFunction(() =>
               window.__terminalTimings.some(
                 (record) => record.phase === 'write-frame',
@@ -289,18 +283,16 @@ try {
         'test/native-terminal-search-ui.html?' +
         new URLSearchParams({ status: 'exited', reason, timing: 'off' }),
     );
-    const footer = page.locator('.native-terminal-status > span').nth(1);
+    // An ended terminal says so in a quiet line under its tabs.
+    const footer = page.locator('.native-terminal-exit[role="status"]');
     await footer.waitFor();
     assert.equal(
       await footer.textContent(),
       reason === 'exit 1' ? 'exited (code 1)' : 'exited (code 1) · ' + reason,
       'identical terminal exit reasons appear once while distinct details remain visible',
     );
-    assert.equal(
-      await footer.getAttribute('title'),
-      reason,
-      'complete original exit reason stays available',
-    );
+    // Its tooltip says where it ran and, when known, its process ids.
+    assert.equal(await footer.getAttribute('title'), '/fixture');
     checks.push({
       profile: 'footer',
       scenario: 'exit reason ' + reason,
@@ -311,7 +303,7 @@ try {
     server.resolvedUrls.local[0] +
       'test/native-terminal-search-ui.html?embedded=true&timing=record',
   );
-  await openNativeTerminalInspector(page);
+  await openTerminalMode(page);
   await page.waitForFunction(() => window.__terminalFixture.requests() > 0);
   await page
     .getByRole('button', { name: 'terminal panel', exact: true })
@@ -336,7 +328,7 @@ try {
     inactive.visibilityEpoch,
     'an already requested replay may finish while its actual view is hidden',
   );
-  await openNativeTerminalInspector(page);
+  await openTerminalMode(page);
   // Find opens on demand with the find shortcut from inside the terminal.
   await page.locator('.xterm-helper-textarea:visible').first().focus();
   await page.keyboard.press(
@@ -378,9 +370,7 @@ try {
     false,
     'hidden parser completion must not masquerade as a visible frame after reveal',
   );
-  await page
-    .getByRole('button', { name: 'copy complete output', exact: true })
-    .click();
+  await chooseTerminalMenu(page, 'copy complete output');
   await page.waitForFunction(() =>
     window.__terminalFixture.copied().includes('0600_中文'),
   );

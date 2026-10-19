@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { openTerminalMode } from './helpers/terminal-mode.mjs';
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0 },
@@ -23,11 +24,8 @@ try {
       server.resolvedUrls.local[0] +
         `test/native-terminal-tabs-ui.html?theme=${theme}&accessibility=1`,
     );
-    await page
-      .getByRole('button', { name: 'terminal panel', exact: true })
-      .click();
-    await page.locator('#inspector-terminal-tab-terminal').click();
-    const surface = page.locator('.native-terminal-surface:not([hidden])');
+    const panel = await openTerminalMode(page);
+    const surface = panel.locator('.native-terminal-surface:not([hidden])');
     await surface.locator('.xterm-accessibility-tree').waitFor();
     const input = await surface
       .locator('.xterm-helper-textarea')

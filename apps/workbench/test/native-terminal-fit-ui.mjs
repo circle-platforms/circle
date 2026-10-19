@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TerminalManager } from '../../desktop/src/workspace/terminal.ts';
-import { openNativeTerminalInspector } from '../../desktop/test/helpers/native-terminal-journey.mjs';
+import {
+  TERMINAL_MODE,
+  closeTerminalMode,
+  openTerminalMode,
+} from './helpers/terminal-mode.mjs';
 import { journeyNodeCommand } from '../../desktop/test/helpers/native-journey-platform.mjs';
 const root = await mkdtemp(join(tmpdir(), 'circle-terminal-fit-'));
 const workspace = join(root, 'workspace');
@@ -140,20 +144,22 @@ try {
             'test/native-terminal-fit-ui.html?theme=' +
             theme,
         );
-        const panel = await openNativeTerminalInspector(page);
+        const panel = await openTerminalMode(page);
         // Earlier cases retain read-only terminals; bind the new owned PTY only.
         const prior = new Set(
           (await manager.list('session1')).map((item) => item.id),
         );
         await panel
-          .locator('.native-terminal-toolbar')
-          .getByRole('button', { name: 'new terminal', exact: true })
+          .getByRole('button', { name: 'new terminal or device', exact: true })
+          .click();
+        await page
+          .getByRole('menuitem', { name: /^new local terminal/ })
           .click();
         await page.waitForFunction(
-          (prior) =>
+          ({ prior, mode }) =>
             [
               ...document.querySelectorAll(
-                '#inspector-terminal-terminal .native-terminal-tabs [role="tab"][aria-selected="true"]',
+                `${mode} .term-tabs [role="tab"][aria-selected="true"]`,
               ),
             ].some(
               (tab) =>
@@ -161,7 +167,7 @@ try {
                   tab.getAttribute('aria-controls')?.slice('terminal-'.length),
                 ),
             ),
-          [...prior],
+          { prior: [...prior], mode: TERMINAL_MODE },
           { timeout: 5000 },
         );
         const created = (await manager.list('session1')).filter(
@@ -170,7 +176,7 @@ try {
         assert.equal(
           created.length,
           1,
-          'the original toolbar creates exactly one new owned PTY',
+          'new local terminal creates exactly one new owned PTY',
         );
         const id = created[0].id;
         const input = panel.locator(`#terminal-${id} .xterm-helper-textarea`);
@@ -181,44 +187,47 @@ try {
         for (let frame = 0; frame < 90; frame++) {
           await page.evaluate(() => new Promise(requestAnimationFrame));
           if (frame % 10 === 0) {
-            const geometry = await page.evaluate((id) => {
-              const selectors = [
-                '.inspector-body',
-                '#inspector-terminal-terminal',
-                '.native-terminal',
-                '.native-terminal-screen',
-                '.native-terminal-fit',
-                '.xterm-screen',
-              ];
-              const bounds = Object.fromEntries(
-                selectors.map((selector) => {
-                  const node = [
-                      '.native-terminal-screen',
-                      '.native-terminal-fit',
-                      '.xterm-screen',
-                    ].includes(selector)
-                      ? document
-                          .getElementById('terminal-' + id)
-                          .querySelector(selector)
-                      : document.querySelector(selector),
-                    r = node.getBoundingClientRect();
-                  return [
-                    selector,
-                    {
-                      height: r.height,
-                      width: r.width,
-                      top: r.top,
-                      bottom: r.bottom,
-                      left: r.left,
-                      right: r.right,
-                      clientHeight: node.clientHeight,
-                      scrollHeight: node.scrollHeight,
-                    },
-                  ];
-                }),
-              );
-              return { viewport: innerHeight, bounds };
-            }, id);
+            const geometry = await page.evaluate(
+              ({ id, mode }) => {
+                // The drawer, its terminal mode, and the terminal inside it.
+                const drawer = {
+                  '.inspector-body': '.work-drawer .inspector-body',
+                  [mode]: mode,
+                  '.native-terminal': `${mode} .native-terminal`,
+                };
+                const selectors = [
+                  ...Object.keys(drawer),
+                  '.native-terminal-screen',
+                  '.native-terminal-fit',
+                  '.xterm-screen',
+                ];
+                const bounds = Object.fromEntries(
+                  selectors.map((selector) => {
+                    const node = drawer[selector]
+                        ? document.querySelector(drawer[selector])
+                        : document
+                            .getElementById('terminal-' + id)
+                            .querySelector(selector),
+                      r = node.getBoundingClientRect();
+                    return [
+                      selector,
+                      {
+                        height: r.height,
+                        width: r.width,
+                        top: r.top,
+                        bottom: r.bottom,
+                        left: r.left,
+                        right: r.right,
+                        clientHeight: node.clientHeight,
+                        scrollHeight: node.scrollHeight,
+                      },
+                    ];
+                  }),
+                );
+                return { viewport: innerHeight, bounds };
+              },
+              { id, mode: TERMINAL_MODE },
+            );
             const terminal = (await manager.list('session1')).find(
               (item) => item.id === id,
             );
@@ -251,7 +260,7 @@ try {
           join(output, 'receipt.json'),
           JSON.stringify(
             {
-              kind: 'complete actual CircleWorkbench original Inspector with a real PTY',
+              kind: 'complete actual CircleWorkbench terminal mode in the drawer with a real PTY',
               receipts,
             },
             null,
@@ -279,7 +288,7 @@ try {
         assert.ok(
           last.bounds['.native-terminal'].bottom <=
             last.bounds['.inspector-body'].bottom + 1,
-          'original Inspector must bound the terminal',
+          'the drawer must bound the terminal',
         );
         assert.deepEqual(
           samples.slice(-3).map((sample) => sample.rows),
@@ -288,7 +297,7 @@ try {
         );
         assert.ok(
           resizes.length <= 8,
-          'opening a finite Inspector must not resize its PTY every frame',
+          'opening a finite drawer must not resize its PTY every frame',
         );
         await input.focus();
         await page.keyboard.type(
@@ -322,10 +331,9 @@ try {
           join(output, `${width}-${theme}.raw.log`),
           actualOutput,
         );
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
-        await openNativeTerminalInspector(page);
+        // Closing the mode from its top-bar button hides the terminal; it does not end it.
+        await closeTerminalMode(page);
+        await openTerminalMode(page);
         assert.equal(
           await original.evaluate(
             (element, id) =>
@@ -345,7 +353,7 @@ try {
           join(output, 'receipt.json'),
           JSON.stringify(
             {
-              kind: 'complete actual CircleWorkbench original Inspector with a real PTY',
+              kind: 'complete actual CircleWorkbench terminal mode in the drawer with a real PTY',
               receipts,
             },
             null,
@@ -366,4 +374,4 @@ try {
   await manager.dispose();
   await rm(root, { recursive: true, force: true });
 }
-console.log('PASS complete original Inspector real PTY bounded sizing');
+console.log('PASS complete drawer terminal mode real PTY bounded sizing');

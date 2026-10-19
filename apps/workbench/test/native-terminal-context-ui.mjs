@@ -3,6 +3,14 @@ import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import {
+  TERMINAL_MODE,
+  chooseTerminalMenu,
+  closeTerminalMode,
+  openTerminalFind,
+  openTerminalMenu,
+  openTerminalMode,
+} from './helpers/terminal-mode.mjs';
 const output =
   process.env.CIRCLE_TERMINAL_CONTEXT_EVIDENCE ||
   '/tmp/circle-native-terminal-context-ui';
@@ -42,33 +50,22 @@ try {
       });
       await message.waitFor();
       assert.equal(await message.inputValue(), 'unsent A draft');
-      await page
-        .getByRole('button', { name: 'terminal panel', exact: true })
-        .click();
-      const terminal = page.locator('#inspector-terminal-terminal');
-      await terminal.waitFor();
-      // Find opens on demand from the terminal bar.
-      await terminal
-        .getByRole('button', { name: 'find in terminal', exact: true })
-        .click();
-      const find = terminal.getByRole('textbox', {
-        name: 'find in terminal',
-        exact: true,
-      });
+      const terminal = await openTerminalMode(page);
+      // Find opens on demand from the terminal's ⋮ menu.
+      const find = await openTerminalFind(page, terminal);
       await find.fill('CIRCLE_SELECTED_中文');
       await find.press('Enter');
-      await page.waitForFunction(
-        () =>
-          document.querySelector(
-            '#inspector-terminal-terminal .xterm-selection',
-          )?.children.length > 0,
-      );
-      const add = terminal.getByRole('button', {
-        name: 'add selection to chat',
-        exact: true,
-      });
+      const selected = () =>
+        page.waitForFunction(
+          (mode) =>
+            document.querySelector(`${mode} .xterm-selection`)?.children
+              .length > 0,
+          TERMINAL_MODE,
+        );
+      await selected();
       stage = 'first attachment';
-      await add.click();
+      // Add selection to chat is an item of the same menu.
+      await chooseTerminalMenu(page, 'add selection to chat');
       await page
         .getByText('fixture terminal · selection', { exact: true })
         .waitFor();
@@ -104,63 +101,41 @@ try {
       await page.screenshot({
         path: output + '/' + theme + '-selection-chip.png',
       });
-      await page
-        .getByRole('button', {
-          name: 'fixture terminal · selection',
-          exact: true,
-        })
-        .click();
-      const original = page.locator('.inspector .context-source').filter({
-        has: page.locator('summary', {
-          hasText: 'fixture terminal · selection',
-        }),
-      });
-      if (!(await original.evaluate((node) => node.open)))
-        await original.locator(':scope > summary').click();
-      const text = attachment.content.slice(
-        0,
-        attachment.content.lastIndexOf('\n\n--- terminal capture source ---\n'),
-      );
-      assert.equal(
-        await original.locator('.terminal-selection-text').textContent(),
-        text,
-      );
-      const raw = original.locator('.terminal-selection-original');
-      assert.equal(
-        await raw.evaluate((node) => node.open),
-        false,
-        'technical metadata starts folded',
-      );
-      await raw.locator('summary').click();
-      assert.equal(
-        await raw.locator('pre').textContent(),
-        attachment.content,
-        'original attachment remains complete',
-      );
-      await raw.locator('summary').click();
-      await page.screenshot({
-        path: output + '/' + theme + '-original-context-preview.png',
-      });
-      await page
-        .getByRole('button', { name: 'terminal panel', exact: true })
-        .click();
-      await find.waitFor();
-      assert.equal(
-        await terminal.locator('#terminal-A-terminal').count(),
-        1,
-        'return to the same original terminal resource',
-      );
-      await page
-        .getByRole('button', { name: 'close inspector', exact: true })
-        .click();
+      // Closing the drawer mode, from its top-bar button or with Escape inside it,
+      // hides the terminal and never closes it; it comes back as it was.
+      const surface = await terminal
+        .locator('#terminal-A-terminal')
+        .elementHandle();
+      await closeTerminalMode(page);
       assert.equal(
         (await page.evaluate(() => window.__terminalContextFixture.observe()))
           .closeCalls,
         0,
       );
-      await page
-        .getByRole('button', { name: 'terminal panel', exact: true })
-        .click();
+      await openTerminalMode(page);
+      await find.waitFor();
+      assert.equal(
+        await terminal
+          .locator('#terminal-A-terminal')
+          .evaluate((node, previous) => node === previous, surface),
+        true,
+        'return to the same original terminal resource',
+      );
+      await terminal.locator('.term-tabs [aria-selected="true"]').focus();
+      await page.keyboard.press('Escape');
+      await terminal.waitFor({ state: 'hidden' });
+      assert.equal(
+        await page
+          .getByRole('button', { name: 'terminal panel', exact: true })
+          .getAttribute('aria-pressed'),
+        'false',
+      );
+      assert.equal(
+        (await page.evaluate(() => window.__terminalContextFixture.observe()))
+          .closeCalls,
+        0,
+      );
+      await openTerminalMode(page);
       await find.waitFor();
       assert.equal(
         (await page.evaluate(() => window.__terminalContextFixture.observe()))
@@ -182,23 +157,21 @@ try {
       assert.equal(await message.inputValue(), 'unsent A draft');
       await find.fill('CIRCLE_SELECTED_中文');
       await find.press('Enter');
-      await page.waitForFunction(
-        () =>
-          document.querySelector(
-            '#inspector-terminal-terminal .xterm-selection',
-          )?.children.length > 0,
-      );
+      await selected();
+      const menu = await openTerminalMenu(page);
       await page.waitForFunction(() => {
-        const button = document.querySelector(
-          '#inspector-terminal-terminal button[aria-label="add selection to chat"]',
+        const item = [...document.querySelectorAll('[role="menuitem"]')].find(
+          (node) => node.textContent.trim() === 'add selection to chat',
         );
-        return button && !button.disabled;
+        return item && item.getAttribute('aria-disabled') !== 'true';
       });
       stage = 'repeat selection after hide/remove';
       await page.evaluate(() =>
         window.__terminalContextFixture.deferSelectionReplay(),
       );
-      await add.click();
+      await menu
+        .getByRole('menuitem', { name: 'add selection to chat', exact: true })
+        .click();
       await page.waitForFunction(
         () => window.__terminalContextFixture.observe().pending,
       );
@@ -254,7 +227,7 @@ try {
     output + '/receipt.json',
     JSON.stringify(
       {
-        kind: 'actual full App, original terminal inspector, real xterm and existing Conversation FileChip; controlled native transport',
+        kind: 'actual full App, terminal mode in the drawer, real xterm and existing Conversation FileChip; controlled native transport',
         checks,
       },
       null,
