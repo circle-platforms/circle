@@ -9,6 +9,7 @@ const ZH_CN: Record<string, string> = {
   'open folder': '打开文件夹',
   'import session': '导入会话',
   'export session': '导出会话',
+  'save image': '保存图片',
   edit: '编辑',
   view: '视图',
   'session tree': '会话树',

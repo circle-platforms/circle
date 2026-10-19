@@ -120,8 +120,6 @@ export const panels: Record<string, string> = {
   'browse the web': '浏览网页',
   'type a URL to open a site.': '输入网址以打开网站。',
   'type a URL': '输入网址',
-  'captured observation': '截取的画面',
-  'browser observation': '浏览器画面',
   'not secure': '不安全',
   'valid until': '有效期截止',
   'SHA-256 fingerprint': 'SHA-256 指纹',
@@ -200,7 +198,6 @@ export const panels: Record<string, string> = {
   'zoom out': '缩小',
   'reset zoom': '恢复默认大小',
   'zoom {percent}%': '缩放 {percent}%',
-  'take screenshot': '截取网页画面',
   'close developer tools': '关闭开发工具',
   // device terminals
   'new connection': '新建连接',

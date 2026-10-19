@@ -70,6 +70,8 @@ const bridge: DesktopBridge = {
   setLanguage: (locale) => ipcRenderer.invoke('circle:set-language', locale),
   saveFile: (options) => ipcRenderer.invoke('circle:save-file', options),
   copyText: (text) => ipcRenderer.invoke('circle:copy-text', text),
+  copyImage: (dataUrl) => ipcRenderer.invoke('circle:copy-image', dataUrl),
+  saveImage: (options) => ipcRenderer.invoke('circle:save-image', options),
   windowControl: (action) =>
     ipcRenderer.invoke('circle:window-control', action),
   openExternal: (url) => ipcRenderer.invoke('circle:open-external', url),

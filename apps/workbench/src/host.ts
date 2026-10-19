@@ -30,6 +30,29 @@ export async function copyText(text: string) {
   if (host) await host.copyText(text);
   else await navigator.clipboard.writeText(text);
 }
+/** A picture to the clipboard, as the system takes it. */
+export async function copyImage(dataUrl: string) {
+  const host = desktopHost();
+  if (host) {
+    await host.copyImage(dataUrl);
+    return;
+  }
+  const blob = await (await fetch(dataUrl)).blob();
+  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+}
+/** A picture to a file the person chooses; false when they chose none. */
+export async function saveImage(
+  name: string,
+  dataUrl: string,
+): Promise<boolean> {
+  const host = desktopHost();
+  if (host) return (await host.saveImage({ name, dataUrl })).saved;
+  const anchor = document.createElement('a');
+  anchor.href = dataUrl;
+  anchor.download = name;
+  anchor.click();
+  return true;
+}
 export async function saveExport(
   name: string,
   content: string,

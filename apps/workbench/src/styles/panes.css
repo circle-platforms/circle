@@ -500,16 +500,14 @@
   border-radius: 6px;
   background: var(--bg);
 }
-/* Circle is driving the page: a clear ring, softened so it is not a neon edge. */
+/* Circle is working in the page: ringed in blue. It waits for you: ringed in orange. */
 .inspector .native-browser-frame.driving {
-  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
-  box-shadow: inset 0 0 0 3px
-    color-mix(in srgb, var(--accent) 72%, var(--border));
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--accent);
 }
 .inspector .native-browser-frame.awaiting {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  box-shadow: inset 0 0 0 3px
-    color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-color: var(--attention);
+  box-shadow: inset 0 0 0 3px var(--attention);
 }
 .inspector .native-browser-viewport {
   flex: 1 1 auto;

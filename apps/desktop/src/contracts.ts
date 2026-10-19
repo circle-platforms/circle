@@ -120,6 +120,13 @@ export interface DesktopBridge {
     mime?: string;
   }) => Promise<{ saved: boolean; name?: string }>;
   copyText: (text: string) => Promise<void>;
+  /** A picture to the system clipboard, from a data URL of a picture type. */
+  copyImage: (dataUrl: string) => Promise<void>;
+  /** A picture to a file the person chooses, from a data URL of a picture type. */
+  saveImage: (options: {
+    name: string;
+    dataUrl: string;
+  }) => Promise<{ saved: boolean; name?: string }>;
   windowControl: (
     action: 'minimize' | 'maximize' | 'close' | 'quit',
   ) => Promise<void>;

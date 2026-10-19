@@ -17,9 +17,11 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   nativeTheme,
   net,
   Notification,
@@ -54,6 +56,7 @@ import {
   MAX_FILE_BYTES,
   safeExternalUrl,
   trustedAppUrl,
+  parseImageDataUrl,
   validSaveName,
 } from './policy';
 import type {
@@ -967,6 +970,36 @@ app
     });
     handle('circle:copy-text', (value) => {
       return clipboard.writeText(boundedText(value, MAX_EXPORT_BYTES));
+    });
+    handle('circle:copy-image', async (value) => {
+      const image = nativeImage.createFromBuffer(
+        parseImageDataUrl(value).bytes,
+      );
+      if (image.isEmpty()) throw Error('invalid image');
+      // The clipboard takes a picture as PNG, whatever type it came in.
+      await clipboard.write([
+        new ClipboardItem({
+          'image/png': new Blob([new Uint8Array(image.toPNG())], {
+            type: 'image/png',
+          }),
+        }),
+      ]);
+    });
+    handle('circle:save-image', async (value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value))
+        throw Error('invalid export');
+      const options = value as Record<string, unknown>;
+      const name = validSaveName(options.name);
+      const { bytes } = parseImageDataUrl(options.dataUrl);
+      const result = fixtureProfile?.exportPath
+        ? { canceled: false, filePath: fixtureProfile.exportPath }
+        : await dialog.showSaveDialog(window!, {
+            title: text('save image'),
+            defaultPath: name,
+          });
+      if (result.canceled || !result.filePath) return { saved: false };
+      await writeFile(result.filePath, bytes, { mode: 0o600 });
+      return { saved: true, name: basename(result.filePath) };
     });
     handle('circle:open-external', async (value) => {
       const url = nativeHttpsUrl(value);

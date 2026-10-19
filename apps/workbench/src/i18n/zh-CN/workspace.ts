@@ -42,4 +42,13 @@ export const workspace: Record<string, string> = {
   'new local terminal': '新建本地终端',
   'new terminal or device': '新建终端或连接设备',
   'terminal {n}': '终端 {n}',
+  'take page screenshot': '截取网页画面',
+  'browser page': '网页',
+  'enlarge {name}': '放大 {name}',
+  screenshot: '截图',
+  'image copied': '已复制图片',
+  'could not copy the image': '无法复制图片',
+  'copy image': '复制图片',
+  'save to file': '保存到文件',
+  'could not save the image': '无法保存图片',
 };

@@ -8,7 +8,7 @@ import { useOwnerState } from '../model/owner-state';
 import type { CommandTerminalView } from '../model/command-terminal-client';
 import { TerminalMode } from './TerminalMode';
 import { AgentsMode } from './AgentsMode';
-import { useModeChrome } from './mode-chrome';
+import { ModeButtons } from './mode-chrome';
 import { desktopHost } from '../host';
 import { isAgentActive } from '../model/activity';
 import { FileIcon } from '../components/FileIcon';
@@ -494,14 +494,8 @@ export function FilesPanel({
 export function BrowserPanel({
   selection,
 }: Partial<Pick<Props, 'selection'>> = {}) {
-  const chrome = useModeChrome();
   return desktopHost() ? (
-    <NativeBrowser
-      target={selection}
-      whole={chrome?.whole}
-      canBeWhole={chrome?.canBeWhole}
-      onWhole={chrome?.onWhole}
-    />
+    <NativeBrowser target={selection} />
   ) : (
     <BrowserPlaceholder />
   );
@@ -533,6 +527,7 @@ function BrowserPlaceholder() {
         >
           <ArrowUpRight size={14} />
         </IconButton>
+        <ModeButtons popOut />
       </div>
       <div className="browser-empty">
         <Globe size={32} />

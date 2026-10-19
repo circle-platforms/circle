@@ -55,6 +55,7 @@ import {
 import { Button, IconButton } from '../components/common';
 import { BrowserDialogPanel, CertificateChoicePanel } from './BrowserDialog';
 import { t } from '../i18n';
+import { ModeButtons, useModeChrome } from './mode-chrome';
 
 const PERMISSIONS: Record<BrowserPermission['kinds'][number], () => string> = {
   camera: () => t('use your camera'),
@@ -104,25 +105,14 @@ const isField = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   !!target.closest('input, textarea, select, [contenteditable="true"]');
 
-/** `whole` and the rest: the inspector's full view, which the browser's menu also offers. */
-export function NativeBrowser({
-  target,
-  whole,
-  canBeWhole,
-  onWhole,
-}: {
-  target?: string;
-  whole?: boolean;
-  canBeWhole?: boolean;
-  onWhole?: () => void;
-} = {}) {
-  const { snapshot, notify } = useRuntime();
+export function NativeBrowser({ target }: { target?: string } = {}) {
+  const { snapshot, notify, runtime } = useRuntime();
+  const whole = useModeChrome()?.whole;
   const session = currentSession(snapshot);
   const id = session.id;
   const state = useBrowserState(id);
   const [url, setUrl] = useState('');
   const [addressFocused, setAddressFocused] = useState(false);
-  const [capture, setCapture] = useState<BrowserCapture | null>(null);
   // A still picture of the page, shown while a menu is open: the page's own view is
   // native and would cover the menu
   const [frozen, setFrozen] = useState<string | null>(null);
@@ -176,7 +166,6 @@ export function NativeBrowser({
     addressTab.current = undefined;
     navigationVersion.current++;
     setUrl('');
-    setCapture(null);
     setFrozenPicture(null);
     let froze = false;
     let freezing = false;
@@ -291,9 +280,39 @@ export function NativeBrowser({
     const frame = requestAnimationFrame(() => updateBounds.current());
     return () => cancelAnimationFrame(frame);
   }, [whole]);
-  useEffect(() => {
-    setCapture(null);
-  }, [id, state?.tab, state?.url]);
+  // A picture of the page you took goes into the message box as an attachment, for you to
+  // send or take back: nothing is shown in the panel for it.
+  const attachScreenshot = (value: BrowserCapture) => {
+    const target = runtime
+      .getSnapshot()
+      .sessions.find((item) => item.id === id);
+    if (!target || target.lifecycle === 'deleting') return;
+    let site = '';
+    try {
+      site = new URL(value.url).hostname;
+    } catch {
+      site = '';
+    }
+    const at = new Date(value.observedAt);
+    const stamp = Number.isNaN(at.getTime())
+      ? ''
+      : ` ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+    runtime.updateSessionView(id, {
+      attachments: [
+        ...target.attachments,
+        {
+          id: crypto.randomUUID(),
+          name: `${site || t('browser page')}${stamp}.png`,
+          kind: 'image',
+          content: value.dataUrl,
+          mime: 'image/png',
+          size: Math.round(
+            ((value.dataUrl.split(',')[1] ?? '').length * 3) / 4,
+          ),
+        },
+      ],
+    });
+  };
   const captureBrowser = () => {
     const identity = currentIdentity.current;
     const navigation = navigationVersion.current;
@@ -306,7 +325,7 @@ export function NativeBrowser({
       identity.url === currentIdentity.current.url;
     void host.browserCapture(id).then(
       (value) => {
-        if (current()) setCapture(value);
+        if (current()) attachScreenshot(value);
       },
       () => {
         if (current()) notify(t('browser capture failed'));
@@ -320,7 +339,6 @@ export function NativeBrowser({
     if (tabChanged) {
       editingAddress.current = false;
       wasOpened.current = false;
-      setCapture(null);
       setFinding(false);
     }
     addressTab.current = state.tab;
@@ -344,7 +362,6 @@ export function NativeBrowser({
     setNavigating((count) => count + 1);
     try {
       active.current = true;
-      setCapture(null);
       await host.browserNavigate(id, target);
       requestAnimationFrame(() => updateBounds.current());
     } catch (error) {
@@ -616,69 +633,71 @@ export function NativeBrowser({
   return (
     // One column the height of the panel: the page takes what the bars leave
     <div ref={root} className="native-browser" onKeyDown={onKeys}>
-      <div className="browser-tabs" role="tablist">
-        {state?.tabs?.length ? (
-          state.tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className={`browser-tab${tab.active ? ' active' : ''}`}
-              role="tab"
-              aria-selected={tab.active}
-              title={tabTitle(tab)}
-              // The middle button closes a tab, as in Chrome
-              onMouseDown={(event) => {
-                if (event.button === 1) event.preventDefault();
-              }}
-              onAuxClick={(event) => {
-                if (event.button !== 1) return;
-                event.preventDefault();
-                void tabs('close', tab.id);
-              }}
-            >
-              <button
-                className="browser-tab-title"
-                onClick={() => void tabs('select', tab.id)}
+      {(state?.tabs?.length ?? 0) > 1 && (
+        <div className="browser-tabs" role="tablist">
+          {state?.tabs?.length ? (
+            state.tabs.map((tab) => (
+              <div
+                key={tab.id}
+                className={`browser-tab${tab.active ? ' active' : ''}`}
+                role="tab"
+                aria-selected={tab.active}
+                title={tabTitle(tab)}
+                // The middle button closes a tab, as in Chrome
+                onMouseDown={(event) => {
+                  if (event.button === 1) event.preventDefault();
+                }}
+                onAuxClick={(event) => {
+                  if (event.button !== 1) return;
+                  event.preventDefault();
+                  void tabs('close', tab.id);
+                }}
               >
-                {state.dialogs?.some((dialog) => dialog.tab === tab.id) && (
-                  <i className="browser-tab-alert" />
-                )}
-                <span className="browser-tab-icon" aria-hidden="true">
-                  {tab.loading && tab.url && tab.url !== 'about:blank' ? (
-                    <LoaderCircle size={13} className="browser-tab-spinner" />
-                  ) : tab.favicon ? (
-                    <img src={tab.favicon} alt="" width={14} height={14} />
-                  ) : (
-                    <Globe size={13} />
+                <button
+                  className="browser-tab-title"
+                  onClick={() => void tabs('select', tab.id)}
+                >
+                  {state.dialogs?.some((dialog) => dialog.tab === tab.id) && (
+                    <i className="browser-tab-alert" />
                   )}
+                  <span className="browser-tab-icon" aria-hidden="true">
+                    {tab.loading && tab.url && tab.url !== 'about:blank' ? (
+                      <LoaderCircle size={13} className="browser-tab-spinner" />
+                    ) : tab.favicon ? (
+                      <img src={tab.favicon} alt="" width={14} height={14} />
+                    ) : (
+                      <Globe size={13} />
+                    )}
+                  </span>
+                  <span className="browser-tab-text">{tabTitle(tab)}</span>
+                </button>
+                <IconButton
+                  label={t('close tab')}
+                  onClick={() => void tabs('close', tab.id)}
+                >
+                  <X size={12} />
+                </IconButton>
+              </div>
+            ))
+          ) : (
+            // Before the page is made, the one tab it will open in
+            <div className="browser-tab active" role="tab" aria-selected>
+              <span className="browser-tab-title">
+                <span className="browser-tab-icon" aria-hidden="true">
+                  <Globe size={13} />
                 </span>
-                <span className="browser-tab-text">{tabTitle(tab)}</span>
-              </button>
-              <IconButton
-                label={t('close tab')}
-                onClick={() => void tabs('close', tab.id)}
-              >
-                <X size={12} />
-              </IconButton>
-            </div>
-          ))
-        ) : (
-          // Before the page is made, the one tab it will open in
-          <div className="browser-tab active" role="tab" aria-selected>
-            <span className="browser-tab-title">
-              <span className="browser-tab-icon" aria-hidden="true">
-                <Globe size={13} />
+                <span className="browser-tab-text">{t('new tab')}</span>
               </span>
-              <span className="browser-tab-text">{t('new tab')}</span>
-            </span>
-          </div>
-        )}
-        <IconButton
-          label={t('new tab')}
-          onClick={() => void tabs('new').then(focusAddress)}
-        >
-          <Plus size={14} />
-        </IconButton>
-      </div>
+            </div>
+          )}
+          <IconButton
+            label={t('new tab')}
+            onClick={() => void tabs('new').then(focusAddress)}
+          >
+            <Plus size={14} />
+          </IconButton>
+        </div>
+      )}
       <div className="browser-address">
         <IconButton
           label={t('go back')}
@@ -884,6 +903,11 @@ export function NativeBrowser({
             </div>
           )}
         </div>
+        {ring === 'driving' && (
+          <Button onClick={() => void host.browserControl(id, 'take')}>
+            {t('take over')}
+          </Button>
+        )}
         <DropdownMenu.Root
           open={menu === 'main'}
           onOpenChange={(open) => openMenu('main', open)}
@@ -918,21 +942,8 @@ export function NativeBrowser({
                 disabled={!pageReady}
                 onSelect={captureBrowser}
               >
-                {t('take screenshot')}
+                {t('take page screenshot')}
               </DropdownMenu.Item>
-              {canBeWhole && onWhole && (
-                <DropdownMenu.Item onSelect={onWhole}>
-                  {whole ? t('exit full view') : t('full view')}
-                </DropdownMenu.Item>
-              )}
-              <DropdownMenu.Separator className="dropdown-separator" />
-              {(ring === 'driving' || ring === 'awaiting') && (
-                <DropdownMenu.Item
-                  onSelect={() => void host.browserControl(id, 'take')}
-                >
-                  {t('take over')}
-                </DropdownMenu.Item>
-              )}
               <DropdownMenu.Item
                 disabled={!opened}
                 onSelect={() => void page('devtools')}
@@ -959,6 +970,7 @@ export function NativeBrowser({
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
+        <ModeButtons popOut />
       </div>
       <div
         className={`native-browser-frame${
@@ -1106,18 +1118,6 @@ export function NativeBrowser({
             </li>
           ))}
         </ul>
-      )}
-      {capture && (
-        <details className="context-source">
-          <summary>{t('captured observation')}</summary>
-          <img
-            className="attachment-image"
-            src={capture.dataUrl}
-            alt={t('browser observation')}
-          />
-          <code>{capture.sha256}</code>
-          <p className="panel-note">{capture.observedAt}</p>
-        </details>
       )}
     </div>
   );
