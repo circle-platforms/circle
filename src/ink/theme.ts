@@ -6,10 +6,10 @@ export type RGB = [number, number, number];
 export const DEFAULT_DARK: [string, string] = ['#d6dee6', '#10151a'];
 export const DEFAULT_LIGHT: [string, string] = ['#3c4148', '#f7f8fa'];
 /**
- * The desktop application's light theme: the same text on a warm off-white ground. A terminal
- * paints its own ground, so the terminal keeps DEFAULT_LIGHT.
+ * The desktop application's light theme: the same text on white. A terminal paints its own
+ * ground, so the terminal keeps DEFAULT_LIGHT.
  */
-export const DESKTOP_LIGHT: [string, string] = ['#3c4148', '#f5f4ed'];
+export const DESKTOP_LIGHT: [string, string] = ['#3c4148', '#ffffff'];
 export function hexToRgb(value: string): RGB {
   const match = value.trim().match(/^#?([0-9a-f]+)$/i);
   const digits = match?.[1];

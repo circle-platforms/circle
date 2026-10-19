@@ -1227,7 +1227,7 @@ pre {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--subtle);
+  background: var(--drawer);
 }
 .inspector-tabs {
   height: 44px;

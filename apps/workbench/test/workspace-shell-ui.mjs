@@ -81,8 +81,58 @@ async function settled(page) {
   }
 }
 // Each mode in turn, with what makes it that mode, and a picture of it.
+// The faces the system really drew a node's text in, as the browser reports them.
+async function platformFonts(page, selector) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send('DOM.enable');
+    await cdp.send('CSS.enable');
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1 });
+    const { nodeId } = await cdp.send('DOM.querySelector', {
+      nodeId: root.nodeId,
+      selector,
+    });
+    const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId });
+    return fonts.map((font) => font.familyName);
+  } finally {
+    await cdp.detach();
+  }
+}
+// The system's own face: SF Pro on macOS, Segoe UI Variable on Windows 11 and Segoe UI
+// before it, with PingFang or Microsoft YaHei for Chinese. Linux keeps its own.
+const SYSTEM_FACES = {
+  darwin: { latin: /^(\.SF|SF Pro)/, chinese: /^PingFang/ },
+  win32: { latin: /^Segoe UI/, chinese: /^Microsoft YaHei/ },
+}[process.platform];
+async function checkFaces(page, zh) {
+  if (!SYSTEM_FACES) return;
+  const latin = await platformFonts(page, '.session-title span');
+  assert.ok(
+    latin.some((name) => SYSTEM_FACES.latin.test(name)),
+    `the title is in the system's face: ${latin}`,
+  );
+  if (!zh) return;
+  await page.evaluate(() => {
+    for (const element of document.querySelectorAll('.workbench *'))
+      if (
+        [...element.childNodes].some(
+          (node) =>
+            node.nodeType === 3 && /[\u4e00-\u9fff]/.test(node.textContent),
+        )
+      ) {
+        element.setAttribute('data-face-probe', '');
+        break;
+      }
+  });
+  const chinese = await platformFonts(page, '[data-face-probe]');
+  assert.ok(
+    chinese.some((name) => SYSTEM_FACES.chinese.test(name)),
+    `Chinese is in the system's Chinese face: ${chinese}`,
+  );
+}
 async function captureModes(page, locale, theme, width) {
   const zh = locale === 'zh';
+  if (width === 1280) await checkFaces(page, zh);
   const titleGeometry = await page.locator('.topbar').evaluate((node) => ({
     titleRight: node
       .querySelector('.session-title button')
@@ -132,6 +182,7 @@ async function captureModes(page, locale, theme, width) {
         return {
           overview: ground(document.querySelector('.overview')),
           conversation: ground(document.querySelector('.transcript')),
+          sidebar: ground(document.querySelector('.sidebar')),
         };
       });
       assert.ok(grounds.overview, 'the overview has a background');
@@ -140,6 +191,15 @@ async function captureModes(page, locale, theme, width) {
         grounds.conversation,
         `the overview has the conversation's background at ${width}px`,
       );
+      // The light theme is one white ground; the dark one sets the sidebar a shade off.
+      if (theme === 'light') {
+        assert.equal(grounds.conversation, 'rgb(255, 255, 255)');
+        assert.equal(
+          grounds.sidebar,
+          grounds.conversation,
+          'the sidebar is on the white',
+        );
+      } else assert.notEqual(grounds.sidebar, grounds.conversation);
       // A card too narrow for a subagent's name, its task and its state keeps the state
       // whole: the task gives way, then the name.
       const agentRow = await page
@@ -163,6 +223,16 @@ async function captureModes(page, locale, theme, width) {
         );
     } else {
       await page.locator('.work-drawer').waitFor({ state: 'visible' });
+      // The drawer is on the light theme's white as well.
+      if (theme === 'light')
+        assert.equal(
+          await page
+            .locator('.inspector')
+            .first()
+            .evaluate((node) => getComputedStyle(node).backgroundColor),
+          'rgb(255, 255, 255)',
+          `the ${kind} drawer is on the white`,
+        );
       assert.equal(
         await page.locator('.inspector-title').count(),
         0,
