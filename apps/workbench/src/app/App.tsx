@@ -247,6 +247,12 @@ export function App() {
   // A narrow window has no room beside the conversation: the overview lies over it, as a
   // drawer does, and only one of the two at a time.
   const [overviewOverlay, setOverviewOverlay] = useState(false);
+  // The drawer opens, by whatever way, in the overview's place when that lies over the
+  // conversation. Elsewhere the overview is a column of its own and stays.
+  const showDrawer = () => {
+    setOverviewOverlay(false);
+    setInspectorOpen(true);
+  };
   const columnsBox = useRef<HTMLDivElement>(null);
   const [groupWidth, setGroupWidth] = useState(0);
   useLayoutEffect(() => {
@@ -329,7 +335,7 @@ export function App() {
     setCommandTerminal({ viewSessionId, requestId: request, resolved: reply });
     setPanel('terminal');
     setSelection('');
-    setInspectorOpen(true);
+    showDrawer();
   };
   const openCommandTerminal = (
     sourceSessionId: string,
@@ -349,7 +355,7 @@ export function App() {
     if (id) {
       setPanel('agents');
       setSelection(id);
-      setInspectorOpen(true);
+      showDrawer();
     }
   };
   const [dialog, setDialog] = useState<DialogId | null>(null);
@@ -668,8 +674,7 @@ export function App() {
     setSelection(choice);
     // The button alone keeps the subagent that is open, as the files button keeps its file.
     if (kind === 'agents' && choice) setAgent(choice);
-    setOverviewOverlay(false);
-    setInspectorOpen(true);
+    showDrawer();
   };
   // When Circle starts using this conversation's browser, its panel opens so the person
   // sees it work: once per start, and never by taking the person away from another page.
@@ -780,7 +785,7 @@ export function App() {
     setSourceLine(result.source.line);
     setSourceColumn(result.source.column);
     setPanel('files');
-    setInspectorOpen(true);
+    showDrawer();
     navigate(`/session/${sourceSessionId}`);
   };
 
