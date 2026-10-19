@@ -199,6 +199,41 @@ try {
           badges: [...node.querySelectorAll('.drawer-mode-badge')].map(
             (item) => item.textContent,
           ),
+          // What they look like: a thin line in the border colour, and a filled pill in
+          // the accent colour on the corner of its icon.
+          divider: (() => {
+            const item = node.querySelector('.drawer-mode-divider');
+            const style = getComputedStyle(item);
+            const box = item.getBoundingClientRect();
+            return {
+              width: Math.round(box.width),
+              height: Math.round(box.height),
+              painted: style.backgroundColor,
+            };
+          })(),
+          pill: (() => {
+            const item = node.querySelector('.drawer-mode-badge');
+            const style = getComputedStyle(item);
+            const box = item.getBoundingClientRect();
+            const owner = item.parentElement.getBoundingClientRect();
+            return {
+              painted: style.backgroundColor,
+              italic: style.fontStyle === 'italic',
+              onCorner:
+                box.right <= owner.right + 1 &&
+                box.top <= owner.top + owner.height / 2,
+            };
+          })(),
+          tokens: (() => {
+            const probe = document.createElement('i');
+            document.body.append(probe);
+            probe.style.color = 'var(--border)';
+            const border = getComputedStyle(probe).color;
+            probe.style.color = 'var(--accent)';
+            const accent = getComputedStyle(probe).color;
+            probe.remove();
+            return { border, accent };
+          })(),
         }));
       assert.deepEqual(bar.names, [
         'overview panel',
@@ -210,6 +245,16 @@ try {
         'terminal panel',
       ]);
       assert.deepEqual(bar.badges, ['1', '1']);
+      assert.deepEqual(
+        { width: bar.divider.width, height: bar.divider.height },
+        { width: 1, height: 16 },
+      );
+      assert.equal(bar.divider.painted, bar.tokens.border);
+      assert.deepEqual(bar.pill, {
+        painted: bar.tokens.accent,
+        italic: false,
+        onCorner: true,
+      });
       const composer = page.locator('textarea[aria-label="message"]');
       const composerOwner = await composer.elementHandle();
       await composer.fill('Workspace shell preserved draft');

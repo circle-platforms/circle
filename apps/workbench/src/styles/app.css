@@ -4946,6 +4946,38 @@ pre {
   background: var(--active);
   color: var(--fg);
 }
+/* The overview stands apart from the modes; a mode's count is a small pill on its icon. */
+.drawer-mode-divider {
+  flex-shrink: 0;
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 5px;
+  background: var(--border);
+}
+.drawer-mode-button {
+  position: relative;
+}
+.drawer-mode-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+}
 .topbar-title {
   min-width: 100px;
 }
