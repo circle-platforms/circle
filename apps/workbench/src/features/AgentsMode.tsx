@@ -6,24 +6,12 @@ import { MessageView } from '../components/MessageView';
 import { SourceNavigation } from '../components/SourceNavigation';
 import { ToolGroup } from '../components/ToolGroup';
 import { t } from '../i18n';
-import {
-  agentActivityText,
-  agentState,
-  isAgentActive,
-} from '../model/activity';
+import { agentActivityText, agentDot, isAgentActive } from '../model/activity';
 import { agentLabel, pendingFor } from '../model/overview';
 import { currentSession } from '../model/state';
 import type { AgentRecord, DialogId } from '../model/types';
 import { groupMessages } from './Conversation';
 import { ModeButtons } from './mode-chrome';
-
-const DOT: Record<string, string> = {
-  running: 'run',
-  preparing: 'run',
-  waiting: 'wait',
-  failed: 'fail',
-  interrupted: 'fail',
-};
 
 function Row({
   agent,
@@ -39,7 +27,6 @@ function Row({
   onSelect: () => void;
 }) {
   const label = agentLabel(agent);
-  const state = agentState(agent);
   return (
     <button
       type="button"
@@ -50,13 +37,7 @@ function Row({
     >
       <i
         className="overview-dot"
-        data-state={
-          waiting
-            ? 'wait'
-            : isAgentActive(agent)
-              ? (DOT[state] ?? 'run')
-              : (DOT[state] ?? 'done')
-        }
+        data-state={agentDot(agent, waiting)}
         aria-hidden
       />
       <span className="agent-row-text">

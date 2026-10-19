@@ -264,6 +264,17 @@ try {
         g.main.width >= MIN_CONVERSATION - 1,
     );
     assert.ok(narrowish.drawer.width >= 290);
+    // The terminal is as tall as the drawer below its tab row, not as tall as its rows.
+    await page.waitForFunction(() => {
+      const drawer = document.querySelector('.work-drawer');
+      const terminal = document.querySelector(
+        '[data-inspector-resource="terminal"] .native-terminal',
+      );
+      if (!drawer || !terminal) return false;
+      const outer = drawer.getBoundingClientRect();
+      const inner = terminal.getBoundingClientRect();
+      return inner.height > 0 && outer.bottom - inner.bottom <= 2;
+    });
     await page.screenshot({ path: `${output}/${theme}-1280-mode.png` });
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })
@@ -309,16 +320,32 @@ try {
       "the workspace took the sidebar's room",
     );
     await page.screenshot({ path: `${output}/${theme}-1280-file.png` });
-    await page.getByRole('button', { name: 'close file', exact: true }).click();
-    await page.waitForFunction(
-      () => !document.querySelector('.workbench.sidebar-collapsed'),
-    );
-    await settled('the sidebar is back', (g) => g.group.width < 1100);
-    // A sidebar the person folded by hand stays as they left it, whatever the file does.
+    // The person shows the sidebar again beside the file: it stays, and the file has the
+    // room that is left.
     const sidebarButton = page.getByRole('button', {
       name: 'show or hide the sidebar',
       exact: true,
     });
+    await sidebarButton.click();
+    await settled(
+      'the sidebar shown by hand beside the file',
+      (g) => g.group.width < 1100 && g.drawer && g.main.width > 0,
+    );
+    await page.evaluate(
+      () =>
+        new Promise((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(done)),
+        ),
+    );
+    assert.equal(
+      await page.locator('.workbench.sidebar-collapsed').count(),
+      0,
+      'a sidebar shown by hand is not folded again under the person',
+    );
+    await page.getByRole('button', { name: 'close file', exact: true }).click();
+    await settled('the sidebar is back', (g) => g.group.width < 1100);
+    assert.equal(await page.locator('.workbench.sidebar-collapsed').count(), 0);
+    // A sidebar the person folded by hand stays as they left it, whatever the file does.
     await sidebarButton.click();
     await page.waitForFunction(() =>
       document.querySelector('.workbench.sidebar-collapsed'),

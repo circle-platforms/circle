@@ -188,8 +188,14 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // The sidebar folded by itself to give a document drawer its room, to unfold with it.
   const sidebarFoldedForDrawer = useRef(false);
+  // The person showed or hid the sidebar while a document was open: that stands until the
+  // document closes, and the window does not fold it again under them.
+  const sidebarChosen = useRef(false);
+  // What folding the sidebar gives the workspace, as it is drawn now.
+  const sidebarElement = useRef<HTMLDivElement>(null);
   const toggleSidebar = () => {
     sidebarFoldedForDrawer.current = false;
+    sidebarChosen.current = true;
     if (narrow) setSidebarOpen((open) => !open);
     else setSidebarCollapsed((closed) => !closed);
   };
@@ -443,12 +449,16 @@ export function App() {
   useEffect(() => {
     if (narrow || groupWidth === 0 || !clusterActive) return;
     const documentOpen = drawerSplit && drawerOpened;
+    if (!documentOpen) sidebarChosen.current = false;
     if (
       documentOpen &&
+      !sidebarChosen.current &&
       sidebarMustFold({
         group: groupWidth,
         drawer: wantedDrawer ?? 0,
         sidebarShown: !sidebarCollapsed,
+        sidebar:
+          sidebarElement.current?.getBoundingClientRect().width || undefined,
       })
     ) {
       sidebarFoldedForDrawer.current = true;
@@ -656,7 +666,8 @@ export function App() {
     }
     setPanel(kind);
     setSelection(choice);
-    if (kind === 'agents') setAgent(choice || null);
+    // The button alone keeps the subagent that is open, as the files button keeps its file.
+    if (kind === 'agents' && choice) setAgent(choice);
     setOverviewOverlay(false);
     setInspectorOpen(true);
   };
@@ -1128,8 +1139,7 @@ export function App() {
         ) === 'sidebar.toggle'
       ) {
         event.preventDefault();
-        if (narrow) setSidebarOpen((open) => !open);
-        else setSidebarCollapsed((closed) => !closed);
+        toggleSidebar();
       }
     };
     addEventListener('keydown', handle, true);
@@ -1275,6 +1285,7 @@ export function App() {
         }}
         onFile={onFile}
         onAgentFile={onAgentFile}
+        agent={agent}
         onAgent={selectAgent}
         onDialog={onDialog}
         onInteraction={(item) => {
@@ -1376,7 +1387,7 @@ export function App() {
           className={`workbench${sidebarCollapsed && !narrow ? ' sidebar-collapsed' : ''}`}
         >
           {desktopHost() && <div className="desktop-drag-region" />}
-          <div className="desktop-sidebar">
+          <div className="desktop-sidebar" ref={sidebarElement}>
             <Sidebar
               onSearch={() => setSearchOpen(true)}
               onDialog={onDialog}

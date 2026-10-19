@@ -145,6 +145,16 @@
   width: 300px;
   border-left: 1px solid var(--border);
 }
+/* A drawer too narrow for both gives the open subagent the room; the list comes back
+   when it is closed. */
+.agents-mode {
+  container-type: inline-size;
+}
+@container (max-width: 619px) {
+  .agents-mode.open > .agent-list {
+    display: none;
+  }
+}
 .agent-list > .panel-note {
   margin: 10px 8px;
 }
@@ -248,4 +258,13 @@
 /* A mode in a window of its own is marked on its button under the bar. */
 .drawer-mode-button.popped {
   box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* The terminal mode is as tall as the drawer, so the terminal fills it. */
+.terminal-mode {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
 }

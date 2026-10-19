@@ -19,7 +19,7 @@ import { PendingOperations } from './PendingOperations';
 import { useSources } from '../components/SourceNavigation';
 import { copyText, desktopHost } from '../host';
 import { t, tn } from '../i18n';
-import { agentActivityText, agentState } from '../model/activity';
+import { agentActivityText, agentDot } from '../model/activity';
 import { contextUsage } from '../model/context-usage';
 import { useOwnerState } from '../model/owner-state';
 import {
@@ -134,20 +134,6 @@ function Row({
 function Dot({ state }: { state: 'run' | 'wait' | 'fail' | 'done' | 'idle' }) {
   return <i className="overview-dot" data-state={state} aria-hidden />;
 }
-
-const AGENT_DOT: Record<string, 'run' | 'wait' | 'fail' | 'done' | 'idle'> = {
-  running: 'run',
-  preparing: 'run',
-  queued: 'run',
-  cancelling: 'run',
-  waiting: 'wait',
-  needs_review: 'wait',
-  blocked: 'wait',
-  failed: 'fail',
-  interrupted: 'fail',
-  completed: 'done',
-  cancelled: 'done',
-};
 
 function checksText(checks: PullRequestSummary['checks']) {
   return checks === 'failing'
@@ -377,7 +363,6 @@ export function Overview({
           {progress.agents.map((agent) => {
             const label = agentLabel(agent);
             const asked = pendingFor(agent.id, snapshot.interactions);
-            const state = agentState(agent);
             return (
               <Row
                 key={agent.id}
@@ -386,7 +371,7 @@ export function Overview({
                 onClick={() => onPanel('agents', agent.id)}
                 end={
                   <>
-                    <Dot state={asked ? 'wait' : (AGENT_DOT[state] ?? 'run')} />
+                    <Dot state={agentDot(agent, !!asked)} />
                     {asked ? (
                       <code>{asked.command ?? asked.tool ?? asked.title}</code>
                     ) : (
@@ -403,7 +388,6 @@ export function Overview({
             );
           })}
           {progress.tasks.map((task) => {
-            const state = agentState(task.agent);
             return (
               <Row
                 key={task.session.id}
@@ -411,7 +395,7 @@ export function Overview({
                 onClick={() => onSession(task.session.id)}
                 end={
                   <>
-                    <Dot state={AGENT_DOT[state] ?? 'run'} />
+                    <Dot state={agentDot(task.agent)} />
                     {agentActivityText(task.agent)}
                   </>
                 }

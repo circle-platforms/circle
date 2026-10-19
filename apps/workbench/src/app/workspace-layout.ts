@@ -101,8 +101,12 @@ export function sidebarMustFold(input: {
   /** The width the document drawer wants. */
   drawer: number;
   sidebarShown: boolean;
+  /** What folding the sidebar gives, as it is drawn now. */
+  sidebar?: number;
 }): boolean {
   if (!input.sidebarShown) return false;
   const need = MIN_CONVERSATION + input.drawer;
-  return input.group < need && input.group + SIDEBAR_WIDTH >= need;
+  return (
+    input.group < need && input.group + (input.sidebar ?? SIDEBAR_WIDTH) >= need
+  );
 }

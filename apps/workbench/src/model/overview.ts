@@ -118,14 +118,18 @@ export type PullRequestAction = 'create' | 'update';
 /**
  * The one button the changes card has. A branch without an open pull request offers
  * to create one when it has anything to put in it; a branch with one offers to bring
- * it up to date when something is not on GitHub yet. The default branch has neither.
+ * it up to date when something is not on GitHub yet. On the default branch the work is
+ * what is not committed or not pushed, and the create-pr skill moves it to a branch of
+ * its own first. A detached HEAD has no branch to offer.
  */
 export function pullRequestAction(
   overview: PullRequestOverview | undefined,
 ): PullRequestAction | null {
   if (!overview || overview.access !== 'ready') return null;
   const { git, current } = overview;
-  if (!git.branch || git.branch === git.defaultBranch) return null;
+  if (!git.branch) return null;
+  if (git.branch === git.defaultBranch)
+    return git.files > 0 || git.unpushed > 0 ? 'create' : null;
   if (current) return git.files > 0 || git.unpushed > 0 ? 'update' : null;
   return git.files > 0 || git.ahead > 0 ? 'create' : null;
 }

@@ -46,8 +46,10 @@ export function PendingOperations({
         { state: 'needs_review', limit: 100, ...(before ? { before } : {}) },
       );
       if (epoch !== generation.current) return;
-      setRows((current) => (before ? [...current, ...result] : result));
-      setHasMore(result.length === 100);
+      // A host that answers with no list has nothing to check: the window carries on.
+      const list = Array.isArray(result) ? result : [];
+      setRows((current) => (before ? [...current, ...list] : list));
+      setHasMore(list.length === 100);
       setError('');
     } catch (err) {
       if (epoch === generation.current) setError(String(err));

@@ -61,6 +61,8 @@ interface Props {
   onAgentFile: (path: string, line?: number, column?: number) => void;
   visible?: boolean;
   onSession?: (id: string) => void;
+  /** The subagent open in the subagents mode, if one is. */
+  agent?: string | null;
   /** Select a subagent, or none. */
   onAgent: (id: string | null) => void;
   onInteraction: (item: Interaction) => void;
@@ -227,7 +229,7 @@ function InspectorResources(
         const original =
           id === 'agents' ? (
             <AgentsMode
-              selection={props.selection}
+              selection={props.agent ?? ''}
               onSelect={props.onAgent}
               onFile={props.onAgentFile}
               onDialog={props.onDialog}

@@ -265,8 +265,17 @@ test('the changes card offers to create a pull request, update one, or nothing',
     pullRequestAction(overview({ ahead: 2, unpushed: 1 }, { current: pull() })),
     'update',
   );
-  // The default branch and a detached HEAD have no pull request of their own.
-  assert.equal(pullRequestAction(overview({ branch: 'main', files: 3 })), null);
+  // On the default branch, work not committed or not pushed is offered as a new pull
+  // request (the skill moves it to a branch first); a detached HEAD has no branch.
+  assert.equal(
+    pullRequestAction(overview({ branch: 'main', files: 3 })),
+    'create',
+  );
+  assert.equal(
+    pullRequestAction(overview({ branch: 'main', ahead: 0, unpushed: 2 })),
+    'create',
+  );
+  assert.equal(pullRequestAction(overview({ branch: 'main' })), null);
   assert.equal(pullRequestAction(overview({ branch: '', files: 3 })), null);
   for (const access of ['missing', 'signed-out', 'unavailable'] as const)
     assert.equal(pullRequestAction(overview({ files: 3 }, { access })), null);

@@ -171,4 +171,29 @@ test('the sidebar folds for a document drawer only when that gives it the room',
     }),
     false,
   );
+  // What folding gives is the sidebar as drawn. A 220-pixel sidebar beside a 950-pixel
+  // workspace gives 1170 when folded, short of the 1180 a 760-pixel document needs beside
+  // the conversation, so it stays; read as 252 pixels it would fold for nothing.
+  assert.equal(
+    sidebarMustFold({
+      group: 950,
+      drawer: 760,
+      sidebarShown: true,
+      sidebar: 220,
+    }),
+    false,
+  );
+  assert.equal(
+    sidebarMustFold({
+      group: 960,
+      drawer: 760,
+      sidebarShown: true,
+      sidebar: 220,
+    }),
+    true,
+  );
+  assert.equal(
+    sidebarMustFold({ group: 950, drawer: 760, sidebarShown: true }),
+    true,
+  );
 });
