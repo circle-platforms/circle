@@ -281,6 +281,8 @@ export interface Job {
   outputPath: string;
   stopRequested: boolean;
   agentId?: string;
+  /** The terminal a background command runs in, so its row and its terminal tab are one. */
+  terminal?: { id: string; epoch: string };
 }
 export interface Interaction {
   callId?: string;

@@ -8,6 +8,8 @@ export const OVERVIEW_WIDTH = 380;
 /** The narrowest the conversation is left, in pixels. */
 export const MIN_CONVERSATION = 420;
 export const MIN_DRAWER = 290;
+/** The sidebar's width: what folding it gives to the workspace. */
+export const SIDEBAR_WIDTH = 252;
 /** Extra room the overview needs to come back, so it does not flicker at the edge. */
 export const RESTORE_MARGIN = 24;
 
@@ -87,4 +89,20 @@ export function clusterWidth(input: {
   drawer: number | null;
 }): number {
   return (input.overviewShown ? OVERVIEW_WIDTH : 0) + (input.drawer ?? 0);
+}
+
+/**
+ * A drawer made for a document (a file or a subagent that is open) wants more than the
+ * workspace has beside the conversation. When folding the sidebar gives it the room, the
+ * sidebar folds, as the window would otherwise have to take the room from the conversation.
+ */
+export function sidebarMustFold(input: {
+  group: number;
+  /** The width the document drawer wants. */
+  drawer: number;
+  sidebarShown: boolean;
+}): boolean {
+  if (!input.sidebarShown) return false;
+  const need = MIN_CONVERSATION + input.drawer;
+  return input.group < need && input.group + SIDEBAR_WIDTH >= need;
 }

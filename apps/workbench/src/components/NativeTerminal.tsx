@@ -338,10 +338,21 @@ export function NativeTerminal({
   const selectedId = selectedBySession[sessionId];
   const { snapshot: appSnapshot, notify } = useRuntime();
   const [dismissed, setDismissed] = useState(readDismissed);
+  // Every command Circle runs has a terminal; only a command that runs in the background,
+  // which has a row of its own in the jobs, is a tab. A foreground one is seen from its
+  // tool row, and in the view of one command.
+  const backgroundTerminals = new Set(
+    appSnapshot.jobs.flatMap((job) =>
+      job.kind === 'command' && job.terminal ? [job.terminal.id] : [],
+    ),
+  );
   const visible = terminals.filter(
     (item) =>
       item.sessionId === sessionId &&
       !dismissed.has(item.id) &&
+      (!item.managedCommand ||
+        !!commandTerminal ||
+        backgroundTerminals.has(item.id)) &&
       (!commandTerminal ||
         (item.id === commandTerminal.resolved.target.terminal.id &&
           item.epoch === commandTerminal.resolved.target.terminal.epoch)),

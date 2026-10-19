@@ -110,6 +110,7 @@ import {
   openingWidth,
   OVERVIEW_WIDTH,
   overviewFits,
+  sidebarMustFold,
 } from './workspace-layout';
 const FileViewer = lazy(() =>
   import('../features/FileViewer').then((module) => ({
@@ -185,7 +186,10 @@ export function App() {
   const narrow = useNarrow();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // The sidebar folded by itself to give a document drawer its room, to unfold with it.
+  const sidebarFoldedForDrawer = useRef(false);
   const toggleSidebar = () => {
+    sidebarFoldedForDrawer.current = false;
     if (narrow) setSidebarOpen((open) => !open);
     else setSidebarCollapsed((closed) => !closed);
   };
@@ -438,7 +442,36 @@ export function App() {
       handle.resize(clusterWidth({ overviewShown, drawer })),
     );
     return () => cancelAnimationFrame(frame);
-  }, [overviewShown, drawerSplit, modeKey, narrow, whole, groupWidth === 0]);
+  }, [overviewShown, drawerSplit, modeKey, narrow, whole, groupWidth]);
+  // A file or a subagent that is open takes 760 pixels: when the window has no room for that
+  // beside the conversation, and the sidebar's room would give it, the sidebar folds, and
+  // unfolds when the document is closed.
+  useEffect(() => {
+    if (narrow || groupWidth === 0 || !clusterActive) return;
+    const documentOpen = drawerSplit && drawerOpened;
+    if (
+      documentOpen &&
+      sidebarMustFold({
+        group: groupWidth,
+        drawer: wantedDrawer ?? 0,
+        sidebarShown: !sidebarCollapsed,
+      })
+    ) {
+      sidebarFoldedForDrawer.current = true;
+      setSidebarCollapsed(true);
+    } else if (!documentOpen && sidebarFoldedForDrawer.current) {
+      sidebarFoldedForDrawer.current = false;
+      setSidebarCollapsed(false);
+    }
+  }, [
+    narrow,
+    groupWidth,
+    clusterActive,
+    drawerSplit,
+    drawerOpened,
+    wantedDrawer,
+    sidebarCollapsed,
+  ]);
   // The changes card's button: Circle loads the create-pr skill and does it.
   const startPullRequest = (action: 'create' | 'update') =>
     perform(async () => {

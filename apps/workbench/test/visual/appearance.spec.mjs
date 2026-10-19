@@ -8,7 +8,7 @@ import { resolve, join } from 'node:path';
 const exec = promisify(execFile);
 const workbench = fileURLToPath(new URL('../..', import.meta.url));
 const suites = [
-  ['main and original panels', 'original-shell-ui.mjs', 64],
+  ['workspace shell', 'workspace-shell-ui.mjs', 72],
   ['git', 'git-conflict-selector-ui.mjs', 8],
   ['debug', 'debug-panel-embedded.mjs', 8],
   ['github', 'github-plugin-ui.mjs', 16],

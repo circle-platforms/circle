@@ -282,6 +282,64 @@ try {
       (g) => g.overview && tight(g) && g.main.width >= MIN_CONVERSATION - 1,
     );
 
+    // A file that is open takes 760 pixels: where the sidebar's room gives it that beside the
+    // conversation, the sidebar folds, and it unfolds when the file closes.
+    await input.focus();
+    await page.keyboard.press('ControlOrMeta+p');
+    const search = page.getByRole('textbox', {
+      name: 'global search',
+      exact: true,
+    });
+    await search.fill('task-model');
+    await search.press('Enter');
+    const opened = await settled(
+      'the file at 760',
+      (g) =>
+        g.drawer &&
+        g.drawer.width >= 700 &&
+        g.main.width >= MIN_CONVERSATION - 1,
+    );
+    assert.equal(
+      await page.locator('.workbench.sidebar-collapsed').count(),
+      1,
+      'the sidebar folded for the file',
+    );
+    assert.ok(
+      opened.group.width >= 1270,
+      "the workspace took the sidebar's room",
+    );
+    await page.screenshot({ path: `${output}/${theme}-1280-file.png` });
+    await page.getByRole('button', { name: 'close file', exact: true }).click();
+    await page.waitForFunction(
+      () => !document.querySelector('.workbench.sidebar-collapsed'),
+    );
+    await settled('the sidebar is back', (g) => g.group.width < 1100);
+    // A sidebar the person folded by hand stays as they left it, whatever the file does.
+    const sidebarButton = page.getByRole('button', {
+      name: 'show or hide the sidebar',
+      exact: true,
+    });
+    await sidebarButton.click();
+    await page.waitForFunction(() =>
+      document.querySelector('.workbench.sidebar-collapsed'),
+    );
+    await input.focus();
+    await page.keyboard.press('ControlOrMeta+p');
+    await search.fill('task-model');
+    await search.press('Enter');
+    await settled('the file again', (g) => g.drawer && g.drawer.width >= 700);
+    await page.getByRole('button', { name: 'close file', exact: true }).click();
+    await settled('the file closed', (g) => !g.drawer || g.drawer.width < 700);
+    assert.equal(
+      await page.locator('.workbench.sidebar-collapsed').count(),
+      1,
+      'a sidebar folded by hand is not unfolded for the person',
+    );
+    await sidebarButton.click();
+    await page.waitForFunction(
+      () => !document.querySelector('.workbench.sidebar-collapsed'),
+    );
+
     // A narrow window: each lies over the conversation, one at a time.
     const overlays = [];
     for (const narrow of [500, 375, 500, 375]) {

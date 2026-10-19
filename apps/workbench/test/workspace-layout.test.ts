@@ -12,6 +12,8 @@ import {
   OVERVIEW_WIDTH,
   overviewFits,
   RESTORE_MARGIN,
+  SIDEBAR_WIDTH,
+  sidebarMustFold,
 } from '../src/app/workspace-layout.ts';
 
 test('files and subagents open as a list and widen when one is opened', () => {
@@ -141,4 +143,32 @@ test('the right-hand column is the overview and the drawer, as each is open', ()
   assert.equal(clusterWidth({ overviewShown: true, drawer: null }), 380);
   assert.equal(clusterWidth({ overviewShown: false, drawer: 300 }), 300);
   assert.equal(clusterWidth({ overviewShown: false, drawer: null }), 0);
+});
+
+test('the sidebar folds for a document drawer only when that gives it the room', () => {
+  const group = 1280 - SIDEBAR_WIDTH;
+  // 420 + 760 does not fit in 1028, but does in 1280.
+  assert.equal(
+    sidebarMustFold({ group, drawer: 760, sidebarShown: true }),
+    true,
+  );
+  // Already folded, nothing more to fold.
+  assert.equal(
+    sidebarMustFold({ group: 1280, drawer: 760, sidebarShown: false }),
+    false,
+  );
+  // It fits as it is: the sidebar stays.
+  assert.equal(
+    sidebarMustFold({ group: 1500, drawer: 760, sidebarShown: true }),
+    false,
+  );
+  // Folding would not be enough either: the window is too narrow, and the sidebar stays.
+  assert.equal(
+    sidebarMustFold({
+      group: 800 - SIDEBAR_WIDTH,
+      drawer: 760,
+      sidebarShown: true,
+    }),
+    false,
+  );
 });

@@ -3018,6 +3018,9 @@ export class RuntimeController {
           output: existsSync(job.outputPath) ? outputTail(job.outputPath) : '',
           outputPath: job.virtualPath,
           stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
+          ...(job.execution?.terminal
+            ? { terminal: job.execution.terminal }
+            : {}),
         })),
       ),
       interactions: [

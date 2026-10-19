@@ -22,7 +22,21 @@ data.activeSessionId = 'A';
 data.interactions = [];
 data.requests = [];
 data.agents = [];
-data.jobs = [];
+// The command Circle runs in the background has a job, and the job names its terminal.
+data.jobs = [
+  {
+    id: 'A:job-1',
+    sessionId: 'A',
+    kind: 'command',
+    title: 'npm run test -- reconnect',
+    state: 'running',
+    elapsed: '14s',
+    output: '',
+    outputPath: 'preview/background_jobs/j1.log',
+    stopRequested: false,
+    terminal: { id: 'terminal-3', epoch: 'fixture' },
+  },
+];
 const runtime = new PreviewRuntime({
   getItem: () => JSON.stringify(data),
   setItem: () => {},
@@ -67,6 +81,28 @@ let items: any[] = [
       displayCommand: 'npm run test -- reconnect',
       ownership: 'pty-group',
       commandPid: 52003,
+      completion: {
+        kind: 'pty-group',
+        descendantCoverage: {
+          state: 'unknown',
+          reason: 'coverage-unavailable',
+          observedAt: 1,
+        },
+      },
+    },
+  },
+  // A command Circle runs in the foreground: it has a terminal, and no tab.
+  {
+    ...shell(4),
+    label: 'command',
+    startedAt: new Date(4000).toISOString(),
+    managedCommand: {
+      executionId: 'exec-2',
+      executionEpoch: 'fixture-run',
+      toolCallId: 'call-2',
+      displayCommand: 'ls -la',
+      ownership: 'pty-group',
+      commandPid: 52004,
       completion: {
         kind: 'pty-group',
         descendantCoverage: {

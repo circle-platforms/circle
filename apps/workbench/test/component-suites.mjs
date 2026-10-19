@@ -31,7 +31,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'native-editable-shortcuts-ui.mjs',
   'windowed-mount-ui.mjs',
   'native-terminal-search-ui.mjs',
-  'original-shell-ui.mjs',
+  'workspace-shell-ui.mjs',
   'debug-panel-embedded.mjs',
   'original-browser-shell-ui.mjs',
   'native-terminal-fit-ui.mjs',
