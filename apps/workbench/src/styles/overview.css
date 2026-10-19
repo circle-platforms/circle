@@ -1,3 +1,26 @@
+/* The right-hand column: the overview, then the mode the person opened beside it. */
+.work-cluster {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+}
+.work-cluster > .overview-column {
+  flex: none;
+  width: 380px;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.work-cluster > .inspector-resource-host {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.work-cluster > .inspector-resource-host[hidden] {
+  display: none;
+}
+
 /* The overview: a column of cards beside the conversation. It only shows. */
 .overview {
   display: flex;
@@ -307,4 +330,10 @@ button.overview-row:hover .overview-name {
 }
 .overview-pull-text [data-checks='running'] {
   color: var(--accent);
+}
+
+/* In a narrow window the overview lies over the conversation, as a drawer does. */
+.inspector-overlay .overview-column {
+  width: 100%;
+  border-left: 0;
 }

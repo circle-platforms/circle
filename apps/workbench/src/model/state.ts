@@ -460,6 +460,15 @@ export class PreviewRuntime implements RuntimePort {
     });
     return id;
   };
+  runSkill = async (input: {
+    name: string;
+    text: string;
+    display: string;
+  }): Promise<void> => {
+    // The preview runs no model: the request is recorded, as every other action is.
+    this.request('load-skill', { name: input.name });
+    this.request('prompt', { text: input.text, display: input.display });
+  };
   send = (kind: 'steering' | 'follow-up' = 'steering'): CommandResult => {
     const session = currentSession(this.snapshot);
     const text = session.draft;

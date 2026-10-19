@@ -599,15 +599,6 @@
   flex: none;
   color: var(--muted);
 }
-.inspector .file-icon.code {
-  color: var(--accent);
-}
-.inspector .file-icon.data {
-  color: var(--attention);
-}
-.inspector .file-icon.image {
-  color: var(--violet);
-}
 .inspector .files-panel > .panel-note {
   margin: 10px 6px;
 }

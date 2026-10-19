@@ -69,7 +69,6 @@ test('the component gate preserves prior journeys and includes each native regre
           'safe-file-undo-ui.mjs',
           'large-file-tree-ui.mjs',
           'settings-navigation-ui.mjs',
-          'native-tools-drawer-ui.mjs',
           'child-terminal-rendered-match-ui.mjs',
           'tasks-panel-ui.mjs',
           'task-config-recovery-ui.mjs',
@@ -165,7 +164,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'tool-text-output-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 58);
+  assert.equal(new Set(COMPONENT_SUITES).size, 57);
 });
 
 test('task configuration recovery remains a required component journey', () => {

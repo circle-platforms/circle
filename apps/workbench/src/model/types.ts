@@ -542,6 +542,16 @@ export interface RuntimePort {
     payload?: Record<string, unknown>,
     sessionId?: string,
   ) => string | Promise<unknown>;
+  /**
+   * Load a skill into the open conversation and send a message that asks for it, as one
+   * step; the person's own draft and attachments are left alone. `display` is what the
+   * transcript shows as the person's message.
+   */
+  runSkill?: (input: {
+    name: string;
+    text: string;
+    display: string;
+  }) => Promise<void>;
   /** Drop a session error the page is already showing, so it is not also a toast. */
   dismissActionError?: (sessionId?: string) => void;
   /** Start the desktop runtime again after it stopped. */

@@ -113,10 +113,10 @@ function revealIn(scroller: HTMLElement, target: Element): void {
 const mediaFiles = (files: FileList): File[] =>
   Array.from(files).filter((file) => MEDIA_TYPES.has(file.type));
 // A transcript item: a message, or the tool calls between two messages, folded together.
-type TranscriptItem =
+export type TranscriptItem =
   | { kind: 'message'; message: Message }
   | { kind: 'tools'; id: string; rows: Message[] };
-function groupMessages(messages: Message[]): TranscriptItem[] {
+export function groupMessages(messages: Message[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   // An answer with no words of its own, only thinking before its calls, folds in with
   // them: a turn reads as your message, a few folded lines, and the answer.

@@ -3,21 +3,14 @@ import { developerPlugin } from './developer';
 import {
   Folder,
   FileDiff,
-  Activity,
   Globe,
-  SquareTerminal,
   BookOpen,
   CirclePlay,
   Server,
   Blocks,
 } from 'lucide-react';
-import {
-  FilesPanel,
-  ChangesPanel,
-  ActivityPanel,
-  BrowserPanel,
-} from '../features/Panels';
-import { TerminalDevice } from '../features/TerminalDevice';
+import { FilesPanel, BrowserPanel } from '../features/Panels';
+import { ChangesMode } from '../features/ChangesMode';
 import {
   KnowledgePage,
   WorkPage,
@@ -68,30 +61,13 @@ export const circlePlugins: WorkbenchPlugin[] = [
         },
         icon: FileDiff,
         fullView: true,
-        component: (props) => <ChangesPanel onFile={props.onFile} />,
-      },
-    ],
-  },
-  {
-    id: 'activity',
-    apiVersion: 1,
-    version: '0.1.0',
-    get title() {
-      return t('activity inspector');
-    },
-    get description() {
-      return t('Circle background jobs, subagents and pending interactions.');
-    },
-    icon: Activity,
-    panels: [
-      {
-        id: 'activity',
-        get title() {
-          return t('activity');
-        },
-        icon: Activity,
-        fullView: true,
-        component: (props) => <ActivityPanel {...props} />,
+        component: (props) => (
+          <ChangesMode
+            selection={props.selection}
+            active={!!props.visible}
+            onFile={props.onFile}
+          />
+        ),
       },
     ],
   },
@@ -114,29 +90,6 @@ export const circlePlugins: WorkbenchPlugin[] = [
         },
         icon: Globe,
         component: BrowserPanel,
-        fullView: true,
-      },
-    ],
-  },
-  {
-    id: 'devices',
-    apiVersion: 1,
-    version: '0.1.0',
-    get title() {
-      return t('device terminal pane');
-    },
-    get description() {
-      return t('SSH and Telnet consoles shared with Circle.');
-    },
-    icon: SquareTerminal,
-    panels: [
-      {
-        id: 'devices',
-        get title() {
-          return t('device terminals');
-        },
-        icon: SquareTerminal,
-        component: TerminalDevice,
         fullView: true,
       },
     ],

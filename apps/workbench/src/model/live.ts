@@ -1001,6 +1001,39 @@ export class LiveRuntime implements RuntimePort {
     });
     return {};
   };
+  runSkill = async (
+    input: { name: string; text: string; display: string },
+    sessionId = this.snapshot.activeSessionId,
+  ): Promise<void> => {
+    await this.changes;
+    const session = this.snapshot.sessions.find(
+      (item) => item.id === sessionId,
+    );
+    if (!session) throw Error(t('session not found'));
+    const loaded = (await this.native(
+      'load-skill',
+      { name: input.name },
+      session.id,
+    )) as { name: string; content: string };
+    const folded = promptAttachments(input.text, [
+      {
+        id: crypto.randomUUID(),
+        name: loaded.name,
+        kind: 'skill',
+        content: loaded.content,
+      },
+    ]);
+    await this.native(
+      'prompt',
+      {
+        text: folded.text,
+        display: input.display,
+        kind: 'steering',
+        attachments: folded.attachments,
+      },
+      session.id,
+    );
+  };
   command = async (
     name: string,
     args = '',

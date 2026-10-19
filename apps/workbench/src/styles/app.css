@@ -5576,6 +5576,21 @@ button.drawer-summary-row:hover {
   padding: 0;
   overflow: visible;
 }
+.drawer-document-content[hidden] {
+  display: none;
+}
+/* With no file open the tree is the whole drawer. */
+.drawer-document.list-only .drawer-context-index.resizable-context-index {
+  position: static;
+  flex: 1 1 auto !important;
+  width: auto !important;
+  border-left: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.drawer-document.list-only .context-index-resizer {
+  display: none;
+}
 .drawer-context-index > .context-index-content {
   padding: 10px;
 }
