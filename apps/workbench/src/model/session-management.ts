@@ -362,6 +362,12 @@ export function recentDetails(
   };
 }
 
+/** A deletion is under way. One whose cleanup failed waits for the session to be deleted
+ * again, which retries the cleanup. */
+export function deletionUnderWay(session: Session): boolean {
+  return session.lifecycle === 'deleting' && !session.deletionFailed;
+}
+
 /**
  * Why archive is unavailable, or nothing when it can be archived.
  * A running turn, a pending question and a live job each say so.

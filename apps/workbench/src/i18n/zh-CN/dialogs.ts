@@ -1,5 +1,6 @@
 // Simplified Chinese for the interface words in the dialogs files. English is the key.
 export const dialogs: Record<string, string> = {
+  'could not delete the session: {reason}': '无法删除会话：{reason}',
   // the connection form
   'The Circle runtime stopped. The saved connection is kept; the connection can be changed once the runtime runs again.':
     'Circle 运行时已停止。已保存的连接仍在；运行时重新运行后才能更改连接。',

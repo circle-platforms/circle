@@ -938,7 +938,11 @@ export function Conversation({
       {(session.lifecycle === 'deleting' || session.occupied) && (
         <div className="archive-banner" role="status">
           {session.lifecycle === 'deleting'
-            ? t('stopping work before deletion…')
+            ? session.deletionFailed
+              ? t('could not delete the session: {reason}', {
+                  reason: session.deletionFailed,
+                })
+              : t('stopping work before deletion…')
             : t('open in another terminal; view only')}
         </div>
       )}

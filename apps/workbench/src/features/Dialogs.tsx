@@ -711,7 +711,20 @@ export function DialogHost({
               onClick={() =>
                 perform(async () => {
                   const workspaceId = target.workspaceId;
-                  await runtime.deleteSession(target.id, true);
+                  // A cleanup that fails leaves the session in deletion with its
+                  // history: say why, and the dialog stays for another try.
+                  try {
+                    await runtime.deleteSession(target.id, true);
+                  } catch (error) {
+                    throw Error(
+                      t('could not delete the session: {reason}', {
+                        reason:
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
+                      }),
+                    );
+                  }
                   onClose();
                   // Deleting a folder's last conversation returns to that folder's
                   // home, not to the empty session the runtime kept to draft in.

@@ -23,6 +23,7 @@ import { useRuntime } from '../app/context';
 import {
   archiveBlockReason,
   canArchiveSession,
+  deletionUnderWay,
   workspaceSessions,
 } from '../model/session-management';
 import type { DialogId, Session, Workspace } from '../model/types';
@@ -232,7 +233,7 @@ export function SessionMenu({
         icon={Trash2}
         label={t('delete session')}
         disabled={
-          session.lifecycle === 'deleting' ||
+          deletionUnderWay(session) ||
           session.occupied ||
           (runtime.mode !== 'live' &&
             (session.id === snapshot.activeSessionId ||

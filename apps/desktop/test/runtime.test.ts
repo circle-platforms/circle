@@ -6301,3 +6301,57 @@ test('the browser ring stays out while the next turn has not begun, though the l
       `${session.state}, ${session.turn ? 'begun' : 'not begun'}, after "${prompt(session)}"`,
     );
 });
+
+test('a deletion whose cleanup fails tells the window why and keeps the history, and deleting it again finishes (#195)', async (t) => {
+  let fail = true;
+  const f = await setup(
+    t,
+    [{ message: assistant('noted') }],
+    true,
+    undefined,
+    async () => {
+      if (fail) throw new Error('cleanup failed');
+    },
+  );
+  assert.equal((await f.call('prompt', { text: 'keep me' })).ok, true);
+  await wait(
+    () => f.model.requests.length === 1 && activeSession(f).state === 'idle',
+    'the turn',
+  );
+  const id = activeSession(f).id;
+  const failed = await f.call('delete-session', { id, confirmed: true });
+  assert.equal(failed.ok, false);
+  assert.match(String(failed.error), /cleanup failed/);
+  // Not stopping work for ever: what the window was last told says the cleanup failed and
+  // why, so it can offer to delete the session again
+  const shown = f.updates
+    .at(-1)!
+    .snapshot.sessions.find((row) => row.id === id);
+  assert.equal(shown?.lifecycle, 'deleting');
+  assert.match(shown?.deletionFailed ?? '', /cleanup failed/);
+  assert.ok(
+    visibleMessages(shown!).some((row) => row.text === 'keep me'),
+    'its history is still there',
+  );
+  const store = new CheckpointStore(f.home);
+  try {
+    assert.ok(store.get(id), 'its history is still saved');
+  } finally {
+    store.close();
+  }
+  fail = false;
+  assert.equal(
+    (await f.call('delete-session', { id, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(
+    f.controller.snapshot().sessions.some((row) => row.id === id),
+    false,
+  );
+  const after = new CheckpointStore(f.home);
+  try {
+    assert.equal(after.get(id), undefined);
+  } finally {
+    after.close();
+  }
+});

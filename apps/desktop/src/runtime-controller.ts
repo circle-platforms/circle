@@ -1198,6 +1198,9 @@ export class RuntimeController {
   private externalGrantOwners = new Map<string, AgentRuntime>();
   private externalSelectionEpoch = 0;
   private externalBlocked = new Set<string>();
+  /** Why a session's last deletion failed. It stays in deletion, with its history, until
+   * deleting it again succeeds (#195). */
+  private deletionFailures = new Map<string, string>();
   private externalRegistry(): ExternalFileGrants {
     const registry = (this.externalFiles ??= new ExternalFileGrants({
       protectedRoots: [
@@ -2751,6 +2754,9 @@ export class RuntimeController {
         archivedAt: this.metadata.archivedAt(row.id),
         lifecycle:
           this.runtimes.lifecycle(row.id) === 'deleting' ? 'deleting' : 'open',
+        ...(this.deletionFailures.has(row.id)
+          ? { deletionFailed: this.deletionFailures.get(row.id) }
+          : {}),
         occupied: !owner && sessionOccupied(this.home, row.id),
         title: row.title || 'new session',
         workspaceId: identity(row.workspace),
@@ -4481,6 +4487,7 @@ export class RuntimeController {
           throw Error(
             'confirm stopping this session and its tasks before deleting it',
           );
+        this.deletionFailures.delete(id);
         for (const target of owned) this.externalBlocked.add(target);
         await Promise.all(
           [...owned].map((target) => this.externalFiles?.revokeSession(target)),
@@ -4489,7 +4496,18 @@ export class RuntimeController {
           confirmed: p.confirmed === true,
         });
         this.publish();
-        await deletion;
+        try {
+          await deletion;
+        } catch (error) {
+          // A cleanup that failed leaves the session in deletion with its history (#195):
+          // the window says why, and deleting it again retries the cleanup.
+          this.deletionFailures.set(
+            id,
+            error instanceof Error ? error.message : String(error),
+          );
+          this.publish();
+          throw error;
+        }
         this.metadata.set([...owned], false);
         for (const target of owned) {
           await this.externalFiles?.revokeSession(target);
@@ -4498,6 +4516,7 @@ export class RuntimeController {
           this.activeRuns.delete(target);
           this.failures.delete(target);
           this.notices.delete(target);
+          this.deletionFailures.delete(target);
           this.planCompletions.delete(target);
           this.turns.delete(target);
           this.turnUsage.delete(target);

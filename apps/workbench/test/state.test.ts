@@ -23,6 +23,7 @@ import {
   archiveBlockReason,
   afterDeleteRoute,
   canArchiveSession,
+  deletionUnderWay,
   disambiguatedSessionTitle,
   historyMessages,
   orderedProjects,
@@ -1057,6 +1058,20 @@ test('recent lists every context newest first, and its hover names only a projec
   assert.deepEqual(
     projectFolders(workspaces, [older], scratch.id).map((item) => item.id),
     ['proj'],
+  );
+});
+
+test('a session whose deletion failed can be deleted again, one being deleted cannot (#195)', () => {
+  const session = { id: 's', title: 'kept work' } as Session;
+  assert.equal(deletionUnderWay({ ...session, lifecycle: 'open' }), false);
+  assert.equal(deletionUnderWay({ ...session, lifecycle: 'deleting' }), true);
+  assert.equal(
+    deletionUnderWay({
+      ...session,
+      lifecycle: 'deleting',
+      deletionFailed: 'browser cleanup failed',
+    }),
+    false,
   );
 });
 

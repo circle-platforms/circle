@@ -129,6 +129,9 @@ export interface Session {
   /** Desktop-only organization; the core transcript and project files stay intact. */
   archivedAt?: string;
   lifecycle?: 'open' | 'deleting';
+  /** Why the last deletion failed. The session stays in deletion, with its history, until
+   * deleting it again succeeds. */
+  deletionFailed?: string;
   /** Another process owns execution of this conversation. */
   occupied?: boolean;
   /** The last renderer action failure, kept with its source session for this window. */
