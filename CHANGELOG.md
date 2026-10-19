@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **A program a Windows command started through another `cmd` is ended.** With `cmd /c start /b node …`, the inner `cmd` ended at once and its program kept running out of reach of `taskkill`: stopping the job, cancelling the command or leaving Circle left it running and its folder could not be removed. Circle now puts each command's shell in a Windows Job object and follows its whole tree, and stopping a job that is already marked done ends what its command left running instead of doing nothing.
+
 ## 1.9.0 - 2026-10-19
 
 ### Added
