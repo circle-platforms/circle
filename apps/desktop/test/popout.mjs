@@ -576,6 +576,21 @@ try {
   );
   await liveBrowser.locator('.native-browser').waitFor();
   await live.locator('.work-drawer').waitFor({ state: 'hidden' });
+  const workspaceId = (await state()).sessions.find(
+    (session) => session.id === liveSession,
+  ).workspaceId;
+  const listings = await Promise.all(
+    [live, liveBrowser].map((page) =>
+      page.evaluate(
+        (id) => window.circleDesktop.listWorkspace(id),
+        workspaceId,
+      ),
+    ),
+  );
+  assert.ok(
+    listings.every((listing) => listing && Array.isArray(listing.files)),
+    'main and pop-out can discover the workspace concurrently',
+  );
   // An address an extension opens goes to the browser's window, as it would to the drawer.
   const liveAddress = liveBrowser.getByRole('textbox', {
     name: 'browser address',
