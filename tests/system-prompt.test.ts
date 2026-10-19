@@ -298,8 +298,9 @@ test('project context stays in the current folder', (t) => {
   assert.match(prompt, /- local: this folder skill/);
   assert.equal(prompt.includes('PARENT REPO RULES'), false);
   assert.equal(prompt.includes('circle-packs'), false);
+  // The folders give this folder's skill alone; `false` leaves out the ones Circle ships.
   assert.deepEqual(
-    discoverSkills(workspace, home, user).map((skill) => skill.name),
+    discoverSkills(workspace, home, user, false).map((skill) => skill.name),
     ['local'],
   );
 });

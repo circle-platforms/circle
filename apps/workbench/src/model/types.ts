@@ -328,7 +328,8 @@ export interface Skill {
   name: string;
   description: string;
   path: string;
-  scope: 'project' | 'user';
+  /** bundled: ships with Circle; a project or user skill of the same name replaces it. */
+  scope: 'project' | 'user' | 'bundled';
   content: string;
 }
 export interface PromptCommand {

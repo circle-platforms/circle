@@ -7,6 +7,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 ### Added
 
 - **A desktop task that needs review can be sent back with a reason.** The decision, with your reason and the attempt and patch you were shown, is recorded on that attempt, and the task runs again as a new attempt in a fresh worktree from the same commit. Its worker is told the reason after the task's own instruction and acceptance criteria, and so is the worker of every later attempt. The attempt sent back keeps its worktree and results; tasks waiting for it keep waiting. The tasks service does this; the window has no control for it yet.
+- **Circle ships with a skill of its own, `create-pr`.** Ask Circle to open a pull request, or load it with `/skill create-pr`: it checks the branch and `gh auth status` first, and says to run `gh auth login` when the GitHub CLI is missing or not logged in. It commits only the files that belong to the work, in the repository's own commit style, on a branch other than the default one, pushes it and opens a draft pull request, or updates the one already open. It never merges or force-pushes without asking, and ends with the pull request's number and URL. A skill of the same name in any skill folder replaces it. `/skill` marks it `(Built-in)` and the desktop's skills page marks it bundled. See [Built-in skills](https://circle-platforms.github.io/circle/skills/#built-in-skills).
 
 ## 1.9.0 - 2026-10-19
 

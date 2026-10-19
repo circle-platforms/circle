@@ -85,7 +85,7 @@ import {
   discoverCustomCommands,
   substituteArguments,
 } from '../../../src/commands.js';
-import { loadSkillBody } from '../../../src/skills.js';
+import { BUILTIN_SKILL_SOURCE, loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import {
@@ -3046,11 +3046,14 @@ export class RuntimeController {
             name: skill.name,
             description: skill.description,
             path: skill.path,
+            // One that ships with Circle is bundled, as an extension that does is.
             scope:
-              skill.source_label.startsWith('Project') ||
-              skill.source_label.startsWith('Ancestor')
-                ? 'project'
-                : 'user',
+              skill.source_label === BUILTIN_SKILL_SOURCE
+                ? 'bundled'
+                : skill.source_label.startsWith('Project') ||
+                    skill.source_label.startsWith('Ancestor')
+                  ? 'project'
+                  : 'user',
             content: loadSkillBody(skill.name, runtime.skills),
           })),
       commands:
