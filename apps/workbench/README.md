@@ -6,7 +6,7 @@ The renderer covers conversations, tool inputs and outputs, thinking, session tr
 
 ## Composition
 
-`CircleWorkbench` receives a session `RuntimePort`, bundled `WorkbenchPlugin` modules and a `ServiceRegistry`. Plugins register pages, inspector panels, context widgets and composer actions. A native host is supplied through the isolated preload bridge.
+`CircleWorkbench` receives a session `RuntimePort`, bundled `WorkbenchPlugin` modules and a `ServiceRegistry`. Plugins register pages, drawer modes and composer actions. A native host is supplied through the isolated preload bridge.
 
 `LiveRuntime` connects native commands and authoritative snapshots to the Circle core. Local storage holds presentation preferences and drafts; it cannot replace core-owned history or execution state. `PreviewRuntime` remains browser/layout tooling. The application registers Circle components only. Deferred platform previews are not initialized or exposed.
 
