@@ -187,6 +187,8 @@ export interface Palette {
   agent_bg: string;
   read_bg_hex: string;
   write_bg_hex: string;
+  /** The write green at label strength: readable on this background in both themes. */
+  write_hex: string;
   think_bg_hex: string;
   agent_bg_hex: string;
   // Thinking rows: blue, the terminal's own slot; dimmed for an expanded header.
@@ -241,6 +243,13 @@ export function buildPalette(
     agent_bg: bgSgr(tints.agent_bg),
     read_bg_hex: tints.read_bg,
     write_bg_hex: tints.write_bg,
+    write_hex: mixWithFloor(
+      rgbToHex(slots[2] ?? [60, 160, 90]),
+      bg,
+      0.2,
+      4.5,
+      surfaces,
+    ),
     think_bg_hex: tints.think_bg,
     agent_bg_hex: tints.agent_bg,
     reason: '\x1b[34m',

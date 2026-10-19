@@ -29,15 +29,17 @@ export function WorkspaceTrustSettings({
   const remove = async (workspace: Workspace) => {
     const sessions = workspaceSessions(snapshot, workspace.id);
     if (runtime.mode === 'live') {
-      // This dialog is the confirmation: tabs and tasks still running stop.
-      if (sessions.length)
-        await runtime.request('archive-workspace', {
-          workspaceId: workspace.id,
-          confirmed: true,
-        });
+      // Trust first: archiving also forgets the folder, after which its id
+      // no longer resolves. Always archive, even with no conversations, or
+      // the row stays and the remove reads as doing nothing. This dialog is
+      // the confirmation: tabs and tasks still running stop.
       await runtime.request('trust-workspace', {
         enabled: false,
         workspaceId: workspace.id,
+      });
+      await runtime.request('archive-workspace', {
+        workspaceId: workspace.id,
+        confirmed: true,
       });
     } else
       runtime.change((state) => {
@@ -47,11 +49,15 @@ export function WorkspaceTrustSettings({
       });
     setRemoving(null);
     notify(
-      runtime.mode === 'live'
-        ? t('{name} is no longer trusted and its sessions are archived', {
-            name: workspaceLabel(workspace),
-          })
-        : 'sample workspace removed from this preview',
+      runtime.mode !== 'live'
+        ? 'sample workspace removed from this preview'
+        : sessions.length
+          ? t('{name} is no longer trusted and its sessions are archived', {
+              name: workspaceLabel(workspace),
+            })
+          : t('{name} is no longer trusted and no longer listed', {
+              name: workspaceLabel(workspace),
+            }),
     );
   };
   const sessions = removing

@@ -4191,6 +4191,23 @@ test('a task started outside a project gets a trusted folder of its own under th
     'the new task lands in the moved folder',
   );
 });
+test('removing a folder from the settings page forgets an opened folder with no sessions', async (t) => {
+  const f = await setupScratch(t, [{ message: assistant('kept apart') }]);
+  const project = join(f.root, 'forgotten');
+  await mkdir(project);
+  const opened = await f.call('open-workspace', { path: project });
+  assert.equal(opened.ok, true, String(opened.error));
+  const workspaceId = (opened.data as { workspaceId: string }).workspaceId;
+  const listed = () =>
+    f.controller
+      .snapshot()
+      .workspaces.some((row) => row.path === realpathSync(project));
+  assert.equal(listed(), true, 'an opened folder is listed before removal');
+  const forgot = await f.call('archive-workspace', { workspaceId });
+  assert.equal(forgot.ok, true, String(forgot.error));
+  assert.equal(listed(), false, 'removal forgets the opened folder');
+});
+
 test('the whole application data folder is refused, not only its runtime home', async (t) => {
   // As the runtime worker runs: home is runtime-home inside the data folder, beside the
   // updates folder the updater clears

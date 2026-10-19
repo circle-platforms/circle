@@ -4620,8 +4620,12 @@ export class RuntimeController {
           .filter((row) => identity(row.workspace) === workspaceId);
         // A folder that only holds archived sessions is still one the settings page
         // can name, so ask workspaceById before deciding there is nothing to hide.
-        this.workspaceById(workspaceId);
+        const folder = this.workspaceById(workspaceId);
         await this.prepareArchive(rows, p.confirmed === true);
+        // Removing a folder from the settings page forgets it altogether: an
+        // opened folder with no sessions of its own would otherwise stay
+        // listed forever, which reads as a remove that does nothing.
+        this.opened.delete(folder);
         for (const row of rows) this.externalBlocked.add(row.id);
         for (const row of rows) {
           await this.externalFiles?.revokeSession(row.id);
