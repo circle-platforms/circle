@@ -140,6 +140,9 @@ async function captureModes(page, locale, theme, width) {
       if (kind === 'terminal') await page.locator('.term-tabbar').waitFor();
     }
     await settled(page);
+    // The pointer leaves the button it last pressed, so no button looks pressed in the
+    // picture but the ones that are.
+    await page.mouse.move(0, 0);
     await page.screenshot({
       animations: 'disabled',
       path: `${output}/${locale}-${theme}-${width}-${kind}.png`,
