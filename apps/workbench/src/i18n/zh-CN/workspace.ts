@@ -66,4 +66,6 @@ export const workspace: Record<string, string> = {
   'attempt {n}': '第 {n} 次执行',
   'external link is not allowed': '此链接不允许打开',
   'ready for review': '可供审阅',
+  'types in your terminal': '在你的终端里输入',
+  'stop circle in {name}': '停止 Circle 在 {name} 里的操作',
 };

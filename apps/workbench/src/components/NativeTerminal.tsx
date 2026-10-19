@@ -48,6 +48,7 @@ import {
 } from '../model/command-terminal-client';
 import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal } from './common';
+import { terminalTabNumbers } from '../../../desktop/src/terminal-tabs';
 import { TerminalTabs, type TerminalTab } from './TerminalTabs';
 import {
   DeviceNotices,
@@ -693,16 +694,13 @@ export function NativeTerminal({
       rememberDismissed(next);
       return next;
     });
-  // A shell keeps its number while others close around it: the cards in the conversation
-  // name it the same way. The number is its place among all this conversation's shells.
-  const shells = terminals
-    .filter(
-      (item) =>
-        item.sessionId === sessionId &&
-        !item.managedCommand &&
-        item.kind === 'shell',
-    )
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  // A shell keeps its number while others close around it, and the model's terminal tools
+  // and the cards in the conversation name it the same way: terminalTabNumbers is the rule.
+  const numbers = terminalTabNumbers(
+    terminals.filter((item) => item.sessionId === sessionId),
+  );
+  // What Circle is doing in each of your shells, by the terminal's id.
+  const circleIn = new Map(devices.local.map((row) => [row.terminal, row]));
   const tabs: TerminalTab[] = [
     ...visible.map((item): TerminalTab => {
       const command = !!item.managedCommand;
@@ -715,21 +713,28 @@ export function NativeTerminal({
         ? (item.managedCommand?.displayCommand ?? item.label)
         : named
           ? item.label
-          : t('terminal {n}', { n: shells.indexOf(item) + 1 });
+          : t('terminal {n}', { n: numbers.get(item.id) ?? 0 });
+      const circle = circleIn.get(item.id);
       return {
         key: `local:${item.id}`,
         label,
         title: `${item.cwd} · ${status(item)}`,
-        // A quiet shell has no dot; what runs for you or Circle does.
-        state: running
-          ? named
-            ? 'run'
-            : undefined
-          : failed
-            ? 'fail'
-            : named
-              ? 'done'
-              : undefined,
+        // A quiet shell has no dot; what runs for you or Circle does, and so does
+        // Circle waiting on you for this shell or working in it.
+        state:
+          circle?.state === 'waiting'
+            ? 'wait'
+            : circle?.state === 'operating'
+              ? 'run'
+              : running
+                ? named
+                  ? 'run'
+                  : undefined
+                : failed
+                  ? 'fail'
+                  : named
+                    ? 'done'
+                    : undefined,
         controls: `terminal-${item.id}`,
         // A command Circle runs cannot be closed until it ends: it has its stop.
         ...(command && running
@@ -763,8 +768,19 @@ export function NativeTerminal({
   const commandRunning =
     !!inFront?.managedCommand &&
     ['running', 'stopping'].includes(inFront.status);
-  // Ringed blue while a command Circle started runs in front.
-  const frame = commandRunning ? 'run' : '';
+  // What Circle is doing in the shell in front: it asks about it, works in it, or you hold it.
+  const circleInFront = inFront ? circleIn.get(inFront.id) : undefined;
+  // Ringed orange while Circle waits for your answer about this shell, blue while it
+  // works in it or a command it started runs here.
+  const frame =
+    circleInFront?.state === 'waiting'
+      ? 'wait'
+      : commandRunning || circleInFront?.state === 'operating'
+        ? 'run'
+        : '';
+  const frontName = inFront
+    ? (tabs.find((tab) => tab.key === `local:${inFront.id}`)?.label ?? '')
+    : '';
   const rowActions = deviceSelected ? (
     deviceSelected.held ? (
       <Button onClick={() => devices.detach(deviceSelected)}>
@@ -785,6 +801,22 @@ export function NativeTerminal({
     >
       <Square size={12} aria-hidden /> {t('stop')}
     </Button>
+  ) : circleInFront?.held ? (
+    <Button onClick={() => devices.giveBackTab(circleInFront)}>
+      {t('give back')}
+    </Button>
+  ) : circleInFront?.state === 'operating' ? (
+    <>
+      <Button onClick={() => devices.takeTab(circleInFront)}>
+        {t('take over')}
+      </Button>
+      <Button
+        aria-label={t('stop circle in {name}', { name: frontName })}
+        onClick={() => devices.stopTab(circleInFront)}
+      >
+        <Square size={12} aria-hidden /> {t('stop')}
+      </Button>
+    </>
   ) : null;
   const terminalMenu =
     deviceSelected || inFront ? (
@@ -1053,7 +1085,12 @@ export function NativeTerminal({
         </div>
       )}
       {!commandTerminal && (
-        <DeviceNotices devices={devices} row={deviceSelected} />
+        <DeviceNotices
+          devices={devices}
+          row={deviceSelected}
+          tab={circleInFront}
+          tabName={frontName}
+        />
       )}
       {!selected && !deviceRows.length && !error && (
         <div className="native-terminal-empty">

@@ -180,6 +180,107 @@ try {
     );
     assert.deepEqual(await calls(page, 'terminalDisconnect'), [['t1']]);
 
+    // Circle in your shells. Its question about the shell is an orange dot on the tab, an
+    // orange ring and a card in the conversation headed by the tab; its work is blue and
+    // puts take over and stop at the end of the row; a shell you hold gives back.
+    const card = page.locator('.inline-request[data-kind="approval"]');
+    assert.equal(
+      await card.locator('header strong').textContent(),
+      'terminal 1',
+    );
+    assert.match(
+      await card.locator('header span').first().textContent(),
+      /runs a shell command/,
+    );
+    assert.equal(
+      await card.locator('.approval-command').textContent(),
+      'npm run test -- reconnect',
+    );
+    const shellOne = page.getByRole('tab', { name: 'terminal 1' });
+    await shellOne.click();
+    await page.evaluate(() =>
+      window.terminalModeFixture.circle(1, { state: 'waiting' }),
+    );
+    await shellOne.locator('.term-dot[data-state="wait"]').waitFor();
+    assert.equal(
+      await page.locator('.term-frame').getAttribute('data-frame'),
+      'wait',
+    );
+    for (const name of ['take over', 'give back'])
+      assert.equal(
+        await page.getByRole('button', { name, exact: true }).count(),
+        0,
+        `no ${name} while Circle waits for your answer`,
+      );
+    await page.screenshot({ path: `${output}/tab-waiting-light-en.png` });
+    await page.evaluate(() =>
+      window.terminalModeFixture.circle(1, { state: 'operating' }),
+    );
+    await shellOne.locator('.term-dot[data-state="run"]').waitFor();
+    assert.equal(
+      await page.locator('.term-frame').getAttribute('data-frame'),
+      'run',
+    );
+    await page.screenshot({ path: `${output}/tab-operating-light-en.png` });
+    await page
+      .getByRole('button', { name: 'stop circle in terminal 1' })
+      .click();
+    assert.deepEqual(await calls(page, 'terminalStop'), [['local:terminal-1']]);
+    await page.waitForFunction(
+      () => !document.querySelector('.term-tab.on .term-dot'),
+    );
+    assert.equal(
+      await page.locator('.term-frame').getAttribute('data-frame'),
+      '',
+    );
+    await page.evaluate(() =>
+      window.terminalModeFixture.circle(1, { state: 'operating' }),
+    );
+    await page.getByRole('button', { name: 'take over', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'give back', exact: true })
+      .waitFor();
+    assert.deepEqual((await calls(page, 'terminalAttach')).at(-1), [
+      'local:terminal-1',
+    ]);
+    assert.equal(
+      await page.locator('.term-frame').getAttribute('data-frame'),
+      '',
+    );
+    await page.getByRole('button', { name: 'give back', exact: true }).click();
+    await page.waitForFunction(
+      () =>
+        ![...document.querySelectorAll('button')].some(
+          (node) => node.textContent.trim() === 'give back',
+        ),
+    );
+    assert.deepEqual((await calls(page, 'terminalDetach')).at(-1), [
+      'local:terminal-1',
+    ]);
+    // A shell Circle handed to you says why.
+    await page.evaluate(() =>
+      window.terminalModeFixture.circle(1, {
+        state: 'held',
+        held: 'handoff',
+        reason: 'the build asks for your password',
+      }),
+    );
+    await page
+      .getByText(
+        'Circle hands you terminal 1: the build asks for your password',
+      )
+      .waitFor();
+    await page
+      .getByRole('button', { name: 'give back', exact: true })
+      .waitFor();
+    await page.evaluate(() =>
+      window.terminalModeFixture.circle(1, {
+        state: 'idle',
+        held: undefined,
+        reason: undefined,
+      }),
+    );
+
     // Closing a shell stops it and takes its tab out of the row.
     await page.getByRole('tab', { name: 'terminal 2' }).click();
     await page.getByRole('button', { name: 'stop terminal 2' }).click();
@@ -241,6 +342,35 @@ try {
       .getByRole('button', { name: zh ? '接管' : 'take over', exact: true })
       .waitFor();
     await page.screenshot({ path: `${output}/device-${theme}-${locale}.png` });
+    // The card for Circle's first command in a shell is headed by the shell's tab, and
+    // while Circle works in it the row offers to take it over or stop Circle.
+    assert.equal(
+      await page
+        .locator('.inline-request[data-kind="approval"] header strong')
+        .textContent(),
+      zh ? '终端 1' : 'terminal 1',
+    );
+    await page.getByRole('tab', { name: zh ? '终端 1' : 'terminal 1' }).click();
+    await page.evaluate(() =>
+      window.terminalModeFixture.circle(1, { state: 'operating' }),
+    );
+    await page
+      .getByRole('button', { name: zh ? '接管' : 'take over', exact: true })
+      .waitFor();
+    await page
+      .getByRole('button', {
+        name: zh
+          ? '停止 Circle 在 终端 1 里的操作'
+          : 'stop circle in terminal 1',
+      })
+      .waitFor();
+    assert.equal(
+      await page.locator('.term-frame').getAttribute('data-frame'),
+      'run',
+    );
+    await page.screenshot({
+      path: `${output}/tab-operating-${theme}-${locale}.png`,
+    });
     assert.deepEqual(errors, []);
     await page.close();
   }

@@ -30,6 +30,7 @@ import {
 } from '../model/shortcuts';
 import { DiffBlock } from '../components/DiffBlock';
 import { BrowserApproval, requestReason } from './InlineRequest';
+import { approvalHeading } from '../model/reasons.ts';
 import { hasToolInput } from '../model/browser';
 import {
   afterDeleteRoute,
@@ -1445,7 +1446,9 @@ export function InteractionDialog({
       }}
       title={
         item?.kind === 'approval' && item.tool
-          ? [item.tool, requestReason(item.reason)].filter(Boolean).join(' · ')
+          ? [approvalHeading(item), requestReason(item.reason)]
+              .filter(Boolean)
+              .join(' · ')
           : (item?.title ?? t('request'))
       }
       wide={!!item?.before || !!item?.diff}

@@ -19,7 +19,27 @@ data.sessions = data.sessions.slice(0, 1).map((session) => ({
   attachments: [],
 }));
 data.activeSessionId = 'A';
-data.interactions = [];
+// Circle's first command in terminal 1 waits for an answer, as the runtime words it.
+data.interactions = [
+  {
+    id: 'approval-tab',
+    sessionId: 'A',
+    kind: 'approval',
+    title: 'terminal_send needs your permission',
+    tool: 'terminal_send',
+    command: 'npm run test -- reconnect',
+    reason: 'runs a shell command',
+    input: {
+      session: 'local:terminal-1',
+      terminal: 'local:terminal-1',
+      ordinal: 1,
+      first_use: true,
+    },
+    choices: ['approve', 'always', 'reject'],
+    status: 'pending',
+    revision: 1,
+  },
+];
 data.requests = [];
 data.agents = [];
 // The command Circle runs in the background has a job, and the job names its terminal.
@@ -178,11 +198,20 @@ const profiles = [
     user: 'admin',
   },
 ];
+// What Circle is doing in each shell of yours, as the runtime tells the window.
+let local: any[] = [1, 2].map((n) => ({
+  id: `local:terminal-${n}`,
+  terminal: `terminal-${n}`,
+  ordinal: n,
+  state: 'idle',
+  allowed: false,
+}));
 const state = () => ({
   sessionId: 'terminal:A',
   conversation: 'A',
   sessions: devices,
   profiles,
+  local,
 });
 const pushState = () => {
   for (const listener of terminalListeners)
@@ -233,6 +262,9 @@ window.circleDesktop = {
     devices = devices.map((row) =>
       row.id === id ? { ...row, held: 'attach' } : row,
     );
+    local = local.map((row) =>
+      row.id === id ? { ...row, state: 'held', held: 'attach' } : row,
+    );
     pushState();
     return state();
   },
@@ -240,6 +272,19 @@ window.circleDesktop = {
     record('terminalDetach', id);
     devices = devices.map((row) =>
       row.id === id ? { ...row, held: '' } : row,
+    );
+    local = local.map((row) =>
+      row.id === id
+        ? { ...row, state: 'idle', held: undefined, reason: undefined }
+        : row,
+    );
+    pushState();
+    return state();
+  },
+  terminalStop: async (_: string, id: string) => {
+    record('terminalStop', id);
+    local = local.map((row) =>
+      row.id === id ? { ...row, state: 'idle' } : row,
     );
     pushState();
     return state();
@@ -301,6 +346,13 @@ connectWorkspaceStreams(workspaceId, 'A');
 Object.assign(window, {
   terminalModeFixture: {
     calls,
+    /** What Circle is doing in one of your shells changes, as the runtime tells it. */
+    circle: (n: number, patch: Record<string, unknown>) => {
+      local = local.map((row) =>
+        row.ordinal === n ? { ...row, ...patch } : row,
+      );
+      pushState();
+    },
     /** The running command ends, with an exit code. */
     endCommand: (exitCode: number) => {
       const item = items.find((one) => one.id === 'terminal-3')!;

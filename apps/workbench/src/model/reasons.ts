@@ -28,6 +28,36 @@ const REASONS: Record<string, () => string> = {
   'gives the page files': () => t('gives the page files'),
   'keeps a download': () => t('keeps a download'),
   'clicks a coordinate target': () => t('clicks a coordinate target'),
+  'types in your terminal': () => t('types in your terminal'),
 };
 export const requestReason = (reason?: string) =>
   reason ? (REASONS[reason]?.() ?? reason) : '';
+
+/**
+ * The number of the terminal tab of yours a terminal call is for, when it is one: the
+ * runtime adds `terminal` (`local:<id>`) and `ordinal` to such a call's input.
+ */
+export function terminalTabNumber(item: {
+  tool?: string;
+  input?: Record<string, unknown>;
+}): number | undefined {
+  const input = item.input;
+  if (
+    !item.tool?.startsWith('terminal_') ||
+    typeof input?.terminal !== 'string' ||
+    !input.terminal.startsWith('local:') ||
+    typeof input.ordinal !== 'number'
+  )
+    return undefined;
+  return input.ordinal;
+}
+
+/** What an approval card is headed with: the tool, or the terminal tab it is for. */
+export function approvalHeading(item: {
+  title: string;
+  tool?: string;
+  input?: Record<string, unknown>;
+}): string {
+  const tab = terminalTabNumber(item);
+  return tab ? t('terminal {n}', { n: tab }) : (item.tool ?? item.title);
+}

@@ -9,6 +9,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { hexToRgb, palette, terminalAnsiHex } from '../../../../src/ink/theme';
 import type {
+  LocalTerminalRow,
   TerminalProfileRow,
   TerminalSessionRow,
   TerminalState,
@@ -49,6 +50,8 @@ export interface DeviceTerminals {
   asking: TerminalState['pendingKey'];
   /** A console Circle handed to the person. */
   handoff: TerminalState['handoff'];
+  /** What Circle is doing in each of the person's own terminal tabs. */
+  local: LocalTerminalRow[];
   /** Reach a saved device; the id of the console that opened. */
   connectProfile: (name: string) => Promise<string>;
   /** Reach a device by its address, without saving it; the id of the console. */
@@ -56,6 +59,11 @@ export interface DeviceTerminals {
   disconnect: (row: TerminalSessionRow) => void;
   attach: (row: TerminalSessionRow) => void;
   detach: (row: TerminalSessionRow) => void;
+  /** Take one of the person's terminal tabs from Circle, or give it back. */
+  takeTab: (row: LocalTerminalRow) => void;
+  giveBackTab: (row: LocalTerminalRow) => void;
+  /** End what Circle is doing in a tab, without taking it. */
+  stopTab: (row: LocalTerminalRow) => void;
   answerHostKey: (decision: 'once' | 'always' | 'reject') => void;
 }
 
@@ -69,6 +77,7 @@ export function useDeviceTerminals(sessionId: string): DeviceTerminals {
     profiles: state?.profiles ?? [],
     asking: state?.pendingKey,
     handoff: state?.handoff,
+    local: state?.local ?? [],
     connectProfile: async (name) => {
       const next = await host!.terminalConnect(sessionId, name);
       return next.sessions.at(-1)?.id ?? '';
@@ -81,6 +90,11 @@ export function useDeviceTerminals(sessionId: string): DeviceTerminals {
       void host?.terminalDisconnect(sessionId, row.id).catch(quiet),
     attach: (row) => void host?.terminalAttach(sessionId, row.id).catch(quiet),
     detach: (row) => void host?.terminalDetach(sessionId, row.id).catch(quiet),
+    takeTab: (row) => void host?.terminalAttach(sessionId, row.id).catch(quiet),
+    giveBackTab: (row) =>
+      void host?.terminalDetach(sessionId, row.id).catch(quiet),
+    stopTab: (row) =>
+      void host?.terminalStop?.(sessionId, row.id)?.catch(quiet),
     answerHostKey: (decision) =>
       void host?.terminalHostKey(sessionId, decision).catch(quiet),
   };
@@ -236,18 +250,32 @@ export function DeviceSurface({
 
 /**
  * What a device asks of you outside its screen: to trust a host key before the login goes
- * on, and the console Circle handed to you.
+ * on, and the console Circle handed to you. A tab of yours that Circle handed over says why.
  */
 export function DeviceNotices({
   devices,
   row,
+  tab,
+  tabName,
 }: {
   devices: DeviceTerminals;
   row: TerminalSessionRow | undefined;
+  /** What Circle is doing in the tab in front, when that is a terminal tab of yours. */
+  tab?: LocalTerminalRow;
+  tabName?: string;
 }) {
   const { asking, handoff } = devices;
   return (
     <>
+      {tab?.held === 'handoff' && (
+        <div className="terminal-handoff" role="status">
+          <Hand size={14} />
+          <span>
+            {t('Circle hands you {name}', { name: tabName ?? '' })}
+            {tab.reason ? `: ${tab.reason}` : ''}
+          </span>
+        </div>
+      )}
       {asking && (
         <div className="terminal-ask" role="alert">
           <KeyRound size={14} />
