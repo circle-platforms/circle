@@ -367,16 +367,21 @@ export function Overview({
               <Row
                 key={agent.id}
                 icon={Bot}
-                title={label.detail || label.name}
+                // What a waiting subagent asked to run is a pointer's rest away.
+                title={
+                  asked
+                    ? (asked.command ?? asked.tool ?? asked.title)
+                    : label.detail || label.name
+                }
                 onClick={() => onPanel('agents', agent.id)}
                 end={
                   <>
                     <Dot state={agentDot(agent, !!asked)} />
-                    {asked ? (
-                      <code>{asked.command ?? asked.tool ?? asked.title}</code>
-                    ) : (
-                      agentActivityText(agent)
-                    )}
+                    {asked
+                      ? asked.kind === 'approval'
+                        ? t('waiting for your approval')
+                        : t('waiting for you')
+                      : agentActivityText(agent)}
                   </>
                 }
               >

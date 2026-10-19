@@ -19,6 +19,8 @@ const WORDS = {
     tokens: 'tokens',
     cost: 'cost',
     cache: 'cache',
+    waitingApproval: 'waiting for your approval',
+    waiting: 'waiting for you',
   },
   'zh-CN': {
     plan: '计划',
@@ -27,6 +29,9 @@ const WORDS = {
     tokens: 'token 数',
     cost: '费用',
     cache: '缓存',
+    // The words of the design's overview board.
+    waitingApproval: '等你批准',
+    waiting: '等待你处理',
   },
 };
 let browser;
@@ -168,11 +173,74 @@ try {
       'not the tokens sent and received over the whole session',
     );
 
+    // A subagent waiting for an approval says so in the design's words, with the
+    // orange dot; what it asked to run is the row's tooltip.
+    await page.evaluate(() =>
+      window.readabilityFixture.runtime.change((state) => {
+        state.agents[0].status = 'waiting';
+        state.interactions = [
+          {
+            id: 'agent-approval',
+            sessionId: 'session1',
+            kind: 'approval',
+            title: 'execute needs your permission',
+            tool: 'execute',
+            command: 'rm -rf dist',
+            status: 'pending',
+            revision: 1,
+            origin: { agent: 'overview-agent', name: 'explore' },
+          },
+        ];
+      }),
+    );
+    const agentRow = progress.locator('.overview-row').filter({
+      has: page.locator('.overview-name').getByText('explore', { exact: true }),
+    });
+    await agentRow
+      .locator('.overview-end')
+      .getByText(words.waitingApproval, { exact: true })
+      .waitFor();
+    assert.equal(await agentRow.getAttribute('title'), 'rm -rf dist');
+    assert.equal(
+      await agentRow.locator('.overview-end').textContent(),
+      words.waitingApproval,
+      'the command is not in the row',
+    );
+    assert.equal(
+      await agentRow.locator('.overview-dot').getAttribute('data-state'),
+      'wait',
+    );
+    // Any other request is waited on in the words every waiting subagent has.
+    await page.evaluate(() =>
+      window.readabilityFixture.runtime.change((state) => {
+        state.interactions = [
+          {
+            id: 'agent-question',
+            sessionId: 'session1',
+            kind: 'question',
+            title: 'Which target should the build use?',
+            choices: ['debug', 'release'],
+            status: 'pending',
+            revision: 1,
+            origin: { agent: 'overview-agent', name: 'explore' },
+          },
+        ];
+      }),
+    );
+    await agentRow
+      .locator('.overview-end')
+      .getByText(words.waiting, { exact: true })
+      .waitFor();
+    assert.equal(
+      await agentRow.getAttribute('title'),
+      'Which target should the build use?',
+    );
+
     assert.deepEqual(errors, []);
     await page.close();
   }
   console.log(
-    'overview cards: in progress and context, in English and Chinese',
+    'overview cards: in progress, context and waiting subagents, in English and Chinese',
   );
 } finally {
   await browser?.close();
