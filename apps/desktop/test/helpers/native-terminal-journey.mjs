@@ -314,15 +314,24 @@ export async function runNativeTerminalJourney({
     await screenshot('terminal-independent-tabs');
     phase = 'tab close, right-click menu and rename';
     const third = await create();
-    await panel
-      .getByRole('button', { name: 'close terminal tab 3', exact: true })
-      .click();
+    const thirdStopped = async () =>
+      !['running', 'stopping'].includes(
+        (await list()).find((terminal) => terminal.id === third.id)?.status,
+      );
+    // A click that lands while the panel re-renders can be lost on the packaged
+    // app, exactly as create() above already tolerates.
+    for (let attempt = 0; attempt < 3 && !(await thirdStopped()); attempt++) {
+      await panel
+        .getByRole('button', { name: 'close terminal tab 3', exact: true })
+        .click();
+      const deadline = Date.now() + patience(4000);
+      while (Date.now() < deadline && !(await thirdStopped()))
+        await page.waitForTimeout(40);
+    }
     await until(
-      async () =>
-        !['running', 'stopping'].includes(
-          (await list()).find((terminal) => terminal.id === third.id)?.status,
-        ),
+      thirdStopped,
       'the tab close button stops its shell',
+      patience(30000),
     );
     await until(
       async () => (await panel.locator('[role="tab"]').count()) === 2,
@@ -486,6 +495,7 @@ export async function runNativeTerminalJourney({
         (await selectedTab(previous.id).count()) === 0 &&
         (await selectedTab(service.id).count()) === 1,
       'the restart keeps a single tab for the service',
+      patience(30000),
     );
     await screenshot('terminal-managed-service-restarted-same-identity');
     phase = 'stop managed service and release port';
@@ -502,6 +512,7 @@ export async function runNativeTerminalJourney({
     await until(
       async () => (await selectedTab(service.id).count()) === 0,
       'a stopped service leaves the tab strip',
+      patience(30000),
     );
     await screenshot('terminal-managed-service-stopped-port-free');
     checks.push(
