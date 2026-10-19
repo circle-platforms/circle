@@ -15,6 +15,7 @@ import {
 import { useState, type ReactNode } from 'react';
 import { useRuntime } from '../app/context';
 import { FileIcon } from '../components/FileIcon';
+import { PendingOperations } from './PendingOperations';
 import { useSources } from '../components/SourceNavigation';
 import { copyText, desktopHost } from '../host';
 import { t, tn } from '../i18n';
@@ -276,6 +277,10 @@ export function Overview({
 
   return (
     <aside className="overview" aria-label={t('overview')}>
+      {/* Operations an interrupted run left for you to settle: shown only while there are any. */}
+      {runtime.mode === 'live' && (
+        <PendingOperations key={session.id} sessionId={session.id} card />
+      )}
       <Card
         id="environment"
         title={t('environment')}

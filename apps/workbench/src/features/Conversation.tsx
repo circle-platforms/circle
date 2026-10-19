@@ -46,6 +46,7 @@ import {
 } from './BrowserDialog';
 import { useBrowserState } from './useBrowserState';
 import { InlineRequest } from './InlineRequest';
+import { TaskReviewCard } from './TaskReviewCard';
 import { EffortMenu, ModeMenu, ModelMenu, MODE_TEXT } from './Composer';
 import { nextMode, sessionMode } from '../model/state';
 import type { SessionMode } from '../model/types';
@@ -638,6 +639,10 @@ export function Conversation({
   const toolIds = new Set(
     messages.flatMap((message) => (message.tool ? [message.tool.id] : [])),
   );
+  // In a task's own conversation, the task: once it has finished it waits for your review.
+  const taskAgent = snapshot.agents.find(
+    (agent) => agent.task && agent.resourceSessionId === session.id,
+  );
   const loose = pending.filter(
     (item) =>
       !(item.kind === 'approval' && item.callId && toolIds.has(item.callId)),
@@ -858,6 +863,12 @@ export function Conversation({
                   </div>
                 )
               }
+            />
+          )}
+          {taskAgent && (
+            <TaskReviewCard
+              agent={taskAgent}
+              onChanges={() => onPanel('changes')}
             />
           )}
           {loose.map((item) => (

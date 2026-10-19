@@ -712,9 +712,16 @@ export function NativeTerminal({
       rememberDismissed(next);
       return next;
     });
-  const shells = visible.filter(
-    (item) => !item.managedCommand && item.kind === 'shell',
-  );
+  // A shell keeps its number while others close around it: the cards in the conversation
+  // name it the same way. The number is its place among all this conversation's shells.
+  const shells = terminals
+    .filter(
+      (item) =>
+        item.sessionId === sessionId &&
+        !item.managedCommand &&
+        item.kind === 'shell',
+    )
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   const tabs: TerminalTab[] = [
     ...visible.map((item): TerminalTab => {
       const command = !!item.managedCommand;
@@ -723,13 +730,14 @@ export function NativeTerminal({
         item.status === 'failed' ||
         (!running && ((item.exitCode ?? 0) !== 0 || !!item.signal));
       const named = command || item.kind === 'service';
+      const label = command
+        ? (item.managedCommand?.displayCommand ?? item.label)
+        : named
+          ? item.label
+          : t('terminal {n}', { n: shells.indexOf(item) + 1 });
       return {
         key: `local:${item.id}`,
-        label: command
-          ? (item.managedCommand?.displayCommand ?? item.label)
-          : named
-            ? item.label
-            : t('terminal {n}', { n: shells.indexOf(item) + 1 }),
+        label,
         title: `${item.cwd} · ${status(item)}`,
         // A quiet shell has no dot; what runs for you or Circle does.
         state: running
@@ -746,7 +754,9 @@ export function NativeTerminal({
         ...(command && running
           ? {}
           : {
-              closeLabel: running ? t('stop terminal') : t('close terminal'),
+              closeLabel: running
+                ? t('stop {name}', { name: label })
+                : t('close {name}', { name: label }),
               onClose: () => {
                 if (running) void stopTerminal(item.id);
                 closeTab(item.id);
@@ -799,7 +809,7 @@ export function NativeTerminal({
     deviceSelected || inFront ? (
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
-          <IconButton label={t('more')}>
+          <IconButton label={t('terminal menu')}>
             <Ellipsis size={14} />
           </IconButton>
         </DropdownMenu.Trigger>

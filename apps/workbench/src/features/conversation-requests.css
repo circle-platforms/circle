@@ -66,3 +66,60 @@
   flex: 0 0 auto;
   align-self: center;
 }
+
+/* A finished task waits for your review, at the end of the task's own conversation. */
+.task-review-card {
+  display: flex;
+  flex-direction: column;
+}
+.task-review-card .task-review-files {
+  margin: 0;
+  font-size: var(--ui-small);
+}
+.task-review-card .task-review-criterion {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-review-card .task-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--ui-size);
+  line-height: 1.5;
+}
+.task-review-card input[type='checkbox'] {
+  flex: none;
+  width: auto;
+  margin: 3px 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.task-review-card textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--ui-size);
+  resize: vertical;
+}
+.task-review-card .task-review-reject {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.task-review-card .task-review-reject label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-review-card .task-review-label {
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}

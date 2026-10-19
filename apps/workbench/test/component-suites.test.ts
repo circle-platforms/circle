@@ -70,11 +70,8 @@ test('the component gate preserves prior journeys and includes each native regre
           'large-file-tree-ui.mjs',
           'settings-navigation-ui.mjs',
           'child-terminal-rendered-match-ui.mjs',
-          'tasks-panel-ui.mjs',
-          'task-config-recovery-ui.mjs',
           'paste-default-ui.mjs',
           'native-editable-shortcuts-ui.mjs',
-          'tasks-refresh-race-ui.mjs',
           'windowed-mount-ui.mjs',
           'native-terminal-search-ui.mjs',
           'original-shell-ui.mjs',
@@ -108,13 +105,12 @@ test('the component gate preserves prior journeys and includes each native regre
           'terminal-accessibility-ui.mjs',
           'git-owner-ui.mjs',
           'tool-text-output-ui.mjs',
+          'terminal-mode-ui.mjs',
+          'screenshot-thumb-ui.mjs',
+          'task-review-ui.mjs',
         ].includes(name),
     ),
     original,
-  );
-  assert.equal(
-    COMPONENT_SUITES.filter((name) => name === 'tasks-panel-ui.mjs').length,
-    1,
   );
   assert.equal(
     COMPONENT_SUITES.filter((name) => name === 'windowed-mount-ui.mjs').length,
@@ -128,7 +124,6 @@ test('the component gate preserves prior journeys and includes each native regre
   for (const name of [
     'git-conflict-selector-ui.mjs',
     'child-terminal-rendered-match-ui.mjs',
-    'tasks-refresh-race-ui.mjs',
     'paste-default-ui.mjs',
     'native-editable-shortcuts-ui.mjs',
     'original-shell-ui.mjs',
@@ -162,17 +157,12 @@ test('the component gate preserves prior journeys and includes each native regre
     'terminal-accessibility-ui.mjs',
     'git-owner-ui.mjs',
     'tool-text-output-ui.mjs',
+    'terminal-mode-ui.mjs',
+    'screenshot-thumb-ui.mjs',
+    'task-review-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
   assert.equal(new Set(COMPONENT_SUITES).size, 57);
-});
-
-test('task configuration recovery remains a required component journey', () => {
-  assert.equal(
-    COMPONENT_SUITES.filter((name) => name === 'task-config-recovery-ui.mjs')
-      .length,
-    1,
-  );
 });
 
 test('safe file undo remains a required component journey', () => {

@@ -20,9 +20,6 @@ export const COMPONENT_SUITES = Object.freeze([
   'safe-file-undo-ui.mjs',
   'large-file-tree-ui.mjs',
   'recovered-input-ui.mjs',
-  'tasks-panel-ui.mjs',
-  'task-config-recovery-ui.mjs',
-  'tasks-refresh-race-ui.mjs',
   'git-continuity-ui.mjs',
   'git-conflict-selector-ui.mjs',
   'child-terminal-rendered-match-ui.mjs',
@@ -63,6 +60,9 @@ export const COMPONENT_SUITES = Object.freeze([
   'browser-chrome-ui.mjs',
   'github-authorization-phase-ui.mjs',
   'terminal-accessibility-ui.mjs',
+  'terminal-mode-ui.mjs',
+  'screenshot-thumb-ui.mjs',
+  'task-review-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */

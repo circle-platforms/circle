@@ -22,10 +22,13 @@ interface PendingOperation {
 export function PendingOperations({
   sessionId,
   refreshKey = 0,
+  card = false,
 }: {
   sessionId: string;
   /** Changes when the panel's refresh is pressed. */
   refreshKey?: number;
+  /** Drawn as a card of the overview. */
+  card?: boolean;
 }) {
   const [rows, setRows] = useState<PendingOperation[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -112,7 +115,7 @@ export function PendingOperations({
   };
   return (
     <section
-      className="task-operations panel-section"
+      className={`task-operations panel-section${card ? ' overview-card' : ''}`}
       aria-label={t('needs your review')}
       aria-busy={busy}
     >
