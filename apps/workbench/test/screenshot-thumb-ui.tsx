@@ -53,6 +53,14 @@ session.messages = [
         content: picture,
         mime: 'image/png',
       },
+      // A tool can bring back a GIF too: the clipboard is given it as a PNG
+      {
+        id: 'shot-2',
+        name: 'spinner.gif',
+        kind: 'image',
+        content: 'R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=',
+        mime: 'image/gif',
+      },
     ],
   },
   {

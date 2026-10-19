@@ -1061,6 +1061,7 @@ app
         : await dialog.showSaveDialog(window!, {
             title: text('export session'),
             defaultPath: name,
+            properties: ['showOverwriteConfirmation'],
           });
       if (result.canceled || !result.filePath) return { saved: false };
       await writeFile(result.filePath, content, {
@@ -1097,6 +1098,9 @@ app
         : await dialog.showSaveDialog(window!, {
             title: text('save image'),
             defaultPath: name,
+            // Every screenshot has a name like the last one: asking before replacing a
+            // file is the default on macOS and Windows, and asked for here on Linux
+            properties: ['showOverwriteConfirmation'],
           });
       if (result.canceled || !result.filePath) return { saved: false };
       await writeFile(result.filePath, bytes, { mode: 0o600 });
