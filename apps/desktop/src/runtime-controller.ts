@@ -1801,6 +1801,7 @@ export class RuntimeController {
       ],
       tasks: ['list', 'events', 'artifacts', 'readArtifact'],
       delivery: ['status', 'checks', 'logs'],
+      pulls: ['overview', 'failedLog'],
     };
     const read =
       (request.service === 'language' &&

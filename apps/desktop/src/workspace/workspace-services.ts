@@ -14,6 +14,7 @@ import {
 import type { LspServer } from '../../../../src/lsp_tool.ts';
 import { WorkspaceDebugService } from './debug.ts';
 import { DeliveryService } from './delivery.ts';
+import { PullRequestReader } from './pulls.ts';
 import type { NativeGitHubConnection } from './github-connection.ts';
 import {
   DeliveryCycleService,
@@ -90,6 +91,7 @@ export class WorkspaceServices {
   private releasing = new Set<string>();
   private loginOwners = new Map<string, string>();
   private activeDelivery?: DeliveryService;
+  private pullRequests?: PullRequestReader;
   private watch: ReturnType<WorkspaceDocuments['watch']>;
   /** Subscription identity only. Session authorization is checked by the host. */
   get id(): string {
@@ -508,6 +510,13 @@ export class WorkspaceServices {
         params.action === 'cancel');
     if (this.failure && !emergency) throw this.failure;
     this.sessions.add(sessionId);
+    if (service === 'pulls') {
+      // What the overview shows of the repository and its pull requests; reads only.
+      this.pullRequests ??= new PullRequestReader(this.options.workspaceRoot, {
+        ghPath: this.options.ghPath,
+      });
+      return this.pullRequests.call(method, params);
+    }
     if (service === 'cycles') {
       const cycles = await this.cyclesFor(sessionId);
       if (this.ownerCycles.get(sessionId)?.stopped)

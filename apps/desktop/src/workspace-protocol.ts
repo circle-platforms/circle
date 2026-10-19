@@ -10,7 +10,8 @@ export type WorkspaceService =
   | 'language'
   | 'debug'
   | 'tasks'
-  | 'delivery';
+  | 'delivery'
+  | 'pulls';
 
 export interface WorkspaceServiceRequest {
   service: WorkspaceService;
@@ -122,6 +123,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'login',
     'ready',
   ]),
+  pulls: new Set(['overview', 'failedLog']),
 };
 
 export function validateWorkspaceRequest(
