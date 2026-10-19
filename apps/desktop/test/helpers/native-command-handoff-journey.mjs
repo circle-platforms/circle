@@ -4,6 +4,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
 import { assertRenderedTerminalMatch } from './native-terminal-rendered-match.mjs';
+import { terminalActionEnabled } from './native-terminal-journey.mjs';
 export const commandHandoffPrompt =
   'NATIVE_COMMAND_HANDOFF: run the owned interactive fixture';
 export async function createNativeCommandHandoffFixture(workspace, nodePath) {
@@ -236,9 +237,8 @@ export async function runNativeCommandHandoffJourney({
       until,
     });
     await page.screenshot({ path: join(output, 'command-handoff-live.png') });
-    await terminal
-      .getByRole('button', { name: 'stop terminal', exact: true })
-      .click();
+    // A command Circle runs is stopped from the end of the tab row, while it runs.
+    await terminal.getByRole('button', { name: 'stop', exact: true }).click();
     let final;
     await until(async () => {
       final = await observed();
@@ -268,16 +268,12 @@ export async function runNativeCommandHandoffJourney({
       Number(await readFile(join(workspace, 'native-command-pid'), 'utf8')),
       pid,
     );
+    // The ended command offers neither a stop nor a restart, which would run it again.
+    await terminal
+      .getByRole('button', { name: 'stop', exact: true })
+      .waitFor({ state: 'detached' });
     assert.equal(
-      await terminal
-        .getByRole('button', { name: 'restart terminal', exact: true })
-        .isEnabled(),
-      false,
-    );
-    assert.equal(
-      await terminal
-        .getByRole('button', { name: 'stop terminal', exact: true })
-        .isEnabled(),
+      await terminalActionEnabled(page, terminal, 'restart terminal'),
       false,
     );
     receipt.owner = owner;

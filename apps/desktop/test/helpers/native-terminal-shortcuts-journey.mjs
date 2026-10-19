@@ -178,9 +178,11 @@ export async function runNativeTerminalShortcutsJourney({
     assert.deepEqual(await response.json(), { id: fixture.id, pid: ready.pid });
     receipt.childPid = ready.pid;
     receipt.port = ready.port;
+    // Pressing the open mode's button again closes the drawer; the shell keeps running.
     await page
-      .getByRole('button', { name: 'close inspector', exact: true })
+      .getByRole('button', { name: 'terminal panel', exact: true })
       .click();
+    await panel().waitFor({ state: 'hidden' });
     process.kill(ready.pid, 0);
     await select();
     const reopened = (await query('terminal', 'list')).find(
@@ -324,8 +326,15 @@ export async function runNativeTerminalShortcutsJourney({
     // Stop is only teardown, after the independent Control+C oracle above.
     try {
       await select();
+      // The tab's × stops the shell and takes its tab out of the row.
       await panel()
-        .getByRole('button', { name: 'stop terminal', exact: true })
+        .locator('.term-tab')
+        .filter({
+          has: page.locator(
+            `[role="tab"][aria-controls="terminal-${terminal.id}"]`,
+          ),
+        })
+        .locator('.term-tab-x')
         .click();
       await until(async () => {
         const value = (await query('terminal', 'list')).find(

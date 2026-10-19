@@ -70,6 +70,22 @@ export async function runNativeInputRecovery({
     }
   };
   const current = () => readNativeRecoverySession(state, page, sessionId);
+  // The conversation's row in the sidebar, which folds itself for a document in the
+  // drawer; the person can always show it again.
+  const openSession = async () => {
+    const row = page.locator(
+      `.sidebar .session-link[href="#/session/${sessionId}"]:visible`,
+    );
+    if (!(await row.count()))
+      await page
+        .getByRole('button', { name: 'show or hide the sidebar', exact: true })
+        .click();
+    await row.first().click();
+    await page.waitForFunction(
+      (id) => location.hash === '#/session/' + id,
+      sessionId,
+    );
+  };
   const composer = () =>
     page.getByRole('textbox', { name: 'message', exact: true });
   let pasteAttempt = 0;
@@ -262,10 +278,7 @@ export async function runNativeInputRecovery({
       });
     }
   };
-  await page
-    .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-    .first()
-    .click();
+  await openSession();
   assert.equal(
     (await current()).state,
     'waiting',
@@ -318,10 +331,7 @@ export async function runNativeInputRecovery({
   await relaunch();
   page = getPage();
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
-  await page
-    .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-    .first()
-    .click();
+  await openSession();
   const region = page.getByRole('region', {
     name: 'unsent messages',
     exact: true,
