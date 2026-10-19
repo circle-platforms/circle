@@ -1784,7 +1784,7 @@ export class RuntimeController {
     const reads: Record<string, string[]> = {
       documents: ['read', 'refresh', 'resolveSource'],
       terminal: ['list', 'replay', 'resolveCommand'],
-      git: ['status', 'snapshot', 'diff', 'branches'],
+      git: ['status', 'snapshot', 'changes', 'diff', 'branches'],
       debug: [
         'snapshot',
         'list',

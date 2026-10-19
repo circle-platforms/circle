@@ -60,6 +60,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   git: new Set([
     'status',
     'snapshot',
+    'changes',
     'applyPatch',
     'conflictContinue',
     'conflictAbort',

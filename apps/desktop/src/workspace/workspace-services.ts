@@ -973,6 +973,7 @@ export class WorkspaceServices {
         ![
           'status',
           'snapshot',
+          'changes',
           'diff',
           'branches',
           'history',
