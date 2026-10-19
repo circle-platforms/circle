@@ -26,7 +26,7 @@ export function DrawerHandle({
       className="resize-handle cluster-handle"
       role="separator"
       aria-orientation="vertical"
-      aria-label={t('resize inspector')}
+      aria-label={t('resize drawer')}
       aria-valuemin={min}
       aria-valuemax={Math.max(min, max)}
       aria-valuenow={width}

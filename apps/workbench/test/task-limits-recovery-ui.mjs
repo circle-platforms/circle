@@ -45,7 +45,7 @@ try {
       .filter({ hasText: 'invalid agents' })
       .waitFor();
     const start = section.getByRole('button', {
-      name: zh ? '启动就绪任务' : 'start ready tasks',
+      name: zh ? '启动排队的任务' : 'start queued tasks',
       exact: true,
     });
     assert.equal(await start.count(), 0, 'nothing to start while broken');

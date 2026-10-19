@@ -87,7 +87,7 @@ try {
     const menu = () =>
       overview
         .getByRole('button', {
-          name: w('pull request 186 actions', '拉取请求 #186 的操作'),
+          name: w('pull request #186 actions', 'PR #186 的操作'),
           exact: true,
         })
         .click();

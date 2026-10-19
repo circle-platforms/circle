@@ -223,7 +223,7 @@ try {
     );
     await page.screenshot({ path: `${output}/tab-operating-light-en.png` });
     await page
-      .getByRole('button', { name: 'stop circle in terminal 1' })
+      .getByRole('button', { name: 'stop Circle in terminal 1' })
       .click();
     assert.deepEqual(await calls(page, 'terminalStop'), [['local:terminal-1']]);
     await page.waitForFunction(
@@ -361,7 +361,7 @@ try {
       .getByRole('button', {
         name: zh
           ? '停止 Circle 在 终端 1 里的操作'
-          : 'stop circle in terminal 1',
+          : 'stop Circle in terminal 1',
       })
       .waitFor();
     assert.equal(

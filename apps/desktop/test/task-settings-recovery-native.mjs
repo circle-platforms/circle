@@ -321,24 +321,22 @@ try {
   await page.screenshot({
     path: join(output, 'restarted-still-explicit-start-required.png'),
   });
-  // The settings page says the queued tasks wait, and its start is the only thing that
-  // lets them run: the next real scripted model request follows that press alone.
+  // The settings page offers to start the queued tasks, and that start is the only thing
+  // that lets them run: the next real scripted model request follows that press alone.
   const restartedSection = await openTaskLimits();
   await restartedSection
-    .getByText('limits repaired; start queued tasks when ready', {
-      exact: false,
-    })
+    .getByRole('button', { name: 'start queued tasks', exact: true })
     .waitFor();
   assert.equal((await requests()).length, 1);
   await restartedSection
-    .getByRole('button', { name: 'start ready tasks', exact: true })
+    .getByRole('button', { name: 'start queued tasks', exact: true })
     .click();
   await until(
     async () => (await requests()).length >= 2,
     'the settings page start runs the queued model request',
   );
   await restartedSection
-    .getByRole('button', { name: 'start ready tasks', exact: true })
+    .getByRole('button', { name: 'start queued tasks', exact: true })
     .waitFor({ state: 'detached' });
   receipt.checks.push(
     'only the explicit start on the settings page causes the next real scripted model request',

@@ -534,7 +534,7 @@ export function Overview({
                     <button
                       type="button"
                       className="icon-button"
-                      aria-label={t('pull request {number} actions', {
+                      aria-label={t('pull request #{number} actions', {
                         number: pull.number,
                       })}
                     >

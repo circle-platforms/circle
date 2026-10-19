@@ -144,7 +144,7 @@ try {
     // The drawer's own edge is dragged. Widened past what the conversation can spare beside
     // the overview, it takes the overview's room: the overview steps aside.
     const handle = page.getByRole('separator', {
-      name: 'resize inspector',
+      name: 'resize drawer',
       exact: true,
     });
     const dragBy = async (dx) => {

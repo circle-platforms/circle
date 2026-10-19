@@ -117,8 +117,6 @@ export const developer: Record<string, string> = {
   'active agents': '活跃代理',
   'fix collaboration limits in settings before starting tasks':
     '请先在协作设置中修正并发上限，再启动任务',
-  'limits repaired; start queued tasks when ready':
-    '并发上限已修复；准备好后请手动启动排队任务',
   'save limits': '保存上限',
   'builds {builds} · browsers {browsers} · foreground {ui}':
     '构建 {builds} · 浏览器 {browsers} · 前台 {ui}',
@@ -129,7 +127,7 @@ export const developer: Record<string, string> = {
   'read-only baseline': '只读基线',
   dependencies: '依赖任务',
   'queue task': '加入任务队列',
-  'start ready tasks': '启动就绪任务',
+  'start queued tasks': '启动排队的任务',
   'no collaboration tasks': '暂无协作任务',
   baseline: '基线',
   result: '结果',
@@ -179,8 +177,7 @@ export const developer: Record<string, string> = {
   'the task changed; reopen its current result before reviewing':
     '任务已变化，请重新打开当前结果再核对',
   'review evidence for {criterion}': '核对依据：{criterion}',
-  'describe what you checked and the observed result':
-    '写明检查内容与实际观察结果',
+  'what you checked and what you saw': '你检查了什么、看到了什么',
   'recording review…': '正在记录核对结果…',
   'confirm reviewed criteria': '确认已逐项核对',
   'load current patch and recheck criteria': '载入当前改动并重新逐项核对',

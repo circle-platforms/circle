@@ -11,7 +11,7 @@ export const app: Record<string, string> = {
   'toggle theme': '切换主题',
   'toggle terminal': '切换终端',
   'toggle inspector': '切换检查器',
-  'resize inspector': '调整检查器大小',
+  'resize drawer': '调整抽屉宽度',
   navigation: '导航',
   inspector: '检查器',
   'global search': '全局搜索',

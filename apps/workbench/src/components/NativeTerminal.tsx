@@ -790,7 +790,7 @@ export function NativeTerminal({
         {t('take over')}
       </Button>
       <Button
-        aria-label={t('stop circle in {name}', { name: frontName })}
+        aria-label={t('stop Circle in {name}', { name: frontName })}
         onClick={() => devices.stopTab(circleInFront)}
       >
         <Square size={12} aria-hidden /> {t('stop')}

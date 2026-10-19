@@ -52,9 +52,9 @@ export const taskPanel: Record<string, string> = {
   'your review': '你的核对',
   'tick each criterion and say what you saw. this records your review; it does not run tests.':
     '逐条勾选验收条件并写下你看到的结果。这里只记录你的核对，不会运行测试。',
-  'the changes are not ready to review yet': '更改还不能核对',
+  'the changes are not ready to review yet': '改动还不能核对',
   'the task changed since you opened it': '打开后任务已有变化',
-  'load the latest changes': '加载最新更改',
+  'load the latest changes': '加载最新改动',
   'review records': '核对记录',
   'prepare to combine task changes': '准备合并任务更改',
   'list task results': '列出任务结果',

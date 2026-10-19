@@ -212,9 +212,7 @@ function ReviewForm({
             </span>
             <textarea
               aria-label={t('review evidence for {criterion}', { criterion })}
-              placeholder={t(
-                'describe what you checked and the observed result',
-              )}
+              placeholder={t('what you checked and what you saw')}
               value={value.evidence}
               onChange={(event) =>
                 setChecks((previous) => ({

@@ -116,7 +116,6 @@ export function TaskLimitsSettings({ sessionId }: { sessionId: string }) {
       )}
       {requiresStart && !problem && (
         <p role="status" className="task-limits-start">
-          {t('limits repaired; start queued tasks when ready')}
           <Button
             disabled={busy}
             onClick={() => {
@@ -128,7 +127,7 @@ export function TaskLimitsSettings({ sessionId }: { sessionId: string }) {
                 .finally(() => setBusy(false));
             }}
           >
-            {t('start ready tasks')}
+            {t('start queued tasks')}
           </Button>
         </p>
       )}

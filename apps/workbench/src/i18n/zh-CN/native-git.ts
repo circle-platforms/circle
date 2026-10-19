@@ -1,6 +1,6 @@
 export const nativeGit: Record<string, string> = {
   'search changed files': '搜索改动文件',
-  'changed files': '改动文件',
+  'changed files': '改动的文件',
   binary: '二进制',
   '{n} more file; narrow your search': '还有 {n} 个文件，请缩小搜索范围',
   '{n} more files; narrow your search': '还有 {n} 个文件，请缩小搜索范围',
