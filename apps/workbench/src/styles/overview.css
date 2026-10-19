@@ -11,7 +11,7 @@
   width: 380px;
   min-height: 0;
   border-left: 1px solid var(--border);
-  background: var(--sidebar);
+  background: var(--bg);
 }
 .work-cluster > .inspector-resource-host {
   flex: 1 1 0;
@@ -21,7 +21,8 @@
   display: none;
 }
 
-/* The overview: a column of cards beside the conversation. It only shows. */
+/* The overview: a column of cards beside the conversation. It only shows. It is pinned to
+   the conversation, so it has the conversation's background, not a tint of its own. */
 .overview {
   display: flex;
   flex-direction: column;
@@ -30,7 +31,7 @@
   height: 100%;
   padding: 12px;
   overflow-y: auto;
-  background: var(--sidebar);
+  background: var(--bg);
   font-size: var(--ui-size);
 }
 .overview-card {

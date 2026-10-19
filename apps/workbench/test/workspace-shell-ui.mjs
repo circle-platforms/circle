@@ -107,6 +107,26 @@ async function captureModes(page, locale, theme, width) {
         (await page.locator('.overview-card').count()) >= 3,
         'the overview shows its cards',
       );
+      // Pinned to the conversation, the overview has the conversation's background.
+      const grounds = await page.evaluate(() => {
+        const ground = (node) => {
+          for (; node; node = node.parentElement) {
+            const color = getComputedStyle(node).backgroundColor;
+            if (!/^rgba\(.*,\s*0\)$|^transparent$/.test(color)) return color;
+          }
+          return null;
+        };
+        return {
+          overview: ground(document.querySelector('.overview')),
+          conversation: ground(document.querySelector('.transcript')),
+        };
+      });
+      assert.ok(grounds.overview, 'the overview has a background');
+      assert.equal(
+        grounds.overview,
+        grounds.conversation,
+        `the overview has the conversation's background at ${width}px`,
+      );
     } else {
       await page.locator('.work-drawer').waitFor({ state: 'visible' });
       assert.equal(
