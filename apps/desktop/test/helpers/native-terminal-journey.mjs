@@ -338,8 +338,15 @@ export async function runNativeTerminalJourney({
       'the tab close button stops its shell',
       patience(30000),
     );
+    // The strip holds exactly the live consoles: a stopped one is gone from
+    // it, however many consoles create() had to start to get here.
     await until(
-      async () => (await panel.locator('[role="tab"]').count()) === 2,
+      async () =>
+        (await selectedTab(third.id).count()) === 0 &&
+        (await panel.locator('[role="tab"]').count()) ===
+          (await list()).filter((terminal) =>
+            ['running', 'stopping'].includes(terminal.status),
+          ).length,
       'a stopped console leaves the tab strip',
     );
     const firstTab = selectedTab(first.id);
