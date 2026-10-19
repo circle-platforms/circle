@@ -6,8 +6,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TerminalManager } from '../../desktop/src/workspace/terminal.ts';
-import { openNativeTerminalInspector } from '../../desktop/test/helpers/native-terminal-journey.mjs';
 import { journeyNodeCommand } from '../../desktop/test/helpers/native-journey-platform.mjs';
+// The drawer's terminal mode. Its view stays mounted while the drawer is closed.
+const terminalMode = '[data-inspector-resource="terminal"]';
+/** Open the terminal mode from the top bar, without closing it when it is already open. */
+async function openTerminalMode(page) {
+  const toggle = page.getByRole('button', {
+    name: 'terminal panel',
+    exact: true,
+  });
+  if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+    await toggle.click();
+  const panel = page.locator(`${terminalMode} .native-terminal:visible`);
+  await panel.waitFor();
+  return panel;
+}
 const root = await mkdtemp(join(tmpdir(), 'circle-terminal-fit-'));
 const workspace = join(root, 'workspace');
 await mkdir(workspace);
@@ -136,23 +149,26 @@ try {
       try {
         await page.goto(
           server.resolvedUrls.local[0] +
-            'test/native-terminal-fit-ui.html?theme=' +
+            'test/fullview-resource-ui.html?theme=' +
             theme,
         );
-        const panel = await openNativeTerminalInspector(page);
+        const panel = await openTerminalMode(page);
         // Earlier cases retain read-only terminals; bind the new owned PTY only.
         const prior = new Set(
           (await manager.list('session1')).map((item) => item.id),
         );
+        // The + at the end of the tabs makes a shell in the conversation's folder.
         await panel
-          .locator('.native-terminal-toolbar')
-          .getByRole('button', { name: 'new terminal', exact: true })
+          .getByRole('button', { name: 'new terminal or device', exact: true })
+          .click();
+        await page
+          .getByRole('menuitem', { name: /^new local terminal/ })
           .click();
         await page.waitForFunction(
           (prior) =>
             [
               ...document.querySelectorAll(
-                '#inspector-terminal-terminal .native-terminal-tabs [role="tab"][aria-selected="true"]',
+                '[data-inspector-resource="terminal"] .term-tabs [role="tab"][aria-selected="true"]',
               ),
             ].some(
               (tab) =>
@@ -169,7 +185,7 @@ try {
         assert.equal(
           created.length,
           1,
-          'the original toolbar creates exactly one new owned PTY',
+          'the terminal mode creates exactly one new owned PTY',
         );
         const id = created[0].id;
         const input = panel.locator(`#terminal-${id} .xterm-helper-textarea`);
@@ -186,7 +202,7 @@ try {
             const geometry = await page.evaluate((id) => {
               const selectors = [
                 '.inspector-body',
-                '#inspector-terminal-terminal',
+                '[data-inspector-resource="terminal"]',
                 '.native-terminal',
                 '.native-terminal-screen',
                 '.native-terminal-fit',
@@ -441,10 +457,18 @@ try {
             0,
             'narrow original overlay does not offer full view',
           );
+        // The mode has no title bar: its top-bar button, pressed again, closes it.
+        const toggle = page.getByRole('button', {
+          name: 'terminal panel',
+          exact: true,
+        });
+        assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+        await toggle.click();
         await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
-        await openNativeTerminalInspector(page);
+          .locator(`${terminalMode} .native-terminal`)
+          .waitFor({ state: 'hidden' });
+        assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+        await openTerminalMode(page);
         assert.equal(
           await original.evaluate(
             (element, id) =>

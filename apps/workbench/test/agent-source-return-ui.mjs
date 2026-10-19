@@ -71,35 +71,25 @@ try {
     0,
     'seed writes before any App runtime mounts',
   );
-  const { second, childId } = await page.evaluate(async (theme) => {
+  const { second, taskId } = await page.evaluate(async (theme) => {
     const { PreviewRuntime } = await import('/src/model/state.ts');
     const runtime = new PreviewRuntime(localStorage);
     let next;
-    let childId;
+    let taskId;
     runtime.change((snapshot) => {
       snapshot.settings.theme = theme;
-      next = snapshot.sessions.find((s) => s.id !== 'session1').id;
+      next = snapshot.sessions.find((s) => s.id !== 'session1');
+      // A subagent of the parent conversation, reading the parent's workspace through
+      // its own session as the runtime projects one. It finished, and failed.
       const agent = snapshot.agents.find((a) => a.sessionId === 'session1');
       agent.name = 'source-child';
-      childId = agent.id;
-      const childSession = structuredClone(
-        snapshot.sessions.find((s) => s.id === 'session1'),
-      );
-      childSession.id = agent.id;
-      childSession.name = 'source child conversation';
-      snapshot.sessions.push(childSession);
       agent.resourceSessionId = agent.id;
       agent.readOnly = true;
       agent.workspaceId = snapshot.sessions.find(
         (s) => s.id === 'session1',
       ).workspaceId;
-      agent.task = {
-        id: 'source-child-task',
-        attempt: 1,
-        state: 'failed',
-        access: 'write',
-        baseline: 'a'.repeat(40),
-      };
+      agent.status = 'completed';
+      agent.activity = 'failed';
       agent.messages = Array.from({ length: 100 }, (_, i) => ({
         id: 'child-source-' + i,
         parentId: null,
@@ -107,6 +97,26 @@ try {
         at: '10:24',
         text: `Child evidence ${i}: [README source](README.md#L2)`,
       }));
+      // A task the parent started is not one of the drawer's subagents: its record
+      // is a conversation of its own.
+      const task = structuredClone(agent);
+      task.id = taskId = 'source-task';
+      task.name = 'source-task';
+      task.resourceSessionId = task.id;
+      task.task = {
+        id: 'source-child-task',
+        attempt: 1,
+        state: 'failed',
+        access: 'write',
+        baseline: 'a'.repeat(40),
+      };
+      const childSession = structuredClone(
+        snapshot.sessions.find((s) => s.id === 'session1'),
+      );
+      childSession.id = task.id;
+      childSession.title = 'source child conversation';
+      snapshot.sessions.push(childSession);
+      snapshot.agents.push(task);
     });
     runtime.change((snapshot) => {
       const source = snapshot.agents.find((a) => a.name === 'source-child');
@@ -119,8 +129,14 @@ try {
       outside.name = 'outside-child';
       outside.workspaceId = 'independent-child-worktree';
       snapshot.agents.push(unknown, outside);
+      // The parent's subagent call names each subagent it started: the conversation
+      // links to each of them.
+      const call = snapshot.sessions
+        .find((s) => s.id === 'session1')
+        .messages.find((m) => m.tool?.agentId === source.id).tool;
+      call.agentIds = [source.id, unknown.id, outside.id];
     });
-    return { second: next, childId };
+    return { second: { id: next.id, title: next.title }, taskId };
   }, process.env.CIRCLE_AGENT_SOURCE_THEME ?? 'dark');
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
@@ -137,15 +153,59 @@ try {
       .getByText('README.md', { exact: true })
       .waitFor();
   };
+  // A subagent opens in the drawer's subagents mode, its conversation beside the list.
+  const record = page.locator('.agent-detail');
+  const recordName = record.locator('.agent-title > span');
   const openAgent = async (name) => {
     const toggle = page.getByRole('button', {
-      name: 'activity panel',
+      name: 'subagents panel',
       exact: true,
     });
     if ((await toggle.getAttribute('aria-pressed')) !== 'true')
       await toggle.click();
-    await page.locator('.activity-row').filter({ hasText: name }).click();
+    await page
+      .locator('.agent-row')
+      .filter({
+        has: page.locator('.agent-row-name').getByText(name, { exact: true }),
+      })
+      .click();
+    await recordName.getByText(name, { exact: true }).waitFor();
   };
+  // Closing a file leaves the drawer on the files tree; the parent conversation's call
+  // that started a subagent leads back to it.
+  const backToAgent = async (name) => {
+    const links = page.locator('.transcript .tool-agent-links');
+    if (!(await links.count()))
+      await page
+        .locator('.transcript .tool-summary')
+        .filter({ hasText: 'ran a subagent' })
+        .click();
+    await links.getByRole('button').filter({ hasText: name }).click();
+    await recordName.getByText(name, { exact: true }).waitFor();
+  };
+  // The × in the subagent's heading takes it out of the drawer.
+  const closeAgent = async () => {
+    await record
+      .getByRole('button', { name: 'close subagent', exact: true })
+      .click();
+    await record.waitFor({ state: 'detached' });
+  };
+  // A document in the drawer folds the sidebar to give it room; search reaches any
+  // conversation, a task's own included.
+  const searchSession = async (title, id) => {
+    await page.keyboard.press('ControlOrMeta+k');
+    await page
+      .getByRole('textbox', { name: 'global search', exact: true })
+      .fill(title);
+    await page
+      .locator('.search-results button')
+      .filter({ has: page.locator('strong').getByText(title, { exact: true }) })
+      .click();
+    await page.waitForURL((url) => url.hash === `#/session/${id}`);
+    await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  };
+  const origin = () =>
+    page.locator('.file-view .file-source-origin').textContent();
   const chooseSession = async (id) => {
     const selector = `.sidebar [data-row-key="recent:${id}"] .session-link[href="#/session/${id}"]`;
     if (!(await page.locator(selector).isVisible()))
@@ -162,28 +222,27 @@ try {
   const message = page.getByRole('textbox', { name: 'message', exact: true });
   await message.fill('PARENT_DRAFT_RETAIN');
   await openBySearch();
+  const parentOrigin = await origin();
   await close();
   assert.equal(await message.inputValue(), 'PARENT_DRAFT_RETAIN');
-  assert.equal(
-    await page.locator('.agent-record').count(),
-    0,
-    'parent source returns to parent',
-  );
+  assert.equal(await record.count(), 0, 'parent source returns to parent');
   await openAgent('source-child');
-  const record = page.locator('.agent-record');
-  await record
-    .locator('header .status')
-    .getByText('failed', { exact: true })
-    .waitFor();
-  await record
-    .locator('header strong')
-    .getByText('source-child', { exact: true })
-    .waitFor();
+  // The actual seeded child, as the list shows it: finished, and failed.
+  const row = page.locator('.agent-row[aria-current="true"]');
+  assert.equal(
+    await row.locator('.agent-row-name').textContent(),
+    'source-child',
+  );
+  assert.equal(await row.getAttribute('title'), 'failed');
+  assert.equal(
+    await row.locator('xpath=ancestor::section[1]/h3').textContent(),
+    'finished',
+  );
   const link = record
     .getByRole('link', { name: 'README source', exact: true })
     .nth(60);
   await link.scrollIntoViewIfNeeded();
-  const body = record.locator('.agent-record-body');
+  const body = record.locator('.agent-transcript');
   const before = await body.evaluate((node) => {
     window.childRecordNode = node;
     return node.scrollTop;
@@ -194,11 +253,13 @@ try {
     .locator('.file-view-heading strong')
     .getByText('README.md', { exact: true })
     .waitFor();
+  assert.equal(
+    await origin(),
+    'agent source: source-child',
+    "the child's source is read through the child's own session",
+  );
   await close();
-  await record
-    .locator('header strong')
-    .getByText('source-child', { exact: true })
-    .waitFor();
+  await backToAgent('source-child');
   assert.equal(
     await body.evaluate((node) => node === window.childRecordNode),
     true,
@@ -206,26 +267,23 @@ try {
   );
   assert.ok(
     Math.abs((await body.evaluate((node) => node.scrollTop)) - before) <= 2,
-    'source close restores child reading position',
+    'the way back to the child restores its reading position',
   );
-  await record
-    .getByRole('button', { name: 'open task conversation', exact: true })
-    .click();
-  await page.waitForURL((url) => url.hash === `#/session/${childId}`);
-  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
-  assert.equal(await page.locator('.agent-record').count(), 0);
+  // The conversation of a task the parent started, with the child still open.
+  await searchSession('source child conversation', taskId);
+  assert.equal(await record.count(), 0);
   await chooseSession('session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   assert.equal(await message.inputValue(), 'PARENT_DRAFT_RETAIN');
   await openAgent('source-child');
-  await record.getByRole('button', { name: 'main', exact: true }).click();
+  await closeAgent();
   for (const [name, notice] of [
     ['unknown-child', 'source workspace is not available'],
     ['outside-child', 'source workspace is not available'],
   ]) {
     await openAgent(name);
-    await page
-      .locator('.agent-record')
+    const childView = await body.elementHandle();
+    await record
       .getByRole('link', { name: 'README source', exact: true })
       .first()
       .click();
@@ -236,24 +294,25 @@ try {
       'unverified child cannot read parent same-name file',
     );
     await openBySearch();
-    await close();
     assert.equal(
-      await record.locator('header strong').textContent(),
-      name,
-      'parent quick-open keeps the child return origin but does not use its refused resource owner',
+      await origin(),
+      parentOrigin,
+      "parent quick-open does not use the child's refused resource owner",
     );
-
-    await page
-      .locator('.agent-record')
-      .getByRole('button', { name: 'main', exact: true })
-      .click();
+    await close();
+    await backToAgent(name);
+    assert.equal(
+      await body.evaluate((node, kept) => node === kept, childView),
+      true,
+      'parent quick-open keeps the child return origin',
+    );
+    await closeAgent();
   }
   await openAgent('source-child');
   await openBySearch();
-  await chooseSession(second);
-  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  await searchSession(second.title, second.id);
   assert.equal(
-    await page.locator('.agent-record').count(),
+    await record.count(),
     0,
     'other session cannot inherit child agent',
   );
@@ -264,7 +323,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    'pre-App seed loaded actual child; parent/child source return, exact child reading position, parent draft and cross-session isolation passed',
+    'pre-App seed loaded actual child; parent/child source owners, exact child reading position, parent draft and cross-session isolation passed',
   );
 } finally {
   await browser?.close();
