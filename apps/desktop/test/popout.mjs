@@ -632,6 +632,18 @@ try {
   await input.focus();
   await liveTerminal.keyboard.insertText(`echo ${mark}`);
   await liveTerminal.keyboard.press('Enter');
+  // Find reads what the shell has printed when it is asked, so it waits for the mark's
+  // own line of output, which a slow shell prints later.
+  await until(
+    () =>
+      liveTerminal
+        .locator('.native-terminal-surface:not([hidden]) .xterm-rows > div')
+        .evaluateAll(
+          (rows, mark) => rows.some((row) => row.textContent.trim() === mark),
+          mark,
+        ),
+    'the shell printed the mark',
+  );
   await liveTerminal
     .getByRole('button', { name: 'terminal menu', exact: true })
     .click();
@@ -701,6 +713,41 @@ try {
     [],
   );
   console.log('popout: ok');
+} catch (error) {
+  // What each window showed, and what its terminals held, for a run that fails on CI.
+  const evidence = join(root, 'artifacts', 'popout');
+  await mkdir(evidence, { recursive: true }).catch(() => {});
+  const windows = [
+    ...(app?.windows() ?? []).map((page) => ['development', page]),
+    ...(liveApp?.windows() ?? []).map((page) => ['live', page]),
+  ];
+  const screens = [];
+  for (const [index, [which, page]] of windows.entries()) {
+    const name = `${which}-${index}`;
+    await page
+      .screenshot({ path: join(evidence, `${name}.png`) })
+      .catch(() => {});
+    screens.push({
+      name,
+      url: page.url(),
+      terminals: await page
+        .locator('.native-terminal-surface')
+        .evaluateAll((surfaces) =>
+          surfaces.map((surface) => ({
+            hidden: surface.hidden,
+            rows: [...surface.querySelectorAll('.xterm-rows > div')].map(
+              (row) => row.textContent,
+            ),
+          })),
+        )
+        .catch((reason) => String(reason)),
+    });
+  }
+  await writeFile(
+    join(evidence, 'failure.json'),
+    JSON.stringify({ error: String(error?.stack ?? error), screens }, null, 2),
+  ).catch(() => {});
+  throw error;
 } finally {
   await app?.close().catch(() => {});
   await liveApp?.close().catch(() => {});
