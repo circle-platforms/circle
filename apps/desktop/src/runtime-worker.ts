@@ -73,6 +73,8 @@ const controller = new RuntimeController({
     port.postMessage({ type: 'workspace-event', event });
   },
   terminal,
+  emitTerminalTabs: (conversation, rows) =>
+    port.postMessage({ type: 'terminal-tabs', conversation, rows }),
   beforeDelete: async (sessionId) => {
     await browser.releaseSession(sessionId);
     await terminal.releaseSession(sessionId);
@@ -132,6 +134,43 @@ port.on('message', ({ data }) => {
   }
   if (message?.type === 'terminal-reply' && message.reply) {
     terminal.receive(message.reply as TerminalReply);
+    return;
+  }
+  if (message?.type === 'terminal-tab-control') {
+    // The person takes one of their terminal tabs, hands it back or stops Circle on it
+    const control = data as {
+      id?: unknown;
+      conversation?: unknown;
+      session?: unknown;
+      action?: unknown;
+    };
+    const id = String(control.id ?? '');
+    void Promise.resolve()
+      .then(() => {
+        if (
+          typeof control.conversation !== 'string' ||
+          !/^[a-zA-Z0-9_-]{1,100}$/.test(control.conversation) ||
+          typeof control.session !== 'string' ||
+          !['take', 'return', 'stop'].includes(String(control.action))
+        )
+          throw Error('invalid terminal tab action');
+        return controller.terminalTabControl(
+          control.conversation,
+          control.session,
+          control.action as 'take' | 'return' | 'stop',
+        );
+      })
+      .then(
+        (rows) =>
+          port.postMessage({ type: 'terminal-tab-reply', id, ok: true, rows }),
+        (error: unknown) =>
+          port.postMessage({
+            type: 'terminal-tab-reply',
+            id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      );
     return;
   }
   const metadata = diagnostics

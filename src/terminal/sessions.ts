@@ -35,14 +35,16 @@ const { Terminal } = xterm;
 
 export type TerminalState = 'connecting' | 'ready' | 'closed' | 'error';
 export type TerminalHeld = 'handoff' | 'attach';
-type WaitOutcome = 'quiet' | 'pattern' | 'capped' | 'closed';
+/** A device's wire, or `local`: one of the person's own terminal tabs in the desktop. */
+export type TerminalKind = 'ssh' | 'telnet' | 'local';
+type WaitOutcome = 'quiet' | 'pattern' | 'capped' | 'closed' | 'held';
 
 /** What the strip, the page and the list show; read-only for the hosts. */
 export interface TerminalView {
   id: string;
   name: string;
   target: string;
-  transport: 'ssh' | 'telnet';
+  transport: TerminalKind;
   state: TerminalState;
   detail: string;
   held: TerminalHeld | undefined;
@@ -71,12 +73,16 @@ export interface TerminalSessionsOptions {
   onChange: (conversation: string) => void;
   /** Raw device bytes, for a renderer that paints its own emulator (the desktop panel). */
   onOutput?: (conversation: string, session: string, bytes: Buffer) => void;
-  /** The person takes a device console over: the host shows its card and opens the page. */
+  /**
+   * The person takes a device console over: the host shows its card and opens the page.
+   * `session` is the console's name; `id` is its id, such as `t1`.
+   */
   hand?: (
     conversation: string,
     session: string,
     reason: string,
     signal: AbortSignal,
+    id: string,
   ) => Promise<void>;
   maxSessions?: number;
 }
@@ -88,7 +94,11 @@ const SEND_SETTLE_QUIET_MS = 400;
 const SEND_SETTLE_MAX_MS = 2000;
 const WAIT_TICK_MS = 150;
 
-/** One device console and its emulated screen. */
+/**
+ * One device console and its emulated screen. A `local` session is one of the person's
+ * own terminal tabs instead, adopted rather than connected: when they hold it the model's
+ * actions on it end rather than wait, and nothing of the model's closes it.
+ */
 export class TerminalSession {
   state: TerminalState = 'connecting';
   detail = '';
@@ -100,16 +110,20 @@ export class TerminalSession {
   readonly screen: InstanceType<typeof Terminal>;
   // Actions parked on the person holding the console
   readonly wakers = new Set<() => void>();
+  // The checks of the waits under way, run again at once when the holder changes
+  readonly watchers = new Set<() => void>();
   // The newest raw bytes, so a view opened mid-session can paint the screen by feeding
   // them to its own emulator: a panel never waits for the device to speak again.
   private ring: Buffer[] = [];
   private ringSize = 0;
+  private disposed = false;
   private static readonly RING_MAX = 256_000;
   constructor(
     readonly id: string,
-    readonly name: string,
+    // A terminal tab's name follows its place among the person's tabs
+    public name: string,
     readonly target: string,
-    readonly transport: 'ssh' | 'telnet',
+    readonly transport: TerminalKind,
     cols: number,
     rows: number,
     readonly handle: TerminalTransport,
@@ -155,9 +169,17 @@ export class TerminalSession {
   get quiet(): number {
     return Date.now() - this.lastOutputAt;
   }
+  /** One of the person's own terminal tabs, not a device console. */
+  get local(): boolean {
+    return this.transport === 'local';
+  }
   wake(): void {
     for (const wake of [...this.wakers]) wake();
     this.wakers.clear();
+  }
+  /** The waits under way look again now, rather than at their next tick. */
+  nudge(): void {
+    for (const check of [...this.watchers]) check();
   }
   /** Cuts the wire. The screen stays readable until dispose() with the conversation. */
   close(): void {
@@ -172,6 +194,8 @@ export class TerminalSession {
     }
   }
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.screen.dispose();
   }
   /** The last lines on the screen, scrollback included, plain text. Read from the end,
@@ -261,6 +285,51 @@ export class TerminalSessions {
   session(conversation: string, id: string): TerminalSession | undefined {
     return this.conversations.get(conversation)?.sessions.get(id);
   }
+  /**
+   * One of the person's own terminal tabs joins the conversation's terminals, already
+   * open: the desktop application's local shells come in this way, never by connect.
+   */
+  adopt(conversation: string, session: TerminalSession): void {
+    if (!session.local) throw Error('only a terminal tab is adopted');
+    const own = this.conversation(conversation);
+    if (own.sessions.has(session.id))
+      throw Error(`${session.id} is already one of this conversation's`);
+    session.state = 'ready';
+    own.sessions.set(session.id, session);
+    this.options.onChange(conversation);
+  }
+  /**
+   * A terminal tab is gone: it leaves the list, the actions on it end, and its screen goes
+   * once the actions already asked for have seen that.
+   */
+  drop(conversation: string, id: string, why = 'closed'): void {
+    const own = this.conversations.get(conversation);
+    const session = own?.sessions.get(id);
+    if (!own || !session?.local) return;
+    own.sessions.delete(id);
+    if (session.state === 'ready' || session.state === 'connecting') {
+      session.state = 'closed';
+      session.detail = why;
+    }
+    session.held = undefined;
+    own.events.push(`${session.name}: ${why}`);
+    session.wake();
+    session.nudge();
+    session.close();
+    const dispose = () => session.dispose();
+    void own.queue.then(dispose, dispose);
+    this.options.onChange(conversation);
+  }
+  /** A terminal's state line, as `terminal_sessions` lists it. */
+  describe(conversation: string, id: string): string | undefined {
+    const session = this.session(conversation, id);
+    return session ? this.header(session) : undefined;
+  }
+  /** Something the person did, told once in the conversation's next result. */
+  tell(conversation: string, event: string): void {
+    const own = this.conversations.get(conversation);
+    if (own && !own.events.includes(event)) own.events.push(event);
+  }
   /** The person takes a console over from the page or panel: keys go to the device now. */
   attach(conversation: string, id: string): boolean {
     const session = this.session(conversation, id);
@@ -270,6 +339,8 @@ export class TerminalSessions {
       this.conversations
         .get(conversation)!
         .events.push(`${session.name}: the user took the terminal`);
+      // A wait on a terminal tab ends now rather than at its next tick
+      session.nudge();
       this.options.onChange(conversation);
     }
     return true;
@@ -342,6 +413,15 @@ export class TerminalSessions {
     if (action === 'connect')
       return this.connect(own, conversation, args, signal);
     const session = this.find(own, String(args.session ?? ''));
+    if (session.local)
+      return this.performLocal(
+        own,
+        conversation,
+        session,
+        action,
+        args,
+        signal,
+      );
     // The person holds the console: nothing runs until they give it back
     if (session.held) await this.handedBack(session, signal);
     switch (action) {
@@ -360,6 +440,61 @@ export class TerminalSessions {
       default:
         throw Error(`no such terminal action: ${action}`);
     }
+  }
+  /**
+   * An action on one of the person's own terminal tabs. While they hold it a read or a wait
+   * says so at once and nothing is typed: the tab is theirs, and a hold there can last
+   * longer than a turn should wait. Nothing the model does closes it.
+   */
+  private async performLocal(
+    own: Conversation,
+    conversation: string,
+    session: TerminalSession,
+    action: TerminalAction,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<TerminalResult> {
+    // An action stopped while it waited its turn does not run late
+    signal.throwIfAborted();
+    switch (action) {
+      case 'send':
+      case 'press':
+        if (session.held)
+          throw Error(
+            `${session.name} is the user's now: they took it over, and nothing was typed. It is yours again when they hand it back`,
+          );
+        return action === 'send'
+          ? this.send(own, session, args, signal)
+          : this.press(own, session, args, signal);
+      case 'read':
+        return session.held
+          ? this.heldResult(own, session)
+          : this.readResult(own, session, args);
+      case 'wait':
+        return session.held
+          ? this.heldResult(own, session)
+          : this.wait(own, session, args, signal);
+      case 'handoff':
+        return this.handoff(own, conversation, session, args, signal);
+      case 'disconnect':
+        throw Error(
+          `${session.name} is the user's own terminal tab; Circle does not close it`,
+        );
+      default:
+        throw Error(`no such terminal action: ${action}`);
+    }
+  }
+  /** A terminal tab the person holds: what the model gets instead of its screen. */
+  private heldResult(
+    own: Conversation,
+    session: TerminalSession,
+    note = 'nothing was read or typed',
+  ): TerminalResult {
+    return {
+      text: `${this.header(session)}\nThe user has ${session.name} now, until they hand it back; ${note}.${this.told(own)}`,
+      host: session.target,
+      session: session.id,
+    };
   }
   private conversation(id: string): Conversation {
     let own = this.conversations.get(id);
@@ -651,7 +786,22 @@ export class TerminalSessions {
     session: TerminalSession,
     signal: AbortSignal,
   ): Promise<TerminalResult> {
-    await this.quiet(session, SEND_SETTLE_QUIET_MS, SEND_SETTLE_MAX_MS, signal);
+    const outcome = await this.quiet(
+      session,
+      SEND_SETTLE_QUIET_MS,
+      SEND_SETTLE_MAX_MS,
+      signal,
+    );
+    if (session.local && outcome === 'closed')
+      throw Error(
+        `${session.name} was closed; what you sent may have been typed before it closed`,
+      );
+    if (outcome === 'held')
+      return this.heldResult(
+        own,
+        session,
+        'what you sent was typed before that',
+      );
     return {
       text: `${this.header(session)}\n### Output\n${session
         .tail(20)
@@ -694,6 +844,12 @@ export class TerminalSessions {
       ...(pattern ? { pattern } : {}),
       signal,
     });
+    if (session.local && outcome === 'closed')
+      throw Error(
+        `${session.name} was closed while you waited; it is gone from terminal_sessions`,
+      );
+    if (outcome === 'held')
+      return this.heldResult(own, session, 'your wait ended there');
     const why =
       outcome === 'quiet'
         ? `quiet for ${Math.round(idleMs / 100) / 10}s`
@@ -736,7 +892,9 @@ export class TerminalSessions {
   ): Promise<TerminalResult> {
     if (session.held)
       throw Error(
-        `${session.name} is already the user's; your action waits for it and shows what they did`,
+        session.local
+          ? `${session.name} is already the user's; it is yours again when they hand it back`
+          : `${session.name} is already the user's; your action waits for it and shows what they did`,
       );
     if (!this.options.hand) throw Error('this caller has no handoff');
     const reason = String(args.reason ?? '');
@@ -746,7 +904,13 @@ export class TerminalSessions {
     );
     this.options.onChange(conversation);
     try {
-      await this.options.hand(conversation, session.name, reason, signal);
+      await this.options.hand(
+        conversation,
+        session.name,
+        reason,
+        signal,
+        session.id,
+      );
     } catch (error) {
       // A host that will not carry the handoff (plan mode) must not leave the console held
       session.held = undefined;
@@ -761,9 +925,11 @@ export class TerminalSessions {
   private liveness(session: TerminalSession): void {
     if (session.state !== 'ready')
       throw Error(
-        `${session.name} is ${session.state}${
-          session.detail ? `: ${session.detail}` : ''
-        }; connect again with terminal_connect`,
+        session.local
+          ? `${session.name} was closed; it is gone from terminal_sessions`
+          : `${session.name} is ${session.state}${
+              session.detail ? `: ${session.detail}` : ''
+            }; connect again with terminal_connect`,
       );
   }
   /** Parked while the person holds the console; woken when they give it back. */
@@ -805,16 +971,30 @@ export class TerminalSessions {
     },
   ): Promise<WaitOutcome> {
     return new Promise((resolve, reject) => {
+      // A terminal tab's action stopped before its wait began does not wait at all
+      if (session.local && want.signal.aborted) {
+        reject(want.signal.reason ?? Error('stopped'));
+        return;
+      }
       const started = Date.now();
-      const finish = (outcome: WaitOutcome) => {
+      let done = false;
+      const end = () => {
+        done = true;
         clearInterval(ticker);
         parsed.dispose();
+        session.watchers.delete(check);
         want.signal.removeEventListener('abort', abort);
+      };
+      const finish = (outcome: WaitOutcome) => {
+        end();
         resolve(outcome);
       };
       const check = () => {
+        if (done) return;
         if (session.state === 'closed' || session.state === 'error')
           finish('closed');
+        // The person took their terminal tab over: it is theirs, the wait is over
+        else if (session.local && session.held) finish('held');
         else if (
           want.pattern &&
           want.pattern.test(session.tail(400).join('\n'))
@@ -826,14 +1006,35 @@ export class TerminalSessions {
       const parsed = session.screen.onWriteParsed(() => check());
       const ticker = setInterval(check, WAIT_TICK_MS);
       const abort = () => {
-        clearInterval(ticker);
-        parsed.dispose();
+        end();
         reject(want.signal.reason ?? Error('stopped'));
       };
       want.signal.addEventListener('abort', abort, { once: true });
+      session.watchers.add(check);
       check();
     });
   }
+}
+
+/**
+ * The `terminal_sessions` text with more terminals in its list: the desktop's own terminal
+ * tabs, listed by the runtime beside the device consoles the main process lists.
+ */
+export function withMoreTerminals(text: string, lines: string[]): string {
+  if (!lines.length) return text;
+  const head = '### Terminals\n';
+  const at = text.indexOf(head);
+  if (at < 0) return `${head}${lines.join('\n')}\n${text}`;
+  const rest = text.slice(at + head.length);
+  const end = rest.indexOf('\n### ');
+  const block = end < 0 ? rest : rest.slice(0, end);
+  const listed = block === '- none' ? [] : block.split('\n');
+  return (
+    text.slice(0, at) +
+    head +
+    [...listed, ...lines].join('\n') +
+    (end < 0 ? '' : rest.slice(end))
+  );
 }
 
 function clamp(

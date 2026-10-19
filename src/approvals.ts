@@ -653,6 +653,38 @@ export const ruleTool = (tool: string): string =>
     : Object.hasOwn(TERMINAL_ACTIONS, tool)
       ? 'terminal'
       : tool;
+/**
+ * A write to one of the person's own terminal tabs in the desktop application, as the
+ * terminal tools describe it (they add `terminal`, `first_use` and, when the write runs
+ * a line, `command`): the shell runs that line as `execute` would run it, so it is
+ * judged by the same rules, and the same rules cover it. A write that runs nothing, such
+ * as text without Enter or an arrow key, does not ask once the tab is in use.
+ */
+interface TerminalTabWrite {
+  firstUse: boolean;
+  command?: string;
+}
+const TERMINAL_TAB_WRITES = new Set(['terminal_send', 'terminal_press']);
+function terminalTabWrite(
+  tool: string,
+  args: Record<string, unknown>,
+): TerminalTabWrite | undefined {
+  if (
+    !TERMINAL_TAB_WRITES.has(tool) ||
+    typeof args.terminal !== 'string' ||
+    !args.terminal.startsWith('local:')
+  )
+    return undefined;
+  return {
+    firstUse: args.first_use === true,
+    ...(typeof args.command === 'string' ? { command: args.command } : {}),
+  };
+}
+/** Where a call's "allow for this session" rule is kept: a tab's lines with commands. */
+const ruleToolFor = (tool: string, args: Record<string, unknown>): string =>
+  terminalTabWrite(tool, args)?.command !== undefined
+    ? 'execute'
+    : ruleTool(tool);
 export class ApprovalPolicy {
   private modes = new Map<string, ApprovalMode>();
   constructor(
@@ -670,11 +702,26 @@ export class ApprovalPolicy {
   }
   // A command the settings' patterns cover runs without asking, in every mode
   // and even when it always asks; a DENY still wins, decided before this.
+  // A line for a terminal tab is such a command too, once the tab is in use.
   allowedBySettings(tool: string, args: Record<string, unknown>): boolean {
+    const tab = terminalTabWrite(tool, args);
+    if (tab)
+      return (
+        !tab.firstUse &&
+        tab.command !== undefined &&
+        commandAllowed(tab.command, this.allowed, this.workspace)
+      );
     return (
       tool === 'execute' &&
       commandAllowed(String(args.command || ''), this.allowed, this.workspace)
     );
+  }
+  /**
+   * The first write to one of the person's terminal tabs in a conversation: the person
+   * allows it in every mode, auto included, and no rule, setting or hook's allow skips it.
+   */
+  firstUse(tool: string, args: Record<string, unknown>): boolean {
+    return terminalTabWrite(tool, args)?.firstUse === true;
   }
   setMode(thread: string, mode: ApprovalMode): void {
     if (mode === 'manual') this.modes.delete(thread);
@@ -714,6 +761,11 @@ export class ApprovalPolicy {
     );
   }
   review(tool: string, args: Record<string, unknown>): Review {
+    const tab = terminalTabWrite(tool, args);
+    if (tab)
+      return tab.command !== undefined
+        ? this.review('execute', { command: tab.command })
+        : review('ASK', 'types in your terminal');
     if (tool === 'execute') {
       let command = String(args.command || '');
       const found = classifyCommand(command, this.credentialFiles);
@@ -844,6 +896,9 @@ export class ApprovalPolicy {
   ): boolean {
     const found = this.review(tool, args);
     if (found.verdict === 'DENY') return false;
+    const tab = terminalTabWrite(tool, args);
+    if (tab?.firstUse) return true;
+    if (tab && tab.command === undefined) return false;
     if (this.allowedBySettings(tool, args)) return false;
     const mode = this.mode(thread);
     if (allowYolo && mode === 'auto') return false;
@@ -857,7 +912,7 @@ export class ApprovalPolicy {
       found.pattern === 'workspace'
     )
       return false;
-    return !this.store.matchesAny(thread, ruleTool(tool), [
+    return !this.store.matchesAny(thread, ruleToolFor(tool, args), [
       found.pattern,
       ...found.covered_by,
     ]);
@@ -875,7 +930,13 @@ export class ApprovalPolicy {
         : found.pattern;
     if (['always', 'prefix'].includes(decision)) {
       if (found.verdict !== 'ASK' || !pattern) return false;
-      this.store.record(thread, 'always', ruleTool(tool), pattern, found.scope);
+      this.store.record(
+        thread,
+        'always',
+        ruleToolFor(tool, args),
+        pattern,
+        found.scope,
+      );
       return true;
     }
     this.store.record(

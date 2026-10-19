@@ -111,11 +111,14 @@ export interface Tool {
   /**
    * What the tool knows of a call that the model did not say, such as the site a browser
    * action acts on: added to the call's arguments before the approval, so the rules and
-   * the card go by it, and checked again by the tool when it runs.
+   * the card go by it, and checked again by the tool when it runs. `args` hold the values
+   * as the call will run, secrets included; `shown` hold them as the card shows them,
+   * with each secret still `%NAME%`, for a fact that quotes what the model wrote.
    */
   approvalFacts?: (
     args: Record<string, unknown>,
     sessionId: string,
+    shown?: Record<string, unknown>,
   ) => Record<string, unknown> | undefined;
   /** Snapshot authorized inputs before waiting for approval; never perform writes here. */
   prepare?: (
