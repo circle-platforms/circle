@@ -5,6 +5,7 @@ import type {
   PullRequestSummary,
 } from '../../desktop/src/workspace/pulls-types.ts';
 import { contextUsage } from '../src/model/context-usage.ts';
+import { keepLastPullRequests } from '../src/model/pull-requests.ts';
 import {
   agentLabel,
   outputRows,
@@ -294,8 +295,48 @@ test('the changes card offers to create a pull request, update one, or nothing',
   );
   assert.equal(pullRequestAction(overview({ branch: 'main' })), null);
   assert.equal(pullRequestAction(overview({ branch: '', files: 3 })), null);
-  for (const access of ['missing', 'signed-out', 'unavailable'] as const)
+  for (const access of [
+    'missing',
+    'signed-out',
+    'unreachable',
+    'unavailable',
+  ] as const)
     assert.equal(pullRequestAction(overview({ files: 3 }, { access })), null);
+});
+
+test('a read GitHub did not answer keeps the pull requests the last read of the branch found', () => {
+  const read = overview(
+    { files: 2, ahead: 1 },
+    {
+      current: pull({ number: 186 }),
+      recent: [pull({ number: 181, state: 'merged' })],
+    },
+  );
+  const offline = overview({ files: 3, ahead: 1 }, { access: 'unreachable' });
+  const kept = keepLastPullRequests(read, offline);
+  assert.equal(kept.access, 'ready');
+  assert.equal(kept.current?.number, 186);
+  assert.deepEqual(
+    kept.recent.map((item) => item.number),
+    [181],
+  );
+  assert.equal(kept.git.files, 3, "the repository's numbers are the new ones");
+  assert.equal(
+    pullRequestAction(kept),
+    'update',
+    "the button still offers to update the branch's pull request",
+  );
+  // Read again offline, it stays.
+  assert.equal(keepLastPullRequests(kept, offline).current?.number, 186);
+  // Nothing to keep, or another branch: what the read says.
+  assert.equal(keepLastPullRequests(undefined, offline), offline);
+  const elsewhere = overview({ branch: 'other' }, { access: 'unreachable' });
+  assert.equal(keepLastPullRequests(read, elsewhere), elsewhere);
+  // A read that answered replaces what was kept, signed out included.
+  const out = overview({}, { access: 'signed-out' });
+  assert.equal(keepLastPullRequests(read, out), out);
+  const fresh = overview({ files: 1 }, { current: null });
+  assert.equal(keepLastPullRequests(read, fresh), fresh);
 });
 
 test("context usage reads the terminal footer's numbers, and its tokens are the window's fill", () => {

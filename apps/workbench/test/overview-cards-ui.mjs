@@ -350,8 +350,71 @@ try {
     assert.deepEqual(errors, []);
     await page.close();
   }
+
+  // The changes card in the live app. A read GitHub does not answer, as when the computer
+  // is offline, keeps the pull requests and the button the last read of the branch found,
+  // with the repository's new numbers; a read that says signed out does not.
+  const page = await browser.newPage({ viewport: { width: 800, height: 950 } });
+  page.setDefaultTimeout(8000);
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  await page.goto(`${server.resolvedUrls.local[0]}test/overview-pulls-ui.html`);
+  await page.locator('aside.overview').waitFor();
+  const git = (files) => ({
+    repository: true,
+    branch: 'fix/reconnect',
+    defaultBranch: 'main',
+    github: 'acme/orbit',
+    files,
+    additions: files * 10,
+    deletions: files,
+    ahead: 1,
+    unpushed: 0,
+  });
+  const pull = {
+    number: 186,
+    title: 'Fix the reconnect race',
+    url: 'https://github.com/acme/orbit/pull/186',
+    state: 'open',
+    draft: true,
+    headRef: 'fix/reconnect',
+    checks: 'failing',
+    failedRunId: 4021,
+  };
+  // The reader answers this from now on; the window asks again when it gains the focus.
+  const read = async (answer) => {
+    const before = await page.evaluate(() => window.pullsFixture.reads());
+    await page.evaluate((answer) => {
+      window.pullsFixture.answer(answer);
+      window.dispatchEvent(new Event('focus'));
+    }, answer);
+    await page.waitForFunction(
+      (before) => window.pullsFixture.reads() > before,
+      before,
+    );
+  };
+  const card = page.locator(
+    'section.overview-card[aria-labelledby="overview-changes"]',
+  );
+  const title = card.getByRole('button', {
+    name: 'Fix the reconnect race',
+    exact: true,
+  });
+  const update = card.getByRole('button', { name: 'update pr', exact: true });
+  await read({ git: git(2), access: 'ready', current: pull, recent: [] });
+  await title.waitFor();
+  await update.waitFor();
+  await read({ git: git(4), access: 'unreachable', current: null, recent: [] });
+  await card.getByText('+40', { exact: true }).waitFor();
+  assert.equal(await title.count(), 1, 'the pull request read before stays');
+  assert.equal(await update.count(), 1, 'and so does the button');
+  await read({ git: git(4), access: 'signed-out', current: null, recent: [] });
+  await title.waitFor({ state: 'detached' });
+  assert.equal(await update.count(), 0);
+  assert.deepEqual(errors, []);
+  await page.close();
   console.log(
-    'overview cards: in progress, context, waiting subagents and long activities, in English and Chinese',
+    'overview cards: in progress, context, waiting subagents, long activities and pull requests offline, in English and Chinese',
   );
 } finally {
   await browser?.close();

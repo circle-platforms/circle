@@ -33,11 +33,12 @@ export interface RepositorySummary {
 }
 
 /**
- * `ready` reads pull requests. `missing` and `signed-out` say why it cannot, and
- * `unavailable` says this folder has no GitHub remote to ask about.
+ * `ready` reads pull requests. `missing` and `signed-out` say why it cannot,
+ * `unreachable` that GitHub did not answer, as when the computer is offline, and
+ * `unavailable` that this folder has no GitHub remote to ask about.
  */
 export type PullRequestAccess =
-  'ready' | 'missing' | 'signed-out' | 'unavailable';
+  'ready' | 'missing' | 'signed-out' | 'unreachable' | 'unavailable';
 
 export interface PullRequestOverview {
   git: RepositorySummary;
