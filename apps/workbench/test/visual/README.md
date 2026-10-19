@@ -6,7 +6,7 @@ Run `npm --prefix apps/workbench run test:visual` after installing the browser p
 node apps/workbench/node_modules/playwright/cli.js install chromium
 ```
 
-The test reuses the existing main-window, panel, Git, GitHub, browser and recovered-input scenarios. They load the application's styles. Both languages, both themes and narrow/wide viewports are captured. These renderer fixtures complement the real Electron interface and developer journeys; they do not replace them.
+The test reuses the existing workspace shell (the overview and each drawer mode), GitHub, browser, file heading and recovered-input scenarios. They load the application's styles. Both languages, both themes and narrow/wide viewports are captured. These renderer fixtures complement the real Electron interface and developer journeys; they do not replace them.
 
 Differences in more than 0.05% of an image's pixels fail the test (text anti-aliasing alone moves up to about a hundred pixels between runs on the same runner) and produce expected, actual and diff images in `apps/workbench/artifacts/visual/`. The HTML report includes every captured image. Apple silicon CI runs the comparison without updating snapshots.
 

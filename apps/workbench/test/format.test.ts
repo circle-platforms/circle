@@ -278,7 +278,10 @@ test('search opens with focus in the field, not on the close button', () => {
     fileURLToPath(new URL('../src/features/Conversation.tsx', import.meta.url)),
     'utf8',
   );
-  assert.match(conversation, /mapped === 'history\.search'\) onCommand\(\)/);
+  assert.match(
+    conversation,
+    /mapped === 'history\.search'\)\s*latestView\.current\.onCommand\(\)/,
+  );
   const field = readFileSync(
     fileURLToPath(new URL('../src/components/common.tsx', import.meta.url)),
     'utf8',

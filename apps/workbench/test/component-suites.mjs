@@ -59,6 +59,8 @@ export const COMPONENT_SUITES = Object.freeze([
   'screenshot-thumb-ui.mjs',
   'task-review-ui.mjs',
   'gutter-marks-ui.mjs',
+  'task-limits-recovery-ui.mjs',
+  'overview-actions-ui.mjs',
   'files-git-marks-ui.mjs',
   'drawer-auto-open-ui.mjs',
   'overview-cards-ui.mjs',

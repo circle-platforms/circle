@@ -149,23 +149,6 @@
   flex: 1;
   min-height: 0;
 }
-.workspace-panel-terminal {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.workspace-panel-terminal > .segmented {
-  flex: none;
-}
-.workspace-panel-terminal > .inspector-resource-view {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
 .inspector-column.inspector-overlay {
   flex: none !important;
   max-width: 100% !important;

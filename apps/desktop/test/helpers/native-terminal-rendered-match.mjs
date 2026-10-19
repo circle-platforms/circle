@@ -8,14 +8,28 @@ export async function assertRenderedTerminalMatch({
   text,
   until,
 }) {
-  // Find opens on demand from the terminal bar.
-  await panel
-    .getByRole('button', { name: 'find in terminal', exact: true })
-    .click();
   const find = panel.getByRole('textbox', {
     name: 'find in terminal',
     exact: true,
   });
+  // Find opens on demand from the terminal's ⋮ menu, or from a find button where a
+  // stand-in terminal bar still has one.
+  if (!(await find.isVisible())) {
+    const button = panel.getByRole('button', {
+      name: 'find in terminal',
+      exact: true,
+    });
+    if (await button.count()) await button.click();
+    else {
+      await panel
+        .getByRole('button', { name: 'terminal menu', exact: true })
+        .click();
+      await panel
+        .page()
+        .getByRole('menuitem', { name: 'find in terminal', exact: true })
+        .click();
+    }
+  }
   const noMatches = panel.getByText('no matches', { exact: true });
   const selection = surface.locator('.xterm-selection div');
   const missing = `CIRCLE_NO_SUCH_RENDERED_MATCH_${randomUUID()}`;

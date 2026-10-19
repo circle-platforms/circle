@@ -316,7 +316,6 @@ export function NativeTerminal({
   const [hasSelection, setHasSelection] = useState<Record<string, boolean>>({});
   const focusTarget = useRef<string | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
-  const tabStrip = useRef<HTMLDivElement>(null);
   const selectedId = selectedBySession[sessionId];
   const { snapshot: appSnapshot, notify } = useRuntime();
   const [dismissed, setDismissed] = useState(readDismissed);
@@ -361,40 +360,6 @@ export function NativeTerminal({
         ].join(' ')
       : undefined);
   currentSearch.current = { sessionId, query, selectedId: selected?.id ?? '' };
-  const tabOrder = visible.map((item) => item.id).join('\n');
-  useLayoutEffect(() => {
-    const strip = tabStrip.current;
-    if (!active || !strip) return;
-    const reveal = () => {
-      if (!strip.clientWidth) return;
-      const tab = strip.querySelector<HTMLButtonElement>(
-        '[aria-selected="true"]',
-      );
-      if (!tab) return;
-      const viewport = strip.getBoundingClientRect();
-      const item = tab.getBoundingClientRect();
-      const left = viewport.left + strip.clientLeft;
-      const right = left + strip.clientWidth;
-      // Adjust only this horizontal scroller. scrollIntoView could move the
-      // Inspector or conversation and disrupt the developer's reading position.
-      if (item.width > strip.clientWidth) strip.scrollLeft += item.left - left;
-      else if (item.left < left) strip.scrollLeft += item.left - left;
-      else if (item.right > right) strip.scrollLeft += item.right - right;
-    };
-    reveal();
-    let width = strip.clientWidth;
-    const observer = new ResizeObserver(() => {
-      const next = strip.clientWidth;
-      if (next !== width) {
-        width = next;
-        reveal();
-      }
-    });
-    observer.observe(strip);
-    return () => observer.disconnect();
-    // Output/status updates retain the same identity/order and must not undo
-    // the user's manual horizontal browsing of terminal history.
-  }, [active, sessionId, selected?.id, tabOrder]);
 
   useEffect(() => {
     searchRequest.current++;

@@ -150,7 +150,7 @@ const launch = async () => {
   assert.equal(actual.packaged, !!process.env.CIRCLE_DESKTOP_EXECUTABLE);
   receipt.identity = actual;
 };
-const openHistoryAndTasks = async () => {
+const openHistory = async () => {
   const historyLink = page.locator(
     `.sidebar:visible .session-link[href="#/session/${sessionId}"][tabindex="0"]`,
   );
@@ -164,14 +164,17 @@ const openHistoryAndTasks = async () => {
   await page
     .getByText('COLD_CONFIG_HISTORY_REMAINS_READABLE', { exact: true })
     .waitFor();
-  const toggle = page.getByRole('button', {
-    name: 'activity panel',
+};
+// The task limits are kept on the settings page, with the start of the tasks a repaired
+// limit left waiting. The tasks panel that also said so went with the manual task controls.
+const openTaskLimits = async () => {
+  await page.getByRole('button', { name: 'settings', exact: true }).click();
+  const section = page.getByRole('region', {
+    name: 'parallel tasks',
     exact: true,
   });
-  if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-    await toggle.click();
-  await page.locator('#inspector-activity-tab-tasks').click();
-  await page.locator('.tasks-panel:visible').waitFor({ state: 'visible' });
+  await section.waitFor();
+  return section;
 };
 try {
   await launch();
@@ -226,10 +229,10 @@ try {
   await mkdir(join(data, 'workspace-services'), { recursive: true });
   await writeFile(receipt.settingsPath, '{malformed native fixture');
   await launch();
-  await openHistoryAndTasks();
-  const panel = page.locator('.tasks-panel:visible');
-  await panel
-    .getByText('the task limit needs fixing in settings', {
+  await openHistory();
+  const limitsSection = await openTaskLimits();
+  await limitsSection
+    .getByText('the saved limit could not be read; save a value to fix it', {
       exact: false,
     })
     .waitFor();
@@ -261,38 +264,25 @@ try {
     ledger.close();
   }
   assert.equal((await requests()).length, 1);
-  assert.equal(
-    await panel
-      .getByRole('button', { name: 'start ready tasks', exact: true })
-      .isEnabled(),
-    false,
-  );
   await page.screenshot({
     path: join(output, 'cold-start-history-and-config-error.png'),
   });
   receipt.checks.push(
     'malformed configuration preserves original window and stored history; queued task does not run',
   );
-  // The panel sends the person to the settings page, where the limit is kept.
-  await panel
-    .getByRole('button', { name: 'open settings', exact: true })
-    .click();
-  const limitsSection = page.getByRole('region', {
-    name: 'parallel tasks',
-    exact: true,
-  });
+  // The settings page repairs the limit where it is kept.
   await limitsSection.getByLabel('agents at once').fill('2');
   await limitsSection
     .getByRole('button', { name: 'save', exact: true })
     .click();
   await limitsSection.getByText('saved', { exact: true }).waitFor();
-  await openHistoryAndTasks();
-  await page
-    .locator('.tasks-panel:visible')
-    .getByText('limits repaired; start queued tasks when ready', {
-      exact: true,
-    })
-    .waitFor();
+  assert.equal(
+    await limitsSection
+      .getByText('the saved limit could not be read', { exact: false })
+      .count(),
+    0,
+  );
+  await openHistory();
   const repaired = await call('settings');
   assert.equal(repaired.error, undefined);
   assert.equal(repaired.agents, 2);
@@ -313,13 +303,7 @@ try {
   await app.close();
   app = undefined;
   await launch();
-  await openHistoryAndTasks();
-  await page
-    .locator('.tasks-panel:visible')
-    .getByText('limits repaired; start queued tasks when ready', {
-      exact: true,
-    })
-    .waitFor();
+  await openHistory();
   assert.equal((await call('settings')).requiresStart, true);
   assert.equal(
     (await call('list')).find((t) => t.spec.id === 'cold-settings-queued')
@@ -337,16 +321,27 @@ try {
   await page.screenshot({
     path: join(output, 'restarted-still-explicit-start-required.png'),
   });
-  await page
-    .locator('.tasks-panel:visible')
+  // The settings page says the queued tasks wait, and its start is the only thing that
+  // lets them run: the next real scripted model request follows that press alone.
+  const restartedSection = await openTaskLimits();
+  await restartedSection
+    .getByText('limits repaired; start queued tasks when ready', {
+      exact: false,
+    })
+    .waitFor();
+  assert.equal((await requests()).length, 1);
+  await restartedSection
     .getByRole('button', { name: 'start ready tasks', exact: true })
     .click();
   await until(
     async () => (await requests()).length >= 2,
-    'explicit native button starts the queued model request',
+    'the settings page start runs the queued model request',
   );
+  await restartedSection
+    .getByRole('button', { name: 'start ready tasks', exact: true })
+    .waitFor({ state: 'detached' });
   receipt.checks.push(
-    'only original explicit start button causes the next real scripted model request',
+    'only the explicit start on the settings page causes the next real scripted model request',
   );
   assert.deepEqual(receipt.rendererErrors, []);
   receipt.status = 'passed';

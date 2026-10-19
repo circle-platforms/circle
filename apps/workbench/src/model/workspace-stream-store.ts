@@ -191,6 +191,11 @@ export class WorkspaceStreamStore {
               'git',
               'tasks',
               'delivery',
+              // Services of earlier versions: their events are history the journal
+              // replays as well, so a checkpoint holding them is still whole
+              'cycles',
+              'language',
+              'debug',
             ].includes(event.service) ||
             [event.workspaceId, event.sessionId, event.resourceId].some(
               (id) => typeof id !== 'string' || !id || id.length > 200,

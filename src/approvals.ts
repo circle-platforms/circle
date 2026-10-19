@@ -656,13 +656,17 @@ export const ruleTool = (tool: string): string =>
 /**
  * A write to one of the person's own terminal tabs in the desktop application, as the
  * terminal tools describe it (they add `terminal`, `first_use` and, when the write runs
- * a line, `command`): the shell runs that line as `execute` would run it, so it is
- * judged by the same rules, and the same rules cover it. A write that runs nothing, such
- * as text without Enter or an arrow key, does not ask once the tab is in use.
+ * a line, `command`, read from the values the line runs with): the shell runs that line
+ * as `execute` would run it, so it is judged by the same rules, and the same rules cover
+ * it. A write that runs nothing, such as text without Enter or an arrow key, does not
+ * ask once the tab is in use. `uncertain` marks a line read off the screen where Circle
+ * could not tell where the prompt ends: it may carry the prompt, so no rule judges or
+ * keeps it, and it asks every time, as a first use does.
  */
 interface TerminalTabWrite {
   firstUse: boolean;
   command?: string;
+  uncertain: boolean;
 }
 const TERMINAL_TAB_WRITES = new Set(['terminal_send', 'terminal_press']);
 function terminalTabWrite(
@@ -678,6 +682,7 @@ function terminalTabWrite(
   return {
     firstUse: args.first_use === true,
     ...(typeof args.command === 'string' ? { command: args.command } : {}),
+    uncertain: args.uncertain === true,
   };
 }
 /** Where a call's "allow for this session" rule is kept: a tab's lines with commands. */
@@ -708,6 +713,7 @@ export class ApprovalPolicy {
     if (tab)
       return (
         !tab.firstUse &&
+        !tab.uncertain &&
         tab.command !== undefined &&
         commandAllowed(tab.command, this.allowed, this.workspace)
       );
@@ -717,11 +723,13 @@ export class ApprovalPolicy {
     );
   }
   /**
-   * The first write to one of the person's terminal tabs in a conversation: the person
-   * allows it in every mode, auto included, and no rule, setting or hook's allow skips it.
+   * A write to one of the person's terminal tabs that the person always sees: the first in
+   * a conversation, and a line Circle could not read for sure. The person allows it in
+   * every mode, auto included, and no rule, setting or hook's allow skips it.
    */
-  firstUse(tool: string, args: Record<string, unknown>): boolean {
-    return terminalTabWrite(tool, args)?.firstUse === true;
+  tabAlwaysAsks(tool: string, args: Record<string, unknown>): boolean {
+    const tab = terminalTabWrite(tool, args);
+    return tab?.firstUse === true || tab?.uncertain === true;
   }
   setMode(thread: string, mode: ApprovalMode): void {
     if (mode === 'manual') this.modes.delete(thread);
@@ -762,10 +770,17 @@ export class ApprovalPolicy {
   }
   review(tool: string, args: Record<string, unknown>): Review {
     const tab = terminalTabWrite(tool, args);
-    if (tab)
-      return tab.command !== undefined
-        ? this.review('execute', { command: tab.command })
-        : review('ASK', 'types in your terminal');
+    if (tab) {
+      if (tab.command === undefined)
+        return review('ASK', 'types in your terminal');
+      const judged = this.review('execute', { command: tab.command });
+      // A line that may carry its prompt: refused if it reads as refused, otherwise shown
+      // to the person as it is, with no rule to keep from it
+      if (!tab.uncertain || judged.verdict === 'DENY') return judged;
+      return review('ASK_FORCED', 'runs the line on the screen', {
+        warn_delete: judged.warn_delete,
+      });
+    }
     if (tool === 'execute') {
       let command = String(args.command || '');
       const found = classifyCommand(command, this.credentialFiles);
@@ -897,7 +912,7 @@ export class ApprovalPolicy {
     const found = this.review(tool, args);
     if (found.verdict === 'DENY') return false;
     const tab = terminalTabWrite(tool, args);
-    if (tab?.firstUse) return true;
+    if (tab?.firstUse || tab?.uncertain) return true;
     if (tab && tab.command === undefined) return false;
     if (this.allowedBySettings(tool, args)) return false;
     const mode = this.mode(thread);

@@ -237,6 +237,22 @@ try {
         request.headers['x-api-key'] === 'native-saved-key' &&
         request.headers['anthropic-version'] === '2023-06-01',
     ),
+    JSON.stringify(
+      requests.map((request) => ({
+        method: request.method,
+        url: request.url,
+        key: request.headers['x-api-key'],
+        version: request.headers['anthropic-version'],
+        headers: Object.keys(request.headers),
+        body: request.body && {
+          model: request.body.model,
+          system: JSON.stringify(request.body.system)?.slice(0, 300),
+          messages: request.body.messages?.length,
+          tools: request.body.tools?.length,
+          last: JSON.stringify(request.body.messages?.at(-1))?.slice(0, 300),
+        },
+      })),
+    ),
   );
   assert.equal(requests.at(-1).body.model, selected);
   checks.push(

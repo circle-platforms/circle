@@ -1,4 +1,5 @@
 import type { PullRequestOverview } from '../../../desktop/src/workspace/pulls-types';
+import { planComplete } from '../../../../src/plan_state';
 import { agentState, isAgentActive } from './activity';
 import { sidebarTasks, type SidebarTask } from './session-management';
 import type { AgentRecord, Interaction, Session, Todo } from './types';
@@ -46,9 +47,12 @@ export function overviewProgress(
   agents: readonly AgentRecord[],
 ): OverviewProgress {
   const todos = session.todos ?? [];
-  const current =
-    todos.find((todo) => todo.status === 'running') ??
-    todos.find((todo) => todo.status === 'pending');
+  // A plan whose every step is done has no step under way: it is not in progress, as
+  // the terminal hides it too. Its steps stay in the session.
+  const current = planComplete(todos)
+    ? undefined
+    : (todos.find((todo) => todo.status === 'running') ??
+      todos.find((todo) => todo.status === 'pending'));
   const plan = current
     ? {
         done: todos.filter((todo) => todo.status === 'completed').length,

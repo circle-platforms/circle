@@ -33,7 +33,31 @@ task.messages = [
 task.leafId = 'ta';
 task.todos = [];
 task.changes = [];
-data.sessions = [parent, task];
+// The parent conversation's call that scheduled the task links to it.
+parent.messages = [
+  ...parent.messages,
+  {
+    id: 'schedule',
+    parentId: parent.leafId,
+    role: 'tool',
+    at: '12:00',
+    text: 'scheduled 1 task',
+    tool: {
+      id: 'call-schedule',
+      name: 'native_tasks_enqueue',
+      input: {},
+      output: 'queued task-1',
+      status: 'success',
+      agentIds: ['task-agent'],
+    },
+  },
+];
+parent.leafId = 'schedule';
+// The task's independent reviewer has a conversation of its own, and only reads.
+const reviewer = structuredClone(task);
+reviewer.id = 'reviewer-session';
+reviewer.title = 'review add a regression for the close boundary';
+data.sessions = [parent, task, reviewer];
 data.activeSessionId = task.id;
 data.interactions = [];
 data.requests = [];
@@ -54,6 +78,26 @@ data.agents = [
       attempt: 1,
       state: 'needs_review',
       access: 'write',
+      baseline: 'b'.repeat(40),
+    },
+  },
+  {
+    id: 'reviewer-agent',
+    sessionId: parent.id,
+    resourceSessionId: reviewer.id,
+    name: 'review add a regression for the close boundary',
+    description: 'review add a regression for the close boundary',
+    status: 'completed',
+    model: 'sample-code-model',
+    tokens: 0,
+    messages: [],
+    readOnly: true,
+    task: {
+      id: 'task-1',
+      role: 'reviewer',
+      attempt: 1,
+      state: 'needs_review',
+      access: 'readonly',
       baseline: 'b'.repeat(40),
     },
   },
@@ -121,6 +165,7 @@ window.circleDesktop = {
 Object.assign(window, {
   taskReviewFixture: {
     calls,
+    parent: parent.id,
     /** The task runs again as a later attempt, and finishes with another patch. */
     nextAttempt: () => {
       record = {

@@ -37,6 +37,8 @@ export function effectiveBindings(
 }
 type KeyEvent = {
   key: string;
+  /** The key pressed, whatever it types: `KeyP` for ⌥P, which types π on macOS. */
+  code?: string;
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
@@ -73,16 +75,23 @@ export function normalizeChord(chord: string, mac = macKeyboard()): string {
   return [...MODIFIERS.filter((name) => held.has(name)), key].join('+');
 }
 export function chordFromEvent(event: KeyEvent, mac = macKeyboard()): string {
-  const key =
-    (
-      {
-        ArrowUp: 'up',
-        ArrowDown: 'down',
-        ArrowLeft: 'left',
-        ArrowRight: 'right',
-        Escape: 'escape',
-      } as Record<string, string>
-    )[event.key] ?? event.key.toLowerCase();
+  // On macOS ⌥ turns a letter or a digit into another character (⌥P types π): an alt
+  // chord is the key pressed. Elsewhere Alt with Ctrl is AltGr, which types characters.
+  const pressed =
+    mac && event.altKey
+      ? /^(?:Key([A-Z])|Digit(\d))$/.exec(event.code ?? '')
+      : null;
+  const key = pressed
+    ? (pressed[1] ?? pressed[2]!).toLowerCase()
+    : ((
+        {
+          ArrowUp: 'up',
+          ArrowDown: 'down',
+          ArrowLeft: 'left',
+          ArrowRight: 'right',
+          Escape: 'escape',
+        } as Record<string, string>
+      )[event.key] ?? event.key.toLowerCase());
   // On macOS ⌘ is its own modifier: the terminal's ctrl chords are the Control key
   // there too, and ⌘ chords stay the system's. Elsewhere the Windows or Super key
   // reads as Ctrl, as it always did.

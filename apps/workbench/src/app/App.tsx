@@ -357,9 +357,22 @@ export function App() {
     trigger?: HTMLElement,
   ) => openOriginalCommandTerminal({ sourceSessionId, userShellId }, trigger);
 
-  // A subagent opens beside the conversation, in the drawer's subagent mode.
+  // A subagent opens beside the conversation, in the drawer's subagent mode. A task is a
+  // conversation of its own: its link opens that conversation, as its row in the sidebar does.
   const selectAgent = (id: string | null) => {
     commandRequest.current++;
+    const current = runtime.getSnapshot();
+    const task = id
+      ? current.agents.find((item) => item.id === id && item.task)
+      : undefined;
+    const conversation = task && (task.resourceSessionId ?? task.id);
+    if (
+      conversation &&
+      current.sessions.some((item) => item.id === conversation)
+    ) {
+      perform(() => selectSessionAndNavigate(conversation));
+      return;
+    }
     setAgent(id);
     if (id) {
       setPanel('agents');

@@ -37,9 +37,14 @@ try {
       await page.goto(
         `${server.resolvedUrls.local[0]}test/screenshot-thumb-ui.html?theme=${theme}&locale=${locale}`,
       );
-      const thumb = page.locator('.tool-shots .image-thumb');
+      const thumbs = page.locator('.tool-shots .image-thumb');
+      const thumb = thumbs.first();
       await thumb.waitFor();
-      assert.equal(await thumb.count(), 1, 'one picture, shown under the line');
+      assert.equal(
+        await thumbs.count(),
+        2,
+        'each picture of the call, shown under the line',
+      );
       // It shows with the tool line folded: nobody has to open the call to see it.
       assert.equal(
         await page.locator('.tool-group-calls').count(),
@@ -82,6 +87,26 @@ try {
       assert.match(calls[0].args[0], /^data:image\/png;base64,/);
       assert.equal(calls[1].args[0], 'app.example.test 12:04.png');
       assert.equal(calls[1].args[1], calls[0].args[0]);
+      await page.keyboard.press('Escape');
+      await dialog.waitFor({ state: 'hidden' });
+      // A GIF goes to the clipboard as a PNG, which the system takes, and is saved as it is
+      await page
+        .getByRole('button', {
+          name: locale === 'zh-CN' ? '放大 spinner.gif' : 'enlarge spinner.gif',
+        })
+        .click();
+      await dialog.waitFor();
+      await dialog.getByRole('button', { name: words.copy }).click();
+      await dialog.getByRole('button', { name: words.save }).click();
+      await page.waitForFunction(
+        () => window.screenshotThumbFixture.calls.length === 4,
+      );
+      const gif = (
+        await page.evaluate(() => window.screenshotThumbFixture.calls)
+      ).slice(2);
+      assert.match(gif[0].args[0], /^data:image\/png;base64,/);
+      assert.equal(gif[1].args[0], 'spinner.gif');
+      assert.match(gif[1].args[1], /^data:image\/gif;base64,/);
       await page.keyboard.press('Escape');
       await dialog.waitFor({ state: 'hidden' });
       assert.deepEqual(errors, []);

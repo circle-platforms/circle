@@ -77,28 +77,6 @@
   font-size: var(--ui-small);
   white-space: nowrap;
 }
-
-/* Terminal and history: two icons before full view and close. */
-.inspector .inspector-body.flush .workspace-panel-terminal > .panel-switch {
-  position: absolute;
-  z-index: 1;
-  top: 7px;
-  right: calc(var(--header-end) + 2px);
-  gap: 0;
-  margin: 0;
-  padding: 2px;
-  border-radius: 7px;
-}
-.inspector .panel-switch button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border-radius: 6px;
-}
-
 /* The terminal itself: the screen to the edges, a quiet bar under it. */
 .inspector .native-terminal.embedded {
   background: var(--bg);
@@ -494,16 +472,6 @@
 .inspector .files-panel > .panel-note {
   margin: 10px 6px;
 }
-/* The tab's view sits in a display: contents fieldset, so it is not the flex child the
-   terminal's own rule expects; make it fill the panel here. */
-.inspector .workspace-panel-terminal fieldset > .inspector-resource-view {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
 /* The drawer owns the resource title and index toggle. The nested file index
    already has a real filter; its legacy absolute heading must not cover the document. */
 .inspector .drawer-context-index .files-panel > .panel-header-name,

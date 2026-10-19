@@ -132,6 +132,8 @@ export class RuntimeSupervisor {
   // The person's own terminal tabs live in the runtime with their shells: what it says
   // of them goes to the window, and the person's take, return and stop come back
   private terminalTabsHandler?: TerminalTabsHandler;
+  /** What Circle last said it does with each conversation's tabs, for a window opened later. */
+  private readonly terminalTabRows = new Map<string, LocalTerminalRow[]>();
   private terminalTabRequests = new Map<
     string,
     {
@@ -312,6 +314,7 @@ export class RuntimeSupervisor {
       request.reject(Error('the runtime stopped'));
     }
     this.terminalTabRequests.clear();
+    this.terminalTabRows.clear();
     this.terminalTabsHandler?.('gone');
     const error = Error(exit.message);
     for (const pending of this.pending.values()) {
@@ -576,6 +579,10 @@ export class RuntimeSupervisor {
   /** Who shows what Circle does with the person's own terminal tabs: the window. */
   onTerminalTabs(handler: TerminalTabsHandler) {
     this.terminalTabsHandler = handler;
+    // A window opened again (macOS keeps the application without one) learns at once
+    // what Circle is doing with the tabs: rows that did not change are not sent again.
+    for (const [conversation, rows] of this.terminalTabRows)
+      handler({ conversation, rows });
   }
   /** The person takes a terminal tab, hands it back or stops Circle on it. */
   terminalTabControl(
@@ -617,6 +624,8 @@ export class RuntimeSupervisor {
       !/^[a-zA-Z0-9_-]{1,100}$/.test(message.conversation)
     )
       return;
+    if (rows.length) this.terminalTabRows.set(message.conversation, rows);
+    else this.terminalTabRows.delete(message.conversation);
     this.terminalTabsHandler?.({ conversation: message.conversation, rows });
   }
   private terminalTabReply(message: {

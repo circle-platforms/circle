@@ -3072,7 +3072,7 @@ export class RuntimeController {
                 : 'Approval is enforced by the Circle core.',
             schema: tool.parameters,
           })),
-      uiPlugins: ['files', 'activity', 'browser', 'devices'],
+      uiPlugins: ['files', 'browser'],
       openUrl: this.openRequest,
       ...(this.whatsNew ? { whatsNew: this.whatsNew } : {}),
       settings: {

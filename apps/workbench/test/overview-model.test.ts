@@ -131,27 +131,6 @@ test('in progress lists the plan step, running subagents and tasks that are not 
   assert.equal(overviewProgress(session('s9'), sessions, agents).plan, null);
 });
 
-test('a finished plan is not in progress, so it neither counts nor shows', () => {
-  const finished = session('s1', {
-    todos: [
-      { id: '1', text: 'trace', status: 'completed' },
-      { id: '2', text: 'fix', status: 'completed' },
-    ],
-  });
-  const progress = overviewProgress(
-    finished,
-    [finished],
-    [agent({ id: 'a1' })],
-  );
-  assert.equal(progress.plan, null);
-  // What the card counts: the subagent at work, and no plan.
-  assert.deepEqual(
-    progress.agents.map((item) => item.id),
-    ['a1'],
-  );
-  assert.equal(overviewProgress(finished, [finished], []).plan, null);
-});
-
 test('the plan step in progress falls back to the next pending one', () => {
   const s = session('s1', {
     todos: [
@@ -160,6 +139,23 @@ test('the plan step in progress falls back to the next pending one', () => {
     ],
   });
   assert.equal(overviewProgress(s, [s], []).plan?.current?.text, 'next');
+});
+
+test('a plan whose every step is done is not in progress', () => {
+  const s = session('s1', {
+    todos: [
+      { id: '1', text: 'trace', status: 'completed' },
+      { id: '2', text: 'fix', status: 'completed' },
+    ],
+  });
+  assert.equal(overviewProgress(s, [s], []).plan, null);
+  // What the card counts then: a subagent at work, and no plan.
+  const progress = overviewProgress(s, [s], [agent({ id: 'a1' })]);
+  assert.equal(progress.plan, null);
+  assert.deepEqual(
+    progress.agents.map((item) => item.id),
+    ['a1'],
+  );
 });
 
 test('a waiting subagent is matched to the request it made', () => {

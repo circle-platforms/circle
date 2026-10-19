@@ -23,6 +23,7 @@ import {
   type LocalTerminalHost,
 } from '../src/local-terminals.ts';
 import { terminalTabNumbers } from '../src/terminal-tabs.ts';
+import { ApprovalPolicy, ApprovalStore } from '../../../src/approvals.ts';
 import type {
   TerminalEvent,
   TerminalSnapshot,
@@ -721,4 +722,119 @@ test('a tab an approval waits on is waiting, and a write the person never allowe
     /the user has not let Circle use terminal 1 yet; nothing was typed/,
   );
   assert.equal(host.writes.length, 0);
+});
+
+/** A tab with a prompt of its own, whose screen Circle has read, on a direct port. */
+async function promptTab(t: TestContext, prompt: string, read = true) {
+  const host = new FakeTerminals();
+  const fixture = tabs(host);
+  const id = randomUUID();
+  const shell = host.open(id, {}, prompt);
+  const session = `local:${shell.id}`;
+  const port = fixture.local.port();
+  const signal = new AbortController().signal;
+  t.after(() => fixture.local.close());
+  if (read) await port.request(id, 'read', { session }, signal);
+  const enter = () =>
+    fixture.local.facts(
+      id,
+      'press',
+      { session, key: 'Enter' },
+      { session, key: 'Enter' },
+    );
+  return { host, ...fixture, id, shell, session, port, signal, enter };
+}
+
+test('a line the person started is read from where they began, past the prompt, and judged as execute would judge it', async (t) => {
+  const f = await promptTab(t, 'jiang@mac circle % ');
+  // the person types on the fresh line and the shell echoes it
+  f.local.typed(f.id, f.shell.id, 'rm -rf build');
+  f.host.print(f.shell.id, 'rm -rf build');
+  await until(
+    () => f.enter().command === 'rm -rf build',
+    'the line reads without its prompt',
+  );
+  const facts = f.enter();
+  assert.equal(facts.uncertain, undefined);
+  const root = await mkdtemp(join(tmpdir(), 'circle-tab-policy-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const policy = new ApprovalPolicy(
+    new ApprovalStore(join(root, 'approvals')),
+    root,
+  );
+  const args = { session: f.session, key: 'Enter', ...facts };
+  // the deletion asks as it does for execute, and no prefix rule is made of the prompt
+  assert.deepEqual(
+    policy.review('terminal_press', args),
+    policy.review('execute', { command: 'rm -rf build' }),
+  );
+});
+
+test('a line the person typed before Circle read the tab may carry its prompt: it asks every time, in every mode', async (t) => {
+  const f = await promptTab(t, 'jiang@mac circle % ', false);
+  f.local.typed(f.id, f.shell.id, 'npm test');
+  f.host.print(f.shell.id, 'npm test');
+  await f.port.request(f.id, 'read', { session: f.session }, f.signal);
+  const facts = f.enter();
+  assert.equal(facts.uncertain, true);
+  assert.match(String(facts.command), /npm test$/);
+  const root = await mkdtemp(join(tmpdir(), 'circle-tab-policy-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const policy = new ApprovalPolicy(
+    new ApprovalStore(join(root, 'approvals')),
+    root,
+  );
+  policy.setMode('conversation', 'auto');
+  const args = { session: f.session, key: 'Enter', ...facts };
+  assert.equal(
+    policy.needsApproval('terminal_press', args, 'conversation'),
+    true,
+  );
+  assert.equal(policy.review('terminal_press', args).pattern, '');
+});
+
+test('a write’s facts are read from the values it types: the rules judge what runs, the card is shown names', async (t) => {
+  const f = await promptTab(t, '$ ');
+  const facts = f.local.facts(
+    f.id,
+    'send',
+    { session: f.session, text: 'echo s3cr3t-value', enter: true },
+    { session: f.session, text: 'echo %TOKEN%', enter: true },
+  );
+  assert.equal(facts.command, 'echo s3cr3t-value');
+  assert.equal(facts.typed, 'echo s3cr3t-value');
+});
+
+test('stopping Circle on a tab says that what it typed may have run, and a long handoff reason stays within what the window carries', async (t) => {
+  const f = await allowedTab(t);
+  const waiting = f.port.request(
+    f.id,
+    'wait',
+    {
+      session: f.session,
+      pattern: 'NEVER_PRINTED',
+      idle_ms: 30000,
+      timeout_ms: 300000,
+    },
+    f.signal,
+  );
+  await until(
+    () => f.local.rows(f.id)[0]?.state === 'operating',
+    'Circle operates the tab',
+  );
+  await f.local.control(f.id, f.session, 'stop');
+  await assert.rejects(waiting, /may already have run, so read the tab/);
+  const handing = f.port.request(
+    f.id,
+    'handoff',
+    { session: f.session, reason: 'x'.repeat(10_000) },
+    f.signal,
+  );
+  await until(
+    () => f.local.rows(f.id)[0]?.held === 'handoff',
+    'the tab is handed over',
+  );
+  assert.ok(f.local.rows(f.id)[0]!.reason!.length <= 2000);
+  await f.local.control(f.id, f.session, 'return');
+  await handing;
 });

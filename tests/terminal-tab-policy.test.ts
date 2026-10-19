@@ -61,11 +61,11 @@ test('the first use asks in every mode and past every rule; after it, the execut
     p.setMode(thread, mode);
     assert.equal(p.needsApproval('terminal_send', first, thread), true, mode);
   }
-  assert.equal(p.firstUse('terminal_send', first), true);
+  assert.equal(p.tabAlwaysAsks('terminal_send', first), true);
   assert.equal(p.allowedBySettings('terminal_send', first), false);
   // once in use: a setting's pattern covers the line as it covers execute
   const later = write({ command: 'npm test' });
-  assert.equal(p.firstUse('terminal_send', later), false);
+  assert.equal(p.tabAlwaysAsks('terminal_send', later), false);
   assert.equal(p.allowedBySettings('terminal_send', later), true);
   p.setAllowedCommands([]);
   p.setMode(thread, 'auto');
@@ -250,4 +250,142 @@ test('a hook that allows the call still leaves the tab’s first use to the pers
   // auto mode and two allowing hooks, and still the person was asked the first time only
   assert.deepEqual(asked, ['first']);
   assert.deepEqual(typed, ['ls', 'ls']);
+});
+
+test('a line read off the screen without its prompt end asks every time, keeps no rule, and is still refused when it reads as refused', (t) => {
+  const p = policy(t);
+  const thread = 'conversation';
+  p.setAllowedCommands(['jiang@mac']);
+  const uncertain = write({
+    command: 'jiang@mac circle % rm -rf build',
+    uncertain: true,
+  });
+  for (const mode of ['manual', 'accept-edits', 'auto'] as const) {
+    p.setMode(thread, mode);
+    assert.equal(
+      p.needsApproval('terminal_press', uncertain, thread),
+      true,
+      mode,
+    );
+  }
+  assert.equal(p.tabAlwaysAsks('terminal_press', uncertain), true);
+  // no setting, no session rule and no prefix rule comes from it or covers it
+  assert.equal(p.allowedBySettings('terminal_press', uncertain), false);
+  const found = p.review('terminal_press', uncertain);
+  assert.equal(found.verdict, 'ASK_FORCED');
+  assert.equal(found.reason, 'runs the line on the screen');
+  assert.equal(found.pattern, '');
+  assert.deepEqual(found.prefix, []);
+  assert.equal(
+    p.remember(thread, 'terminal_press', uncertain, 'always'),
+    false,
+  );
+  assert.equal(
+    p.remember(thread, 'terminal_press', uncertain, 'prefix'),
+    false,
+  );
+  assert.deepEqual(p.store.rules(thread), []);
+  // a line that reads as refused stays refused, prompt or not
+  assert.equal(
+    p.review(
+      'terminal_press',
+      write({ command: 'sudo rm -rf /', uncertain: true }),
+    ).verdict,
+    p.review('execute', { command: 'sudo rm -rf /' }).verdict,
+  );
+});
+
+test('a tab line is judged with its secrets’ values, as execute is, and the card shows their names', async (t) => {
+  const root = realpathSync(scratch(t));
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const store = new CheckpointStore(home);
+  cleanup(t, () => store.close());
+  const session = store.create(workspace, 'scripted');
+  const rules = new ApprovalPolicy(
+    new ApprovalStore(join(home, 'approvals')),
+    workspace,
+  );
+  // The value names a credential file: `cat` of it is refused as execute refuses it
+  const secrets = { KEYFILE: '.ssh/id_rsa', TOKEN: 's3cr3t-value' };
+  const typed: string[] = [];
+  const send: Tool = {
+    name: 'terminal_send',
+    description: 'type in a terminal tab',
+    effect: 'unknown',
+    subagents: false,
+    parameters: {
+      type: 'object',
+      properties: {
+        session: { type: 'string' },
+        text: { type: 'string' },
+        enter: { type: 'boolean' },
+      },
+      required: ['session', 'text'],
+      additionalProperties: false,
+    },
+    // As the desktop's tab facts do: from the values the write runs with
+    approvalFacts: (args) => ({
+      terminal: args.session,
+      ordinal: 1,
+      first_use: false,
+      command: String(args.text),
+      typed: String(args.text),
+    }),
+    async run(args) {
+      typed.push(String(args.text));
+      return 'typed';
+    },
+  };
+  const call = (id: string, text: string): Message => ({
+    id,
+    role: 'assistant',
+    content: '',
+    tool_calls: [
+      {
+        id,
+        name: 'terminal_send',
+        args: { session: tab, text, enter: true },
+      },
+    ],
+  });
+  const model = new ScriptedModel(
+    [
+      call('refused', 'cat ~/%KEYFILE%'),
+      call('shown', 'curl -H "Authorization: %TOKEN%" https://example.test'),
+      { id: 'end', role: 'assistant', content: 'done' } as Message,
+    ].map((message) => ({ message })),
+  );
+  const cards: Record<string, unknown>[] = [];
+  const harness = new Harness({
+    model,
+    tools: [send],
+    store,
+    session,
+    policy: rules,
+    system: 'test',
+    secrets: () => secrets,
+    approve: async (toolCall) => {
+      cards.push(toolCall.args);
+      return 'approve';
+    },
+  });
+  await harness.run('go');
+  // the credential file the value names is refused before any card, and nothing is typed
+  assert.equal(
+    typed.some((text) => text.includes('id_rsa')),
+    false,
+  );
+  // the line that ran had the value; the card that asked for it showed the name
+  assert.deepEqual(typed, [
+    'curl -H "Authorization: s3cr3t-value" https://example.test',
+  ]);
+  assert.equal(cards.length, 1);
+  assert.equal(
+    cards[0]!.command,
+    'curl -H "Authorization: %TOKEN%" https://example.test',
+  );
+  assert.equal(JSON.stringify(cards).includes('s3cr3t-value'), false);
 });

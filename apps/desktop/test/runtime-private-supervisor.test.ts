@@ -621,7 +621,8 @@ test('what the runtime says of the terminal tabs reaches the window only when it
   await fixture(
     async (supervisor, child) => {
       const updates: unknown[] = [];
-      supervisor.onTerminalTabs((update) => updates.push(update));
+      const record = (update: unknown) => void updates.push(update);
+      supervisor.onTerminalTabs(record);
       const row = {
         id: 'local:abc',
         terminal: 'abc',
@@ -646,6 +647,12 @@ test('what the runtime says of the terminal tabs reaches the window only when it
         rows: [row],
       });
       assert.deepEqual(updates, [{ conversation: 'c1', rows: [row] }]);
+      // a window opened later (macOS reopening the application) is told at once
+      const later: unknown[] = [];
+      supervisor.onTerminalTabs((update) => later.push(update));
+      assert.deepEqual(later, [{ conversation: 'c1', rows: [row] }]);
+      // the first window takes over again
+      supervisor.onTerminalTabs(record);
       const taken = supervisor.terminalTabControl('c1', 'local:abc', 'take');
       const controls = () =>
         child.sent.filter((message) => message.type === 'terminal-tab-control');
@@ -687,6 +694,10 @@ test('what the runtime says of the terminal tabs reaches the window only when it
       child.emit('exit', 1);
       await assert.rejects(pending, /the runtime stopped/);
       assert.equal(updates.at(-1), 'gone');
+      // and a window opened after that has nothing old to show
+      const afterwards: unknown[] = [];
+      supervisor.onTerminalTabs((update) => afterwards.push(update));
+      assert.deepEqual(afterwards, []);
     },
     { logFile, restartDelayMs: 60_000 },
     configured,

@@ -19,6 +19,7 @@ import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
 import { redact } from './redact.js';
 import {
   expandVariables,
+  redactSecrets,
   secretRedactor,
   written,
   type Redactor,
@@ -181,6 +182,19 @@ export interface QueuedMessage {
   pastes?: Record<string, string>;
   attachments?: MediaAttachment[];
 }
+/** Facts a tool read from the values a call runs with, as the person and the hooks see them. */
+function namedSecrets(
+  facts: Record<string, unknown>,
+  secrets: Record<string, string>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(facts).map(([name, value]) => [
+      name,
+      typeof value === 'string' ? redactSecrets(value, secrets) : value,
+    ]),
+  );
+}
+
 export class Harness {
   /** Text from session_start, added to the system prompt without replacing it. */
   hookPreface = '';
@@ -1438,10 +1452,15 @@ export class Harness {
       const raw = call.args;
       let resolved = expandVariables(raw, { ...variables, ...secrets }, used);
       call = { ...call, args: expandVariables(raw, variables) };
-      // After the arguments were checked, from the values: the model cannot give these itself
+      // After the arguments were checked, from the values: the model cannot give these itself.
+      // The rules judge them as they are; the card and the hooks see each secret's value
+      // back as its name, as they see the arguments.
       const facts = tool.approvalFacts?.(resolved, this.sessionId, call.args);
       if (facts) {
-        call = { ...call, args: { ...call.args, ...facts } };
+        call = {
+          ...call,
+          args: { ...call.args, ...namedSecrets(facts, secrets) },
+        };
         resolved = { ...resolved, ...facts };
       }
       if (
@@ -1474,7 +1493,7 @@ export class Harness {
       // A first write to one of the person's terminal tabs asks as well, in every mode
       const alwaysAsk =
         found.verdict === 'ASK_FORCED' ||
-        this.options.policy.firstUse(call.name, resolved);
+        this.options.policy.tabAlwaysAsks(call.name, resolved);
       const hookAsk = before?.decision === 'ask';
       const hookAllow = before?.decision === 'allow' && !alwaysAsk;
       if (hookAllow) hookLine = HOOK_ALLOWED_LINE;
