@@ -260,7 +260,7 @@ Settings → appearance:
 
 The choice of language and text size is kept by the window, not in `settings.json`.
 
-The light theme is set on a cream ground, `#F2EDD7`, and the window's text is the system's own font: SF Pro on macOS, Segoe UI Variable on Windows 11 and Segoe UI before it, with PingFang or Microsoft YaHei for Chinese.
+The light theme is set on a warm off-white ground, `#F5F4ED`, and the window's text is the system's own font: SF Pro on macOS, Segoe UI Variable on Windows 11 and Segoe UI before it, with PingFang or Microsoft YaHei for Chinese.
 
 ## Updates
 
