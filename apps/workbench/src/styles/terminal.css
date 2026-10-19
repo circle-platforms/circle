@@ -28,25 +28,21 @@
   min-width: 0;
   overflow: auto;
 }
-.native-terminal-tabs > [role='tab'] {
+.native-terminal-tabs > .native-terminal-tab {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  color: var(--muted);
-  font-size: var(--ui-small);
-  border-radius: 4px;
-  white-space: nowrap;
-  cursor: default;
+  gap: 2px;
 }
-.native-terminal-tabs > [role='tab'].active {
-  background: var(--bg);
-  color: var(--fg);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--fg) 5%, transparent);
-}
-.native-terminal-tabs > [role='tab'][draggable='true'] {
+.native-terminal-tabs > .native-terminal-tab[draggable='true'] {
   cursor: grab;
+}
+.native-terminal-tabs .native-terminal-tab > [role='tab'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
 }
 .native-terminal-tab-label {
   overflow: hidden;
@@ -54,22 +50,23 @@
 }
 /* The close control waits for the tab it belongs to, so a strip of tabs stays
    quiet until the person reaches for one. */
-.native-terminal-tab-close {
+.native-terminal-tabs .native-terminal-tab-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 16px;
   height: 16px;
+  padding: 0;
   border-radius: 4px;
   color: var(--muted);
   opacity: 0;
 }
-.native-terminal-tabs > [role='tab']:hover .native-terminal-tab-close,
-.native-terminal-tabs > [role='tab']:focus-within .native-terminal-tab-close,
-.native-terminal-tabs > [role='tab'].active .native-terminal-tab-close {
+.native-terminal-tab:hover .native-terminal-tab-close,
+.native-terminal-tab:focus-within .native-terminal-tab-close,
+.native-terminal-tab.active .native-terminal-tab-close {
   opacity: 1;
 }
-.native-terminal-tab-close:hover {
+.native-terminal-tabs .native-terminal-tab-close:hover {
   background: var(--hover);
   color: var(--fg);
 }

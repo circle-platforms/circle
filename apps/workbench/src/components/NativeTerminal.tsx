@@ -219,6 +219,11 @@ export function NativeTerminal({
   const [orderBySession, setOrderBySession] = useState<
     Record<string, string[]>
   >({});
+  // Consoles the person stopped, or that a restart replaced, leave the strip.
+  // One that ended by itself stays, with its exit reason, until its tab is closed.
+  const [hiddenBySession, setHiddenBySession] = useState<
+    Record<string, string[]>
+  >({});
   const [renameFor, setRenameFor] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const dragId = useRef<string | null>(null);
@@ -258,8 +263,9 @@ export function NativeTerminal({
     const at = order.indexOf(id);
     return at === -1 ? Number.MAX_SAFE_INTEGER : at;
   };
+  const hidden = hiddenBySession[sessionId] ?? [];
   const visible = sessionTerminals
-    .filter((item) => commandTerminal || live(item))
+    .filter((item) => commandTerminal || !hidden.includes(item.id))
     .sort((a, b) => orderPosition(a.id) - orderPosition(b.id));
   const selected =
     visible.find((item) => item.id === selectedId) ?? visible.at(-1);
@@ -320,6 +326,16 @@ export function NativeTerminal({
   const adopt = useCallback((snapshot: TerminalSnapshot) => {
     setTerminals((current) => mergeTerminalSnapshot(current, snapshot));
     // A restart replaces its predecessor in the same tab position.
+    if (snapshot.restartOf)
+      setHiddenBySession((previous) => ({
+        ...previous,
+        [snapshot.sessionId]: [
+          ...new Set([
+            ...(previous[snapshot.sessionId] ?? []),
+            snapshot.restartOf as string,
+          ]),
+        ],
+      }));
     if (snapshot.restartOf)
       setOrderBySession((previous) => {
         if (previous[snapshot.sessionId]?.includes(snapshot.id))
@@ -434,13 +450,7 @@ export function NativeTerminal({
     try {
       adopt(await terminalRequest<TerminalSnapshot>('close', { id }));
       // A stopped console leaves the strip; the history keeps its output.
-      setOrderBySession((previous) => ({
-        ...previous,
-        [target]: (previous[target] ?? []).filter((item) => item !== id),
-      }));
-      setSelected((previous) =>
-        previous[target] === id ? { ...previous, [target]: '' } : previous,
-      );
+      dismiss(id);
     } catch (reason) {
       setOperations((previous) => ({
         ...previous,
@@ -463,9 +473,27 @@ export function NativeTerminal({
     ids.splice(at === -1 ? ids.length : at, 0, from);
     setOrderBySession((previous) => ({ ...previous, [sessionId]: ids }));
   };
+  const dismiss = (id: string) => {
+    setHiddenBySession((previous) => ({
+      ...previous,
+      [sessionId]: [...new Set([...(previous[sessionId] ?? []), id])],
+    }));
+    setOrderBySession((previous) => ({
+      ...previous,
+      [sessionId]: (previous[sessionId] ?? []).filter((item) => item !== id),
+    }));
+    setSelected((previous) =>
+      previous[sessionId] === id ? { ...previous, [sessionId]: '' } : previous,
+    );
+  };
+  const closeTab = async (id: string) => {
+    const item = terminals.find((entry) => entry.id === id);
+    if (item && live(item)) await stopTerminal(id);
+    else dismiss(id);
+  };
   const closeMany = (ids: string[]) =>
     run(async () => {
-      await Promise.all(ids.map((id) => stopTerminal(id)));
+      await Promise.all(ids.map((id) => closeTab(id)));
     });
   const openRename = (id: string) => {
     setRenameValue(terminals.find((item) => item.id === id)?.label ?? '');
@@ -691,14 +719,9 @@ export function NativeTerminal({
             <ContextMenu.Root key={item.id}>
               <ContextMenu.Trigger asChild>
                 <div
-                  role="tab"
-                  aria-selected={item.id === selected?.id}
-                  aria-controls={`terminal-${item.id}`}
                   className={`native-terminal-tab${
                     item.id === selected?.id ? ' active' : ''
                   }`}
-                  tabIndex={item.id === selected?.id ? 0 : -1}
-                  title={`${item.cwd} · ${status(item)}`}
                   draggable={!commandTerminal}
                   onDragStart={(event) => {
                     dragId.current = item.id;
@@ -720,41 +743,51 @@ export function NativeTerminal({
                     event.preventDefault();
                     moveTab(from, item.id);
                   }}
-                  onClick={() => selectTerminal(item.id)}
-                  onKeyDown={(event) => {
-                    const at = visible.findIndex(
-                      (entry) => entry.id === item.id,
-                    );
-                    const targetIndex =
-                      event.key === 'Home'
-                        ? 0
-                        : event.key === 'End'
-                          ? visible.length - 1
-                          : event.key === 'ArrowLeft'
-                            ? (at + visible.length - 1) % visible.length
-                            : event.key === 'ArrowRight'
-                              ? (at + 1) % visible.length
-                              : -1;
-                    const next = visible[targetIndex];
-                    if (!next) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    focusTarget.current = null;
-                    selectTerminal(next.id);
-                    tabStrip.current
-                      ?.querySelector<HTMLElement>(
-                        `[aria-controls="terminal-${next.id}"]`,
-                      )
-                      ?.focus();
-                  }}
                 >
-                  <span
-                    className={`native-terminal-lamp ${item.serviceState ?? item.status}`}
-                    aria-hidden="true"
-                  />
-                  <span className="native-terminal-tab-label">
-                    {item.label} {index + 1}
-                  </span>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={item.id === selected?.id}
+                    aria-controls={`terminal-${item.id}`}
+                    className={item.id === selected?.id ? 'active' : ''}
+                    tabIndex={item.id === selected?.id ? 0 : -1}
+                    title={`${item.cwd} · ${status(item)}`}
+                    onClick={() => selectTerminal(item.id)}
+                    onKeyDown={(event) => {
+                      const at = visible.findIndex(
+                        (entry) => entry.id === item.id,
+                      );
+                      const targetIndex =
+                        event.key === 'Home'
+                          ? 0
+                          : event.key === 'End'
+                            ? visible.length - 1
+                            : event.key === 'ArrowLeft'
+                              ? (at + visible.length - 1) % visible.length
+                              : event.key === 'ArrowRight'
+                                ? (at + 1) % visible.length
+                                : -1;
+                      const next = visible[targetIndex];
+                      if (!next) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      focusTarget.current = null;
+                      selectTerminal(next.id);
+                      tabStrip.current
+                        ?.querySelector<HTMLElement>(
+                          `[aria-controls="terminal-${next.id}"]`,
+                        )
+                        ?.focus();
+                    }}
+                  >
+                    <span
+                      className={`native-terminal-lamp ${item.serviceState ?? item.status}`}
+                      aria-hidden="true"
+                    />
+                    <span className="native-terminal-tab-label">
+                      {item.label} {index + 1}
+                    </span>
+                  </button>
                   {!commandTerminal && (
                     <button
                       type="button"
@@ -764,7 +797,7 @@ export function NativeTerminal({
                       })}
                       onClick={(event) => {
                         event.stopPropagation();
-                        void stopTerminal(item.id);
+                        void closeTab(item.id);
                       }}
                     >
                       <X size={12} />
@@ -778,9 +811,7 @@ export function NativeTerminal({
                     <ContextMenu.Item onSelect={() => openRename(item.id)}>
                       {t('rename…')}
                     </ContextMenu.Item>
-                    <ContextMenu.Item
-                      onSelect={() => void stopTerminal(item.id)}
-                    >
+                    <ContextMenu.Item onSelect={() => void closeTab(item.id)}>
                       {t('close')}
                     </ContextMenu.Item>
                     <ContextMenu.Item
