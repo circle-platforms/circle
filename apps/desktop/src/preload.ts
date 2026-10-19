@@ -192,11 +192,15 @@ const bridge: DesktopBridge = {
         .then(() => listener(value.sessionId, value.attachment))
         .then(
           (saved) => answer(saved === true, ''),
+          // The page's own error, from the page's world: its words, not its class.
           (error: unknown) =>
             answer(
               false,
-              (error instanceof Error ? error.message : String(error)) ||
-                'failed',
+              String(
+                (error && typeof error === 'object' && 'message' in error
+                  ? error.message
+                  : error) || 'failed',
+              ),
             ),
         );
     };
