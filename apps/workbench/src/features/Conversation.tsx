@@ -551,8 +551,10 @@ export function Conversation({
         };
         if (commands[mapped]) act(() => runtime.command(commands[mapped]!));
         else if (mapped === 'find') setFinding((value) => !value);
-        // The plan is a step of the overview's "in progress" card.
-        else if (mapped === 'plan.focus') onPanel('overview');
+        // The plan is a step of the overview's "in progress" card. This listener outlives
+        // the render it was made in: only the latest handler knows if the overview shows.
+        else if (mapped === 'plan.focus')
+          latestView.current.onPanel('overview');
         // history.search is ctrl+r. It opens the same search as ctrl+k.
         else if (mapped === 'history.search') onCommand();
         else if (mapped === 'exit') onDialog('exit');
