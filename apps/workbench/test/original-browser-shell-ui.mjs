@@ -1,13 +1,50 @@
+// The browser mode of the full application, against a synthetic desktop host: the page
+// fills the drawer to its edges at every width (beside the conversation, or over it in a
+// narrow window), the ring says who has the browser without moving the page, and a page
+// screenshot you take lands in the message box only while it still shows the page it was
+// taken of. The appearance baselines are this suite's screenshots.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { crc32, deflateSync } from 'node:zlib';
+import { settledLayout } from './helpers/settled-layout.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out =
   process.env.CIRCLE_BROWSER_SHELL_EVIDENCE ||
   '/tmp/circle-original-browser-shell-ui';
 await mkdir(out, { recursive: true });
+// One-pixel pictures of different colours. Each capture the host answers gets its own,
+// so the attachment that lands says which capture it came from.
+const png = (red, green, blue) => {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, sum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = 2;
+  return (
+    'data:image/png;base64,' +
+    Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', header),
+      chunk('IDAT', deflateSync(Buffer.from([0, red, green, blue]))),
+      chunk('IEND', Buffer.alloc(0)),
+    ]).toString('base64')
+  );
+};
+const pictures = Array.from({ length: 8 }, (_, index) =>
+  png(index * 30, 90, 240 - index * 30),
+);
+assert.equal(new Set(pictures).size, pictures.length);
 const server = await createServer({
   root,
   server: { host: '127.0.0.1', port: 0 },
@@ -27,7 +64,7 @@ const errors = [],
 page.on('pageerror', (e) => errors.push(String(e)));
 let sawClosedTools = false;
 try {
-  await page.addInitScript(() => {
+  await page.addInitScript((pictures) => {
     localStorage.setItem('circle.workbench.language', 'en');
     const state = {
       sessionId: 'browser:session1',
@@ -40,14 +77,23 @@ try {
     };
     const listeners = new Set();
     const captures = [];
+    const calls = [];
+    const emit = () => {
+      for (const listener of listeners) listener({ ...state });
+    };
     window.__browserCaptureFixture = {
+      calls,
       count: () => captures.length,
-      resolve: (index, hash) =>
+      // The desktop answers with the page as it was when the picture was asked for, and
+      // the picture. The time is this machine's, as the attachment's name shows it.
+      resolve: (index, hours, minutes) =>
         captures[index].resolve({
-          dataUrl:
-            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhJkAAAAASUVORK5CYII=',
-          sha256: hash,
-          observedAt: '2026-10-16T00:00:00Z',
+          ...captures[index].page,
+          dataUrl: pictures[index],
+          sha256: 'capture-' + index,
+          observedAt: new Date(2026, 9, 16, hours, minutes).toISOString(),
+          attempts: 1,
+          retryErrors: [],
         }),
       reject: (index) => captures[index].reject(Error('old capture failed')),
       tabs: () => {
@@ -59,12 +105,12 @@ try {
           },
           { id: 't2', title: 'other fixture', url: 'http://localhost/other' },
         ];
-        for (const listener of listeners) listener({ ...state });
+        emit();
       },
       drive: (driving) => {
         state.operating = driving;
         state.control = driving ? 'agent' : 'shared';
-        for (const listener of listeners) listener({ ...state });
+        emit();
       },
     };
     window.circleDesktop = new Proxy(
@@ -83,15 +129,24 @@ try {
           return { ...state };
         },
         browserCapture: () =>
-          new Promise((resolve, reject) => captures.push({ resolve, reject })),
+          new Promise((resolve, reject) =>
+            captures.push({
+              resolve,
+              reject,
+              page: JSON.parse(JSON.stringify(state)),
+            }),
+          ),
+        browserControl: async (id, action) => {
+          calls.push(['control', id, action]);
+        },
         browserNavigate: async (id, url) => {
           state.url = url;
-          for (const listener of listeners) listener({ ...state });
+          emit();
         },
         browserTabs: async (id, action, tab) => {
           state.tab = tab;
           state.url = state.tabs.find((item) => item.id === tab).url;
-          for (const listener of listeners) listener({ ...state });
+          emit();
         },
         browserDiagnostics: async () => ({
           state: {
@@ -108,6 +163,8 @@ try {
           stream: { epoch: 'e', sequence: 0 },
         }),
         onBrowserDiagnosticEvent: () => () => {},
+        // No mode of this window is in a window of its own.
+        popouts: async () => [],
       },
       {
         get: (target, key) =>
@@ -117,7 +174,7 @@ try {
                 key.toString().startsWith('on') ? () => {} : Promise.resolve(),
       },
     );
-  });
+  }, pictures);
   await page.clock.setFixedTime(new Date('2026-10-16T00:00:00Z'));
   // The page opens 1400 px wide.
   let previousWidth = 1400;
@@ -142,12 +199,12 @@ try {
             { language, theme },
           );
           await page.evaluate(() => document.fonts.ready);
-          // At most 1050 px wide the app closes the side panel (useNarrow in
-          // App.tsx). The close is a render after the narrow layout's, and a
-          // slow runner reports the new width to the page late, so the panel
-          // can read as open here and close a moment later. Wait for this
-          // width's layout and, after crossing into narrow, for that close,
-          // before reading or opening the panel.
+          // At most 1050 px wide the app closes the drawer (useNarrow in App.tsx), and
+          // the drawer and the overview then lie over the conversation. The close is a
+          // render after the narrow layout's, and a slow runner reports the new width
+          // to the page late, so the drawer can read as open here and close a moment
+          // later. Wait for this width's layout and, after crossing into narrow, for
+          // that close, before reading or opening the drawer.
           const narrow = width <= 1050;
           await page.waitForFunction(
             (narrow) =>
@@ -175,6 +232,12 @@ try {
               exact: true,
             })
             .waitFor();
+          // Beside the conversation in a wide window, over it in a narrow one
+          await page
+            .locator(
+              `#workbench-columns[data-inspector-mode='${narrow ? 'overlay' : 'split'}']`,
+            )
+            .waitFor({ state: 'attached' });
           // Circle does not dock its own developer tools under the page.
           if (!sawClosedTools) {
             assert.equal(await page.locator('.browser-diagnostics').count(), 0);
@@ -195,6 +258,17 @@ try {
                 }),
             );
           for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
+          // Take over shows only while Circle operates the page.
+          assert.equal(
+            await page
+              .locator('.native-browser .browser-address')
+              .getByRole('button', {
+                name: language === 'en' ? 'take over' : '接管',
+                exact: true,
+              })
+              .count(),
+            0,
+          );
           for (const expanded of [false]) {
             assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             // Locale changes may load CJK fonts after React commits. Capture the
@@ -203,10 +277,9 @@ try {
               await document.fonts.ready;
               const transcript = document.querySelector('.transcript');
               if (transcript) transcript.scrollTop = transcript.scrollHeight;
-              await new Promise((resolve) =>
-                requestAnimationFrame(() => requestAnimationFrame(resolve)),
-              );
             });
+            await page.mouse.move(0, 0);
+            await settledLayout(page);
             const geometry = await page.evaluate(() => {
               const selectors = [
                 '.inspector-body',
@@ -233,7 +306,6 @@ try {
                 };
               });
             });
-            await page.mouse.move(0, 0);
             assert.equal(
               await page.locator('html').getAttribute('data-theme'),
               theme,
@@ -298,71 +370,11 @@ try {
               body.bottom - frame.bottom <= 32,
               'do not weaken native blank-under-panel acceptance',
             );
-            checks.push({ height, expanded, geometry });
+            checks.push({ width, height, expanded, geometry });
           }
         }
-  // Thickening the ring must not move or resize the page. A screenshot's
-  // coordinates are taken before Circle clicks.
-  await page.setViewportSize({ width: 1400, height: 684 });
-  await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
-  await page.locator('.workbench').waitFor();
-  await page.evaluate(async () => {
-    await (await import('/src/i18n/index.ts')).setLanguage('en');
-    window.__browserCaptureFixture.drive(false);
-  });
-  {
-    const toggle = page.getByRole('button', {
-      name: 'browser panel',
-      exact: true,
-    });
-    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-      await toggle.click();
-    await page
-      .getByRole('button', { name: 'browser menu', exact: true })
-      .waitFor();
-  }
-  const pageBox = () =>
-    page.evaluate(() => {
-      const frame = document
-        .querySelector('.native-browser-frame')
-        .getBoundingClientRect();
-      const view = document
-        .querySelector('.native-browser-viewport')
-        .getBoundingClientRect();
-      const round = (value) => Math.round(value);
-      return {
-        x: round(view.x),
-        y: round(view.y),
-        w: round(view.width),
-        h: round(view.height),
-        inset: round(view.x - frame.x),
-      };
-    });
-  const idlePage = await pageBox();
-  assert.ok(idlePage.w > 50 && idlePage.h > 50, 'the page has a box');
-  await page.evaluate(() => window.__browserCaptureFixture.drive(true));
-  await page.getByTestId('browser-operating').waitFor();
-  const drivingPage = await pageBox();
-  assert.deepEqual(
-    drivingPage,
-    idlePage,
-    'the control ring resized the page: ' +
-      JSON.stringify({ idle: idlePage, driving: drivingPage }),
-  );
-  await page.evaluate(() => window.__browserCaptureFixture.drive(false));
-  await page.getByTestId('browser-frame').waitFor();
-  const restoredPage = await pageBox();
-  assert.deepEqual(
-    restoredPage,
-    idlePage,
-    'giving the browser back resized the page: ' +
-      JSON.stringify({ idle: idlePage, restored: restoredPage }),
-  );
-  checks.push({
-    scenario: 'the control ring does not resize the page',
-    status: 'passed',
-  });
-  // Circle driving the page is a ring, in both languages and both themes.
+  // Circle driving the page is a ring, in both languages and both themes, with take over
+  // in the address row while it lasts.
   for (const language of ['en', 'zh-CN'])
     for (const theme of ['dark', 'light']) {
       await page.setViewportSize({ width: 1400, height: 684 });
@@ -394,11 +406,19 @@ try {
           .querySelector('.native-browser-viewport')
           .getBoundingClientRect();
         const box = node.getBoundingClientRect();
+        // The accent the theme gives, as the ring would paint it
+        const probe = document.createElement('i');
+        probe.style.color = 'var(--accent)';
+        node.append(probe);
+        const accent = getComputedStyle(probe).color;
+        probe.remove();
         return {
           driving: node.classList.contains('driving'),
           border: getComputedStyle(node).borderTopWidth,
           padding: getComputedStyle(node).paddingTop,
           shadow: getComputedStyle(node).boxShadow,
+          color: getComputedStyle(node).borderTopColor,
+          accent,
           inset: view.top - box.top,
         };
       });
@@ -406,15 +426,38 @@ try {
       assert.equal(ring.border, '1px');
       assert.equal(ring.padding, '3px');
       assert.notEqual(ring.shadow, 'none');
+      assert.equal(ring.color, ring.accent, 'the driving ring is the accent');
       assert(
         ring.inset >= 3,
         'the page covers the driving ring: ' + JSON.stringify(ring),
       );
+      const takeOver = page
+        .locator('.native-browser .browser-address')
+        .getByRole('button', {
+          name: language === 'en' ? 'take over' : '接管',
+          exact: true,
+        });
+      await takeOver.waitFor();
       await page.mouse.move(0, 0);
+      await settledLayout(page);
       await page.screenshot({
         animations: 'disabled',
         path: out + `/${language}-${theme}-1400-684-driving.png`,
       });
+      // After the last picture: take over asks the desktop for the browser
+      if (language === 'zh-CN' && theme === 'light') {
+        await takeOver.click();
+        await page.waitForFunction(() =>
+          window.__browserCaptureFixture.calls.some(
+            (call) => call[0] === 'control',
+          ),
+        );
+        assert.deepEqual(
+          await page.evaluate(() => window.__browserCaptureFixture.calls),
+          [['control', 'session1', 'take']],
+        );
+        checks.push({ scenario: 'take over asks for the browser' });
+      }
     }
   await page.setViewportSize({ width: 1400, height: 970 });
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
@@ -433,14 +476,15 @@ try {
       .waitFor();
   };
   await openBrowser();
-  // Take screenshot lives in the browser's ⋮ menu, as Chrome keeps its tools there
+  // Take page screenshot lives in the browser's ⋮ menu, as Chrome keeps its tools there.
+  // The picture goes into the message box as an attachment; the panel shows nothing of it.
   const capture = {
     click: async () => {
       await page
         .getByRole('button', { name: 'browser menu', exact: true })
         .click();
       await page
-        .getByRole('menuitem', { name: 'take screenshot', exact: true })
+        .getByRole('menuitem', { name: 'take page screenshot', exact: true })
         .click();
       await page.getByRole('menu').waitFor({ state: 'detached' });
     },
@@ -457,23 +501,41 @@ try {
           requestAnimationFrame(() => requestAnimationFrame(resolve)),
         ),
     );
+  // What the conversations keep: every attachment of every session, as stored
+  const stored = () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('circle.workbench.preview.v1');
+      return (raw ? JSON.parse(raw).sessions : []).flatMap((session) =>
+        session.attachments.map((file) => ({
+          session: session.id,
+          name: file.name,
+          kind: file.kind,
+          mime: file.mime,
+          content: file.content,
+        })),
+      );
+    });
+  // What the message box shows
+  const chips = () =>
+    page
+      .locator('.composer .attachment-strip .file-chip > button:first-child')
+      .allInnerTexts();
+  const address = page.getByRole('textbox', {
+    name: 'browser address',
+    exact: true,
+  });
   await capture.click();
   await waitCaptureCount(1);
-  await page
-    .getByRole('textbox', { name: 'browser address', exact: true })
-    .fill('http://localhost/new-page');
-  await page
-    .getByRole('textbox', { name: 'browser address', exact: true })
-    .press('Enter');
-  await page.evaluate(() =>
-    window.__browserCaptureFixture.resolve(0, 'old-navigation'),
-  );
+  await address.fill('http://localhost/new-page');
+  await address.press('Enter');
+  await page.evaluate(() => window.__browserCaptureFixture.resolve(0, 12, 0));
   await settle();
-  assert.equal(
-    await page.getByText('captured observation', { exact: true }).count(),
-    0,
+  assert.deepEqual(
+    await stored(),
+    [],
     'late pre-navigation capture cannot reappear on another page',
   );
+  assert.deepEqual(await chips(), []);
   checks.push({
     scenario: 'late navigation capture rejected',
     status: 'passed',
@@ -484,65 +546,64 @@ try {
   await page
     .getByRole('button', { name: 'other fixture', exact: true })
     .click();
-  await page.evaluate(() =>
-    window.__browserCaptureFixture.resolve(1, 'old-tab'),
-  );
+  await page.evaluate(() => window.__browserCaptureFixture.resolve(1, 12, 1));
   await settle();
-  assert.equal(
-    await page.getByText('captured observation', { exact: true }).count(),
-    0,
-    'late old-tab capture cannot reappear',
-  );
+  assert.deepEqual(await stored(), [], 'late old-tab capture cannot reappear');
+  assert.deepEqual(await chips(), []);
   checks.push({ scenario: 'late tab capture rejected', status: 'passed' });
   await capture.click();
   await waitCaptureCount(3);
   await page
     .locator('.sidebar [data-row-key="recent:session2"] a.session-link')
     .click();
+  // The top bar and the browser render the same conversation
+  await page
+    .locator('.session-title', { hasText: 'Review the request lifecycle' })
+    .waitFor();
   await openBrowser();
-  await page.evaluate(() =>
-    window.__browserCaptureFixture.resolve(2, 'old-session'),
-  );
+  await page.evaluate(() => window.__browserCaptureFixture.resolve(2, 12, 2));
   await settle();
-  assert.equal(
-    await page.getByText('captured observation', { exact: true }).count(),
-    0,
+  assert.deepEqual(
+    await stored(),
+    [],
     'late old-session capture cannot reappear',
   );
+  assert.deepEqual(await chips(), []);
   checks.push({ scenario: 'late session capture rejected', status: 'passed' });
   await capture.click();
   await capture.click();
   await waitCaptureCount(5);
-  await page.evaluate(() =>
-    window.__browserCaptureFixture.resolve(4, 'latest-capture'),
-  );
-  await page.getByText('captured observation', { exact: true }).click();
-  await page.getByText('latest-capture', { exact: true }).waitFor();
-  await page.evaluate(() =>
-    window.__browserCaptureFixture.resolve(3, 'earlier-capture'),
-  );
+  await page.evaluate(() => window.__browserCaptureFixture.resolve(4, 12, 4));
+  // What the desktop returned is what lands, named for the site and the time
+  const latest = {
+    session: 'session2',
+    name: 'localhost 12:04.png',
+    kind: 'image',
+    mime: 'image/png',
+    content: pictures[4],
+  };
+  await page
+    .locator('.composer .attachment-strip .file-chip', {
+      hasText: latest.name,
+    })
+    .waitFor();
+  assert.deepEqual(await stored(), [latest]);
+  await page.evaluate(() => window.__browserCaptureFixture.resolve(3, 12, 3));
   await settle();
-  assert.equal(
-    await page.getByText('earlier-capture', { exact: true }).count(),
-    0,
+  assert.deepEqual(
+    await stored(),
+    [latest],
     'earlier capture cannot replace latest result',
   );
-  assert.equal(
-    await page.getByText('latest-capture', { exact: true }).count(),
-    1,
-  );
+  assert.deepEqual(await chips(), [latest.name]);
   checks.push({
     scenario: 'capture generation preserves latest response',
     status: 'passed',
   });
   await capture.click();
   await waitCaptureCount(6);
-  await page
-    .getByRole('textbox', { name: 'browser address', exact: true })
-    .fill('http://localhost/last');
-  await page
-    .getByRole('textbox', { name: 'browser address', exact: true })
-    .press('Enter');
+  await address.fill('http://localhost/last');
+  await address.press('Enter');
   await page.evaluate(() => window.__browserCaptureFixture.reject(5));
   await settle();
   assert.equal(
@@ -550,7 +611,71 @@ try {
     0,
     'obsolete capture failure cannot notify a new page',
   );
+  // A capture that fails while its page still shows does say so
+  await capture.click();
+  await waitCaptureCount(7);
+  await page.evaluate(() => window.__browserCaptureFixture.reject(6));
+  await page
+    .getByRole('status')
+    .filter({ hasText: 'browser capture failed' })
+    .waitFor();
+  assert.deepEqual(await stored(), [latest]);
   checks.push({ scenario: 'obsolete capture error ignored', status: 'passed' });
+  // Thickening the ring must not move or resize the page, nor may what shows with it. A
+  // screenshot's coordinates are taken before Circle clicks.
+  await page.setViewportSize({ width: 1400, height: 684 });
+  await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
+  await page.locator('.workbench').waitFor();
+  await page.evaluate(async () => {
+    await (await import('/src/i18n/index.ts')).setLanguage('en');
+    window.__browserCaptureFixture.drive(false);
+  });
+  await openBrowser();
+  await page.getByTestId('browser-frame').waitFor();
+  await settledLayout(page);
+  const pageBox = () =>
+    page.evaluate(() => {
+      const frame = document
+        .querySelector('.native-browser-frame')
+        .getBoundingClientRect();
+      const view = document
+        .querySelector('.native-browser-viewport')
+        .getBoundingClientRect();
+      const round = (value) => Math.round(value);
+      return {
+        x: round(view.x),
+        y: round(view.y),
+        w: round(view.width),
+        h: round(view.height),
+        inset: round(view.x - frame.x),
+      };
+    });
+  const idlePage = await pageBox();
+  assert.ok(idlePage.w > 50 && idlePage.h > 50, 'the page has a box');
+  await page.evaluate(() => window.__browserCaptureFixture.drive(true));
+  await page.getByTestId('browser-operating').waitFor();
+  await settledLayout(page);
+  const drivingPage = await pageBox();
+  assert.deepEqual(
+    drivingPage,
+    idlePage,
+    'the control ring resized the page: ' +
+      JSON.stringify({ idle: idlePage, driving: drivingPage }),
+  );
+  await page.evaluate(() => window.__browserCaptureFixture.drive(false));
+  await page.getByTestId('browser-frame').waitFor();
+  await settledLayout(page);
+  const restoredPage = await pageBox();
+  assert.deepEqual(
+    restoredPage,
+    idlePage,
+    'giving the browser back resized the page: ' +
+      JSON.stringify({ idle: idlePage, restored: restoredPage }),
+  );
+  checks.push({
+    scenario: 'the control ring does not resize the page',
+    status: 'passed',
+  });
   assert.deepEqual(errors, [], 'full application renders without page errors');
   console.log(
     'PASS original full-app browser inspector bounds closed and expanded',

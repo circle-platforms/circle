@@ -1,6 +1,7 @@
 // The browser panel looks and behaves as Chrome does: tabs with icons and a close
-// button each, back/forward/reload-or-stop, an address bar that shows the host and
-// selects on focus, the ⋮ menu with zoom, find in page, and Chrome's shortcuts. The full
+// button each once there are several, back/forward/reload-or-stop, an address bar that
+// shows the host and selects on focus, the ⋮ menu with zoom, find in page, a page
+// screenshot that goes into the message box, and Chrome's shortcuts. The full
 // application runs against a synthetic desktop host; what each control asks the main
 // process for is recorded and checked.
 import { createServer } from 'vite';
@@ -8,6 +9,7 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { settledLayout } from './helpers/settled-layout.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out =
   process.env.CIRCLE_BROWSER_CHROME_EVIDENCE ||
@@ -114,12 +116,16 @@ try {
             calls.push(['tabs', action, tab ?? null]);
             emit();
           },
+          // The page as it is, and its picture, taken at 09:30 on this machine's clock
           browserCapture: async () => {
             calls.push(['capture']);
             return {
+              ...JSON.parse(JSON.stringify(state)),
               dataUrl: ICON,
               sha256: 'capture-hash',
-              observedAt: '2026-10-17T00:00:00Z',
+              observedAt: new Date(2026, 9, 17, 9, 30).toISOString(),
+              attempts: 1,
+              retryErrors: [],
             };
           },
           // The desktop hands the keyboard over on its own channel; record it as
@@ -127,6 +133,8 @@ try {
           browserKeys: (id, focused) => {
             calls.push(['page', 'keys', focused]);
           },
+          // No mode of this window is in a window of its own.
+          popouts: async () => [],
           browserPage: async (id, action, value) => {
             calls.push(['page', action, value ?? null]);
             if (action === 'snapshot') return ICON;
@@ -232,6 +240,22 @@ try {
   checks.push(
     'tabs show their icon or a spinner, a tooltip and a close button',
   );
+  // With one tab there is no row of tabs: the toolbar is the panel's first row, and a
+  // new tab comes from the ⋮ menu or ⌘T
+  const twoTabs = await page.evaluate(() => window.__browser.state.tabs);
+  await setState({ tabs: twoTabs.slice(0, 1) });
+  await page
+    .locator('.native-browser .browser-tabs')
+    .waitFor({ state: 'detached' });
+  assert.equal(
+    await page
+      .locator('.native-browser')
+      .evaluate((node) => node.firstElementChild.className),
+    'browser-address',
+  );
+  await setState({ tabs: twoTabs });
+  await tabs.nth(1).waitFor();
+  checks.push('one tab has no row of tabs');
 
   // The address bar: the host emphasised while not typing, the lock for https, and no
   // extra go button
@@ -266,9 +290,19 @@ try {
     await address.evaluate((input) => document.activeElement === input),
     false,
   );
-  // Escape in the address bar never reaches the conversation's stop key
+  // Escape in the address bar never reaches the conversation's stop key: the host is
+  // asked for nothing, and the conversation records no stop
   assert.deepEqual(
     (await calls()).filter((call) => call[0] !== 'page'),
+    [],
+  );
+  assert.deepEqual(
+    await page.evaluate(() =>
+      (
+        JSON.parse(localStorage.getItem('circle.workbench.preview.v1'))
+          ?.requests ?? []
+      ).filter((request) => request.kind === 'abort'),
+    ),
     [],
   );
   await clearCalls();
@@ -336,14 +370,14 @@ try {
         (node) => node.getAttribute('aria-label') || node.textContent.trim(),
       ),
     );
+  // Full view is the button at the end of the address row, not an item here
   assert.deepEqual(items, [
     'new tab⌘+T',
     'zoom out',
     'reset zoom',
     'zoom in',
     'find…⌘+F',
-    'take screenshot',
-    'full view',
+    'take page screenshot',
     'developer tools⌥+⌘+I',
     'close tab⌘+W',
   ]);
@@ -384,14 +418,38 @@ try {
       ['page', 'zoom', 'reset'],
     ],
   );
-  // Take screenshot is in the menu. Developer tools are Chromium's, so the
-  // page keeps its size and the menu asks the browser to open them.
+  // Take page screenshot is in the menu: what the desktop captured goes into the message
+  // box as an image attachment named for the site and the time. Developer tools are
+  // Chromium's, so the page keeps its size and the menu asks the browser to open them.
   await clearCalls();
   await page.getByRole('button', { name: 'browser menu', exact: true }).click();
   await page
-    .getByRole('menuitem', { name: 'take screenshot', exact: true })
+    .getByRole('menuitem', { name: 'take page screenshot', exact: true })
     .click();
-  await page.getByText('captured observation', { exact: true }).waitFor();
+  const shotName = 'docs.example.test 09:30.png';
+  await page
+    .locator('.composer .attachment-strip .file-chip', { hasText: shotName })
+    .waitFor();
+  assert.deepEqual(
+    (await calls()).filter((call) => call[0] === 'capture'),
+    [['capture']],
+  );
+  assert.deepEqual(
+    await page.evaluate(() =>
+      JSON.parse(
+        localStorage.getItem('circle.workbench.preview.v1'),
+      ).sessions.flatMap((session) =>
+        session.attachments.map((file) => [
+          session.id,
+          file.name,
+          file.kind,
+          file.mime,
+          file.content,
+        ]),
+      ),
+    ),
+    [['session1', shotName, 'image', 'image/png', ICON]],
+  );
   assert.equal(await page.locator('.browser-diagnostics').count(), 0);
   const closedTools = await viewportRect();
   await page.getByRole('button', { name: 'browser menu', exact: true }).click();
@@ -427,7 +485,7 @@ try {
     'the capture button moved into the menu',
   );
   checks.push(
-    'the ⋮ menu zooms, captures and opens developer tools over a still of the page',
+    'the ⋮ menu zooms, captures into the message box and opens developer tools over a still of the page',
   );
 
   // Find in page: ⌘F, n of m, Enter and shift+Enter, Escape; the page keeps its size
@@ -581,12 +639,27 @@ try {
         );
         await page.evaluate(() => document.fonts.ready);
         await openBrowser(language);
-        const wholeButton = page.getByRole('button', {
+        // Full view is the button at the end of the address row
+        const toolbar = page.locator('.native-browser .browser-address');
+        const wholeButton = toolbar.getByRole('button', {
           name: language === 'en' ? 'full view' : '完整视图',
           exact: true,
         });
-        if (mode === 'full') await wholeButton.click();
-        await settle();
+        assert.equal(
+          await wholeButton.evaluate(
+            (node) => node === node.parentElement.lastElementChild,
+          ),
+          true,
+        );
+        if (mode === 'full') {
+          await wholeButton.click();
+          await page
+            .locator(
+              '.workspace-content.whole > .inspector-full .native-browser',
+            )
+            .waitFor();
+        }
+        await settledLayout(page);
         const panel = await page.locator('.inspector').boundingBox();
         const name = `${language}-${theme}-${Math.round(panel.width)}`;
         await page.locator('.inspector').screenshot({
@@ -645,13 +718,15 @@ try {
           return { out, crossing };
         });
         assert.deepEqual(overlap, { out: false, crossing: false }, name);
-        if (mode === 'full')
-          await page
-            .getByRole('button', {
-              name: language === 'en' ? 'exit full view' : '退出完整视图',
-              exact: true,
-            })
-            .click();
+        if (mode === 'full') {
+          const exit = toolbar.getByRole('button', {
+            name: language === 'en' ? 'exit full view' : '退出完整视图',
+            exact: true,
+          });
+          assert.equal(await exit.getAttribute('aria-pressed'), 'true');
+          await exit.click();
+          await page.locator('.inspector-full').waitFor({ state: 'detached' });
+        }
         shots.push({ name, width: Math.round(panel.width) });
       }
   checks.push({ appearance: shots });
