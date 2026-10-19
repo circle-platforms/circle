@@ -350,6 +350,8 @@ export const pages: Record<string, string> = {
   'remove workspace': '删除工作区',
   'Circle stops trusting this folder and hides its conversations from the sidebar. The files stay where they are, and so does the history: archived sessions stay under all sessions, and opening the folder again trusts it once you confirm.':
     'Circle 不再信任这个文件夹，侧栏也不再显示它的会话。文件都留在原处，记录也还在：归档的会话在“所有会话”里能看到，重新打开这个文件夹并确认后才会再次信任。',
+  'Terminal tabs and tasks still running in these conversations stop.':
+    '这些会话里仍在运行的终端标签页和任务会停止。',
   '{n} conversation': '{n} 个会话',
   '{n} conversations': '{n} 个会话',
   '{name} is no longer trusted and its sessions are archived':

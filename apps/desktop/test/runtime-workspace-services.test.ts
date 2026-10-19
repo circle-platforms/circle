@@ -837,6 +837,108 @@ test('a native shell exiting by itself publishes archive availability without a 
   );
 });
 
+test('a confirmed archive closes the terminal tabs first, and stops nothing while something else keeps a session (#201)', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write',
+          name: 'write_file',
+          args: { file_path: 'blocked.txt', content: 'only after approval' },
+        },
+      ]),
+    },
+    { message: assistant('rejected') },
+  ]);
+  const first = f.controller.snapshot().activeSessionId;
+  const shell = await f.service('terminal', 'create', {
+    command: {
+      file: process.execPath,
+      args: ['-e', 'setInterval(()=>{},1000)'],
+    },
+  });
+  assert.equal(shell.ok, true, shell.error);
+  const pid = (shell.data as any).pid;
+  assert.ok(alive(pid));
+  const workspaceId = f.controller
+    .snapshot()
+    .sessions.find((s) => s.id === first)!.workspaceId;
+  // Another session of the folder waits for an approval: archiving all of them
+  // cannot happen, so it closes nothing, confirmed or not.
+  await f.call('new-session');
+  const second = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'request a write' });
+  await wait(() =>
+    f.controller
+      .snapshot()
+      .interactions.some((row) => row.status === 'pending'),
+  );
+  for (const confirmed of [false, true]) {
+    const refused = await f.call('archive-workspace', {
+      workspaceId,
+      confirmed,
+    });
+    assert.equal(refused.ok, false);
+    assert.match(refused.error!, /before archiving it/);
+  }
+  assert.ok(alive(pid));
+  assert.equal(
+    f.controller.snapshot().sessions.some((s) => s.archivedAt),
+    false,
+  );
+  const pending = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  await f.call('answer', {
+    id: pending.id,
+    revision: pending.revision,
+    answer: 'reject',
+  });
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((s) => s.id === second)!.state ===
+      'idle',
+  );
+  const archived = await f.call('archive-workspace', {
+    workspaceId,
+    confirmed: true,
+  });
+  assert.equal(archived.ok, true, archived.error);
+  await wait(() => !alive(pid));
+  for (const id of [first, second]) {
+    const session = f.controller.snapshot().sessions.find((s) => s.id === id)!;
+    assert.ok(session.archivedAt, id);
+    assert.equal(session.nativeResourcesActive, false);
+  }
+  // One session alone: its shell closes and it is archived.
+  await f.call('archive-session', { id: first, archived: false });
+  await f.call('select-session', { id: first });
+  const again = await f.service(
+    'terminal',
+    'create',
+    {
+      command: {
+        file: process.execPath,
+        args: ['-e', 'setInterval(()=>{},1000)'],
+      },
+    },
+    first,
+  );
+  assert.equal(again.ok, true, again.error);
+  const pidAgain = (again.data as any).pid;
+  assert.ok(alive(pidAgain));
+  const one = await f.call('archive-session', {
+    id: first,
+    archived: true,
+    confirmed: true,
+  });
+  assert.equal(one.ok, true, one.error);
+  await wait(() => !alive(pidAgain));
+  assert.ok(
+    f.controller.snapshot().sessions.find((s) => s.id === first)!.archivedAt,
+  );
+});
+
 test('streaming token IPC sends deltas while final snapshots remain authoritative', async (t) => {
   const content = Array(128).fill('chunk ').join('');
   const f = await setup(t, [

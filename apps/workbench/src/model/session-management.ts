@@ -380,8 +380,6 @@ export function archiveBlockReason(
   if (session.lifecycle === 'deleting')
     return t('this session is being deleted');
   if (session.occupied) return t('open in another terminal; view only');
-  if (session.nativeResourcesActive)
-    return t('stop native resources and tasks before archiving');
   if (session.state === 'waiting') return t('stop the turn before archiving');
   if (
     snapshot.interactions.some(
@@ -424,6 +422,16 @@ export function disambiguatedSessionTitle(
   return shared < 2 ? mine : `${title} · ${shortSessionId(session.id)}`;
 }
 
+/**
+ * Archiving these sessions first stops their terminal tabs and tasks, so it asks
+ * before it does that (#201). Nothing else is stopped by archiving.
+ */
+export function archiveStopsWork(sessions: readonly Session[]): boolean {
+  return sessions.some(
+    (session) => !session.archivedAt && session.nativeResourcesActive,
+  );
+}
+
 export function canArchiveSession(
   snapshot: WorkbenchSnapshot,
   session: Session,
@@ -431,7 +439,6 @@ export function canArchiveSession(
   return (
     session.lifecycle !== 'deleting' &&
     !session.occupied &&
-    !session.nativeResourcesActive &&
     session.state !== 'waiting' &&
     !snapshot.interactions.some(
       (item) => item.sessionId === session.id && item.status === 'pending',

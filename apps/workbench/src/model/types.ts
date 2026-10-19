@@ -30,6 +30,8 @@ export type PageId =
 export type DialogId =
   | 'rename'
   | 'delete-session'
+  | 'archive-session'
+  | 'archive-workspace'
   | 'tree'
   | 'fork'
   | 'session'

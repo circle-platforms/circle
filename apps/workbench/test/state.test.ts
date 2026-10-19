@@ -21,6 +21,7 @@ import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
   activityAge,
   archiveBlockReason,
+  archiveStopsWork,
   afterDeleteRoute,
   canArchiveSession,
   deletionUnderWay,
@@ -102,7 +103,7 @@ test('session lists separate archived records, preserve their history, and rejec
   ];
   assert.equal(canArchiveSession(state, session), false);
 });
-test('owned native resources disable archive and explain why until they stop', () => {
+test('terminal tabs or tasks still running make archive ask before it stops them (#201)', () => {
   const runtime = new PreviewRuntime();
   const snapshot = runtime.getSnapshot();
   const session = currentSession(snapshot);
@@ -110,14 +111,14 @@ test('owned native resources disable archive and explain why until they stop', (
   snapshot.jobs = [];
   session.state = 'idle';
   session.nativeResourcesActive = true;
-  assert.equal(canArchiveSession(snapshot, session), false);
-  assert.equal(
-    archiveBlockReason(snapshot, session),
-    'stop native resources and tasks before archiving',
-  );
-  session.nativeResourcesActive = false;
   assert.equal(canArchiveSession(snapshot, session), true);
   assert.equal(archiveBlockReason(snapshot, session), undefined);
+  assert.equal(archiveStopsWork([session]), true);
+  session.archivedAt = new Date().toISOString();
+  assert.equal(archiveStopsWork([session]), false);
+  session.archivedAt = undefined;
+  session.nativeResourcesActive = false;
+  assert.equal(archiveStopsWork([session]), false);
 });
 
 test('free input is preserved without an invented reply or task', () => {

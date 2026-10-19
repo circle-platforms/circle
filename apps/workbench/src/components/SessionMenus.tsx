@@ -22,6 +22,7 @@ import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import {
   archiveBlockReason,
+  archiveStopsWork,
   canArchiveSession,
   deletionUnderWay,
   workspaceSessions,
@@ -159,7 +160,14 @@ export function SessionMenu({
   const { snapshot, runtime, perform } = useRuntime();
   const holdFocus = useRef(false);
   const archiveReason = archiveBlockReason(snapshot, session);
-  const archive = () =>
+  const archive = () => {
+    // Its terminal tabs and tasks stop only once the person says so.
+    if (
+      runtime.mode === 'live' &&
+      !session.archivedAt &&
+      archiveStopsWork([session])
+    )
+      return onDialog('archive-session', session.id);
     perform(async () => {
       if (runtime.mode === 'live')
         await runtime.request('archive-session', {
@@ -174,6 +182,7 @@ export function SessionMenu({
             : new Date().toISOString();
         });
     });
+  };
   return (
     <Menu
       label={t('session actions for {title}', { title: session.title })}
@@ -255,11 +264,13 @@ export function WorkspaceMenu({
   workspace,
   onNew,
   onCollapseAll,
+  onDialog,
   tipOpen,
 }: {
   workspace: Workspace;
   onNew: () => void;
   onCollapseAll: () => void;
+  onDialog?: (dialog: DialogId, selection?: string) => void;
   tipOpen?: boolean;
 }) {
   const { snapshot, runtime, perform } = useRuntime();
@@ -291,7 +302,9 @@ export function WorkspaceMenu({
           !sessions.length ||
           sessions.some((session) => !canArchiveSession(snapshot, session))
         }
-        onSelect={() =>
+        onSelect={() => {
+          if (runtime.mode === 'live' && onDialog && archiveStopsWork(sessions))
+            return onDialog('archive-workspace', workspace.id);
           perform(async () => {
             if (runtime.mode === 'live')
               await runtime.request('archive-workspace', {
@@ -304,8 +317,8 @@ export function WorkspaceMenu({
                 ))
                   session.archivedAt ??= new Date().toISOString();
               });
-          })
-        }
+          });
+        }}
       >
         {t('archive all sessions')}
       </DropdownMenu.Item>

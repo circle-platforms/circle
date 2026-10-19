@@ -3995,13 +3995,16 @@ export class RuntimeController {
     id: string,
     workspace: string,
     action = 'archiving',
+    // Whether its terminal tabs and tasks count: a confirmed archive stops them.
+    stoppable = true,
   ): Promise<void> {
     const owner = this.runtimes.get(id);
-    if (await this.nativeSessionActive(id, workspace))
+    if (stoppable && (await this.nativeSessionActive(id, workspace)))
       throw Error(
         `stop this session's native resources and tasks before ${action} it`,
       );
     if (
+      stoppable &&
       [...this.taskServices.values()].some((service) =>
         service.hasActiveSession(id),
       )
@@ -4015,6 +4018,22 @@ export class RuntimeController {
       [...this.pending.values()].some((pending) => pending.row.sessionId === id)
     )
       throw Error(`stop this session before ${action} it`);
+  }
+  // Archiving stops nothing unasked. Once the person confirmed it, the sessions'
+  // terminal tabs and tasks stop first, as for a deletion (#201), and only when
+  // nothing else keeps any of the sessions from being archived.
+  private async prepareArchive(
+    rows: { id: string; workspace: string }[],
+    confirmed: boolean,
+  ): Promise<void> {
+    if (confirmed) {
+      for (const row of rows)
+        await this.assertArchivable(row.id, row.workspace, 'archiving', false);
+      for (const row of rows)
+        if (await this.nativeSessionActive(row.id, row.workspace))
+          await this.releaseSessionResources(row.id, row.workspace);
+    }
+    for (const row of rows) await this.assertArchivable(row.id, row.workspace);
   }
   private resetPlan(runtime: AgentRuntime): void {
     const tracker = new PlanCompletionTracker();
@@ -4584,7 +4603,7 @@ export class RuntimeController {
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
         const archive = flag(p.archived);
-        if (archive) await this.assertArchivable(id, row.workspace);
+        if (archive) await this.prepareArchive([row], p.confirmed === true);
         if (archive) {
           this.externalBlocked.add(id);
           await this.externalFiles?.revokeSession(id);
@@ -4602,8 +4621,7 @@ export class RuntimeController {
         // A folder that only holds archived sessions is still one the settings page
         // can name, so ask workspaceById before deciding there is nothing to hide.
         this.workspaceById(workspaceId);
-        for (const row of rows)
-          await this.assertArchivable(row.id, row.workspace);
+        await this.prepareArchive(rows, p.confirmed === true);
         for (const row of rows) this.externalBlocked.add(row.id);
         for (const row of rows) {
           await this.externalFiles?.revokeSession(row.id);

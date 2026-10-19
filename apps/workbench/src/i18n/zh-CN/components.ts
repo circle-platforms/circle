@@ -8,8 +8,6 @@ export const components: Record<string, string> = {
   'archive session': '归档会话',
   'this session is being deleted': '正在删除这个会话',
   'stop the turn before archiving': '先停止这一轮，再归档',
-  'stop native resources and tasks before archiving':
-    '先停止原生资源和任务，再归档',
   'answer the pending request first': '先回答待处理的请求',
   'stop the running job first': '先停止正在运行的任务',
   'restore session': '恢复会话',

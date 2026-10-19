@@ -34,8 +34,10 @@ import { approvalHeading } from '../model/reasons.ts';
 import { hasToolInput } from '../model/browser';
 import {
   afterDeleteRoute,
+  archiveStopsWork,
   canArchiveSession,
 } from '../model/session-management';
+import { workspaceLabel } from '../model/workspace-label';
 import { openHome } from './home-selection';
 import { branchMessages, currentSession, sessionText } from '../model/state';
 import type { DialogId, Interaction, Session } from '../model/types';
@@ -53,6 +55,8 @@ export const downloadFile = saveExport;
 const NAMES: Record<DialogId, () => string> = {
   rename: () => t('rename session'),
   'delete-session': () => t('delete session'),
+  'archive-session': () => t('archive session'),
+  'archive-workspace': () => t('archive all sessions'),
   tree: () => t('session tree'),
   fork: () => t('fork session'),
   session: () => t('session details'),
@@ -571,7 +575,9 @@ export function DialogHost({
   const workspace = snapshot.workspaces.find(
     (item) =>
       item.id ===
-      (dialog === 'trust' && selection ? selection : target.workspaceId),
+      ((dialog === 'trust' || dialog === 'archive-workspace') && selection
+        ? selection
+        : target.workspaceId),
   )!;
   const [title, setTitle] = useState('');
   const [editor, setEditor] = useState('');
@@ -692,7 +698,8 @@ export function DialogHost({
         <>
           <p className="dialog-paragraph">
             {runtime.mode === 'live'
-              ? !canArchiveSession(snapshot, target)
+              ? !canArchiveSession(snapshot, target) ||
+                archiveStopsWork([target])
                 ? t(
                     'Stop all work in “{title}”, then delete its saved conversation?',
                     {
@@ -745,9 +752,66 @@ export function DialogHost({
                 })
               }
             >
-              {runtime.mode === 'live' && !canArchiveSession(snapshot, target)
+              {runtime.mode === 'live' &&
+              (!canArchiveSession(snapshot, target) ||
+                archiveStopsWork([target]))
                 ? t('stop work and delete session')
                 : t('delete local session')}
+            </Button>
+          </div>
+        </>
+      )}
+      {dialog === 'archive-session' && (
+        <>
+          <p className="dialog-paragraph">
+            {t(
+              'Close the terminal tabs and stop the tasks of “{title}”, then archive it?',
+              { title: target.title },
+            )}
+          </p>
+          <div className="dialog-actions">
+            <Button onClick={onClose}>{t('keep session')}</Button>
+            <Button
+              className="danger"
+              onClick={() =>
+                perform(async () => {
+                  await runtime.request('archive-session', {
+                    id: target.id,
+                    archived: true,
+                    confirmed: true,
+                  });
+                  onClose();
+                })
+              }
+            >
+              {t('stop work and archive')}
+            </Button>
+          </div>
+        </>
+      )}
+      {dialog === 'archive-workspace' && workspace && (
+        <>
+          <p className="dialog-paragraph">
+            {t(
+              'Close the terminal tabs and stop the tasks in “{name}”, then archive all its sessions?',
+              { name: workspaceLabel(workspace) },
+            )}
+          </p>
+          <div className="dialog-actions">
+            <Button onClick={onClose}>{t('cancel')}</Button>
+            <Button
+              className="danger"
+              onClick={() =>
+                perform(async () => {
+                  await runtime.request('archive-workspace', {
+                    workspaceId: workspace.id,
+                    confirmed: true,
+                  });
+                  onClose();
+                })
+              }
+            >
+              {t('stop work and archive all')}
             </Button>
           </div>
         </>

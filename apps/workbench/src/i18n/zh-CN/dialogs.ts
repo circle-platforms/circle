@@ -84,6 +84,13 @@ export const dialogs: Record<string, string> = {
   'stop work and delete session': '停止任务并删除会话',
   'Stop all work in “{title}”, then delete its saved conversation?':
     '停止“{title}”中的所有任务，然后删除已保存的对话？',
+  // archiving a session whose terminal tabs or tasks still run
+  'Close the terminal tabs and stop the tasks of “{title}”, then archive it?':
+    '关闭“{title}”的终端标签页并停止它的任务，然后归档？',
+  'stop work and archive': '停止任务并归档',
+  'Close the terminal tabs and stop the tasks in “{name}”, then archive all its sessions?':
+    '关闭“{name}”中的终端标签页并停止任务，然后归档全部会话？',
+  'stop work and archive all': '停止任务并全部归档',
   // the session tree and fork
   'search session tree': '搜索会话树',
   'user messages only': '仅用户消息',
