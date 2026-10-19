@@ -53,6 +53,14 @@ function failingCommand(dir: string, message: string): string {
   return nodeCommand(script);
 }
 
+// A hook that prints `text` (nothing for '') and exits 0, in any system shell:
+// cmd.exe has neither `printf` nor `true`.
+function printingCommand(dir: string, name: string, text: string): string {
+  const script = join(dir, `print-${name}.mjs`);
+  writeFileSync(script, `process.stdout.write(${JSON.stringify(text)});\n`);
+  return nodeCommand(script);
+}
+
 function writeJson(path: string, value: unknown): void {
   mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, JSON.stringify(value, null, 2));
@@ -73,7 +81,12 @@ test('path globs follow canonical paths and Windows or macOS case rules', (t) =>
   const { workspace } = layout(t);
   mkdirSync(join(workspace, 'real'), { recursive: true });
   writeFileSync(join(workspace, 'real', 'App.ts'), 'export {}\n');
-  symlinkSync(join(workspace, 'real'), join(workspace, 'link'), 'dir');
+  // A Windows junction needs no symlink privilege and canonicalizes the same way.
+  symlinkSync(
+    join(workspace, 'real'),
+    join(workspace, 'link'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
   const linked = join(workspace, 'link', 'App.ts');
   assert.equal(
     canonicalPath(linked),
@@ -613,8 +626,16 @@ test('gating output that is not JSON denies, and a non-gating failure only notif
   writeJson(join(home, 'hooks.json'), {
     hooks: {
       before_tool: [
-        { name: 'text', command: 'printf "not json"', tools: 'write_file' },
-        { name: 'quiet', command: 'true', tools: 'execute' },
+        {
+          name: 'text',
+          command: printingCommand(workspace, 'text', 'not json'),
+          tools: 'write_file',
+        },
+        {
+          name: 'quiet',
+          command: printingCommand(workspace, 'quiet', ''),
+          tools: 'execute',
+        },
       ],
       after_tool: [
         {
@@ -623,8 +644,15 @@ test('gating output that is not JSON denies, and a non-gating failure only notif
           tools: 'write_file',
         },
       ],
-      before_stop: [{ name: 'ok', command: 'true' }],
-      session_start: [{ name: 'hi', command: 'printf "hello from hook"' }],
+      before_stop: [
+        { name: 'ok', command: printingCommand(workspace, 'ok', '') },
+      ],
+      session_start: [
+        {
+          name: 'hi',
+          command: printingCommand(workspace, 'hi', 'hello from hook'),
+        },
+      ],
     },
   });
   const runner = new HookRunner(
