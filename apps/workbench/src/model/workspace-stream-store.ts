@@ -189,8 +189,6 @@ export class WorkspaceStreamStore {
               'documents',
               'terminal',
               'git',
-              'language',
-              'debug',
               'tasks',
               'delivery',
             ].includes(event.service) ||

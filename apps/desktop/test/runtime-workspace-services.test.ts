@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { existsSync, realpathSync, mkdirSync, writeFileSync } from 'node:fs';
+import { realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { WorkspaceEventStream } from '../src/workspace/event-stream.ts';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -22,6 +22,7 @@ import { AgentRuntime } from '../../../src/runtime.ts';
 import type { FileMutations } from '../../../src/file_mutations.ts';
 import {
   defaultSettings,
+  loadSettings,
   trustFolder,
   saveSettings,
   saveSettingsChange,
@@ -55,18 +56,12 @@ async function wait(check: () => boolean) {
     await delay(10);
   }
 }
-function withDeveloper<
-  T extends { extensions: Record<string, { enabled?: boolean }> },
->(settings: T, enabled = true): T {
-  settings.extensions.developer = { enabled };
-  return settings;
-}
 async function setup(
   t: TestContext,
   replies: ConstructorParameters<typeof ScriptedModel>[0] = [],
   trusted = true,
   extra: Partial<ConstructorParameters<typeof RuntimeController>[0]> = {},
-  developer = true,
+  prepare: (settings: ReturnType<typeof defaultSettings>) => void = () => {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-controller-services-'));
   const home = join(root, 'home');
@@ -74,13 +69,11 @@ async function setup(
   await mkdir(home);
   await mkdir(workspace);
   execFileSync('git', ['init', '-q', workspace]);
-  saveSettings(
-    withDeveloper(
-      trusted ? trustFolder(defaultSettings(), workspace) : defaultSettings(),
-      developer,
-    ),
-    home,
-  );
+  const settings = trusted
+    ? trustFolder(defaultSettings(), workspace)
+    : defaultSettings();
+  prepare(settings);
+  saveSettings(settings, home);
   const model = new ScriptedModel(replies);
   const events: WorkspaceServiceEvent[] = [];
   const updates: any[] = [];
@@ -120,98 +113,6 @@ async function setup(
     updates,
   };
 }
-test('language restart is performed once per host operation and readonly child sources cannot stop it', async (t) => {
-  const f = await setup(
-    t,
-    Array.from({ length: 6 }, () => ({ message: assistant('read completed') })),
-  );
-  await writeFile(join(f.workspace, 'main.ts'), 'export const value = 1;\n');
-  execFileSync('git', ['-C', f.workspace, 'add', 'main.ts']);
-  execFileSync('git', [
-    '-C',
-    f.workspace,
-    '-c',
-    'user.name=Fixture',
-    '-c',
-    'user.email=fixture@example.invalid',
-    'commit',
-    '-qm',
-    'Create language fixture',
-  ]);
-  const parent = f.controller.snapshot().activeSessionId;
-  const project = () => f.service('language', 'request', { method: 'project' });
-  const before = await project();
-  assert.equal(before.ok, true, before.error);
-  const command = {
-    id: randomUUID(),
-    name: 'workspace-service' as const,
-    sessionId: parent,
-    payload: {
-      service: 'language',
-      method: 'request',
-      params: { method: 'restart', path: 'main.ts' },
-    },
-  };
-  const replies = await Promise.all([
-    f.controller.dispatch(command),
-    f.controller.dispatch(command),
-  ]);
-  for (const reply of replies) assert.equal(reply.ok, true, reply.error);
-  const after = await project();
-  assert.equal(after.ok, true, after.error);
-  assert.equal((after.data as any).version, (before.data as any).version + 1);
-  const replay = await f.controller.dispatch(command);
-  assert.equal(replay.ok, true, replay.error);
-  assert.equal(
-    ((await project()).data as any).version,
-    (after.data as any).version,
-  );
-  const invalidOuter = await f.service('language', 'restart', {
-    method: 'definition',
-    path: 'main.ts',
-  });
-  assert.equal(
-    invalidOuter.ok,
-    false,
-    'the protocol rejects an invalid outer method before execution',
-  );
-  assert.equal(
-    ((await project()).data as any).version,
-    (after.data as any).version,
-  );
-  const enqueued = await f.service('tasks', 'enqueue', {
-    operationId: 'language-reader',
-    tasks: [
-      {
-        id: 'language-reader',
-        prompt: 'Read main.ts',
-        access: 'readonly',
-        acceptanceCriteria: ['inspect actual source'],
-      },
-    ],
-  });
-  assert.equal(enqueued.ok, true, enqueued.error);
-  await wait(() =>
-    f.controller
-      .snapshot()
-      .agents.some((agent) => agent.task?.id === 'language-reader'),
-  );
-  const child = f.controller
-    .snapshot()
-    .agents.find((agent) => agent.task?.id === 'language-reader')!;
-  const stopped = await f.service(
-    'language',
-    'request',
-    { method: 'stop', path: 'main.ts' },
-    child.id,
-  );
-  assert.equal(stopped.ok, false);
-  assert.match(stopped.error ?? '', /read-only agent source/);
-  assert.equal(
-    ((await project()).data as any).version,
-    (after.data as any).version,
-  );
-});
 test('legacy write-file requires an explicit revision without changing existing or missing files', async (t) => {
   const f = await setup(t);
   await writeFile(join(f.workspace, 'README.md'), 'human content');
@@ -1739,88 +1640,31 @@ if ($result -eq 0 -or $result -ge $buffer.Capacity) { throw "GetShortPathName fa
   }
 });
 
-async function markerAdapter(t: TestContext) {
-  const scratch = await mkdtemp(join(tmpdir(), 'circle-debug-marker-'));
-  t.after(() => rm(scratch, { recursive: true, force: true }));
-  const marker = join(scratch, 'adapter-started');
-  const adapter = join(scratch, 'adapter.cjs');
-  await writeFile(
-    adapter,
-    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started');\n`,
-  );
-  return {
-    marker,
-    workspaceTools: {
-      nodeExecutable: process.execPath,
-      runtimeExecutable: process.execPath,
-      adapterPath: adapter,
-      ghPath: 'gh',
-    },
-  };
-}
-
-test('a missing debug target names the file and does not start the adapter', async (t) => {
-  const marked = await markerAdapter(t);
-  const f = await setup(t, [], true, {
-    workspaceTools: marked.workspaceTools,
+test('a developer extension setting saved by an earlier version is ignored, and debug and language requests are refused', async (t) => {
+  const f = await setup(t, [], true, {}, (settings) => {
+    settings.extensions.developer = { enabled: true };
   });
-  const launch = await f.service('debug', 'launch', { program: 'missing.js' });
-  assert.equal(launch.ok, false);
-  assert.match(String(launch.error), /debug target is missing: missing\.js/);
-  assert.doesNotMatch(String(launch.error), /inspect effects/);
-  assert.equal(existsSync(marked.marker), false);
-});
-
-test('saving the developer extension applies it without a reload', async (t) => {
-  const f = await setup(t, [], true, {}, false);
-  const refused = await f.service('language', 'open', { path: 'main.ts' });
-  assert.equal(refused.ok, false);
-  assert.match(String(refused.error), /developer tools are off/);
-  const enabled = await f.call('save-settings', {
-    settings: {},
-    extensions: [{ name: 'developer', enabled: true }],
-  });
-  assert.equal(enabled.ok, true, String(enabled.error));
-  const on = f.controller
-    .snapshot()
-    .extensions.find((item) => item.name === 'developer');
-  assert.equal(on?.enabled, true);
+  const extensions = f.controller.snapshot().extensions;
+  assert.ok(extensions.some((item) => item.name === 'github'));
   assert.equal(
-    (on?.view as { provider?: string } | undefined)?.provider,
-    'developer',
-  );
-  const opened = await f.service('language', 'open', { path: 'main.ts' });
-  assert.doesNotMatch(String(opened.error ?? ''), /developer tools are off/);
-  const disabled = await f.call('save-settings', {
-    settings: {},
-    extensions: [{ name: 'developer', enabled: false }],
-  });
-  assert.equal(disabled.ok, true, String(disabled.error));
-  const off = f.controller
-    .snapshot()
-    .extensions.find((item) => item.name === 'developer');
-  assert.equal(off?.enabled, false);
-  assert.equal(off?.view, undefined);
-  const again = await f.service('language', 'open', { path: 'main.ts' });
-  assert.equal(again.ok, false);
-  assert.match(String(again.error), /developer tools are off/);
-});
-
-test('developer tools off refuses language and debug without starting the adapter', async (t) => {
-  const marked = await markerAdapter(t);
-  const f = await setup(
-    t,
-    [],
-    true,
-    { workspaceTools: marked.workspaceTools },
+    extensions.some((item) => item.name === 'developer'),
     false,
   );
-  const language = await f.service('language', 'open', { path: 'main.ts' });
-  assert.equal(language.ok, false);
-  assert.match(String(language.error), /developer tools are off/);
   await writeFile(join(f.workspace, 'main.ts'), 'export const value = 1;\n');
-  const launch = await f.service('debug', 'launch', { program: 'main.ts' });
-  assert.equal(launch.ok, false);
-  assert.match(String(launch.error), /developer tools are off/);
-  assert.equal(existsSync(marked.marker), false);
+  for (const [service, method, params] of [
+    ['language', 'open', { path: 'main.ts' }],
+    ['debug', 'launch', { program: 'main.ts' }],
+  ] as const) {
+    const reply = await f.service(service, method, params);
+    assert.equal(reply.ok, false);
+    assert.match(String(reply.error), /unknown workspace service operation/);
+  }
+  const saved = await f.call('save-settings', {
+    settings: {},
+    extensions: [{ name: 'github', enabled: false }],
+  });
+  assert.equal(saved.ok, true, String(saved.error));
+  assert.deepEqual(loadSettings(f.home).extensions.developer, {
+    enabled: true,
+  });
 });

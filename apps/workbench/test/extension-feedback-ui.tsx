@@ -37,16 +37,6 @@ snapshot.extensions = [
     commands: [],
     events: [],
   },
-  {
-    id: 'developer',
-    name: 'developer',
-    version: '0.1.0',
-    scope: 'bundled',
-    enabled: false,
-    tools: [],
-    commands: [],
-    events: [],
-  },
 ];
 let update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
 let listener: ((value: RuntimeUpdate) => void) | undefined;
@@ -131,34 +121,24 @@ Object.assign(window, {
       }
       emit();
     },
-    loadDeveloper: () => {
-      const extension = snapshot.extensions.find(
-        (item) => item.name === 'developer',
-      );
-      if (!extension) throw Error('developer extension missing');
+    // An enabled snapshot that arrives after the switch was turned off.
+    stale: () => {
+      const extension = snapshot.extensions[0];
       extension.enabled = true;
-      delete extension.error;
-      extension.view = { provider: 'developer', version: '0.1.0' };
-      extension.status = { text: 'ready', lamp: 'ok' };
+      extension.view = {
+        provider: 'github',
+        client: 'GitHub CLI',
+        epoch: 1,
+        state: 'disconnected',
+        repositories: [],
+        remoteRevocation: 'not-requested',
+      };
       emit();
     },
-    staleDeveloper: () => {
-      const extension = snapshot.extensions.find(
-        (item) => item.name === 'developer',
-      );
-      if (!extension) throw Error('developer extension missing');
-      extension.enabled = true;
-      extension.view = { provider: 'developer', version: '0.1.0' };
-      emit();
-    },
-    settleDeveloper: () => {
-      const extension = snapshot.extensions.find(
-        (item) => item.name === 'developer',
-      );
-      if (!extension) throw Error('developer extension missing');
+    settle: () => {
+      const extension = snapshot.extensions[0];
       extension.enabled = false;
       delete extension.view;
-      delete extension.status;
       delete extension.error;
       emit();
     },
@@ -172,7 +152,6 @@ Object.assign(window, {
       loadError: t('extension could not be loaded'),
       reload: t('extension setting saved; reload required'),
       disabling: t('disabling extension'),
-      developer: t('developer extension'),
       interface: t('interface components'),
       runtime: t('runtime extensions'),
       reloadButton: t('reload'),

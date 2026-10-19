@@ -68,10 +68,7 @@ export function nativeTaskJourneyFixture(requestsPath) {
         id: 'parent',
         match: { role: 'parent', firstUser: 'Prepare native journey' },
         replies: [
-          answer(
-            'journey-baseline',
-            'Native journey ready: README.md and debug.cjs',
-          ),
+          answer('journey-baseline', 'Native journey ready: README.md'),
           { waitForAbort: true },
         ],
       },

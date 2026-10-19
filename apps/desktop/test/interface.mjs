@@ -807,10 +807,9 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Three plain components, the device-terminal pane, GitHub, the developer
-  // extension, and the hub interface with the four platform objects. Paired
-  // ones stay off in preview.
-  assert.equal(await page.getByRole('checkbox').count(), 11);
+  // Three plain components, the device-terminal pane, GitHub, and the hub
+  // interface with the four platform objects. Paired ones stay off in preview.
+  assert.equal(await page.getByRole('checkbox').count(), 10);
   await page
     .getByRole('checkbox', {
       name: 'enable device terminal pane interface',
@@ -818,14 +817,7 @@ try {
     })
     .waitFor();
   // Each switch is named by the interface's shown title.
-  for (const id of [
-    'GitHub',
-    'developer extension',
-    'knowledge',
-    'work',
-    'execution',
-    'methods',
-  ])
+  for (const id of ['GitHub', 'knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page
         .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })

@@ -752,7 +752,7 @@ export class TerminalManager {
       );
     if (old.transientEnvironment && !previous.environment)
       throw Error(
-        'per-launch environment is unavailable after restart; relaunch from its debugger or task',
+        'per-launch environment is unavailable after restart; start it again from where it was launched',
       );
     await this.close(owner, id);
     const next = await this.#create(
@@ -1355,7 +1355,7 @@ async function terminateOwnedTree(
     await exec('taskkill', ['/pid', String(terminal.pid), '/T', '/F'], {
       windowsHide: true,
     }).catch(async (error: NodeJS.ErrnoException) => {
-      // The debugger may have ended it between the native-exit check and
+      // It may have ended by itself between the native-exit check and
       // taskkill. Success still requires its actual onExit and flushed logs.
       if (entry.pty === terminal && !(await untilStopped(entry, 3000)))
         throw error;

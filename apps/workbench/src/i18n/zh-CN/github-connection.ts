@@ -1,4 +1,5 @@
 export const githubConnection: Record<string, string> = {
+  'loading…': '加载中…',
   'inspect the exact commit and files before publishing':
     '检查待发布的提交和文件',
   'local draft storage is unavailable; keep this panel open and copy your text before leaving':

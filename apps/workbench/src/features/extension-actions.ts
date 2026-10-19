@@ -1,6 +1,6 @@
 /** Bundled extensions the desktop applies as soon as the switch is saved. */
 export function extensionAppliesImmediately(name: string): boolean {
-  return name === 'github' || name === 'developer';
+  return name === 'github';
 }
 
 export type ExtensionActionPhase =

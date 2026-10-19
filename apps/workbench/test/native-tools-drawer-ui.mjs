@@ -30,27 +30,31 @@ try {
     const draft = page.getByRole('textbox', { name: 'resource draft' });
     await draft.fill('persistent tab draft');
     const original = await draft.elementHandle();
-    await page.getByRole('tab', { name: 'debug', exact: true }).click();
+    await page.getByRole('tab', { name: 'tasks', exact: true }).click();
+    await page.getByRole('button', { name: 'new task', exact: true }).click();
     await page
-      .getByRole('textbox', { name: 'program path' })
-      .fill('/synthetic/app.cjs');
-    await page.getByRole('tab', { name: 'debug', exact: true }).press('Home');
+      .getByRole('textbox', { name: 'task instruction' })
+      .fill('synthetic task');
+    await page.getByRole('tab', { name: 'tasks', exact: true }).press('Home');
     assert.equal(await draft.inputValue(), 'persistent tab draft');
     assert.equal(await original.evaluate((node) => node.isConnected), true);
     await page.getByRole('tab', { name: 'activity', exact: true }).press('End');
     assert.equal(
-      await page.getByRole('textbox', { name: 'program path' }).inputValue(),
-      '/synthetic/app.cjs',
+      await page
+        .getByRole('textbox', { name: 'task instruction' })
+        .inputValue(),
+      'synthetic task',
     );
-    assert.equal(
-      await page.evaluate(
-        () =>
-          window.nativeDrawerFixture.calls.filter(
-            (call) => call.payload.method === 'snapshot',
-          ).length,
+    // The tasks view lists its tasks and the operations awaiting review once.
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.nativeDrawerFixture.calls
+          .filter((call) => call.payload.method === 'list')
+          .map((call) => call.payload.service)
+          .sort(),
       ),
-      1,
-      'tab navigation must not recreate the debug service view',
+      ['operations', 'tasks'],
+      'tab navigation must not recreate the tasks view',
     );
     const geometry = await page
       .locator('.workspace-resource-tabs')
@@ -112,7 +116,7 @@ try {
     await page.close();
   }
   console.log(
-    'native drawer: local keyboard tabs retain draft/debug identity; browser hide/show releases native bounds and keys in dark/light themes',
+    'native drawer: local keyboard tabs retain draft/tasks identity; browser hide/show releases native bounds and keys in dark/light themes',
   );
 } finally {
   await browser?.close();

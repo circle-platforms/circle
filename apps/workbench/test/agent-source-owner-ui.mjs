@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { WorkspaceDocuments } from '../../desktop/src/workspace/documents.ts';
-import { LanguageService } from '../../desktop/src/workspace/language.ts';
 const temp = await mkdtemp(join(tmpdir(), 'child-owner-')),
   parent = join(temp, 'parent'),
   child = join(temp, 'child');
@@ -16,18 +15,12 @@ const original =
   'import { amount } from "./lib";\nconst childMarker = "CHILD";\nconsole.log(amount);\n';
 await writeFile(join(parent, 'main.ts'), 'const parentMarker="PARENT";\n');
 await writeFile(join(child, 'main.ts'), original);
-await writeFile(join(child, 'lib.ts'), 'export const amount = 1;\n');
-await writeFile(join(parent, 'lib.ts'), 'export const parentOnly = 99;\n');
 await writeFile(join(child, 'plan.md'), 'CHILD PLAN\n');
 const documents = new Map([
   ['child-session', new WorkspaceDocuments(child)],
   ['parent-session', new WorkspaceDocuments(parent)],
 ]);
 for (const service of documents.values()) await service.refresh();
-const languages = new Map([
-  ['child-session', new LanguageService(child)],
-  ['parent-session', new LanguageService(parent)],
-]);
 const journal = [],
   streams = new Set(),
   requests = [];
@@ -103,13 +96,7 @@ const server = await createServer({
                   params.after ?? { seq: 0, offset: 0 },
                 hasMore: false,
               };
-            } else if (service === 'debug' && method === 'snapshot')
-              data = { status: 'idle', output: '', breakpoints: {} };
-            else if (service === 'debug' && method === 'setBreakpoints')
-              data = { breakpoints: [] };
-            else if (service === 'language')
-              data = languages.get(id).call(method, params);
-            else if (method === 'read')
+            } else if (method === 'read')
               data = await documents.get(id).read(params.path);
             else if (method === 'save') {
               data = await documents
@@ -184,40 +171,6 @@ try {
     await readFile(join(parent, 'main.ts'), 'utf8'),
     'const parentMarker="PARENT";\n',
   );
-  await input.focus();
-  await page.keyboard.press('ControlOrMeta+a');
-  await page.keyboard.press('ArrowLeft');
-  for (let n = 0; n < 10; n++) await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('F12');
-  await page
-    .locator('.file-view-heading strong')
-    .getByText('lib.ts', { exact: true })
-    .waitFor();
-  await page.waitForFunction(() =>
-    document.querySelector('.view-lines')?.textContent?.includes('export'),
-  );
-  await input.focus();
-  await page.keyboard.press('ControlOrMeta+a');
-  await page.keyboard.press('ArrowLeft');
-  for (let n = 0; n < 14; n++) await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('F2');
-  const rename = page.locator('input.rename-input');
-  await rename.fill('total');
-  await rename.press('Enter');
-  await page.getByRole('button', { name: 'save all', exact: true }).click();
-  await until(
-    async () =>
-      (await readFile(join(child, 'lib.ts'), 'utf8')).includes(
-        'export const total',
-      ) &&
-      (await readFile(join(child, 'main.ts'), 'utf8')).includes(
-        'import { total }',
-      ),
-  );
-  assert.equal(
-    await readFile(join(parent, 'lib.ts'), 'utf8'),
-    'export const parentOnly = 99;\n',
-  );
   await page
     .getByRole('button', { name: 'external parent', exact: true })
     .click();
@@ -266,25 +219,17 @@ try {
     'readonly plan does not dispatch any mutation',
   );
   assert(
-    requests.some(
-      (r) => r.service === 'language' && r.params.method === 'rename',
-    ),
+    requests.some((r) => r.service === 'documents' && r.method === 'save'),
   );
-  assert(
-    requests.some(
-      (r) => r.service === 'documents' && r.method === 'applyEdits',
-    ),
-  );
-  assert(requests.some((r) => r.service === 'language'));
   assert(
     requests
-      .filter((r) => r.service === 'documents' || r.service === 'language')
+      .filter((r) => r.service === 'documents')
       .every((r) => r.id === 'child-session'),
-    'all resource reads writes diagnostics stay bound to child session',
+    'all resource reads and writes stay bound to child session',
   );
   assert.deepEqual(errors, []);
   console.log(
-    'actual independent child documents/LSP/watch/CAS/readonly use child owner; same-name parent stays isolated',
+    'actual independent child documents/watch/CAS/readonly use child owner; same-name parent stays isolated',
   );
 } catch (error) {
   console.error(
@@ -307,6 +252,5 @@ try {
   for (const stream of streams) stream.end();
   await server.close();
   for (const service of documents.values()) service.close();
-  for (const service of languages.values()) service.dispose();
   await rm(temp, { recursive: true, force: true });
 }

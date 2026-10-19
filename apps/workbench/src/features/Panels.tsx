@@ -90,9 +90,6 @@ interface Props {
   fileOwnerKey?: string;
   resourcesPaused?: boolean;
   commandTerminal?: CommandTerminalView;
-  debugSourceRequest?: { id: string; path: string; line?: number };
-  onOpenTerminal?: (target: { id: string; epoch: string }) => void;
-  terminalFocusRequest?: { id: string; epoch: string; requestId: string };
   onExitCommandTerminal?: () => void;
   panel: PanelId;
   selection: string;
@@ -300,11 +297,6 @@ function InspectorResources(
                 commandTerminal={
                   id === 'terminal' ? props.commandTerminal : undefined
                 }
-                debugSourceRequest={
-                  id === 'activity' ? props.debugSourceRequest : undefined
-                }
-                onOpenTerminal={props.onOpenTerminal}
-                terminalFocusRequest={props.terminalFocusRequest}
                 onExitCommandTerminal={props.onExitCommandTerminal}
                 sessionId={props.sessionId}
                 visible={!!props.visible && id === props.panel}

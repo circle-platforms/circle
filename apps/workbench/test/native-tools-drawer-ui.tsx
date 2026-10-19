@@ -14,19 +14,6 @@ const query = new URLSearchParams(location.search);
 applyTheme(query.get('theme') === 'light' ? 'light' : 'dark');
 setLanguage('en');
 const runtime = new PreviewRuntime();
-// The debug tab belongs to the developer extension; this drawer exercises it.
-runtime.change((snapshot) => {
-  snapshot.extensions.push({
-    id: 'developer',
-    name: 'developer',
-    version: '0.1.0',
-    scope: 'bundled',
-    enabled: true,
-    tools: [],
-    commands: [],
-    events: [],
-  });
-});
 const fixture = {
   calls: [] as any[],
   bounds: [] as any[],
@@ -37,7 +24,17 @@ Object.assign(window, { nativeDrawerFixture: fixture });
 (window as any).circleDesktop = {
   runtimeCommand: async (command: any) => {
     fixture.calls.push(command);
-    return { ok: true, data: { status: 'idle', output: '', breakpoints: {} } };
+    // The tasks tab asks for its list and limits once, when it first shows.
+    const method = command.payload?.method;
+    return {
+      ok: true,
+      data:
+        method === 'list'
+          ? []
+          : method === 'settings'
+            ? { agents: 8, builds: 2, ui: 1, browsers: 1 }
+            : {},
+    };
   },
   onWorkspaceEvent: () => () => {},
   browserState: async (id: string) => ({

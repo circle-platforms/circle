@@ -114,9 +114,7 @@ const controller = new RuntimeController({
   dataFolder: data,
   model,
   workspaceTools: {
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
   },
   emit: (value) => emit('update', value),

@@ -7,13 +7,6 @@ export function extensionStatusText(extension: RuntimeExtension): string {
   const view = extension.view as
     { provider?: unknown; state?: unknown } | undefined;
   if (
-    extension.name === 'developer' &&
-    extension.scope === 'bundled' &&
-    view?.provider === 'developer' &&
-    text === 'ready'
-  )
-    return t('ready');
-  if (
     extension.name !== 'github' ||
     extension.scope !== 'bundled' ||
     view?.provider !== 'github' ||

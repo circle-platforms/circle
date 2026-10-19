@@ -26,9 +26,7 @@ test('workspace service command preserves argv, reaches real readiness and resta
   const service = new WorkspaceServices({
     workspaceRoot: root,
     dataDir: data,
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
     terminalEnv: {
       HOME: root,

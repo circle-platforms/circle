@@ -26,10 +26,7 @@ const port = (process as unknown as { parentPort: Port }).parentPort;
 if (!port) throw Error('Circle runtime needs its native parent process');
 const home = process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
 if (!home) throw Error('Circle runtime home is missing');
-const workspaceTools = workspaceToolsForWorker(
-  import.meta.url,
-  process.execPath,
-);
+const workspaceTools = workspaceToolsForWorker(import.meta.url);
 // Child commands, Jobs and their nested package scripts inherit the shipped
 // runtime. This changes only this utility process, never user shell settings.
 process.env.PATH = workspaceRuntimePath(

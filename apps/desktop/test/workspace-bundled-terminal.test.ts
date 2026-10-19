@@ -10,15 +10,13 @@ import type { TerminalSnapshot } from '../src/workspace/terminal.ts';
 test('bundled npm launches nested npm and a real HTTP service with only system PATH', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-bundled-npm-'));
   const data = await mkdtemp(path.join(tmpdir(), 'circle-bundled-npm-data-'));
-  const runtime =
-    process.env.CIRCLE_JS_DEBUG_RUNTIME ??
-    fileURLToPath(
-      new URL(
-        '../dist/tools/node/bin/' +
-          (process.platform === 'win32' ? 'node.exe' : 'node'),
-        import.meta.url,
-      ),
-    );
+  const runtime = fileURLToPath(
+    new URL(
+      '../dist/tools/node/bin/' +
+        (process.platform === 'win32' ? 'node.exe' : 'node'),
+      import.meta.url,
+    ),
+  );
   const runtimeReal = await realpath(runtime);
   const probe = createServer();
   await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
@@ -39,9 +37,7 @@ test('bundled npm launches nested npm and a real HTTP service with only system P
   const service = new WorkspaceServices({
     workspaceRoot: root,
     dataDir: data,
-    nodeExecutable: process.execPath,
     runtimeExecutable: runtime,
-    adapterPath: 'unused',
     ghPath: 'unused',
     terminalEnv: {
       PATH: systemPath,

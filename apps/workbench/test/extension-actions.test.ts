@@ -13,30 +13,28 @@ const action = (patch: Partial<ExtensionAction> = {}): ExtensionAction => ({
   ...patch,
 });
 
-test('github and developer apply without a reload; other extensions still ask for one', () => {
-  assert.equal(phaseAfterExtensionSave('live', 'developer', true), 'waiting');
-  assert.equal(phaseAfterExtensionSave('live', 'developer', false), 'waiting');
+test('github applies without a reload; other extensions still ask for one', () => {
   assert.equal(phaseAfterExtensionSave('live', 'github', true), 'waiting');
+  assert.equal(phaseAfterExtensionSave('live', 'github', false), 'waiting');
+  // The developer extension was removed; its name is an ordinary extension now.
+  assert.equal(phaseAfterExtensionSave('live', 'developer', true), 'reload');
   assert.equal(phaseAfterExtensionSave('live', 'observer', true), 'reload');
   assert.equal(phaseAfterExtensionSave('live', 'observer', false), 'waiting');
-  assert.equal(
-    phaseAfterExtensionSave('preview', 'developer', true),
-    'preview',
-  );
+  assert.equal(phaseAfterExtensionSave('preview', 'github', true), 'preview');
 });
 
-test('developer becomes enabled only once its view is published', () => {
+test('github becomes enabled only once its view is published', () => {
   const enabling = action({ target: true });
   assert.equal(
-    reconcileExtensionAction('developer', enabling, {
+    reconcileExtensionAction('github', enabling, {
       enabled: true,
       view: undefined,
     }),
     'keep',
   );
-  const done = reconcileExtensionAction('developer', enabling, {
+  const done = reconcileExtensionAction('github', enabling, {
     enabled: true,
-    view: { provider: 'developer' },
+    view: { provider: 'github' },
   });
   assert.notEqual(done, 'keep');
   if (done === 'keep') return;
@@ -45,15 +43,15 @@ test('developer becomes enabled only once its view is published', () => {
 
 test('a stale snapshot after disable keeps the switch off', () => {
   const disabled = action({ target: false, phase: 'complete' });
-  const stale = reconcileExtensionAction('developer', disabled, {
+  const stale = reconcileExtensionAction('github', disabled, {
     enabled: true,
-    view: { provider: 'developer' },
+    view: { provider: 'github' },
   });
   assert.notEqual(stale, 'keep');
   if (stale === 'keep') return;
   assert.equal(stale.phase, 'waiting');
   assert.equal(stale.target, false);
-  const settled = reconcileExtensionAction('developer', stale, {
+  const settled = reconcileExtensionAction('github', stale, {
     enabled: false,
   });
   assert.notEqual(settled, 'keep');

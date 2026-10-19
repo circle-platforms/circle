@@ -1,8 +1,5 @@
 import { setTerminalAccessibility } from '../src/terminal-accessibility';
 import { createRoot } from 'react-dom/client';
-import { useState } from 'react';
-import { Tooltip } from 'radix-ui';
-import { NativeTerminal } from '../src/components/NativeTerminal';
 import { CircleWorkbench } from '../src/workbench';
 import { PreviewRuntime } from '../src/model/state';
 import { createFixtures } from '../src/preview/fixtures';
@@ -230,40 +227,10 @@ Object.assign(window, {
       items = [items.at(-1)!, ...items.slice(0, -1)];
     },
     writes,
-    observed: () => ({ ids: items.map((item) => item.id), seq }),
   },
 });
 setLanguage('en');
 location.hash = '/session/A';
-function FocusFixture() {
-  const [sessionId, setSession] = useState('A');
-  const [request, setRequest] = useState<{
-    id: string;
-    epoch: string;
-    requestId: string;
-  }>();
-  Object.assign(
-    (window as typeof window & { terminalTabsFixture: object })
-      .terminalTabsFixture,
-    {
-      focusTerminal: (request: {
-        id: string;
-        epoch: string;
-        requestId: string;
-      }) => setRequest(request),
-      focusSession: setSession,
-    },
-  );
-  return (
-    <Tooltip.Provider>
-      <NativeTerminal sessionId={sessionId} focusRequest={request} />
-    </Tooltip.Provider>
-  );
-}
 createRoot(document.getElementById('root')!).render(
-  query.has('target') ? (
-    <FocusFixture />
-  ) : (
-    <CircleWorkbench runtime={runtime} plugins={[]} />
-  ),
+  <CircleWorkbench runtime={runtime} plugins={[]} />,
 );

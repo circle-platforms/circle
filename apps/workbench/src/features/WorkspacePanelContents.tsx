@@ -9,8 +9,7 @@ import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { TasksPanel } from './TasksPanel';
 import { appendTerminalSelection } from '../model/terminal-context';
 import { workspaceCall } from '../model/workspace-client';
-import { developerToolsEnabled } from '../plugins/developer';
-import { activityTabWhenDebugHidden, forcedActivityTab } from './activity-tabs';
+import { forcedActivityTab } from './activity-tabs';
 import type { TerminalReplay } from '../../../desktop/src/workspace/terminal';
 const NativeTerminal = lazy(() =>
   import('../components/NativeTerminal').then((m) => ({
@@ -20,18 +19,12 @@ const NativeTerminal = lazy(() =>
 const GitPanel = lazy(() =>
   import('../components/GitPanel').then((m) => ({ default: m.GitPanel })),
 );
-const DebugPanel = lazy(() =>
-  import('../components/DebugPanel').then((m) => ({ default: m.DebugPanel })),
-);
 
 /** Native resources use the existing inspector's tabs and lifetime, without another workbench. */
 export function WorkspacePanelContents({
   kind,
   resourcesPaused = false,
   commandTerminal,
-  debugSourceRequest,
-  onOpenTerminal,
-  terminalFocusRequest,
   onExitCommandTerminal,
   sessionId,
   visible,
@@ -43,9 +36,6 @@ export function WorkspacePanelContents({
   kind: 'terminal' | 'changes' | 'activity';
   resourcesPaused?: boolean;
   commandTerminal?: CommandTerminalView;
-  debugSourceRequest?: { id: string; path: string; line?: number };
-  onOpenTerminal?: (target: { id: string; epoch: string }) => void;
-  terminalFocusRequest?: { id: string; epoch: string; requestId: string };
   onExitCommandTerminal?: () => void;
   sessionId: string;
   visible: boolean;
@@ -55,7 +45,6 @@ export function WorkspacePanelContents({
   onSession: (id: string) => void;
 }) {
   const { runtime, snapshot } = useRuntime();
-  const showDebug = developerToolsEnabled(snapshot.extensions);
   const workspaceRoot = snapshot.workspaces.find(
     (workspace) =>
       workspace.id ===
@@ -71,20 +60,11 @@ export function WorkspacePanelContents({
     setTab(next);
   };
   useEffect(() => {
-    const forced = forcedActivityTab({
-      kind,
-      selection,
-      showDebug,
-      hasSourceRequest: !!debugSourceRequest,
-    });
+    const forced = forcedActivityTab({ kind, selection });
     if (forced) select(forced);
-    // The current tab is intentionally not a dependency: after a debug-file
-    // request the person can still open tasks or the activity list.
-  }, [kind, selection, debugSourceRequest?.id, showDebug]);
-  useEffect(() => {
-    const next = activityTabWhenDebugHidden(kind, showDebug, tab);
-    if (next) select(next);
-  }, [kind, showDebug, tab]);
+    // The current tab is intentionally not a dependency: after a task is
+    // selected the person can still open the activity list.
+  }, [kind, selection]);
   const tabs =
     kind === 'terminal'
       ? [
@@ -99,7 +79,6 @@ export function WorkspacePanelContents({
         : [
             { id: 'original', label: t('activity') },
             { id: 'tasks', label: t('tasks') },
-            ...(showDebug ? [{ id: 'debug', label: t('debug') }] : []),
           ];
   const resourceName =
     workspaceRoot ??
@@ -191,7 +170,6 @@ export function WorkspacePanelContents({
                       embedded
                       sessionId={sessionId}
                       commandTerminal={commandTerminal}
-                      focusRequest={terminalFocusRequest}
                       onExitCommandTerminal={onExitCommandTerminal}
                       active={visible && tab === 'terminal'}
                       onAddToDraft={(capture) =>
@@ -221,15 +199,6 @@ export function WorkspacePanelContents({
                     />
                   ) : item.id === 'git' ? (
                     <GitPanel sessionId={sessionId} embedded onFile={onFile} />
-                  ) : item.id === 'debug' ? (
-                    <DebugPanel
-                      sourceRequest={debugSourceRequest}
-                      workspaceRoot={workspaceRoot}
-                      onOpenTerminal={onOpenTerminal}
-                      sessionId={sessionId}
-                      embedded
-                      onFile={onFile}
-                    />
                   ) : (
                     <TasksPanel
                       embedded

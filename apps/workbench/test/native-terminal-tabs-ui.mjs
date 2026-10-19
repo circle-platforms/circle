@@ -501,64 +501,6 @@ try {
       });
       await page.close();
     }
-  const focusPage = await browser.newPage();
-  currentPage = focusPage;
-  await focusPage.goto(
-    `${server.resolvedUrls.local[0]}test/native-terminal-tabs-ui.html?target=1`,
-  );
-  await focusPage.getByRole('tab', { name: 'zsh 9', exact: true }).waitFor();
-  await focusPage.evaluate(() =>
-    window.terminalTabsFixture.focusTerminal({
-      id: 'terminal-2',
-      epoch: 'fixture',
-      requestId: 'debug-source-1',
-    }),
-  );
-  await focusPage.waitForFunction(
-    () =>
-      document
-        .querySelector('[role="tab"][aria-selected="true"]')
-        ?.getAttribute('aria-controls') === 'terminal-terminal-2',
-  );
-  await focusPage.evaluate(() =>
-    window.terminalTabsFixture.focusTerminal({
-      id: 'terminal-1',
-      epoch: 'stale',
-      requestId: 'debug-source-2',
-    }),
-  );
-  await focusPage
-    .getByRole('alert')
-    .getByText('terminal is no longer available', { exact: true })
-    .waitFor();
-  assert.equal(
-    await focusPage
-      .locator('[role="tab"][aria-selected="true"]')
-      .getAttribute('aria-controls'),
-    'terminal-terminal-2',
-    'stale epochs cannot select a terminal',
-  );
-  assert.equal(
-    (await focusPage.evaluate(() => window.terminalTabsFixture.observed())).ids
-      .length,
-    9,
-    'focus never creates or restarts a process',
-  );
-  await focusPage.evaluate(() => window.terminalTabsFixture.focusSession('B'));
-  await focusPage.waitForFunction(
-    () => document.querySelectorAll('[role="tab"]').length === 0,
-  );
-  await focusPage.evaluate(() => window.terminalTabsFixture.focusSession('A'));
-  await focusPage.getByRole('tab', { name: 'debug 2', exact: true }).waitFor();
-  await focusPage.waitForFunction(
-    () => !document.querySelector('[role="alert"]'),
-  );
-  assert.equal(
-    (await focusPage.evaluate(() => window.terminalTabsFixture.observed())).ids
-      .length,
-    9,
-  );
-  await focusPage.close();
   await writeFile(
     `${output}/receipt.json`,
     JSON.stringify(

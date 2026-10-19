@@ -12,35 +12,48 @@ import {
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScriptedModel } from '../src/testing.js';
 
-test('the developer extension is bundled, off, and lists nothing until enabled', async (t) => {
+// Earlier versions shipped a developer extension for the desktop's debugger and
+// language service. Its entry in settings.json may still turn it on.
+function earlierSettings(home: string) {
+  const settings = defaultSettings();
+  settings.extensions.developer = { enabled: true };
+  saveSettings(settings, home);
+  return loadSettings(home);
+}
+
+test('a developer extension turned on by an earlier version is not listed, fails nothing and stays in settings', async (t) => {
   const root = scratch(t);
   const home = join(root, 'home');
   const workspace = join(root, 'project');
   mkdirSync(workspace);
+  const settings = earlierSettings(home);
   const host = await new ExtensionHost({
     home,
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
+    settings: settings.extensions,
   }).load();
   cleanup(t, () => host.close());
-  const developer = host.extensions.find((ext) => ext.name === 'developer');
-  assert.ok(developer);
-  assert.equal(developer.source, 'bundled');
-  assert.equal(developer.enabled, false);
-  assert.equal(developer.version, '0.1.0');
-  assert.deepEqual(developer.tools, []);
-  assert.equal(host.commands().has('developer'), false);
-  assert.match(host.describe(), /developer 0\.1\.0 \(bundled\) · off/);
+  assert.ok(host.extensions.some((ext) => ext.name === 'github'));
+  assert.equal(
+    host.extensions.some((ext) => ext.name === 'developer'),
+    false,
+  );
+  assert.deepEqual(
+    host.extensions.filter((ext) => ext.error || ext.warnings.length),
+    [],
+  );
+  assert.doesNotMatch(host.describe(), /developer/);
+  assert.deepEqual(loadSettings(home).extensions.developer, { enabled: true });
 });
 
-test('/extensions enable developer saves the choice and publishes its view', async (t) => {
+test('/extensions enable developer names no extension and leaves the saved entry alone', async (t) => {
   const root = scratch(t);
   const home = join(root, 'home');
   const workspace = join(root, 'project');
   mkdirSync(workspace);
-  const settings = defaultSettings();
-  saveSettings(settings, home);
+  const settings = earlierSettings(home);
   const app = new SessionApp(workspace, home, settings);
   const ui = app as any;
   ui.screen.render = () => {};
@@ -62,23 +75,18 @@ test('/extensions enable developer saves the choice and publishes its view', asy
     await runtime.close();
   });
   assert.equal(
-    runtime.extensions.extensions.find((ext) => ext.name === 'developer')
-      ?.enabled,
+    runtime.extensions.extensions.some((ext) => ext.name === 'developer'),
     false,
+  );
+  await app.submit('/extensions disable developer');
+  assert.match(
+    String(app.state.notices.at(-1)),
+    /No extension named developer/,
   );
   await app.submit('/extensions enable developer');
-  assert.equal(loadSettings(home).extensions.developer?.enabled, true);
-  const enabled = runtime.extensions.extensions.find(
-    (ext) => ext.name === 'developer',
+  assert.match(
+    String(app.state.notices.at(-1)),
+    /No extension named developer/,
   );
-  assert.equal(enabled?.enabled, true);
-  assert.equal(enabled?.error, '');
-  assert.deepEqual(enabled?.view, { provider: 'developer', version: '0.1.0' });
-  await app.submit('/extensions disable developer');
-  assert.equal(loadSettings(home).extensions.developer?.enabled, false);
-  assert.equal(
-    runtime.extensions.extensions.find((ext) => ext.name === 'developer')
-      ?.enabled,
-    false,
-  );
+  assert.deepEqual(loadSettings(home).extensions.developer, { enabled: true });
 });

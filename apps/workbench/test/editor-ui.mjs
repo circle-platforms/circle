@@ -18,7 +18,6 @@ import {
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WorkspaceServices } from '../../desktop/src/workspace/workspace-services.ts';
 const workspace = mkdtempSync(join(tmpdir(), 'circle-editor-ui-'));
 const initial =
   'import { amount } from "./lib";\nconst label = "amount";\nconsole.log(amount, label);\n';
@@ -26,10 +25,7 @@ writeFileSync(join(workspace, 'main.ts'), initial);
 writeFileSync(join(workspace, 'lib.ts'), 'export const amount = 1;\n');
 const rules = '# isolated project instructions\nfollow the rules\n';
 writeFileSync(join(workspace, 'AGENTS.md'), rules);
-const languageControls = [];
-const languageData = mkdtempSync(
-  join(tmpdir(), 'circle-editor-language-journal-'),
-);
+const viteData = mkdtempSync(join(tmpdir(), 'circle-editor-vite-'));
 const documentsModule =
   process.env.CIRCLE_EDITOR_DOCUMENT_SERVICE ??
   fileURLToPath(
@@ -51,21 +47,16 @@ let externalDuringSave;
 let releaseHeldRead;
 let mainReads = 0;
 let interruptNextBatch = false;
-let holdNextHistory = false;
-let releaseHistory;
-let heldHistory = 0;
-let failNextCopy = false;
-const diagnosticCopies = [];
 const batchCalls = [];
 const batchCommitCounts = new Map();
 let seq = 0,
   externalWrites = 0;
-const event = (data, service = 'documents', resourceId = 'files') => {
+const event = (data) => {
   const payload = {
     workspaceId: 'fixture',
     sessionId: 'fixture',
-    service,
-    resourceId,
+    service: 'documents',
+    resourceId: 'files',
     epoch: 'editor-fixture',
     seq: ++seq,
     cursor: { seq, offset: seq * 100 },
@@ -76,20 +67,6 @@ const event = (data, service = 'documents', resourceId = 'files') => {
   for (const stream of pauseEvents ? [] : streams)
     stream.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
-const language = new WorkspaceServices({
-  workspaceRoot: workspace,
-  workspaceId: 'fixture',
-  dataDir: languageData,
-  nodeExecutable: process.execPath,
-  runtimeExecutable: process.execPath,
-  adapterPath: 'unused',
-  ghPath: 'unused',
-  languageServers: {},
-  emit: (record) => {
-    if (record.service === 'language')
-      event(record.data, 'language', record.resourceId);
-  },
-});
 const files = () =>
   readdirSync(workspace)
     .filter((name) => name.endsWith('.ts'))
@@ -100,7 +77,6 @@ const files = () =>
       size: statSync(join(workspace, path)).size,
     }));
 const changed = async (changes) => {
-  await language.call('fixture', 'language', 'refresh', {});
   if (documents) {
     const snapshot = await documents.refresh();
     event({ kind: 'files', snapshot });
@@ -120,11 +96,7 @@ const changed = async (changes) => {
 };
 if (documents) await documents.refresh();
 const readDocument = (path) => {
-  if (
-    !['main.ts', 'lib.ts', 'moved.ts', 'tsconfig.json', 'AGENTS.md'].includes(
-      path,
-    )
-  )
+  if (!['main.ts', 'lib.ts', 'moved.ts', 'AGENTS.md'].includes(path))
     throw Error('outside fixture');
   const content = readFileSync(join(workspace, path), 'utf8');
   return {
@@ -152,36 +124,6 @@ const server = await createServer({
           '/__editor_workspace',
           async (request, response) => {
             try {
-              if (request.url.includes('copy-diagnostics=1')) {
-                if (failNextCopy) {
-                  failNextCopy = false;
-                  throw Error('isolated clipboard unavailable');
-                }
-                let body = '';
-                for await (const chunk of request) body += chunk;
-                diagnosticCopies.push(body);
-                response.end('{}');
-                return;
-              }
-              if (request.url.includes('fail-copy=1')) {
-                failNextCopy = true;
-                response.end('{}');
-                return;
-              }
-              if (request.url.includes('hold-history=1')) {
-                holdNextHistory = true;
-                response.end('{}');
-                return;
-              }
-              if (request.url.includes('release-history=1')) {
-                releaseHistory?.();
-                response.end('{}');
-                return;
-              }
-              if (request.url.includes('history-pending=1')) {
-                response.end(JSON.stringify({ heldHistory }));
-                return;
-              }
               if (request.url.includes('external-during-save=1')) {
                 externalDuringSave = '// written during the save\n';
                 response.end('{}');
@@ -240,41 +182,15 @@ const server = await createServer({
                 response.end('{}');
                 return;
               }
-              if (request.url.includes('badconfig=1')) {
-                writeFileSync(
-                  join(workspace, 'tsconfig.json'),
-                  '{"compilerOptions":{"target":,}}',
-                );
-                await changed([['added', 'tsconfig.json']]);
-                response.end('{}');
-                return;
-              }
-              if (request.url.includes('goodconfig=1')) {
-                writeFileSync(
-                  join(workspace, 'tsconfig.json'),
-                  JSON.stringify({
-                    compilerOptions: {
-                      target: 'ES2022',
-                      module: 'ESNext',
-                      moduleResolution: 'Bundler',
-                    },
-                    include: ['*.ts'],
-                  }),
-                );
-                await changed([['changed', 'tsconfig.json']]);
-                response.end('{}');
-                return;
-              }
               let body = '';
               for await (const chunk of request) body += chunk;
               const command = JSON.parse(body),
                 { service, method, params } = command.payload;
               let data;
               if (service === 'events' && method === 'replay') {
-                const historyRead = params.limit === 32;
                 const events = journal
                   .filter((event) => event.seq > (params.after?.seq ?? 0))
-                  .slice(0, historyRead ? 3 : (params.limit ?? 256));
+                  .slice(0, params.limit ?? 256);
                 data = {
                   events,
                   cursor: events.at(-1)?.cursor ??
@@ -285,37 +201,6 @@ const server = await createServer({
                       (events.at(-1)?.seq ?? params.after?.seq ?? 0),
                   ),
                 };
-                if (historyRead && holdNextHistory) {
-                  holdNextHistory = false;
-                  heldHistory++;
-                  await new Promise((resolve) => {
-                    releaseHistory = resolve;
-                  });
-                }
-              } else if (service === 'debug' && method === 'snapshot') {
-                data = { status: 'idle', output: '', breakpoints: {} };
-              } else if (service === 'debug' && method === 'setBreakpoints') {
-                data = {
-                  breakpoints: (params.lines ?? []).map((line) => ({
-                    line,
-                    verified: false,
-                  })),
-                };
-              } else if (service === 'language') {
-                if (
-                  method === 'request' &&
-                  ['status', 'stop', 'restart'].includes(params.method)
-                )
-                  languageControls.push({
-                    method: params.method,
-                    path: params.path,
-                  });
-                data = await language.call(
-                  'fixture',
-                  'language',
-                  method,
-                  params,
-                );
               } else if (service === 'documents' && method === 'read') {
                 if (params.path === 'AGENTS.md')
                   await new Promise((resolve) => setTimeout(resolve, 200));
@@ -406,7 +291,7 @@ const server = await createServer({
     },
   ],
   root,
-  cacheDir: join(languageData, 'vite-cache'),
+  cacheDir: join(viteData, 'vite-cache'),
   // Test the captured module graph; concurrent source edits must not reset fixtures.
   server: {
     port: 0,
@@ -418,57 +303,6 @@ const server = await createServer({
 });
 let browser;
 try {
-  const historicalContent = Array.from(
-    { length: 800 },
-    (_, index) => `const bad${index}: number = "wrong";`,
-  ).join('\n');
-  await language.call('fixture', 'language', 'change', {
-    path: 'main.ts',
-    content: historicalContent,
-    version: 21,
-  });
-  const historicalDiagnostics = await language.call(
-    'fixture',
-    'language',
-    'request',
-    { method: 'diagnostics', path: 'main.ts' },
-  );
-  assert.equal(historicalDiagnostics.length, 800);
-  const historicalBatch = journal.find(
-    (row) => row.service === 'language' && row.data.kind === 'diagnostics',
-  );
-  assert.ok(
-    historicalBatch.data.count > 3,
-    'real diagnostic result spans multiple replay pages',
-  );
-  await language.call('fixture', 'language', 'change', {
-    path: 'main.ts',
-    content: 'const amount: number = "review this value";\n',
-    version: 22,
-  });
-  const shortDiagnostics = await language.call(
-    'fixture',
-    'language',
-    'request',
-    { method: 'diagnostics', path: 'main.ts' },
-  );
-  assert.equal(shortDiagnostics.length, 1);
-  const shortBatch = journal.findLast(
-    (row) => row.service === 'language' && row.data.kind === 'diagnostics',
-  );
-  await language.call('fixture', 'language', 'change', {
-    path: 'main.ts',
-    content: initial,
-    version: 23,
-  });
-  assert.deepEqual(
-    await language.call('fixture', 'language', 'request', {
-      method: 'diagnostics',
-      path: 'main.ts',
-    }),
-    [],
-  );
-  await language.releaseSession('fixture');
   await server.listen();
   browser = await chromium.launch({
     headless: true,
@@ -479,327 +313,6 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  const historyPage = await browser.newPage({
-    viewport: { width: 760, height: 900 },
-  });
-  historyPage.on('pageerror', (error) => errors.push(error.message));
-  await historyPage.goto(
-    `${server.resolvedUrls.local[0]}test/editor-ui.html?viewer`,
-  );
-  await historyPage.waitForFunction(() =>
-    document
-      .querySelector('.native-code-editor .view-lines')
-      ?.textContent.includes('console.log'),
-  );
-  await historyPage
-    .getByText('all changes saved', { exact: true })
-    .waitFor({ state: 'attached' });
-  await historyPage.locator('.editor-project-diagnostics > summary').click();
-  await historyPage.getByText('diagnostic history', { exact: true }).click();
-  const historyBatch = historyPage.locator(
-    `[data-diagnostic-batch="${historicalBatch.data.batchId}"]`,
-  );
-  await historyBatch.locator(':scope > summary').click();
-  await historyBatch
-    .getByText('diagnostic batch incomplete; read more', { exact: true })
-    .waitFor();
-  assert.equal(
-    await historyBatch
-      .getByRole('button', { name: 'copy complete diagnostics', exact: true })
-      .isDisabled(),
-    true,
-  );
-  let historyPages = 0;
-  while (
-    await historyPage
-      .getByRole('button', {
-        name: 'read more diagnostic history',
-        exact: true,
-      })
-      .count()
-  ) {
-    const more = historyPage.getByRole('button', {
-      name: 'read more diagnostic history',
-      exact: true,
-    });
-    await more.click();
-    await historyPage
-      .getByRole('button', { name: 'reading diagnostic history', exact: true })
-      .waitFor({ state: 'hidden' });
-    assert.ok(++historyPages < 50, 'history cursor makes bounded progress');
-  }
-  assert.ok(historyPages > 1, 'history was read through multiple real pages');
-  await historyBatch
-    .getByRole('button', { name: 'copy complete diagnostics', exact: true })
-    .click();
-  await historyPage.waitForFunction(
-    () => document.documentElement.dataset.diagnosticCopies === '1',
-  );
-  assert.equal(diagnosticCopies.at(-1), JSON.stringify(historicalDiagnostics));
-  await historyPage.evaluate(() => fetch('/__editor_workspace?fail-copy=1'));
-  await historyBatch
-    .getByRole('button', { name: 'copy complete diagnostics', exact: true })
-    .click();
-  await historyPage
-    .getByText('could not copy diagnostics', { exact: true })
-    .waitFor();
-  assert.equal(
-    diagnosticCopies.length,
-    1,
-    'failed clipboard write never claims another copy',
-  );
-  assert.equal(
-    await historyBatch
-      .getByRole('button', { name: 'copy complete diagnostics', exact: true })
-      .isEnabled(),
-    true,
-  );
-  assert.equal(await historyBatch.locator('li').count(), 800);
-  assert.equal(
-    await historyBatch.locator('pre').isVisible(),
-    false,
-    'raw diagnostic JSON stays folded',
-  );
-  assert.equal(
-    await historyPage.locator('.squiggly-error').count(),
-    0,
-    'historical errors never replace cleared current markers',
-  );
-  await historyBatch.locator(':scope > summary').click();
-  const shortHistoryBatch = historyPage.locator(
-    `[data-diagnostic-batch="${shortBatch.data.batchId}"]`,
-  );
-  await shortHistoryBatch.locator(':scope > summary').click();
-  assert.equal(await shortHistoryBatch.locator('li').count(), 1);
-  assert.match(
-    await shortHistoryBatch.locator('li').innerText(),
-    /typescript error.*line 1.*not assignable/s,
-  );
-  if (process.env.CIRCLE_EDITOR_EVIDENCE_DIR) {
-    mkdirSync(process.env.CIRCLE_EDITOR_EVIDENCE_DIR, { recursive: true });
-    for (const width of [760, 375]) {
-      await historyPage.setViewportSize({ width, height: 900 });
-      for (const theme of ['dark', 'light']) {
-        await historyPage.evaluate(
-          async (theme) => (await import('/src/theme.ts')).applyTheme(theme),
-          theme,
-        );
-        await historyPage.waitForFunction(
-          (theme) => document.documentElement.dataset.theme === theme,
-          theme,
-        );
-        await shortHistoryBatch
-          .getByRole('button', {
-            name: 'copy complete diagnostics',
-            exact: true,
-          })
-          .scrollIntoViewIfNeeded();
-        await historyPage.screenshot({
-          path: join(
-            process.env.CIRCLE_EDITOR_EVIDENCE_DIR,
-            `diagnostic-history-${theme}-${width}.png`,
-          ),
-        });
-      }
-    }
-    await historyPage.setViewportSize({ width: 760, height: 900 });
-  }
-  const savedLanguage = await language.replay();
-  assert.ok(
-    savedLanguage.events.some(
-      (row) => row.data.batchId === historicalBatch.data.batchId,
-    ),
-  );
-  await historyPage
-    .getByRole('button', { name: 'open lib', exact: true })
-    .click();
-  await historyPage
-    .locator('.file-view-heading strong')
-    .getByText('lib.ts', { exact: true })
-    .waitFor();
-  await historyPage
-    .getByRole('button', { name: 'read more diagnostic history', exact: true })
-    .waitFor();
-  while (
-    await historyPage
-      .getByRole('button', {
-        name: 'read more diagnostic history',
-        exact: true,
-      })
-      .count()
-  ) {
-    await historyPage
-      .getByRole('button', {
-        name: 'read more diagnostic history',
-        exact: true,
-      })
-      .click();
-    await historyPage
-      .getByRole('button', { name: 'reading diagnostic history', exact: true })
-      .waitFor({ state: 'hidden' });
-  }
-  await historyPage.evaluate(() => fetch('/__editor_workspace?hold-history=1'));
-  await historyPage
-    .getByRole('button', { name: 'open main', exact: true })
-    .click();
-  await historyPage.waitForFunction(
-    async () =>
-      (await (await fetch('/__editor_workspace?history-pending=1')).json())
-        .heldHistory === 1,
-  );
-  await historyPage
-    .getByRole('button', { name: 'open lib', exact: true })
-    .click();
-  await historyPage
-    .locator('.file-view-heading strong')
-    .getByText('lib.ts', { exact: true })
-    .waitFor();
-  await historyPage.evaluate(() =>
-    fetch('/__editor_workspace?release-history=1'),
-  );
-  await historyPage
-    .getByRole('button', { name: 'reading diagnostic history', exact: true })
-    .waitFor({ state: 'hidden' });
-  assert.equal(
-    await historyPage
-      .locator(`[data-diagnostic-batch="${historicalBatch.data.batchId}"]`)
-      .count(),
-    0,
-    'late main-file history never leaks into lib',
-  );
-  await historyPage
-    .getByRole('button', { name: 'open main', exact: true })
-    .click();
-  await historyPage
-    .locator('.file-view-heading strong')
-    .getByText('main.ts', { exact: true })
-    .waitFor();
-  await historyPage.close();
-  const referencesPage = await browser.newPage();
-  referencesPage.on('pageerror', (error) => errors.push(error.message));
-  await referencesPage.goto(
-    `${server.resolvedUrls.local[0]}test/editor-ui.html?viewer=1`,
-  );
-  await referencesPage
-    .getByRole('button', { name: 'edit', exact: true })
-    .click();
-  const referenceLines = referencesPage
-    .locator('.native-code-editor .view-lines')
-    .first();
-  await referencesPage.waitForFunction(() =>
-    document
-      .querySelector('.native-code-editor .view-lines')
-      ?.textContent.includes('console.log'),
-  );
-  await referenceLines.click();
-  const referenceModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
-  await referencesPage.keyboard.press(`${referenceModifier}+a`);
-  await referencesPage.keyboard.press('ArrowLeft');
-  for (let index = 0; index < 10; index++)
-    await referencesPage.keyboard.press('ArrowRight');
-  await referencesPage.keyboard.press('Shift+F12');
-  const referenceWidget = referencesPage.locator('.reference-zone-widget');
-  await referenceWidget.waitFor({ state: 'visible', timeout: 10000 });
-  await referenceWidget
-    .locator('.monaco-list-row')
-    .filter({ hasText: 'import { amount }' })
-    .waitFor();
-  await referenceWidget
-    .locator('.monaco-list-row')
-    .filter({ hasText: 'console.log(amount, label);' })
-    .waitFor();
-  assert.equal(
-    await referenceWidget.locator('.head .dirname').textContent(),
-    '.',
-    'reference widget shows a relative root instead of its internal workspace URI segment',
-  );
-  assert.equal(
-    await referenceWidget.locator('.head .filename').textContent(),
-    'main.ts',
-    'display labels preserve the actual reference file identity',
-  );
-  console.log('Keyboard references widget shows actual import and usage rows');
-  if (process.env.CIRCLE_EDITOR_EVIDENCE_DIR) {
-    mkdirSync(process.env.CIRCLE_EDITOR_EVIDENCE_DIR, { recursive: true });
-    await referencesPage.screenshot({
-      path: join(
-        process.env.CIRCLE_EDITOR_EVIDENCE_DIR,
-        'editor-keyboard-references.png',
-      ),
-    });
-  }
-  // Selecting a usage schedules the SDK active-node update; closing immediately
-  // must dispose that pending update without an unhandled cancellation rejection.
-  await referenceWidget
-    .locator('.monaco-list-row')
-    .filter({ hasText: 'console.log(amount, label);' })
-    .click();
-  await referencesPage.keyboard.press('Escape');
-  await referenceLines.click();
-  await referencesPage.keyboard.press(`${referenceModifier}+a`);
-  await referencesPage.keyboard.insertText(
-    'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uni',
-  );
-  await referencesPage.keyboard.press('Control+Space');
-  await referencesPage
-    .locator('.suggest-widget.visible .monaco-list-row')
-    .filter({ hasText: 'uniqueMember' })
-    .waitFor();
-  if (process.env.CIRCLE_EDITOR_EVIDENCE_DIR)
-    await referencesPage.screenshot({
-      path: join(
-        process.env.CIRCLE_EDITOR_EVIDENCE_DIR,
-        'editor-keyboard-completion.png',
-      ),
-    });
-  await referencesPage
-    .locator('.suggest-widget.visible .monaco-list-row')
-    .filter({ hasText: 'uniqueOther' })
-    .waitFor();
-  assert.equal(
-    await referencesPage
-      .locator('.suggest-widget.visible .monaco-list-row')
-      .count(),
-    2,
-  );
-  await referencesPage.keyboard.press('ArrowDown');
-  await referencesPage
-    .locator('.suggest-widget.visible .monaco-list-row.focused')
-    .filter({ hasText: 'uniqueOther' })
-    .waitFor({ state: 'visible' });
-  await referencesPage.keyboard.press('ArrowUp');
-  await referencesPage
-    .locator('.suggest-widget.visible .monaco-list-row.focused')
-    .filter({ hasText: 'uniqueMember' })
-    .waitFor({ state: 'visible' });
-  await referencesPage.keyboard.press('Enter');
-  await referencesPage.waitForFunction(() =>
-    document
-      .querySelector('.native-code-editor .view-lines')
-      ?.textContent.replaceAll('\u00a0', ' ')
-      .includes('object.uniqueMember'),
-  );
-  assert.equal(
-    readFileSync(join(workspace, 'main.ts'), 'utf8'),
-    initial,
-    'keyboard completion remains unsaved',
-  );
-  await referencesPage.keyboard.press(`${referenceModifier}+s`);
-  for (
-    let tries = 0;
-    tries < 100 &&
-    readFileSync(join(workspace, 'main.ts'), 'utf8') !==
-      'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uniqueMember';
-    tries++
-  )
-    await referencesPage.waitForTimeout(30);
-  assert.equal(
-    readFileSync(join(workspace, 'main.ts'), 'utf8'),
-    'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uniqueMember',
-  );
-  console.log('Keyboard completion accepts uniqueMember with exact disk save');
-  await referencesPage.close();
-  writeFileSync(join(workspace, 'main.ts'), initial);
   await page.goto(`${server.resolvedUrls.local[0]}test/editor-ui.html`);
   await page.locator('.monaco-editor').waitFor();
   await page
@@ -1637,66 +1150,6 @@ try {
         'editor-recovered.png',
       ),
     });
-  await viewer
-    .getByRole('button', { name: 'break project config', exact: true })
-    .click();
-  await viewer.locator('.editor-project-diagnostics > summary').waitFor();
-  assert.equal(
-    await viewer.locator('.editor-project-diagnostics').getAttribute('open'),
-    null,
-  );
-  await viewer.locator('.editor-project-diagnostics > summary').click();
-  await viewer
-    .getByRole('button', { name: 'tsconfig.json', exact: true })
-    .first()
-    .click();
-  await viewer
-    .locator('.file-view-heading strong')
-    .getByText('tsconfig.json', { exact: true })
-    .waitFor();
-  await viewer
-    .getByRole('button', { name: 'fix project config', exact: true })
-    .click();
-  await viewer
-    .locator('.editor-project-diagnostics > summary')
-    .getByText('code checks', { exact: true })
-    .waitFor();
-  assert.equal(
-    await viewer.locator('.editor-project-diagnostics').getAttribute('role'),
-    null,
-  );
-  await viewer.getByText('typescript · running', { exact: true }).waitFor();
-  assert.equal(
-    await viewer.getByRole('button', { name: 'stop', exact: true }).count(),
-    0,
-  );
-  assert.equal(await viewer.getByText(/^process id:/).count(), 0);
-  const refreshes = languageControls.filter(
-    (row) => row.method === 'restart',
-  ).length;
-  await viewer.getByRole('button', { name: 'refresh', exact: true }).click();
-  await viewer.waitForFunction(
-    () =>
-      document
-        .querySelector(
-          '.editor-project-diagnostics [aria-label="code checks status"]',
-        )
-        ?.getAttribute('aria-busy') === 'false',
-  );
-  assert.equal(
-    languageControls.filter((row) => row.method === 'restart').length,
-    refreshes + 1,
-  );
-  assert.equal(languageControls.at(-1).path, 'tsconfig.json');
-  await viewer.locator('.editor-project-diagnostics > summary').click();
-  await viewer.waitForTimeout(1100);
-  const controlsWhileClosed = languageControls.length;
-  await viewer.waitForTimeout(1100);
-  assert.equal(
-    languageControls.length,
-    controlsWhileClosed,
-    'closed details do not poll language status',
-  );
   await viewer.close();
   assert.deepEqual(errors, []);
   console.log(
@@ -1704,12 +1157,6 @@ try {
       (documents ? 'WorkspaceDocuments' : 'standalone fixture adapter'),
   );
 } catch (error) {
-  console.error(
-    'language project at failure',
-    await language.call('fixture', 'language', 'request', {
-      method: 'project',
-    }),
-  );
   for (const context of browser?.contexts() ?? [])
     for (const page of context.pages())
       console.error(
@@ -1722,7 +1169,6 @@ try {
   for (const stream of streams) stream.end();
   await server.close();
   documents?.close();
-  await language.dispose();
   rmSync(workspace, { recursive: true, force: true });
-  rmSync(languageData, { recursive: true, force: true });
+  rmSync(viteData, { recursive: true, force: true });
 }

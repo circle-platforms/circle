@@ -200,7 +200,6 @@ export function NativeTerminal({
   sessionId: parentSessionId,
   commandTerminal,
   onExitCommandTerminal,
-  focusRequest,
   active = true,
   embedded = false,
   onAddToDraft,
@@ -208,7 +207,6 @@ export function NativeTerminal({
   sessionId: string;
   commandTerminal?: CommandTerminalView;
   onExitCommandTerminal?: () => void;
-  focusRequest?: { id: string; epoch: string; requestId: string };
   active?: boolean;
   embedded?: boolean;
   onAddToDraft?: (capture: TerminalSelectionCapture) => Promise<void>;
@@ -258,23 +256,6 @@ export function NativeTerminal({
       sessionId,
     );
   }, [commandKey, sessionId]);
-  const focusOwner = useRef<
-    { requestId: string; sessionId: string } | undefined
-  >(undefined);
-  const focusSession = useRef(sessionId);
-  if (focusSession.current !== sessionId) {
-    focusSession.current = sessionId;
-    // Leaving a session permanently cancels its old focus request, including
-    // if the user later returns with the same prop still present.
-    if (focusOwner.current) focusOwner.current.sessionId = '';
-  }
-  if (focusRequest && focusOwner.current?.requestId !== focusRequest.requestId)
-    focusOwner.current = { requestId: focusRequest.requestId, sessionId };
-  const requestedFocus =
-    !commandTerminal && focusOwner.current?.sessionId === sessionId
-      ? focusRequest
-      : undefined;
-  const focusKey = requestedFocus ? JSON.stringify(requestedFocus) : '';
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([]);
   const [selectedBySession, setSelected] = useState<Record<string, string>>({});
   const [operations, setOperations] = useState<
@@ -406,22 +387,6 @@ export function NativeTerminal({
             throw Error(t('command terminal source changed; open it again'));
           focusTarget.current = target.terminal.id;
         }
-        const requested = requestedFocus
-          ? items.find(
-              (item) =>
-                item.id === requestedFocus.id &&
-                item.epoch === requestedFocus.epoch &&
-                item.sessionId === sessionId,
-            )
-          : undefined;
-        if (requestedFocus && !requested) {
-          focusTarget.current = null;
-          throw Error(t('terminal is no longer available'));
-        }
-        if (requested) {
-          focusTarget.current = requested.id;
-          if (active) controls.current.get(requested.id)?.focus();
-        }
         setTerminals((previous) => [
           ...previous.filter((item) => item.sessionId !== sessionId),
           ...items,
@@ -429,7 +394,6 @@ export function NativeTerminal({
         setSelected((previous) => ({
           ...previous,
           [sessionId]:
-            requested?.id ??
             items.find((item) => item.id === previous[sessionId])?.id ??
             items.at(-1)?.id ??
             '',
@@ -448,7 +412,7 @@ export function NativeTerminal({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, reload, terminalRequest, focusKey]);
+  }, [sessionId, reload, terminalRequest]);
 
   useEffect(
     () =>

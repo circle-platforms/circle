@@ -31,7 +31,7 @@ async function wait(check: () => boolean) {
     await delay(10);
   }
 }
-test('a corrupt task archive blocks its unknown readonly child while both ordinary parents retain document and language access', async (t) => {
+test('a corrupt task archive blocks its unknown readonly child while both ordinary parents retain document access', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'circle-archive-scope-')),
     home = join(root, 'home');
   await mkdir(home);
@@ -64,7 +64,6 @@ test('a corrupt task archive blocks its unknown readonly child while both ordina
     ]);
   }
   const settings = trustFolder(trustFolder(defaultSettings(), a), b);
-  settings.extensions.developer = { enabled: true };
   saveSettings(settings, home);
   const model = new ScriptedModel(
     Array.from({ length: 10 }, () => ({
@@ -190,20 +189,6 @@ test('a corrupt task archive blocks its unknown readonly child while both ordina
       await readFile(join(workspace, 'main.ts'), 'utf8'),
       `export const value = ${value};\n`,
     );
-    const language = await service(
-      'language',
-      'request',
-      {
-        method: 'rename',
-        path: 'main.ts',
-        line: 1,
-        column: 14,
-        newName: 'renamed',
-      },
-      id,
-    );
-    assert.equal(language.ok, true, language.error);
-    assert.ok(Array.isArray(language.data));
   }
   for (const method of ['save', 'applyEdits']) {
     const denied = await service(

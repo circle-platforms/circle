@@ -51,7 +51,6 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { useRuntime } from './context';
-import { developerToolsEnabled } from '../plugins/developer';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
 import {
   historyMessages,
@@ -194,21 +193,9 @@ export function App() {
   );
   const [sourceLine, setSourceLine] = useState<number | undefined>();
   const [sourceColumn, setSourceColumn] = useState<number | undefined>();
-  const [debugSourceRequest, setDebugSourceRequest] = useState<{
-    id: string;
-    sessionId: string;
-    path: string;
-    line?: number;
-  }>();
   const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
   const [commandTerminal, setCommandTerminal] = useState<CommandTerminalView>();
-  const [terminalFocusRequest, setTerminalFocusRequest] = useState<{
-    id: string;
-    epoch: string;
-    requestId: string;
-    sessionId: string;
-  }>();
   const commandRequest = useRef(0);
   const commandReturnFocus = useRef<
     { origin: string; trigger: HTMLElement } | undefined
@@ -946,27 +933,6 @@ export function App() {
               line={sourceLine}
               column={sourceColumn}
               resourceOwner={fileOwner}
-              onDebugSource={
-                runtime.mode === 'live' &&
-                developerToolsEnabled(snapshot.extensions)
-                  ? (path, line) => {
-                      const owner = fileOwner?.sessionId ?? session.id;
-                      perform(async () => {
-                        if (owner !== runtime.getSnapshot().activeSessionId)
-                          await selectSessionAndNavigate(owner);
-                        if (runtime.getSnapshot().activeSessionId !== owner)
-                          return;
-                        setDebugSourceRequest({
-                          id: crypto.randomUUID(),
-                          sessionId: owner,
-                          path,
-                          line,
-                        });
-                        onPanel('activity', 'debug');
-                      });
-                    }
-                  : undefined
-              }
               onNavigate={(path, line, column) =>
                 openSource(path, line, column, fileOwner)
               }
@@ -1116,26 +1082,6 @@ export function App() {
         panel={panel}
         visible={inspectorVisible}
         commandTerminal={commandTerminal}
-        terminalFocusRequest={
-          terminalFocusRequest?.sessionId === session.id
-            ? terminalFocusRequest
-            : undefined
-        }
-        onOpenTerminal={(target) => {
-          commandRequest.current++;
-          setCommandTerminal(undefined);
-          setTerminalFocusRequest({
-            ...target,
-            requestId: crypto.randomUUID(),
-            sessionId: session.id,
-          });
-          onPanel('terminal');
-        }}
-        debugSourceRequest={
-          debugSourceRequest?.sessionId === session.id
-            ? debugSourceRequest
-            : undefined
-        }
         onExitCommandTerminal={() => {
           commandRequest.current++;
           commandReturnFocus.current = undefined;

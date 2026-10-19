@@ -708,9 +708,7 @@ test('profile disable unloads only GitHub in two controller runtimes and freezes
   };
   internal.githubProfile = f.connection;
   controller.options.workspaceTools = {
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'synthetic-gh',
   };
   try {
@@ -1269,9 +1267,7 @@ test('the original settings toggle loads only GitHub into the existing runtime a
     workspace,
     model,
     workspaceTools: {
-      nodeExecutable: process.execPath,
       runtimeExecutable: process.execPath,
-      adapterPath: 'unused',
       ghPath: 'synthetic-never-executed',
     },
     emit: () => {},

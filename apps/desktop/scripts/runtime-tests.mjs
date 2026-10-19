@@ -6,7 +6,6 @@ import { readFile, readdir, stat, mkdir, mkdtemp } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  DEBUG_VERSION,
   GH_VERSION,
   NODE_VERSION,
   prepareDeveloperTools,
@@ -26,7 +25,6 @@ async function prepared() {
       process.platform === 'win32' ? 'bin/node.exe' : 'bin/node',
     ],
     ['gh', GH_VERSION, process.platform === 'win32' ? 'bin/gh.exe' : 'bin/gh'],
-    ['js-debug', DEBUG_VERSION, 'src/dapDebugServer.js'],
   ]) {
     const directory = join(dist, 'tools', name);
     const receipt = JSON.parse(
@@ -81,16 +79,6 @@ if (process.argv.includes('--prepare-only')) {
               join(root, 'artifacts/runtime-progress'),
           }
         : {}),
-      CIRCLE_JS_DEBUG_ADAPTER:
-        process.env.CIRCLE_JS_DEBUG_ADAPTER ??
-        join(dist, 'tools/js-debug/src/dapDebugServer.js'),
-      CIRCLE_JS_DEBUG_RUNTIME:
-        process.env.CIRCLE_JS_DEBUG_RUNTIME ??
-        join(
-          dist,
-          'tools/node/bin',
-          process.platform === 'win32' ? 'node.exe' : 'node',
-        ),
     },
   });
   process.exitCode = result.exitCode;

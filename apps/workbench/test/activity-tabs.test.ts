@@ -1,54 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  activityTabWhenDebugHidden,
-  forcedActivityTab,
-} from '../src/features/activity-tabs.ts';
+import { forcedActivityTab } from '../src/features/activity-tabs.ts';
 
-test('a debug-file request opens debug only while developer tools are on', () => {
-  const request = {
-    kind: 'activity',
-    selection: 'original',
-    showDebug: true,
-    hasSourceRequest: true,
-  };
-  assert.equal(forcedActivityTab(request), 'debug');
-  assert.equal(forcedActivityTab({ ...request, showDebug: false }), undefined);
+test('a task selection opens the tasks tab of the activity panel only', () => {
   assert.equal(
-    forcedActivityTab({ ...request, hasSourceRequest: false }),
-    undefined,
-  );
-  assert.equal(
-    forcedActivityTab({
-      kind: 'activity',
-      selection: 'debug',
-      showDebug: true,
-      hasSourceRequest: false,
-    }),
-    'debug',
-  );
-  assert.equal(
-    forcedActivityTab({
-      kind: 'activity',
-      selection: 'task:abc',
-      showDebug: true,
-      hasSourceRequest: true,
-    }),
+    forcedActivityTab({ kind: 'activity', selection: 'task:abc' }),
     'tasks',
   );
-});
-
-test('hiding debug leaves that tab and does not disturb tasks', () => {
   assert.equal(
-    activityTabWhenDebugHidden('activity', false, 'debug'),
-    'original',
+    forcedActivityTab({ kind: 'activity', selection: 'original' }),
+    undefined,
   );
+  // The debug tab is gone; an old selection naming it opens nothing.
   assert.equal(
-    activityTabWhenDebugHidden('activity', false, 'tasks'),
+    forcedActivityTab({ kind: 'activity', selection: 'debug' }),
     undefined,
   );
   assert.equal(
-    activityTabWhenDebugHidden('activity', true, 'debug'),
+    forcedActivityTab({ kind: 'changes', selection: 'task:abc' }),
     undefined,
   );
 });

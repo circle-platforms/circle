@@ -1245,7 +1245,7 @@ try {
       })}`,
     );
     checks.push(
-      'the native page hides when its tab, the debug tab, tasks, Git, the inspector, a menu or a dialog covers it, and follows a window resize',
+      'the native page hides when its tab, tasks, Git, the inspector, a menu or a dialog covers it, and follows a window resize',
     );
 
     await send('open the unavailable local port');

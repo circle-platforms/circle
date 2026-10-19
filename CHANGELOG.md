@@ -6,6 +6,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Removed
 
+- **The developer extension is gone, with Node debugging and the desktop editor's TypeScript and JavaScript language service.** The desktop application has no debug tab, no debug-file button and no breakpoints in the editor gutter, and its editor no longer offers go to definition, references, rename, formatting or code checks. The editor still opens files with syntax highlighting and saves with the version check. The desktop package no longer carries the js-debug adapter, TypeScript or a TypeScript language server. An `extensions.developer` entry that an earlier version saved in `settings.json` is ignored and left there, and `/extensions enable developer` says there is no extension of that name. The agent's `lsp` tool, Chromium's developer tools in the browser panel and the other extensions are unchanged.
 - **Automatic delivery is gone from the desktop application.** Circle no longer takes a request on its own from tasks to a draft pull request, follows its checks or schedules repairs; tasks themselves stay. The Changes panel has no automatic delivery tab, and its Git tab no longer has a GitHub delivery section. The GitHub extension stays: with a connected account and an allowed repository, the model can still read the branch it would publish, publish it as a draft pull request, read its checks and failed logs and run failed jobs again. What earlier versions saved for automatic delivery stays in the data folder and is no longer read.
 
 ## 1.9.0 - 2026-10-19

@@ -66,7 +66,6 @@ test('native delegation reuses real agent sessions, retains child approval owner
     'Create fixture',
   );
   const settings = trustFolder(defaultSettings(), workspace);
-  settings.extensions.developer = { enabled: true };
   saveSettings(settings, home);
   const modelTrace: unknown[] = [];
   const workspaceEvents: unknown[] = [];
@@ -292,20 +291,6 @@ test('native delegation reuses real agent sessions, retains child approval owner
   );
   assert.equal(apply.ok, false);
   assert.match(apply.error!, /read-only agent/);
-  const preview = await service(
-    'language',
-    'request',
-    {
-      method: 'rename',
-      path: 'main.ts',
-      line: 1,
-      column: 14,
-      newName: 'renamed',
-    },
-    reader.id,
-  );
-  assert.equal(preview.ok, true, preview.error);
-  assert.ok(Array.isArray(preview.data));
   const parentDoc = await service(
     'documents',
     'read',
