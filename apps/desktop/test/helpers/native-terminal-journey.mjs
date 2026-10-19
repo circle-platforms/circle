@@ -314,6 +314,13 @@ export async function runNativeTerminalJourney({
     await screenshot('terminal-independent-tabs');
     phase = 'tab close, right-click menu and rename';
     const third = await create();
+    // Tab labels carry their position, while the snapshot order follows the
+    // last output: address every tab through its aria-controls, never by index.
+    const closeOf = (id) =>
+      panel
+        .locator(`[role="tab"][aria-controls="terminal-${id}"]`)
+        .locator('xpath=..')
+        .getByRole('button', { name: /close terminal tab/ });
     const thirdStopped = async () =>
       !['running', 'stopping'].includes(
         (await list()).find((terminal) => terminal.id === third.id)?.status,
@@ -321,9 +328,7 @@ export async function runNativeTerminalJourney({
     // A click that lands while the panel re-renders can be lost on the packaged
     // app, exactly as create() above already tolerates.
     for (let attempt = 0; attempt < 3 && !(await thirdStopped()); attempt++) {
-      await panel
-        .getByRole('button', { name: 'close terminal tab 3', exact: true })
-        .click();
+      await closeOf(third.id).click();
       const deadline = Date.now() + patience(4000);
       while (Date.now() < deadline && !(await thirdStopped()))
         await page.waitForTimeout(40);
@@ -364,7 +369,13 @@ export async function runNativeTerminalJourney({
         'renamed shell',
       'the renamed label reaches the runtime',
     );
-    await panel.getByText('renamed shell 1', { exact: true }).waitFor();
+    await until(
+      async () =>
+        ((await selectedTab(first.id).textContent()) ?? '').includes(
+          'renamed shell',
+        ),
+      'the renamed label reaches the tab',
+    );
     checks.push(
       'tabs close from their own button, and the right-click menu renames, closes and creates',
     );
