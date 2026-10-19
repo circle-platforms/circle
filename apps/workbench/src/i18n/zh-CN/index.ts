@@ -18,6 +18,7 @@ import { model } from './model.ts';
 import { pages } from './pages.ts';
 import { panels } from './panels.ts';
 import { plugins } from './plugins.ts';
+import { workspace } from './workspace.ts';
 
 /** Every interface text in Simplified Chinese, keyed by its English. */
 export const ZH_CN: Record<string, string> = {
@@ -41,4 +42,5 @@ export const ZH_CN: Record<string, string> = {
   ...pages,
   ...panels,
   ...plugins,
+  ...workspace,
 };

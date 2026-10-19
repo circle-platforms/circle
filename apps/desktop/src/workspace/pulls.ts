@@ -4,58 +4,21 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { boundFailedRunLog } from './delivery.ts';
 import { GitWorkspaceService } from './git.ts';
+import type {
+  PullRequestAccess,
+  PullRequestChecks,
+  PullRequestOverview,
+  PullRequestSummary,
+  RepositorySummary,
+} from './pulls-types.ts';
+
+export type * from './pulls-types.ts';
 
 const exec = promisify(execFile);
 const GH_TIMEOUT = 20_000;
 const RECENT_LIMIT = 6;
 const UNTRACKED_LINE_LIMIT = 1024 * 1024;
 const UNTRACKED_FILE_LIMIT = 200;
-
-export type PullRequestState = 'open' | 'merged' | 'closed';
-export type PullRequestChecks = 'passing' | 'failing' | 'running' | 'none';
-
-export interface PullRequestSummary {
-  number: number;
-  title: string;
-  url: string;
-  state: PullRequestState;
-  draft: boolean;
-  headRef: string;
-  /** Only read for the branch's own pull request. */
-  checks?: PullRequestChecks;
-  /** The newest failed GitHub Actions run of that pull request, for its log. */
-  failedRunId?: number;
-}
-
-export interface RepositorySummary {
-  repository: boolean;
-  /** Empty while HEAD is detached. */
-  branch: string;
-  defaultBranch: string;
-  /** `owner/name` when origin is a github.com remote. */
-  github: string;
-  files: number;
-  additions: number;
-  deletions: number;
-  /** Commits on this branch that its default branch does not have. */
-  ahead: number;
-  /** Commits its upstream branch does not have; all of `ahead` with no upstream. */
-  unpushed: number;
-}
-
-/**
- * `ready` reads pull requests. `missing` and `signed-out` say why it cannot, and
- * `unavailable` says this folder has no GitHub remote to ask about.
- */
-export type PullRequestAccess =
-  'ready' | 'missing' | 'signed-out' | 'unavailable';
-
-export interface PullRequestOverview {
-  git: RepositorySummary;
-  access: PullRequestAccess;
-  current: PullRequestSummary | null;
-  recent: PullRequestSummary[];
-}
 
 export type GhRunner = (args: string[]) => Promise<string>;
 

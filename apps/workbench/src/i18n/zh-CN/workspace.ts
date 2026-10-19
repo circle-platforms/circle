@@ -1,0 +1,23 @@
+/** The overview beside the conversation and the work drawer's modes. */
+export const workspace: Record<string, string> = {
+  'this machine': '本机',
+  'in progress': '进行中',
+  'plan {done}/{total}': '计划 {done}/{total}',
+  '{n} subagent': '{n} 个子代理',
+  '{n} subagents': '{n} 个子代理',
+  'everything is committed': '已全部提交',
+  'no changes': '没有改动',
+  'create pr': '创建 PR',
+  'update pr': '更新 PR',
+  'open pr': '打开 PR',
+  'copy link': '复制链接',
+  'copy failed ci logs': '复制失败的 CI 日志',
+  'could not read the ci log': '读不到 CI 日志',
+  'pull request {number} actions': '拉取请求 #{number} 的操作',
+  'ci failing': 'CI 失败',
+  'ci running': 'CI 运行中',
+  'ci passing': 'CI 通过',
+  merged: '已合并',
+  closed: '已关闭',
+  draft: '草稿',
+};
