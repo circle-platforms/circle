@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Removed
+
+- **Automatic delivery is gone from the desktop application.** Circle no longer takes a request on its own from tasks to a draft pull request, follows its checks or schedules repairs; tasks themselves stay. The Changes panel has no automatic delivery tab, and its Git tab no longer has a GitHub delivery section. The GitHub extension stays: with a connected account and an allowed repository, the model can still read the branch it would publish, publish it as a draft pull request, read its checks and failed logs and run failed jobs again. What earlier versions saved for automatic delivery stays in the data folder and is no longer read.
+
 ## 1.9.0 - 2026-10-19
 
 ### Added

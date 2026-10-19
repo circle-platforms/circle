@@ -177,31 +177,6 @@
   max-width: 100% !important;
   min-width: 0 !important;
 }
-.delivery-cycle-panel label {
-  display: block;
-  margin: 12px 0;
-}
-.delivery-cycle-panel label .input {
-  display: block;
-  width: 100%;
-}
-.delivery-cycle-panel textarea.input {
-  min-height: 70px;
-  resize: vertical;
-}
-.delivery-cycle-panel article {
-  overflow-wrap: anywhere;
-}
-.delivery-cycle-panel article > header,
-.delivery-cycle-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.delivery-cycle-panel .panel-note[role='alert'] {
-  color: var(--negative);
-}
 
 /* Panel v4 applies className/style to an inner surface; its registered outer
    panel must also leave the main region when the original inspector is hidden. */

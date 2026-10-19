@@ -10,7 +10,6 @@ export function operationLabel(service: string, method: string): string {
     debug: t('debugger'),
     tasks: t('tasks'),
     delivery: t('github delivery'),
-    cycles: t('automatic delivery'),
     operations: t('review records'),
     inputs: t('recovered inputs'),
     events: t('activity'),
@@ -79,8 +78,6 @@ export function operationLabel(service: string, method: string): string {
     logs: t('read logs'),
     login: t('sign in to github'),
     ready: t('mark pull request ready'),
-    advance: t('advance delivery'),
-    retryCI: t('retry ci'),
     resolve: t('resolve recovered input'),
   };
   return `${domains[service] ?? t('action')} · ${actions[method] ?? t('check the result')}`;

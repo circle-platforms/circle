@@ -2,7 +2,6 @@
 export type WorkspaceService =
   | 'inputs'
   | 'operations'
-  | 'cycles'
   | 'events'
   | 'documents'
   | 'terminal'
@@ -35,7 +34,6 @@ export interface WorkspaceServiceEvent {
 const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   inputs: new Set(['list', 'resolve']),
   operations: new Set(['list', 'review']),
-  cycles: new Set(['list', 'snapshot', 'create', 'advance', 'retryCI']),
   events: new Set(['replay']),
   documents: new Set([
     'read',

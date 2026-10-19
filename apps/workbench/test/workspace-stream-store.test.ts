@@ -108,24 +108,6 @@ test('cursor-only, missing endpoint, oversized and malformed checkpoints fail at
   assert.deepEqual(store.checkpoint(), valid);
 });
 
-test('delivery cycle journal checkpoints survive renderer reload', () => {
-  const store = new WorkspaceStreamStore();
-  const cycle = {
-    ...event(1),
-    service: 'cycles',
-    resourceId: 'cycle-one',
-    data: { phase: 'awaiting-review' },
-  } as unknown as WorkspaceStreamEvent;
-  assert.equal(store.apply(cycle), 'applied');
-  const restored = new WorkspaceStreamStore();
-  assert.equal(restored.restore(store.checkpoint()), true);
-  assert.equal(restored.cursor.seq, 1);
-  assert.equal(
-    restored.snapshot(WorkspaceStreamStore.resourceKey(cycle))[0].data.phase,
-    'awaiting-review',
-  );
-});
-
 test('rolling UTF8 accounting is exact across trimming, eviction, reset and checkpoint restoration', () => {
   const store = new WorkspaceStreamStore({
     maxEventsPerResource: 3,

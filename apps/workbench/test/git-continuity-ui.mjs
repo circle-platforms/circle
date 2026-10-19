@@ -384,7 +384,7 @@ try {
     'readonly historical browsing, scoped local index and independent operation selection passed',
   );
   // The compact index is a dismissible resource overlay, never a cover over
-  // repository-wide actions or delivery, and choosing a file reveals its diff.
+  // repository-wide actions, and choosing a file reveals its diff.
   await message.fill('overlay keeps my draft');
   await page.setViewportSize({ width: 500, height: 1000 });
   const contextIndex = panel.locator('[data-context-index-resource="git"]');

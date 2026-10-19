@@ -14,11 +14,7 @@ const output =
 await mkdir(output, { recursive: true });
 const repos = new Map(),
   calls = [];
-let hold = false,
-  release,
-  holdStatus = false,
-  releaseStatus,
-  holdGitStatus = false,
+let holdGitStatus = false,
   releaseGitStatus;
 for (const id of ['a', 'b']) {
   const path = join(directory, id);
@@ -78,21 +74,7 @@ const server = await createServer({
                 .get(command.sessionId)
                 .call(p.method, p.params);
             else if (p.service === 'terminal' && p.method === 'list') data = [];
-            else if (p.service === 'delivery') {
-              if (
-                p.method === 'status' &&
-                command.sessionId === 'a' &&
-                holdStatus
-              ) {
-                await new Promise((r) => (releaseStatus = r));
-                throw Error('late status failure a');
-              }
-              if (p.method === 'publish') {
-                if (hold) await new Promise((r) => (release = r));
-                throw Error('owned publish failure ' + command.sessionId);
-              }
-              data = p.method === 'checks' ? [] : { pullRequest: null };
-            } else throw Error('unexpected service');
+            else throw Error('unexpected service');
             res.end(JSON.stringify({ ok: true, data }));
           } catch (error) {
             res.end(JSON.stringify({ ok: false, error: String(error) }));
@@ -157,24 +139,9 @@ try {
     .filter({ hasText: 'owned a' })
     .waitFor();
   receipt.fileChosenWhileBusyOpens = true;
-  await git
-    .getByRole('textbox', { name: 'commit message', exact: true })
-    .fill('commit draft A');
-  let delivery = git.locator('.native-delivery');
-  await delivery.locator(':scope > summary').click();
-  await delivery
-    .getByRole('textbox', { name: 'PR title', exact: true })
-    .fill('draft A');
-  await delivery
-    .getByRole('textbox', { name: 'PR description', exact: true })
-    .fill('body A');
-  await delivery
-    .getByRole('button', { name: 'publish draft PR', exact: true })
-    .click();
-  await delivery
-    .getByRole('alert')
-    .filter({ hasText: 'owned publish failure a' })
-    .waitFor();
+  const commitMessage = () =>
+    git.getByRole('textbox', { name: 'commit message', exact: true });
+  await commitMessage().fill('commit draft A');
   if (process.env.CIRCLE_GIT_OWNER_CASE !== 'state') {
     const before = calls.length;
     await page
@@ -192,12 +159,11 @@ try {
     await page.waitForFunction(() => location.hash.includes('workspace=b'));
     await page.screenshot({ path: join(output, 'home-other-project.png') });
     assert.equal(
-      await delivery
-        .getByRole('button', { name: 'publish draft PR', exact: true })
-        .isEnabled(),
+      await commitMessage().isEnabled(),
       false,
       'Home cannot mutate the previous owner through its retained panel',
     );
+    assert.equal(await commitMessage().inputValue(), 'commit draft A');
     assert(
       (
         await page
@@ -208,17 +174,14 @@ try {
       ).includes(repos.get('a').root),
     );
     assert.equal(
-      await delivery
-        .getByRole('textbox', { name: 'PR title', exact: true })
-        .inputValue(),
-      'draft A',
-    );
-    assert.equal(
       calls
         .slice(before)
         .some(
           (c) =>
-            c.payload.service === 'delivery' && c.payload.method === 'publish',
+            c.payload.service === 'git' &&
+            !['status', 'snapshot', 'diff', 'branches', 'history'].includes(
+              c.payload.method,
+            ),
         ),
       false,
     );
@@ -237,24 +200,7 @@ try {
     );
   };
   await select('b');
-  const ownerStatusDeadline = Date.now() + 8000;
-  while (
-    !calls.some(
-      (command) =>
-        command.sessionId === 'b' &&
-        command.payload.service === 'delivery' &&
-        command.payload.method === 'status',
-    )
-  ) {
-    assert(Date.now() < ownerStatusDeadline);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.equal(
-    await git
-      .getByRole('textbox', { name: 'commit message', exact: true })
-      .inputValue(),
-    '',
-  );
+  assert.equal(await commitMessage().inputValue(), '');
   await git.getByRole('checkbox', { name: 'dirty-b.txt', exact: true }).check();
   await git
     .getByRole('button', { name: 'stage selected', exact: true })
@@ -282,152 +228,15 @@ try {
     assert(Date.now() < unstageDeadline);
     await new Promise((r) => setTimeout(r, 5));
   }
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR title', exact: true })
-      .inputValue(),
-    '',
-  );
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR description', exact: true })
-      .inputValue(),
-    '',
-  );
-  assert.equal(await delivery.getByRole('alert').count(), 0);
-  await delivery
-    .getByRole('textbox', { name: 'PR title', exact: true })
-    .fill('draft B');
   await select('a');
-  assert.equal(
-    await git
-      .getByRole('textbox', { name: 'commit message', exact: true })
-      .inputValue(),
-    'commit draft A',
-  );
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR title', exact: true })
-      .inputValue(),
-    'draft A',
-  );
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR description', exact: true })
-      .inputValue(),
-    'body A',
-  );
-  hold = true;
-  await delivery
-    .getByRole('button', { name: 'publish draft PR', exact: true })
-    .click();
-  const heldDeadline = Date.now() + 8000;
-  while (!release) {
-    assert(Date.now() < heldDeadline);
-    await new Promise((r) => setTimeout(r, 5));
-  }
-  await select('b');
-  const pendingResponse = page.waitForResponse(
-    (response) =>
-      response.url().endsWith('/owner-command') &&
-      response.request().postDataJSON()?.payload.method === 'publish',
-  );
-  release();
-  await (await pendingResponse).finished();
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  );
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR title', exact: true })
-      .inputValue(),
-    'draft B',
-  );
-  assert.equal(
-    await delivery.getByRole('alert').count(),
-    0,
-    'late A errors cannot appear in B',
-  );
-  await select('a');
-  holdStatus = true;
-  const refreshStatus = delivery.getByRole('button', {
-    name: 'refresh status',
-    exact: true,
-  });
-  await refreshStatus.scrollIntoViewIfNeeded();
-  assert.equal(
-    await refreshStatus.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      const hit = document.elementFromPoint(
-        bounds.x + bounds.width / 2,
-        bounds.y + bounds.height / 2,
-      );
-      return hit === element || element.contains(hit);
-    }),
-    true,
-    'the narrow change index must never cover unrelated delivery controls',
-  );
-  await delivery
-    .getByRole('button', { name: 'refresh status', exact: true })
-    .click();
-  const statusDeadline = Date.now() + 8000;
-  while (!releaseStatus) {
-    assert(Date.now() < statusDeadline);
-    await new Promise((r) => setTimeout(r, 5));
-  }
-  await select('b');
-  const statusResponse = page.waitForResponse(
-    (response) =>
-      response.url().endsWith('/owner-command') &&
-      response.request().postDataJSON()?.sessionId === 'a' &&
-      response.request().postDataJSON()?.payload.method === 'status',
-  );
-  releaseStatus();
-  await (await statusResponse).finished();
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  );
-  assert.equal(
-    await delivery.getByRole('alert').count(),
-    0,
-    'late original-owner status errors cannot enter the new owner',
-  );
-  hold = false;
-  holdStatus = false;
-  await select('a');
-  const longBody =
-    Array.from(
-      { length: 600 },
-      (_, index) => `line ${index + 1}: 中文 PR recovery text`,
-    ).join('\n') + '\n';
-  await delivery
-    .getByRole('textbox', { name: 'PR description', exact: true })
-    .fill(longBody);
+  assert.equal(await commitMessage().inputValue(), 'commit draft A');
+  const longMessage = Array.from(
+    { length: 600 },
+    (_, index) => `part ${index + 1}: 中文 commit recovery text`,
+  ).join(' ');
+  await commitMessage().fill(longMessage);
   const inspectDrafts = async () => {
-    assert.equal(
-      await git
-        .getByRole('textbox', { name: 'commit message', exact: true })
-        .inputValue(),
-      'commit draft A',
-    );
-    assert.equal(
-      await delivery
-        .getByRole('textbox', { name: 'PR title', exact: true })
-        .inputValue(),
-      'draft A',
-    );
-    assert.equal(
-      await delivery
-        .getByRole('textbox', { name: 'PR description', exact: true })
-        .inputValue(),
-      longBody,
-    );
+    assert.equal(await commitMessage().inputValue(), longMessage);
   };
   const reopenGit = async () => {
     const toggle = page.getByRole('button', {
@@ -438,12 +247,7 @@ try {
       await toggle.click();
     await page.locator('#inspector-changes-tab-git').click();
     git = page.locator('.native-git:visible');
-    delivery = git.locator('.native-delivery');
-    if (!(await delivery.evaluate((node) => node.open)))
-      await delivery.locator(':scope > summary').click();
-    await git
-      .getByRole('textbox', { name: 'commit message', exact: true })
-      .waitFor();
+    await commitMessage().waitFor();
   };
   await page
     .getByRole('button', { name: 'changes panel', exact: true })
@@ -467,11 +271,6 @@ try {
   await page.reload();
   await reopenGit();
   await inspectDrafts();
-  assert.equal(
-    await delivery.getByRole('alert').count(),
-    0,
-    'errors are not restored as drafts',
-  );
   const persistedProfile = await page.context().storageState();
   await page.context().close();
   const restoredContext = await browser.newContext({
@@ -490,7 +289,7 @@ try {
       .filter(([key]) => key.startsWith('circle.workbench.owner-draft.v1:'))
       .map(([, value]) => JSON.parse(value)),
   );
-  assert(saved.length >= 4);
+  assert(saved.length >= 1);
   for (const item of saved)
     assert.deepEqual(Object.keys(item).sort(), [
       'field',
@@ -506,73 +305,33 @@ try {
       return window.__restoreOwnerStorage.call(this, key, value);
     };
   });
-  await delivery
-    .getByRole('textbox', { name: 'PR title', exact: true })
-    .fill('unsaved current input');
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR title', exact: true })
-      .inputValue(),
-    'unsaved current input',
-  );
-  await delivery
-    .getByRole('status')
-    .filter({ hasText: 'local draft storage is unavailable' })
-    .waitFor();
-  await select('b');
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR title', exact: true })
-      .inputValue(),
-    'draft B',
-  );
-  assert.equal(
-    await delivery
+  const storageWarning = () =>
+    git
       .getByRole('status')
-      .filter({ hasText: 'local draft storage is unavailable' })
-      .count(),
-    0,
-  );
+      .filter({ hasText: 'local draft storage is unavailable' });
+  await commitMessage().fill('unsaved current input');
+  assert.equal(await commitMessage().inputValue(), 'unsaved current input');
+  await storageWarning().waitFor();
+  await select('b');
+  assert.equal(await commitMessage().inputValue(), '');
+  assert.equal(await storageWarning().count(), 0);
   await select('a');
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR title', exact: true })
-      .inputValue(),
-    'unsaved current input',
-  );
-  await delivery
-    .getByRole('status')
-    .filter({ hasText: 'local draft storage is unavailable' })
-    .waitFor();
+  assert.equal(await commitMessage().inputValue(), 'unsaved current input');
+  await storageWarning().waitFor();
   await page.evaluate(() => {
     Storage.prototype.setItem = window.__restoreOwnerStorage;
     delete window.__restoreOwnerStorage;
   });
-  await delivery
-    .getByRole('textbox', { name: 'PR title', exact: true })
-    .fill('saved after recovery');
-  assert.equal(
-    await delivery
-      .getByRole('status')
-      .filter({ hasText: 'local draft storage is unavailable' })
-      .count(),
-    0,
-  );
+  await commitMessage().fill('saved after recovery');
+  assert.equal(await storageWarning().count(), 0);
   await select('b');
-  if (!(await delivery.evaluate((node) => node.open)))
-    await delivery.locator(':scope > summary').click();
-  assert.equal(
-    await delivery
-      .getByRole('textbox', { name: 'PR title', exact: true })
-      .inputValue(),
-    'draft B',
-  );
+  assert.equal(await commitMessage().inputValue(), '');
   receipt.draftRecovery = {
     reload: true,
     newRendererContextFromPersistedProfile: true,
     fullView: true,
     closePanel: true,
-    bodyLines: 600,
+    messageParts: 600,
     quotaFailureKeepsInputAndWarns: true,
     noBusyErrorOrCredentialsPersisted: true,
   };

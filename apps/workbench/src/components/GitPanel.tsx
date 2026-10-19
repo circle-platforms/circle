@@ -4,7 +4,6 @@ import { useEffect, useRef, useId, useMemo } from 'react';
 import { workspaceCall } from '../model/workspace-client';
 import { t, tn } from '../i18n';
 import './GitPanel.css';
-import { DeliveryPanel, WorkspaceServiceError } from './DeliveryPanel';
 import { Button, IconButton, Modal, SearchInput } from './common';
 import {
   RotateCcw,
@@ -59,16 +58,27 @@ function gitDiffView(text: string): DiffView {
     rows,
   };
 }
+function WorkspaceServiceError({ error }: { error: string }) {
+  if (!error.includes('native workspace services are not connected'))
+    return <p role="alert">{error}</p>;
+  return (
+    <div role="alert">
+      <p>{t('open this workspace in Circle desktop, then refresh')}</p>
+      <details>
+        <summary>{t('technical details')}</summary>
+        <pre tabIndex={0}>{error}</pre>
+      </details>
+    </div>
+  );
+}
 export function GitPanel({
   sessionId,
   onFile,
-  onOpenExternal,
   embedded = false,
 }: {
   embedded?: boolean;
   sessionId: string;
   onFile?: (path: string) => void;
-  onOpenExternal?: (url: string) => void;
 }) {
   const [state, setState] = useOwnerState<GitSnapshot | null>(sessionId, null);
   const [scope, setScope] = useOwnerState(sessionId, 'working');
@@ -785,14 +795,6 @@ export function GitPanel({
             </Button>
           </div>
         </>
-      )}
-      {!readonly && (
-        <DeliveryPanel
-          embedded
-          sessionId={sessionId}
-          revision={state?.revision}
-          onOpenExternal={onOpenExternal}
-        />
       )}
       {busy && <p role="status">{t('working…')}</p>}
       <Modal

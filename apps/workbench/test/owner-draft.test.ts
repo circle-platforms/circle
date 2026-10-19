@@ -10,10 +10,9 @@ test('versioned user drafts preserve exact text and bind both owner and field', 
     },
   };
   const text = '  中文\n' + 'line\n'.repeat(600);
-  saveOwnerDraft(storage, 'owner:a', 'delivery.body', text);
-  assert.equal(readOwnerDraft(storage, 'owner:a', 'delivery.body'), text);
-  assert.equal(readOwnerDraft(storage, 'owner:b', 'delivery.body'), '');
-  assert.equal(readOwnerDraft(storage, 'owner:a', 'delivery.title'), '');
+  saveOwnerDraft(storage, 'owner:a', 'git.commit-message', text);
+  assert.equal(readOwnerDraft(storage, 'owner:a', 'git.commit-message'), text);
+  assert.equal(readOwnerDraft(storage, 'owner:b', 'git.commit-message'), '');
   const record = JSON.parse([...values.values()][0]);
   assert.deepEqual(Object.keys(record).sort(), [
     'field',
@@ -21,14 +20,16 @@ test('versioned user drafts preserve exact text and bind both owner and field', 
     'text',
     'version',
   ]);
-  values.set(
-    [...values.keys()][0],
-    JSON.stringify({ ...record, owner: 'wrong' }),
-  );
-  assert.throws(
-    () => readOwnerDraft(storage, 'owner:a', 'delivery.body'),
-    /invalid owner draft/,
-  );
+  for (const tampered of [
+    { ...record, owner: 'wrong' },
+    { ...record, field: 'another field' },
+  ]) {
+    values.set([...values.keys()][0], JSON.stringify(tampered));
+    assert.throws(
+      () => readOwnerDraft(storage, 'owner:a', 'git.commit-message'),
+      /invalid owner draft/,
+    );
+  }
 });
 test('storage read and write failures remain explicit rather than reporting persistence', () => {
   const denied = {

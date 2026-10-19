@@ -89,7 +89,6 @@ function Harness() {
             selection=""
             onFile={() => {}}
             onSession={() => {}}
-            onTask={() => {}}
           >
             <textarea aria-label="resource draft" defaultValue="keep me" />
           </WorkspacePanelContents>

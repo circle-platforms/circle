@@ -311,7 +311,6 @@ function InspectorResources(
                 selection={props.selection}
                 onFile={props.onFile}
                 onSession={props.onSession ?? (() => {})}
-                onTask={(task) => props.onPanel('activity', `task:${task}`)}
               >
                 {original}
               </WorkspacePanelContents>

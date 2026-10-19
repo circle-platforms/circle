@@ -26,12 +26,6 @@ export const nativeGit: Record<string, string> = {
   conflict: '冲突',
   untracked: '未跟踪',
   renamed: '重命名',
-  'publication was sent, but GitHub has not confirmed the reviewed commit; refresh PR checks before retrying and do not repeat the push':
-    '发布请求已发送，但 GitHub 尚未确认已审阅的提交；请刷新 PR 检查后再决定下一步，不要重复推送',
-  'connect or reconnect GitHub in its plugin details before checking or publishing':
-    '请先前往 GitHub 插件详情连接或重新连接账户，再检查或发布',
-
-  skipped: '已跳过',
   'open this workspace in Circle desktop, then refresh':
     '在 Circle 桌面端打开此工作区后刷新',
   'technical details': '技术详情',
@@ -48,14 +42,6 @@ export const nativeGit: Record<string, string> = {
   'starting login': '正在启动登录',
   'open GitHub authorization': '打开 GitHub 授权页',
   'cancel login': '取消登录',
-  'draft PR': '草稿 PR',
-  'ready for review': '可供审阅',
-  'PR title': 'PR 标题',
-  'PR description': 'PR 描述',
-  'open check': '打开检查',
-  'CI run id': 'CI 运行编号',
-  'show failed CI logs': '显示失败 CI 日志',
-  'retry failed CI jobs': '重试失败的 CI 任务',
   'comparison base': '比较基线',
   'unstage this hunk': '取消暂存此块',
   'stage this hunk': '暂存此块',
@@ -79,15 +65,7 @@ export const nativeGit: Record<string, string> = {
   'abort merge': '中止合并',
   'abort this merge and restore its pre-merge state?':
     '中止本次合并并恢复到合并前状态？',
-  'GitHub delivery': 'GitHub 交付',
-  'connection and PR status': '连接与 PR 状态',
-  'publish draft PR': '发布草稿 PR',
-  'check CI': '检查 CI',
-  'request review after checks pass': '检查通过后请求审阅',
-  'merging remains a human decision': '最终合并由用户决定',
   'working…': '处理中…',
-  'the branch changed after it was reviewed; refresh and review it again before publishing; nothing was pushed':
-    '分支在审阅后已更改；请刷新并重新审阅后再发布；尚未推送任何内容',
   'show changes': '显示改动',
   unstaged: '未暂存',
   staged: '已暂存',

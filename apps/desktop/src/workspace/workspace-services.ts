@@ -15,11 +15,6 @@ import type { LspServer } from '../../../../src/lsp_tool.ts';
 import { WorkspaceDebugService } from './debug.ts';
 import { DeliveryService } from './delivery.ts';
 import type { NativeGitHubConnection } from './github-connection.ts';
-import {
-  DeliveryCycleService,
-  type CyclePorts,
-  type CycleSpec,
-} from './delivery-cycle.ts';
 import type { CredentialStore } from './delivery-login.ts';
 import {
   WorkspaceEventStream,
@@ -56,8 +51,6 @@ export interface WorkspaceServicesOptions {
   terminalEnv?: NodeJS.ProcessEnv;
   /** Only the trusted host can choose optional non-JS language servers. */
   languageServers?: Readonly<Record<string, LspServer>>;
-  cyclePorts?: (sessionId: string) => CyclePorts | Promise<CyclePorts>;
-  cycleIntervalMs?: number;
   emit: (event: WorkspaceServiceEvent) => void;
   onPersistenceError?: (error: Error) => void;
   maxPendingEventBytes?: number;
@@ -85,8 +78,6 @@ export class WorkspaceServices {
   private closed = false;
   private disposed = false;
   private disposePromise?: Promise<void>;
-  private ownerCycles = new Map<string, OwnedCycles>();
-  private cycleDirectory: string;
   private releasing = new Set<string>();
   private loginOwners = new Map<string, string>();
   private activeDelivery?: DeliveryService;
@@ -102,7 +93,6 @@ export class WorkspaceServices {
       .digest('hex');
     this.workspaceId = options.workspaceId ?? rootHash.slice(0, 24);
     const directory = path.join(options.dataDir, 'workspaces', rootHash);
-    this.cycleDirectory = path.join(directory, 'delivery');
     this.ready = WorkspaceEventStream.open(
       path.join(directory, 'events.jsonl'),
       options.eventStreamOptions,
@@ -189,139 +179,7 @@ export class WorkspaceServices {
   deliveryAdapter() {
     return this.delivery;
   }
-  private async cyclesFor(sessionId: string): Promise<DeliveryCycleService> {
-    if (!this.options.cyclePorts)
-      throw Error(
-        'automated delivery is unavailable until trusted task and verification services are connected',
-      );
-    let entry = this.ownerCycles.get(sessionId);
-    if (entry?.stopped) throw Error('session delivery cycles are closed');
-    if (!entry) {
-      const owned: OwnedCycles = {
-        service: undefined as unknown as Promise<DeliveryCycleService>,
-        stopped: false,
-      };
-      owned.service = Promise.resolve().then(async () => {
-        const ports = await this.options.cyclePorts!(sessionId);
-        if (owned.stopped || this.closed)
-          throw Error('session delivery cycles are closed');
-        const check = () => {
-          if (owned.stopped || this.closed || this.failure)
-            throw Error('session delivery cycle has stopped');
-        };
-        const guarded = <T extends object>(target: T): T =>
-          new Proxy(target, {
-            get(object, key) {
-              const value = Reflect.get(object, key);
-              if (typeof value !== 'function') return value;
-              return (...args: unknown[]) => {
-                check();
-                return Reflect.apply(value, object, args);
-              };
-            },
-          });
-        const service = await DeliveryCycleService.open({
-          dataDir: path.join(
-            this.cycleDirectory,
-            createHash('sha256').update(sessionId).digest('hex'),
-          ),
-          ports: {
-            bind: (cycle, mode) => {
-              check();
-              ports.bind?.(cycle, mode);
-            },
-            tasks: guarded(ports.tasks),
-            git: guarded(ports.git),
-            delivery: guarded(ports.delivery),
-            verify: (cycle) => {
-              check();
-              return ports.verify(cycle);
-            },
-          },
-          onEvent: (cycle) => {
-            void this.publish(sessionId, 'cycles', cycle.id, {
-              kind: 'cycle',
-              id: cycle.id,
-              state: cycle.state,
-              attempt: cycle.attempt,
-            });
-          },
-        });
-        if (owned.stopped || this.closed) {
-          await service.close();
-          return service;
-        }
-        owned.timer = setInterval(
-          () => this.advanceCycles(sessionId, owned),
-          this.options.cycleIntervalMs ?? 1000,
-        );
-        owned.timer.unref();
-        return service;
-      });
-      this.ownerCycles.set(sessionId, owned);
-      entry = owned;
-      owned.service
-        .then(() => this.advanceCycles(sessionId, owned))
-        .catch(() => {
-          if (!owned.stopped && this.ownerCycles.get(sessionId) === owned)
-            this.ownerCycles.delete(sessionId);
-        });
-    }
-    return entry.service;
-  }
-  private advanceCycles(sessionId: string, owned: OwnedCycles) {
-    if (this.closed || this.failure || owned.stopped || owned.tick) return;
-    owned.tick = (async () => {
-      const service = await owned.service;
-      for (const cycle of service.list()) {
-        if (this.closed || this.failure || owned.stopped) break;
-        if (['needs_review', 'pending_human_merge'].includes(cycle.state))
-          continue;
-        try {
-          await service.advance(cycle.id);
-        } catch (error) {
-          await this.publish(sessionId, 'cycles', cycle.id, {
-            kind: 'cycle-error',
-            id: cycle.id,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'cycle advancement failed',
-          });
-        }
-      }
-    })()
-      .catch((error) => this.failPersistence(error))
-      .finally(() => {
-        owned.tick = undefined;
-      });
-  }
-  private async closeCycles(sessionId: string) {
-    const owned = this.ownerCycles.get(sessionId);
-    if (!owned) return;
-    owned.stopped = true;
-    if (owned.timer) clearInterval(owned.timer);
-    await owned.tick;
-    await owned.service.then(
-      (service) => service.close(),
-      () => undefined,
-    );
-  }
   async hasActiveSession(sessionId: string): Promise<boolean> {
-    const owned = this.ownerCycles.get(sessionId);
-    if (owned && !owned.stopped) {
-      const cycles = await owned.service.catch(() => undefined);
-      if (
-        cycles &&
-        cycles
-          .list()
-          .some(
-            (cycle) =>
-              !['needs_review', 'pending_human_merge'].includes(cycle.state),
-          )
-      )
-        return true;
-    }
     if ((await this.terminals.activeIds(sessionId)).length) return true;
     const debug = this.debuggers.get(sessionId)?.snapshot();
     if (
@@ -350,10 +208,6 @@ export class WorkspaceServices {
       throw Error('session resources are already closing');
     this.releasing.add(sessionId);
     try {
-      let cycleCloseError: unknown;
-      const closingCycles = this.closeCycles(sessionId).catch((error) => {
-        cycleCloseError = error;
-      });
       await Promise.all(
         (await this.terminals.activeIds(sessionId)).map((id) =>
           this.terminals.close(sessionId, id),
@@ -364,8 +218,6 @@ export class WorkspaceServices {
         await debug.dispose();
         this.debuggers.delete(sessionId);
       }
-      await closingCycles;
-      if (cycleCloseError) throw cycleCloseError;
       this.debugTerminals.delete(sessionId);
       await this.languages.get(sessionId)?.dispose();
       this.languages.delete(sessionId);
@@ -410,9 +262,6 @@ export class WorkspaceServices {
       await Promise.allSettled([
         this.terminals.dispose(),
         ...[...this.debuggers.values()].map((debug) => debug.dispose()),
-        ...[...this.ownerCycles.keys()].map((session) =>
-          this.closeCycles(session),
-        ),
       ]);
     })();
   }
@@ -508,52 +357,6 @@ export class WorkspaceServices {
         params.action === 'cancel');
     if (this.failure && !emergency) throw this.failure;
     this.sessions.add(sessionId);
-    if (service === 'cycles') {
-      const cycles = await this.cyclesFor(sessionId);
-      if (this.ownerCycles.get(sessionId)?.stopped)
-        throw Error('session delivery cycles are closed');
-      if (method === 'list') return cycles.list();
-      const id = requiredString(params, 'id');
-      if (method === 'snapshot') return cycles.snapshot(id);
-      if (method === 'create') {
-        if (params.workspace !== undefined)
-          throw Error('cycle workspace is assigned by the trusted host');
-        const title = requiredString(params, 'title');
-        const body = requiredString(params, 'body', true);
-        if (
-          !Array.isArray(params.acceptanceCriteria) ||
-          !params.acceptanceCriteria.length ||
-          params.acceptanceCriteria.some(
-            (item) => typeof item !== 'string' || !item.trim(),
-          )
-        )
-          throw Error('acceptance criteria must be nonempty strings');
-        const spec: CycleSpec = {
-          id,
-          title,
-          body,
-          workspace: this.options.workspaceRoot,
-          acceptanceCriteria: params.acceptanceCriteria,
-        };
-        const result = await cycles.create(spec, {
-          operationId: requiredString(params, 'operationId'),
-        });
-        this.advanceCycles(sessionId, this.ownerCycles.get(sessionId)!);
-        return result;
-      }
-      if (method === 'advance') {
-        const result = await cycles.advance(id);
-        this.advanceCycles(sessionId, this.ownerCycles.get(sessionId)!);
-        return result;
-      }
-      if (method === 'retryCI')
-        return cycles.retryCI(
-          id,
-          requiredInteger(params, 'runId', 1, Number.MAX_SAFE_INTEGER),
-          { operationId: requiredString(params, 'operationId') },
-        );
-      throw Error('unknown delivery cycle method');
-    }
     if (service === 'documents') {
       if (method === 'resolveSource') {
         const input = requiredString(params, 'path');
@@ -987,9 +790,6 @@ export class WorkspaceServices {
   }
   private async disposeOwned() {
     this.closed = true;
-    await Promise.allSettled(
-      [...this.ownerCycles.keys()].map((session) => this.closeCycles(session)),
-    );
     this.watch.close();
     this.documents.close();
     await Promise.all(
@@ -1102,13 +902,6 @@ function validateServiceOptions(params: Record<string, unknown>) {
     ...(command ? { command } : {}),
     ...(readiness ? { readiness } : {}),
   };
-}
-
-interface OwnedCycles {
-  service: Promise<DeliveryCycleService>;
-  timer?: ReturnType<typeof setInterval>;
-  tick?: Promise<void>;
-  stopped: boolean;
 }
 
 export class WorkspaceServicesClosedError extends Error {

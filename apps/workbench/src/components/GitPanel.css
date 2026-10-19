@@ -51,8 +51,7 @@
 .git-file-state.conflict {
   color: var(--attention);
 }
-.native-git-files,
-.native-delivery-checks {
+.native-git-files {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -107,28 +106,8 @@
 .native-git .diff-block pre {
   overflow: auto;
 }
-.native-git .field-label,
-.native-delivery .field-label {
+.native-git .field-label {
   align-items: stretch;
-}
-.native-delivery-connection {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  margin-block: 8px;
-  color: var(--secondary);
-  font-size: var(--ui-small);
-}
-.native-delivery-connection > .button {
-  margin-left: auto;
-}
-.native-delivery > .button {
-  margin-block: 4px;
-  margin-inline-end: 6px;
-}
-.native-delivery .activity-row {
-  flex-wrap: wrap;
 }
 
 /* Preserve the native disclosure marker used by the existing details controls. */

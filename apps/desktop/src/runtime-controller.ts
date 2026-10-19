@@ -15,9 +15,6 @@ import {
   commandTerminalAction,
   type CommandTerminalSource,
 } from './workspace/command-handoff.js';
-import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
-import { GitWorkspaceService } from './workspace/git.js';
-import { DeliveryService } from './workspace/delivery.js';
 import { NativeGitHubConnection } from './workspace/github-connection.js';
 import { githubWorkspaceBackend } from './workspace/github-backend.js';
 import type { GitHubConnectionBackend } from '../../../src/github_connection.js';
@@ -1137,120 +1134,6 @@ export class RuntimeController {
               delete: () => this.options.credentialStore!.delete('github.com'),
             }
           : undefined,
-        cyclePorts: async (sessionId) => {
-          const ownerRuntime =
-            this.runtimes.get(sessionId) ?? this.taskRuntimes.get(sessionId);
-          if (
-            ownerRuntime &&
-            loadSettings(this.home).extensions.github?.enabled === true
-          )
-            await ownerRuntime.setBundledExtensionEnabled('github', true);
-          const githubInvocation = this.githubInvocation(sessionId);
-          const githubConnection = this.githubConnection();
-          const githubEpoch = githubConnection?.snapshot().epoch;
-          const cycleScopes = new Map<
-            string,
-            {
-              invocation: ReturnType<RuntimeController['githubInvocation']>;
-              epoch: number | undefined;
-            }
-          >();
-          const scopeFor = (cycle: { id: string }) => {
-            const scope = cycleScopes.get(cycle.id);
-            if (!scope) throw Error('cycle authorization scope is missing');
-            return scope;
-          };
-          const git = new GitWorkspaceService(root);
-          const [name, email] = await Promise.all([
-            git.git(['config', '--get', 'user.name']),
-            git.git(['config', '--get', 'user.email']),
-          ]);
-          return createWorkspaceCyclePorts({
-            workspace: root,
-            sessionId,
-            bindCycle: (cycle, mode) => {
-              if (!cycleScopes.has(cycle.id))
-                cycleScopes.set(cycle.id, {
-                  invocation:
-                    mode === 'created'
-                      ? this.githubInvocation(sessionId)
-                      : githubInvocation,
-                  epoch:
-                    mode === 'created'
-                      ? githubConnection?.snapshot().epoch
-                      : githubEpoch,
-                });
-            },
-            invocation: (cycle) => {
-              const scope = scopeFor(cycle);
-              return {
-                signal: scope.invocation.signal,
-                assertActive: () => {
-                  scope.invocation.assertActive();
-                  if (!githubConnection || scope.epoch === undefined)
-                    throw Error('connect GitHub in the GitHub plugin details');
-                  githubConnection.assertEpoch(scope.epoch);
-                },
-              };
-            },
-            dataDir: join(
-              this.options.dataFolder ?? this.home,
-              'cycle-adapters',
-              identity(root),
-            ),
-            identity: { name: name.trim(), email: email.trim() },
-            getTaskService: () => this.collaboration(root, sessionId),
-            verify: (task, context) =>
-              this.taskVerifier(root, task.spec.baseline)(task, context),
-            withResource: (resource, run) =>
-              this.taskResources.withResource(resource, run),
-            pushAuthentication: async (ownedPath, cycle) => {
-              const scope = scopeFor(cycle);
-              scope.invocation.assertActive();
-              const remote = (
-                await new GitWorkspaceService(ownedPath).git([
-                  'remote',
-                  'get-url',
-                  '--push',
-                  '--all',
-                  'origin',
-                ])
-              ).trim();
-              scope.invocation.assertActive();
-              const match =
-                /^https:\/\/github\.com\/([-\w.]+\/[-\w.]+?)(?:\.git)?$/.exec(
-                  remote,
-                );
-              if (!match)
-                throw Error(
-                  'select an authorized GitHub HTTPS push destination',
-                );
-              return githubConnection?.gitPushAuthentication(
-                scope.epoch!,
-                match[1]!,
-                scope.invocation.signal,
-                scope.invocation.assertActive,
-              );
-            },
-            createDelivery: (ownedPath, cycle) =>
-              new DeliveryService(ownedPath, tools.ghPath, {
-                spawn: (file, args, options) => spawnPty(file, args, options),
-                connection: githubConnection,
-                epoch: scopeFor(cycle).epoch,
-                ...scopeFor(cycle).invocation,
-                credentialStore: this.options.credentialStore
-                  ? {
-                      get: () =>
-                        this.options.credentialStore!.get('github.com'),
-                      put: (token) =>
-                        this.options.credentialStore!.put('github.com', token),
-                    }
-                  : undefined,
-              }),
-            redact: (value) =>
-              this.runtimes.get(sessionId)?.redact(value) ?? value,
-          });
-        },
         workspaceId: identity(root),
         credentialFiles: settingsForRun(this.home, root).settings
           .credential_files,

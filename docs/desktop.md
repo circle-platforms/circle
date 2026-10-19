@@ -98,7 +98,6 @@ The desktop application edits, runs, debugs and reviews a trusted project while 
 - **Git.** The Git tab of the Changes panel reads the repository's working tree, index and branch differences, whoever made them. It stages and reverts single hunks, marks conflicted files until you resolve and stage them, commits and pushes.
 - **Browser.** **developer tools** in the browser panel's ⋮ menu, **Inspect** on the page, or F12, ctrl+shift+I, or ⌥⌘I on macOS, open Chromium's own developer tools in a separate window. The page keeps its size. Closing the tools attaches Circle's browser observations again.
 - **Tasks.** The agent can split work into tasks that run in parallel in the Activity panel; a task that writes gets its own Git worktree on a branch of its own. Up to eight agents run at once by default, two builds and one task that drives the screen; settings change these limits.
-- **Automatic delivery.** With a GitHub account connected on the GitHub plugin's page and the repository allowed there, automatic delivery commits verified task results to a branch of its own, opens a draft pull request, follows its checks and schedules repairs when they fail. It never merges: a pull request whose checks pass waits for you.
 
 [Known issues](known-issues.md#desktop-application) lists what these do not do yet.
 

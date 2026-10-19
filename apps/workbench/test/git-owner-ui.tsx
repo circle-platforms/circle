@@ -25,25 +25,6 @@ snapshot.activeSessionId = 'a';
 snapshot.runtime = { connected: true, configured: true };
 snapshot.interactions = [];
 snapshot.requests = [];
-// Synthetic connection view only; all delivery traffic stays on the local fixture.
-snapshot.extensions = [
-  {
-    id: 'bundled:github',
-    scope: 'bundled',
-    name: 'github',
-    enabled: true,
-    tools: ['github_connection'],
-    commands: [],
-    events: [],
-    view: {
-      provider: 'github',
-      client: 'GitHub CLI',
-      state: 'connected',
-      epoch: 1,
-      repositories: ['fixture/repo'],
-    },
-  } as any,
-];
 let update: any = { seq: 0, connected: true, snapshot };
 let listener: any;
 const host = {

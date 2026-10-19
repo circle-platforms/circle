@@ -3,12 +3,10 @@ import {
   type CommandTerminalView,
 } from '../model/command-terminal-client';
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
-import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { TasksPanel } from './TasksPanel';
-import { DeliveryCyclePanel } from './DeliveryCyclePanel';
 import { appendTerminalSelection } from '../model/terminal-context';
 import { workspaceCall } from '../model/workspace-client';
 import { developerToolsEnabled } from '../plugins/developer';
@@ -41,7 +39,6 @@ export function WorkspacePanelContents({
   children,
   onFile,
   onSession,
-  onTask,
 }: {
   kind: 'terminal' | 'changes' | 'activity';
   resourcesPaused?: boolean;
@@ -56,9 +53,8 @@ export function WorkspacePanelContents({
   children: ReactNode;
   onFile: (path: string, line?: number, column?: number) => void;
   onSession: (id: string) => void;
-  onTask: (id: string) => void;
 }) {
-  const { runtime, snapshot, notify } = useRuntime();
+  const { runtime, snapshot } = useRuntime();
   const showDebug = developerToolsEnabled(snapshot.extensions);
   const workspaceRoot = snapshot.workspaces.find(
     (workspace) =>
@@ -99,31 +95,12 @@ export function WorkspacePanelContents({
         ? [
             { id: 'original', label: t('session changes') },
             { id: 'git', label: t('git') },
-            { id: 'delivery', label: t('automatic delivery') },
           ]
         : [
             { id: 'original', label: t('activity') },
             { id: 'tasks', label: t('tasks') },
             ...(showDebug ? [{ id: 'debug', label: t('debug') }] : []),
           ];
-  const openExternal = (url: string) => {
-    try {
-      const target = new URL(url);
-      if (
-        target.protocol !== 'https:' ||
-        target.hostname !== 'github.com' ||
-        target.username ||
-        target.password
-      )
-        throw Error(t('external link is not allowed'));
-      const host = desktopHost();
-      if (host?.openExternal)
-        void host.openExternal(target.href).catch((e) => notify(String(e)));
-      else window.open(target.href, '_blank', 'noopener,noreferrer');
-    } catch (e) {
-      notify(String(e));
-    }
-  };
   const resourceName =
     workspaceRoot ??
     snapshot.sessions.find((item) => item.id === sessionId)?.title ??
@@ -243,12 +220,7 @@ export function WorkspacePanelContents({
                       }
                     />
                   ) : item.id === 'git' ? (
-                    <GitPanel
-                      sessionId={sessionId}
-                      embedded
-                      onFile={onFile}
-                      onOpenExternal={openExternal}
-                    />
+                    <GitPanel sessionId={sessionId} embedded onFile={onFile} />
                   ) : item.id === 'debug' ? (
                     <DebugPanel
                       sourceRequest={debugSourceRequest}
@@ -258,7 +230,7 @@ export function WorkspacePanelContents({
                       embedded
                       onFile={onFile}
                     />
-                  ) : item.id === 'tasks' ? (
+                  ) : (
                     <TasksPanel
                       embedded
                       sessionId={sessionId}
@@ -268,13 +240,6 @@ export function WorkspacePanelContents({
                           ? selection.slice(5)
                           : undefined
                       }
-                    />
-                  ) : (
-                    <DeliveryCyclePanel
-                      sessionId={sessionId}
-                      active={visible && tab === 'delivery'}
-                      onTask={onTask}
-                      onOpenExternal={openExternal}
                     />
                   )}
                 </NativeResourceBoundary>

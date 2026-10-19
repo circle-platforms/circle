@@ -17,6 +17,9 @@ test('workspace service dispatch admits explicit capabilities only', () => {
     { service: 'terminal', method: 'exec' },
     { service: 'debug', method: 'sendMessage' },
     { service: 'documents', method: 'read', params: [] },
+    // Automatic delivery was removed; its old requests name no service.
+    { service: 'cycles', method: 'list' },
+    { service: 'cycles', method: 'create' },
   ]) {
     assert.throws(() => validateWorkspaceRequest(value));
   }

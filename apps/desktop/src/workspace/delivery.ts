@@ -170,36 +170,15 @@ export class DeliveryService {
       assertActive: this.assertActive,
     });
   }
-  /** Trusted host only: publish the exact candidate already pushed by the cycle ledger. */
-  async publishPushed(input: {
-    revision: string;
-    head: string;
-    title: string;
-    body: string;
-  }): Promise<unknown> {
-    if (this.connection && this.operationEpoch === undefined)
-      return this.scoped().publishPushed(input);
-    return this.serialized(() => this.publish(input, input.head));
-  }
-  /** Trusted host only: bounded failure logs together with the complete redacted text. */
-  async failureLogs(runId: number): Promise<{
-    text: string;
-    full: string;
-    truncated: boolean;
-  }> {
-    if (this.connection && this.operationEpoch === undefined)
-      return this.scoped().failureLogs(runId);
-    this.guard();
-    return this.readFailureLogs(runId);
-  }
   private async readFailureLogs(runId: unknown) {
     if (!Number.isSafeInteger(runId) || Number(runId) <= 0)
       throw Error('valid run id is required');
     try {
-      const full = await this.redactLogs(
-        await this.gh(['run', 'view', String(runId), '--log-failed']),
+      return boundFailedRunLog(
+        await this.redactLogs(
+          await this.gh(['run', 'view', String(runId), '--log-failed']),
+        ),
       );
-      return { ...boundFailedRunLog(full), full };
     } catch (primary) {
       try {
         return await this.completedJobLogs(Number(runId));
@@ -306,13 +285,7 @@ export class DeliveryService {
           throw error;
         }),
       );
-    if (method === 'logs') {
-      // The renderer sees only the bounded text; the complete log stays in the host.
-      const { full: _full, ...bounded } = await this.readFailureLogs(
-        params.runId,
-      );
-      return bounded;
-    }
+    if (method === 'logs') return this.readFailureLogs(params.runId);
     if (method === 'publish') return this.publish(params);
     if (method === 'ready') {
       const state = await this.candidateSnapshot();
@@ -395,7 +368,6 @@ export class DeliveryService {
   /** Read completed failures while other jobs continue. Repository and job IDs come only from verified API records. */
   private async completedJobLogs(runId: number): Promise<{
     text: string;
-    full: string;
     truncated: boolean;
     source: 'completed-jobs';
     runId: number;
@@ -539,8 +511,8 @@ export class DeliveryService {
     if (!complete) throw Error('workflow job pagination limit reached');
     if (!jobs.length)
       throw Error('no completed failed jobs have downloadable logs yet');
-    const sections: string[] = [],
-      bounded: string[] = [];
+    const sections: string[] = [];
+    let truncated = false;
     for (const job of jobs.sort((left, right) => left.id - right.id)) {
       const current = validateJob(
         JSON.parse(await api(`${endpoint}/jobs/${job.id}`)) as Job,
@@ -564,8 +536,9 @@ export class DeliveryService {
       const title = await this.redactLogs(
         `=== ${name} (job ${job.id}, ${current.conclusion}) ===\n`,
       );
-      sections.push(title + text);
-      bounded.push(title + tailText(text));
+      const tail = tailText(text);
+      if (tail !== text) truncated = true;
+      sections.push(title + tail);
     }
     const after = validateRun(
       JSON.parse(await api(`${endpoint}/runs/${runId}`)) as Run,
@@ -579,9 +552,8 @@ export class DeliveryService {
       `workflow run ${runId}, attempt ${run.run_attempt}: completed failed job logs${after.status === 'completed' ? '' : '; other jobs are still running'}\n\n`,
     );
     return {
-      text: header + bounded.join('\n\n'),
-      full: header + sections.join('\n\n'),
-      truncated: bounded.some((section, index) => section !== sections[index]),
+      text: header + sections.join('\n\n'),
+      truncated,
       source: 'completed-jobs',
       runId,
       attempt: run.run_attempt,
@@ -589,65 +561,38 @@ export class DeliveryService {
       jobIds: jobs.map((job) => job.id),
     };
   }
-  private async publish(
-    params: Record<string, unknown>,
-    pushedHead?: string,
-  ): Promise<unknown> {
+  private async publish(params: Record<string, unknown>): Promise<unknown> {
     const state = await this.candidateSnapshot();
-    if (
-      state.revision !== params.revision ||
-      (pushedHead !== undefined && state.head !== pushedHead)
-    )
-      throw pushedHead === undefined
-        ? new DeliveryPreflightError('DELIVERY_CANDIDATE_CHANGED')
-        : Error('repository changed; refresh before publishing');
+    if (state.revision !== params.revision)
+      throw new DeliveryPreflightError('DELIVERY_CANDIDATE_CHANGED');
     if (state.entries.length)
-      throw pushedHead === undefined
-        ? new DeliveryPreflightError('DELIVERY_WORKSPACE_DIRTY')
-        : Error('commit or preserve workspace changes before publishing');
+      throw new DeliveryPreflightError('DELIVERY_WORKSPACE_DIRTY');
     if (
       state.branch === 'detached' ||
       /^(main|master)$/.test(state.branch) ||
       state.branch === (await this.defaultBranch())
     )
-      throw pushedHead === undefined
-        ? new DeliveryPreflightError('DELIVERY_FEATURE_BRANCH_REQUIRED')
-        : Error('publish from a feature branch');
-    const preparePublishedHead = async () => {
-      if (pushedHead === undefined) {
-        const repository = this.connection
-          ? await this.repository()
-          : undefined;
-        this.guard();
-        await this.git.call(
-          'push',
-          { revision: state.revision },
-          {
-            signal: this.operationSignal,
-            assertActive: () => this.guard(),
-            pushAuthentication:
-              this.connection && repository
-                ? this.connection.gitPushAuthentication(
-                    this.operationEpoch!,
-                    repository,
-                    this.operationSignal,
-                    () => this.guard(),
-                  )
-                : undefined,
-          },
-        );
-        return;
-      }
-      const reference = `refs/heads/${state.branch}`;
-      const advertised = (
-        await this.git.git(['ls-remote', '--heads', 'origin', reference])
-      ).trim();
-      if (advertised !== `${pushedHead}\t${reference}`)
-        throw Error(
-          'the remote branch no longer contains the pushed candidate',
-        );
-      if ((await this.candidateSnapshot()).revision !== state.revision)
-        throw Error('repository changed while verifying the pushed candidate');
+      throw new DeliveryPreflightError('DELIVERY_FEATURE_BRANCH_REQUIRED');
+    const push = async () => {
+      const repository = this.connection ? await this.repository() : undefined;
+      this.guard();
+      await this.git.call(
+        'push',
+        { revision: state.revision },
+        {
+          signal: this.operationSignal,
+          assertActive: () => this.guard(),
+          pushAuthentication:
+            this.connection && repository
+              ? this.connection.gitPushAuthentication(
+                  this.operationEpoch!,
+                  repository,
+                  this.operationSignal,
+                  () => this.guard(),
+                )
+              : undefined,
+        },
+      );
     };
     const openForBranch = (pr: { state?: string; headRefName?: string }) =>
       pr.state === 'OPEN' && pr.headRefName === state.branch;
@@ -702,7 +647,7 @@ export class DeliveryService {
       () => findOpen(),
     );
     if (existing) {
-      await preparePublishedHead();
+      await push();
       return confirmPublished(existing.number);
     }
     if (
@@ -711,7 +656,7 @@ export class DeliveryService {
       typeof params.body !== 'string'
     )
       throw Error('title and body are required');
-    await preparePublishedHead();
+    await push();
     try {
       await this.gh([
         'pr',

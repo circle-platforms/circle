@@ -17,6 +17,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { GitWorkspaceService } from '../src/workspace/git.ts';
 import { WorkspaceServices } from '../src/workspace/workspace-services.ts';
+import { WorkspaceEventStream } from '../src/workspace/event-stream.ts';
 import type { WorkspaceDocument } from '../src/workspace/documents.ts';
 import type {
   TerminalSnapshot,
@@ -377,6 +378,82 @@ test('initial event journal open failure still allows complete service disposal'
     await rm(root, { recursive: true, force: true });
     await rm(data, { recursive: true, force: true });
   }
+});
+test('a workspace that ran automatic delivery in an earlier version opens, replays its old events and keeps its files', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-legacy-delivery-'));
+  const data = await mkdtemp(
+    path.join(tmpdir(), 'circle-legacy-delivery-data-'),
+  );
+  const directory = path.join(
+    data,
+    'workspaces',
+    createHash('sha256').update(path.resolve(root)).digest('hex'),
+  );
+  // What automatic delivery left behind: its cycle ledger and a journal event.
+  const ledger = path.join(
+    directory,
+    'delivery',
+    createHash('sha256').update('session-a').digest('hex'),
+    'delivery-cycles.json',
+  );
+  await mkdir(path.dirname(ledger), { recursive: true });
+  const saved = JSON.stringify({ version: 1, cycles: [], operations: [] });
+  await writeFile(ledger, saved);
+  const journal = await WorkspaceEventStream.open(
+    path.join(directory, 'events.jsonl'),
+  );
+  await journal.append({
+    workspaceId: 'legacy',
+    sessionId: 'session-a',
+    service: 'cycles' as never,
+    resourceId: 'cycle-one',
+    data: { kind: 'cycle', id: 'cycle-one', state: 'waiting_ci', attempt: 1 },
+  });
+  await journal.close();
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    emit: () => {},
+  });
+  try {
+    await writeFile(path.join(root, 'notes.txt'), 'before\n');
+    const read = (await service.call('session-a', 'documents', 'read', {
+      path: 'notes.txt',
+    })) as WorkspaceDocument;
+    await service.call('session-a', 'documents', 'save', {
+      path: 'notes.txt',
+      content: 'after\n',
+      expectedRevision: read.revision,
+    });
+    const page = await service.replay();
+    assert.deepEqual(
+      [
+        page.events[0]?.seq,
+        page.events[0]?.service,
+        page.events[0]?.resourceId,
+      ],
+      [1, 'cycles', 'cycle-one'],
+    );
+    assert.ok(
+      page.events.some(
+        (event) => event.service === 'documents' && event.data.kind === 'save',
+      ),
+    );
+    assert.deepEqual(
+      page.events.map((event) => event.seq),
+      page.events.map((_, index) => index + 1),
+    );
+    assert.equal(service.eventHealth.error, undefined);
+  } finally {
+    await service.dispose();
+  }
+  assert.equal(await readFile(ledger, 'utf8'), saved);
+  await rm(root, { recursive: true, force: true });
+  await rm(data, { recursive: true, force: true });
 });
 test('document saves invalidate semantic projects without discarding another unsaved overlay', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-language-save-'));
