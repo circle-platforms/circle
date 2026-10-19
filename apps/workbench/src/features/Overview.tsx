@@ -101,13 +101,17 @@ function Row({
   title,
   children,
   end,
+  kind,
 }: {
   icon?: LucideIcon;
   onClick?: () => void;
   title?: string;
   children: ReactNode;
   end?: ReactNode;
+  /** `agent`: the name stays whole and what the subagent does gives way first. */
+  kind?: 'agent';
 }) {
+  const className = kind ? `overview-row overview-${kind}` : 'overview-row';
   const body = (
     <>
       {Icon && <Icon size={16} aria-hidden />}
@@ -116,16 +120,11 @@ function Row({
     </>
   );
   return onClick ? (
-    <button
-      type="button"
-      className="overview-row"
-      title={title}
-      onClick={onClick}
-    >
+    <button type="button" className={className} title={title} onClick={onClick}>
       {body}
     </button>
   ) : (
-    <div className="overview-row" title={title}>
+    <div className={className} title={title}>
       {body}
     </div>
   );
@@ -133,6 +132,25 @@ function Row({
 
 function Dot({ state }: { state: 'run' | 'wait' | 'fail' | 'done' | 'idle' }) {
   return <i className="overview-dot" data-state={state} aria-hidden />;
+}
+
+/**
+ * The words a row ends with, such as a subagent's activity: cut short with an ellipsis
+ * when the card has no room for all of them, and whole, or what they stand for, in the
+ * tooltip.
+ */
+function EndText({
+  children,
+  title = children,
+}: {
+  children: string;
+  title?: string;
+}) {
+  return (
+    <span className="overview-end-text" title={title}>
+      {children}
+    </span>
+  );
 }
 
 function checksText(checks: PullRequestSummary['checks']) {
@@ -314,7 +332,7 @@ export function Overview({
       >
         <dl className="overview-facts">
           <dt>{t('tokens')}</dt>
-          <dd>{usage.tokens}</dd>
+          <dd>{usage.fill}</dd>
           <dt>{t('cost')}</dt>
           <dd title={t('estimated from the model’s published prices')}>
             {usage.cost}
@@ -352,8 +370,8 @@ export function Overview({
           onToggle={() => toggle('progress')}
           summary={progressSummary}
         >
-          {progress.plan?.current && (
-            <Row end={t('plan')}>
+          {progress.plan && (
+            <Row end={<EndText>{t('plan')}</EndText>}>
               <Dot state="run" />
               <span className="overview-name">
                 {progress.plan.current.text}
@@ -363,20 +381,27 @@ export function Overview({
           {progress.agents.map((agent) => {
             const label = agentLabel(agent);
             const asked = pendingFor(agent.id, snapshot.interactions);
+            // What a waiting subagent asked to run is a pointer's rest away.
+            const request = asked
+              ? (asked.command ?? asked.tool ?? asked.title)
+              : undefined;
             return (
               <Row
                 key={agent.id}
+                kind="agent"
                 icon={Bot}
-                title={label.detail || label.name}
+                title={request ?? (label.detail || label.name)}
                 onClick={() => onPanel('agents', agent.id)}
                 end={
                   <>
                     <Dot state={agentDot(agent, !!asked)} />
-                    {asked ? (
-                      <code>{asked.command ?? asked.tool ?? asked.title}</code>
-                    ) : (
-                      agentActivityText(agent)
-                    )}
+                    <EndText title={request}>
+                      {asked
+                        ? asked.kind === 'approval'
+                          ? t('needs approval')
+                          : t('waiting for you')
+                        : agentActivityText(agent)}
+                    </EndText>
                   </>
                 }
               >
@@ -396,7 +421,7 @@ export function Overview({
                 end={
                   <>
                     <Dot state={agentDot(task.agent)} />
-                    {agentActivityText(task.agent)}
+                    <EndText>{agentActivityText(task.agent)}</EndText>
                   </>
                 }
               >

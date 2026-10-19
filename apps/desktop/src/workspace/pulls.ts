@@ -1,8 +1,12 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { boundFailedRunLog } from './delivery.ts';
+import {
+  boundFailedRunLog,
+  completedFailedJobLogs,
+  redactGitHubCredentials,
+} from './delivery.ts';
 import { GitWorkspaceService } from './git.ts';
 import type {
   PullRequestAccess,
@@ -19,8 +23,17 @@ const GH_TIMEOUT = 20_000;
 const RECENT_LIMIT = 6;
 const UNTRACKED_LINE_LIMIT = 1024 * 1024;
 const UNTRACKED_FILE_LIMIT = 200;
+/** The failed jobs whose logs one copy holds, each cut to its tail. */
+const FAILED_JOBS_COPIED = 10;
 
-export type GhRunner = (args: string[]) => Promise<string>;
+/**
+ * Runs `gh` with these arguments and gives what it printed. `quiet` asks only whether it
+ * succeeded: what it prints is not read at all.
+ */
+export type GhRunner = (
+  args: string[],
+  options?: { quiet?: boolean },
+) => Promise<string>;
 
 const EMPTY_GIT: RepositorySummary = {
   repository: false,
@@ -35,23 +48,54 @@ const EMPTY_GIT: RepositorySummary = {
 };
 
 function runGh(root: string, ghPath: string): GhRunner {
-  return async (args) =>
-    (
+  const env = {
+    ...process.env,
+    GH_PROMPT_DISABLED: '1',
+    GH_NO_UPDATE_NOTIFIER: '1',
+    GH_PAGER: 'cat',
+    NO_COLOR: '1',
+    GIT_TERMINAL_PROMPT: '0',
+  };
+  return async (args, { quiet = false } = {}) => {
+    if (quiet) {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(ghPath, args, {
+          cwd: root,
+          env,
+          stdio: 'ignore',
+          timeout: GH_TIMEOUT,
+        });
+        child.once('error', reject);
+        child.once('exit', (code, signal) =>
+          code === 0
+            ? resolve()
+            : reject(
+                Error(`gh ${args.slice(0, 2).join(' ')}: ${signal ?? code}`),
+              ),
+        );
+      });
+      return '';
+    }
+    return (
       await exec(ghPath, args, {
         cwd: root,
         encoding: 'utf8',
         maxBuffer: 8 * 1024 * 1024,
         timeout: GH_TIMEOUT,
-        env: {
-          ...process.env,
-          GH_PROMPT_DISABLED: '1',
-          GH_NO_UPDATE_NOTIFIER: '1',
-          GH_PAGER: 'cat',
-          NO_COLOR: '1',
-          GIT_TERMINAL_PROMPT: '0',
-        },
+        env,
       })
     ).stdout;
+  };
+}
+
+/**
+ * Why a read of GitHub failed: a sign-in GitHub refused, or no answer, as when the
+ * computer is offline or GitHub fails.
+ */
+function readFailure(error: unknown): 'signed-out' | 'unreachable' {
+  return /\bHTTP 401\b|bad credentials/i.test(String(error))
+    ? 'signed-out'
+    : 'unreachable';
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -158,8 +202,9 @@ export function githubSlug(remote: string): string {
 
 /**
  * What the overview shows about a folder's repository and its pull requests. It asks
- * the person's own `gh`, as the create-pr skill does, so what Circle opened is what
- * shows here. Nothing it reads is written back.
+ * `gh` with the person's own sign-in, the one the create-pr skill uses, so what Circle
+ * opened is what shows here. The application passes the `gh` it ships. Nothing it reads
+ * is written back.
  */
 export class PullRequestReader {
   readonly git: GitWorkspaceService;
@@ -185,9 +230,11 @@ export class PullRequestReader {
     const access = await this.access();
     if (access !== 'ready') return { git, access, current: null, recent: [] };
     const onDefault = !git.branch || git.branch === git.defaultBranch;
+    // A read that fails says why; only gh's own answer that the branch has none means no
+    // pull request, so a computer offline never turns update into create.
     const [current, recent] = await Promise.all([
       onDefault
-        ? Promise.resolve(null)
+        ? { pull: null }
         : this.gh([
             'pr',
             'view',
@@ -195,8 +242,11 @@ export class PullRequestReader {
             '--json',
             'number,title,url,state,isDraft,headRefName,statusCheckRollup',
           ]).then(
-            (out) => summarizePullRequest(JSON.parse(out)) ?? null,
-            () => null,
+            (out) => ({ pull: summarizePullRequest(JSON.parse(out)) ?? null }),
+            (error: unknown) =>
+              /no pull requests found/i.test(String(error))
+                ? { pull: null }
+                : { failure: readFailure(error) },
           ),
       this.gh([
         'pr',
@@ -210,32 +260,81 @@ export class PullRequestReader {
         '--json',
         'number,title,url,state,isDraft,headRefName',
       ]).then(
-        (out) =>
-          (JSON.parse(out) as unknown[])
+        (out) => ({
+          pulls: (JSON.parse(out) as unknown[])
             .map(summarizePullRequest)
             .filter((item): item is PullRequestSummary => !!item),
-        () => [],
+        }),
+        (error: unknown) => ({ failure: readFailure(error) }),
       ),
     ]);
+    if ('failure' in current || 'failure' in recent) {
+      const failures = [current, recent].flatMap((read) =>
+        'failure' in read ? [read.failure] : [],
+      );
+      return {
+        git,
+        access: failures.includes('signed-out') ? 'signed-out' : 'unreachable',
+        current: null,
+        recent: [],
+      };
+    }
+    const branchPull = current.pull;
     return {
       git,
       access,
       // A branch whose pull request is closed or merged starts another one.
-      current: current && current.state === 'open' ? current : null,
-      recent: recent.filter((item) => item.number !== current?.number),
+      current: branchPull && branchPull.state === 'open' ? branchPull : null,
+      recent: recent.pulls.filter((item) => item.number !== branchPull?.number),
     };
   }
 
-  /** The tail of what failed in one GitHub Actions run, bounded per job. */
+  /**
+   * The tail of what failed in one GitHub Actions run: each failed job's last 32 KB, of
+   * ten jobs at most, with credentials hidden. While other jobs of the run still run,
+   * `gh run view --log-failed` refuses, and the jobs that already failed are read one by
+   * one instead.
+   */
   async failedLog(
     runId: unknown,
   ): Promise<{ text: string; truncated: boolean }> {
     if (typeof runId !== 'number' || !Number.isSafeInteger(runId) || runId < 1)
       throw Error('valid run id is required');
-    const log = await this.gh(['run', 'view', String(runId), '--log-failed']);
-    return boundFailedRunLog(log);
+    let whole: unknown;
+    try {
+      // Hidden before it is cut, so a credential cannot survive half cut.
+      return boundFailedRunLog(
+        redactGitHubCredentials(
+          await this.gh(['run', 'view', String(runId), '--log-failed']),
+        ),
+        { maxJobs: FAILED_JOBS_COPIED },
+      );
+    } catch (error) {
+      whole = error;
+    }
+    try {
+      const { text, truncated } = await completedFailedJobLogs(
+        (args) => this.gh(args),
+        runId,
+        (text) => redactGitHubCredentials(text),
+        { maxJobs: FAILED_JOBS_COPIED },
+      );
+      return { text, truncated };
+    } catch (jobs) {
+      throw Error(
+        redactGitHubCredentials(
+          `failed logs are unavailable: ${String(whole)}\ncompleted jobs: ${String(jobs)}`,
+        ),
+      );
+    }
   }
 
+  /**
+   * Whether `gh` holds a sign-in for github.com: its active account there, or GH_TOKEN.
+   * `gh auth token` reads it without asking GitHub, so an account that fails beside it, a
+   * GitHub Enterprise host or a computer offline cannot make it look signed out; what it
+   * prints is not read. Whether GitHub takes the sign-in shows when pull requests are read.
+   */
   private async access(): Promise<PullRequestAccess> {
     try {
       await this.gh(['--version']);
@@ -243,7 +342,9 @@ export class PullRequestReader {
       return 'missing';
     }
     try {
-      await this.gh(['auth', 'status']);
+      await this.gh(['auth', 'token', '--hostname', 'github.com'], {
+        quiet: true,
+      });
     } catch {
       return 'signed-out';
     }

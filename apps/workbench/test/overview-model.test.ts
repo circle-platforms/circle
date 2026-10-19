@@ -5,6 +5,7 @@ import type {
   PullRequestSummary,
 } from '../../desktop/src/workspace/pulls-types.ts';
 import { contextUsage } from '../src/model/context-usage.ts';
+import { keepLastPullRequests } from '../src/model/pull-requests.ts';
 import {
   agentLabel,
   outputRows,
@@ -149,6 +150,13 @@ test('a plan whose every step is done is not in progress', () => {
     ],
   });
   assert.equal(overviewProgress(s, [s], []).plan, null);
+  // What the card counts then: a subagent at work, and no plan.
+  const progress = overviewProgress(s, [s], [agent({ id: 'a1' })]);
+  assert.equal(progress.plan, null);
+  assert.deepEqual(
+    progress.agents.map((item) => item.id),
+    ['a1'],
+  );
 });
 
 test('a waiting subagent is matched to the request it made', () => {
@@ -287,17 +295,61 @@ test('the changes card offers to create a pull request, update one, or nothing',
   );
   assert.equal(pullRequestAction(overview({ branch: 'main' })), null);
   assert.equal(pullRequestAction(overview({ branch: '', files: 3 })), null);
-  for (const access of ['missing', 'signed-out', 'unavailable'] as const)
+  for (const access of [
+    'missing',
+    'signed-out',
+    'unreachable',
+    'unavailable',
+  ] as const)
     assert.equal(pullRequestAction(overview({ files: 3 }, { access })), null);
 });
 
-test('context usage reads the same numbers as the terminal footer', () => {
+test('a read GitHub did not answer keeps the pull requests the last read of the branch found', () => {
+  const read = overview(
+    { files: 2, ahead: 1 },
+    {
+      current: pull({ number: 186 }),
+      recent: [pull({ number: 181, state: 'merged' })],
+    },
+  );
+  const offline = overview({ files: 3, ahead: 1 }, { access: 'unreachable' });
+  const kept = keepLastPullRequests(read, offline);
+  assert.equal(kept.access, 'ready');
+  assert.equal(kept.current?.number, 186);
+  assert.deepEqual(
+    kept.recent.map((item) => item.number),
+    [181],
+  );
+  assert.equal(kept.git.files, 3, "the repository's numbers are the new ones");
+  assert.equal(
+    pullRequestAction(kept),
+    'update',
+    "the button still offers to update the branch's pull request",
+  );
+  // Read again offline, it stays.
+  assert.equal(keepLastPullRequests(kept, offline).current?.number, 186);
+  // Nothing to keep, or another branch: what the read says.
+  assert.equal(keepLastPullRequests(undefined, offline), offline);
+  const elsewhere = overview({ branch: 'other' }, { access: 'unreachable' });
+  assert.equal(keepLastPullRequests(read, elsewhere), elsewhere);
+  // A read that answered replaces what was kept, signed out included.
+  const out = overview({}, { access: 'signed-out' });
+  assert.equal(keepLastPullRequests(read, out), out);
+  const fresh = overview({ files: 1 }, { current: null });
+  assert.equal(keepLastPullRequests(read, fresh), fresh);
+  // A host that answers nothing is not a read to merge.
+  assert.equal(
+    keepLastPullRequests(read, undefined as unknown as PullRequestOverview),
+    undefined,
+  );
+});
+
+test("context usage reads the terminal footer's numbers, and its tokens are the window's fill", () => {
   const unknown = contextUsage({ meters: undefined });
   assert.deepEqual(unknown, {
     percent: null,
     level: '',
-    context: 'N/A',
-    tokens: 'N/A',
+    fill: 'N/A',
     cost: 'N/A',
     cache: 'N/A',
   });
@@ -310,8 +362,10 @@ test('context usage reads the same numbers as the terminal footer', () => {
     contextWindow: 128_000,
   };
   const usage = contextUsage({ meters });
-  assert.equal(usage.context, '14.1k / 128.0k (11%)');
-  assert.equal(usage.tokens, '↑ 12.3k · ↓ 1.2k');
+  // What the last answer left in the window, of the model's window: not what the whole
+  // session sent and received.
+  assert.equal(usage.fill, '14.1k / 128.0k');
+  assert.equal(Math.round(usage.percent!), 11);
   assert.equal(usage.cost, '$0.04');
   assert.equal(usage.cache, '50.0%');
   assert.equal(usage.level, '');
@@ -324,7 +378,15 @@ test('context usage reads the same numbers as the terminal footer', () => {
     'full',
   );
   assert.equal(
-    contextUsage({ meters: { ...meters, contextWindow: null } }).context,
+    contextUsage({ meters: { ...meters, contextWindow: 1_048_576 } }).fill,
+    '14.1k / 1.0M',
+  );
+  assert.equal(
+    contextUsage({ meters: { ...meters, contextWindow: null } }).fill,
     '14.1k / N/A',
+  );
+  assert.equal(
+    contextUsage({ meters: { ...meters, contextInput: null } }).fill,
+    'N/A',
   );
 });

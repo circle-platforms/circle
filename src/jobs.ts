@@ -65,6 +65,8 @@ export interface Job extends JobOwner {
   detail?: string;
   source?: string;
   execution?: CommandExecution;
+  /** The session a background subagent runs in. The job keeps it after the subagent ends. */
+  agent?: string;
 }
 interface Entry {
   execution?: CommandExecution;
@@ -357,7 +359,12 @@ export class JobRegistry {
     this.entries.add(entry);
     return entry;
   }
-  private publish(entry: Entry, kind: Job['kind'], detail?: string): Job {
+  private publish(
+    entry: Entry,
+    kind: Job['kind'],
+    detail?: string,
+    agent?: string,
+  ): Job {
     if (entry.job) return entry.job;
     const id = `j${this.next++}`;
     // Do not rename an open output file: Windows and child-inherited file handles
@@ -378,6 +385,7 @@ export class JobRegistry {
       outputPath: entry.path,
       virtualPath: `/background_jobs/${this.runName}/${entry.path.split(/[\\/]/).at(-1)}`,
       ...(detail ? { detail } : {}),
+      ...(agent ? { agent } : {}),
     };
     entry.job = job;
     if (entry.execution) {
@@ -993,10 +1001,12 @@ export class JobRegistry {
       log: (text: string) => void,
       job: Job,
     ) => Promise<string>,
+    /** The session the subagent runs in, so that its job and its conversation are one. */
+    agent?: string,
   ): Job {
     this.checkCapacity('agent');
     const entry = this.entry(title, owner);
-    const job = this.publish(entry, 'agent');
+    const job = this.publish(entry, 'agent', undefined, agent);
     const log = (text: string): void => {
       if (!entry.finished) {
         writeFileSync(entry.path, redact(text) + '\n', { flag: 'a' });

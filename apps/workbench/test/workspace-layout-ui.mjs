@@ -402,6 +402,57 @@ try {
         .click();
       await settled('nothing over it', (g) => !g.overview && !g.drawer);
     }
+    // Still narrow: a file opened from the overview, here an instruction file of the
+    // context card, takes the overview's place with the room the overview had.
+    await page.evaluate(() =>
+      window.readabilityFixture.runtime.change((state) => {
+        const session = state.sessions[0];
+        const workspace = state.workspaces.find(
+          (item) => item.id === session.workspaceId,
+        );
+        workspace.instructions = [
+          {
+            name: 'AGENTS.md',
+            path: `${workspace.path}/AGENTS.md`,
+            content: '# project instructions',
+          },
+        ];
+        state.files.push({
+          id: 'layout-instructions',
+          workspaceId: session.workspaceId,
+          path: 'AGENTS.md',
+          content: '# project instructions\n\nKeep changes scoped.\n',
+          language: 'markdown',
+        });
+      }),
+    );
+    await page
+      .getByRole('button', { name: 'overview panel', exact: true })
+      .click();
+    await settled(
+      'the overview over the conversation',
+      (g) => g.mode === 'overlay' && g.overview && !g.drawer,
+    );
+    const contextHeading = page.locator('#overview-context button');
+    if ((await contextHeading.getAttribute('aria-expanded')) !== 'true')
+      await contextHeading.click();
+    await page
+      .locator('#overview-context-body .overview-link')
+      .filter({ hasText: 'AGENTS.md' })
+      .click();
+    const instruction = await settled(
+      "the instruction file in the overview's place",
+      (g) =>
+        g.mode === 'overlay' && !g.overview && g.drawer && g.drawer.width > 250,
+    );
+    assert.ok(instruction.drawer.right <= 376);
+    await page
+      .locator('.work-drawer .file-view')
+      .getByText('AGENTS.md', { exact: true })
+      .first()
+      .waitFor();
+    await page.getByRole('button', { name: 'close file', exact: true }).click();
+    await settled('nothing over it again', (g) => !g.overview && !g.drawer);
     await page.setViewportSize({ width: 1680, height: 950 });
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })

@@ -61,6 +61,9 @@ export const COMPONENT_SUITES = Object.freeze([
   'gutter-marks-ui.mjs',
   'task-limits-recovery-ui.mjs',
   'overview-actions-ui.mjs',
+  'files-git-marks-ui.mjs',
+  'drawer-auto-open-ui.mjs',
+  'overview-cards-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */

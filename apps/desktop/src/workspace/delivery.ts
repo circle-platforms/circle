@@ -23,8 +23,11 @@ function tailText(text: string): string {
     line = tail.indexOf('\n');
   return `[earlier log output omitted]\n${line >= 0 && line < tail.length - 1 ? tail.slice(line + 1) : tail}`;
 }
-/** Keep the tail of each job in `gh run view --log-failed` output, whose lines start with the job name and a tab. */
-export function boundFailedRunLog(text: string): {
+/** Keep the tail of each job in `gh run view --log-failed` output, whose lines start with the job name and a tab, and at most `maxJobs` jobs. */
+export function boundFailedRunLog(
+  text: string,
+  { maxJobs = Infinity }: { maxJobs?: number } = {},
+): {
   text: string;
   truncated: boolean;
 } {
@@ -37,16 +40,40 @@ export function boundFailedRunLog(text: string): {
     if (!lines) jobs.set(current, (lines = []));
     lines.push(line);
   }
-  let truncated = false;
-  const sections = [...jobs.values()].map((lines) => {
+  const all = [...jobs.values()];
+  const kept = all.slice(0, maxJobs);
+  let truncated = kept.length < all.length;
+  const sections = kept.map((lines) => {
     const job = lines.join('\n'),
       bounded = tailText(job);
     if (bounded !== job) truncated = true;
     return bounded;
   });
+  if (kept.length < all.length)
+    sections.push(`[${all.length - kept.length} more failed jobs left out]`);
   return truncated
     ? { text: sections.join('\n'), truncated }
     : { text, truncated };
+}
+/** What reads GitHub through `gh`: its arguments in, what it printed out. */
+export type GhCall = (args: string[]) => Promise<string>;
+/** Hides the given secrets, the GitHub tokens of the environment and whatever has the shape of a GitHub token. */
+export function redactGitHubCredentials(
+  text: string,
+  secrets: readonly (string | undefined)[] = [],
+): string {
+  for (const secret of [
+    ...secrets,
+    process.env.GH_TOKEN,
+    process.env.GITHUB_TOKEN,
+    process.env.GH_ENTERPRISE_TOKEN,
+    process.env.GITHUB_ENTERPRISE_TOKEN,
+  ])
+    if (secret) text = text.split(secret).join('[redacted]');
+  return text.replace(
+    /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
+    '[redacted]',
+  );
 }
 export class DeliveryService {
   readonly git: GitWorkspaceService;
@@ -351,215 +378,14 @@ export class DeliveryService {
     throw Error('unknown delivery method');
   }
   private async redactLogs(text: string): Promise<string> {
-    const secrets = [
-      await this.login?.token(),
-      process.env.GH_TOKEN,
-      process.env.GITHUB_TOKEN,
-      process.env.GH_ENTERPRISE_TOKEN,
-      process.env.GITHUB_ENTERPRISE_TOKEN,
-    ];
-    for (const secret of secrets)
-      if (secret) text = text.split(secret).join('[redacted]');
-    return text.replace(
-      /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
-      '[redacted]',
-    );
+    return redactGitHubCredentials(text, [await this.login?.token()]);
   }
-  /** Read completed failures while other jobs continue. Repository and job IDs come only from verified API records. */
-  private async completedJobLogs(runId: number): Promise<{
-    text: string;
-    truncated: boolean;
-    source: 'completed-jobs';
-    runId: number;
-    attempt: number;
-    partial: boolean;
-    jobIds: number[];
-  }> {
-    const repository = JSON.parse(
-      await this.gh(['repo', 'view', '--json', 'nameWithOwner,url']),
-    ) as { nameWithOwner: string; url: string };
-    if (
-      typeof repository.nameWithOwner !== 'string' ||
-      !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository.nameWithOwner)
-    )
-      throw Error('invalid authorized repository identity');
-    const web = new URL(repository.url);
-    if (
-      web.protocol !== 'https:' ||
-      web.username ||
-      web.password ||
-      web.search ||
-      web.hash ||
-      web.pathname.replace(/\/$/, '').toLowerCase() !==
-        `/${repository.nameWithOwner}`.toLowerCase()
-    )
-      throw Error('repository URL does not match its authorized identity');
-    const apiHosts = new Set([
-      web.host.toLowerCase(),
-      `api.${web.hostname}${web.port ? ':' + web.port : ''}`.toLowerCase(),
-    ]);
-    const endpoint = `repos/${repository.nameWithOwner}/actions`;
-    const validAPIURL = (value: unknown, suffix: string) => {
-      if (typeof value !== 'string') return false;
-      const url = new URL(value);
-      return (
-        url.protocol === 'https:' &&
-        !url.username &&
-        !url.password &&
-        !url.search &&
-        !url.hash &&
-        apiHosts.has(url.host.toLowerCase()) &&
-        [`/${endpoint}${suffix}`, `/api/v3/${endpoint}${suffix}`].some(
-          (path) => url.pathname.toLowerCase() === path.toLowerCase(),
-        )
-      );
-    };
-    const api = async (path: string) =>
-      this.gh(['api', '--hostname', web.host, path]);
-    type Run = {
-      id: number;
-      run_attempt: number;
-      head_sha: string;
-      status: string;
-      url: string;
-      repository: { full_name: string };
-    };
-    const validateRun = (value: Run) => {
-      if (
-        !value ||
-        value.id !== runId ||
-        !Number.isSafeInteger(value.run_attempt) ||
-        value.run_attempt < 1 ||
-        !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value.head_sha) ||
-        value.repository?.full_name?.toLowerCase() !==
-          repository.nameWithOwner.toLowerCase() ||
-        !validAPIURL(value.url, `/runs/${runId}`)
-      )
-        throw Error(
-          'workflow run does not belong to the authorized repository',
-        );
-      return value;
-    };
-    const run = validateRun(
-      JSON.parse(await api(`${endpoint}/runs/${runId}`)) as Run,
-    );
-    type Job = {
-      id: number;
-      run_id: number;
-      run_attempt?: number;
-      head_sha: string;
-      run_url: string;
-      url: string;
-      status: string;
-      conclusion: string;
-      name: string;
-    };
-    const validateJob = (job: Job) => {
-      if (
-        !job ||
-        !Number.isSafeInteger(job.id) ||
-        job.id < 1 ||
-        job.run_id !== runId ||
-        job.head_sha !== run.head_sha ||
-        (job.run_attempt !== undefined &&
-          job.run_attempt !== run.run_attempt) ||
-        !validAPIURL(job.run_url, `/runs/${runId}`) ||
-        !validAPIURL(job.url, `/jobs/${job.id}`)
-      )
-        throw Error('job does not belong to the verified workflow run');
-      return job;
-    };
-    const failures = new Set([
-      'failure',
-      'timed_out',
-      'cancelled',
-      'action_required',
-      'startup_failure',
-    ]);
-    const jobs: Job[] = [],
-      seen = new Set<number>();
-    let complete = false;
-    for (let page = 1; page <= 100; page++) {
-      const result = JSON.parse(
-        await api(
-          `${endpoint}/runs/${runId}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`,
-        ),
-      ) as { total_count: number; jobs: Job[] };
-      if (
-        !Array.isArray(result.jobs) ||
-        result.jobs.length > 100 ||
-        !Number.isSafeInteger(result.total_count) ||
-        result.total_count < 0 ||
-        result.total_count > 10000
-      )
-        throw Error('invalid workflow job page');
-      for (const entry of result.jobs) {
-        const job = validateJob(entry);
-        if (seen.has(job.id))
-          throw Error('workflow job pagination repeated a job');
-        seen.add(job.id);
-        if (job.status === 'completed' && failures.has(job.conclusion))
-          jobs.push(job);
-      }
-      if (seen.size >= result.total_count) {
-        complete = true;
-        break;
-      }
-      if (!result.jobs.length)
-        throw Error('workflow job pagination ended before its declared total');
-    }
-    if (!complete) throw Error('workflow job pagination limit reached');
-    if (!jobs.length)
-      throw Error('no completed failed jobs have downloadable logs yet');
-    const sections: string[] = [];
-    let truncated = false;
-    for (const job of jobs.sort((left, right) => left.id - right.id)) {
-      const current = validateJob(
-        JSON.parse(await api(`${endpoint}/jobs/${job.id}`)) as Job,
-      );
-      if (
-        current.id !== job.id ||
-        current.status !== 'completed' ||
-        !failures.has(current.conclusion)
-      )
-        throw Error('failed job changed before its logs could be read');
-      // Redact before cutting so a credential cannot survive half-cut.
-      const text = await this.redactLogs(
-        await api(`${endpoint}/jobs/${job.id}/logs`),
-      );
-      if (!text.trim())
-        throw Error(`completed failed job ${job.id} returned empty logs`);
-      const name =
-        typeof current.name === 'string'
-          ? current.name.replace(/[\r\n\0]/g, ' ').slice(0, 1000)
-          : 'failed job';
-      const title = await this.redactLogs(
-        `=== ${name} (job ${job.id}, ${current.conclusion}) ===\n`,
-      );
-      const tail = tailText(text);
-      if (tail !== text) truncated = true;
-      sections.push(title + tail);
-    }
-    const after = validateRun(
-      JSON.parse(await api(`${endpoint}/runs/${runId}`)) as Run,
-    );
-    if (
-      after.head_sha !== run.head_sha ||
-      after.run_attempt !== run.run_attempt
-    )
-      throw Error('workflow run changed while reading completed job logs');
-    const header = await this.redactLogs(
-      `workflow run ${runId}, attempt ${run.run_attempt}: completed failed job logs${after.status === 'completed' ? '' : '; other jobs are still running'}\n\n`,
-    );
-    return {
-      text: header + sections.join('\n\n'),
-      truncated,
-      source: 'completed-jobs',
+  private completedJobLogs(runId: number) {
+    return completedFailedJobLogs(
+      (args) => this.gh(args),
       runId,
-      attempt: run.run_attempt,
-      partial: after.status !== 'completed',
-      jobIds: jobs.map((job) => job.id),
-    };
+      (text) => this.redactLogs(text),
+    );
   }
   private async publish(params: Record<string, unknown>): Promise<unknown> {
     const state = await this.candidateSnapshot();
@@ -679,4 +505,204 @@ export class DeliveryService {
     }
     return confirmPublished();
   }
+}
+/**
+ * Read completed failures while other jobs continue, which `gh run view --log-failed`
+ * refuses. Repository and job IDs come only from verified API records. Each job keeps
+ * its tail, and at most `maxJobs` jobs are read, the earliest first.
+ */
+export async function completedFailedJobLogs(
+  gh: GhCall,
+  runId: number,
+  redact: (text: string) => string | Promise<string>,
+  { maxJobs = Infinity }: { maxJobs?: number } = {},
+): Promise<{
+  text: string;
+  truncated: boolean;
+  source: 'completed-jobs';
+  runId: number;
+  attempt: number;
+  partial: boolean;
+  jobIds: number[];
+}> {
+  const repository = JSON.parse(
+    await gh(['repo', 'view', '--json', 'nameWithOwner,url']),
+  ) as { nameWithOwner: string; url: string };
+  if (
+    typeof repository.nameWithOwner !== 'string' ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository.nameWithOwner)
+  )
+    throw Error('invalid authorized repository identity');
+  const web = new URL(repository.url);
+  if (
+    web.protocol !== 'https:' ||
+    web.username ||
+    web.password ||
+    web.search ||
+    web.hash ||
+    web.pathname.replace(/\/$/, '').toLowerCase() !==
+      `/${repository.nameWithOwner}`.toLowerCase()
+  )
+    throw Error('repository URL does not match its authorized identity');
+  const apiHosts = new Set([
+    web.host.toLowerCase(),
+    `api.${web.hostname}${web.port ? ':' + web.port : ''}`.toLowerCase(),
+  ]);
+  const endpoint = `repos/${repository.nameWithOwner}/actions`;
+  const validAPIURL = (value: unknown, suffix: string) => {
+    if (typeof value !== 'string') return false;
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      apiHosts.has(url.host.toLowerCase()) &&
+      [`/${endpoint}${suffix}`, `/api/v3/${endpoint}${suffix}`].some(
+        (path) => url.pathname.toLowerCase() === path.toLowerCase(),
+      )
+    );
+  };
+  const api = async (path: string) => gh(['api', '--hostname', web.host, path]);
+  type Run = {
+    id: number;
+    run_attempt: number;
+    head_sha: string;
+    status: string;
+    url: string;
+    repository: { full_name: string };
+  };
+  const validateRun = (value: Run) => {
+    if (
+      !value ||
+      value.id !== runId ||
+      !Number.isSafeInteger(value.run_attempt) ||
+      value.run_attempt < 1 ||
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value.head_sha) ||
+      value.repository?.full_name?.toLowerCase() !==
+        repository.nameWithOwner.toLowerCase() ||
+      !validAPIURL(value.url, `/runs/${runId}`)
+    )
+      throw Error('workflow run does not belong to the authorized repository');
+    return value;
+  };
+  const run = validateRun(
+    JSON.parse(await api(`${endpoint}/runs/${runId}`)) as Run,
+  );
+  type Job = {
+    id: number;
+    run_id: number;
+    run_attempt?: number;
+    head_sha: string;
+    run_url: string;
+    url: string;
+    status: string;
+    conclusion: string;
+    name: string;
+  };
+  const validateJob = (job: Job) => {
+    if (
+      !job ||
+      !Number.isSafeInteger(job.id) ||
+      job.id < 1 ||
+      job.run_id !== runId ||
+      job.head_sha !== run.head_sha ||
+      (job.run_attempt !== undefined && job.run_attempt !== run.run_attempt) ||
+      !validAPIURL(job.run_url, `/runs/${runId}`) ||
+      !validAPIURL(job.url, `/jobs/${job.id}`)
+    )
+      throw Error('job does not belong to the verified workflow run');
+    return job;
+  };
+  const failures = new Set([
+    'failure',
+    'timed_out',
+    'cancelled',
+    'action_required',
+    'startup_failure',
+  ]);
+  const jobs: Job[] = [],
+    seen = new Set<number>();
+  let complete = false;
+  for (let page = 1; page <= 100; page++) {
+    const result = JSON.parse(
+      await api(
+        `${endpoint}/runs/${runId}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`,
+      ),
+    ) as { total_count: number; jobs: Job[] };
+    if (
+      !Array.isArray(result.jobs) ||
+      result.jobs.length > 100 ||
+      !Number.isSafeInteger(result.total_count) ||
+      result.total_count < 0 ||
+      result.total_count > 10000
+    )
+      throw Error('invalid workflow job page');
+    for (const entry of result.jobs) {
+      const job = validateJob(entry);
+      if (seen.has(job.id))
+        throw Error('workflow job pagination repeated a job');
+      seen.add(job.id);
+      if (job.status === 'completed' && failures.has(job.conclusion))
+        jobs.push(job);
+    }
+    if (seen.size >= result.total_count) {
+      complete = true;
+      break;
+    }
+    if (!result.jobs.length)
+      throw Error('workflow job pagination ended before its declared total');
+  }
+  if (!complete) throw Error('workflow job pagination limit reached');
+  if (!jobs.length)
+    throw Error('no completed failed jobs have downloadable logs yet');
+  const shown = jobs
+    .sort((left, right) => left.id - right.id)
+    .slice(0, maxJobs);
+  const omitted = jobs.length - shown.length;
+  const sections: string[] = [];
+  let truncated = omitted > 0;
+  for (const job of shown) {
+    const current = validateJob(
+      JSON.parse(await api(`${endpoint}/jobs/${job.id}`)) as Job,
+    );
+    if (
+      current.id !== job.id ||
+      current.status !== 'completed' ||
+      !failures.has(current.conclusion)
+    )
+      throw Error('failed job changed before its logs could be read');
+    // Redact before cutting so a credential cannot survive half-cut.
+    const text = await redact(await api(`${endpoint}/jobs/${job.id}/logs`));
+    if (!text.trim())
+      throw Error(`completed failed job ${job.id} returned empty logs`);
+    const name =
+      typeof current.name === 'string'
+        ? current.name.replace(/[\r\n\0]/g, ' ').slice(0, 1000)
+        : 'failed job';
+    const title = await redact(
+      `=== ${name} (job ${job.id}, ${current.conclusion}) ===\n`,
+    );
+    const tail = tailText(text);
+    if (tail !== text) truncated = true;
+    sections.push(title + tail);
+  }
+  const after = validateRun(
+    JSON.parse(await api(`${endpoint}/runs/${runId}`)) as Run,
+  );
+  if (after.head_sha !== run.head_sha || after.run_attempt !== run.run_attempt)
+    throw Error('workflow run changed while reading completed job logs');
+  const header = await redact(
+    `workflow run ${runId}, attempt ${run.run_attempt}: completed failed job logs${after.status === 'completed' ? '' : '; other jobs are still running'}${omitted ? `; ${omitted} more failed jobs left out` : ''}\n\n`,
+  );
+  return {
+    text: header + sections.join('\n\n'),
+    truncated,
+    source: 'completed-jobs',
+    runId,
+    attempt: run.run_attempt,
+    partial: after.status !== 'completed',
+    jobIds: shown.map((job) => job.id),
+  };
 }

@@ -2,6 +2,7 @@
 export const workspace: Record<string, string> = {
   'this machine': '本机',
   'in progress': '进行中',
+  'needs approval': '等你批准',
   'plan {done}/{total}': '计划 {done}/{total}',
   '{n} subagent': '{n} 个子代理',
   '{n} subagents': '{n} 个子代理',

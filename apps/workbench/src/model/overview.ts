@@ -23,7 +23,8 @@ export function agentLabel(
 }
 
 export interface OverviewProgress {
-  plan: { done: number; total: number; current: Todo | undefined } | null;
+  /** The plan while a step of it is under way or still to do; a finished plan is not. */
+  plan: { done: number; total: number; current: Todo } | null;
   /** Subagents that are working or waiting for the person; finished ones are not "in progress". */
   agents: AgentRecord[];
   /** Tasks that are queued, working, waiting, or need the person's review. */
@@ -48,16 +49,17 @@ export function overviewProgress(
   const todos = session.todos ?? [];
   // A plan whose every step is done has no step under way: it is not in progress, as
   // the terminal hides it too. Its steps stay in the session.
-  const plan =
-    todos.length && !planComplete(todos)
-      ? {
-          done: todos.filter((todo) => todo.status === 'completed').length,
-          total: todos.length,
-          current:
-            todos.find((todo) => todo.status === 'running') ??
-            todos.find((todo) => todo.status === 'pending'),
-        }
-      : null;
+  const current = planComplete(todos)
+    ? undefined
+    : (todos.find((todo) => todo.status === 'running') ??
+      todos.find((todo) => todo.status === 'pending'));
+  const plan = current
+    ? {
+        done: todos.filter((todo) => todo.status === 'completed').length,
+        total: todos.length,
+        current,
+      }
+    : null;
   return {
     plan,
     agents: agents.filter(

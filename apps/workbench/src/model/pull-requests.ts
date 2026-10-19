@@ -9,6 +9,31 @@ export const REFRESH_RUNNING_MS = 20_000;
 const AFTER_TURN_MS = 600;
 
 /**
+ * What a read shows. One that GitHub did not answer, as when the computer is offline,
+ * keeps the pull requests the last read of the same branch found, stale and not wrong;
+ * the repository's numbers are always the new ones. A host that answered nothing is
+ * passed on as it is.
+ */
+export function keepLastPullRequests(
+  last: PullRequestOverview | undefined,
+  next: PullRequestOverview,
+): PullRequestOverview {
+  if (
+    next?.access !== 'unreachable' ||
+    last?.access !== 'ready' ||
+    last.git.github !== next.git.github ||
+    last.git.branch !== next.git.branch
+  )
+    return next;
+  return {
+    ...next,
+    access: 'ready',
+    current: last.current,
+    recent: last.recent,
+  };
+}
+
+/**
  * The repository and pull requests of a conversation's folder, read through the
  * `pulls` workspace service. Outside the live app there is nothing to read; the
  * caller's `sample` stands in so the preview can show the card.
@@ -43,7 +68,12 @@ export function usePullRequests({
         'overview',
       );
       // The person may have moved to another conversation while this read ran.
-      setBySession((known) => new Map(known).set(sessionId, overview));
+      setBySession((known) =>
+        new Map(known).set(
+          sessionId,
+          keepLastPullRequests(known.get(sessionId), overview),
+        ),
+      );
       if (session.current === sessionId) setFailed(false);
     } catch {
       // Keep what was shown; it is stale, not wrong.

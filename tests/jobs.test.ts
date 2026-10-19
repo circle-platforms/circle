@@ -270,6 +270,39 @@ test('output limits and background timeouts fail jobs, and capacity checks do no
   assert.equal(jobs.get(timed.id)!.reason, 'timeout');
   assert.equal(jobs.get(timed.id)!.status, 'failed');
 });
+test('a subagent job carries the session it runs in when it starts, when it ends and in every list', async (t) => {
+  const root = scratch(t);
+  const events: [string, string | undefined][] = [];
+  const jobs = new JobRegistry(
+    new Sandbox(root, join(root, 'data')),
+    (event, job) => events.push([event, job.agent]),
+  );
+  cleanup(t, () => jobs.close().then(() => {}));
+  const job = jobs.startAgent(
+    'research',
+    { sessionId: 'parent' },
+    async () => 'report',
+    'child-session',
+  );
+  assert.equal(job.agent, 'child-session');
+  await jobs.wait([job.id], 5, new AbortController().signal);
+  assert.equal(jobs.get(job.id)!.status, 'done');
+  assert.equal(jobs.get(job.id)!.agent, 'child-session');
+  assert.equal(jobs.list('parent')[0]!.agent, 'child-session');
+  assert.deepEqual(
+    events.filter(([event]) => event !== 'job_updated'),
+    [
+      ['job_started', 'child-session'],
+      ['job_ended', 'child-session'],
+    ],
+  );
+  const unnamed = jobs.startAgent(
+    'no session',
+    { sessionId: 'parent' },
+    async () => 'report',
+  );
+  assert.equal('agent' in unnamed, false);
+});
 test('subagent reports are logged and stopping awaits the asynchronous cancellation cleanup', async (t) => {
   const root = scratch(t);
   const jobs = new JobRegistry(new Sandbox(root, join(root, 'data')));
@@ -533,6 +566,100 @@ test('a background subagent ends every shell it owns before its report is marked
   // Windows stop cannot be mistaken for a write that happened before cleanup.
   assert.equal(await fixture.release(), 'closed');
   assert.equal(existsSync(join(root, 'late')), false);
+});
+test("a background subagent's job names the session it runs in, while it works and after it ends, and a foreground subagent has no job", async (t) => {
+  const root = scratch(t);
+  const reached = deferred<void>();
+  const release = deferred<void>();
+  const model: import('../src/types.js').ChatModel = {
+    model: 'controlled',
+    complete: async (request) => {
+      const users = request.messages.filter(
+        (message) => message.role === 'user' && !message.internal,
+      );
+      const last = users.at(-1)!;
+      const answered = request.messages
+        .slice(request.messages.indexOf(last))
+        .some((message) => message.role === 'tool');
+      // A subagent's conversation starts with what it was sent to do.
+      if (users[0]!.content === 'background research') {
+        reached.resolve();
+        // Held until the test has looked at the running job; a failed check closes the
+        // runtime, and its stop ends the wait.
+        await new Promise<void>((resolve, reject) => {
+          request.signal.addEventListener(
+            'abort',
+            () => reject(request.signal.reason),
+            { once: true },
+          );
+          void release.promise.then(resolve);
+        });
+        return response('background-report', 'Background report.');
+      }
+      if (users[0]!.content === 'foreground research')
+        return response('foreground-report', 'Foreground report.');
+      const background = last.content === 'start in the background';
+      if (answered) return response(`main-end-${users.length}`, 'started');
+      return response(`main-${users.length}`, '', [
+        {
+          id: `task-${users.length}`,
+          name: 'task',
+          args: {
+            description: background
+              ? 'background research'
+              : 'foreground research',
+            subagent_type: 'general-purpose',
+            ...(background ? { background: true } : {}),
+          },
+        },
+      ]);
+    },
+  };
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  runtime.policy.setYolo(runtime.session.id, true);
+  const children = () =>
+    runtime.store.contextState(runtime.session.id).subagentSessionIds ?? [];
+  await runtime.harness.run('start in the background');
+  await reached.promise;
+  const [child] = children();
+  assert.ok(child, 'the subagent has a session of its own');
+  assert.notEqual(child, runtime.session.id);
+  const running = runtime.jobs.get('j1')!;
+  assert.equal(running.kind, 'agent');
+  assert.equal(running.status, 'running');
+  assert.equal(running.sessionId, runtime.session.id);
+  assert.equal(running.agent, child);
+  assert.equal(
+    runtime.store.list(undefined, true).find((row) => row.id === running.agent)
+      ?.parent_id,
+    runtime.session.id,
+    "the job's session is the subagent's own record, under its parent",
+  );
+  release.resolve();
+  await runtime.jobs.wait(['j1'], 5, new AbortController().signal);
+  const ended = runtime.jobs.get('j1')!;
+  assert.equal(ended.status, 'done');
+  assert.equal(ended.agent, child, 'the finished job still names it');
+  assert.deepEqual(
+    runtime.jobs.list().map((job) => [job.id, job.agent]),
+    [['j1', child]],
+  );
+
+  await runtime.harness.run('start in the foreground');
+  const foreground = children().find((id) => id !== child);
+  assert.ok(foreground, 'the foreground subagent ran in a session of its own');
+  assert.deepEqual(
+    runtime.jobs.list().map((job) => job.id),
+    ['j1'],
+    'a subagent the turn waits for is not a job',
+  );
 });
 test('card ownership queues background interactions while typing, prioritizes foreground and cancels queued cards without presenting them', async (t) => {
   let typing = true;

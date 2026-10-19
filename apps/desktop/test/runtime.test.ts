@@ -2144,6 +2144,115 @@ test('subagent interaction remains bound to its actual parent and child sessions
   );
 });
 
+test("a background subagent's job is projected with its record, while it works and after it ends, and a foreground subagent has no job", async (t) => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  // Requests of the parent and of a background child can come in either order, so
+  // every reply reads whose conversation asks.
+  const route = async (request: ModelRequest) => {
+    const users = request.messages.filter(
+      (m) => m.role === 'user' && !m.internal,
+    );
+    const last = users.at(-1)!;
+    const answered = request.messages
+      .slice(request.messages.indexOf(last))
+      .some((m) => m.role === 'tool');
+    if (users[0]!.content === 'background research') {
+      // Held until the test has looked at the running job; a failed check closes the
+      // runtime, and its stop ends the wait.
+      await new Promise<void>((resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        );
+        void released.then(resolve);
+      });
+      return { message: assistant('background report'), usage: emptyUsage() };
+    }
+    if (users[0]!.content === 'foreground research')
+      return { message: assistant('foreground report'), usage: emptyUsage() };
+    const background = last.content === 'research in the background';
+    return {
+      message: answered
+        ? assistant('started')
+        : assistant('', [
+            {
+              id: `task-${users.length}`,
+              name: 'task',
+              args: {
+                description: background
+                  ? 'background research'
+                  : 'foreground research',
+                subagent_type: 'general-purpose',
+                ...(background ? { background: true } : {}),
+              },
+            },
+          ]),
+      usage: emptyUsage(),
+    };
+  };
+  const f = await setup(
+    t,
+    Array.from({ length: 8 }, () => route),
+  );
+  await f.call('prompt', { text: 'research in the background' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .jobs.some((job) => job.kind === 'agent' && job.state === 'running'),
+    'the running subagent job',
+  );
+  const running = f.controller.snapshot();
+  const job = running.jobs.find((item) => item.kind === 'agent')!;
+  assert(job.agentId, 'the job names its subagent');
+  const agent = running.agents.find((item) => item.id === job.agentId);
+  assert(agent, "the job's subagent is a record of the subagents mode");
+  assert.equal(agent.sessionId, running.activeSessionId);
+  assert.equal(job.sessionId, running.activeSessionId);
+  assert.equal(job.stopRequested, false);
+  release();
+  await wait(
+    () =>
+      f.controller.snapshot().jobs.find((item) => item.id === job.id)?.state ===
+      'completed',
+    'the subagent job ends',
+  );
+  assert.equal(
+    f.controller.snapshot().jobs.find((item) => item.id === job.id)!.agentId,
+    agent.id,
+    'the finished list keeps its time',
+  );
+  await wait(
+    () => f.controller.snapshot().sessions[0]!.state === 'idle',
+    'the first turn ends',
+  );
+
+  await f.call('prompt', { text: 'research in the foreground' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .agents.some((item) =>
+          item.messages.some((m) => m.text === 'foreground report'),
+        ) && f.controller.snapshot().sessions[0]!.state === 'idle',
+    'the foreground subagent reports',
+  );
+  const after = f.controller.snapshot();
+  const foreground = after.agents.find((item) =>
+    item.messages.some((m) => m.text === 'foreground report'),
+  )!;
+  assert.notEqual(foreground.id, agent.id);
+  assert.deepEqual(
+    after.jobs
+      .filter((item) => item.kind === 'agent')
+      .map((item) => item.agentId),
+    [agent.id],
+    'a subagent the turn waits for has no job, so no stop of its own',
+  );
+});
+
 test('saved API configuration, model selection and effort produce actual local gateway requests', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'circle-desktop-gateway-'));
   const home = join(root, 'home');

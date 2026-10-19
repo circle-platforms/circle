@@ -2928,6 +2928,9 @@ export class RuntimeController {
           output: existsSync(job.outputPath) ? outputTail(job.outputPath) : '',
           outputPath: job.virtualPath,
           stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
+          // A background subagent's job, by the session its record is: its stop and its
+          // time in the subagents mode, while it works and after it has ended.
+          ...(job.kind === 'agent' && job.agent ? { agentId: job.agent } : {}),
           ...(job.execution?.terminal
             ? { terminal: job.execution.terminal }
             : {}),
