@@ -1,4 +1,9 @@
-import { Maximize2, Minimize2, PictureInPicture2 } from 'lucide-react';
+import {
+  Maximize2,
+  Minimize2,
+  PanelRight,
+  PictureInPicture2,
+} from 'lucide-react';
 import { createContext, useContext, type ReactNode } from 'react';
 import { IconButton } from '../components/common';
 import { t } from '../i18n';
@@ -15,6 +20,10 @@ export interface ModeChromeValue {
   onWhole: () => void;
   /** Offered by the modes that can live in a window of their own. */
   onPopOut?: () => void;
+  /** This mode is in a window of its own now, and the drawer leaves its page alone. */
+  poppedOut?: boolean;
+  /** Set in that window: the way back to the drawer. */
+  onDock?: () => void;
 }
 
 const ModeChrome = createContext<ModeChromeValue | undefined>(undefined);
@@ -37,6 +46,13 @@ export function useModeChrome(): ModeChromeValue | undefined {
 export function ModeButtons({ popOut = false }: { popOut?: boolean }) {
   const chrome = useModeChrome();
   if (!chrome) return null;
+  // In a window of its own the mode has no full view or window to offer, only the way back.
+  if (chrome.onDock)
+    return (
+      <IconButton label={t('put back in the drawer')} onClick={chrome.onDock}>
+        <PanelRight size={14} />
+      </IconButton>
+    );
   return (
     <>
       {popOut && chrome.onPopOut && (

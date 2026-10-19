@@ -8,7 +8,7 @@ import { useOwnerState } from '../model/owner-state';
 import type { CommandTerminalView } from '../model/command-terminal-client';
 import { TerminalMode } from './TerminalMode';
 import { AgentsMode } from './AgentsMode';
-import { ModeButtons } from './mode-chrome';
+import { ModeButtons, ModeChromeProvider, useModeChrome } from './mode-chrome';
 import { desktopHost } from '../host';
 import { isAgentActive } from '../model/activity';
 import { FileIcon } from '../components/FileIcon';
@@ -51,6 +51,10 @@ interface Props {
   terminalFocusRequest?: { id: string; epoch: string; requestId: string };
   onExitCommandTerminal?: () => void;
   panel: PanelId;
+  /** The modes that are in windows of their own. */
+  popped?: ReadonlySet<string>;
+  /** Take the browser or the terminal out into a window of its own. */
+  onPopOut?: (kind: 'browser' | 'terminal') => void;
   selection: string;
   onPanel: (panel: PanelId, selection?: string) => void;
   onClose: () => void;
@@ -86,6 +90,7 @@ export function PanelButtons({
   onOverview,
   onPanel,
   onClose,
+  popped = new Set(),
 }: {
   panel: PanelId;
   open: boolean;
@@ -93,6 +98,8 @@ export function PanelButtons({
   onOverview: () => void;
   onPanel: (panel: PanelId) => void;
   onClose: () => void;
+  /** The modes that are in windows of their own: marked, and pressed to bring forward. */
+  popped?: ReadonlySet<string>;
 }) {
   const panels = usePanels();
   const { snapshot } = useRuntime();
@@ -147,12 +154,18 @@ export function PanelButtons({
       {modes.map((item) => (
         <button
           key={item.id}
-          className={`drawer-mode-button ${open && panel === item.id ? 'active' : ''}`}
+          className={`drawer-mode-button ${open && panel === item.id ? 'active' : ''}${popped.has(item.id) ? ' popped' : ''}`}
           aria-label={t('{title} panel', { title: item.title })}
-          title={item.title}
+          title={
+            popped.has(item.id)
+              ? t('{title} is in its own window', { title: item.title })
+              : item.title
+          }
           aria-pressed={open && panel === item.id}
           onClick={() =>
-            open && panel === item.id ? onClose() : onPanel(item.id)
+            open && panel === item.id && !popped.has(item.id)
+              ? onClose()
+              : onPanel(item.id)
           }
           onPointerUp={blurAfterPress}
         >
@@ -202,6 +215,8 @@ function InspectorResources(
     );
   }, [props.panel]);
   const ids = new Set([...visited, props.panel]);
+  // What the drawer offers every mode: the full view. A mode adds what is its own.
+  const chrome = useModeChrome();
   return (
     <>
       {[...ids].map((id) => {
@@ -231,33 +246,44 @@ function InspectorResources(
           ) : id === 'terminal' ? null : (
             <p className="panel-note">{t('plugin disabled')}</p>
           );
+        const canPopOut = id === 'browser' || id === 'terminal';
         return (
-          <div
+          <ModeChromeProvider
             key={id}
-            hidden={id !== props.panel}
-            className="inspector-resource-view"
-            data-inspector-resource={id}
+            value={{
+              ...(chrome ?? { canBeWhole: false, whole: false, onWhole() {} }),
+              ...(canPopOut && props.onPopOut
+                ? { onPopOut: () => props.onPopOut!(id) }
+                : {}),
+              poppedOut: canPopOut && !!props.popped?.has(id),
+            }}
           >
-            {id === 'files' ? (
-              <DrawerFiles
-                index={original}
-                filePath={props.filePath}
-                ownerKey={props.fileOwnerKey ?? props.sessionId}
-              >
-                {props.fileView}
-              </DrawerFiles>
-            ) : id === 'terminal' ? (
-              <TerminalMode
-                commandTerminal={props.commandTerminal}
-                terminalFocusRequest={props.terminalFocusRequest}
-                onExitCommandTerminal={props.onExitCommandTerminal}
-                sessionId={props.sessionId}
-                visible={!!props.visible && id === props.panel}
-              />
-            ) : (
-              original
-            )}
-          </div>
+            <div
+              hidden={id !== props.panel}
+              className="inspector-resource-view"
+              data-inspector-resource={id}
+            >
+              {id === 'files' ? (
+                <DrawerFiles
+                  index={original}
+                  filePath={props.filePath}
+                  ownerKey={props.fileOwnerKey ?? props.sessionId}
+                >
+                  {props.fileView}
+                </DrawerFiles>
+              ) : id === 'terminal' ? (
+                <TerminalMode
+                  commandTerminal={props.commandTerminal}
+                  terminalFocusRequest={props.terminalFocusRequest}
+                  onExitCommandTerminal={props.onExitCommandTerminal}
+                  sessionId={props.sessionId}
+                  visible={!!props.visible && id === props.panel}
+                />
+              ) : (
+                original
+              )}
+            </div>
+          </ModeChromeProvider>
         );
       })}
     </>

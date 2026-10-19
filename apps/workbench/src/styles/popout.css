@@ -1,0 +1,16 @@
+/* A window a mode of the drawer was popped out into: the mode, and nothing else. */
+html[data-popout],
+html[data-popout] body,
+html[data-popout] #root {
+  height: 100%;
+}
+.inspector.popout {
+  height: 100%;
+  background: var(--bg);
+}
+.popout-empty {
+  margin: 0;
+  padding: 24px;
+  color: var(--muted);
+  font-size: var(--ui-size);
+}

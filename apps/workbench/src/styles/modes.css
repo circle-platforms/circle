@@ -244,3 +244,8 @@
   font-size: var(--ui-small);
   overflow-wrap: anywhere;
 }
+
+/* A mode in a window of its own is marked on its button under the bar. */
+.drawer-mode-button.popped {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}

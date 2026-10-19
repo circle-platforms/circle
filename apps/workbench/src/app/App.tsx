@@ -23,6 +23,7 @@ import {
   Suspense,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -95,6 +96,7 @@ import {
 } from '../model/source-resource-owner';
 import { Inspector, PanelButtons } from '../features/Panels';
 import { DrawerHandle } from '../features/DrawerHandle';
+import { popoutKey, usePopouts } from '../model/popouts';
 import { Overview } from '../features/Overview';
 import { ModeChromeProvider } from '../features/mode-chrome';
 import {
@@ -194,6 +196,38 @@ export function App() {
     else setOverviewOverlay(false);
   }, [narrow]);
   const [panel, setPanel] = useState<PanelId>('files');
+  // The browser and the terminal can be in windows of their own, one for each conversation.
+  const popped = usePopouts();
+  const poppedModes = useMemo(
+    () =>
+      new Set(
+        (['browser', 'terminal'] as const).filter((kind) =>
+          popped.has(popoutKey(kind, session.id)),
+        ),
+      ),
+    [popped, session.id],
+  );
+  const popOut = (kind: 'browser' | 'terminal') => {
+    const host = desktopHost();
+    if (!host?.popoutOpen) return;
+    const name = kind === 'browser' ? t('browser') : t('terminal');
+    void host
+      .popoutOpen(kind, session.id, `${name} · ${session.title}`)
+      .then(() => {
+        // What was in the drawer is in its window now.
+        if (panel === kind) setInspectorOpen(false);
+      })
+      .catch(() => notify(t('the window could not be opened')));
+  };
+  // Another conversation is shown: its windows are not, they come back to their drawer.
+  const shownSession = useRef(session.id);
+  useEffect(() => {
+    if (shownSession.current === session.id) return;
+    shownSession.current = session.id;
+    void desktopHost()
+      ?.popoutDockAll?.()
+      .catch(() => {});
+  }, [session.id]);
   // The overview sits beside the conversation. The person's wish is kept; whether it
   // fits beside a drawer is decided as the window and the drawer change.
   const [overviewWanted, setOverviewWanted] = useState(
@@ -589,6 +623,10 @@ export function App() {
       if (!overviewShown) toggleOverview();
       return;
     }
+    if ((kind === 'browser' || kind === 'terminal') && poppedModes.has(kind)) {
+      popOut(kind);
+      return;
+    }
     setPanel(kind);
     setSelection(choice);
     if (kind === 'agents') setAgent(choice || null);
@@ -609,13 +647,13 @@ export function App() {
       if (!isSessionBrowser(state, session.id)) return;
       const started = !!state.operating && !browserOperating.current;
       browserOperating.current = !!state.operating;
-      if (started && !onPage && !narrow) {
+      if (started && !onPage && !narrow && !poppedModes.has('browser')) {
         setPanel('browser');
         setInspectorOpen(true);
       }
     };
     return host.onBrowserEvent(show);
-  }, [session.id, onPage, narrow]);
+  }, [session.id, onPage, narrow, poppedModes]);
   // The same courtesy for a device console: when Circle opens one, its panel opens too,
   // once per appearance and never over another page or a narrow window.
   const terminalCount = useRef(0);
@@ -628,13 +666,13 @@ export function App() {
         return;
       const opened = event.state.sessions.length > terminalCount.current;
       terminalCount.current = event.state.sessions.length;
-      if (opened && !onPage && !narrow) {
+      if (opened && !onPage && !narrow && !poppedModes.has('terminal')) {
         setPanel('terminal');
         setInspectorOpen(true);
       }
     };
     return host.onTerminalEvent(show);
-  }, [session.id, onPage, narrow]);
+  }, [session.id, onPage, narrow, poppedModes]);
   const openSource = async (
     path: string,
     line?: number,
@@ -1183,6 +1221,8 @@ export function App() {
         fileOwnerKey={fileOwner?.sessionId ?? session.id}
         panel={panel}
         visible={inspectorVisible}
+        popped={poppedModes}
+        onPopOut={popOut}
         commandTerminal={commandTerminal}
         terminalFocusRequest={
           terminalFocusRequest?.sessionId === session.id
@@ -1400,6 +1440,7 @@ export function App() {
                     onOverview={toggleOverview}
                     onPanel={(id) => onPanel(id)}
                     onClose={() => setInspectorOpen(false)}
+                    popped={poppedModes}
                   />
                 )}
                 <DropdownMenu.Root>

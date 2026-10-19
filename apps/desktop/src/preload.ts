@@ -147,6 +147,17 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:terminal-input', id, session, text),
   terminalResize: (id, session, cols, rows) =>
     ipcRenderer.invoke('circle:terminal-resize', id, session, cols, rows),
+  popoutOpen: (kind, id, title) =>
+    ipcRenderer.invoke('circle:popout-open', kind, id, title),
+  popoutDock: (kind, id) => ipcRenderer.invoke('circle:popout-dock', kind, id),
+  popoutDockAll: () => ipcRenderer.invoke('circle:popout-dock-all'),
+  popouts: () => ipcRenderer.invoke('circle:popouts'),
+  onPopoutEvent: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:popout-event', handler);
+    return () => ipcRenderer.removeListener('circle:popout-event', handler);
+  },
   onTerminalEvent: (listener) => {
     const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
       listener(value);

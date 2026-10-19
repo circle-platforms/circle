@@ -255,6 +255,22 @@ export interface DesktopBridge {
     rows: number,
   ) => Promise<void>;
   onTerminalEvent: (listener: (event: TerminalEvent) => void) => () => void;
+  /**
+   * Take a mode of the drawer out into a window of its own, or bring that window to the
+   * front when it is already open. The title is the window's.
+   */
+  popoutOpen: (
+    kind: PopoutKind,
+    sessionId: string,
+    title: string,
+  ) => Promise<void>;
+  /** Close a mode's window: the mode is in the drawer again. */
+  popoutDock: (kind: PopoutKind, sessionId: string) => Promise<void>;
+  /** Close every such window, as when another conversation is shown. */
+  popoutDockAll: () => Promise<void>;
+  /** The modes that are in windows of their own now. */
+  popouts: () => Promise<PopoutState[]>;
+  onPopoutEvent: (listener: (event: PopoutEvent) => void) => () => void;
   /** Whether the window shows dark or light: the browser's own pages follow it. */
   setTheme: (dark: boolean) => Promise<void>;
   onAction: (listener: (action: DesktopAction) => void) => () => void;
@@ -453,6 +469,15 @@ export interface TerminalState {
   profiles: TerminalProfileRow[];
   pendingKey?: TerminalHostKeyAsk & { profile: string };
   handoff?: { session: string; reason: string };
+}
+/** The parts of the drawer that can live in a window of their own. */
+export type PopoutKind = 'browser' | 'terminal';
+export interface PopoutState {
+  kind: PopoutKind;
+  sessionId: string;
+}
+export interface PopoutEvent extends PopoutState {
+  open: boolean;
 }
 export type TerminalEvent =
   | { kind: 'state'; state: TerminalState }

@@ -237,6 +237,8 @@ interface Tab {
 }
 interface Conversation {
   id: string;
+  /** The window that shows the conversation's pages: the main one unless popped out. */
+  window?: BrowserWindow;
   tabs: Map<string, Tab>;
   active?: string;
   nextTab: number;
@@ -384,6 +386,52 @@ export class BrowserSessions {
   private publish(id: string) {
     if (!this.window.isDestroyed()) this.emit(this.state(id));
   }
+  /** The window that shows a conversation's pages. */
+  private hostOf(conversation: Conversation): BrowserWindow {
+    const own = conversation.window;
+    return own && !own.isDestroyed() ? own : this.window;
+  }
+  /**
+   * A conversation's pages move to another window, as when its browser pops out of the
+   * drawer, or back to the main one. Its views, and the layer over them while Circle acts,
+   * leave the old window and join the new; the new window's panel then places them.
+   */
+  moveToWindow(idValue: unknown, target: BrowserWindow | null) {
+    const id = this.validId(idValue);
+    const conversation = this.conversations.get(id);
+    const next = target && !target.isDestroyed() ? target : this.window;
+    if (!conversation) return;
+    const previous = this.hostOf(conversation);
+    conversation.window = next === this.window ? undefined : next;
+    if (previous === next) return;
+    const views = [
+      ...[...conversation.tabs.values()].map((tab) => tab.view),
+      ...(conversation.mask ? [conversation.mask] : []),
+    ];
+    // A view the old window has already let go of, or a window that is closing, is no
+    // reason to leave the rest behind.
+    const settle = (action: () => void) => {
+      try {
+        action();
+      } catch {
+        /* The window or the view may be gone. */
+      }
+    };
+    for (const view of views) {
+      if (!previous.isDestroyed())
+        settle(() => previous.contentView.removeChildView(view));
+      settle(() => next.contentView.addChildView(view));
+    }
+    // The new window's panel measures its own page: until it does, nothing shows.
+    conversation.wantedVisible = false;
+    this.visibility(conversation);
+    this.publish(id);
+  }
+  /** The window a conversation's pages are in, for who may place them. */
+  windowOf(idValue: unknown): BrowserWindow {
+    const conversation = this.conversations.get(this.validId(idValue));
+    return conversation ? this.hostOf(conversation) : this.window;
+  }
   // ---- conversations and tabs
   private deletedSessions = new Set<string>();
   private retiringContents = new Map<string, Set<WebContents>>();
@@ -432,9 +480,10 @@ export class BrowserSessions {
     return tab ?? this.createTab(conversation, { activate: true });
   }
   private visibility(conversation: Conversation) {
-    const [windowWidth, windowHeight] = this.window.isDestroyed()
+    const host = this.hostOf(conversation);
+    const [windowWidth, windowHeight] = host.isDestroyed()
       ? [0, 0]
-      : this.window.getContentSize();
+      : host.getContentSize();
     // Off the window as well as invisible: a native view that only flips its
     // flag can stay composited over the conversation on Linux.
     const away = { x: windowWidth, y: windowHeight, width: 1, height: 1 };
@@ -708,11 +757,11 @@ export class BrowserSessions {
     conversation.tabs.set(tab.id, tab);
     view.setBounds(conversation.bounds);
     view.setVisible(false);
-    this.window.contentView.addChildView(view);
+    this.hostOf(conversation).contentView.addChildView(view);
     // A tab Circle's action opens (a new tab, a popup) stays under the layer that takes the
     // person's clicks while Circle acts
     if (conversation.mask && conversation.operating)
-      this.window.contentView.addChildView(conversation.mask);
+      this.hostOf(conversation).contentView.addChildView(conversation.mask);
     this.prepareSession(conversation, contents.session);
     this.handle(conversation, tab);
     tab.fromPage = !!options.opener;
@@ -918,8 +967,9 @@ export class BrowserSessions {
     if (choice) settle(() => choice.answer());
     settle(() => this.dropPermissions(conversation, tab));
     try {
-      if (!this.window.isDestroyed())
-        settle(() => this.window.contentView.removeChildView(tab.view));
+      const host = this.hostOf(conversation);
+      if (!host.isDestroyed())
+        settle(() => host.contentView.removeChildView(tab.view));
       if (!contents.isDestroyed()) settle(() => contents.close());
     } finally {
       this.visibility(conversation);
@@ -1098,7 +1148,7 @@ export class BrowserSessions {
       event.preventDefault();
       // The address bar and the find field are the window's
       if (action === 'address' || action === 'find')
-        this.window.webContents.focus();
+        this.hostOf(conversation).webContents.focus();
       this.sendKey({ sessionId: 'browser:' + id, action, tab: tab.id });
     });
     contents.on('context-menu', (_event, params) =>
@@ -1623,11 +1673,14 @@ export class BrowserSessions {
     const chooser = tab?.chooser;
     if (!conversation || !tab || !chooser?.backendNodeId)
       throw Error('no such file chooser');
-    const picked = await systemDialog.showOpenDialog(this.window, {
-      properties: chooser.multiple
-        ? ['openFile', 'multiSelections']
-        : ['openFile'],
-    });
+    const picked = await systemDialog.showOpenDialog(
+      this.hostOf(conversation),
+      {
+        properties: chooser.multiple
+          ? ['openFile', 'multiSelections']
+          : ['openFile'],
+      },
+    );
     if (picked.canceled || !picked.filePaths.length) return this.state(id);
     if (tab.chooser !== chooser)
       throw Error('the file chooser was answered meanwhile');
@@ -1656,7 +1709,7 @@ export class BrowserSessions {
     if (!value || typeof value !== 'object')
       throw Error('invalid browser bounds');
     const bounds = value as BrowserBounds;
-    const [width, height] = this.window.getContentSize();
+    const [width, height] = this.windowOf(id).getContentSize();
     if (
       !['x', 'y', 'width', 'height'].every((key) =>
         Number.isFinite(bounds[key as keyof BrowserBounds]),
@@ -1718,8 +1771,9 @@ export class BrowserSessions {
         this.keyTarget = id;
         // A click on the address bar has to take the keyboard from the page view.
         // Until the window has it, the first F12 reaches neither of them.
-        if (!this.window.isDestroyed() && !this.window.webContents.isFocused())
-          this.window.webContents.focus();
+        const host = this.windowOf(id);
+        if (!host.isDestroyed() && !host.webContents.isFocused())
+          host.webContents.focus();
       } else if (this.keyTarget === id) this.keyTarget = undefined;
       return null;
     }
@@ -1841,7 +1895,7 @@ export class BrowserSessions {
                 this.contextCommand(conversation, tab, item.command, params),
             },
       ),
-    ).popup({ window: this.window });
+    ).popup({ window: this.hostOf(conversation) });
   }
   private contextCommand(
     conversation: Conversation,
@@ -2137,7 +2191,7 @@ export class BrowserSessions {
       conversation.mask = mask;
     }
     // Added again, it is the topmost view
-    this.window.contentView.addChildView(mask);
+    this.hostOf(conversation).contentView.addChildView(mask);
     mask.setBounds(conversation.bounds);
     mask.setVisible(conversation.wantedVisible);
   }
@@ -2763,7 +2817,8 @@ export class BrowserSessions {
       }
       // The person's typing stays in the conversation's input box, wherever Circle clicks
       const composer =
-        allContents.getFocusedWebContents() === this.window.webContents;
+        allContents.getFocusedWebContents() ===
+        this.hostOf(conversation).webContents;
       conversation.operating = true;
       conversation.control = 'agent';
       this.mask(conversation);
@@ -2783,8 +2838,8 @@ export class BrowserSessions {
           this.watchReturn(conversation);
         } else if (control === 'agent') conversation.control = 'shared';
         this.visibility(conversation);
-        if (composer && !this.window.isDestroyed())
-          this.window.webContents.focus();
+        if (composer && !this.hostOf(conversation).isDestroyed())
+          this.hostOf(conversation).webContents.focus();
         this.publish(conversation.id);
       }
     };

@@ -69,6 +69,13 @@ import { installation, Updater } from './updater';
 import { circleAppVersion } from './circle-version';
 import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
 import { channelOf } from './channel';
+import {
+  Popouts,
+  type PopoutHooks,
+  validPopoutKind,
+  validPopoutSession,
+  validPopoutTitle,
+} from './popouts';
 // A release, or a beta that package:beta wrote into the packaged package.json
 const channel = channelOf(
   (() => {
@@ -120,6 +127,8 @@ protocol.registerSchemesAsPrivileged([
 ]);
 const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
+// The browser and the terminal can leave the drawer for a window of their own.
+let popouts: Popouts<BrowserWindow> | null = null;
 let browsers: BrowserSessions | null = null;
 let browserClosePending: Promise<void> = Promise.resolve();
 let terminals: TerminalPanelHost | null = null;
@@ -165,15 +174,25 @@ if (startupLocale() === 'zh-CN') {
   // It does not create the catalog: Recent and Home stay English until gtk30.mo exists.
   if (!process.env.LANGUAGE) process.env.LANGUAGE = 'zh_CN';
 }
+/** The window and the windows the drawer's modes were popped out into. */
+function appWindows(): BrowserWindow[] {
+  return [window, ...(popouts?.all() ?? [])].filter(
+    (one): one is BrowserWindow => !!one && !one.isDestroyed(),
+  );
+}
+/** What the runtime, the browser and the terminals tell the window, told to every window. */
+function broadcast(channel: string, ...args: unknown[]) {
+  for (const one of appWindows()) one.webContents.send(channel, ...args);
+}
 function checkSender(event: {
   sender: WebContents;
   senderFrame: WebFrameMain | null;
 }) {
+  const own = appWindows().find((one) => one.webContents === event.sender);
   if (
-    !window ||
-    event.sender !== window.webContents ||
-    event.senderFrame?.routingId !== window.webContents.mainFrame.routingId ||
-    event.senderFrame?.processId !== window.webContents.mainFrame.processId ||
+    !own ||
+    event.senderFrame?.routingId !== own.webContents.mainFrame.routingId ||
+    event.senderFrame?.processId !== own.webContents.mainFrame.processId ||
     !trustedAppUrl(event.senderFrame.url)
   )
     throw Error('untrusted IPC sender');
@@ -182,6 +201,16 @@ function handle(channel: string, handler: (...args: unknown[]) => unknown) {
   ipcMain.handle(channel, (event, ...args) => {
     checkSender(event);
     return handler(...args);
+  });
+}
+/** Like `handle`, for a handler that has to know which window asked. */
+function handleFrom(
+  channel: string,
+  handler: (sender: WebContents, ...args: unknown[]) => unknown,
+) {
+  ipcMain.handle(channel, (event, ...args) => {
+    checkSender(event);
+    return handler(event.sender, ...args);
   });
 }
 const sendAction = (action: DesktopAction) =>
@@ -425,6 +454,109 @@ function showAttention(update: Parameters<typeof attention>[0]) {
     note.show();
   }
 }
+/**
+ * What every window of the application does with the right button, a link that wants a
+ * window of its own, and a page address that is not the application's: the same for the
+ * main window and for one a mode of the drawer was popped out into.
+ */
+function installWindowChrome(target: BrowserWindow) {
+  // Electron gives the window no right-click menu of its own. A text field gets the
+  // system's editing commands, selected text gets Copy; the page asks nothing of the
+  // main process for it, so the preload bridge stays as it is.
+  target.webContents.on('context-menu', (_event, params) => {
+    const items = windowContextMenu(params);
+    if (!items.length || target.isDestroyed()) return;
+    Menu.buildFromTemplate(
+      items.map((item): MenuItemConstructorOptions => {
+        if (item === 'separator') return { type: 'separator' };
+        if (item.command === 'selectAll')
+          return {
+            ...selectAllMenuItem(text(item.label)),
+            enabled: item.enabled,
+          };
+        // A click of its own rather than a role: on macOS a role item only sends the
+        // system's selector, so its click() does nothing and cannot be checked.
+        const command = item.command;
+        return {
+          label: text(item.label),
+          enabled: item.enabled,
+          click: () => {
+            if (!target.isDestroyed()) target.webContents[command]();
+          },
+        };
+      }),
+    ).popup({ window: target });
+  });
+  target.webContents.setWindowOpenHandler(({ url }) => {
+    const allowed = safeExternalUrl(url);
+    if (allowed && !fixtureProfile) void shell.openExternal(allowed);
+    return { action: 'deny' };
+  });
+  target.webContents.on(
+    'did-start-navigation',
+    (_event, _url, _inPlace, mainFrame) => {
+      if (mainFrame) externalFilePicker.invalidate();
+    },
+  );
+  target.webContents.on('will-navigate', (event, url) => {
+    if (!trustedAppUrl(url)) event.preventDefault();
+  });
+  // The system's menu takes some of the browser's keys (⌘W closes the window) before
+  // the window sees them: while the browser panel has the keyboard, they are its.
+  target.webContents.on('before-input-event', (event, input) =>
+    browsers?.windowKey(event, input),
+  );
+}
+/**
+ * A window for one mode of the drawer: the browser or the terminal of a conversation, in
+ * the same application page, which then shows only that mode. A browser brings its pages
+ * along; closing the window sends them back to the main window first.
+ */
+async function createPopoutWindow(
+  kind: 'browser' | 'terminal',
+  sessionId: string,
+  title: string,
+  hooks: PopoutHooks<BrowserWindow>,
+): Promise<BrowserWindow> {
+  const popout = new BrowserWindow({
+    width: 920,
+    height: 640,
+    minWidth: 420,
+    minHeight: 300,
+    title,
+    icon: join(
+      __dirname,
+      process.platform === 'darwin'
+        ? 'assets/circle-macos.png'
+        : 'assets/circle.png',
+    ),
+    show: false,
+    autoHideMenuBar: process.platform !== 'darwin',
+    webPreferences: {
+      preload: join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  // The page asks the main process for what it starts with: from here it is answered.
+  hooks.created(popout);
+  // The title is the mode and the conversation, not the page's.
+  popout.on('page-title-updated', (event) => event.preventDefault());
+  installWindowChrome(popout);
+  if (kind === 'browser') browsers?.moveToWindow(sessionId, popout);
+  // Before it is gone, so its pages are not lost with it
+  popout.on('close', () => {
+    if (kind === 'browser') browsers?.moveToWindow(sessionId, null);
+  });
+  popout.once('closed', hooks.closed);
+  popout.once('ready-to-show', () => popout.show());
+  await popout.loadURL(
+    `circle://workbench/index.html#/popout/${kind}/${sessionId}`,
+  );
+  return popout;
+}
 async function createWindow() {
   window = new BrowserWindow({
     width: 1440,
@@ -453,7 +585,7 @@ async function createWindow() {
   });
   browsers = new BrowserSessions(
     window,
-    (state) => window?.webContents.send('circle:browser-event', state),
+    (state) => broadcast('circle:browser-event', state),
     () => interfaceLocale,
     join(dataPath, 'browser-certificates.json'),
     browserCertificates,
@@ -466,15 +598,12 @@ async function createWindow() {
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
   );
+  // A browser shortcut goes to the window that has the page, wherever the panel is.
   browsers.sendKey = (event) => {
-    if (window && !window.isDestroyed())
-      window.webContents.send('circle:browser-key', event);
+    const target = browsers?.windowOf(event.sessionId.replace(/^browser:/, ''));
+    if (target && !target.isDestroyed())
+      target.webContents.send('circle:browser-key', event);
   };
-  // The system's menu takes some of the browser's keys (⌘W closes the window) before
-  // the window sees them: while the browser panel has the keyboard, they are its.
-  window.webContents.on('before-input-event', (event, input) =>
-    browsers?.windowKey(event, input),
-  );
   runtime?.onSessionCleanup(async (id) => {
     await browsers?.deleteSession(id);
     browserCertificates.delete(id);
@@ -484,8 +613,7 @@ async function createWindow() {
     return browsers.agent(request, signal);
   });
   terminals = new TerminalPanelHost(
-    (event: TerminalEvent) =>
-      window?.webContents.send('circle:terminal-event', event),
+    (event: TerminalEvent) => broadcast('circle:terminal-event', event),
     join(dataPath, 'runtime-home'),
     join(dataPath, 'terminal-host-keys.json'),
     (name) => loadSecrets(join(dataPath, 'runtime-home'))[name] ?? '',
@@ -493,54 +621,19 @@ async function createWindow() {
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
   );
+  popouts = new Popouts<BrowserWindow>({
+    create: createPopoutWindow,
+    onChange: (event) => broadcast('circle:popout-event', event),
+  });
   runtime?.onTerminalCleanup(async (id) => terminals?.releaseSession(id));
   runtime?.onTerminal((request, signal) => {
     if (!terminals) throw Error('the terminal host is closed');
     return terminals.agent(request, signal);
   });
-  // Electron gives the window no right-click menu of its own. A text field gets the
-  // system's editing commands, selected text gets Copy; the page asks nothing of the
-  // main process for it, so the preload bridge stays as it is.
-  window.webContents.on('context-menu', (_event, params) => {
-    const items = windowContextMenu(params);
-    if (!items.length || !window) return;
-    Menu.buildFromTemplate(
-      items.map((item): MenuItemConstructorOptions => {
-        if (item === 'separator') return { type: 'separator' };
-        if (item.command === 'selectAll')
-          return {
-            ...selectAllMenuItem(text(item.label)),
-            enabled: item.enabled,
-          };
-        // A click of its own rather than a role: on macOS a role item only sends the
-        // system's selector, so its click() does nothing and cannot be checked.
-        const command = item.command;
-        return {
-          label: text(item.label),
-          enabled: item.enabled,
-          click: () => {
-            if (window && !window.isDestroyed()) window.webContents[command]();
-          },
-        };
-      }),
-    ).popup({ window });
-  });
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    const allowed = safeExternalUrl(url);
-    if (allowed && !fixtureProfile) void shell.openExternal(allowed);
-    return { action: 'deny' };
-  });
-  window.webContents.on(
-    'did-start-navigation',
-    (_event, _url, _inPlace, mainFrame) => {
-      if (mainFrame) externalFilePicker.invalidate();
-    },
-  );
-  window.webContents.on('will-navigate', (event, url) => {
-    if (!trustedAppUrl(url)) event.preventDefault();
-  });
+  installWindowChrome(window);
   window.once('ready-to-show', () => window?.show());
   window.on('close', () => {
+    popouts?.dockAll();
     terminals?.close();
     if (!browsers) return;
     browserClosePending = Promise.all([
@@ -558,6 +651,7 @@ async function createWindow() {
   window.on('closed', () => {
     browsers = null;
     terminals = null;
+    popouts = null;
     window = null;
   });
   await window.loadURL('circle://workbench/index.html');
@@ -637,14 +731,12 @@ app
             : {}),
         }),
       );
-      runtime.onWorkspaceEvent((event) => {
-        if (window && !window.isDestroyed())
-          window.webContents.send('circle:workspace-event', event);
-      });
-      runtime.onTokenDelta((delta) => {
-        if (window && !window.isDestroyed())
-          window.webContents.send('circle:runtime-token-delta', delta);
-      });
+      runtime.onWorkspaceEvent((event) =>
+        broadcast('circle:workspace-event', event),
+      );
+      runtime.onTokenDelta((delta) =>
+        broadcast('circle:runtime-token-delta', delta),
+      );
       runtime.subscribe((update) => {
         externalFilePicker.observe({
           connected: update.connected,
@@ -661,7 +753,7 @@ app
             browserCertificates.delete(id);
           }
         runtimeSessions = current;
-        window?.webContents.send('circle:runtime-update', update);
+        broadcast('circle:runtime-update', update);
         showAttention(update);
       });
       await runtime.start();
@@ -1013,11 +1105,31 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.navigate(id, url);
     });
-    handle('circle:browser-bounds', (id, bounds, visible) => {
+    // Only the window that has a conversation's pages places them: the drawer of the main
+    // window keeps its hands off while the browser is in a window of its own.
+    handleFrom('circle:browser-bounds', (sender, id, bounds, visible) => {
       if (!browsers) throw Error('window not ready');
+      if (browsers.windowOf(id).webContents !== sender)
+        return browsers.state(id);
       return browsers.bounds(id, bounds, visible);
     });
-    handle('circle:browser-hide', (id) => browsers?.hide(id));
+    handleFrom('circle:browser-hide', (sender, id) => {
+      if (browsers && browsers.windowOf(id).webContents === sender)
+        browsers.hide(id);
+    });
+    handle('circle:popout-open', async (kind, id, title) => {
+      if (!popouts) throw Error('window not ready');
+      await popouts.open(
+        validPopoutKind(kind),
+        validPopoutSession(id),
+        validPopoutTitle(title),
+      );
+    });
+    handle('circle:popout-dock', (kind, id) => {
+      popouts?.dock(validPopoutKind(kind), validPopoutSession(id));
+    });
+    handle('circle:popout-dock-all', () => popouts?.dockAll());
+    handle('circle:popouts', () => popouts?.list() ?? []);
     handle('circle:browser-capture', (id) => {
       if (!browsers) throw Error('window not ready');
       return browsers.capture(id);
@@ -1069,7 +1181,8 @@ app
       }
       if (!browsers) return;
       // Set before the click returns, so the next key finds the panel focused.
-      void browsers.page(id, 'keys', focused).catch(() => {});
+      if (browsers.windowOf(id).webContents === event.sender)
+        void browsers.page(id, 'keys', focused).catch(() => {});
     });
     handle('circle:browser-reveal', (id, download) => {
       if (!browsers) throw Error('window not ready');

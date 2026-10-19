@@ -680,8 +680,11 @@ export function NativeTerminal({
   // Devices, tabs and what the selected tab can be told to do.
   const devices = useDeviceTerminals(sessionId);
   const workspaceFolder = (() => {
+    const owner =
+      appSnapshot.sessions.find((item) => item.id === sessionId) ??
+      currentSession(appSnapshot);
     const path = appSnapshot.workspaces.find(
-      (item) => item.id === currentSession(appSnapshot).workspaceId,
+      (item) => item.id === owner.workspaceId,
     )?.path;
     return path ? folderName(path) : '';
   })();
@@ -690,7 +693,10 @@ export function NativeTerminal({
   const [deviceRefresh, setDeviceRefresh] = useState(0);
   const [connectOpen, setConnectOpen] = useState(false);
   const wantsConnect = useRef(false);
-  const deviceSelected = deviceRows.find((row) => row.id === deviceChosen);
+  // With no shell in front, the first console is: the row never shows a blank screen.
+  const deviceSelected =
+    deviceRows.find((row) => row.id === deviceChosen) ??
+    (selected ? undefined : deviceRows[0]);
   // The shell or command in front: none while a device console is.
   const inFront = deviceSelected ? undefined : selected;
   const selectedKey = deviceSelected

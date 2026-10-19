@@ -105,11 +105,25 @@ const isField = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   !!target.closest('input, textarea, select, [contenteditable="true"]');
 
-export function NativeBrowser({ target }: { target?: string } = {}) {
+export function NativeBrowser({
+  target,
+  sessionId,
+}: {
+  target?: string;
+  /** The conversation whose browser this is; the open one when not given. */
+  sessionId?: string;
+} = {}) {
   const { snapshot, notify, runtime } = useRuntime();
-  const whole = useModeChrome()?.whole;
-  const session = currentSession(snapshot);
+  const chrome = useModeChrome();
+  const whole = chrome?.whole;
+  const session =
+    snapshot.sessions.find((item) => item.id === sessionId) ??
+    currentSession(snapshot);
   const id = session.id;
+  // The page is in a window of its own: this one leaves it where it is and unplaced.
+  const elsewhere = !!chrome?.poppedOut;
+  const elsewhereRef = useRef(elsewhere);
+  elsewhereRef.current = elsewhere;
   const state = useBrowserState(id);
   const [url, setUrl] = useState('');
   const [addressFocused, setAddressFocused] = useState(false);
@@ -171,6 +185,8 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
     let freezing = false;
     let disposed = false;
     const update = () => {
+      // Whoever has the page places it: another window, while it is popped out.
+      if (elsewhereRef.current) return;
       const node = viewport.current;
       const rect = node ? laidOutBrowserViewport(node) : null;
       // Hidden, collapsed, zero-size, or a drawer mode that folds the page: the
@@ -269,12 +285,20 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
       removeEventListener('resize', schedule);
       removeEventListener('scroll', schedule, true);
       captureGeneration.current++;
-      void host.browserHide(id);
-      void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
-        () => {},
-      );
+      if (!elsewhereRef.current) {
+        void host.browserHide(id);
+        void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
+          () => {},
+        );
+      }
     };
   }, [id]);
+  // The page comes back from its window: place it again.
+  useEffect(() => {
+    if (elsewhere) return;
+    const frame = requestAnimationFrame(() => updateBounds.current());
+    return () => cancelAnimationFrame(frame);
+  }, [elsewhere]);
   // Full view moves the same panel to another box. Measure after that move.
   useEffect(() => {
     const frame = requestAnimationFrame(() => updateBounds.current());
