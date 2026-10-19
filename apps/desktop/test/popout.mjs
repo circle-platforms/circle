@@ -94,13 +94,18 @@ try {
   await main.setViewportSize?.({ width: 1500, height: 900 });
   const titles = () =>
     app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows().map((one) => one.getTitle()),
+      BrowserWindow.getAllWindows()
+        .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
+        .map((one) => one.getTitle()),
     );
-  // The application's windows by what they show: the main one, or a mode's route.
+  // The application's windows by what they show: the main one, or a mode's route. A window
+  // that is closing stays listed for a moment after its page is gone, so only live ones count.
   const views = () =>
     app.evaluate(({ BrowserWindow }) => {
       const count = { main: 0, browser: 0, terminal: 0 };
-      for (const one of BrowserWindow.getAllWindows()) {
+      for (const one of BrowserWindow.getAllWindows().filter(
+        (one) => !one.isDestroyed() && !one.webContents.isDestroyed(),
+      )) {
         const url = one.webContents.getURL();
         const which = url.includes('#/popout/browser/')
           ? 'browser'
@@ -117,12 +122,14 @@ try {
   const press = (which, keyCode, modifiers = []) =>
     app.evaluate(
       ({ BrowserWindow }, { which, keyCode, modifiers }) => {
-        const target = BrowserWindow.getAllWindows().find((one) => {
-          const url = one.webContents.getURL();
-          return which === 'main'
-            ? !url.includes('#/popout/')
-            : url.includes(which);
-        });
+        const target = BrowserWindow.getAllWindows()
+          .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
+          .find((one) => {
+            const url = one.webContents.getURL();
+            return which === 'main'
+              ? !url.includes('#/popout/')
+              : url.includes(which);
+          });
         for (const type of ['keyDown', 'keyUp'])
           target.webContents.sendInputEvent({ type, keyCode, modifiers });
       },
@@ -203,9 +210,9 @@ try {
   const notice = popped.locator('.toast');
   await notice.getByText('invalid address', { exact: true }).waitFor();
   const page = await app.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows().find((one) =>
-      one.webContents.getURL().includes('#/popout/browser/'),
-    );
+    const window = BrowserWindow.getAllWindows()
+      .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
+      .find((one) => one.webContents.getURL().includes('#/popout/browser/'));
     return window.contentView.children
       .find((view) => view.getVisible())
       ?.getBounds();
