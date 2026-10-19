@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { test } from 'node:test';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { testBrowserOptions } from './helpers/test-browser.ts';
 import { previewPort } from './preview-port.ts';
+import { workbenchServer } from './helpers/workbench-server.ts';
 
 const browserOptions = testBrowserOptions(chromium.executablePath());
 
@@ -19,78 +18,8 @@ test(
     // lets another test replace optimized modules while this page imports them.
     const scratch = await mkdtemp(join(tmpdir(), 'circle-composer-pin-'));
     t.after(() => rm(scratch, { recursive: true, force: true }));
-    const root = fileURLToPath(new URL('..', import.meta.url));
     const port = await previewPort(process.env.CIRCLE_WORKBENCH_TEST_PORT);
-    const server: ChildProcess = spawn(
-      // Node runs Vite itself: Windows has no `npx` file to spawn, only npx.cmd.
-      process.execPath,
-      [
-        join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
-        '--host',
-        '127.0.0.1',
-        '--port',
-        String(port),
-        '--strictPort',
-      ],
-      {
-        cwd: root,
-        detached: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          CIRCLE_COMPONENT_UI_EVIDENCE: scratch,
-          CIRCLE_HOME: join(scratch, 'home'),
-          CIRCLE_WORKBENCH_DATA_DIR: join(scratch, 'desktop'),
-        },
-      },
-    );
-    let logs = '';
-    const take = (chunk: unknown) => {
-      logs += String(chunk);
-    };
-    server.stdout?.on('data', take);
-    server.stderr?.on('data', take);
-    const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error('vite did not start\n' + logs)),
-        20_000,
-      );
-      const watch = () => {
-        // CI colours vite's output, so the word is not followed by ':' there.
-        if (!logs.replace(/\x1b\[[0-9;]*m/g, '').includes('Local:')) return;
-        clearTimeout(timer);
-        resolve();
-      };
-      server.stdout?.on('data', watch);
-      server.stderr?.on('data', watch);
-      server.once('exit', (code) => {
-        clearTimeout(timer);
-        reject(new Error(`vite exited ${code}\n` + logs));
-      });
-    });
-    const stop = async () => {
-      const pid = server.pid;
-      if (pid === undefined || server.exitCode !== null) return;
-      try {
-        process.kill(-pid, 'SIGTERM');
-      } catch {
-        server.kill('SIGTERM');
-      }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          try {
-            process.kill(-pid, 'SIGKILL');
-          } catch {
-            /* already gone */
-          }
-          resolve();
-        }, 2_000);
-        server.once('exit', () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-    };
+    const server = await workbenchServer(scratch, port);
     const browser = await chromium.launch({
       ...browserOptions,
       headless: true,
@@ -98,7 +27,6 @@ test(
     });
     const diagnostics: string[] = [];
     try {
-      await ready;
       // The preview follows the browser language. These steps use the English names.
       const page = await browser.newPage({
         locale: 'en-US',
@@ -158,12 +86,12 @@ test(
       assert.ok(rows >= 6, `expected several sessions, saw ${rows}`);
     } catch (error) {
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}\nBrowser diagnostics:\n${diagnostics.join('\n')}\nVite output:\n${logs}`,
+        `${error instanceof Error ? error.message : String(error)}\nBrowser diagnostics:\n${diagnostics.join('\n')}`,
         { cause: error },
       );
     } finally {
       await browser.close();
-      await stop();
+      await server.close();
     }
   },
 );

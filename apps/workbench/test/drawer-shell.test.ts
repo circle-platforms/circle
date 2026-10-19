@@ -6,6 +6,7 @@ import { DrawerOverview } from '../src/features/Panels.tsx';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'vite';
+import { warmModules } from './helpers/workbench-server.ts';
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { testBrowserOptions } from './helpers/test-browser.ts';
@@ -23,20 +24,8 @@ test(
       logLevel: 'error',
     });
     await server.listen();
-    // Compile the window's whole module graph, lazy panels included, before the
-    // browser starts: the 10 s limits below are for the interface, not for a slow
-    // runner's first on-demand compile (Intel macOS took longer than that).
-    const warmed = new Set<string>();
-    const warm = async (url: string): Promise<void> => {
-      if (warmed.has(url)) return;
-      warmed.add(url);
-      await server.transformRequest(url);
-      const node = await server.moduleGraph.getModuleByUrl(url);
-      await Promise.all(
-        [...(node?.importedModules ?? [])].map((child) => warm(child.url)),
-      );
-    };
-    await warm('/src/main.tsx');
+    // The 10 s limits below are for the interface, not Vite's first compile.
+    await warmModules(server);
     const browser = await chromium.launch({
       ...browserOptions,
       headless: true,
