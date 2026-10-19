@@ -102,6 +102,24 @@ test('session lists separate archived records, preserve their history, and rejec
   ];
   assert.equal(canArchiveSession(state, session), false);
 });
+test('owned native resources disable archive and explain why until they stop', () => {
+  const runtime = new PreviewRuntime();
+  const snapshot = runtime.getSnapshot();
+  const session = currentSession(snapshot);
+  snapshot.interactions = [];
+  snapshot.jobs = [];
+  session.state = 'idle';
+  session.nativeResourcesActive = true;
+  assert.equal(canArchiveSession(snapshot, session), false);
+  assert.equal(
+    archiveBlockReason(snapshot, session),
+    'stop native resources and tasks before archiving',
+  );
+  session.nativeResourcesActive = false;
+  assert.equal(canArchiveSession(snapshot, session), true);
+  assert.equal(archiveBlockReason(snapshot, session), undefined);
+});
+
 test('free input is preserved without an invented reply or task', () => {
   const runtime = new PreviewRuntime();
   const before = runtime.getSnapshot().sessions[0]!.messages.length;

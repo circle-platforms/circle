@@ -134,6 +134,8 @@ export interface Session {
   deletionFailed?: string;
   /** Another process owns execution of this conversation. */
   occupied?: boolean;
+  /** Owned native processes, terminal tabs or tasks still prevent archiving. */
+  nativeResourcesActive?: boolean;
   /** The last renderer action failure, kept with its source session for this window. */
   actionError?: string;
   /** Renderer-only state; never changes the core conversation or execution. */

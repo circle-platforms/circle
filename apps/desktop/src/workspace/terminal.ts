@@ -841,6 +841,10 @@ export class TerminalManager {
   /** Terminals that are running, stopping or still hold a live pty after a failed start. */
   async activeIds(owner: string): Promise<string[]> {
     await this.#ready;
+    return this.activeIdsNow(owner);
+  }
+  /** Current ownership for synchronous runtime snapshots; never opens a terminal. */
+  activeIdsNow(owner: string): string[] {
     identity(owner, 'owner');
     return [...this.#entries.values()]
       .filter(

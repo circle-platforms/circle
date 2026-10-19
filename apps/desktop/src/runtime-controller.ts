@@ -903,6 +903,19 @@ export class RuntimeController {
         ?.hasActiveSession(sessionId)) === true
     );
   }
+  private nativeSessionActiveNow(
+    sessionId: string,
+    workspace: string,
+  ): boolean {
+    return (
+      [...this.taskServices.values()].some((service) =>
+        service.hasActiveSession(sessionId),
+      ) ||
+      this.workspaceServices
+        .get(this.workspaceRoots.get(workspace)?.canonical ?? workspace)
+        ?.hasActiveSessionNow(sessionId) === true
+    );
+  }
   private workspaceEvent(
     workspace: string,
     event: WorkspaceServiceEvent,
@@ -1099,6 +1112,7 @@ export class RuntimeController {
     const root = this.trustedWorkspace(workspace);
     let services = this.workspaceServices.get(root);
     if (!services) {
+      const resourceStates = new Map<string, boolean>();
       const tools = this.options.workspaceTools ?? {
         runtimeExecutable: process.execPath,
         ghPath: 'gh',
@@ -1125,7 +1139,16 @@ export class RuntimeController {
         workspaceId: identity(root),
         credentialFiles: settingsForRun(this.home, root).settings
           .credential_files,
-        emit: (event) => this.options.emitWorkspaceEvent?.(event),
+        emit: (event) => {
+          this.options.emitWorkspaceEvent?.(event);
+          // Output stays on its own stream. Publish session availability only
+          // when resource ownership changes, including a shell exiting by itself.
+          const active = this.nativeSessionActiveNow(event.sessionId, root);
+          if ((resourceStates.get(event.sessionId) ?? false) !== active) {
+            resourceStates.set(event.sessionId, active);
+            this.publish();
+          }
+        },
         onPersistenceError: (error) => this.workspaceFailure(root, error),
       });
       this.workspaceServices.set(root, services);
@@ -2758,6 +2781,10 @@ export class RuntimeController {
           ? { deletionFailed: this.deletionFailures.get(row.id) }
           : {}),
         occupied: !owner && sessionOccupied(this.home, row.id),
+        nativeResourcesActive: this.nativeSessionActiveNow(
+          row.id,
+          row.workspace,
+        ),
         title: row.title || 'new session',
         workspaceId: identity(row.workspace),
         model: selected ? owner.harness.model.model : row.model,

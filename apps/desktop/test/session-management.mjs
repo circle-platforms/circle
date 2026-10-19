@@ -491,9 +491,35 @@ try {
   checks.push(
     'native EOF offsets 2 and 120 succeed, a valid reread recovers, and all results reach the next model request',
   );
+  const nativeTerminal = await command('workspace-service', {
+    service: 'terminal',
+    method: 'create',
+    params: { label: 'archive ownership fixture' },
+  });
+  assert.equal(nativeTerminal.ok, true, nativeTerminal.error);
+  const terminal = nativeTerminal.data;
+  assert.ok(terminal.pid);
+  process.kill(terminal.pid, 0);
+  await until(
+    async () =>
+      (await state()).sessions.find((session) => session.id === a)
+        ?.nativeResourcesActive === true,
+    'native resource ownership projected',
+  );
   for (const theme of ['dark', 'light']) {
     await command('save-settings', { settings: { theme } });
     await workspaceMenu().click();
+    assert.equal(
+      await page
+        .getByRole('menuitem', { name: 'archive all sessions', exact: true })
+        .isDisabled(),
+      true,
+    );
+    await page
+      .getByText('stop native resources and tasks before archiving', {
+        exact: true,
+      })
+      .waitFor();
     await page
       .getByRole('menuitem', {
         name:
@@ -541,6 +567,39 @@ try {
   }
   checks.push(
     'worker network trust and workspace actions are visible in both palettes',
+  );
+  // Exit through the shell itself: availability must refresh from its real exit,
+  // without polling runtime state or issuing a terminal-close command.
+  assert.equal(
+    (
+      await command('workspace-service', {
+        service: 'terminal',
+        method: 'write',
+        params: { id: terminal.id, data: 'exit\r' },
+      })
+    ).ok,
+    true,
+  );
+  await workspaceMenu().click();
+  await until(
+    async () =>
+      !(await page
+        .getByRole('menuitem', { name: 'archive all sessions', exact: true })
+        .isDisabled()),
+    'archive re-enabled after native shell exit',
+  );
+  assert.equal(
+    await page
+      .getByText('stop native resources and tasks before archiving', {
+        exact: true,
+      })
+      .count(),
+    0,
+  );
+  await assert.rejects(async () => process.kill(terminal.pid, 0));
+  await page.keyboard.press('Escape');
+  checks.push(
+    'native resources disable archive with a visible reason in both palettes; an actual shell exit re-enables it',
   );
   await workspaceMenu().click();
   await page

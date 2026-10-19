@@ -743,6 +743,11 @@ test('archive refuses native processes and confirmed delete awaits only its owni
   assert.equal(a.ok, true, a.error);
   const pidA = (a.data as any).pid;
   assert.ok(alive(pidA));
+  assert.equal(
+    f.controller.snapshot().sessions.find((s) => s.id === first)
+      ?.nativeResourcesActive,
+    true,
+  );
   await f.call('new-session');
   const second = f.controller.snapshot().activeSessionId;
   const b = await create();
@@ -754,6 +759,12 @@ test('archive refuses native processes and confirmed delete awaits only its owni
   });
   assert.equal(archive.ok, false);
   assert.match(archive.error!, /native resources/);
+  const archiveAll = await f.call('archive-workspace', {
+    workspaceId: f.controller.snapshot().sessions.find((s) => s.id === first)!
+      .workspaceId,
+  });
+  assert.equal(archiveAll.ok, false);
+  assert.match(archiveAll.error!, /native resources/);
   const unconfirmed = await f.call('delete-session', { id: first });
   assert.equal(unconfirmed.ok, false);
   assert.match(unconfirmed.error!, /confirm/);
@@ -771,6 +782,59 @@ test('archive refuses native processes and confirmed delete awaits only its owni
   });
   assert.equal(close.ok, true, close.error);
   await wait(() => !alive(pidB));
+  await wait(() =>
+    f.updates.some(
+      (u) =>
+        u.snapshot.sessions.find((s: any) => s.id === second)
+          ?.nativeResourcesActive === false,
+    ),
+  );
+  assert.equal(
+    f.controller.snapshot().sessions.find((s) => s.id === second)
+      ?.nativeResourcesActive,
+    false,
+  );
+});
+
+test('a native shell exiting by itself publishes archive availability without a command', async (t) => {
+  const f = await setup(t);
+  const session = f.controller.snapshot().activeSessionId;
+  const created = await f.service('terminal', 'create', {
+    command: {
+      file: process.execPath,
+      args: ['-e', 'setInterval(()=>{},1000)'],
+    },
+  });
+  assert.equal(created.ok, true, created.error);
+  const terminal = created.data as any;
+  assert.ok(alive(terminal.pid));
+  await wait(() =>
+    f.updates.some(
+      (u) =>
+        u.snapshot.sessions.find((s: any) => s.id === session)
+          ?.nativeResourcesActive === true,
+    ),
+  );
+  const afterStart = f.updates.length;
+  process.kill(terminal.pid, 'SIGKILL');
+  await wait(() => !alive(terminal.pid));
+  await wait(() =>
+    f.updates
+      .slice(afterStart)
+      .some(
+        (u) =>
+          u.snapshot.sessions.find((s: any) => s.id === session)
+            ?.nativeResourcesActive === false,
+      ),
+  );
+  const archived = await f.call('archive-session', {
+    id: session,
+    archived: true,
+  });
+  assert.equal(archived.ok, true, archived.error);
+  assert.ok(
+    f.controller.snapshot().sessions.find((s) => s.id === session)?.archivedAt,
+  );
 });
 
 test('streaming token IPC sends deltas while final snapshots remain authoritative', async (t) => {

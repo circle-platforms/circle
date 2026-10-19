@@ -304,17 +304,64 @@ test('on Windows, close waits for a root whose termination was accepted to actua
   assert.equal(child.exitCode, 1);
 });
 
-test('on Windows, a refused termination of the root still fails close within its bound', async () => {
+for (const code of [undefined, 'EPERM', 'ESRCH'])
+  test(`on Windows, an already-ending creation handle (${code ?? 'silent ESRCH'}) waits for its exit (#196)`, async () => {
+    for (const taskkillCode of [0, 128]) {
+      const child = terminatingChild();
+      child.kill = ((signal: string) => {
+        child.kills.push(signal);
+        if (code)
+          child.emit('error', Object.assign(new Error('ending'), { code }));
+        setTimeout(() => {
+          (child as any).exitCode = 1;
+          child.emit('exit', 1, null);
+        }, 150);
+        return false;
+      }) as typeof child.kill;
+      const browser = browserWithChild(child);
+      const state = browser as any;
+      state.taskkill = async (pid: number) => {
+        if (taskkillCode) throw notFound(pid);
+      };
+      const waits: number[] = [];
+      const wait = state.waitForExit.bind(browser);
+      state.waitForExit = (root: ChildProcess, timeout: number) => {
+        waits.push(timeout);
+        return wait(root, timeout);
+      };
+      const listeners = child.listenerCount('error');
+      await asWindows(() => browser.close());
+      assert.equal(waits.at(-1), 20_000);
+      assert.equal(child.exitCode, 1);
+      assert.deepEqual(child.kills, ['SIGKILL']);
+      assert.equal(child.listenerCount('error'), listeners);
+    }
+  });
+
+test('on Windows, an unexpected creation-handle error keeps the short exit bound', async () => {
   const child = terminatingChild();
+  child.kill = (() => {
+    child.emit(
+      'error',
+      Object.assign(new Error('unexpected'), { code: 'EIO' }),
+    );
+    return false;
+  }) as typeof child.kill;
   const browser = browserWithChild(child);
   (browser as any).stopProcess = async () => {};
-  const started = Date.now();
+  const waits: number[] = [];
+  (browser as any).waitForExit = async (
+    _child: ChildProcess,
+    timeout: number,
+  ) => {
+    waits.push(timeout);
+    return false;
+  };
   await assert.rejects(
     asWindows(() => browser.close()),
     /the browser process did not stop/,
   );
-  assert(Date.now() - started < 5000);
-  assert.deepEqual(child.kills, ['SIGKILL']);
+  assert.equal(waits.at(-1), 40);
   assert.equal(child.exitCode, null);
 });
 
@@ -386,12 +433,22 @@ test('on Windows, taskkill exit 128 is not taken as a stop: a root that never ex
   (browser as any).taskkill = async (pid: number) => {
     throw notFound(pid);
   };
+  const waits: number[] = [];
+  (browser as any).waitForExit = async (
+    _child: ChildProcess,
+    timeout: number,
+  ) => {
+    waits.push(timeout);
+    return false;
+  };
   await assert.rejects(
     asWindows(() => browser.close()),
     /the browser process did not stop/,
   );
   assert.deepEqual(child.kills, ['SIGKILL']);
   assert.equal(child.exitCode, null);
+  assert.equal(waits.at(-1), 20_000);
+  assert.ok((browser as any).ownedRoots.has(child));
 });
 
 test('on Windows, another taskkill failure is still kept with the live root, which is not stopped another way', async () => {

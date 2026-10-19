@@ -161,7 +161,11 @@ export class WorkspaceServices {
     return this.delivery;
   }
   async hasActiveSession(sessionId: string): Promise<boolean> {
-    if ((await this.terminals.activeIds(sessionId)).length) return true;
+    await this.terminals.activeIds(sessionId);
+    return this.hasActiveSessionNow(sessionId);
+  }
+  hasActiveSessionNow(sessionId: string): boolean {
+    if (this.terminals.activeIdsNow(sessionId).length) return true;
     for (const [id, owner] of this.loginOwners)
       if (owner === sessionId) {
         try {

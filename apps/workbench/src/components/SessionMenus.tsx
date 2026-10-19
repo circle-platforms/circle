@@ -158,6 +158,7 @@ export function SessionMenu({
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const holdFocus = useRef(false);
+  const archiveReason = archiveBlockReason(snapshot, session);
   const archive = () =>
     perform(async () => {
       if (runtime.mode === 'live')
@@ -227,6 +228,11 @@ export function SessionMenu({
         }
         onSelect={archive}
       />
+      {archiveReason && (
+        <DropdownMenu.Label className="session-menu-reason">
+          {archiveReason}
+        </DropdownMenu.Label>
+      )}
       <DropdownMenu.Separator className="dropdown-separator" />
       <Item
         className="danger"
@@ -258,6 +264,9 @@ export function WorkspaceMenu({
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const sessions = workspaceSessions(snapshot, workspace.id);
+  const archiveReason = sessions
+    .map((session) => archiveBlockReason(snapshot, session))
+    .find(Boolean);
   return (
     <Menu
       label={t('workspace actions for {name}', {
@@ -277,6 +286,7 @@ export function WorkspaceMenu({
       </DropdownMenu.Item>
       <DropdownMenu.Separator className="dropdown-separator" />
       <DropdownMenu.Item
+        title={archiveReason}
         disabled={
           !sessions.length ||
           sessions.some((session) => !canArchiveSession(snapshot, session))
@@ -299,6 +309,11 @@ export function WorkspaceMenu({
       >
         {t('archive all sessions')}
       </DropdownMenu.Item>
+      {archiveReason && (
+        <DropdownMenu.Label className="session-menu-reason">
+          {archiveReason}
+        </DropdownMenu.Label>
+      )}
     </Menu>
   );
 }
