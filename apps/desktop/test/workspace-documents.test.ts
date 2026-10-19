@@ -527,15 +527,19 @@ test('symbolic links to files or parent folders do not extend workspace grants',
   await mkdir(external);
   await writeFile(join(external, 'secret.txt'), 'outside');
   await writeFile(join(root, 'safe.txt'), 'inside');
-  await symlink(join(external, 'secret.txt'), join(root, 'outside.txt'));
-  await symlink(external, join(root, 'alias'));
-  await symlink(join(root, 'safe.txt'), join(root, 'inside-alias.txt'));
-  for (const path of [
-    'outside.txt',
-    'alias/secret.txt',
-    'inside-alias.txt',
-    'alias/new.txt',
-  ]) {
+  // Windows junctions are real reparse points and need no symlink privilege.
+  // Keep both an escaping link and an in-workspace alias, with existing and new files.
+  const windows = process.platform === 'win32';
+  await symlink(external, join(root, 'alias'), windows ? 'junction' : 'dir');
+  if (windows) await symlink(root, join(root, 'inside-alias'), 'junction');
+  else {
+    await symlink(join(external, 'secret.txt'), join(root, 'outside.txt'));
+    await symlink(join(root, 'safe.txt'), join(root, 'inside-alias.txt'));
+  }
+  const paths = windows
+    ? ['alias/secret.txt', 'inside-alias/safe.txt', 'alias/new.txt']
+    : ['outside.txt', 'alias/secret.txt', 'inside-alias.txt', 'alias/new.txt'];
+  for (const path of paths) {
     await assert.rejects(documents.read(path), DocumentPathError);
     await assert.rejects(
       documents.save(path, 'forbidden', null),

@@ -100,10 +100,20 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
       }),
       /outside/,
     );
-    await symlink(path.join(data, 'outside.ts'), path.join(root, 'escape.ts'));
+    // A directory junction exercises the same escaping ancestor without requiring
+    // Windows Developer Mode or an elevated account to create a file symlink.
+    const escape =
+      process.platform === 'win32' ? 'escape/outside.ts' : 'escape.ts';
+    if (process.platform === 'win32')
+      await symlink(data, path.join(root, 'escape'), 'junction');
+    else
+      await symlink(
+        path.join(data, 'outside.ts'),
+        path.join(root, 'escape.ts'),
+      );
     await assert.rejects(
       service.call('session-a', 'documents', 'resolveSource', {
-        path: 'escape.ts',
+        path: escape,
       }),
       /outside/,
     );
