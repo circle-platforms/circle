@@ -5213,6 +5213,13 @@ export class RuntimeController {
         }
         if (found) {
           const extension = found.command;
+          // Hub sign-in and sign-out are status: the hub page shows them, and the window
+          // says them in passing rather than in the conversation. What any other hub
+          // command finds is the conversation's, as every extension's output is.
+          const hubStatus =
+            name === 'hub' &&
+            /^(?:(?:login|logout)(?:\s|$)|$)/.test(args.trim());
+          const status: string[] = [];
           await extension.handler(args, {
             workspace: found.owner.options.workspace,
             ...(secret ? { secret } : {}),
@@ -5229,10 +5236,11 @@ export class RuntimeController {
               this.notices.set(id, rows);
               this.publish();
             },
-            // Hub sign-in and sign-out are status. The page shows them. They
-            // are not messages in the conversation.
             append: (content) => {
-              if (name === 'hub') return;
+              if (hubStatus) {
+                status.push(content);
+                return;
+              }
               const runtimeNotice = githubStatusNotice(
                 content,
                 name === 'github' &&
@@ -5270,7 +5278,7 @@ export class RuntimeController {
               this.track(runtime.harness.run(prompt), runtime);
             },
           });
-          return {};
+          return status.length ? { notice: status.join('\n') } : {};
         }
         const custom = discoverCustomCommands(
           runtime.options.workspace,

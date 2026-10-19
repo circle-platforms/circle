@@ -86,6 +86,8 @@ Connects Circle to a [circle-hub](https://github.com/circle-platforms/circle-hub
 
 This extension's own version is **0.1.0**. That number is the Circle plugin version: the desktop pages pair with it and show only while it matches. It is not the hub server's version. The extension speaks circle-hub **client API 1.0.0**, which **circle-hub 0.2.0** serves. The two version lines are different series; 0.1.0 here does not mean the server is old, and a server 0.2.0 does not mean this extension is behind. The range a client should declare is described in the hub's [compatibility matrix](https://github.com/circle-platforms/circle-hub/blob/main/docs/compatibility.md).
 
+In the desktop application, what a `/hub` command finds shows in the conversation, as in the terminal. `/hub`, `/hub login` and `/hub logout` say where you are signed in as a notice in passing instead, and the hub page shows it.
+
 | Command | What it does |
 |---|---|
 | `/hub` | Where you are signed in: the address, user and scope, and whether a token is held. `/hub help` lists the commands. When the system language is Chinese, every `/hub` reply, error, help line and status word is Simplified Chinese. Commands, ids, paths and the server's own status words stay as the server sent them. |

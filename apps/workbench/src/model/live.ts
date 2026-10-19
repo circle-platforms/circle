@@ -1272,8 +1272,10 @@ export class LiveRuntime implements RuntimePort {
       };
     }
     if (this.snapshot.commands.some((command) => command.name === name)) {
-      await native('custom-command', { name, args });
-      return {};
+      const data = (await native('custom-command', { name, args })) as
+        { notice?: string } | undefined;
+      // What an extension says in passing, such as the hub's sign-in, is a notice.
+      return data?.notice ? { notice: data.notice } : {};
     }
     const dialogs: Record<string, CommandResult['dialog']> = {
       login: 'connect',

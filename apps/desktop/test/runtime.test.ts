@@ -6355,3 +6355,31 @@ test('a deletion whose cleanup fails tells the window why and keeps the history,
     after.close();
   }
 });
+
+test('what a hub command finds shows in the conversation, and its sign-in status is a notice in passing (#199)', async (t) => {
+  const f = await setup(t, []);
+  saveSettingsChange(f.home, (settings) => {
+    settings.extensions.hub = { enabled: true };
+  });
+  assert.equal((await f.call('reload')).ok, true);
+  const notices = () =>
+    activeSession(f)
+      .messages.filter((row) => row.role === 'notice')
+      .map((row) => row.text);
+  // A command's own result is the conversation's, as every extension's is.
+  const help = await f.call('custom-command', { name: 'hub', args: 'help' });
+  assert.equal(help.ok, true, help.error);
+  assert.ok(
+    notices().some((text) => text.includes('/hub packs')),
+    'the hub commands are listed in the conversation',
+  );
+  // Where you are signed in is status: said in passing, not a row of the conversation.
+  const before = notices().length;
+  const status = await f.call('custom-command', { name: 'hub', args: '' });
+  assert.equal(status.ok, true, status.error);
+  assert.match(
+    String((status.data as { notice?: string }).notice),
+    /not signed in/,
+  );
+  assert.equal(notices().length, before);
+});
