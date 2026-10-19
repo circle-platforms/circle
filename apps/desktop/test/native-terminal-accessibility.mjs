@@ -1,3 +1,5 @@
+// The terminal's screen-reader support on a real shell: node --import tsx
+// test/native-terminal-accessibility.mjs (Circle's TypeScript sources are imported).
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
@@ -10,7 +12,6 @@ import {
   trustFolder,
   saveSettings,
 } from '../../../src/settings.ts';
-import { openNativeTerminalInspector } from './helpers/native-terminal-journey.mjs';
 import {
   preserveNativeClipboard,
   restoreNativeClipboardWithRecovery,
@@ -97,11 +98,33 @@ try {
       },
       { sessionId, service, method, params },
     );
-  const panel = await openNativeTerminalInspector(page);
-  await panel
-    .locator('.native-terminal-toolbar')
-    .getByRole('button', { name: 'new terminal', exact: true })
-    .click();
+  // The terminal mode, from its top-bar button: one row of tabs, a + menu that makes a
+  // shell, and a menu for the tab in front
+  const openTerminalMode = async () => {
+    const toggle = page.getByRole('button', {
+      name: 'terminal panel',
+      exact: true,
+    });
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+      await toggle.click();
+    const mode = page.locator('.terminal-mode .native-terminal:visible');
+    await mode.waitFor();
+    return mode;
+  };
+  const newShell = async (mode) => {
+    await mode
+      .getByRole('button', { name: 'new terminal or device', exact: true })
+      .click();
+    await page.getByRole('menuitem', { name: /^new local terminal/ }).click();
+  };
+  const terminalMenu = async (mode, item) => {
+    await mode
+      .getByRole('button', { name: 'terminal menu', exact: true })
+      .click();
+    await page.getByRole('menuitem', { name: item, exact: true }).click();
+  };
+  const panel = await openTerminalMode();
+  await newShell(panel);
   await until(async () => {
     terminalId = (await query('terminal', 'list'))[0]?.id;
     return !!terminalId;
@@ -166,10 +189,8 @@ try {
     axRows.some((n) => rowText(n).includes('AX_LINE_')),
     'actual AX row text is exposed through its text descendants',
   );
-  // Find opens on demand from the terminal bar.
-  await panel
-    .getByRole('button', { name: 'find in terminal', exact: true })
-    .click();
+  // Find opens on demand from the menu of the tab in front.
+  await terminalMenu(panel, 'find in terminal');
   const find = panel.getByRole('textbox', {
     name: 'find in terminal',
     exact: true,
@@ -218,12 +239,14 @@ try {
   );
   assert.equal(await input.evaluate((n, old) => n === old, inputNode), true);
   assert.equal((await query('terminal', 'list'))[0].pid, first.pid);
-  await panel
-    .getByRole('button', { name: 'copy complete output', exact: true })
-    .click();
-  const copied = await app.evaluate(async ({ clipboard }) =>
-    clipboard.readText(),
+  await terminalMenu(panel, 'copy complete output');
+  const readClipboard = () =>
+    app.evaluate(async ({ clipboard }) => clipboard.readText());
+  await until(
+    async () => (await readClipboard()).includes('AX_LINE_0600_中文'),
+    'the complete output on the clipboard',
   );
+  const copied = await readClipboard();
   for (let n = 1; n <= 600; n++)
     assert.equal(
       copied.split('AX_LINE_' + String(n).padStart(4, '0') + '_中文').length -
@@ -231,10 +254,7 @@ try {
       1,
     );
   await writeFile(join(output, '600-copy.txt'), copied);
-  await panel
-    .locator('.native-terminal-toolbar')
-    .getByRole('button', { name: 'new terminal', exact: true })
-    .click();
+  await newShell(panel);
   await until(
     async () => (await query('terminal', 'list')).length === 2,
     'second actual PTY',
@@ -282,7 +302,7 @@ try {
   await page
     .locator(`[data-row-key="recent:${sessionId}"] .session-link`)
     .click();
-  const panelAgain = await openNativeTerminalInspector(page);
+  const panelAgain = await openTerminalMode();
   await until(
     () =>
       panelAgain
