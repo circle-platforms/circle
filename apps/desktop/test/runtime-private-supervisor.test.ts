@@ -602,6 +602,19 @@ test('an unexpected exit keeps the saved connection, says why, logs stderr and r
   );
 });
 
+test('a runtime that stops while it is asked to close lets Circle quit', () =>
+  fixture(async (supervisor, child) => {
+    // A signal to every process of the application stops the runtime just as the main
+    // process asks it to close: the close is never answered
+    child.postMessage = (value) => {
+      child.sent.push(structuredClone(value));
+      if (value.name === 'close')
+        queueMicrotask(() => child.emit('exit', null));
+    };
+    await supervisor.close();
+    assert.equal(child.sent.at(-1)?.name, 'close');
+  }));
+
 test('quitting while a restart waits for stale leases cancels it', async (t) => {
   const logFile = await scratchLog(t);
   const started = Date.now();

@@ -878,12 +878,22 @@ export class RuntimeSupervisor {
     if (this.closing) return this.closing;
     this.closing = (async () => {
       this.cancelRestartWait?.();
-      if (!this.child) return;
-      const reply = await this.command({
-        id: randomUUID(),
-        name: 'close',
-        payload: {},
-      });
+      const child = this.child;
+      if (!child) return;
+      let reply;
+      try {
+        reply = await this.command({
+          id: randomUUID(),
+          name: 'close',
+          payload: {},
+        });
+      } catch (error) {
+        // A runtime that stopped while it was asked to close has nothing left to stop. A
+        // signal to every process of the application (pkill, the end of a Linux session)
+        // stops it just as the main process asks, and quitting goes on.
+        if (this.child !== child) return;
+        throw error;
+      }
       if (!reply.ok) throw Error(reply.error ?? 'runtime close failed');
       this.child?.kill();
       await this.exited;
