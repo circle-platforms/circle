@@ -267,12 +267,14 @@ export interface DesktopBridge {
   onTerminalEvent: (listener: (event: TerminalEvent) => void) => () => void;
   /**
    * Take a mode of the drawer out into a window of its own, or bring that window to the
-   * front when it is already open. The title is the window's.
+   * front when it is already open. The title is the window's. An `address` for the
+   * browser opens there, as it would in the drawer. Only the main window asks.
    */
   popoutOpen: (
     kind: PopoutKind,
     sessionId: string,
     title: string,
+    address?: string,
   ) => Promise<void>;
   /** Close a mode's window: the mode is in the drawer again. */
   popoutDock: (kind: PopoutKind, sessionId: string) => Promise<void>;
@@ -281,6 +283,32 @@ export interface DesktopBridge {
   /** The modes that are in windows of their own now. */
   popouts: () => Promise<PopoutState[]>;
   onPopoutEvent: (listener: (event: PopoutEvent) => void) => () => void;
+  /**
+   * In the browser's window: the address the main window last asked it to open, once; null
+   * when there is none. `onPopoutAddress` says when there is one to take.
+   */
+  popoutAddress?: () => Promise<string | null>;
+  onPopoutAddress?: (listener: () => void) => () => void;
+  /**
+   * In a window of its own: an attachment for its conversation's message box, which is in
+   * the main window. Resolves once the main window has it, with whether it could also be
+   * saved with the draft.
+   */
+  popoutAttach?: (
+    sessionId: string,
+    attachment: PopoutAttachment,
+  ) => Promise<boolean>;
+  /**
+   * In the main window: an attachment a window of its own puts into a conversation's
+   * message box. What the listener returns (saved or not), or the error it throws, goes
+   * back to that window.
+   */
+  onPopoutAttach?: (
+    listener: (
+      sessionId: string,
+      attachment: PopoutAttachment,
+    ) => boolean | Promise<boolean>,
+  ) => () => void;
   /** Whether the window shows dark or light: the browser's own pages follow it. */
   setTheme: (dark: boolean) => Promise<void>;
   onAction: (listener: (action: DesktopAction) => void) => () => void;
@@ -512,6 +540,19 @@ export interface PopoutState {
 }
 export interface PopoutEvent extends PopoutState {
   open: boolean;
+}
+/**
+ * What a window of its own puts into its conversation's message box: a page screenshot
+ * (`image`, a PNG data URL) from the browser's window, a terminal selection (`file`, plain
+ * text) from the terminal's. `size` is its bytes.
+ */
+export interface PopoutAttachment {
+  id: string;
+  name: string;
+  kind: 'image' | 'file';
+  mime: string;
+  size: number;
+  content: string;
 }
 export type TerminalEvent =
   | { kind: 'state'; state: TerminalState }

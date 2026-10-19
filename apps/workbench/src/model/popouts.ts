@@ -1,6 +1,24 @@
 import { useEffect, useState } from 'react';
 import type { PopoutKind } from '../../../desktop/src/contracts';
+import { MAX_POPOUT_TITLE } from '../../../desktop/src/popouts';
 import { desktopHost } from '../host';
+
+/**
+ * A window's title: the mode and the conversation, such as `browser · Fix the reconnect
+ * race`. A conversation's title that would make it too long for the window is cut short.
+ */
+export function popoutTitle(mode: string, title: string): string {
+  const head = `${mode} · `;
+  const whole = head + title;
+  if (whole.length <= MAX_POPOUT_TITLE) return whole;
+  let cut = '';
+  // Whole characters only: a pair of surrogates is never split.
+  for (const char of title) {
+    if (head.length + cut.length + char.length + 1 > MAX_POPOUT_TITLE) break;
+    cut += char;
+  }
+  return head + cut.trimEnd() + '…';
+}
 
 /** The modes that are in windows of their own now, as `kind:conversation`. */
 export function usePopouts(): ReadonlySet<string> {

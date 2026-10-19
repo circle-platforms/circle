@@ -558,6 +558,12 @@ export interface RuntimePort {
   dismissActionError?: (sessionId?: string) => void;
   /** Start the desktop runtime again after it stopped. */
   restartRuntime?: () => Promise<void>;
+  /**
+   * Another window of the application wrote `key` to the storage this one read at start
+   * (any key, when null), such as the main window's text size: a window that only reads
+   * that storage, as a mode's window of its own does, takes the change in.
+   */
+  storageChanged?: (key: string | null) => void;
   newSession: (workspaceId?: string) => string | Promise<string>;
   beginConversation: (
     input: BeginConversation,

@@ -34,18 +34,26 @@ async function start() {
   const host = desktopHost();
   let runtime: RuntimePort;
   const info = host ? await host.info() : undefined;
+  const popout = popoutRoute(location.hash);
   boot('runtime');
   if (host && info) {
     document.documentElement.dataset.desktop = info.platform;
     document.documentElement.dataset.host = 'desktop';
     // A window a mode was popped out into reads the runtime but writes nothing of the
     // view (drafts, scroll) to the storage the main window keeps them in.
-    const storage = popoutRoute(location.hash)
-      ? readOnlyStorage()
-      : localStorage;
+    const storage = popout ? readOnlyStorage() : localStorage;
     runtime = info.frontendOnly
       ? new PreviewRuntime(storage)
       : new LiveRuntime(host, await host.runtimeState(), storage);
+    // What the main window writes there (its text size; the preview's settings), such a
+    // window follows.
+    if (popout) {
+      const reader = runtime;
+      addEventListener('storage', (event) => {
+        if (event.storageArea === localStorage)
+          reader.storageChanged?.(event.key);
+      });
+    }
     if (runtime.mode === 'live') {
       boot('subscribe');
       // Subscribe before reading again so updates during bootstrap cannot be missed.
@@ -65,7 +73,6 @@ async function start() {
   void host?.setLanguage(locale());
   subscribeLanguage(() => void host?.setLanguage(locale()));
   boot('render');
-  const popout = popoutRoute(location.hash);
   if (popout) document.documentElement.dataset.popout = popout.kind;
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

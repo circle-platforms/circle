@@ -54,6 +54,7 @@ export const workspace: Record<string, string> = {
   'the window could not be opened': '无法打开窗口',
   '{title} is in its own window': '{title} 在单独的窗口中',
   'this conversation is gone': '这个会话已不存在',
+  'the main window did not answer': '主窗口没有响应',
   'take page screenshot': '截取网页画面',
   'browser page': '网页',
   'enlarge {name}': '放大 {name}',

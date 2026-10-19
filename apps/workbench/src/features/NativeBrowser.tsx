@@ -56,6 +56,8 @@ import { Button, IconButton } from '../components/common';
 import { BrowserDialogPanel, CertificateChoicePanel } from './BrowserDialog';
 import { t } from '../i18n';
 import { ModeButtons, useModeChrome } from './mode-chrome';
+import { useAddToDraft } from '../app/draft';
+import { screenshotAttachment } from '../model/draft-attachments';
 
 const PERMISSIONS: Record<BrowserPermission['kinds'][number], () => string> = {
   camera: () => t('use your camera'),
@@ -107,9 +109,12 @@ const isField = (target: EventTarget | null) =>
 
 export function NativeBrowser({
   target,
+  targetRequest,
   sessionId,
 }: {
   target?: string;
+  /** Counts the times `target` was asked for, so the same address can open again. */
+  targetRequest?: number;
   /** The conversation whose browser this is; the open one when not given. */
   sessionId?: string;
 } = {}) {
@@ -305,37 +310,26 @@ export function NativeBrowser({
     return () => cancelAnimationFrame(frame);
   }, [whole]);
   // A picture of the page you took goes into the message box as an attachment, for you to
-  // send or take back: nothing is shown in the panel for it.
+  // send or take back: nothing is shown in the panel for it. From a window of its own it
+  // goes to the main window's message box, and the window says so.
+  const addToDraft = useAddToDraft();
   const attachScreenshot = (value: BrowserCapture) => {
     const target = runtime
       .getSnapshot()
       .sessions.find((item) => item.id === id);
     if (!target || target.lifecycle === 'deleting') return;
-    let site = '';
-    try {
-      site = new URL(value.url).hostname;
-    } catch {
-      site = '';
-    }
-    const at = new Date(value.observedAt);
-    const stamp = Number.isNaN(at.getTime())
-      ? ''
-      : ` ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
-    runtime.updateSessionView(id, {
-      attachments: [
-        ...target.attachments,
-        {
-          id: crypto.randomUUID(),
-          name: `${site || t('browser page')}${stamp}.png`,
-          kind: 'image',
-          content: value.dataUrl,
-          mime: 'image/png',
-          size: Math.round(
-            ((value.dataUrl.split(',')[1] ?? '').length * 3) / 4,
-          ),
-        },
-      ],
-    });
+    void addToDraft(id, screenshotAttachment(value)).then(
+      (saved) => {
+        if (chrome?.onDock)
+          notify(
+            saved
+              ? t('added to the message box')
+              : t('added to the message box, but it could not be saved'),
+          );
+      },
+      (error: unknown) =>
+        notify(error instanceof Error ? error.message : t('action failed')),
+    );
   };
   const captureBrowser = () => {
     const identity = currentIdentity.current;
@@ -417,7 +411,7 @@ export function NativeBrowser({
     setUrl(target);
     void navigate(target);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, id]);
+  }, [target, targetRequest, id]);
   const tabs = (action: 'new' | 'select' | 'close', tab?: string) =>
     host
       .browserTabs(id, action, tab)

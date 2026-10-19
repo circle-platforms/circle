@@ -96,7 +96,8 @@ import {
 } from '../model/source-resource-owner';
 import { Inspector, PanelButtons } from '../features/Panels';
 import { DrawerHandle } from '../features/DrawerHandle';
-import { popoutKey, usePopouts } from '../model/popouts';
+import { popoutKey, popoutTitle, usePopouts } from '../model/popouts';
+import { addDraftAttachment } from '../model/draft-attachments';
 import { Overview } from '../features/Overview';
 import { ModeChromeProvider } from '../features/mode-chrome';
 import {
@@ -218,18 +219,32 @@ export function App() {
       ),
     [popped, session.id],
   );
-  const popOut = (kind: 'browser' | 'terminal') => {
+  // `address`: a page for the browser's window to open, as the drawer's would.
+  const popOut = (kind: 'browser' | 'terminal', address?: string) => {
     const host = desktopHost();
     if (!host?.popoutOpen) return;
     const name = kind === 'browser' ? t('browser') : t('terminal');
-    void host
-      .popoutOpen(kind, session.id, `${name} · ${session.title}`)
+    const title = popoutTitle(name, session.title);
+    void (
+      address
+        ? host.popoutOpen(kind, session.id, title, address)
+        : host.popoutOpen(kind, session.id, title)
+    )
       .then(() => {
         // What was in the drawer is in its window now.
         if (panel === kind) setInspectorOpen(false);
       })
       .catch(() => notify(t('the window could not be opened')));
   };
+  // A window of its own puts a screenshot or a terminal selection into the message box of
+  // its conversation, which is kept here.
+  useEffect(
+    () =>
+      desktopHost()?.onPopoutAttach?.((sessionId, attachment) =>
+        addDraftAttachment(runtime, sessionId, attachment),
+      ),
+    [runtime],
+  );
   // Another conversation is shown: its windows are not, they come back to their drawer.
   const shownSession = useRef(session.id);
   useEffect(() => {
@@ -662,7 +677,11 @@ export function App() {
       return;
     }
     if ((kind === 'browser' || kind === 'terminal') && poppedModes.has(kind)) {
-      popOut(kind);
+      // An address for the browser opens in its window, as it would in the drawer.
+      popOut(
+        kind,
+        kind === 'browser' && /^https?:\/\//i.test(choice) ? choice : undefined,
+      );
       return;
     }
     setPanel(kind);

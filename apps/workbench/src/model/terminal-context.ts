@@ -1,6 +1,7 @@
 import type { TerminalReplay } from '../../../desktop/src/workspace/terminal';
 import type { Attachment, RuntimePort } from './types';
 import { t } from '../i18n';
+import { addDraftAttachment, type AddToDraft } from './draft-attachments';
 
 // The desktop text-file limit. Kept renderer-local to avoid importing Node path
 // utilities from policy.ts; a contract test pins these two values together.
@@ -28,11 +29,15 @@ export interface TerminalSelectionCapture {
  * Replay authenticates the resource identity through the existing session route.
  * The selected text remains user-provided content, just like a manual attachment.
  * No source path in this attachment grants access to any file or process.
+ * `add` puts it into the message box: the window's own, unless the terminal is in a
+ * window of its own, whose message box is the main window's.
  */
 export async function appendTerminalSelection(
   runtime: RuntimePort,
   capture: TerminalSelectionCapture,
   replay: () => Promise<TerminalReplay>,
+  add: AddToDraft = async (sessionId, attachment) =>
+    addDraftAttachment(runtime, sessionId, attachment),
 ): Promise<void> {
   const expired = () => Error(t('terminal selection expired; select it again'));
   const current = () => {
@@ -48,16 +53,17 @@ export async function appendTerminalSelection(
       throw expired();
     return session;
   };
-  const persist = (sessionId: string, attachments: Attachment[]) => {
-    if (!runtime.updateSessionView(sessionId, { attachments }))
+  const persist = async (sessionId: string, attachment: Attachment) => {
+    if (!(await add(sessionId, attachment)))
       throw Error(t('terminal selection could not be saved'));
   };
   const id = `terminal-selection:${capture.operationId}`;
   const initial = current();
-  if (initial.attachments.some((item) => item.id === id)) {
+  const known = initial.attachments.find((item) => item.id === id);
+  if (known) {
     // A previous call may have changed memory before storage failed. Retrying
     // the operation must retry persistence without appending another capture.
-    persist(initial.id, initial.attachments);
+    await persist(initial.id, known);
     return;
   }
   if (!capture.text) throw Error(t('select terminal output first'));
@@ -86,8 +92,9 @@ export async function appendTerminalSelection(
       throw Error(t('terminal selection source changed'));
     // Take the latest attachments after the asynchronous source check. Another
     // capture or a file picker may have appended context while replay was in flight.
-    if (target.attachments.some((item) => item.id === id)) {
-      persist(target.id, target.attachments);
+    const added = target.attachments.find((item) => item.id === id);
+    if (added) {
+      await persist(target.id, added);
       return;
     }
     const metadata = {
@@ -134,7 +141,7 @@ export async function appendTerminalSelection(
       size,
       content,
     };
-    persist(target.id, [...target.attachments, attachment]);
+    await persist(target.id, attachment);
   } finally {
     unsubscribe();
   }
