@@ -47,6 +47,7 @@ export const circlePlugins: WorkbenchPlugin[] = [
         component: (props) => (
           <FilesPanel
             selection={props.selection}
+            visible={props.visible}
             onFile={props.onFile}
             onDialog={props.onDialog}
           />
