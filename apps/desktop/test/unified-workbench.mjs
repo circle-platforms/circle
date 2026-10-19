@@ -248,20 +248,6 @@ try {
   const state = async () =>
     (await page.evaluate(() => window.circleDesktop.runtimeState())).snapshot;
   sessionId = (await state()).activeSessionId;
-  const call = async (service, method, params = {}) => {
-    const response = await page.evaluate(
-      ({ sessionId, service, method, params }) =>
-        window.circleDesktop.runtimeCommand({
-          id: crypto.randomUUID(),
-          name: 'workspace-service',
-          sessionId,
-          payload: { service, method, params },
-        }),
-      { sessionId, service, method, params },
-    );
-    assert.equal(response.ok, true, JSON.stringify(response));
-    return response.data;
-  };
   phase = 'scripted-turn';
   const composer = page.getByRole('textbox', { name: 'message', exact: true });
   await composer.fill('verify the isolated native workbench');
@@ -293,13 +279,30 @@ try {
       await button.click();
   };
   phase = 'overview';
+  // The overview is a column of its own beside the conversation; the top bar names it
+  // and each mode of the work drawer
   await open('overview');
-  const drawer = page.locator('.work-drawer');
-  await drawer.locator('.drawer-summary-card').nth(4).waitFor();
-  assert.equal(await drawer.locator('.drawer-summary-card').count(), 5);
-  for (const name of ['overview', 'files', 'changes', 'browser', 'terminal'])
+  const overview = page.getByRole('complementary', {
+    name: 'overview',
+    exact: true,
+  });
+  await overview
+    .getByRole('region', { name: 'environment', exact: true })
+    .waitFor();
+  await overview.getByRole('region', { name: /^context\b/ }).waitFor();
+  for (const name of [
+    'overview',
+    'files',
+    'changes',
+    'browser',
+    'subagents',
+    'terminal',
+  ])
     assert.equal(await mode(name).count(), 1);
-  check('label modes and the five-card overview share one work drawer');
+  const drawer = page.locator('.work-drawer');
+  check(
+    'the overview sits beside the conversation and the top bar names each mode of the work drawer',
+  );
   phase = 'file-drawer';
   await open('files');
   // Renderer completion comes from its actual paged native list, not a test runtime.
@@ -417,11 +420,8 @@ try {
     'real native catalog pages all10,001 committed files through preload/main; editor draft, root identity and Git index survive',
   );
   phase = 'drawer-continuity';
-  const index = drawer.getByRole('button', { name: 'file index', exact: true });
-  const indexed = await index.getAttribute('aria-pressed');
-  await index.click();
-  assert.notEqual(await index.getAttribute('aria-pressed'), indexed);
-  await index.click();
+  // The full view and back, the overview put away and shown again, and another mode
+  // shown in the drawer: the composer, its draft and the unsaved editor are the same
   await drawer.getByRole('button', { name: 'full view', exact: true }).click();
   await drawer
     .getByRole('button', { name: 'exit full view', exact: true })
@@ -429,17 +429,26 @@ try {
   assert.equal(await composer.inputValue(), 'unsent conversation draft');
   assert.equal(await composerNode.evaluate((node) => node.isConnected), true);
   assert.equal(await editorNode.evaluate((node) => node.isConnected), true);
-  await open('overview');
+  // A wide file can have made the overview step aside: show it and put it away, or the
+  // other way round
+  const overviewShown =
+    (await mode('overview').getAttribute('aria-pressed')) === 'true';
+  for (const shown of overviewShown ? [false, true] : [true, false]) {
+    await mode('overview').click();
+    await overview.waitFor({ state: shown ? 'visible' : 'detached' });
+  }
+  await open('changes');
+  await drawer.locator('.changes-mode').waitFor();
   await open('files');
   assert.equal(await editorNode.evaluate((node) => node.isConnected), true);
+  assert.equal(await composerNode.evaluate((node) => node.isConnected), true);
   await drawer.getByText('unsaved changes', { exact: true }).waitFor();
   check(
-    'index/full/split/mode changes retain composer DOM, draft and unsaved editor instance',
+    'full view, the overview and mode changes retain composer DOM, draft and unsaved editor instance',
   );
   phase = 'index-resize';
+  // The full view has room for the tree beside the open file
   await drawer.getByRole('button', { name: 'full view', exact: true }).click();
-  if ((await index.getAttribute('aria-pressed')) !== 'true')
-    await index.click();
   const resizeIndex = drawer.getByRole('separator', {
     name: 'resize context index',
     exact: true,
@@ -502,13 +511,18 @@ try {
     'explicit save writes exact bytes while leaving the Git index untouched',
   );
   phase = 'native-late-file-navigation';
-  const fileIndexToggle = drawer.getByRole('button', {
-    name: 'file index',
-    exact: true,
-  });
-  if ((await fileIndexToggle.getAttribute('aria-pressed')) !== 'true')
-    await fileIndexToggle.click();
+  // The tree is beside the open file while the drawer has room for both (the overview
+  // shown above made it give way); otherwise the file has the drawer, and the tree comes
+  // back when the file closes
   const nativeTree = drawer.getByRole('tree', { name: 'files', exact: true });
+  const showTree = async () => {
+    if (!(await nativeTree.isVisible()))
+      await drawer
+        .getByRole('button', { name: 'close file', exact: true })
+        .click();
+    await nativeTree.waitFor();
+  };
+  await showTree();
   await nativeTree.getByRole('treeitem', { name: 'bulk', exact: true }).click();
   await nativeTree.press('End');
   const maximumMountedNativeRows = await nativeTree
@@ -558,9 +572,8 @@ try {
   check(
     'an actual file beyond native page four opens its exact disk bytes from bounded file index without a model request',
   );
-  // Return to the saved baseline document for the remaining Git/theme journeys.
-  if ((await fileIndexToggle.getAttribute('aria-pressed')) !== 'true')
-    await fileIndexToggle.click();
+  // Return to the saved baseline document for the remaining changes/theme journeys.
+  await showTree();
   await nativeFilter.fill('README.md');
   await nativeTree
     .getByRole('treeitem', { name: 'README.md', exact: true })
@@ -570,36 +583,42 @@ try {
     .getByText('README.md', { exact: true })
     .first()
     .waitFor();
-  if ((await fileIndexToggle.getAttribute('aria-pressed')) !== 'true')
-    await fileIndexToggle.click();
-  await nativeFilter.fill('');
-  phase = 'git-history';
+  // The open file can have the drawer to itself again, and the filter with the tree
+  if (await nativeFilter.isVisible()) await nativeFilter.fill('');
+  // The Git panel and its history went with the window's staging and committing: the
+  // changes mode is one list of what differs from the last commit, and authors nothing.
+  phase = 'changes';
   await open('changes');
-  await drawer.getByRole('tab', { name: 'git', exact: true }).click();
-  await drawer.locator('.native-git-history summary').click();
-  await drawer
-    .getByRole('button', { name: /Create isolated baseline/ })
+  const changesMode = drawer.locator('.changes-mode');
+  await changesMode
+    .getByRole('button', { name: 'all uncommitted', exact: true })
     .click();
-  await drawer.locator('.native-git-commits [aria-current="true"]').waitFor();
-  assert.equal(
-    await drawer
-      .getByRole('button', { name: 'commit selected', exact: true })
-      .count(),
-    0,
-  );
-  const history = await call('git', 'history');
-  assert.equal(history.commits[0].id, commit);
+  const savedRow = changesMode
+    .getByRole('list', { name: 'changed files', exact: true })
+    .getByRole('button', { name: /README\.md/ });
+  await savedRow.click();
+  assert.equal(await savedRow.locator('.overview-letter').innerText(), 'M');
+  await changesMode
+    .locator('.changes-diff')
+    .getByText('editor buffer survived drawer navigation')
+    .first()
+    .waitFor();
+  await changesMode
+    .getByRole('button', { name: 'open file', exact: true })
+    .waitFor();
   assert.equal((await git('diff', '--cached')).trim(), '');
+  assert.equal((await git('write-tree')).trim(), originalIndex);
+  assert.equal((await git('rev-parse', 'HEAD')).trim(), commit);
   assert.equal(await readFile(file, 'utf8'), saved);
-  receipt.gitHistory = {
+  receipt.changes = {
     commit,
-    renderedReadonly: true,
-    actualHistoryMatches: true,
+    listedModified: true,
+    differenceShown: true,
     diskUnchanged: true,
     indexUnchanged: true,
   };
   check(
-    'real repository history opens in a read-only scope and does not restore/stage files',
+    'the changes mode lists the saved file as changed since the last commit, with its difference, and stages nothing',
   );
   phase = 'themes';
   for (const theme of ['dark', 'light']) {
@@ -629,9 +648,10 @@ try {
     assert.equal(await composer.inputValue(), 'unsent conversation draft');
     await open('files');
     await editor.locator('.view-lines').first().waitFor();
+    // A mode has no title bar: the open file's heading names it
     assert.equal(
       await drawer
-        .locator('.inspector-title-name')
+        .locator('.file-view-heading')
         .evaluate((node) => getComputedStyle(node).visibility),
       'visible',
     );
@@ -639,15 +659,10 @@ try {
       path: join(output, `drawer-${theme}.png`),
       animations: 'disabled',
     });
+    // The full view has room for the tree beside the open file
     await drawer
       .getByRole('button', { name: 'full view', exact: true })
       .click();
-    const fileIndex = drawer.getByRole('button', {
-      name: 'file index',
-      exact: true,
-    });
-    if ((await fileIndex.getAttribute('aria-pressed')) !== 'true')
-      await fileIndex.click();
     const indexOverlap = await drawer
       .locator('.drawer-context-index')
       .evaluate((index) => {
