@@ -4,7 +4,7 @@
 // debugging port. Nothing comes from the network: the model is a local endpoint, and the data
 // folder is a scratch one. It is the desktop part of the merge gate (.github/workflows/check.yml)
 // and of a tag's release run; the full journeys run in the Desktop workbench workflow.
-//   CIRCLE_DESKTOP_APP_PATH    the packaged Circle.app (macOS) or folder
+//   CIRCLE_DESKTOP_APP_PATH    the packaged Circle.app (macOS) or folder; it starts a copy
 //   CIRCLE_DESKTOP_EXECUTABLE  the program inside it
 // What it saw goes to artifacts/launch-smoke/, and is kept when a check fails.
 import { chromium } from 'playwright';
@@ -12,9 +12,23 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
-import { existsSync, openSync, readdirSync } from 'node:fs';
+import {
+  constants,
+  existsSync,
+  openSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { patience } from './helpers/patience.mjs';
@@ -123,7 +137,44 @@ delete env.ELECTRON_RUN_AS_NODE;
 const log = join(temp, 'application.log');
 const output = openSync(log, 'a');
 
-// Everything still running from the package, for the evidence and the last check
+// The application starts from a copy of the package of its own, so that what still runs from
+// it after the quit is this run's: another journey may start the same package at the same
+// time, and its processes are not this one's leftovers (#200). The copy's path is the real
+// one, as the processes report theirs (/private/var on macOS, long names on Windows).
+const inside = relative(resolve(appPath), resolve(executable));
+if (!inside || inside.startsWith('..') || isAbsolute(inside))
+  throw Error(
+    'CIRCLE_DESKTOP_EXECUTABLE must be inside CIRCLE_DESKTOP_APP_PATH',
+  );
+const copy = join(realpathSync.native(temp), basename(resolve(appPath)));
+stage(`copying the package to ${copy}`);
+await cp(appPath, copy, {
+  recursive: true,
+  verbatimSymlinks: true,
+  mode: constants.COPYFILE_FICLONE,
+});
+const program = join(copy, inside);
+// Chromium's sandbox helper must belong to root and be setuid where unprivileged user
+// namespaces are restricted. The copy belongs to whoever made it, so it is set up as the
+// package's helper is.
+const helper = join(dirname(resolve(executable)), 'chrome-sandbox');
+if (process.platform === 'linux' && existsSync(helper)) {
+  const { uid, mode } = statSync(helper);
+  const copied = join(dirname(program), 'chrome-sandbox');
+  if (uid === 0 && mode & 0o4000)
+    for (const args of [
+      ['chown', 'root:root', copied],
+      ['chmod', '4755', copied],
+    ]) {
+      const result = spawnSync('sudo', ['-n', ...args], { encoding: 'utf8' });
+      if (result.status !== 0)
+        throw Error(
+          `sudo ${args.join(' ')} exited with ${result.status ?? result.error}: ${result.stderr ?? ''}`,
+        );
+    }
+}
+
+// Everything still running from the copy, for the evidence and the last check
 const leftovers = () => {
   try {
     if (process.platform === 'win32') {
@@ -132,7 +183,7 @@ const leftovers = () => {
       // runner (#176, #115), and listing every process fails on protected ones.
       const names = [
         ...new Set(
-          readdirSync(appPath, { recursive: true })
+          readdirSync(copy, { recursive: true })
             .map(String)
             .filter((file) => /\.exe$/i.test(file))
             .map((file) => basename(file).replace(/\.exe$/i, '')),
@@ -143,7 +194,7 @@ const leftovers = () => {
         encoding: 'utf8',
         timeout: 30000,
       });
-      const root = resolve(appPath).toLowerCase();
+      const root = copy.toLowerCase();
       const left = readWindowsProcessRecords(result.stdout || '')
         .entries.filter((entry) => entry.path.toLowerCase().startsWith(root))
         .map((entry) => `${entry.pid} ${basename(entry.path)}`);
@@ -160,7 +211,7 @@ const leftovers = () => {
       timeout: 30000,
     })
       .split('\n')
-      .filter((line) => line.includes(resolve(appPath)));
+      .filter((line) => line.includes(copy));
   } catch (error) {
     return [`could not list processes: ${error}`];
   }
@@ -168,8 +219,8 @@ const leftovers = () => {
 
 // The application starts detached in a process group of its own, so that everything it
 // started can be stopped together when it does not quit
-stage(`starting ${executable}`);
-const app = spawn(executable, ['--remote-debugging-port=0'], {
+stage(`starting ${program}`);
+const app = spawn(program, ['--remote-debugging-port=0'], {
   env,
   detached: process.platform !== 'win32',
   stdio: ['ignore', output, output],
@@ -333,5 +384,11 @@ try {
     await rm(temp, { recursive: true, force: true, maxRetries: 10 }).catch(
       () => {},
     );
-  else console.error(`kept ${temp}`);
+  else {
+    // The copy is the package's own bytes: a failure keeps the data and the log
+    await rm(copy, { recursive: true, force: true, maxRetries: 10 }).catch(
+      () => {},
+    );
+    console.error(`kept ${temp}`);
+  }
 }
