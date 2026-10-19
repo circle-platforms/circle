@@ -163,8 +163,8 @@ if (query.has('accessibility'))
 connectWorkspaceStreams(workspaceId, 'A');
 Object.assign(window, {
   terminalTabsFixture: {
-    showManagedProcess: () => {
-      const item = items.find((item) => item.id === 'terminal-10')!;
+    showManagedProcess: (id = 'terminal-10') => {
+      const item = items.find((entry) => entry.id === id)!;
       Object.assign(item, {
         pid: 51010,
         managedCommand: {

@@ -423,7 +423,16 @@ try {
       await page
         .getByRole('button', { name: 'stop terminal', exact: true })
         .click();
-      assert.equal((await geometry()).selected, created.selected);
+      // The owner's decision (2026-10-19): a stopped console leaves the strip at
+      // once instead of sitting there grey; its output stays in the command
+      // history and the selection moves to the next live console.
+      await page.waitForFunction(
+        () =>
+          !document.querySelector(
+            '.native-terminal-tabs [aria-controls="terminal-terminal-10"]',
+          ),
+      );
+      assert.equal((await geometry()).selected, 'terminal-terminal-9');
       // Reload the session list after a real session switch, preserving selected id
       // even when the backend list order changes.
       await page.evaluate(() => window.terminalTabsFixture.reorder());
@@ -448,14 +457,15 @@ try {
         await toggle.click();
       await page.locator('#inspector-terminal-tab-terminal').click();
       const reordered = await visible();
-      assert.equal(reordered.selected, created.selected);
-      assert.match(reordered.label, /zsh 1/);
+      assert.equal(reordered.selected, 'terminal-terminal-9');
+      assert.match(reordered.label, /zsh 9/);
       await page.screenshot({ path: `${output}/${theme}-${width}.png` });
       assert.equal(reordered.pageX, initial.pageX);
       assert.equal(reordered.pageY, initial.pageY);
       assert.deepEqual(errors, []);
-      await page.evaluate(() =>
-        window.terminalTabsFixture.showManagedProcess(),
+      await page.evaluate(
+        (id) => window.terminalTabsFixture.showManagedProcess(id),
+        (await geometry()).selected.replace(/^terminal-/, ''),
       );
       await page
         .locator('.native-service-details code')

@@ -784,8 +784,13 @@ export function NativeTerminal({
                       if (!next) return;
                       event.preventDefault();
                       event.stopPropagation();
+                      // Keyboard moves stay on the strip: focusing the new
+                      // console's xterm here would swallow the next key.
                       focusTarget.current = null;
-                      selectTerminal(next.id);
+                      setSelected((previous) => ({
+                        ...previous,
+                        [sessionId]: next.id,
+                      }));
                       tabStrip.current
                         ?.querySelector<HTMLElement>(
                           `[aria-controls="terminal-${next.id}"]`,
