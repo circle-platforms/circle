@@ -165,8 +165,8 @@ const openHistory = async () => {
     .getByText('COLD_CONFIG_HISTORY_REMAINS_READABLE', { exact: true })
     .waitFor();
 };
-// The task limits are kept on the settings page. The tasks panel that also said so, and
-// had the start button, went with the manual task controls: Circle starts tasks itself.
+// The task limits are kept on the settings page, with the start of the tasks a repaired
+// limit left waiting. The tasks panel that also said so went with the manual task controls.
 const openTaskLimits = async () => {
   await page.getByRole('button', { name: 'settings', exact: true }).click();
   const section = page.getByRole('region', {
@@ -321,10 +321,28 @@ try {
   await page.screenshot({
     path: join(output, 'restarted-still-explicit-start-required.png'),
   });
-  // The explicit start that lifted this gate was the tasks panel's start ready tasks,
-  // removed with the manual task controls. Nothing in the window, and none of the
-  // model's task tools, calls the tasks service's start now, so the queued task waits
-  // here for good: a gap of the redesign, reported, not checked as intended.
+  // The settings page says the queued tasks wait, and its start is the only thing that
+  // lets them run: the next real scripted model request follows that press alone.
+  const restartedSection = await openTaskLimits();
+  await restartedSection
+    .getByText('limits repaired; start queued tasks when ready', {
+      exact: false,
+    })
+    .waitFor();
+  assert.equal((await requests()).length, 1);
+  await restartedSection
+    .getByRole('button', { name: 'start ready tasks', exact: true })
+    .click();
+  await until(
+    async () => (await requests()).length >= 2,
+    'the settings page start runs the queued model request',
+  );
+  await restartedSection
+    .getByRole('button', { name: 'start ready tasks', exact: true })
+    .waitFor({ state: 'detached' });
+  receipt.checks.push(
+    'only the explicit start on the settings page causes the next real scripted model request',
+  );
   assert.deepEqual(receipt.rendererErrors, []);
   receipt.status = 'passed';
 } catch (error) {
