@@ -337,6 +337,11 @@ test('a read GitHub did not answer keeps the pull requests the last read of the 
   assert.equal(keepLastPullRequests(read, out), out);
   const fresh = overview({ files: 1 }, { current: null });
   assert.equal(keepLastPullRequests(read, fresh), fresh);
+  // A host that answers nothing is not a read to merge.
+  assert.equal(
+    keepLastPullRequests(read, undefined as unknown as PullRequestOverview),
+    undefined,
+  );
 });
 
 test("context usage reads the terminal footer's numbers, and its tokens are the window's fill", () => {
