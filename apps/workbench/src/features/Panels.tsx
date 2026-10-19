@@ -148,6 +148,7 @@ export function PanelButtons({
           key={item.id}
           className={`drawer-mode-button ${open && panel === item.id ? 'active' : ''}`}
           aria-label={t('{title} panel', { title: item.title })}
+          title={item.title}
           aria-pressed={open && panel === item.id}
           onClick={() =>
             open && panel === item.id ? onClose() : onPanel(item.id)

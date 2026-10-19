@@ -5426,6 +5426,19 @@ pre {
 .topbar-title {
   min-width: 100px;
 }
+/* The conversation title keeps its room: when the top bar is too narrow for the
+   modes' words beside it, the modes show their icons only. */
+.topbar {
+  container: topbar / inline-size;
+}
+@container topbar (max-width: 1119px) {
+  .drawer-mode-button > span {
+    display: none;
+  }
+  .drawer-mode-button {
+    padding-inline: 7px;
+  }
+}
 .topbar-actions {
   min-width: 0;
 }
