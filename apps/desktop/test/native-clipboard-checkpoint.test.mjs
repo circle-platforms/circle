@@ -16,6 +16,7 @@ import {
   readClipboardCheckpoint,
   removeClipboardCheckpoint,
 } from './helpers/native-clipboard-checkpoint.mjs';
+import { fileSymlinkRefusal } from './helpers/symlink-support.mjs';
 import {
   preserveNativeClipboard,
   restoreNativeClipboard,
@@ -54,7 +55,7 @@ test('private checkpoint has exact formats, bytes, bounded data and owner-only p
     await removeClipboardCheckpoint(record);
   }
 });
-test('symlink, unsafe permissions and unsupported/oversized data fail closed', async () => {
+test('symlink, unsafe permissions and unsupported/oversized data fail closed', async (t) => {
   const record = await writeClipboardCheckpoint(payload);
   const original = record.file + '.original';
   try {
@@ -63,10 +64,16 @@ test('symlink, unsafe permissions and unsupported/oversized data fail closed', a
       await assert.rejects(readClipboardCheckpoint(record), /permissions/);
       await chmod(record.file, 0o600);
     }
-    await writeFile(original, 'not a checkpoint', { mode: 0o600 });
-    await rm(record.file);
-    await symlink(original, record.file);
-    await assert.rejects(readClipboardCheckpoint(record), /unsafe/);
+    await t.test(
+      'a symlinked checkpoint is unsafe',
+      { skip: await fileSymlinkRefusal() },
+      async () => {
+        await writeFile(original, 'not a checkpoint', { mode: 0o600 });
+        await rm(record.file);
+        await symlink(original, record.file);
+        await assert.rejects(readClipboardCheckpoint(record), /unsafe/);
+      },
+    );
     await assert.rejects(
       writeClipboardCheckpoint([
         [{ type: 'x', readType: 'x', kind: 'unknown' }],

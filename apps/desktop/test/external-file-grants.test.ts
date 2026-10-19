@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExternalFileGrants } from '../src/workspace/external-file-grants.ts';
 import { FileRewindJournal } from '../../../src/file_rewind.ts';
+import { fileSymlinkRefusal } from './helpers/symlink-support.mjs';
 
 async function fixture(t: TestContext) {
   const scratch = await mkdtemp(join(tmpdir(), 'circle-exact-grant-'));
@@ -113,12 +114,18 @@ test('revocation and regrant invalidate an already prepared text undo preview', 
 test('symlink hardlink credential binary oversized and private-data grants are refused', async (t) => {
   const { root, path, grants } = await fixture(t);
   const alias = join(root, 'alias.txt');
-  await symlink(path, alias);
-  await assert.rejects(
-    grants.mint('a', alias, 'readwrite'),
-    /regular non-linked/,
+  await t.test(
+    'a symlink is refused',
+    { skip: await fileSymlinkRefusal() },
+    async () => {
+      await symlink(path, alias);
+      await assert.rejects(
+        grants.mint('a', alias, 'readwrite'),
+        /regular non-linked/,
+      );
+      await rm(alias);
+    },
   );
-  await rm(alias);
   await link(path, alias);
   await assert.rejects(grants.mint('a', path, 'read'), /regular non-linked/);
   await rm(alias);
@@ -150,15 +157,21 @@ test('file replacement parent rename and symlink swaps never inherit an exact gr
   await assert.rejects(grants.read('a', path, signal), /identity changed/);
   await rm(path);
   await rename(path + '.old', path);
-  await grants.mint('a', path, 'readwrite');
-  await rename(path, path + '.old');
-  await symlink(path + '.old', path);
-  await assert.rejects(
-    grants.read('a', path, signal),
-    /identity changed|symbolic/,
+  await t.test(
+    'a symlink swapped in for the granted file is refused',
+    { skip: await fileSymlinkRefusal() },
+    async () => {
+      await grants.mint('a', path, 'readwrite');
+      await rename(path, path + '.old');
+      await symlink(path + '.old', path);
+      await assert.rejects(
+        grants.read('a', path, signal),
+        /identity changed|symbolic/,
+      );
+      await rm(path);
+      await rename(path + '.old', path);
+    },
   );
-  await rm(path);
-  await rename(path + '.old', path);
   const parent = join(root, 'parent');
   await mkdir(parent);
   const nested = join(parent, 'file.txt');
