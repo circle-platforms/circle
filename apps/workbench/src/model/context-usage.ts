@@ -6,10 +6,9 @@ export interface ContextUsage {
   percent: number | null;
   /** Orange from 70% and red from 90%. */
   level: '' | 'high' | 'full';
-  /** `12.3k / 128.0k (10%)`, or `N/A` where the endpoint did not say. */
-  context: string;
-  /** `↑ 12.3k · ↓ 1.2k`, the terminal footer's pair. */
-  tokens: string;
+  /** `14.1k / 128.0k`, the tokens in the window after the last answer of the model's
+   * window; `N/A` for what the endpoint did not say. */
+  fill: string;
   cost: string;
   /** `N/A` when the endpoint did not report any cache use. */
   cache: string;
@@ -32,19 +31,14 @@ export function contextUsage(session: Pick<Session, 'meters'>): ContextUsage {
     (meters && meters.input
       ? `${((Math.min(meters.cacheRead, meters.input) / meters.input) * 100).toFixed(1)}%`
       : 'N/A');
-  const context =
+  const fill =
     meters && meters.contextInput !== null
-      ? meters.contextWindow
-        ? `${formatTokens(meters.contextInput)} / ${formatWindow(meters.contextWindow)} (${Math.round(percent ?? 0)}%)`
-        : `${formatTokens(meters.contextInput)} / N/A`
+      ? `${formatTokens(meters.contextInput)} / ${meters.contextWindow ? formatWindow(meters.contextWindow) : 'N/A'}`
       : 'N/A';
   return {
     percent,
     level,
-    context,
-    tokens: meters
-      ? `↑ ${meters.inputUnknown ? 'N/A' : formatTokens(meters.input)} · ↓ ${formatTokens(meters.output)}`
-      : 'N/A',
+    fill,
     cost: meters?.cost ?? 'N/A',
     cache,
   };

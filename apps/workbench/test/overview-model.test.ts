@@ -302,13 +302,12 @@ test('the changes card offers to create a pull request, update one, or nothing',
     assert.equal(pullRequestAction(overview({ files: 3 }, { access })), null);
 });
 
-test('context usage reads the same numbers as the terminal footer', () => {
+test("context usage reads the terminal footer's numbers, and its tokens are the window's fill", () => {
   const unknown = contextUsage({ meters: undefined });
   assert.deepEqual(unknown, {
     percent: null,
     level: '',
-    context: 'N/A',
-    tokens: 'N/A',
+    fill: 'N/A',
     cost: 'N/A',
     cache: 'N/A',
   });
@@ -321,8 +320,10 @@ test('context usage reads the same numbers as the terminal footer', () => {
     contextWindow: 128_000,
   };
   const usage = contextUsage({ meters });
-  assert.equal(usage.context, '14.1k / 128.0k (11%)');
-  assert.equal(usage.tokens, '↑ 12.3k · ↓ 1.2k');
+  // What the last answer left in the window, of the model's window: not what the whole
+  // session sent and received.
+  assert.equal(usage.fill, '14.1k / 128.0k');
+  assert.equal(Math.round(usage.percent!), 11);
   assert.equal(usage.cost, '$0.04');
   assert.equal(usage.cache, '50.0%');
   assert.equal(usage.level, '');
@@ -335,7 +336,15 @@ test('context usage reads the same numbers as the terminal footer', () => {
     'full',
   );
   assert.equal(
-    contextUsage({ meters: { ...meters, contextWindow: null } }).context,
+    contextUsage({ meters: { ...meters, contextWindow: 1_048_576 } }).fill,
+    '14.1k / 1.0M',
+  );
+  assert.equal(
+    contextUsage({ meters: { ...meters, contextWindow: null } }).fill,
     '14.1k / N/A',
+  );
+  assert.equal(
+    contextUsage({ meters: { ...meters, contextInput: null } }).fill,
+    'N/A',
   );
 });

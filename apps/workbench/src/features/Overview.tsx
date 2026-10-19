@@ -314,7 +314,7 @@ export function Overview({
       >
         <dl className="overview-facts">
           <dt>{t('tokens')}</dt>
-          <dd>{usage.tokens}</dd>
+          <dd>{usage.fill}</dd>
           <dt>{t('cost')}</dt>
           <dd title={t('estimated from the model’s published prices')}>
             {usage.cost}

@@ -16,11 +16,17 @@ const WORDS = {
     plan: 'plan',
     oneSubagent: '1 subagent',
     planAndSubagent: 'plan 1/2 · 1 subagent',
+    tokens: 'tokens',
+    cost: 'cost',
+    cache: 'cache',
   },
   'zh-CN': {
     plan: '计划',
     oneSubagent: '1 个子代理',
     planAndSubagent: '计划 1/2 · 1 个子代理',
+    tokens: 'token 数',
+    cost: '费用',
+    cache: '缓存',
   },
 };
 let browser;
@@ -121,10 +127,53 @@ try {
       'Add the regression',
     );
 
+    // The context card: its tokens are how full the model's window is, used of the
+    // window, as the percentage above them says; cost and cache stay.
+    await page.evaluate(() =>
+      window.readabilityFixture.runtime.change((state) => {
+        state.sessions.find((item) => item.id === 'session1').meters = {
+          input: 912_300,
+          output: 41_200,
+          cacheRead: 456_150,
+          cost: '$0.04',
+          contextInput: 14_100,
+          contextWindow: 128_000,
+        };
+      }),
+    );
+    const context = page.locator('#overview-context');
+    await context
+      .locator('.overview-summary')
+      .getByText('11%', { exact: true })
+      .waitFor();
+    if (
+      (await context.locator('button').getAttribute('aria-expanded')) !== 'true'
+    )
+      await context.locator('button').click();
+    const facts = await page
+      .locator('#overview-context-body dl')
+      .evaluate((list) =>
+        Object.fromEntries(
+          [...list.querySelectorAll('dt')].map((term) => [
+            term.textContent,
+            term.nextElementSibling?.textContent,
+          ]),
+        ),
+      );
+    assert.equal(facts[words.tokens], '14.1k / 128.0k');
+    assert.equal(facts[words.cost], '$0.04');
+    assert.equal(facts[words.cache], '50.0%');
+    assert.ok(
+      !Object.values(facts).some((value) => value?.includes('↑')),
+      'not the tokens sent and received over the whole session',
+    );
+
     assert.deepEqual(errors, []);
     await page.close();
   }
-  console.log('overview cards: in progress, in English and Chinese');
+  console.log(
+    'overview cards: in progress and context, in English and Chinese',
+  );
 } finally {
   await browser?.close();
   await server.close();
