@@ -43,6 +43,33 @@ try {
         await page.locator('.file-view-filename strong').getAttribute('title'),
         path,
       );
+      // There is no index to reopen: the drawer widens for a file in the split at 1280,
+      // and the narrow window lays it over the conversation at 760, and in both the tree
+      // stays beside the open document, where the helper finds the next file.
+      await page.waitForFunction(
+        (mode) => {
+          const box = (selector) => {
+            const node = document.querySelector(selector);
+            return node?.getClientRects().length
+              ? node.getBoundingClientRect()
+              : null;
+          };
+          const content = box(
+            '.drawer-document.has-file .drawer-document-content',
+          );
+          const index = box('.drawer-document.has-file .drawer-context-index');
+          return (
+            document.getElementById('workbench-columns')?.dataset
+              .inspectorMode === mode &&
+            !!content &&
+            !!index &&
+            content.width > 0 &&
+            index.width > 0 &&
+            index.left >= content.right - 1
+          );
+        },
+        width > 1050 ? 'split' : 'overlay',
+      );
       await page
         .locator('.file-view')
         .getByRole('button', {
@@ -62,7 +89,7 @@ try {
     await page.close();
   }
   console.log(
-    'Shared native project-index helper actual App renderer: root/nested paths, source/edit labels, narrow overlay index reopening, composer preservation passed (native package not executed)',
+    'Shared native project-index helper actual App renderer: root/nested paths, source/edit labels, the index beside the open file in the split and the narrow overlay, composer preservation passed (native package not executed)',
   );
 } finally {
   await browser?.close();

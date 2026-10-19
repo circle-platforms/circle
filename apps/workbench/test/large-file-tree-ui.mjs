@@ -36,6 +36,8 @@ try {
     const drawer = page.locator('.work-drawer');
     const tree = drawer.getByRole('tree', { name: 'files', exact: true });
     await tree.waitFor();
+    // With no file open the tree is the whole drawer.
+    assert.equal(await drawer.locator('.drawer-document.list-only').count(), 1);
     await tree.getByRole('treeitem', { name: 'bulk', exact: true }).click();
     await tree.press('End');
     await tree.press('ArrowUp');
@@ -52,27 +54,47 @@ try {
       .getByText('item-10999.ts', { exact: true })
       .first()
       .waitFor();
-    const toggle = drawer.getByRole('button', {
-      name: 'file index',
-      exact: true,
-    });
-    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-      await toggle.click();
+    // There is no index toggle: a file opens with the tree beside it while the drawer
+    // has the room for both, and the drawer widens to 760 pixels for a file. The tree
+    // belongs to the conversation that opened the file.
+    const indexBeside = (owner) =>
+      page.waitForFunction((owner) => {
+        const box = (selector) => {
+          const node = document.querySelector(selector);
+          return node?.getClientRects().length
+            ? node.getBoundingClientRect()
+            : null;
+        };
+        const content = box(
+          '.drawer-document.has-file .drawer-document-content',
+        );
+        const index = box(
+          `.drawer-document.has-file .drawer-context-index[data-context-index-owner="${owner}"]`,
+        );
+        return (
+          !!content &&
+          !!index &&
+          content.width > 0 &&
+          index.width > 0 &&
+          index.left >= content.right - 1
+        );
+      }, owner);
+    await indexBeside('large-tree-session-a');
     const filter = drawer.getByRole('textbox', {
       name: 'filter files',
       exact: true,
     });
-    await filter.fill('deep/nested/source.ts');
-    await tree
-      .getByRole('treeitem', { name: 'deep/nested/source.ts', exact: true })
-      .click();
-    await drawer
-      .locator('.file-view')
-      .getByText('source.ts', { exact: true })
-      .first()
-      .waitFor();
-    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-      await toggle.click();
+    const openThroughFilter = async (path) => {
+      await filter.fill(path);
+      await tree.getByRole('treeitem', { name: path, exact: true }).click();
+      await drawer
+        .locator('.file-view')
+        .getByText(path.split('/').at(-1), { exact: true })
+        .first()
+        .waitFor();
+    };
+    await openThroughFilter('deep/nested/source.ts');
+    await indexBeside('large-tree-session-a');
     await filter.fill('');
     const selected = tree.getByRole('treeitem', {
       name: 'deep/nested/source.ts',
@@ -86,15 +108,12 @@ try {
       await tree.locator('.tree-focused').getAttribute('data-path'),
       'deep/nested',
     );
+    // The index beside the open file is resized here, in the split: the drawer's own
+    // edge is beside it, and the index's separator must move the index alone.
     const handle = drawer.getByRole('separator', {
       name: 'resize context index',
       exact: true,
     });
-    await drawer
-      .getByRole('button', { name: 'full view', exact: true })
-      .click();
-    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-      await toggle.click();
     await handle.waitFor();
     await handle.press('Home');
     const min = Number(await handle.getAttribute('aria-valuenow'));
@@ -116,14 +135,18 @@ try {
       drawerWidth,
       'index drag cannot resize work drawer',
     );
+    // Another conversation closes the file, and the tree is the whole drawer again, that
+    // conversation's own. The separator is there only beside a file: open one there too.
     await page.evaluate(() => {
       location.hash = '/session/large-tree-session-b';
     });
     await drawer
-      .getByRole('button', { name: 'file index', exact: true })
+      .locator(
+        '.drawer-document.list-only [data-context-index-owner="large-tree-session-b"]',
+      )
       .waitFor();
-    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-      await toggle.click();
+    await openThroughFilter('deep/nested/source.ts');
+    await indexBeside('large-tree-session-b');
     await handle.waitFor();
     assert.notEqual(
       Number(await handle.getAttribute('aria-valuenow')),
@@ -133,8 +156,13 @@ try {
     await page.evaluate(() => {
       location.hash = '/session/large-tree-session-a';
     });
-    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-      await toggle.click();
+    await drawer
+      .locator(
+        '.drawer-document.list-only [data-context-index-owner="large-tree-session-a"]',
+      )
+      .waitFor();
+    await openThroughFilter('deep/nested/source.ts');
+    await indexBeside('large-tree-session-a');
     await page.waitForFunction(
       (width) =>
         Number(
@@ -156,16 +184,7 @@ try {
       name: 'files panel',
       exact: true,
     });
-    if ((await filesMode.getAttribute('aria-pressed')) !== 'true')
-      await filesMode.click();
-    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-      await toggle.click();
-    await filter.fill('deep/nested/source.ts');
-    await tree
-      .getByRole('treeitem', { name: 'deep/nested/source.ts', exact: true })
-      .click();
-    const full = drawer.getByRole('button', { name: 'full view', exact: true });
-    if (await full.isVisible()) await full.click();
+    assert.equal(await filesMode.getAttribute('aria-pressed'), 'true');
     await page.setViewportSize({ width: 800, height: 950 });
     await page.waitForFunction(
       () =>
@@ -186,14 +205,51 @@ try {
           requestAnimationFrame(() => requestAnimationFrame(resolve)),
         ),
     );
-    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-      await toggle.click();
     await drawer
       .locator('.file-view')
       .getByText('source.ts', { exact: true })
       .first()
       .waitFor();
-    await drawer.locator('.drawer-context-index').waitFor();
+    // At 800 pixels the sidebar stays and the drawer lies over the conversation beside
+    // it, too narrow for the file and the tree: the file has the drawer to itself.
+    await page.waitForFunction(() => {
+      const drawer = document.querySelector('.work-drawer');
+      const content = document.querySelector(
+        '.drawer-document.has-file .drawer-document-content',
+      );
+      const index = document.querySelector(
+        '.drawer-document.has-file .drawer-context-index',
+      );
+      if (!drawer || !content || !index) return false;
+      const width = drawer.getBoundingClientRect().width;
+      return (
+        width < 620 &&
+        index.hidden &&
+        Math.abs(content.getBoundingClientRect().width - width) <= 1
+      );
+    });
+    // The tree comes back when the file closes, filtered to the deep path as it was left.
+    await drawer
+      .getByRole('button', { name: 'close file', exact: true })
+      .click();
+    // A narrow window also closes the drawer with the file; the files button opens it.
+    await page
+      .locator('.drawer-document.list-only')
+      .waitFor({ state: 'attached' });
+    if ((await filesMode.getAttribute('aria-pressed')) !== 'true')
+      await filesMode.click();
+    await page.waitForFunction(
+      () =>
+        document.getElementById('workbench-columns')?.dataset.inspectorMode ===
+        'overlay',
+    );
+    await drawer
+      .locator('.drawer-document.list-only .drawer-context-index')
+      .waitFor();
+    assert.equal(await filter.inputValue(), 'deep/nested/source.ts');
+    await tree
+      .getByRole('treeitem', { name: 'deep/nested/source.ts', exact: true })
+      .waitFor();
     await page.screenshot({
       path: join(output, `deep-index-${theme}-narrow.png`),
     });

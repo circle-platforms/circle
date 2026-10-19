@@ -42,12 +42,40 @@ try {
     const editor = page.locator('.file-view .native-code-editor');
     await editor.waitFor();
     const editorIdentity = await editor.elementHandle();
-    const indexToggle = page.getByRole('button', {
-      name: 'file index',
-      exact: true,
-    });
-    if ((await indexToggle.getAttribute('aria-pressed')) !== 'true')
-      await indexToggle.click();
+    // The drawer has no index toggle: an open file has the tree beside it whenever the
+    // drawer has the room for both. The drawer widens to 760 pixels for a file (the
+    // sidebar folds at 1280), and the narrow window lays it over the conversation at its
+    // full width, so at both widths the document and the tree share it.
+    const indexBeside = await page
+      .waitForFunction(() => {
+        const box = (selector) => {
+          const node = document.querySelector(selector);
+          return node?.getClientRects().length
+            ? node.getBoundingClientRect()
+            : null;
+        };
+        const content = box(
+          '.drawer-document.has-file .drawer-document-content',
+        );
+        const index = box('.drawer-document.has-file .drawer-context-index');
+        return (
+          !!content &&
+          !!index &&
+          content.width > 0 &&
+          index.width > 0 &&
+          index.left >= content.right - 1
+        );
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    if (!probe)
+      assert.equal(
+        indexBeside,
+        true,
+        `the ${width}px drawer shows the file index beside the open document`,
+      );
     const entry = page
       .locator('.drawer-context-index .files-panel')
       .getByRole('button', {
@@ -55,7 +83,8 @@ try {
         exact: true,
         includeHidden: true,
       });
-    await page.locator('.drawer-context-index .files-panel').waitFor();
+    if (indexBeside)
+      await page.locator('.drawer-context-index .files-panel').waitFor();
     const count = await entry.count();
     const visible = count > 0 && (await entry.isVisible());
     const before = count
@@ -76,7 +105,13 @@ try {
             .evaluate((node) => getComputedStyle(node).display),
         };
     if (probe) {
-      receipts.push({ width, visible, ...before, expectedFailure: !visible });
+      receipts.push({
+        width,
+        indexBeside,
+        visible,
+        ...before,
+        expectedFailure: !visible,
+      });
       if (output)
         await page.screenshot({ path: join(output, `before-${width}.png`) });
     } else {
@@ -147,6 +182,7 @@ try {
       assert.deepEqual(errors, []);
       receipts.push({
         width,
+        indexBeside,
         visible,
         ...before,
         scopedSession: 'session1',
