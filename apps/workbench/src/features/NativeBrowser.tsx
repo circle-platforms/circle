@@ -634,6 +634,7 @@ export function NativeBrowser({
     control: state?.control,
     operating: state?.operating,
     sessionState: session.state,
+    turnStarted: session.turn !== undefined,
     tools: currentTurnTools(visibleMessages(session)),
   });
   const controlLabel =

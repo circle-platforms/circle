@@ -80,3 +80,41 @@ test('only the current turn counts toward the ring', () => {
     'idle',
   );
 });
+
+test('a busy session whose turn has not begun does not light the ring with the last turn', () => {
+  // The desktop says the session is busy before it saves the new prompt, so the
+  // newest tools are still the last turn's.
+  const tools = currentTurnTools([
+    { role: 'user' },
+    { role: 'tool', tool: browser('success', 'browser_handoff') },
+    { role: 'assistant' },
+  ]);
+  assert.equal(
+    browserRing({
+      control: 'shared',
+      sessionState: 'waiting',
+      turnStarted: false,
+      tools,
+    }),
+    'idle',
+  );
+  assert.equal(
+    browserRing({
+      control: 'shared',
+      sessionState: 'waiting',
+      turnStarted: true,
+      tools,
+    }),
+    'driving',
+  );
+  assert.equal(
+    browserRing({
+      control: 'shared',
+      operating: true,
+      sessionState: 'waiting',
+      turnStarted: false,
+      tools,
+    }),
+    'driving',
+  );
+});

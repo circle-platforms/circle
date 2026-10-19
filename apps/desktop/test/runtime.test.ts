@@ -41,6 +41,10 @@ import {
 import { fallbackTitle, TITLE_MAX_TOKENS } from '../../../src/session_title.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
 import {
+  browserRing,
+  currentTurnTools,
+} from '../../workbench/src/model/browser.ts';
+import {
   historyMessages,
   visibleSessions,
 } from '../../workbench/src/model/session-management.ts';
@@ -6130,4 +6134,61 @@ test('trust is given and taken away for the folder the settings page names', asy
     (await call('archive-workspace', { workspaceId: 'nope' })).ok,
     false,
   );
+});
+
+test('the browser ring stays out while the next turn has not begun, though the last one used the browser', async (t) => {
+  const browser = fakeBrowser();
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'look', name: 'browser_snapshot', args: {} },
+        ]),
+      },
+      { message: assistant('looked') },
+      { message: assistant('hello') },
+    ],
+    true,
+    browser.port,
+  );
+  await f.call('prompt', { text: 'look at the page' });
+  await wait(
+    () => f.model.requests.length === 2 && activeSession(f).state === 'idle',
+    'the browser turn',
+  );
+  assert.deepEqual(
+    browser.requests.map((request) => request.action),
+    ['snapshot'],
+  );
+  const id = activeSession(f).id;
+  f.updates.length = 0;
+  await f.call('prompt', { text: 'say hello' });
+  await wait(
+    () => f.model.requests.length === 3 && activeSession(f).state === 'idle',
+    'the next turn',
+  );
+  const sessions = f.updates.flatMap((update) =>
+    update.snapshot.sessions.filter((row) => row.id === id),
+  );
+  const prompt = (session: (typeof sessions)[number]) =>
+    visibleMessages(session).findLast((row) => row.role === 'user')?.text;
+  // The window is told the session is busy before the prompt is saved. Once it
+  // is told the turn began, the prompt is there, so the turn's tools are its own.
+  assert(sessions.some((session) => session.turn));
+  for (const session of sessions)
+    if (session.turn) assert.equal(prompt(session), 'say hello');
+  // As the browser panel reads it, no update lights the ring: this turn never
+  // touched the browser.
+  for (const session of sessions)
+    assert.equal(
+      browserRing({
+        control: 'shared',
+        sessionState: session.state,
+        turnStarted: session.turn !== undefined,
+        tools: currentTurnTools(visibleMessages(session)),
+      }),
+      'idle',
+      `${session.state}, ${session.turn ? 'begun' : 'not begun'}, after "${prompt(session)}"`,
+    );
 });
