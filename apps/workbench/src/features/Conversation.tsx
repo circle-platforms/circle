@@ -645,8 +645,12 @@ export function Conversation({
     messages.flatMap((message) => (message.tool ? [message.tool.id] : [])),
   );
   // In a task's own conversation, the task: once it has finished it waits for your review.
+  // The review card is the task's, at the end of its own conversation, not its reviewer's.
   const taskAgent = snapshot.agents.find(
-    (agent) => agent.task && agent.resourceSessionId === session.id,
+    (agent) =>
+      agent.task &&
+      agent.task.role !== 'reviewer' &&
+      agent.resourceSessionId === session.id,
   );
   const loose = pending.filter(
     (item) =>

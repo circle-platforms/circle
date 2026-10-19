@@ -110,10 +110,19 @@ export function FileViewer({
     : /\.[cm]?jsx?$/.test(path)
       ? 'javascript'
       : (projected?.language ?? 'plaintext');
+  // A task that only reads, such as a reviewer, saves nothing from its own conversation
+  // either: the runtime refuses it, and the file says so before a save is tried.
+  const readOnlyTask = snapshot.agents.some(
+    (item) =>
+      (item.resourceSessionId ?? item.id) === session.id &&
+      item.task &&
+      item.readOnly,
+  );
   const readOnly = resourceOwner
     ? resourceOwner.readOnly
-    : session.readOnly &&
-      !['plan', 'plan.md'].includes(path.split('/').at(-1)!);
+    : readOnlyTask ||
+      (session.readOnly &&
+        !['plan', 'plan.md'].includes(path.split('/').at(-1)!));
   const sourceWorkspace = snapshot.workspaces.find(
     (item) => item.id === workspaceId,
   );
