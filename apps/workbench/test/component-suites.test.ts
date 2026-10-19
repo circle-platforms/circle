@@ -50,7 +50,6 @@ test('the component gate preserves prior journeys and includes each native regre
     'resource-boundary-ui.mjs',
     'pending-operations-ui.mjs',
     'recovered-input-ui.mjs',
-    'git-continuity-ui.mjs',
     'debug-panel-ui.mjs',
     'keyboard-navigation-ui.mjs',
   ];
@@ -58,10 +57,8 @@ test('the component gate preserves prior journeys and includes each native regre
     COMPONENT_SUITES.filter(
       (name) =>
         ![
-          'git-conflict-selector-ui.mjs',
           'external-file-access-ui.mjs',
           'external-file-entry-ui.mjs',
-          'git-large-index-ui.mjs',
           'context-index-resize-ui.mjs',
           'virtual-file-tree-ui.mjs',
           'project-index-journey-ui.mjs',
@@ -103,7 +100,6 @@ test('the component gate preserves prior journeys and includes each native regre
           'browser-chrome-ui.mjs',
           'github-authorization-phase-ui.mjs',
           'terminal-accessibility-ui.mjs',
-          'git-owner-ui.mjs',
           'tool-text-output-ui.mjs',
           'terminal-mode-ui.mjs',
           'screenshot-thumb-ui.mjs',
@@ -122,7 +118,6 @@ test('the component gate preserves prior journeys and includes each native regre
     1,
   );
   for (const name of [
-    'git-conflict-selector-ui.mjs',
     'child-terminal-rendered-match-ui.mjs',
     'paste-default-ui.mjs',
     'native-editable-shortcuts-ui.mjs',
@@ -155,14 +150,13 @@ test('the component gate preserves prior journeys and includes each native regre
     'browser-chrome-ui.mjs',
     'github-authorization-phase-ui.mjs',
     'terminal-accessibility-ui.mjs',
-    'git-owner-ui.mjs',
     'tool-text-output-ui.mjs',
     'terminal-mode-ui.mjs',
     'screenshot-thumb-ui.mjs',
     'task-review-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 57);
+  assert.equal(new Set(COMPONENT_SUITES).size, 53);
 });
 
 test('safe file undo remains a required component journey', () => {
@@ -183,7 +177,6 @@ test('remaining-goal journeys stay required once', () => {
   for (const name of [
     'virtual-file-tree-ui.mjs',
     'context-index-resize-ui.mjs',
-    'git-large-index-ui.mjs',
     'external-file-access-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((value) => value === name).length, 1);

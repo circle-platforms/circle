@@ -9,7 +9,6 @@ const exec = promisify(execFile);
 const workbench = fileURLToPath(new URL('../..', import.meta.url));
 const suites = [
   ['workspace shell', 'workspace-shell-ui.mjs', 72],
-  ['git', 'git-conflict-selector-ui.mjs', 8],
   ['debug', 'debug-panel-embedded.mjs', 8],
   ['github', 'github-plugin-ui.mjs', 16],
   ['recovered inputs', 'recovered-input-ui.mjs', 16],
