@@ -195,9 +195,14 @@ try {
   // A key typed into the console is the device's (#155): on Windows and Linux
   // Ctrl+K reaches it once as ^K and opens no search; on macOS ⌘K is no terminal
   // key and opens search from the console.
-  const keys = page.locator('.device-terminal .xterm-helper-textarea');
+  const keys = page.locator(
+    '.device-screen:not([hidden]) .xterm-helper-textarea',
+  );
   await page.waitForFunction(
-    () => !document.querySelector('.device-terminal textarea[disabled]'),
+    () =>
+      !document.querySelector(
+        '.device-screen:not([hidden]) textarea[disabled]',
+      ),
   );
   await keys.focus();
   const searchOpen = () =>

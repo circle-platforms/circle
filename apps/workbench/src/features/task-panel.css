@@ -150,6 +150,15 @@
   font-size: var(--ui-small);
   line-height: 1.6;
 }
+.settings-block > p.task-limits-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
 
 .task-operations .panel-note {
   margin: 6px 0 0;
