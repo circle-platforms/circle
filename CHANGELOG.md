@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.9.1 - 2026-10-19
+
 ### Added
 
 - **Circle can work in your desktop terminal tabs.** The `terminal_*` tools also reach the shells you open as terminal tabs in the desktop application, listed as `local:<id>` beside the device consoles under their tab's name (`terminal 1`); background commands, services and closed shells are never listed. Reading a tab asks nothing. The first thing Circle types in a tab asks you, in every mode including auto, whatever a rule, an `allowed_commands` pattern or a hook allows; after that a line it runs there is approved as the same `execute` command would be, under the same rules, and plan mode refuses it before the tab sees it. A tab stays yours: typing in it while Circle uses it takes it over, ends Circle's read or wait at once and refuses its typing until you hand it back; stopping ends Circle's action without taking the tab; Circle never closes a tab, and closing one ends what Circle was doing in it. In the terminal drawer, the shell Circle works in has a blue dot and ring, or an orange one while Circle waits for your answer, with **take over** and **stop** at the end of the row, and **give back** once you hold it. The terminal interface has no terminal tabs. See [Circle in your terminal tabs](https://circle-platforms.github.io/circle/desktop/#circle-in-your-terminal-tabs).
