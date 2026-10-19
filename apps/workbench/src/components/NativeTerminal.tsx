@@ -1324,11 +1324,6 @@ export function NativeTerminal({
                 autoCorrect="off"
               />
             </label>
-            <p>
-              {t(
-                'when both checks are set, both must pass before the service is ready',
-              )}
-            </p>
             {error && (
               <p className="native-terminal-error" role="alert">
                 {error}

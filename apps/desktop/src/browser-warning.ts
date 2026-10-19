@@ -1,7 +1,7 @@
 import {
   buildPalette,
   DEFAULT_DARK,
-  DEFAULT_LIGHT,
+  DESKTOP_LIGHT,
   mix,
 } from '../../../src/ink/theme.js';
 import type { BrowserCertificate } from './contracts';
@@ -38,7 +38,7 @@ export function warningPage({
   lang,
   nonce,
 }: WarningPage): string {
-  const p = buildPalette(...(dark ? DEFAULT_DARK : DEFAULT_LIGHT));
+  const p = buildPalette(...(dark ? DEFAULT_DARK : DESKTOP_LIGHT));
   const rgb = (stop: number) => `rgb(${p.rainbow_stops[stop]![1].join(',')})`;
   const host = escape(certificate.host);
   const fill = (value: string) => escape(text(value)).replace('{host}', host);
@@ -53,7 +53,7 @@ export function warningPage({
   return `<!doctype html><html lang="${escape(lang)}"><head><meta charset="utf-8"><title>${escape(text('Privacy error'))}</title>
 <style>
 :root{color-scheme:${dark ? 'dark' : 'light'}}
-body{margin:0;background:${p.bg_hex};color:${p.fg_hex};font:14px/1.55 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+body{margin:0;background:${p.bg_hex};color:${p.fg_hex};font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI Variable","Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif}
 main{max-width:600px;margin:0 auto;padding:12vh 28px 40px}
 .icon{width:44px;height:44px;color:${rgb(2)}}
 h1{font-size:22px;font-weight:600;margin:20px 0 12px}

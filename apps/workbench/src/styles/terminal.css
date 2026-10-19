@@ -181,6 +181,9 @@
   color: var(--muted);
   font-size: var(--ui-small);
 }
+.native-service-form legend {
+  font-size: var(--ui-small);
+}
 .native-service-argument {
   display: flex;
   align-items: center;

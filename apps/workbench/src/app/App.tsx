@@ -1479,7 +1479,7 @@ export function App() {
                   <DropdownMenu.Root>
                     <h1 className="session-title">
                       <DropdownMenu.Trigger asChild>
-                        <button>
+                        <button title={sessionTitle(session.title)}>
                           <span>{sessionTitle(session.title)}</span>
                           <ChevronDown size={14} />
                         </button>

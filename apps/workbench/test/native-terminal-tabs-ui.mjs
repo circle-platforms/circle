@@ -345,6 +345,18 @@ try {
         1,
         'one new terminal makes one shell',
       );
+      // Ten tabs do not fit: the row scrolls, and every tab keeps its whole name.
+      assert.deepEqual(
+        await strip
+          .locator('.term-tab-label')
+          .evaluateAll((labels) =>
+            labels
+              .filter((label) => label.scrollWidth > label.clientWidth)
+              .map((label) => label.textContent),
+          ),
+        [],
+        'no tab name is cut',
+      );
       await page.screenshot({
         path: `${output}/${theme}-${width}-terminal10.png`,
       });

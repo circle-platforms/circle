@@ -122,6 +122,22 @@ try {
     assert.equal(marks.plain.letter, '');
     assert.notEqual(marks.plain.colour, marks.tokens.attention);
     assert.equal(marks.gone, false, 'a deleted file is not in the tree');
+    // A folder is a row like the files beside it: the same size and colour of name.
+    const rows = await page.evaluate(() => {
+      const look = (path) => {
+        const label = document.querySelector(
+          `.virtual-file-tree-row[data-path="${path}"] .virtual-file-tree-label`,
+        );
+        const style = getComputedStyle(label);
+        return { size: style.fontSize, colour: style.color };
+      };
+      return { folder: look('docs'), file: look('src/plain.ts') };
+    });
+    assert.deepEqual(
+      rows.folder,
+      rows.file,
+      `folder rows read as files (${theme})`,
+    );
     assert.deepEqual(errors, []);
     await page.close();
   }

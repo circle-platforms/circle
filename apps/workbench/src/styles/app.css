@@ -42,15 +42,13 @@
     local('SourceHanSansSC-Bold');
 }
 :root {
+  /* The system's own face: SF Pro on macOS, which switches between its text and display
+     cuts by size; Segoe UI Variable on Windows 11 and Segoe UI before it. Chinese comes
+     from Circle CJK; elsewhere, the desktop's own interface font. */
   font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    'Circle CJK',
-    'PingFang SC',
-    'Microsoft YaHei',
-    sans-serif;
+    -apple-system, BlinkMacSystemFont, 'Segoe UI Variable',
+    'Segoe UI Variable Text', 'Segoe UI', 'Circle CJK', 'PingFang SC',
+    'Microsoft YaHei', system-ui, sans-serif;
   font-size: var(--ui-size, 13px);
   --ui-small: calc(var(--ui-size, 13px) - 2px);
   --ui-tiny: calc(var(--ui-size, 13px) - 3px);
@@ -3004,11 +3002,6 @@ pre {
   .setting-row input[type='range'] {
     max-width: 120px;
   }
-  .page .form-stack input,
-  .dialog-content input,
-  .dialog-content textarea {
-    font-size: 16px;
-  }
 }
 .platform-role {
   display: flex;
@@ -3666,7 +3659,8 @@ pre {
   font-weight: 600;
 }
 .inline-request[data-kind='question'] > header strong,
-.inline-request[data-kind='secret'] > header strong {
+.inline-request[data-kind='secret'] > header strong,
+.inline-request[data-kind='review'] > header strong {
   font-family: inherit;
   font-size: var(--ui-size);
   line-height: 1.5;
@@ -4086,7 +4080,9 @@ pre {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: min(46vw, 100%);
+  /* The button hangs 8px into the bar's padding, so it may be that much wider than its
+     heading; otherwise it is cut by what it overhangs. */
+  max-width: min(46vw, calc(100% + 8px));
   padding: 4px 8px;
   margin-left: -8px;
   border-radius: 7px;

@@ -260,6 +260,8 @@ Settings → appearance:
 
 The choice of language and text size is kept by the window, not in `settings.json`.
 
+The light theme is set on a cream ground, `#F2EDD7`, and the window's text is the system's own font: SF Pro on macOS, Segoe UI Variable on Windows 11 and Segoe UI before it, with PingFang or Microsoft YaHei for Chinese.
+
 ## Updates
 
 Settings → about → check now asks GitHub for the newest release. When there is a newer one, update downloads this system's package into the data folder and checks it: its checksum, on macOS its signature, and that it holds that version. Restart to update then quits Circle; a small installer puts the new copy where the old one was and starts it, and settings say which version it was updated to. The sidebar offers a newer version as well, with how far the download is and the restart. Circle reaches GitHub through the system's proxy settings.

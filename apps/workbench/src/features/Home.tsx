@@ -309,9 +309,6 @@ export function Home({
             t('what are we working on?')
           )}
         </h2>
-        <p>
-          {t('Start with a message, a file, or a question about your project.')}
-        </p>
       </div>
       <div className="home-composer">
         <div
@@ -345,7 +342,7 @@ export function Home({
             autoFocus
             rows={3}
             aria-label={t('message')}
-            placeholder={t('Ask anything, or describe a change…')}
+            placeholder={t('ask anything, or describe a change…')}
             value={draft}
             onChange={(event) => {
               const text = event.target.value;

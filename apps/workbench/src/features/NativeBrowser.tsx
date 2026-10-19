@@ -1032,7 +1032,6 @@ export function NativeBrowser({
             <div className="browser-empty">
               <Globe size={22} strokeWidth={1.5} />
               <h3>{t('browse the web')}</h3>
-              <p>{t('type a URL to open a site.')}</p>
             </div>
           ) : frozen ? (
             <img className="browser-frozen" src={frozen} alt="" />

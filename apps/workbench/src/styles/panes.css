@@ -272,11 +272,15 @@
   text-overflow: ellipsis;
 }
 .inspector .browser-url-display > b {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--fg);
   font-weight: 400;
+  text-overflow: ellipsis;
 }
 .inspector .browser-url-display > span {
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

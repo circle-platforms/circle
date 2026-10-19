@@ -94,6 +94,19 @@ async function captureModes(page, locale, theme, width) {
     titleGeometry.titleRight <= titleGeometry.actionsLeft + 1,
     `the session title does not run under the top bar's icons at ${width}px`,
   );
+  // Where the bar has room, the title is whole, and its tooltip has it in any case.
+  const title = await page
+    .locator('.session-title button')
+    .evaluate((node) => ({
+      whole:
+        node.querySelector('span').scrollWidth <=
+        node.querySelector('span').clientWidth,
+      tooltip: node.getAttribute('title'),
+      text: node.querySelector('span').textContent,
+    }));
+  assert.equal(title.tooltip, title.text);
+  if (width >= 1280)
+    assert.ok(title.whole, `the session title is whole at ${width}px`);
   for (const [kind] of MODES) {
     // The overview may be on already, as it is by default where there is room.
     if (
@@ -127,6 +140,27 @@ async function captureModes(page, locale, theme, width) {
         grounds.conversation,
         `the overview has the conversation's background at ${width}px`,
       );
+      // A card too narrow for a subagent's name, its task and its state keeps the state
+      // whole: the task gives way, then the name.
+      const agentRow = await page
+        .locator('.overview-agent')
+        .first()
+        .evaluate((node) => ({
+          card: node.closest('.overview-card').clientWidth,
+          detail: node.querySelector('.overview-detail')
+            ? getComputedStyle(node.querySelector('.overview-detail')).display
+            : 'none',
+          state:
+            node.querySelector('.overview-end-text').scrollWidth <=
+            node.querySelector('.overview-end-text').clientWidth,
+        }));
+      assert.ok(agentRow.state, `the subagent's state is whole at ${width}px`);
+      if (agentRow.card <= 300)
+        assert.equal(
+          agentRow.detail,
+          'none',
+          'a narrow card leaves out the task',
+        );
     } else {
       await page.locator('.work-drawer').waitFor({ state: 'visible' });
       assert.equal(

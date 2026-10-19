@@ -56,7 +56,7 @@ export const taskPanel: Record<string, string> = {
   'the task changed since you opened it': '打开后任务已有变化',
   'load the latest changes': '加载最新改动',
   'review records': '核对记录',
-  'prepare to combine task changes': '准备合并任务更改',
+  'prepare to combine task changes': '准备合并任务改动',
   'list task results': '列出任务结果',
   'read task result': '读取任务结果',
   create: '创建',

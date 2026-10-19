@@ -46,6 +46,18 @@ try {
     const card = page.locator('.task-review-card');
     assert.match(await card.innerText(), /2 files changed/);
     assert.match(await card.innerText(), /attempt 1/);
+    // Its heading is words, in the text's own face, not a tool name in code.
+    assert.equal(
+      await card
+        .locator('header strong')
+        .evaluate(
+          (node) =>
+            getComputedStyle(node).fontFamily ===
+            getComputedStyle(node.closest('.task-review-card')).fontFamily,
+        ),
+      true,
+      'the review heading is not in the code face',
+    );
     const confirm = card.getByRole('button', {
       name: 'confirm reviewed criteria',
     });

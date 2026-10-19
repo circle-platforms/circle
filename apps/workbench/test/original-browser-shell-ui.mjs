@@ -258,6 +258,19 @@ try {
                 }),
             );
           for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
+          // However narrow the field, the address fits it: the path gives way, then the
+          // host with an ellipsis, and nothing runs past the field's edge.
+          const address = await page
+            .locator('.browser-url-display')
+            .evaluate((node) => {
+              const host = node.querySelector('b');
+              return {
+                fits: node.scrollWidth <= node.clientWidth + 1,
+                host: host && getComputedStyle(host).textOverflow,
+              };
+            });
+          assert.ok(address.fits, `the address fits its field at ${width}px`);
+          assert.equal(address.host, 'ellipsis');
           // Take over shows only while Circle operates the page.
           assert.equal(
             await page

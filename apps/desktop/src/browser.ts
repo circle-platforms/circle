@@ -108,7 +108,7 @@ import {
   palette,
   setPalette,
   DEFAULT_DARK,
-  DEFAULT_LIGHT,
+  DESKTOP_LIGHT,
 } from '../../../src/ink/theme.js';
 
 /** One site's downloads that wait for the person. */
@@ -2882,7 +2882,7 @@ export class BrowserSessions {
     );
   }
   private overlayColors() {
-    setPalette(buildPalette(...(this.dark ? DEFAULT_DARK : DEFAULT_LIGHT)));
+    setPalette(buildPalette(...(this.dark ? DEFAULT_DARK : DESKTOP_LIGHT)));
     const p = palette();
     return {
       color: `rgb(${p.rainbow_stops[0]![1].join(',')})`,

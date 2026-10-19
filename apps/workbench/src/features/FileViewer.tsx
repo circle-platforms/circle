@@ -92,6 +92,9 @@ export function FileViewer({
   const [conflict, setConflict] = useState<EditorDocument | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveQueued, setSaveQueued] = useState(false);
+  // The file this view last saved: it says so until the next edit, and a file just
+  // opened says nothing.
+  const [savedHere, setSavedHere] = useState('');
   const inFlightSaves = useRef(new Map<string, SaveFlight>());
   const [loading, setLoading] = useState(true);
   const [missing, setMissing] = useState(false);
@@ -488,7 +491,10 @@ export function FileViewer({
     }
     const baseline = editorDocuments.get(buffer.uri) ?? document;
     if (!all && !restore && buffer.content === baseline.content) {
-      if (currentIdentity.current === identity) notify(t('file saved'));
+      if (currentIdentity.current === identity) {
+        setSavedHere(identity);
+        notify(t('file saved'));
+      }
       return;
     }
     const flight: SaveFlight = {
@@ -640,6 +646,7 @@ export function FileViewer({
       completed = true;
       if (selected()) {
         setBufferCount(pendingEditorDocuments(target.workspaceId).length);
+        setSavedHere(target.key);
         notify(t('file saved'));
       }
     } catch (cause) {
@@ -749,7 +756,11 @@ export function FileViewer({
           className={`file-view-state${dirty ? ' dirty' : ''}`}
           role="status"
         >
-          {dirty ? t('unsaved changes') : t('all changes saved')}
+          {dirty
+            ? t('unsaved changes')
+            : savedHere === identity
+              ? t('all changes saved')
+              : ''}
         </span>
         {bufferCount > 1 && (
           <Button

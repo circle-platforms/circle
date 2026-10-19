@@ -21,8 +21,8 @@ export const panels: Record<string, string> = {
   '{n} file': '{n} 个文件',
   '{n} files': '{n} 个文件',
   added: '新增',
-  modified: '修改',
-  deleted: '删除',
+  modified: '已修改',
+  deleted: '已删除',
   'no files changed in this session yet': '这个会话还没有改动文件',
   configured: '已配置',
   'not configured': '未配置',
@@ -118,7 +118,6 @@ export const panels: Record<string, string> = {
   'browser address': '浏览器地址',
   'open a page': '打开一个页面',
   'browse the web': '浏览网页',
-  'type a URL to open a site.': '输入网址以打开网站。',
   'type a URL': '输入网址',
   'not secure': '不安全',
   'valid until': '有效期截止',
@@ -203,8 +202,8 @@ export const panels: Record<string, string> = {
   'new connection': '新建连接',
   port: '端口',
   user: '用户',
-  'ssh signs in from a saved profile; a telnet console answers its own login':
-    'ssh 通过已保存的配置文件登录；telnet 控制台会自己询问登录。',
+  'SSH signs in from a saved device; a Telnet console asks for its own login':
+    'SSH 从已保存设备登录；Telnet 控制台会自己要求登录',
   'no saved profiles yet; a new connection reaches a device by address':
     '还没有保存的配置文件；用“新建连接”按地址连接设备。',
   'disconnect {name}': '断开 {name}',

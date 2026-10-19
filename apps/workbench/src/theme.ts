@@ -1,7 +1,7 @@
 import {
   buildPalette,
   DEFAULT_DARK,
-  DEFAULT_LIGHT,
+  DESKTOP_LIGHT,
   hexToRgb,
   mix,
   palette,
@@ -22,7 +22,7 @@ export function applyTheme(choice: Theme, size: TextSize = 'default') {
     choice === 'auto'
       ? matchMedia('(prefers-color-scheme: dark)').matches
       : choice === 'dark';
-  setPalette(buildPalette(...(dark ? DEFAULT_DARK : DEFAULT_LIGHT)));
+  setPalette(buildPalette(...(dark ? DEFAULT_DARK : DESKTOP_LIGHT)));
   const p = palette();
   const rgb = (color: string) => `rgb(${hexToRgb(color).join(' ')})`;
   const values: Record<string, string> = {

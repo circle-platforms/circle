@@ -179,6 +179,21 @@ button.overview-row:hover .overview-name {
   min-width: 0;
   max-width: 55%;
 }
+/* Too narrow for the name, a share of the task and the state: the task gives way, then
+   the name, and the state stays whole. The overview is that narrow only when it lies over
+   a window that narrow; beside the conversation it keeps its 380 pixels. */
+@media (max-width: 330px) {
+  .overview-agent .overview-detail {
+    display: none;
+  }
+  .overview-agent .overview-name {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .overview-agent > .overview-end {
+    flex-shrink: 0;
+  }
+}
 .overview-dot {
   flex: none;
   width: 6px;

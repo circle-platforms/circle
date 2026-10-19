@@ -743,11 +743,6 @@ export function Conversation({
             <div className="welcome">
               <span className="circle-logo large" />
               <h2>{t('what are we working on?')}</h2>
-              <p>
-                {t(
-                  'Start with a message, a file, or a question about your project.',
-                )}
-              </p>
               <button
                 onClick={() => onDialog('trust')}
                 className="workspace-trust"
@@ -1182,7 +1177,7 @@ export function Conversation({
               style={{ fieldSizing: 'content' }}
               rows={1}
               aria-label={t('message')}
-              placeholder={t('Ask anything, or describe a change…')}
+              placeholder={t('ask anything, or describe a change…')}
               value={session.draft}
               onChange={(event) => setDraft(event.target.value)}
               onPaste={(event) => {

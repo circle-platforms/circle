@@ -22,12 +22,13 @@
 .term-tabs::-webkit-scrollbar {
   display: none;
 }
+/* A tab keeps its whole name, up to the longest the row allows, where a long one ends in
+   an ellipsis; when the tabs do not fit, the row scrolls rather than cut their names. */
 .term-tab {
   display: flex;
-  flex: 0 1 auto;
+  flex: none;
   align-items: center;
   gap: 4px;
-  min-width: 64px;
   max-width: 190px;
   height: 28px;
   padding: 0 10px;
@@ -42,9 +43,7 @@
 .term-tab:hover {
   background: var(--hover);
 }
-/* The selected tab keeps its whole name; the others give way first. */
 .term-tab.on {
-  flex-shrink: 0;
   background: var(--active);
   color: var(--fg);
 }

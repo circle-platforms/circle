@@ -1003,7 +1003,7 @@ try {
     await saveAll.click();
     await saveAll.waitFor({ state: 'hidden' });
     await batch
-      .getByText(zh ? '所有修改已保存' : 'all changes saved', {
+      .getByText(zh ? '所有改动已保存' : 'all changes saved', {
         exact: true,
       })
       .waitFor();
@@ -1074,7 +1074,10 @@ try {
       ?.textContent.replaceAll('\u00a0', ' ')
       .includes('external write 1'),
   );
-  await viewer.getByText('all changes saved', { exact: true }).waitFor();
+  // The buffer is clean again, and a file this view has not saved says nothing of saving.
+  await viewer.waitForFunction(
+    () => document.querySelector('.file-view-state')?.textContent === '',
+  );
   await viewer.locator('.view-lines').first().click();
   await viewer.keyboard.press(`${modifier}+End`);
   await viewer.keyboard.type('// human draft');

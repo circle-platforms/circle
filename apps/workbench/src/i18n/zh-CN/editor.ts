@@ -26,7 +26,7 @@ export const editor: Record<string, string> = {
   'unsaved changes could not be backed up; keep this window open':
     '无法备份未保存的修改，请保持此窗口打开',
   'unsaved changes': '未保存的修改',
-  'all changes saved': '所有修改已保存',
+  'all changes saved': '所有改动已保存',
   'file changed on disk; review the diff before saving':
     '磁盘上的文件已改变，请审阅差异后再保存',
   'save all': '全部保存',

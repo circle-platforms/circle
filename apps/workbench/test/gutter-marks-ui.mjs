@@ -61,6 +61,8 @@ try {
           .sort((a, b) => a - b),
       );
 
+    // A file just opened has nothing to say about saving.
+    assert.equal(await page.locator('.file-view-state').innerText(), '');
     // Lines 3 and 4 changed, line 5 is new and a line went after 11: two orange rows, a
     // blue one and a red triangle on the row after the gap.
     await mark('deleted').first().waitFor({ state: 'attached' });
@@ -148,7 +150,7 @@ try {
       .getByRole('button', { name: zh ? '保存' : 'save', exact: true })
       .click();
     await page
-      .getByText(zh ? '所有修改已保存' : 'all changes saved', { exact: true })
+      .getByText(zh ? '所有改动已保存' : 'all changes saved', { exact: true })
       .waitFor();
     await page.waitForFunction(
       () =>

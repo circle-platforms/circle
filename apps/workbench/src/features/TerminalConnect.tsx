@@ -5,8 +5,8 @@ import type { TerminalTargetRow } from '../../../desktop/src/contracts';
 
 /**
  * A quick connect: reach a device by its address, as SecureCRT does. Nothing is saved;
- * the devices that stay come from the saved profiles. A telnet console answers its own
- * login; ssh signs in from a saved profile, which is said under the fields.
+ * the devices that stay come from the saved profiles. A Telnet console asks for its own
+ * login; SSH signs in from a saved device, which is said under the fields.
  */
 export function TerminalConnect({
   onConnect,
@@ -105,7 +105,7 @@ export function TerminalConnect({
       </label>
       <p className="term-connect-note">
         {t(
-          'ssh signs in from a saved profile; a telnet console answers its own login',
+          'SSH signs in from a saved device; a Telnet console asks for its own login',
         )}
       </p>
       {problem && (

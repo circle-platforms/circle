@@ -6,6 +6,7 @@ import {
   contrastRatio,
   DEFAULT_DARK,
   DEFAULT_LIGHT,
+  DESKTOP_LIGHT,
   setPalette,
   hexToRgb,
   rgbToHex,
@@ -108,7 +109,7 @@ test('Chinese and graphemes occupy terminal cells, and truncation preserves file
   assert.equal(stringWidth(truncate('文件/file.ts', 7, true)), 7);
 });
 test('palette contrast is readable across panel and all type surfaces in dark and light themes', () => {
-  for (const defaults of [DEFAULT_DARK, DEFAULT_LIGHT]) {
+  for (const defaults of [DEFAULT_DARK, DEFAULT_LIGHT, DESKTOP_LIGHT]) {
     const p = buildPalette(...defaults);
     const sgrToHex = (sgr: string) =>
       rgbToHex(
