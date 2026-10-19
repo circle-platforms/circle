@@ -217,7 +217,7 @@ test('fallback never labels running jobs as completed logs and rejects reruns ob
   );
 });
 
-test('failure logs keep the tail of each job for the renderer while the trusted host gets the complete text', async (t) => {
+test('failure logs keep the tail of each job and never the whole log', async (t) => {
   const primary = await fixture(t, { primarySuccess: true, bigPrimary: true });
   const shown = (await primary.service.call('logs', { runId })) as Record<
     string,
@@ -230,10 +230,7 @@ test('failure logs keep the tail of each job for the renderer while the trusted 
     assert.match(shown.text, new RegExp(`last ${job} \\[redacted\\]`));
     assert.doesNotMatch(shown.text, new RegExp(`early ${job}`));
   }
-  const trusted = await primary.service.failureLogs(runId);
-  assert.equal(trusted.text, shown.text);
-  assert.match(trusted.full, /early build[\s\S]*early test/);
-  assert.equal(trusted.full.includes(primary.secret), false);
+  assert.equal(shown.text.includes(primary.secret), false);
 
   const fallback = await fixture(t, { jobNoise: 20_000 });
   const jobs = (await fallback.service.call('logs', { runId })) as {
@@ -245,7 +242,6 @@ test('failure logs keep the tail of each job for the renderer while the trusted 
   assert.match(jobs.text, /=== job 101 \(job 101, failure\) ===/);
   assert.match(jobs.text, /assert expected repaired output 101\s*$/);
   assert.doesNotMatch(jobs.text, /ACTUAL_JOB_LOG/);
-  const complete = await fallback.service.failureLogs(runId);
-  assert.match(complete.full, /ACTUAL_JOB_LOG 101 \[redacted\] \[redacted\]/);
-  assert.equal(complete.full.includes(fallback.secret), false);
+  assert.equal('full' in jobs, false);
+  assert.equal(jobs.text.includes(fallback.secret), false);
 });

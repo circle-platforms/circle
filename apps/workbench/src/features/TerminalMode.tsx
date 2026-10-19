@@ -20,12 +20,10 @@ const NativeTerminal = lazy(() =>
 export function TerminalMode({
   commandTerminal,
   onExitCommandTerminal,
-  terminalFocusRequest,
   sessionId,
   visible,
 }: {
   commandTerminal?: CommandTerminalView;
-  terminalFocusRequest?: { id: string; epoch: string; requestId: string };
   onExitCommandTerminal?: () => void;
   sessionId: string;
   visible: boolean;
@@ -39,7 +37,6 @@ export function TerminalMode({
             embedded
             sessionId={sessionId}
             commandTerminal={commandTerminal}
-            focusRequest={terminalFocusRequest}
             onExitCommandTerminal={onExitCommandTerminal}
             active={visible}
             onAddToDraft={(capture) =>

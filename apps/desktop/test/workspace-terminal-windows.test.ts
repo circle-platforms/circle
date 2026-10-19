@@ -55,7 +55,7 @@ test(
         owner,
         sessionId: 'portable',
         command: {
-          file: process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
+          file: process.execPath,
           args: [
             fileURLToPath(
               new URL('./fixtures/native-pty-child.cjs', import.meta.url),
@@ -150,7 +150,7 @@ test(
         owner,
         sessionId: owner,
         command: {
-          file: process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
+          file: process.execPath,
           args: [
             '-e',
             "console.log('FULL_ORIGINAL_PROGRAM_OUTPUT');setInterval(()=>{},1000)",

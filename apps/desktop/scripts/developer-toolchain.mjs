@@ -39,7 +39,6 @@ const nodeAssets = {
   ],
 };
 export const GH_VERSION = '2.83.2';
-export const DEBUG_VERSION = '1.140.0';
 const ghAssets = {
   'darwin-arm64': [
     'macOS_arm64.zip',
@@ -86,10 +85,11 @@ async function fileHashes(root, relative = '') {
 }
 export async function prepareNativeDependencies(root, dist) {
   const require = createRequire(join(root, 'package.json'));
-  for (const name of ['node-pty', 'typescript-language-server', 'typescript']) {
-    const source = dirname(require.resolve(`${name}/package.json`));
-    await cp(source, join(dist, 'node_modules', name), { recursive: true });
-  }
+  await cp(
+    dirname(require.resolve('node-pty/package.json')),
+    join(dist, 'node_modules', 'node-pty'),
+    { recursive: true },
+  );
   const version = '3.3.3';
   const platform = process.env.CIRCLE_DESKTOP_PLATFORM ?? process.platform;
   const arch = process.env.CIRCLE_DESKTOP_ARCH ?? process.arch;
@@ -255,6 +255,8 @@ export async function prepareDeveloperTools(
   await prepareCommandSupervisor(dist);
   const tools = join(dist, 'tools');
   await mkdir(tools, { recursive: true });
+  // Earlier versions kept the JavaScript debug adapter here too; a package never ships it.
+  await rm(join(tools, 'js-debug'), { recursive: true, force: true });
   const temp = await mkdtemp(join(tmpdir(), 'circle-developer-tools-'));
   const specs = [
     {
@@ -271,24 +273,14 @@ export async function prepareDeveloperTools(
       sha256: asset[1],
       base: `https://github.com/cli/cli/releases/download/v${GH_VERSION}/`,
     },
-    {
-      name: 'js-debug',
-      version: DEBUG_VERSION,
-      file: `js-debug-dap-v${DEBUG_VERSION}.tar.gz`,
-      sha256:
-        '27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968',
-      base: `https://github.com/microsoft/vscode-js-debug/releases/download/v${DEBUG_VERSION}/`,
-    },
   ];
   try {
     for (const spec of specs) {
       const destination = join(tools, spec.name);
-      const entry =
-        spec.name === 'node'
-          ? join('bin', platform === 'win32' ? 'node.exe' : 'node')
-          : spec.name === 'gh'
-            ? join('bin', platform === 'win32' ? 'gh.exe' : 'gh')
-            : join('src', 'dapDebugServer.js');
+      const entry = join(
+        'bin',
+        `${spec.name}${platform === 'win32' ? '.exe' : ''}`,
+      );
       // Only a verified receipt permits cache reuse; no system executable fallback.
       // A build says which it did, and why it downloads.
       const mismatch = await toolCacheMismatch(destination, {
@@ -301,8 +293,7 @@ export async function prepareDeveloperTools(
             : [entry],
       });
       if (!mismatch) {
-        if (platform !== 'win32' && spec.name !== 'js-debug')
-          await chmod(join(destination, entry), 0o755);
+        if (platform !== 'win32') await chmod(join(destination, entry), 0o755);
         if (platform !== 'win32' && spec.name === 'node')
           for (const tool of ['npm', 'npx'])
             await chmod(join(destination, 'bin', tool), 0o755);
@@ -375,11 +366,6 @@ export async function prepareDeveloperTools(
         if (platform !== 'win32')
           await chmod(join(destination, 'bin/node'), 0o755);
       } else await cp(source, destination, { recursive: true });
-      if (spec.name === 'js-debug')
-        await writeFile(
-          join(destination, 'package.json'),
-          JSON.stringify({ type: 'commonjs' }) + '\n',
-        );
       if (spec.name === 'gh' && platform !== 'win32')
         await chmod(join(destination, 'bin/gh'), 0o755);
       await writeFile(

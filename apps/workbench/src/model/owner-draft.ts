@@ -1,6 +1,5 @@
 import { useReducer, useRef } from 'react';
-export type OwnerDraftField =
-  'git.commit-message' | 'delivery.title' | 'delivery.body';
+export type OwnerDraftField = 'git.commit-message';
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem'>;
 const key = (owner: string, field: OwnerDraftField) =>
   `circle.workbench.owner-draft.v1:${encodeURIComponent(owner)}:${field}`;

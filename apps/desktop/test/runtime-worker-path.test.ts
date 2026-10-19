@@ -38,15 +38,13 @@ test('worker runtime PATH preparation preserves original entries and is idempote
 
 test('actual scripted desktop worker runs nested npm with strict system PATH through bundled Node', async () => {
   const originalPath = process.env.PATH;
-  const nodeRuntime =
-    process.env.CIRCLE_JS_DEBUG_RUNTIME ??
-    fileURLToPath(
-      new URL(
-        '../dist/tools/node/bin/' +
-          (process.platform === 'win32' ? 'node.exe' : 'node'),
-        import.meta.url,
-      ),
-    );
+  const nodeRuntime = fileURLToPath(
+    new URL(
+      '../dist/tools/node/bin/' +
+        (process.platform === 'win32' ? 'node.exe' : 'node'),
+      import.meta.url,
+    ),
+  );
   const expected = await realpath(nodeRuntime);
   const toolsRoot = dirname(dirname(nodeRuntime));
   const appModules = fileURLToPath(new URL('../node_modules', import.meta.url));
@@ -154,12 +152,7 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
       format: 'esm',
       // Match build.mjs: keep Koffi's loader/native payload external and avoid
       // colliding with module imports bundled from dependencies.
-      external: [
-        'koffi',
-        'node-pty',
-        'typescript-language-server',
-        'typescript',
-      ],
+      external: ['koffi', 'node-pty'],
       banner: {
         js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
       },

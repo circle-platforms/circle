@@ -2,13 +2,10 @@
 export type WorkspaceService =
   | 'inputs'
   | 'operations'
-  | 'cycles'
   | 'events'
   | 'documents'
   | 'terminal'
   | 'git'
-  | 'language'
-  | 'debug'
   | 'tasks'
   | 'delivery'
   | 'pulls';
@@ -36,7 +33,6 @@ export interface WorkspaceServiceEvent {
 const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   inputs: new Set(['list', 'resolve']),
   operations: new Set(['list', 'review']),
-  cycles: new Set(['list', 'snapshot', 'create', 'advance', 'retryCI']),
   events: new Set(['replay']),
   documents: new Set([
     'read',
@@ -76,29 +72,6 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'commitDiff',
     'continueMerge',
     'abortMerge',
-  ]),
-  language: new Set(['open', 'change', 'close', 'request']),
-  debug: new Set([
-    'output',
-    'start',
-    'snapshot',
-    'launch',
-    'attach',
-    'setBreakpoints',
-    'stackTrace',
-    'breakpoints',
-    'threads',
-    'stack',
-    'scopes',
-    'variables',
-    'next',
-    'stepIn',
-    'stepOut',
-    'continue',
-    'pause',
-    'stop',
-    'list',
-    'evaluate',
   ]),
   tasks: new Set([
     'enqueue',

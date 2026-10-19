@@ -43,13 +43,7 @@ await build({
   },
   plugins: [shareExtensionError(), nativeBinaries],
   sourcemap: true,
-  external: [
-    'koffi',
-    'node-pty',
-    'typescript-language-server',
-    'typescript',
-    ...nativeModules,
-  ],
+  external: ['koffi', 'node-pty', ...nativeModules],
 });
 await copyRuntimeAssets(dist);
 await buildBundledExtensions(dist);
@@ -60,15 +54,7 @@ await build({
   platform: 'node',
   target: 'node24',
   format: 'cjs',
-  external: [
-    'electron',
-    'original-fs',
-    'koffi',
-    'node-pty',
-    'typescript-language-server',
-    'typescript',
-    ...nativeModules,
-  ],
+  external: ['electron', 'original-fs', 'koffi', 'node-pty', ...nativeModules],
   plugins: [nativeBinaries],
   sourcemap: true,
 });

@@ -173,7 +173,6 @@ const STATES: Record<string, () => string> = {
   pending: () => t('pending'),
   recorded: () => t('answered'),
   idle: () => t('idle'),
-  'not debugging': () => t('not debugging'),
   active: () => t('active'),
   trusted: () => t('trusted'),
   'not trusted': () => t('not trusted'),

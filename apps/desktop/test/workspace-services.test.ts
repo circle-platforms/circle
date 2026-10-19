@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
@@ -17,13 +16,13 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { GitWorkspaceService } from '../src/workspace/git.ts';
 import { WorkspaceServices } from '../src/workspace/workspace-services.ts';
+import { WorkspaceEventStream } from '../src/workspace/event-stream.ts';
 import type { WorkspaceDocument } from '../src/workspace/documents.ts';
 import type {
   TerminalSnapshot,
   TerminalReplay,
 } from '../src/workspace/terminal.ts';
 import type { WorkspaceServiceEvent } from '../src/workspace-protocol.ts';
-import { patience } from './helpers/patience.mjs';
 const interactiveShell =
   process.platform === 'win32' ? { args: ['/d', '/q'] } : { shell: '/bin/sh' };
 
@@ -34,9 +33,7 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
   const service = new WorkspaceServices({
     workspaceRoot: root,
     dataDir: data,
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: path.join(root, 'missing-adapter'),
     ghPath: path.join(root, 'missing-gh'),
     credentialFiles: ['private.custom'],
     terminalEnv: {
@@ -221,9 +218,7 @@ test('releasing one session waits for its PTY exit and preserves another session
   const service = new WorkspaceServices({
     workspaceRoot: root,
     dataDir: data,
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
     terminalEnv: {
       HOME: root,
@@ -279,9 +274,7 @@ test('blocked durable writer bounds 100000 incoming events and exposes one failu
       BASH_ENV: '',
     },
     dataDir: data,
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
     maxPendingEventBytes: 32768,
     eventStreamOptions: { beforeWrite: () => gate },
@@ -335,9 +328,7 @@ test('initial event journal open failure still allows complete service disposal'
   const service = new WorkspaceServices({
     workspaceRoot: root,
     dataDir: data,
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
     terminalEnv: {
       HOME: root,
@@ -378,52 +369,79 @@ test('initial event journal open failure still allows complete service disposal'
     await rm(data, { recursive: true, force: true });
   }
 });
-test('document saves invalidate semantic projects without discarding another unsaved overlay', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'circle-language-save-'));
-  const data = await mkdtemp(path.join(tmpdir(), 'circle-language-save-data-'));
-  await writeFile(path.join(root, 'a.ts'), 'export const value = 1;\n');
-  await writeFile(path.join(root, 'b.ts'), 'export const untouched = true;\n');
+test('a workspace that ran automatic delivery in an earlier version opens, replays its old events and keeps its files', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-legacy-delivery-'));
+  const data = await mkdtemp(
+    path.join(tmpdir(), 'circle-legacy-delivery-data-'),
+  );
+  const directory = path.join(
+    data,
+    'workspaces',
+    createHash('sha256').update(path.resolve(root)).digest('hex'),
+  );
+  // What automatic delivery left behind: its cycle ledger and a journal event.
+  const ledger = path.join(
+    directory,
+    'delivery',
+    createHash('sha256').update('session-a').digest('hex'),
+    'delivery-cycles.json',
+  );
+  await mkdir(path.dirname(ledger), { recursive: true });
+  const saved = JSON.stringify({ version: 1, cycles: [], operations: [] });
+  await writeFile(ledger, saved);
+  const journal = await WorkspaceEventStream.open(
+    path.join(directory, 'events.jsonl'),
+  );
+  await journal.append({
+    workspaceId: 'legacy',
+    sessionId: 'session-a',
+    service: 'cycles' as never,
+    resourceId: 'cycle-one',
+    data: { kind: 'cycle', id: 'cycle-one', state: 'waiting_ci', attempt: 1 },
+  });
+  await journal.close();
   const service = new WorkspaceServices({
     workspaceRoot: root,
     dataDir: data,
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
     emit: () => {},
   });
   try {
-    await service.call('s', 'language', 'open', {
-      path: 'b.ts',
-      content: 'export const untouched: string = 123;\n',
-    });
-    const before = (await service.call('s', 'language', 'request', {
-      method: 'diagnostics',
-      path: 'b.ts',
-    })) as unknown[];
-    assert.ok(before.length > 0);
-    const doc = (await service.call('s', 'documents', 'read', {
-      path: 'a.ts',
+    await writeFile(path.join(root, 'notes.txt'), 'before\n');
+    const read = (await service.call('session-a', 'documents', 'read', {
+      path: 'notes.txt',
     })) as WorkspaceDocument;
-    await service.call('s', 'documents', 'save', {
-      path: 'a.ts',
-      content: 'export const value = 2;\n',
-      expectedRevision: doc.revision,
+    await service.call('session-a', 'documents', 'save', {
+      path: 'notes.txt',
+      content: 'after\n',
+      expectedRevision: read.revision,
     });
-    const after = (await service.call('s', 'language', 'request', {
-      method: 'diagnostics',
-      path: 'b.ts',
-    })) as unknown[];
-    assert.ok(after.length > 0);
-    assert.equal(
-      await readFile(path.join(root, 'b.ts'), 'utf8'),
-      'export const untouched = true;\n',
+    const page = await service.replay();
+    assert.deepEqual(
+      [
+        page.events[0]?.seq,
+        page.events[0]?.service,
+        page.events[0]?.resourceId,
+      ],
+      [1, 'cycles', 'cycle-one'],
     );
+    assert.ok(
+      page.events.some(
+        (event) => event.service === 'documents' && event.data.kind === 'save',
+      ),
+    );
+    assert.deepEqual(
+      page.events.map((event) => event.seq),
+      page.events.map((_, index) => index + 1),
+    );
+    assert.equal(service.eventHealth.error, undefined);
   } finally {
     await service.dispose();
-    await rm(root, { recursive: true, force: true });
-    await rm(data, { recursive: true, force: true });
   }
+  assert.equal(await readFile(ledger, 'utf8'), saved);
+  await rm(root, { recursive: true, force: true });
+  await rm(data, { recursive: true, force: true });
 });
 test('concurrent disposal shares completion and late sources are not reported as disk failures', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-service-close-'));
@@ -433,9 +451,7 @@ test('concurrent disposal shares completion and late sources are not reported as
     workspaceRoot: root,
     workspaceId: 'owned-close',
     dataDir: data,
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
     terminalEnv: {
       HOME: root,
@@ -517,9 +533,7 @@ test('concurrent disposal shares completion and late sources are not reported as
       workspaceRoot: root,
       workspaceId: 'owned-close',
       dataDir: data,
-      nodeExecutable: process.execPath,
       runtimeExecutable: process.execPath,
-      adapterPath: 'unused',
       ghPath: 'unused',
       emit: () => {},
     });
@@ -546,9 +560,7 @@ test('Git canonicalizes granted repository aliases without granting its parent t
   await symlink(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
   const base = {
     dataDir: path.join(container, 'data'),
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
     emit: () => {},
   };
@@ -573,271 +585,3 @@ test('Git canonicalizes granted repository aliases without granting its parent t
     await rm(container, { recursive: true, force: true });
   }
 });
-
-test('diagnostic bodies remain replayable after clearing and restart, with byte-bounded Unicode chunks', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'circle-diagnostic-history-'));
-  const data = await mkdtemp(
-    path.join(tmpdir(), 'circle-diagnostic-history-data-'),
-  );
-  await writeFile(path.join(root, 'a.ts'), 'const value: string = 1;');
-  await writeFile(path.join(root, 'main.py'), 'disk');
-  const oldLog = process.env.LSP_TEST_LOG;
-  const protocolLog = path.join(data, 'language-protocol.json');
-  process.env.LSP_TEST_LOG = protocolLog;
-  const options = {
-    workspaceRoot: root,
-    dataDir: data,
-    nodeExecutable: process.execPath,
-    runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
-    ghPath: 'unused',
-    emit: () => {},
-    languageServers: {
-      '.py': {
-        command: process.execPath,
-        args: [
-          fileURLToPath(
-            new URL('../../../tests/fixtures/lsp-server.ts', import.meta.url),
-          ),
-          '--diagnostic-history',
-        ],
-      },
-    },
-  };
-  let service = new WorkspaceServices(options);
-  const allEvents = async () => {
-    const events = [];
-    let page = await service.replay(undefined, 3);
-    while (true) {
-      events.push(...page.events);
-      if (!page.hasMore) return events;
-      page = await service.replay(page.cursor, 3);
-    }
-  };
-  try {
-    await service.call('s', 'language', 'open', {
-      path: 'a.ts',
-      content: 'const value: string = 1;',
-    });
-    const ts = await service.call('s', 'language', 'request', {
-      method: 'diagnostics',
-      path: 'a.ts',
-    });
-    assert.ok((ts as unknown[]).length);
-    await service.call('s', 'language', 'change', {
-      path: 'a.ts',
-      content: 'const value: string = "ok";',
-    });
-    assert.deepEqual(
-      await service.call('s', 'language', 'diagnostics', { path: 'a.ts' }),
-      [],
-    );
-    await service.call('s', 'language', 'open', {
-      path: 'main.py',
-      content: 'PRIVATE_UNSAVED_SOURCE',
-      version: 12,
-    });
-    const lsp = await service.call('s', 'language', 'request', {
-      method: 'diagnostics',
-      path: 'main.py',
-    });
-    await service.call('s', 'language', 'change', {
-      path: 'main.py',
-      content: 'clean',
-      version: 13,
-    });
-    assert.deepEqual(
-      await service.call('s', 'language', 'request', {
-        method: 'diagnostics',
-        path: 'main.py',
-      }),
-      [],
-    );
-    await service.call('s', 'language', 'change', {
-      path: 'main.py',
-      content: 'hold',
-      version: 14,
-    });
-    // Attach the rejection expectation before any awaited publication: the
-    // held server can correctly reject before change's journal write finishes.
-    const late = assert.rejects(
-      service.call('s', 'language', 'request', {
-        method: 'diagnostics',
-        path: 'main.py',
-      }),
-      /stale language response/,
-    );
-    const deadline = Date.now() + patience(1000);
-    while (true) {
-      const requests = JSON.parse(await readFile(protocolLog, 'utf8')) as any[];
-      if (
-        requests.filter((row) => row.method === 'textDocument/diagnostic')
-          .length === 3
-      )
-        break;
-      assert.ok(Date.now() < deadline, 'real server receives held diagnostic');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    await service.call('s', 'language', 'change', {
-      path: 'main.py',
-      content: 'clean',
-      version: 15,
-    });
-    await late;
-    await service.dispose();
-    service = new WorkspaceServices(options);
-    const events = (await allEvents()).filter(
-      (event) =>
-        event.service === 'language' && event.data.kind === 'diagnostics',
-    );
-    const batches = new Map<string, typeof events>();
-    for (const event of events) {
-      assert.ok(Buffer.byteLength(JSON.stringify(event)) <= 64 * 1024);
-      const id = event.data.batchId as string;
-      batches.set(id, [...(batches.get(id) ?? []), event]);
-    }
-    assert.equal(batches.size, 4);
-    const restored = [...batches.values()].map((rows) => {
-      rows.sort((a, b) => Number(a.data.index) - Number(b.data.index));
-      assert.equal(rows.length, rows[0].data.count);
-      return {
-        metadata: rows[0].data,
-        value: JSON.parse(rows.map((row) => row.data.body).join('')),
-      };
-    });
-    assert.deepEqual(restored[0].value, ts);
-    assert.equal(restored[0].metadata.provider, 'typescript');
-    assert.equal(restored[0].metadata.documentVersion, 1);
-    assert.deepEqual(restored[1].value, []);
-    assert.deepEqual(restored[2].value, lsp);
-    assert.equal(restored[2].metadata.provider, 'lsp');
-    assert.equal(restored[2].metadata.documentVersion, 12);
-    assert.deepEqual(restored[3].value, []);
-    assert.ok(
-      events.length > 20,
-      'large multibyte original is chunked, never truncated',
-    );
-    assert.ok(!JSON.stringify(events).includes('PRIVATE_UNSAVED_SOURCE'));
-    assert.equal(await readFile(path.join(root, 'main.py'), 'utf8'), 'disk');
-  } finally {
-    if (oldLog === undefined) delete process.env.LSP_TEST_LOG;
-    else process.env.LSP_TEST_LOG = oldLog;
-    await service.dispose();
-    await rm(root, { recursive: true, force: true });
-    await rm(data, { recursive: true, force: true });
-  }
-});
-
-test(
-  'DAP raw output larger than one MiB survives journal paging and close without cumulative events',
-  { timeout: patience(15000) },
-  async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-output-'));
-    const data = await mkdtemp(
-      path.join(tmpdir(), 'circle-debug-output-data-'),
-    );
-    const adapter = path.join(root, 'adapter.cjs');
-    const events: WorkspaceServiceEvent[] = [];
-    await writeFile(path.join(root, 'fixture.cjs'), '');
-    await writeFile(
-      adapter,
-      `const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize')s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));s.write(frame({type:"event",event:"output",body:{category:"stdout",output:"中文😀\\n".repeat(150000)}}));}else s.write(reply(m));}})}).listen(process.argv[2],function(){console.log('Debug server listening at '+process.argv[2])});`,
-    );
-    const service = new WorkspaceServices({
-      workspaceRoot: root,
-      dataDir: data,
-      nodeExecutable: process.execPath,
-      runtimeExecutable: process.execPath,
-      adapterPath: adapter,
-      ghPath: 'missing',
-      emit: (event) => events.push(event),
-    });
-    const expected = '中文😀\n'.repeat(150000);
-    try {
-      await service.call('A', 'debug', 'launch', { program: 'fixture.cjs' });
-      const deadline = Date.now() + patience(5000);
-      while (
-        !events.some(
-          (event) =>
-            event.service === 'debug' && (event.data as any).kind === 'output',
-        ) &&
-        Date.now() < deadline
-      )
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      // Wait for this complete incoming DAP message's durability chain.
-      let page: any = await service.call('A', 'debug', 'output', {});
-      const chunks: string[] = [];
-      const throughSeq = page.throughSeq;
-      for (;;) {
-        chunks.push(...page.events.map((event: any) => event.data.text));
-        if (!page.hasMore) break;
-        page = await service.call('A', 'debug', 'output', {
-          after: page.cursor,
-          throughSeq,
-        });
-      }
-      assert.equal(chunks.join(''), expected);
-      const snapshot: any = await service.call('A', 'debug', 'snapshot', {});
-      assert.ok(Buffer.byteLength(snapshot.output) <= 64 * 1024);
-      assert.ok(!snapshot.output.includes('�'));
-      assert.ok(
-        events.every(
-          (event) => Buffer.byteLength(JSON.stringify(event)) < 128 * 1024,
-        ),
-      );
-      const foreign: any = await service.call('B', 'debug', 'output', {});
-      assert.equal(foreign.events.length, 0);
-      assert.equal(service.eventHealth.error, undefined);
-      await service.dispose();
-      const journalFiles = await readdir(path.join(data, 'workspaces'));
-      const raw = await readFile(
-        path.join(data, 'workspaces', journalFiles[0], 'events.jsonl'),
-        'utf8',
-      );
-      const stored = raw
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line))
-        .filter(
-          (event) => event.sessionId === 'A' && event.data.kind === 'output',
-        )
-        .map((event) => event.data.text)
-        .join('');
-      assert.equal(stored, expected);
-      const reopened = new WorkspaceServices({
-        workspaceRoot: root,
-        dataDir: data,
-        nodeExecutable: process.execPath,
-        runtimeExecutable: process.execPath,
-        adapterPath: adapter,
-        ghPath: 'missing',
-        emit: () => {},
-      });
-      try {
-        let after = { offset: 0, seq: 0 };
-        const recovered: string[] = [];
-        for (;;) {
-          const page: any = await reopened.call('A', 'debug', 'output', {
-            after,
-          });
-          recovered.push(...page.events.map((event: any) => event.data.text));
-          if (!page.hasMore) break;
-          after = page.cursor;
-        }
-        assert.equal(recovered.join(''), expected);
-        assert.equal(
-          ((await reopened.call('A', 'debug', 'snapshot', {})) as any)
-            .adapterPid,
-          undefined,
-          'history reading never launches an adapter',
-        );
-      } finally {
-        await reopened.dispose();
-      }
-    } finally {
-      await service.dispose();
-      await rm(root, { recursive: true, force: true });
-      await rm(data, { recursive: true, force: true });
-    }
-  },
-);

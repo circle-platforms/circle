@@ -14,7 +14,7 @@ export interface LspServer {
   command: string;
   args: string[];
 }
-export const DEFAULT_SERVERS: Record<string, LspServer> = {
+const DEFAULT_SERVERS: Record<string, LspServer> = {
   '.py': { command: 'pylsp', args: [] },
   '.pyi': { command: 'pylsp', args: [] },
   '.ts': { command: 'typescript-language-server', args: ['--stdio'] },
@@ -68,29 +68,12 @@ export class LspClient {
   private documents = new Map<string, { version: number; text: string }>();
   private exited: Promise<void>;
   private closing?: Promise<void>;
-  private processState:
-    'starting' | 'running' | 'stopping' | 'exited' | 'failed' = 'starting';
-  private stderrTail = '';
-  private exitCode?: number;
-  private exitSignal?: string;
-  private exitReason?: string;
-  private command: string;
-  private readonly redactions = Object.entries(process.env)
-    .filter(
-      ([key, value]) =>
-        /(?:TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL)/i.test(key) &&
-        value &&
-        value.length >= 4,
-    )
-    .map(([, value]) => value!);
-  private listeners = new Set<(method: string, params: unknown) => void>();
   constructor(
     server: LspServer,
     readonly workspace: string,
     readonly timeout = 8000,
   ) {
     const command = findExecutable(server.command) || server.command;
-    this.command = command;
     this.child = spawn(command, server.args, {
       cwd: workspace,
       env: shellEnvironment(),
@@ -99,28 +82,11 @@ export class LspClient {
       shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(command),
     });
     this.child.stdout.on('data', (chunk: Buffer) => this.read(chunk));
-    this.child.stderr.on('data', (chunk: Buffer) => {
-      this.stderrTail = (this.stderrTail + chunk.toString('utf8')).slice(-8192);
-    });
+    this.child.stderr.on('data', () => {});
     this.child.stdin.on('error', (error) => this.fail(error));
-    this.child.on('error', (error) => {
-      this.processState = 'failed';
-      this.exitReason =
-        (error as NodeJS.ErrnoException).code ?? 'process error';
-      this.fail(error);
-    });
+    this.child.on('error', (error) => this.fail(error));
     this.exited = new Promise((resolve) => {
-      this.child.once('close', (code, signal) => {
-        this.exitCode = code ?? undefined;
-        this.exitSignal = signal ?? undefined;
-        if (this.processState !== 'failed') this.processState = 'exited';
-        this.exitReason ??= this.closing
-          ? 'stopped'
-          : signal
-            ? 'terminated by signal'
-            : code === 0
-              ? 'exited normally'
-              : 'non-zero exit';
+      this.child.once('close', () => {
         this.closed = true;
         this.fail(new Error('language server closed'));
         resolve();
@@ -177,9 +143,6 @@ export class LspClient {
         continue;
       }
       if (typeof message.method === 'string') {
-        if (message.id === undefined)
-          for (const listener of this.listeners)
-            listener(message.method, message.params);
         if (message.id !== undefined) {
           if (message.method === 'workspace/configuration')
             this.send({
@@ -235,7 +198,6 @@ export class LspClient {
           if (encoding && encoding !== 'utf-16')
             throw Error('language server must support UTF-16 positions');
           this.notify('initialized', {});
-          this.processState = 'running';
         })
         .catch((error) => {
           this.ready = undefined;
@@ -289,34 +251,12 @@ export class LspClient {
       }
     });
   }
-  onNotification(
-    listener: (method: string, params: unknown) => void,
-  ): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-  closeDocument(path: string): void {
+  open(path: string): void {
     const uri = pathToFileURL(path).href;
-    if (this.documents.delete(uri))
-      this.notify('textDocument/didClose', { textDocument: { uri } });
-  }
-  open(path: string, content?: string, expectedVersion?: number): number {
-    const uri = pathToFileURL(path).href;
-    const text = content ?? readFileSync(path, 'utf8');
+    const text = readFileSync(path, 'utf8');
     const previous = this.documents.get(uri);
-    if (
-      expectedVersion !== undefined &&
-      (!Number.isSafeInteger(expectedVersion) ||
-        expectedVersion < 1 ||
-        expectedVersion < (previous?.version ?? 0) ||
-        (expectedVersion === previous?.version && previous.text !== text))
-    )
-      throw Error('stale language document version');
     const version =
-      expectedVersion ??
-      (previous?.text === text
-        ? previous.version
-        : (previous?.version ?? 0) + 1);
+      previous?.text === text ? previous.version : (previous?.version ?? 0) + 1;
     if (!previous) {
       const extension = extname(path).slice(1);
       const languageId =
@@ -335,37 +275,12 @@ export class LspClient {
       this.notify('textDocument/didOpen', {
         textDocument: { uri, languageId, version, text },
       });
-    } else if (text !== previous.text || version !== previous.version)
+    } else if (text !== previous.text)
       this.notify('textDocument/didChange', {
         textDocument: { uri, version },
         contentChanges: [{ text }],
       });
     this.documents.set(uri, { version, text });
-    return version;
-  }
-  processSnapshot() {
-    // Redact the combined tail rather than individual chunks: secrets can span chunks.
-    let stderr = this.stderrTail;
-    for (const secret of this.redactions)
-      stderr = stderr.split(secret).join('[redacted]');
-    stderr = stderr.replace(
-      /(authorization\s*[:=]\s*|bearer\s+|(?:token|password|secret|api[_-]?key)\s*[:=]\s*)[^\s]+/gi,
-      '$1[redacted]',
-    );
-    return {
-      kind: 'external' as const,
-      provider: 'lsp',
-      canStop: ['starting', 'running'].includes(this.processState),
-      canRestart: true,
-      state: this.processState,
-      pid: this.child.pid,
-      command: this.command,
-      cwd: this.workspace,
-      stderrTail: stderr.slice(-8192),
-      exitCode: this.exitCode,
-      signal: this.exitSignal,
-      reason: this.exitReason,
-    };
   }
   close(): Promise<void> {
     return (this.closing ??= this.finishClose());
@@ -373,11 +288,6 @@ export class LspClient {
   private async finishClose(): Promise<void> {
     if (this.closed) return this.exited;
     this.closed = true;
-    if (this.processState !== 'failed') {
-      this.processState = 'stopping';
-      this.exitReason = 'stopped';
-    }
-    this.listeners.clear();
     this.fail(new Error('language server closed'));
     const pid = this.child.pid;
     if (!pid) return;

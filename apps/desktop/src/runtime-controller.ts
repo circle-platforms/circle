@@ -15,9 +15,6 @@ import {
   commandTerminalAction,
   type CommandTerminalSource,
 } from './workspace/command-handoff.js';
-import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
-import { GitWorkspaceService } from './workspace/git.js';
-import { DeliveryService } from './workspace/delivery.js';
 import { NativeGitHubConnection } from './workspace/github-connection.js';
 import { githubWorkspaceBackend } from './workspace/github-backend.js';
 import type { GitHubConnectionBackend } from '../../../src/github_connection.js';
@@ -309,9 +306,7 @@ export interface ControllerOptions {
   emitTokenDelta?: (delta: RuntimeTokenDelta) => void;
   credentialStore?: RuntimeCredentialStore;
   workspaceTools?: {
-    nodeExecutable: string;
     runtimeExecutable: string;
-    adapterPath: string;
     ghPath: string;
     /** Bundled static supervisor; no source-directory or PATH fallback. */
     commandSupervisorPath?: string;
@@ -776,7 +771,7 @@ export class RuntimeController {
       owner.applyThinkingChoice(level);
     }
   }
-  private synchronizeSharedSettings(settings: CircleSettings): Promise<void> {
+  private synchronizeSharedSettings(settings: CircleSettings): void {
     if (settings.extensions.github?.enabled !== true) {
       this.githubLeases.clear();
       this.githubProviderLifetime.abort();
@@ -807,7 +802,6 @@ export class RuntimeController {
         void owner.setBundledExtensionEnabled('github', true).catch(() => {});
       }
     }
-    const developerApplied = this.applyDeveloperExtension(settings);
     for (const owner of this.runtimes.values()) {
       if (
         !owner.options.localContext &&
@@ -837,36 +831,6 @@ export class RuntimeController {
         trusted_folders: [...settings.trusted_folders],
       });
     }
-    return developerApplied;
-  }
-  /** Turn the developer extension on or off in every runtime, without a reload. */
-  private applyDeveloperExtension(settings: CircleSettings): Promise<void> {
-    const enabled = settings.extensions.developer?.enabled === true;
-    const active = this.active;
-    const owners = [
-      ...this.runtimes.values(),
-      ...this.taskRuntimes.values(),
-    ].filter((owner) => !owner.isClosing);
-    owners.sort((left, right) =>
-      left === active ? -1 : right === active ? 1 : 0,
-    );
-    const pending: Promise<void>[] = [];
-    for (const owner of owners) {
-      const previous =
-        owner.options.settings.extensions.developer?.enabled === true;
-      owner.options.settings.extensions.developer = {
-        ...owner.options.settings.extensions.developer,
-        enabled,
-      };
-      if (previous === enabled) continue;
-      pending.push(
-        owner.setBundledExtensionEnabled('developer', enabled).then(
-          () => undefined,
-          () => undefined,
-        ),
-      );
-    }
-    return Promise.all(pending).then(() => undefined);
   }
   private async releaseSessionResources(
     sessionId: string,
@@ -1105,15 +1069,7 @@ export class RuntimeController {
     let services = this.workspaceServices.get(root);
     if (!services) {
       const tools = this.options.workspaceTools ?? {
-        nodeExecutable: process.execPath,
         runtimeExecutable: process.execPath,
-        adapterPath: join(
-          this.home,
-          'tools',
-          'js-debug',
-          'src',
-          'dapDebugServer.js',
-        ),
         ghPath: 'gh',
       };
       services = new WorkspaceServices({
@@ -1126,8 +1082,6 @@ export class RuntimeController {
         githubConnection: this.githubConnection(),
         enforceGitHubConnection: true,
         githubEnabled: (id) => this.githubAvailable(id),
-        developerEnabled: () =>
-          loadSettings(this.home).extensions.developer?.enabled === true,
         githubInvocation: (id) => this.githubInvocation(id),
         credentialStore: this.options.credentialStore
           ? {
@@ -1137,120 +1091,6 @@ export class RuntimeController {
               delete: () => this.options.credentialStore!.delete('github.com'),
             }
           : undefined,
-        cyclePorts: async (sessionId) => {
-          const ownerRuntime =
-            this.runtimes.get(sessionId) ?? this.taskRuntimes.get(sessionId);
-          if (
-            ownerRuntime &&
-            loadSettings(this.home).extensions.github?.enabled === true
-          )
-            await ownerRuntime.setBundledExtensionEnabled('github', true);
-          const githubInvocation = this.githubInvocation(sessionId);
-          const githubConnection = this.githubConnection();
-          const githubEpoch = githubConnection?.snapshot().epoch;
-          const cycleScopes = new Map<
-            string,
-            {
-              invocation: ReturnType<RuntimeController['githubInvocation']>;
-              epoch: number | undefined;
-            }
-          >();
-          const scopeFor = (cycle: { id: string }) => {
-            const scope = cycleScopes.get(cycle.id);
-            if (!scope) throw Error('cycle authorization scope is missing');
-            return scope;
-          };
-          const git = new GitWorkspaceService(root);
-          const [name, email] = await Promise.all([
-            git.git(['config', '--get', 'user.name']),
-            git.git(['config', '--get', 'user.email']),
-          ]);
-          return createWorkspaceCyclePorts({
-            workspace: root,
-            sessionId,
-            bindCycle: (cycle, mode) => {
-              if (!cycleScopes.has(cycle.id))
-                cycleScopes.set(cycle.id, {
-                  invocation:
-                    mode === 'created'
-                      ? this.githubInvocation(sessionId)
-                      : githubInvocation,
-                  epoch:
-                    mode === 'created'
-                      ? githubConnection?.snapshot().epoch
-                      : githubEpoch,
-                });
-            },
-            invocation: (cycle) => {
-              const scope = scopeFor(cycle);
-              return {
-                signal: scope.invocation.signal,
-                assertActive: () => {
-                  scope.invocation.assertActive();
-                  if (!githubConnection || scope.epoch === undefined)
-                    throw Error('connect GitHub in the GitHub plugin details');
-                  githubConnection.assertEpoch(scope.epoch);
-                },
-              };
-            },
-            dataDir: join(
-              this.options.dataFolder ?? this.home,
-              'cycle-adapters',
-              identity(root),
-            ),
-            identity: { name: name.trim(), email: email.trim() },
-            getTaskService: () => this.collaboration(root, sessionId),
-            verify: (task, context) =>
-              this.taskVerifier(root, task.spec.baseline)(task, context),
-            withResource: (resource, run) =>
-              this.taskResources.withResource(resource, run),
-            pushAuthentication: async (ownedPath, cycle) => {
-              const scope = scopeFor(cycle);
-              scope.invocation.assertActive();
-              const remote = (
-                await new GitWorkspaceService(ownedPath).git([
-                  'remote',
-                  'get-url',
-                  '--push',
-                  '--all',
-                  'origin',
-                ])
-              ).trim();
-              scope.invocation.assertActive();
-              const match =
-                /^https:\/\/github\.com\/([-\w.]+\/[-\w.]+?)(?:\.git)?$/.exec(
-                  remote,
-                );
-              if (!match)
-                throw Error(
-                  'select an authorized GitHub HTTPS push destination',
-                );
-              return githubConnection?.gitPushAuthentication(
-                scope.epoch!,
-                match[1]!,
-                scope.invocation.signal,
-                scope.invocation.assertActive,
-              );
-            },
-            createDelivery: (ownedPath, cycle) =>
-              new DeliveryService(ownedPath, tools.ghPath, {
-                spawn: (file, args, options) => spawnPty(file, args, options),
-                connection: githubConnection,
-                epoch: scopeFor(cycle).epoch,
-                ...scopeFor(cycle).invocation,
-                credentialStore: this.options.credentialStore
-                  ? {
-                      get: () =>
-                        this.options.credentialStore!.get('github.com'),
-                      put: (token) =>
-                        this.options.credentialStore!.put('github.com', token),
-                    }
-                  : undefined,
-              }),
-            redact: (value) =>
-              this.runtimes.get(sessionId)?.redact(value) ?? value,
-          });
-        },
         workspaceId: identity(root),
         credentialFiles: settingsForRun(this.home, root).settings
           .credential_files,
@@ -1769,8 +1609,6 @@ export class RuntimeController {
         const code = (error as { code?: string })?.code;
         if (code === 'DOCUMENT_CONFLICT')
           return 'file changed on disk; reload and compare your draft before saving';
-        if (code === 'DEBUG_TARGET_MISSING' || code === 'DEVELOPER_TOOLS_OFF')
-          return error instanceof Error ? error.message : String(error);
         return 'operation failed; inspect effects before retrying';
       },
     }));
@@ -1785,33 +1623,11 @@ export class RuntimeController {
       documents: ['read', 'refresh', 'resolveSource'],
       terminal: ['list', 'replay', 'resolveCommand'],
       git: ['status', 'snapshot', 'changes', 'diff', 'branches'],
-      debug: [
-        'snapshot',
-        'list',
-        'output',
-        'threads',
-        'stack',
-        'stackTrace',
-        'scopes',
-        'variables',
-        'setBreakpoints',
-        'breakpoints',
-        'pause',
-        'stop',
-      ],
       tasks: ['list', 'events', 'artifacts', 'readArtifact'],
       delivery: ['status', 'checks', 'logs'],
       pulls: ['overview', 'failedLog'],
     };
     const read =
-      (request.service === 'language' &&
-        !['stop', 'restart'].includes(
-          String(
-            request.method === 'request'
-              ? request.params?.method
-              : request.method,
-          ),
-        )) ||
       request.service === 'events' ||
       (request.service === 'terminal' &&
         request.method === 'command' &&
@@ -1967,14 +1783,10 @@ export class RuntimeController {
       throw Error('session is deleting or deleted');
     const request = validateWorkspaceRequest(command.payload);
     if (
-      ['documents', 'language'].includes(request.service) &&
+      request.service === 'documents' &&
       this.sourceTask(id)?.spec.access === 'readonly'
     )
-      assertReadonlyTaskRequest(
-        request.service,
-        request.method,
-        request.params,
-      );
+      assertReadonlyTaskRequest(request.service, request.method);
     if (
       request.service === 'inputs' &&
       (request.method === 'list' || request.params?.action !== 'resume')
@@ -2028,7 +1840,6 @@ export class RuntimeController {
     const emergency =
       (request.service === 'terminal' &&
         ['signal', 'close'].includes(request.method)) ||
-      (request.service === 'debug' && request.method === 'stop') ||
       (request.service === 'delivery' &&
         request.method === 'login' &&
         request.params?.action === 'cancel');
@@ -4294,7 +4105,7 @@ export class RuntimeController {
     if (command.name === 'workspace-service')
       return this.workspaceCommand(command);
     this.metadata.refresh();
-    void this.synchronizeSharedSettings(loadSettings(this.home));
+    this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
     // These capability operations address their explicit owner and must never
     // open or acquire the unrelated session currently being inspected.
@@ -5010,7 +4821,7 @@ export class RuntimeController {
               };
           }
         });
-        await this.synchronizeSharedSettings(settings);
+        this.synchronizeSharedSettings(settings);
         if (data.defaultEffort !== undefined)
           this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)

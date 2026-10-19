@@ -114,7 +114,7 @@ export function measurePanelControlGeometry(node) {
  * configureAppearance({locale,theme}) must click original Settings and return to the same session.
  * openPanel(kind) must use original Inspector/Browser toggles, and expose service form or storage tab.
  * resize(size) must resize the native BrowserWindow (not merely the renderer viewport).
- * No model, command, storage or debugger mutations are issued here.
+ * No model, command or storage mutations are issued here.
  */
 export async function runNativePanelAcceptance({
   page,
@@ -135,7 +135,6 @@ export async function runNativePanelAcceptance({
     cases: [],
   };
   const specs = [
-    { kind: 'debug', root: '.debug-panel', en: 'program path', zh: '程序路径' },
     {
       kind: 'service',
       root: '.native-service-form',
@@ -229,7 +228,7 @@ export async function runNativePanelAcceptance({
         }
       }
     receipt.status = 'passed';
-    assert.equal(receipt.cases.length, 24);
+    assert.equal(receipt.cases.length, 16);
     return receipt;
   } catch (error) {
     receipt.status = 'failed';

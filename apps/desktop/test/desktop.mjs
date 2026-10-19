@@ -1199,8 +1199,8 @@ try {
       'export const hello = "native workspace";'
     );
   });
-  // F12 in the editor is go to definition. It must not open the browser's tools,
-  // and neither must ctrl+shift+I, while the keyboard is outside the browser panel.
+  // F12 and ctrl+shift+I must not open the browser's tools while the keyboard
+  // is in the editor, outside the browser panel.
   const browserDevTools = () =>
     app.evaluate(({ webContents }) =>
       webContents
@@ -1288,7 +1288,6 @@ try {
   // Each switch is named by the interface's shown title.
   const expectedInterfaces = [
     'GitHub',
-    'developer extension',
     'file and diff inspector',
     'activity inspector',
     'browser pane',

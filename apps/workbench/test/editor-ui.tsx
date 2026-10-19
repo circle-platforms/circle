@@ -106,11 +106,9 @@ function Fixture() {
             language="typescript"
             readOnly={false}
             diff={diff}
-            live={false}
             selection={selection}
             onChange={setValue}
             onSave={() => setSaves((count) => count + 1)}
-            onNavigate={async () => {}}
           />
         )}
       </div>
@@ -120,17 +118,6 @@ function Fixture() {
 const nativeFixture = new URL(location.href).searchParams.has('viewer');
 if (nativeFixture) {
   window.circleDesktop = {
-    copyText: async (text) => {
-      const response = await fetch('/__editor_workspace?copy-diagnostics=1', {
-        method: 'POST',
-        body: text,
-      });
-      const reply = await response.json();
-      if (reply.ok === false) throw Error(reply.error);
-      document.documentElement.dataset.diagnosticCopies = String(
-        Number(document.documentElement.dataset.diagnosticCopies ?? 0) + 1,
-      );
-    },
     onWorkspaceEvent: (listener) => {
       const source = new EventSource('/__editor_events');
       source.onmessage = (message) => {
@@ -166,16 +153,6 @@ if (nativeFixture) {
   runtime.change((state) => {
     const session = currentSession(state);
     session.readOnly = false;
-    state.extensions.push({
-      id: 'developer',
-      name: 'developer',
-      version: '0.1.0',
-      scope: 'bundled',
-      enabled: true,
-      tools: [],
-      commands: [],
-      events: [],
-    });
     state.files = [
       {
         id: 'fixture-main',
@@ -225,20 +202,6 @@ if (nativeFixture) {
             }
           >
             external delete
-          </button>
-          <button
-            onClick={() =>
-              fetch('/__editor_workspace?badconfig=1', { method: 'POST' })
-            }
-          >
-            break project config
-          </button>
-          <button
-            onClick={() =>
-              fetch('/__editor_workspace?goodconfig=1', { method: 'POST' })
-            }
-          >
-            fix project config
           </button>
           <div style={{ height: 650, display: 'flex' }}>
             <FileViewer

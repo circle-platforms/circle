@@ -47,8 +47,6 @@ interface Props {
   fileOwnerKey?: string;
   resourcesPaused?: boolean;
   commandTerminal?: CommandTerminalView;
-  onOpenTerminal?: (target: { id: string; epoch: string }) => void;
-  terminalFocusRequest?: { id: string; epoch: string; requestId: string };
   onExitCommandTerminal?: () => void;
   panel: PanelId;
   /** The modes that are in windows of their own. */
@@ -274,7 +272,6 @@ function InspectorResources(
               ) : id === 'terminal' ? (
                 <TerminalMode
                   commandTerminal={props.commandTerminal}
-                  terminalFocusRequest={props.terminalFocusRequest}
                   onExitCommandTerminal={props.onExitCommandTerminal}
                   sessionId={props.sessionId}
                   visible={!!props.visible && id === props.panel}

@@ -127,12 +127,10 @@ test(
       dataFolder: data,
       model,
       workspaceTools: {
-        nodeExecutable: process.execPath,
         runtimeExecutable: process.execPath,
         commandSupervisorPath: fileURLToPath(
           new URL('../src/workspace/command-supervisor.mjs', import.meta.url),
         ),
-        adapterPath: 'unused',
         ghPath: 'unused',
       },
       emit(value: RuntimeUpdate) {

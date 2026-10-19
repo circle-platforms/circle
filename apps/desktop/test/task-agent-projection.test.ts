@@ -240,7 +240,7 @@ test('adopted proposal links use exact ledger attempts and reviewers while propo
     undefined,
   );
 });
-test('read-only source policy permits inspection and language previews but rejects disk mutation', () => {
+test('read-only source policy permits inspection but rejects disk mutation', () => {
   for (const method of ['read', 'refresh', 'resolveSource'])
     assert.doesNotThrow(() => assertReadonlyTaskRequest('documents', method));
   for (const method of ['save', 'applyEdits', 'delete'])
@@ -248,23 +248,4 @@ test('read-only source policy permits inspection and language previews but rejec
       () => assertReadonlyTaskRequest('documents', method),
       /read-only agent/,
     );
-  for (const method of ['definition', 'rename', 'format', 'diagnostics'])
-    assert.doesNotThrow(() =>
-      assertReadonlyTaskRequest('language', 'request', { method }),
-    );
-  assert.throws(
-    () =>
-      assertReadonlyTaskRequest('language', 'request', {
-        method: 'workspace/applyEdit',
-      }),
-    /previews only/,
-  );
-  assert.throws(
-    () =>
-      assertReadonlyTaskRequest('language', 'request', {
-        method: 'rename',
-        apply: true,
-      }),
-    /previews only/,
-  );
 });

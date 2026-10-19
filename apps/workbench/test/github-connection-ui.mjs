@@ -291,21 +291,6 @@ try {
             ? /revocation is not confirmed/
             : /尚未确认 GitHub 授权已撤销/,
         );
-        const delivery = page.locator('.native-delivery');
-        await delivery.locator(':scope > summary').click();
-        assert.equal(
-          await delivery.locator('a').getAttribute('href'),
-          '/page/extensions?plugin=github',
-        );
-        assert.equal(
-          await delivery
-            .getByRole('button', {
-              name: label('connect GitHub', '连接 GitHub'),
-              exact: true,
-            })
-            .count(),
-          0,
-        );
         await page.evaluate(() => window.githubFixture.integrationLoading());
         await card
           .getByText(

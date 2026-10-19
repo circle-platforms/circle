@@ -50,7 +50,6 @@ test('the component gate preserves prior journeys and includes each native regre
     'resource-boundary-ui.mjs',
     'pending-operations-ui.mjs',
     'recovered-input-ui.mjs',
-    'debug-panel-ui.mjs',
     'keyboard-navigation-ui.mjs',
   ];
   assert.deepEqual(
@@ -72,7 +71,6 @@ test('the component gate preserves prior journeys and includes each native regre
           'windowed-mount-ui.mjs',
           'native-terminal-search-ui.mjs',
           'workspace-shell-ui.mjs',
-          'debug-panel-embedded.mjs',
           'original-browser-shell-ui.mjs',
           'native-terminal-fit-ui.mjs',
           'runtime-failure-ui.mjs',
@@ -122,7 +120,6 @@ test('the component gate preserves prior journeys and includes each native regre
     'paste-default-ui.mjs',
     'native-editable-shortcuts-ui.mjs',
     'workspace-shell-ui.mjs',
-    'debug-panel-embedded.mjs',
     'original-browser-shell-ui.mjs',
     'native-terminal-fit-ui.mjs',
     'runtime-failure-ui.mjs',
@@ -156,7 +153,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'task-review-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 53);
+  assert.equal(new Set(COMPONENT_SUITES).size, 51);
 });
 
 test('safe file undo remains a required component journey', () => {

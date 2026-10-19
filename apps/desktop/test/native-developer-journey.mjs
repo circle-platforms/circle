@@ -37,19 +37,7 @@ import {
   createNativeTerminalFixture,
   runNativeTerminalJourney,
 } from './helpers/native-terminal-journey.mjs';
-import {
-  createNativeDebugFixture,
-  runNativeDebugJourney,
-} from './helpers/native-debug-journey.mjs';
 import { runNativeKeyboardJourney } from './helpers/native-keyboard-journey.mjs';
-import {
-  createNativeEditorInteractionsFixture,
-  runNativeEditorInteractions,
-} from './helpers/native-editor-interactions.mjs';
-import {
-  createNativeEditorSemanticsFixture,
-  runNativeEditorSemantics,
-} from './helpers/native-editor-semantics.mjs';
 import { runNativeInputRecovery } from './helpers/native-input-recovery.mjs';
 import { runNativeBrowserStream } from './helpers/native-browser-stream.mjs';
 import {
@@ -102,8 +90,6 @@ await mkdir(shellHome, { recursive: true });
 const repo = join(data, 'runtime-home', 'workspace');
 await mkdir(repo, { recursive: true });
 const baseline = '# native journey\n\noriginal content\n';
-const program =
-  "function fixture() {\n  const count = 3;\n  const next = count + 1;\n  console.log('DEBUG_RESULT', next);\n  return next;\n}\nfixture();\n";
 const browserDebugFixture = browserDebugFixtureSource(
   "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\nnew EventSource('/events').onmessage = event => { (window.__journeyEvents ||= []).push(event.data); console.log(event.data); };\n",
 );
@@ -115,11 +101,6 @@ await Promise.all([
   ),
   writeFile(join(repo, 'git-probe.txt'), 'baseline\n'),
   writeFile(join(repo, 'README.md'), baseline),
-  writeFile(join(repo, 'debug.cjs'), program),
-  writeFile(
-    join(repo, 'debug-args.cjs'),
-    "const args = process.argv.slice(2);\nconsole.log('JOURNEY_LITERAL_ARGS', JSON.stringify(args));\n",
-  ),
   writeFile(join(repo, 'browser-source.js'), browserSource),
   writeFile(
     join(repo, 'package.json'),
@@ -128,8 +109,6 @@ await Promise.all([
 ]);
 await createNativeGitFixture(repo);
 await createNativeEditorFixture(repo);
-await createNativeEditorInteractionsFixture(repo);
-await createNativeEditorSemanticsFixture(repo);
 const terminalFixture = await createNativeTerminalFixture(repo);
 const terminalShortcutsFixture =
   await createNativeTerminalShortcutsFixture(repo);
@@ -150,7 +129,6 @@ const commandHandoffFixture = await createNativeCommandHandoffFixture(
     appPath: launchRoot,
   }),
 );
-const debugFixture = await createNativeDebugFixture(repo);
 const childCommandFixture = await createNativeChildCommandHandoffFixture(
   repo,
   commandHandoffFixture.nodePath,
@@ -168,18 +146,12 @@ await git(
   ...continuityFixture.files,
   ...commandHandoffFixture.files,
   ...childCommandFixture.files,
-  debugFixture.program,
-  '.circle-native-debug-interaction.json',
-  'editor-supplement.ts',
-  'editor-keyboard-interactions.ts',
   'editor-main.ts',
   'editor-lib.ts',
   '.circle-editor-journey.json',
   'AGENTS.md',
   'git-probe.txt',
   'README.md',
-  'debug.cjs',
-  'debug-args.cjs',
   'browser-source.js',
   'package.json',
 );
@@ -431,8 +403,6 @@ for (const file of [
     'native-browser-stream',
     'native-editor-isolation',
     'native-editor-journey',
-    'native-editor-semantics',
-    'native-editor-interactions',
     'native-terminal-journey',
     'native-terminal-shortcuts-journey',
     'native-continuity-journey',
@@ -441,7 +411,6 @@ for (const file of [
     'native-terminal-rendered-match',
     'native-paste-cleanup',
     'native-github-settings-journey',
-    'native-debug-journey',
     'native-panel-acceptance',
     'native-keyboard-journey',
     'native-git-journey',
@@ -629,7 +598,7 @@ try {
       .waitFor({ state: 'visible' });
     sessionId = (await state()).activeSessionId;
     await page
-      .getByText('Native journey ready: README.md and debug.cjs', {
+      .getByText('Native journey ready: README.md', {
         exact: true,
       })
       .waitFor();
@@ -687,108 +656,30 @@ try {
           .click();
     },
   );
-  await check('enable the bundled developer extension', async () => {
-    await page.evaluate(() => {
-      location.hash = '#/page/extensions';
-    });
+  await check('native editor save, undo and conflict journey', async () => {
     await page
-      .getByRole('heading', { name: 'extensions', exact: true })
-      .waitFor();
-    await page
-      .getByRole('button', { name: 'runtime extensions', exact: true })
+      .getByRole('button', { name: 'files panel', exact: true })
       .click();
-    const card = page.locator('.extension-card').filter({
-      has: page.getByRole('heading', {
-        name: 'developer extension',
-        exact: true,
-      }),
-    });
-    const toggle = card.getByRole('checkbox', {
-      name: 'enable developer extension',
-      exact: true,
-    });
-    if (!(await toggle.isChecked())) await toggle.click();
-    // The developer extension applies at once; no reload is asked for.
-    await page.waitForFunction(() => {
-      const card = [...document.querySelectorAll('.extension-card')].find(
-        (item) =>
-          item.querySelector('h2')?.textContent === 'developer extension',
-      );
-      const input = card?.querySelector('input[type="checkbox"]');
-      return (
-        input instanceof HTMLInputElement &&
-        input.checked &&
-        card.textContent.includes('extension enabled')
-      );
-    });
-    await page
-      .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-      .first()
-      .click();
-    await page.waitForFunction(
-      (id) => location.hash === `#/session/${id}`,
+    const result = await runNativeEditorJourney({
+      page,
+      workspace: repo,
       sessionId,
+      output,
+    });
+    await writeFile(
+      join(output, 'editor-journey.json'),
+      JSON.stringify(result, null, 2),
     );
-  });
-  await check(
-    'native editor semantic navigation and conflict journey',
-    async () => {
+    await closeFile();
+    if (
       await page
-        .getByRole('button', { name: 'files panel', exact: true })
+        .getByRole('button', { name: 'close inspector', exact: true })
+        .isVisible()
+    )
+      await page
+        .getByRole('button', { name: 'close inspector', exact: true })
         .click();
-      const result = await runNativeEditorJourney({
-        page,
-        workspace: repo,
-        sessionId,
-        output,
-      });
-      await writeFile(
-        join(output, 'editor-journey.json'),
-        JSON.stringify(result, null, 2),
-      );
-      if (
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .isVisible()
-      )
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
-    },
-  );
-  await check(
-    'supplemental editor references completion formatting and replacement',
-    async () => {
-      await runNativeEditorSemantics({
-        page,
-        workspace: repo,
-        sessionId,
-        output,
-        assertDevToolsClosed: async () => {
-          const mainWindow = await app.browserWindow(page);
-          const windowId = await mainWindow.evaluate((window) => window.id);
-          const opened = await app.evaluate(({ BrowserWindow }, id) => {
-            const window = BrowserWindow.fromId(id);
-            if (!window || window.isDestroyed())
-              throw new Error('native journey main window is unavailable');
-            return window.webContents.isDevToolsOpened();
-          }, windowId);
-          assert.equal(
-            opened,
-            false,
-            'formatting must keep main DevTools closed',
-          );
-        },
-      });
-    },
-  );
-  await check(
-    'editor references and completion through keyboard UI',
-    async () => {
-      await runNativeEditorInteractions({ page, workspace: repo, output });
-      await closeFile();
-    },
-  );
+  });
   await check(
     'loaded project instruction source opens actual file',
     async () => {
@@ -1054,132 +945,6 @@ try {
         beforeReadme,
         'extended Git journey preserves existing manual edits',
       );
-    },
-  );
-  await check('Node launch breakpoint variables and step', async () => {
-    await openInspector('activity', 'debug');
-    const panel = page.locator('.debug-panel');
-    await panel.getByLabel('program path', { exact: true }).fill('debug.cjs');
-    const breakpoints = panel.locator('details.debug-run');
-    if ((await breakpoints.getAttribute('open')) === null)
-      await breakpoints.locator('summary').click();
-    await panel.getByLabel('breakpoint line', { exact: true }).fill('3');
-    await panel
-      .getByRole('button', { name: 'set breakpoint', exact: true })
-      .click();
-    await panel.getByRole('button', { name: 'launch', exact: true }).click();
-    await until(
-      async () => (await query('debug', 'snapshot')).status === 'paused',
-      'Node hits the breakpoint configured before launch',
-    );
-    await until(async () => {
-      const r = await query('debug', 'stackTrace');
-      return r.stackFrames?.[0]?.line === 3;
-    }, 'real Node breakpoint line3');
-    await panel
-      .getByRole('button', { name: /fixture.*debug\.cjs:3/ })
-      .first()
-      .click();
-    // The work drawer shows one mode at a time: the frame's source opens in files,
-    // and the debug view keeps the frame's variables for the way back.
-    await page
-      .locator('.file-view-heading strong')
-      .getByText('debug.cjs', { exact: true })
-      .waitFor();
-    await openInspector('activity', 'debug');
-    await panel.getByRole('button', { name: 'count', exact: true }).waitFor();
-    assert.equal(
-      await panel
-        .getByRole('button', { name: 'count', exact: true })
-        .locator('code')
-        .innerText(),
-      'count: 3',
-    );
-    await screenshot('05-node-breakpoint');
-    await panel.getByRole('button', { name: 'step over', exact: true }).click();
-    await until(
-      async () =>
-        (await query('debug', 'stackTrace')).stackFrames?.[0]?.line === 4,
-      'Node stepOver line4',
-    );
-    await panel.getByRole('button', { name: 'continue', exact: true }).click();
-    await until(
-      async () =>
-        (await query('debug', 'snapshot')).output.includes('DEBUG_RESULT 4'),
-      'Node continued real output',
-    );
-  });
-  await check('explicit entry pause and literal launch arguments', async () => {
-    await openInspector('activity', 'debug');
-    const panel = page.locator('.debug-panel');
-    await until(
-      async () =>
-        ['idle', 'stopped', 'failed'].includes(
-          (await query('debug', 'snapshot')).status,
-        ),
-      'prior debug process completed',
-    );
-    await panel
-      .getByLabel('program path', { exact: true })
-      .fill('debug-args.cjs');
-    await panel.locator('.debug-launch-options summary').click();
-    await panel
-      .getByRole('checkbox', { name: 'pause at entry', exact: true })
-      .check();
-    const args = ['two words', '"quoted"', ''];
-    for (let index = 0; index < args.length; index++) {
-      await panel
-        .getByRole('button', { name: 'add argument', exact: true })
-        .click();
-      await panel
-        .getByLabel('program argument ' + (index + 1), { exact: true })
-        .fill(args[index]);
-    }
-    await panel.getByRole('button', { name: 'launch', exact: true }).click();
-    await until(
-      async () => (await query('debug', 'snapshot')).status === 'paused',
-      'explicit entry pause takes effect',
-    );
-    const frames = await query('debug', 'stackTrace');
-    assert(
-      frames.stackFrames.some((frame) =>
-        frame.source?.path?.endsWith('debug-args.cjs'),
-      ),
-      'entry pause belongs to actual args fixture',
-    );
-    await screenshot('05-debug-explicit-entry-arguments');
-    await panel.getByRole('button', { name: 'continue', exact: true }).click();
-    await until(
-      async () =>
-        (await query('debug', 'snapshot')).output.includes(
-          'JOURNEY_LITERAL_ARGS ' + JSON.stringify(args),
-        ),
-      'actual process argv preserves spaces quotes and empty argument',
-    );
-    await writeFile(
-      join(output, 'debug-literal-arguments.json'),
-      JSON.stringify(
-        { args, output: (await query('debug', 'snapshot')).output },
-        null,
-        2,
-      ),
-    );
-    await panel
-      .getByRole('checkbox', { name: 'pause at entry', exact: true })
-      .uncheck();
-  });
-  await check(
-    'debug variable editing steps interactive stdin and inspector cleanup',
-    async () => {
-      await runNativeDebugJourney({
-        page,
-        workspace: repo,
-        sessionId,
-        query,
-        until,
-        output,
-        screenshot,
-      });
     },
   );
   await check(
@@ -1861,24 +1626,18 @@ try {
           const zh = currentLocale === 'zh-CN';
           const toggle = page.getByRole('button', {
             name:
-              kind === 'debug'
+              kind === 'service'
                 ? zh
-                  ? '活动面板'
-                  : 'activity panel'
-                : kind === 'service'
-                  ? zh
-                    ? '终端面板'
-                    : 'terminal panel'
-                  : zh
-                    ? '浏览器面板'
-                    : 'browser panel',
+                  ? '终端面板'
+                  : 'terminal panel'
+                : zh
+                  ? '浏览器面板'
+                  : 'browser panel',
             exact: true,
           });
           if ((await toggle.getAttribute('aria-pressed')) !== 'true')
             await toggle.click();
-          if (kind === 'debug')
-            await page.locator('#inspector-activity-tab-debug').click();
-          else if (kind === 'service') {
+          if (kind === 'service') {
             await page.locator('#inspector-terminal-tab-terminal').click();
             await page
               .locator('.native-terminal')
@@ -2047,7 +1806,6 @@ try {
     'isolation-a.ts',
     'isolation-b.md',
     'git-probe.txt',
-    'debug.cjs',
     'browser-source.js',
     ...terminalShortcutsFixture.files,
     ...continuityFixture.files,

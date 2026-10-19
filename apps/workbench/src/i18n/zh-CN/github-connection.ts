@@ -1,16 +1,11 @@
 export const githubConnection: Record<string, string> = {
+  'loading…': '加载中…',
   'inspect the exact commit and files before publishing':
     '检查待发布的提交和文件',
   'local draft storage is unavailable; keep this panel open and copy your text before leaving':
     '本地草稿暂时无法保存；请保持面板打开，离开前复制文字。',
   'GitHub disconnected': 'GitHub 已断开连接',
   'GitHub authorization in progress': '正在进行 GitHub 授权',
-  'commit remaining workspace changes or move them to another branch, then refresh before publishing; nothing was pushed':
-    '请提交剩余工作区修改，或将其移到其他分支，再刷新并发布；尚未推送任何内容。',
-  'repository changed; refresh and review the current changes before publishing; nothing was pushed':
-    '仓库已更改；请刷新并审阅当前修改后再发布；尚未推送任何内容。',
-  'switch to a feature branch before publishing; nothing was pushed':
-    '请切换到功能分支后再发布；尚未推送任何内容。',
   'Resources belong to {name}. Start a conversation in the selected project to make changes.':
     '这些资源属于 {name}。在所选项目中开始会话后即可修改。',
   'verifying GitHub account': '正在核验 GitHub 账户…',
@@ -82,8 +77,6 @@ export const githubConnection: Record<string, string> = {
   'No repositories selected; repository actions are unavailable.':
     '尚未选择仓库，暂不能执行仓库操作。',
   'GitHub connection': 'GitHub 连接',
-  'Connect GitHub in settings for repository delivery.':
-    '在设置中连接 GitHub，以交付仓库更改。',
   'GitHub connection is unavailable; enable the bundled GitHub extension in Circle desktop.':
     'GitHub 连接不可用；请在 Circle 桌面版启用内置 GitHub 扩展。',
   'connected as {account}': '已连接：{account}',

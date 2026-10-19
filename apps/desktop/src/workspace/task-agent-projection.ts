@@ -148,40 +148,14 @@ export const taskNeedsReconciliation = (
     task.state,
   );
 
-/** Language edits are previews. Disk changes must pass the documents write guard. */
+/** Disk changes must pass the documents write guard. */
 export function assertReadonlyTaskRequest(
   service: string,
   method: string,
-  params: Record<string, unknown> = {},
 ): void {
   if (
     service === 'documents' &&
     !['read', 'refresh', 'resolveSource'].includes(method)
   )
     throw Error('read-only agent source cannot modify workspace documents');
-  if (service === 'language') {
-    const request = method === 'request' ? params.method : method;
-    if (
-      typeof request !== 'string' ||
-      ![
-        'open',
-        'change',
-        'close',
-        'sync',
-        'project',
-        'refresh',
-        'definition',
-        'references',
-        'rename',
-        'completion',
-        'format',
-        'diagnostics',
-        'status',
-        'hover',
-      ].includes(request) ||
-      params.apply === true ||
-      params.write === true
-    )
-      throw Error('read-only agent source permits language previews only');
-  }
 }

@@ -63,4 +63,7 @@ export const workspace: Record<string, string> = {
   'copy image': '复制图片',
   'save to file': '保存到文件',
   'could not save the image': '无法保存图片',
+  'attempt {n}': '第 {n} 次执行',
+  'external link is not allowed': '此链接不允许打开',
+  'ready for review': '可供审阅',
 };

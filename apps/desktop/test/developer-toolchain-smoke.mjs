@@ -33,29 +33,10 @@ assert.equal(koffi.version, '3.3.3');
 const ffiLibrary = koffi.load(process.platform === 'win32' ? 'kernel32.dll' : null);
 const ffiPID = ffiLibrary.func(process.platform === 'win32' ? 'uint32_t __stdcall GetCurrentProcessId()' : 'int getpid()');
 assert.equal(Number(ffiPID()), process.pid);
-const ts = load('typescript');
-assert.ok(fs.existsSync(ts.getDefaultLibFilePath({})));
-assert.ok(fs.existsSync(path.join(dist, 'tools/js-debug/src/dapDebugServer.js')));
+assert.ok(!fs.existsSync(path.join(dist, 'tools/js-debug')));
 const gh = cp.spawnSync(path.join(dist, 'tools/gh/bin', process.platform === 'win32' ? 'gh.exe' : 'gh'), ['--version'], { encoding: 'utf8' });
 assert.equal(gh.status, 0, gh.stderr);
 assert.match(gh.stdout, /2\\.83\\.2/);
-const socketDir = fs.mkdtempSync(path.join(${JSON.stringify(scratch)}, 'adapter-'));
-fs.chmodSync(socketDir, 0o700);
-// As the desktop does: a named pipe on Windows, a socket in a private directory elsewhere.
-const slash = String.fromCharCode(92);
-const socketPath = process.platform === 'win32' ? [slash, slash, '.', slash, 'pipe', slash, 'circle-debug-smoke-', process.pid].join('') : path.join(socketDir, 's');
-const adapter = cp.spawn(process.execPath, [path.join(dist, 'tools/js-debug/src/dapDebugServer.js'), socketPath], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
-let adapterOutput = '';
-let adapterReady = false;
-adapter.stdout.on('data', chunk => {
-  adapterOutput += chunk;
-  if (/127\\.0\\.0\\.1:\\d+/.test(adapterOutput)) { adapter.kill(); throw Error('debug adapter announced a TCP port'); }
-  if (/listening/i.test(adapterOutput) && adapterOutput.includes(socketPath)) { adapterReady = true; adapter.kill(); }
-});
-adapter.stderr.on('data', chunk => { adapterOutput += chunk; });
-adapter.on('exit', () => { assert.ok(adapterReady, adapterOutput); console.log('debug adapter: real listening socket verified'); });
-adapter.on('error', error => { throw error; });
-setTimeout(() => { if (!adapterReady) { adapter.kill(); process.exit(3); } }, 10000).unref();
 const node = path.join(dist, 'tools/node/bin', process.platform === 'win32' ? 'node.exe' : 'node');
 const nodeVersion = cp.spawnSync(node, ['--version'], { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined } });
 assert.equal(nodeVersion.status, 0, nodeVersion.stderr);
@@ -79,7 +60,7 @@ terminal.onData((data) => { output += data; });
 terminal.onExit((event) => {
   assert.equal(event.exitCode, 0, output);
   assert.match(output, /PTY:hello/);
-  console.log(JSON.stringify({ node: process.version, electron: process.versions.electron, abi: process.versions.modules, target: process.platform + '-' + process.arch, pty: 'interactive stdin/output verified', gh: gh.stdout.split('\\n')[0], typescript: ts.version, adapter: 'present', bundledNode: nodeVersion.stdout.trim(), dist }));
+  console.log(JSON.stringify({ node: process.version, electron: process.versions.electron, abi: process.versions.modules, target: process.platform + '-' + process.arch, pty: 'interactive stdin/output verified', gh: gh.stdout.split('\\n')[0], bundledNode: nodeVersion.stdout.trim(), dist }));
 });
 terminal.write('hello\\r');
 setTimeout(() => { terminal.kill(); process.exit(2); }, 10000).unref();

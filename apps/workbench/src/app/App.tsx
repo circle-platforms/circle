@@ -269,12 +269,6 @@ export function App() {
   const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
   const [commandTerminal, setCommandTerminal] = useState<CommandTerminalView>();
-  const [terminalFocusRequest, setTerminalFocusRequest] = useState<{
-    id: string;
-    epoch: string;
-    requestId: string;
-    sessionId: string;
-  }>();
   const commandRequest = useRef(0);
   const commandReturnFocus = useRef<
     { origin: string; trigger: HTMLElement } | undefined
@@ -1257,21 +1251,6 @@ export function App() {
         popped={poppedModes}
         onPopOut={popOut}
         commandTerminal={commandTerminal}
-        terminalFocusRequest={
-          terminalFocusRequest?.sessionId === session.id
-            ? terminalFocusRequest
-            : undefined
-        }
-        onOpenTerminal={(target) => {
-          commandRequest.current++;
-          setCommandTerminal(undefined);
-          setTerminalFocusRequest({
-            ...target,
-            requestId: crypto.randomUUID(),
-            sessionId: session.id,
-          });
-          onPanel('terminal');
-        }}
         onExitCommandTerminal={() => {
           commandRequest.current++;
           commandReturnFocus.current = undefined;
