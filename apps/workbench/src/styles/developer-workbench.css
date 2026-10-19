@@ -271,17 +271,7 @@
   overflow: auto;
   overscroll-behavior: contain;
 }
-/* The outer drawer owns its title; native resources own their local tabs. */
-.inspector.work-drawer[data-inspector-panel]
-  > .inspector-title
-  > .inspector-title-name {
-  visibility: visible;
-}
-.inspector.work-drawer .inspector-body.flush .native-browser > .browser-tabs,
-.inspector.work-drawer
-  .inspector-body.flush
-  .native-terminal.embedded
-  > .native-terminal-toolbar {
+.inspector.work-drawer .inspector-body.flush .native-browser > .browser-tabs {
   position: relative;
   inset: auto;
   z-index: 0;
@@ -290,7 +280,4 @@
   height: auto;
   padding: 4px 10px;
   border-bottom: 1px solid var(--border);
-}
-.inspector.work-drawer .native-terminal-toolbar .native-terminal-tabs {
-  flex: 1;
 }

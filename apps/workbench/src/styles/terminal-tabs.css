@@ -1,0 +1,214 @@
+/* One row for every terminal of the conversation: shells, background commands and
+   device consoles, then what the selected one can be told to do. */
+.term-tabbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 40px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.term-tabs {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.term-tabs::-webkit-scrollbar {
+  display: none;
+}
+.term-tab {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 64px;
+  max-width: 190px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  white-space: nowrap;
+}
+.term-tab.closable {
+  padding-right: 3px;
+}
+.term-tab:hover {
+  background: var(--hover);
+}
+/* The selected tab keeps its whole name; the others give way first. */
+.term-tab.on {
+  flex-shrink: 0;
+  background: var(--active);
+  color: var(--fg);
+}
+.term-tab-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}
+.term-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term-tab-x {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  color: var(--muted);
+}
+.term-tab-x:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.term-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.term-dot[data-state='run'] {
+  background: var(--accent);
+}
+.term-dot[data-state='wait'] {
+  background: var(--attention);
+}
+.term-dot[data-state='fail'] {
+  background: var(--negative);
+}
+.term-dot[data-state='done'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--muted);
+}
+.term-tabbar > .icon-button {
+  flex: none;
+}
+.term-tabbar-end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding-left: 6px;
+}
+.term-tabbar-end .button {
+  height: 26px;
+  white-space: nowrap;
+}
+/* A terminal that waits for you is ringed in orange, one Circle works in in blue. */
+.term-frame {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  margin: 8px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.term-frame[data-frame='wait'] {
+  border-color: var(--attention);
+}
+.term-frame[data-frame='run'] {
+  border-color: var(--accent);
+}
+
+/* The button that makes a terminal or reaches a device, with its menu and its form. */
+.term-plus {
+  display: inline-flex;
+}
+.dropdown.term-menu [role='menuitem'] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.term-menu small {
+  margin-left: auto;
+  padding-left: 14px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+}
+.dropdown-label {
+  padding: 6px 9px 3px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.term-connect-pop {
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  padding: 14px;
+}
+.term-connect {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.term-connect h3 {
+  margin: 0;
+  font-size: var(--ui-size);
+  font-weight: 600;
+}
+.term-connect-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.term-connect-field > .segmented {
+  align-self: flex-start;
+}
+.term-connect-label {
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.term-connect-row {
+  display: grid;
+  grid-template-columns: 1fr 90px;
+  gap: 8px;
+}
+.term-connect input {
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: var(--ui-size);
+}
+.term-connect-note,
+.term-connect-problem {
+  margin: 0;
+  font-size: var(--ui-small);
+}
+.term-connect-note {
+  color: var(--muted);
+}
+.term-connect-problem {
+  color: var(--negative);
+}
+.term-connect-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
