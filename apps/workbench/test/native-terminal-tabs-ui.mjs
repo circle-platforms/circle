@@ -111,10 +111,13 @@ try {
         };
         const initial = await footerGeometry();
         verifyFooter(initial);
-        assert.ok(
-          initial.fields.scrollHeight > initial.fields.height,
-          'short service form scrolls inside the original dialog',
-        );
+        // A short window is too low for the form even before arguments are added: its
+        // fields scroll inside the dialog. A taller one may fit it whole.
+        if (viewport.height <= 520)
+          assert.ok(
+            initial.fields.scrollHeight > initial.fields.height,
+            'short service form scrolls inside the original dialog',
+          );
         await page.screenshot({
           path: `${output}/${locale}-${theme}-${viewport.width}x${viewport.height}-service.png`,
         });
