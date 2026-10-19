@@ -296,7 +296,7 @@ try {
   await send('start activity fixture');
   // Nothing under the input box lists the subagent: its request is a card in the main
   // conversation with its name on it, the subagents button counts it, and the overview's
-  // in progress card shows it waiting with what it asked to run.
+  // in progress card says it needs approval, with what it asked to run as the tooltip.
   const childRequest = page.locator('.inline-request[data-kind="approval"]');
   await childRequest.waitFor();
   assert.equal(
@@ -312,10 +312,9 @@ try {
   });
   const waitingOn = async (asked) => {
     await subagentRow.locator('.overview-dot[data-state="wait"]').waitFor();
-    assert.equal(
-      await subagentRow.locator('.overview-end code').innerText(),
-      asked,
-    );
+    const end = subagentRow.locator('.overview-end-text');
+    assert.equal(await end.innerText(), 'needs approval');
+    assert.equal(await end.getAttribute('title'), asked);
   };
   await waitingOn(childCommand);
   await childRequest
