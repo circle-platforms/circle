@@ -791,7 +791,8 @@ test('asynchronous launch snapshots trusted origin and notification ownership be
 test('a genuinely unwritable original log cannot prevent transport failure from stopping its real process', async (t) => {
   const root = scratch(t),
     transport = pipeLauncher({ separateOutput: true }),
-    trigger = deferred<void>();
+    trigger = deferred<void>(),
+    stopReasons: string[] = [];
   let actual!: Awaited<ReturnType<CommandLauncher>>;
   const jobs = new JobRegistry(
     new Sandbox(root, join(root, 'data')),
@@ -806,7 +807,14 @@ test('a genuinely unwritable original log cannot prevent transport failure from 
           await writeFile(request.outputPath, 'actual logger write');
         })();
         void settled.catch(() => {});
-        return { ...actual, settled };
+        return {
+          ...actual,
+          settled,
+          stop: (reason: string) => {
+            stopReasons.push(reason);
+            return actual.stop(reason);
+          },
+        };
       },
     },
   );
@@ -854,13 +862,30 @@ test('a genuinely unwritable original log cannot prevent transport failure from 
   await rm(path);
   await mkdir(path);
   trigger.resolve();
-  const outcome = await Promise.race([
-    running,
-    delay(600).then(() => ({ timeout: true })),
-  ]);
+  // The call has a one-second deadline, which would also stop the process.
+  // What stopped it is recorded, so no wall-clock race is needed to tell the
+  // transport failure from the deadline.
+  const outcome = await running;
   assert.ok(
     'error' in outcome,
-    'the real log write error must reject the original call before its deadline',
+    'the real log write error must reject the call',
+  );
+  const failures = (error: unknown): unknown[] =>
+    error instanceof AggregateError ? error.errors.flatMap(failures) : [error];
+  assert.ok(
+    failures(outcome.error).some(
+      (error) =>
+        (error as NodeJS.ErrnoException).path === path &&
+        ['EISDIR', 'EPERM', 'EACCES'].includes(
+          (error as NodeJS.ErrnoException).code ?? '',
+        ),
+    ),
+    `the rejection carries the real write error: ${String(outcome.error)}`,
+  );
+  assert.equal(
+    stopReasons[0],
+    'transport error',
+    'the transport failure, not the deadline, stops the process',
   );
   assert.equal(
     transport.launches[0]!.stops,

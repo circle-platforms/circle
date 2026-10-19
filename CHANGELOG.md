@@ -4,6 +4,14 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **A program a Windows command started through another `cmd` is ended.** With `cmd /c start /b node …`, the inner `cmd` ended at once and its program kept running out of reach of `taskkill`: stopping the job, cancelling the command or leaving Circle left it running and its folder could not be removed. Circle now puts each command's shell in a Windows Job object and follows its whole tree, and stopping a job that is already marked done ends what its command left running instead of doing nothing.
+- **Ctrl+K in a desktop terminal is the shell's on Windows and Linux.** With the keyboard in the terminal panel or a device console, Ctrl+K opened search and also sent ^K to the shell; Ctrl+P and Ctrl+B opened quick open and hid the sidebar the same way. These keys now reach only the terminal, once. On macOS ⌘K, ⌘P and ⌘B still work from a terminal.
+- **A Chinese desktop window says the runtime's stop in Chinese.** When the runtime exited while a command was under way, such as a `!` shell command, the toast changed to the main process's English `Circle runtime exited (1)`, wrapped in Electron's `Error invoking remote method` text. The failed command now reads like the runtime notice, `Circle 运行时已退出 (1) · 正在重启…`, with the exit code.
+- **Closing the browser on Windows no longer fails when taskkill finds nothing to stop.** taskkill's exit 128 (process not found) for the browser or one of its child processes was taken as a failed close. Circle now stops the browser's own process handle and waits for it to exit, and reports a failure only when the browser is still running.
+- **A screenshot of a named Windows app is the whole window under display scaling.** At 200% a window that is not DPI aware filled only the upper-left quarter of its picture and the rest was black. Circle now measures the window in its own DPI awareness, so the picture is the size the window draws itself at.
+
 ## 1.9.0 - 2026-10-19
 
 ### Added

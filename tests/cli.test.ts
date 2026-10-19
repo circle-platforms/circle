@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -792,21 +793,22 @@ test('--verbose shows tool calls, calls not run, retries and tokens in print and
 test('print mode runs the commands the settings allow, without --yolo', async (t) => {
   const home = scratch(t);
   const workspace = realpathSync(scratch(t));
+  // `mkdir` asks like `touch` did and means the same in cmd.exe and sh.
   const replies: Reply[] = [
-    { call: { name: 'execute', args: { command: 'touch made.txt' } } },
+    { call: { name: 'execute', args: { command: 'mkdir made' } } },
     { call: { name: 'execute', args: { command: 'rm -rf dist' } } },
     { content: 'done' },
   ];
   const endpoint = await gateway(t, replies);
   setUp(home, endpoint.base, [workspace]);
   const settings = loadSettings(home);
-  settings.allowed_commands = ['touch *'];
+  settings.allowed_commands = ['mkdir *'];
   saveSettings(settings, home);
   const run = await circle(home, ['-p', 'work', workspace, '--verbose']);
   assert.equal(run.code, 0, run.stderr);
   assert.equal(run.stdout, 'done\n');
   // the covered command really ran
-  assert.equal(existsSync(join(workspace, 'made.txt')), true);
+  assert.equal(statSync(join(workspace, 'made')).isDirectory(), true);
   // one no pattern covers still does not run, and says so
   assert.match(
     run.stderr,

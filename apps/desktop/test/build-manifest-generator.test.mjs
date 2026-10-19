@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import {
+  asarEntryName,
   captureNativeBuildSource,
   generateNativeBuildManifest,
 } from '../scripts/native-build-manifest.mjs';
@@ -187,4 +188,64 @@ test('pre-build source receipt binds both development files and actual packaged 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('asar entry names keep the host separator that @electron/asar splits on', () => {
+  // The same walk as @electron/asar Filesystem.getNode/searchNodeFromDirectory,
+  // with the path module of the host the archive is read on.
+  const header = {
+    files: {
+      dist: {
+        files: {
+          'main.cjs': { size: 1 },
+          node_modules: {
+            files: {
+              '@koromix': {
+                files: {
+                  'koffi-target': { files: { 'koffi.node': { size: 1 } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const lookup = (pathApi, name) => {
+    let node = header;
+    for (const dir of pathApi.dirname(name).split(pathApi.sep))
+      if (dir !== '.') node = node.files[dir] ?? { files: {} };
+    return node.files[pathApi.basename(name)];
+  };
+  for (const [pathApi, appPath] of [
+    [path.win32, 'C:\\Circle\\resources\\app.asar'],
+    [path.posix, '/Applications/Circle.app/Contents/Resources/app.asar'],
+  ]) {
+    const file = pathApi.join(
+      appPath,
+      'dist',
+      'node_modules',
+      '@koromix',
+      'koffi-target',
+      'koffi.node',
+    );
+    const name = asarEntryName(appPath, file, pathApi);
+    assert.deepEqual(lookup(pathApi, name), { size: 1 }, pathApi.sep);
+    assert.deepEqual(
+      lookup(
+        pathApi,
+        asarEntryName(
+          appPath,
+          pathApi.join(appPath, 'dist', 'main.cjs'),
+          pathApi,
+        ),
+      ),
+      { size: 1 },
+    );
+  }
+  // A '/'-joined name, as before, is one unknown directory on Windows.
+  assert.equal(
+    lookup(path.win32, 'dist/node_modules/@koromix/koffi-target/koffi.node'),
+    undefined,
+  );
 });

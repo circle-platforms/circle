@@ -272,6 +272,10 @@ const NAVIGATE_TIMEOUT = 30_000;
 /** How long the browser has to start: a new profile on a busy Windows machine has taken 20 s. */
 const START_TIMEOUT = 60_000;
 const TASKKILL_TIMEOUT = 3000;
+/** taskkill's exit code when the process it was given is not running (Win32 error 128). */
+const TASKKILL_NOT_FOUND = 128;
+const taskkillFoundNothing = (error: unknown): boolean =>
+  (error as { code?: unknown } | undefined)?.code === TASKKILL_NOT_FOUND;
 /** How long a browser whose pipe closed during its start has for its exit to arrive. */
 const STARTUP_END_WAIT = 1000;
 /** How long a Windows root whose termination was accepted has to finish ending. */
@@ -564,20 +568,14 @@ export class ChromeBrowser implements BrowserPort {
   ): Promise<void> {
     if (this.exited(child)) return;
     if (process.platform === 'win32') {
-      await new Promise<void>((resolve, reject) =>
-        execFile(
-          'taskkill',
-          ['/PID', String(child.pid), '/T', ...(force ? ['/F'] : [])],
-          {
-            timeout: TASKKILL_TIMEOUT,
-            killSignal: 'SIGKILL',
-          },
-          (error) => {
-            if (error && !this.exited(child)) reject(error);
-            else resolve();
-          },
-        ),
-      );
+      try {
+        await this.taskkill(child.pid!, force);
+      } catch (error) {
+        // Exit 128 is taskkill's "process not found": the root, or a member of its tree,
+        // ended before taskkill reached it. That is no failure to stop; closeProcess
+        // confirms the root's own exit from its handle either way.
+        if (!this.exited(child) && !taskkillFoundNothing(error)) throw error;
+      }
       return;
     }
     // This process group was created by launch; never target the person's browser.
@@ -585,6 +583,17 @@ export class ChromeBrowser implements BrowserPort {
       return;
     // Fixtures/embedders may supply a child without its own process group.
     if (!this.exited(child)) child.kill(force ? 'SIGKILL' : 'SIGTERM');
+  }
+  /** taskkill for one owned process tree, bounded; rejects with its exit code as `code`. */
+  private taskkill(pid: number, force: boolean): Promise<void> {
+    return new Promise<void>((resolve, reject) =>
+      execFile(
+        'taskkill',
+        ['/PID', String(pid), '/T', ...(force ? ['/F'] : [])],
+        { timeout: TASKKILL_TIMEOUT, killSignal: 'SIGKILL' },
+        (error) => (error ? reject(error) : resolve()),
+      ),
+    );
   }
   /**
    * Signals a process group launch created; false when none of its members runs. macOS
@@ -626,6 +635,14 @@ export class ChromeBrowser implements BrowserPort {
       return Number(group) === pid && status && !status.startsWith('Z');
     });
   }
+  /** True when Windows accepted terminating the owned root's own handle. */
+  private terminateHandle(child: ChildProcess): boolean {
+    try {
+      return child.kill('SIGKILL');
+    } catch {
+      return false;
+    }
+  }
   private async closeProcess(): Promise<void> {
     const timeout = Math.max(1, this.options.closeTimeout ?? 3000);
     if (this.child) this.ownedRoots.add(this.child);
@@ -655,13 +672,15 @@ export class ChromeBrowser implements BrowserPort {
               forceFailed = true;
               forceError = error;
             }
-            // A successful tree command is not an observed root exit. Stop the
-            // same owned handle once, then retain the existing exit verification.
+            // Neither a successful tree command nor taskkill's "not found" is an observed
+            // root exit. Stop the same owned handle once (it names this process, never a
+            // reused PID), then retain the existing exit verification. A failed tree command
+            // keeps its error and the live root, for a later explicit close.
             const terminated =
               !forceFailed &&
               process.platform === 'win32' &&
               !this.exited(child) &&
-              child.kill('SIGKILL');
+              this.terminateHandle(child);
             // A failed taskkill callback can precede the owned root's exit.
             // Observe the same bounded exit phase before retaining its error.
             // Once Windows has accepted the termination of the root's own handle,

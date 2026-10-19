@@ -29,7 +29,11 @@ import type {
   CommandDescendantCoverage,
 } from './command_process.js';
 import { commandExecutionReceipt } from './command_process.js';
-import { endStranded } from './windows_stranded.js';
+import {
+  loadChildrenApi,
+  loadedChildrenApi,
+  WindowsCommandTree,
+} from './windows_stranded.js';
 export function plainJobOutput(text: string): string {
   return text
     .split('\n')
@@ -83,6 +87,10 @@ interface Entry {
   shellExited?: boolean;
   /** When the shell was seen to end. */
   shellEnded?: number;
+  /** What the shell started, on Windows, for ending it later. */
+  tree?: CommandTree;
+  /** Ending what a finished command left running. */
+  leftoverStop?: Promise<void>;
   exitCode?: number;
   deadline?: number;
   reason?: string;
@@ -93,6 +101,27 @@ interface Entry {
   finished: boolean;
   interrupt?: () => void;
 }
+/** What a shell started, kept so that it can be ended after the shell has ended. */
+export interface CommandTree {
+  /** Notes what is in the tree now. True when something the shell started still runs. */
+  record(ended: number): boolean;
+  end(ended: number): Promise<unknown>;
+  dispose(): void;
+}
+export interface JobProcessOptions extends CommandProcessOptions {
+  /** How a shell's tree is followed; on Windows, the process list and a Job object. */
+  commandTree?: (shell: {
+    pid: number;
+    started: number;
+  }) => CommandTree | undefined;
+}
+const windowsTree = (shell: {
+  pid: number;
+  started: number;
+}): CommandTree | undefined => {
+  const api = loadedChildrenApi();
+  return api ? new WindowsCommandTree(api, shell) : undefined;
+};
 export interface ExecuteResult {
   output: string;
   exit_code?: number;
@@ -224,6 +253,8 @@ export class JobRegistry {
   private jobs = new Map<string, Entry>();
   private executions = new Map<string, Entry>();
   private notices = new Map<string, Job[]>();
+  /** Finished commands whose shells left processes running (Windows). */
+  private leftovers = new Set<Entry>();
   private changes = new EventEmitter();
   private next = 1;
   private endSequence = 0;
@@ -241,8 +272,13 @@ export class JobRegistry {
     ) => void = () => {},
     readonly maxRunning = 16,
     readonly outputLimit = JobRegistry.outputLimit(),
-    private readonly processOptions: CommandProcessOptions = {},
+    private readonly processOptions: JobProcessOptions = {},
   ) {
+    if (process.platform === 'win32' && !processOptions.commandTree) {
+      this.processOptions = { ...processOptions, commandTree: windowsTree };
+      // Loaded ahead, so that a shell can be put in its Job as soon as it starts.
+      void loadChildrenApi().catch(() => {});
+    }
     if (!sandbox.offloadRoot)
       throw new Error('background jobs need a data folder');
     const root = join(sandbox.offloadRoot, 'background_jobs');
@@ -492,8 +528,26 @@ export class JobRegistry {
       this.notices.set(job.sessionId, queue);
       this.emit('job_ended', job);
     }
+    // A stop ends the tree itself once the shell has gone, then lets it go.
+    if (!this.leftovers.has(entry) && !entry.stopPromise) entry.tree?.dispose();
     entry.settle();
     this.changes.emit('change');
+  }
+  /** Ends what a finished command's shell left running. */
+  private endLeftovers(entry: Entry): Promise<void> {
+    if (!this.leftovers.has(entry))
+      return entry.leftoverStop ?? Promise.resolve();
+    entry.leftoverStop ??= (async () => {
+      try {
+        await entry.tree?.end(entry.shellEnded ?? Date.now());
+      } catch {
+        /* Ending is best effort; nothing else can be done here. */
+      } finally {
+        this.leftovers.delete(entry);
+        entry.tree?.dispose();
+      }
+    })();
+    return entry.leftoverStop;
   }
   private observePtyGroup(
     entry: Entry,
@@ -713,6 +767,15 @@ export class JobRegistry {
       });
       entry.child = child;
       entry.pid = child.pid;
+      if (child.pid)
+        try {
+          entry.tree = this.processOptions.commandTree?.({
+            pid: child.pid,
+            started: entry.started,
+          });
+        } catch {
+          /* The command still runs; only what it leaves is not followed. */
+        }
       execution.pid = child.pid;
       execution.status = 'running';
       this.executionChanged(entry);
@@ -725,8 +788,13 @@ export class JobRegistry {
         entry.shellExited = true;
         entry.shellEnded = Date.now();
         entry.exitCode = code ?? 130;
-        if (!groupAlive(entry)) this.finish(entry);
-        else if (!entry.job && !entry.stopPromise) {
+        if (!groupAlive(entry)) {
+          // On Windows what the shell left running is not a job: Circle ends it when the
+          // finished job is stopped, when its owner ends and when Circle leaves.
+          if (!entry.stopPromise && entry.tree?.record(entry.shellEnded))
+            this.leftovers.add(entry);
+          this.finish(entry);
+        } else if (!entry.job && !entry.stopPromise) {
           this.publish(entry, 'adopted', 'left running');
           entry.interrupt?.();
         }
@@ -1015,7 +1083,7 @@ export class JobRegistry {
     this.jobs.delete(id);
   }
   private stopEntry(entry: Entry, reason: string): Promise<void> {
-    if (entry.finished) return Promise.resolve();
+    if (entry.finished) return this.endLeftovers(entry);
     if (entry.stopPromise) return entry.stopPromise;
     entry.reason = reason;
     entry.controller.abort(new Error('Interrupted'));
@@ -1055,13 +1123,21 @@ export class JobRegistry {
           await new Promise<void>((resolve) =>
             entry.child!.once('close', () => resolve()),
           );
-        // taskkill misses a program the shell starts just as it is stopped.
-        if (process.platform === 'win32' && entry.pid)
-          await endStranded({
-            pid: entry.pid,
-            started: entry.started,
-            ended: entry.shellEnded ?? Date.now(),
-          }).catch(() => []);
+        // The process list may not have loaded when the shell started.
+        if (
+          !entry.tree &&
+          entry.pid &&
+          this.processOptions.commandTree === windowsTree
+        ) {
+          await loadChildrenApi().catch(() => undefined);
+          entry.tree = windowsTree({ pid: entry.pid, started: entry.started });
+        }
+        // taskkill misses a program the shell starts just as it is stopped, and one whose
+        // parent had already ended.
+        await entry.tree
+          ?.end(entry.shellEnded ?? Date.now())
+          .catch(() => undefined);
+        entry.tree?.dispose();
         this.finish(entry);
       } else if (entry.watch) {
         await stopWatch(entry.watch);
@@ -1090,7 +1166,7 @@ export class JobRegistry {
   }
   async stopOwned(parent: string): Promise<void> {
     await Promise.all(
-      [...this.entries]
+      [...this.entries, ...this.leftovers]
         .filter((entry) => entry.owner.parent === parent)
         .map((entry) => this.stopEntry(entry, 'parent ended')),
     );
@@ -1150,6 +1226,11 @@ export class JobRegistry {
     await Promise.all(
       [...this.entries].map((entry) => this.stopEntry(entry, 'exit')),
     );
+    // A command that ended meanwhile may have left something too.
+    while (this.leftovers.size)
+      await Promise.all(
+        [...this.leftovers].map((entry) => this.endLeftovers(entry)),
+      );
     clearInterval(this.monitor);
     return running;
   }

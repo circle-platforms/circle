@@ -34,6 +34,7 @@ import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 import { t } from '../i18n/index.ts';
 import { SessionActionError } from './action-error';
+import { runtimeStoppedNotice } from './runtime-notice';
 import { armComposerFocus, cancelComposerFocus } from './composer-focus';
 import { sessionHasContent } from './session-management';
 
@@ -456,12 +457,16 @@ export class LiveRuntime implements RuntimePort {
       if (this.disposed) throw Error(t('Circle runtime disconnected'));
       if (!this.snapshot.runtime?.connected)
         throw Error(t('Circle runtime disconnected'));
-      const reply = await this.host.runtimeCommand({
-        id: crypto.randomUUID(),
-        name,
-        sessionId,
-        payload,
-      });
+      const reply = await this.host
+        .runtimeCommand({
+          id: crypto.randomUUID(),
+          name,
+          sessionId,
+          payload,
+        })
+        .catch(async (error: unknown) => {
+          throw await this.stoppedRuntimeError(error);
+        });
       // Token sequence numbers and an unrelated intervening update cannot
       // acknowledge this command. Only its full publication (or a newer one
       // from that same runtime epoch) proves the effect reached this renderer.
@@ -479,6 +484,35 @@ export class LiveRuntime implements RuntimePort {
     if (reportFailure)
       void promise.catch((error) => this.report(error, sessionId));
     return promise;
+  }
+  /**
+   * A command the runtime's stop cut off fails with the main process's English
+   * sentence: `Circle runtime exited (1)` for one under way, `runtime disconnected`
+   * for one sent after. That is the stop the window already announces, so it is said
+   * the same way, in the interface language with the exit code. Any other failure
+   * stays as it was.
+   */
+  private async stoppedRuntimeError(error: unknown): Promise<unknown> {
+    const message = error instanceof Error ? error.message : String(error);
+    // Electron's wrapping of a rejected invoke: `Error invoking remote method
+    // '<channel>': Error: <message>`.
+    const said =
+      /^Error invoking remote method '[^']+':\s*(?:Error:\s*)?(.*)$/s.exec(
+        message,
+      )?.[1] ?? message;
+    // The reply can come before the update that says the runtime stopped.
+    if (!this.disposed && this.snapshot.runtime?.connected !== false)
+      try {
+        this.receive(await this.host.runtimeState());
+      } catch {
+        /* The stop then reaches the window with its own update. */
+      }
+    const runtime = this.snapshot.runtime;
+    const notice = runtimeStoppedNotice(runtime);
+    return notice &&
+      (said === runtime?.error || said === 'runtime disconnected')
+      ? Error(notice)
+      : error;
   }
   private coversAppliedState(reply: RuntimeReply): boolean {
     const marker = reply.ok ? reply.appliedState : undefined;

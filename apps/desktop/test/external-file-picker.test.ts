@@ -11,6 +11,7 @@ import type {
   ExternalFileAccess,
   NativeExternalFileGrant,
 } from '../src/contracts.ts';
+import { fileSymlinkRefusal } from './helpers/symlink-support.mjs';
 const selectedPath = path.join(tmpdir(), 'synthetic-selected.txt');
 const context = (): ExternalPickerContext => ({
   connected: true,
@@ -204,7 +205,7 @@ test('registry denial for native selected forbidden files propagates without a g
   );
 });
 
-test('trusted picker plus real registry rejects symlinks and credential/app-data selections', async () => {
+test('trusted picker plus real registry rejects symlinks and credential/app-data selections', async (t) => {
   const { mkdtemp, mkdir, writeFile, symlink, rm, realpath } =
     await import('node:fs/promises');
   const { ExternalFileGrants } =
@@ -218,7 +219,8 @@ test('trusted picker plus real registry rejects symlinks and credential/app-data
   await writeFile(ordinary, 'synthetic external content\n');
   await writeFile(secret, 'SYNTHETIC_SECRET=not-a-real-key\n');
   await writeFile(path.join(privateRoot, 'settings.json'), '{}\n');
-  await symlink(ordinary, link);
+  const symlinkRefusal = await fileSymlinkRefusal();
+  if (!symlinkRefusal) await symlink(ordinary, link);
   const registry = new ExternalFileGrants({ protectedRoots: [privateRoot] });
   const { picker, ports } = gate();
   let selected = ordinary;
@@ -232,13 +234,23 @@ test('trusted picker plus real registry rejects symlinks and credential/app-data
     },
   };
   try {
-    for (selected of [secret, link, path.join(privateRoot, 'settings.json')]) {
+    const refused = async () => {
       await assert.rejects(
         picker.request('A', 'readwrite', actualPorts),
         /credential|private|non-linked/,
       );
       assert.deepEqual(registry.list('A'), []);
-    }
+    };
+    for (selected of [secret, path.join(privateRoot, 'settings.json')])
+      await refused();
+    await t.test(
+      'a symlinked selection is refused',
+      { skip: symlinkRefusal },
+      async () => {
+        selected = link;
+        await refused();
+      },
+    );
     selected = ordinary;
     const granted = await picker.request('A', 'read', actualPorts);
     assert.ok(granted);

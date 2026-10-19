@@ -318,6 +318,97 @@ test('on Windows, a refused termination of the root still fails close within its
   assert.equal(child.exitCode, null);
 });
 
+/** taskkill's error for a process that is not running: exit 128. */
+function notFound(pid: number) {
+  return Object.assign(
+    new Error(
+      `Command failed: taskkill /PID ${pid} /T /F\nERROR: The process "${pid}" not found.`,
+    ),
+    { code: 128 },
+  );
+}
+
+test('on Windows, taskkill exit 128 for a root that already ended waits for its exit instead of failing close', async () => {
+  // The root ended between the exit check and taskkill; its exit event arrives just after
+  // taskkill reports it not found, and Windows no longer terminates its handle.
+  const child = liveChild() as ChildProcess & { kills: string[] };
+  child.kills = [];
+  (child as any).kill = (signal: string) => {
+    child.kills.push(signal);
+    return false;
+  };
+  const browser = browserWithChild(child);
+  const calls: boolean[] = [];
+  (browser as any).taskkill = async (pid: number, force: boolean) => {
+    calls.push(force);
+    if (!force) throw Object.assign(new Error('graceful refused'), { code: 1 });
+    setTimeout(() => {
+      (child as unknown as { exitCode: number | null }).exitCode = 1;
+      child.emit('exit', 1, null);
+    }, 10);
+    throw notFound(pid);
+  };
+  await asWindows(() => browser.close());
+  assert.deepEqual(calls, [false, true]);
+  assert.equal(child.exitCode, 1);
+});
+
+test('on Windows, taskkill exit 128 for a root seen exited resolves without stopping it again', async () => {
+  const child = terminatingChild(0);
+  const browser = browserWithChild(child);
+  (browser as any).taskkill = async (pid: number, force: boolean) => {
+    if (!force) throw Object.assign(new Error('graceful refused'), { code: 1 });
+    (child as unknown as { exitCode: number | null }).exitCode = 1;
+    child.emit('exit', 1, null);
+    throw notFound(pid);
+  };
+  await asWindows(() => browser.close());
+  assert.deepEqual(child.kills, []);
+  assert.equal(child.exitCode, 1);
+});
+
+test('on Windows, taskkill exit 128 for a root still running stops its own handle and confirms its exit', async () => {
+  // taskkill /T reported members it could not find; the root itself still runs.
+  const child = terminatingChild(50);
+  const browser = browserWithChild(child);
+  (browser as any).taskkill = async (pid: number, force: boolean) => {
+    if (!force) throw Object.assign(new Error('graceful refused'), { code: 1 });
+    throw notFound(pid);
+  };
+  await asWindows(() => browser.close());
+  assert.deepEqual(child.kills, ['SIGKILL']);
+  assert.equal(child.exitCode, 1);
+});
+
+test('on Windows, taskkill exit 128 is not taken as a stop: a root that never exits still fails close', async () => {
+  const child = terminatingChild();
+  const browser = browserWithChild(child);
+  (browser as any).taskkill = async (pid: number) => {
+    throw notFound(pid);
+  };
+  await assert.rejects(
+    asWindows(() => browser.close()),
+    /the browser process did not stop/,
+  );
+  assert.deepEqual(child.kills, ['SIGKILL']);
+  assert.equal(child.exitCode, null);
+});
+
+test('on Windows, another taskkill failure is still kept with the live root, which is not stopped another way', async () => {
+  const child = terminatingChild(30);
+  const browser = browserWithChild(child);
+  const denied = Object.assign(new Error('Access is denied.'), { code: 1 });
+  (browser as any).taskkill = async () => {
+    throw denied;
+  };
+  await assert.rejects(
+    asWindows(() => browser.close()),
+    denied,
+  );
+  assert.deepEqual(child.kills, []);
+  assert.equal(child.exitCode, null);
+});
+
 test('refused forced browser termination retains session history until a successful deletion retry', async (t) => {
   const home = scratch(t);
   const workspace = scratch(t);

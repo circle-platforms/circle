@@ -16,6 +16,7 @@ const bundledGh =
   );
 import { withGitHubPushCredentials } from '../src/workspace/git-push-auth.ts';
 import { GitWorkspaceService } from '../src/workspace/git.ts';
+import { isolatedGitEnv } from './helpers/git-isolation.mjs';
 const TOKEN = 'synthetic-owned-gh-push-grant';
 function git(
   args: string[],
@@ -33,10 +34,39 @@ function git(
     child.stdin?.end(input);
   });
 }
+// A probe against the fixture server answers 401 and Git exits at once. If it
+// is still running after a minute, something outside the fixture (a credential
+// helper or askpass program) is waiting for a person: stop it and say so,
+// rather than let the suite hang or pass on a killed process.
+async function gitProbe(args: string[], env: NodeJS.ProcessEnv, cwd: string) {
+  const controller = new AbortController();
+  const limit = setTimeout(() => controller.abort(), 60_000);
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      execFile(
+        'git',
+        args,
+        { env, cwd, encoding: 'utf8', signal: controller.signal },
+        (error, stdout) => {
+          if (controller.signal.aborted)
+            reject(
+              new Error(
+                `git ${args.join(' ')} did not finish within 60 s: a credential helper or prompt outside the fixture is waiting`,
+              ),
+            );
+          else if (error) reject(error);
+          else resolve(stdout);
+        },
+      );
+    });
+  } finally {
+    clearTimeout(limit);
+  }
+}
 test('owned gh credential helper serves only the exact HTTPS repository and cleans private helpers without writing Git configuration', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-private-push-'));
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     HOME: root,
     USERPROFILE: root,
     GH_CONFIG_DIR: root,
@@ -128,7 +158,7 @@ test('actual Git HTTP 401 challenge cannot borrow an owned GitHub grant for anot
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as { port: number };
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     HOME: root,
     USERPROFILE: root,
     GH_CONFIG_DIR: root,
@@ -201,7 +231,7 @@ test('actual Git HTTP 401 challenge cannot borrow an owned GitHub grant for anot
 });
 test('authenticated Git push rejects unapproved or multiple actual push destinations before obtaining a grant', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-push-dest-'));
-  const env = { ...process.env, HOME: root, USERPROFILE: root };
+  const env = { ...isolatedGitEnv(), HOME: root, USERPROFILE: root };
   try {
     await git(['init'], env, root);
     await git(
@@ -279,7 +309,7 @@ test('private credential context strips injected command and tracing settings an
   let directory = '';
   const controller = new AbortController();
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     GIT_CONFIG_COUNT: '1',
     GIT_CONFIG_KEY_0: 'credential.helper',
     GIT_CONFIG_VALUE_0: '!untrusted',
@@ -347,7 +377,7 @@ test('private credential context strips injected command and tracing settings an
 test('private push configuration suppresses repository push signing programs while a real nonce-advertising bare remote receives the branch', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-push-signing-'));
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     HOME: root,
     USERPROFILE: root,
     GIT_TERMINAL_PROMPT: '0',
@@ -431,7 +461,7 @@ test('private push configuration suppresses repository push signing programs whi
 test('credential waits recheck the accepted candidate and authenticated pushes cannot overwrite a diverged remote', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-push-candidate-'));
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     HOME: root,
     USERPROFILE: root,
     GIT_TERMINAL_PROMPT: '0',
@@ -584,7 +614,7 @@ test('repository HTTP credentials are an actual transport override and authentic
     path.join(tmpdir(), 'circle-push-http-overrides-'),
   );
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     HOME: root,
     USERPROFILE: root,
     GIT_TERMINAL_PROMPT: '0',
@@ -628,7 +658,13 @@ test('repository HTTP credentials are an actual transport override and authentic
       root,
     );
     await assert.rejects(
-      git(['ls-remote', `http://127.0.0.1:${port}/repo`], env, root),
+      gitProbe(['ls-remote', `http://127.0.0.1:${port}/repo`], env, root),
+      (error: Error & { code?: unknown }) => {
+        // Git itself refused the 401; a stopped probe is a different failure.
+        assert.doesNotMatch(error.message, /did not finish within/);
+        assert.equal(error.code, 128, error.message);
+        return true;
+      },
     );
     assert.equal(
       marker,
@@ -724,7 +760,7 @@ test('repository HTTP credentials are an actual transport override and authentic
 test('linked worktree pushes use common HTTP configuration until worktreeConfig is explicitly enabled', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-push-linked-config-'));
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     HOME: root,
     USERPROFILE: root,
     GIT_TERMINAL_PROMPT: '0',
