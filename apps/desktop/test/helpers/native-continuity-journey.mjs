@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
-import { openNativeTerminalInspector } from './native-terminal-journey.mjs';
+import {
+  chooseNewLocalTerminal,
+  chooseTerminalAction,
+  openNativeTerminalInspector,
+} from './native-terminal-journey.mjs';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
 import { saveWithShortcut } from './native-editor-save.mjs';
 const selectedText = 'CIRCLE_NATIVE_CONTEXT_中文';
@@ -93,6 +97,10 @@ export async function runNativeTerminalContextJourney({
       throw error;
     }
   };
+  const terminalToggle = page.getByRole('button', {
+    name: 'terminal panel',
+    exact: true,
+  });
   try {
     const before = currentSession(await state(), sessionId);
     const originalDraft = await composer(page).inputValue();
@@ -109,10 +117,7 @@ export async function runNativeTerminalContextJourney({
     const originalMessages = before.messages.map((m) => m.id);
     const panel = await openNativeTerminalInspector(page);
     const prior = new Set((await query('terminal', 'list')).map((t) => t.id));
-    await panel
-      .locator('.native-terminal-toolbar')
-      .getByRole('button', { name: 'new terminal', exact: true })
-      .click();
+    await chooseNewLocalTerminal(page, panel);
     await until(
       async () =>
         Boolean(
@@ -154,25 +159,23 @@ export async function runNativeTerminalContextJourney({
     nodePid = Number(actualOutput.match(/CONTINUITY_NODE_PID\s+(\d+)/)?.[1]);
     assert(Number.isSafeInteger(nodePid) && nodePid > 0);
     process.kill(nodePid, 0);
-    // Find opens on demand from the terminal bar.
-    await panel
-      .getByRole('button', { name: 'find in terminal', exact: true })
-      .click();
+    // Find opens from the terminal's ⋮ menu.
+    await chooseTerminalAction(page, panel, 'find in terminal');
     const find = panel.getByRole('textbox', {
       name: 'find in terminal',
       exact: true,
     });
     await find.fill(fixture.selectedText);
     await find.press('Enter');
-    const add = panel.getByRole('button', {
-      name: 'add selection to chat',
-      exact: true,
-    });
     await until(
-      () => add.isEnabled(),
-      'actual xterm selection enables add to chat',
+      async () =>
+        (await panel
+          .locator(`#terminal-${terminal.id} .xterm-selection div`)
+          .count()) > 0,
+      'the match is the actual xterm selection',
     );
-    await add.click();
+    // The menu's item waits until the terminal reports the selection.
+    await chooseTerminalAction(page, panel, 'add selection to chat');
     let attachment;
     await until(
       async () =>
@@ -222,15 +225,17 @@ export async function runNativeTerminalContextJourney({
       originalMessages,
       'adding context never sends the conversation',
     );
+    // The chip opens the attachment in a window of its own: the selected text first,
+    // where it came from, and the original attachment folded.
     await page
       .locator('.attachment-strip')
       .getByRole('button', { name: attachment.name, exact: true })
       .click();
-    const original = page
-      .locator('.inspector .context-source')
-      .filter({ has: page.locator('summary', { hasText: attachment.name }) });
-    if (!(await original.evaluate((node) => node.open)))
-      await original.locator(':scope > summary').click();
+    const original = page.getByRole('dialog', {
+      name: attachment.name,
+      exact: true,
+    });
+    await original.waitFor();
     assert.equal(
       await original.locator('.terminal-selection-text').textContent(),
       fixture.selectedText,
@@ -269,10 +274,18 @@ export async function runNativeTerminalContextJourney({
     await page.screenshot({
       path: join(output, 'native-terminal-selection-original-context.png'),
     });
-    await openNativeTerminalInspector(page);
-    await page
-      .getByRole('button', { name: 'close inspector', exact: true })
+    await original
+      .getByRole('button', { name: 'close dialog', exact: true })
       .click();
+    await original.waitFor({ state: 'detached' });
+    // Closing the drawer hides the terminal; its shell and child keep running.
+    await openNativeTerminalInspector(page);
+    await terminalToggle.click();
+    await until(
+      async () =>
+        (await terminalToggle.getAttribute('aria-pressed')) !== 'true',
+      'the terminal mode closes',
+    );
     process.kill(nodePid, 0);
     const hidden = (await query('terminal', 'list')).find(
       (t) => t.id === terminal.id,
@@ -293,10 +306,7 @@ export async function runNativeTerminalContextJourney({
     assert.equal(reopened.status, 'running');
     // AUTO accessibility may intentionally omit the auxiliary DOM tree.
     // Search the actual parsed VT buffer and copy its real selection instead.
-    // Find opens on demand from the terminal bar.
-    await reopenedPanel
-      .getByRole('button', { name: 'find in terminal', exact: true })
-      .click();
+    await chooseTerminalAction(page, reopenedPanel, 'find in terminal');
     const reopenedFind = reopenedPanel.getByRole('textbox', {
       name: 'find in terminal',
       exact: true,
@@ -398,16 +408,19 @@ export async function runNativeTerminalContextJourney({
     throw error;
   } finally {
     let cleanupError;
-    // The helper owns this terminal; closing its UI explicitly stops it after the preservation assertion.
+    // The helper owns this terminal; its tab's × stops it after the preservation assertion.
     if (terminal) {
       try {
         const panel = await openNativeTerminalInspector(page);
-        await panel
-          .locator(`[role="tab"][aria-controls="terminal-${terminal.id}"]`)
-          .click();
-        await panel
-          .getByRole('button', { name: 'stop terminal', exact: true })
-          .click();
+        const closeTab = panel
+          .locator('.term-tab')
+          .filter({
+            has: page.locator(
+              `[role="tab"][aria-controls="terminal-${terminal.id}"]`,
+            ),
+          })
+          .locator('.term-tab-x');
+        if (await closeTab.count()) await closeTab.click();
         await until(
           async () =>
             (await query('terminal', 'list')).some(
@@ -442,6 +455,57 @@ export async function runNativeTerminalContextJourney({
   }
 }
 
+// The sidebar folds a task under the conversation that started it; a click lists the
+// tasks, and a click on one opens its own conversation.
+async function openTaskConversation(
+  page,
+  ownerId,
+  taskSessionId,
+  state,
+  until,
+) {
+  const link = page
+    .locator(`.sidebar .session-link[href="#/session/${taskSessionId}"]`)
+    .first();
+  if (!(await link.isVisible())) {
+    const toggle = page
+      .locator(
+        `.sidebar .session-row:has(> .session-link[href="#/session/${ownerId}"]) + .session-tasks-toggle`,
+      )
+      .first();
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true')
+      await toggle.click();
+  }
+  await link.click();
+  await until(
+    async () => (await state()).activeSessionId === taskSessionId,
+    'the task conversation is open',
+  );
+  await page.waitForURL((url) => url.hash === `#/session/${taskSessionId}`);
+  const conversation = page.locator('.main-stack .conversation:visible');
+  await conversation.waitFor();
+  return conversation;
+}
+/** The calls of a conversation, unfolded: each group and the named call itself. */
+async function openToolCall(page, conversation, target) {
+  for (const summary of await conversation
+    .locator('.tool-group > .tool-summary')
+    .all())
+    if ((await summary.getAttribute('aria-expanded')) !== 'true')
+      await summary.click();
+  const call = conversation
+    .locator('.tool-call')
+    .filter({ has: page.locator('.tool-target', { hasText: target }) });
+  assert.equal(
+    await call.count(),
+    1,
+    'one actual child tool refers to the fixture source',
+  );
+  const head = call.locator('.tool-head');
+  if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click();
+  return call;
+}
+
 /** Invoke only after the existing task phase has checked parent agent-result.txt is absent. */
 export async function runNativeChildSourceJourney({
   page,
@@ -453,9 +517,8 @@ export async function runNativeChildSourceJourney({
   state,
   until,
   output,
-  entry = 'activity',
 }) {
-  const receipt = { checks: [], entry };
+  const receipt = { checks: [], entry: 'sidebar task row' };
   const sourcePath = 'agent-result.txt';
   const parentContent = 'parent same-name source must remain unchanged\n';
   try {
@@ -506,56 +569,15 @@ export async function runNativeChildSourceJourney({
         previousDraft,
         'the parent persisted draft matches the actual composer',
       );
-    if (entry === 'tool') {
-      const sourceTool = parent.messages.find(
-        (m) =>
-          m.tool &&
-          [
-            ...(m.tool.agentIds ?? []),
-            ...(m.tool.agentId ? [m.tool.agentId] : []),
-          ].includes(agent.id),
-      );
-      assert(
-        sourceTool,
-        'tool entry requires a genuine projected tool-child mapping',
-      );
-      const links = page
-        .locator('.tool-agent-links button')
-        .filter({ has: page.getByText(agent.name, { exact: true }) });
-      assert.equal(
-        await links.count(),
-        1,
-        'the trusted child navigation entry is unambiguous',
-      );
-      await links.click();
-    } else {
-      const toggle = page.getByRole('button', {
-        name: 'activity panel',
-        exact: true,
-      });
-      if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-        await toggle.click();
-      await page.locator('#inspector-activity-tab-original').click();
-      const row = page
-        .locator('#inspector-activity-original .activity-row')
-        .filter({ has: page.getByText(agent.name, { exact: true }) });
-      assert.equal(
-        await row.count(),
-        1,
-        'the actual child activity entry is unambiguous',
-      );
-      await row.click();
-    }
-    const record = page.locator('.agent-record:visible');
-    await record.getByText(agent.id, { exact: true }).waitFor();
-    const source = record
-      .locator('.tool-call')
-      .filter({ has: page.locator('.tool-target', { hasText: sourcePath }) });
-    assert.equal(
-      await source.count(),
-      1,
-      'one actual child tool refers to the fixture source',
+    // A task is a conversation of its own, under its parent's row in the sidebar.
+    const conversation = await openTaskConversation(
+      page,
+      sessionId,
+      agent.id,
+      state,
+      until,
     );
+    const source = await openToolCall(page, conversation, sourcePath);
     await source
       .getByRole('button', { name: 'open file', exact: true })
       .click();
@@ -567,18 +589,32 @@ export async function runNativeChildSourceJourney({
       await readFile(join(workspace, sourcePath), 'utf8'),
       parentContent,
     );
+    assert.equal(
+      (await state()).activeSessionId,
+      agent.id,
+      'the child source opens in the task conversation, not the parent',
+    );
     await page.screenshot({
       path: join(output, 'native-child-owned-source.png'),
     });
     await page.getByRole('button', { name: 'close file', exact: true }).click();
-    await record.getByText(agent.id, { exact: true }).waitFor();
-    currentSession(await state(), sessionId);
+    // Closing the file returns to the same task conversation, its call still unfolded.
+    await source.locator('.tool-head[aria-expanded="true"]').waitFor();
+    assert.equal((await state()).activeSessionId, agent.id);
     assert.equal(
       (await persistedSessionView(page, sessionId))?.draft ?? '',
       previousDraft,
     );
-    await record.getByRole('button', { name: 'main', exact: true }).click();
+    await page
+      .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+      .first()
+      .click();
+    await until(
+      async () => (await state()).activeSessionId === sessionId,
+      'the parent conversation is open again',
+    );
     await composer(page).waitFor();
+    currentSession(await state(), sessionId);
     assert.equal(await composer(page).inputValue(), previousDraft);
     await page.keyboard.press('ControlOrMeta+p');
     const quickOpen = page.getByRole('dialog', {
@@ -603,7 +639,7 @@ export async function runNativeChildSourceJourney({
     await until(
       async () =>
         (await file.locator('.view-lines').textContent())
-          .replaceAll('\u00a0', ' ')
+          .replaceAll(' ', ' ')
           .includes(fixture.changedOther.trim()),
       'manual edit reaches actual Monaco buffer',
     );
@@ -632,9 +668,9 @@ export async function runNativeChildSourceJourney({
       previousDraft,
     );
     receipt.checks.push(
-      'actual projected child opens from original navigation',
+      'the actual task conversation opens from its parent row in the sidebar',
       'child tool source opens actual child worktree file',
-      'closing file returns to the same child record',
+      'closing the file returns to the same task conversation',
       'parent same-name file stays unchanged while another file saves',
     );
     receipt.status = 'passed';

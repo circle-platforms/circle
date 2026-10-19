@@ -12,8 +12,20 @@ const read = (id, file_path) => ({
   args: { file_path },
 });
 
-/** Scripts are per real conversation; approval order cannot consume another agent's reply. */
-export function nativeTaskJourneyFixture(requestsPath) {
+export const nativeTaskJourneyIds = {
+  JOURNEY_WRITE_A: 'journey-write-a',
+  JOURNEY_WRITE_B: 'journey-write-b',
+  JOURNEY_READ_ONLY: 'journey-read-only',
+};
+export const nativeTaskJourneyEnqueueCall = 'journey-enqueue-tasks';
+
+/**
+ * Scripts are per real conversation; approval order cannot consume another agent's reply.
+ * The parent's second turn stays active until it is aborted. With `startTasks`, a file
+ * path, that turn first waits for the file and then schedules the three tasks itself, as
+ * Circle does: the person never makes a task.
+ */
+export function nativeTaskJourneyFixture(requestsPath, { startTasks } = {}) {
   const criteria = 'Inspect actual file and git effects';
   const workers = [
     {
@@ -69,6 +81,28 @@ export function nativeTaskJourneyFixture(requestsPath) {
         match: { role: 'parent', firstUser: 'Prepare native journey' },
         replies: [
           answer('journey-baseline', 'Native journey ready: README.md'),
+          ...(startTasks
+            ? [
+                {
+                  chunks: [{ waitForFile: startTasks }],
+                  message: answer('journey-schedule-tasks', '', [
+                    {
+                      id: nativeTaskJourneyEnqueueCall,
+                      name: 'native_tasks_enqueue',
+                      args: {
+                        operationId: 'journey-enqueue-three',
+                        tasks: workers.map((worker) => ({
+                          id: nativeTaskJourneyIds[worker.marker],
+                          prompt: worker.marker,
+                          access: worker.access,
+                          acceptanceCriteria: [criteria],
+                        })),
+                      },
+                    },
+                  ]).message,
+                },
+              ]
+            : []),
           { waitForAbort: true },
         ],
       },
