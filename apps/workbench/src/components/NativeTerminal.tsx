@@ -227,6 +227,9 @@ export function NativeTerminal({
   const [renameFor, setRenameFor] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const dragId = useRef<string | null>(null);
+  // Consoles whose stop was requested leave the strip once the exit arrives,
+  // even when the request found them already stopping.
+  const requestedStop = useRef(new Set<string>());
   const [query, setQuery] = useState('');
   const [found, setFound] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -323,8 +326,30 @@ export function NativeTerminal({
     };
   }, [sessionId, selected?.id]);
 
+  /** Takes a finished console out of the strip; its history row remains. */
+  const dismiss = useCallback((id: string, session: string) => {
+    setHiddenBySession((previous) => ({
+      ...previous,
+      [session]: [...new Set([...(previous[session] ?? []), id])],
+    }));
+    setOrderBySession((previous) => ({
+      ...previous,
+      [session]: (previous[session] ?? []).filter((item) => item !== id),
+    }));
+    setSelected((previous) =>
+      previous[session] === id ? { ...previous, [session]: '' } : previous,
+    );
+  }, []);
+
   const adopt = useCallback((snapshot: TerminalSnapshot) => {
     setTerminals((current) => mergeTerminalSnapshot(current, snapshot));
+    if (
+      requestedStop.current.has(snapshot.id) &&
+      !['running', 'stopping'].includes(snapshot.status)
+    ) {
+      requestedStop.current.delete(snapshot.id);
+      dismiss(snapshot.id, snapshot.sessionId);
+    }
     // A restart replaces its predecessor in the same tab position.
     if (snapshot.restartOf)
       setHiddenBySession((previous) => ({
@@ -446,11 +471,12 @@ export function NativeTerminal({
   const stopTerminal = async (id: string) => {
     if (stopping.includes(id)) return;
     const target = sessionId;
+    requestedStop.current.add(id);
     setStopping((previous) => [...previous, id]);
     try {
       adopt(await terminalRequest<TerminalSnapshot>('close', { id }));
       // A stopped console leaves the strip; the history keeps its output.
-      dismiss(id);
+      dismiss(id, target);
     } catch (reason) {
       setOperations((previous) => ({
         ...previous,
@@ -473,23 +499,10 @@ export function NativeTerminal({
     ids.splice(at === -1 ? ids.length : at, 0, from);
     setOrderBySession((previous) => ({ ...previous, [sessionId]: ids }));
   };
-  const dismiss = (id: string) => {
-    setHiddenBySession((previous) => ({
-      ...previous,
-      [sessionId]: [...new Set([...(previous[sessionId] ?? []), id])],
-    }));
-    setOrderBySession((previous) => ({
-      ...previous,
-      [sessionId]: (previous[sessionId] ?? []).filter((item) => item !== id),
-    }));
-    setSelected((previous) =>
-      previous[sessionId] === id ? { ...previous, [sessionId]: '' } : previous,
-    );
-  };
   const closeTab = async (id: string) => {
     const item = terminals.find((entry) => entry.id === id);
     if (item && live(item)) await stopTerminal(id);
-    else dismiss(id);
+    else dismiss(id, sessionId);
   };
   const closeMany = (ids: string[]) =>
     run(async () => {
