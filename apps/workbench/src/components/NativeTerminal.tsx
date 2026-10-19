@@ -23,6 +23,7 @@ import {
   Square,
   X,
 } from 'lucide-react';
+import { ContextMenu } from 'radix-ui';
 import stripAnsi from 'strip-ansi';
 import type {
   TerminalEvent,
@@ -30,6 +31,12 @@ import type {
   TerminalSnapshot,
 } from '../../../desktop/src/workspace/terminal';
 import { terminalTheme } from '../model/terminal-theme';
+import {
+  extraExitReason,
+  folderName,
+  processDetails,
+  status,
+} from '../model/terminal-status';
 import { t, useLocale } from '../i18n';
 import { copyText } from '../host';
 import {
@@ -115,84 +122,6 @@ function recordTerminalTiming(
     // An optional test observer must never affect terminal input or output.
   }
   return true;
-}
-
-function status(snapshot: TerminalSnapshot): string {
-  if (snapshot.managedCommand) {
-    const root = snapshot.managedCommand.completion.rootExit;
-    if (root)
-      return root.signal
-        ? t('ended by signal {signal}', { signal: root.signal })
-        : t('exited (code {code})', { code: root.exitCode });
-    if (!['running', 'stopping'].includes(snapshot.status))
-      return t('terminal closed');
-  }
-
-  if (snapshot.kind === 'service') {
-    if (snapshot.serviceState === 'starting') return t('service starting');
-    if (snapshot.serviceState === 'ready') return t('service ready');
-    if (snapshot.serviceState === 'running') return t('service running');
-    if (snapshot.serviceState === 'stopped') return t('stopped');
-    if (snapshot.serviceState === 'failed' && snapshot.status === 'running')
-      return t('readiness failed');
-  }
-  switch (snapshot.status) {
-    case 'running':
-      return t('running');
-    case 'stopping':
-      return t('stopping');
-    case 'exited':
-      return snapshot.signal
-        ? t('ended by signal {signal}', { signal: snapshot.signal })
-        : t('exited (code {code})', { code: snapshot.exitCode ?? 0 });
-    case 'failed':
-      return t('failed');
-    case 'interrupted':
-      return t('interrupted');
-  }
-}
-
-/** The exit reason adds nothing when it only restates the status line. */
-function extraExitReason(snapshot: TerminalSnapshot) {
-  const reason = snapshot.exitReason;
-  if (!reason || snapshot.managedCommand) return '';
-  const code = snapshot.exitCode ?? 0;
-  const same = [
-    status(snapshot),
-    `exit ${code}`,
-    snapshot.signal ? `signal ${snapshot.signal}` : '',
-    snapshot.signal ?? '',
-  ];
-  return same.includes(reason) ? '' : reason;
-}
-
-/** The folder a terminal runs in, by name; the full path is in its tooltip. */
-function folderName(path: string) {
-  const trimmed = path.replace(/[\\/]+$/, '');
-  return trimmed.split(/[\\/]/).at(-1) || path;
-}
-
-/** Process ids are for developers: they stay in the status tooltip. */
-function processDetails(snapshot: TerminalSnapshot) {
-  const ids = snapshot.managedCommand
-    ? [
-        snapshot.managedCommand.commandPid !== undefined
-          ? t('command pid {pid}', {
-              pid: snapshot.managedCommand.commandPid,
-            })
-          : '',
-        snapshot.pid !== undefined
-          ? t('pty pid {pid}', { pid: snapshot.pid })
-          : '',
-      ]
-    : [
-        snapshot.pid !== undefined
-          ? t('process pid {pid}', { pid: snapshot.pid })
-          : '',
-      ];
-  return [snapshot.cwd, ids.filter(Boolean).join(' · ')]
-    .filter(Boolean)
-    .join('\n');
 }
 
 /** Keep mounted while the Inspector is hidden. Its PTYs and reading position persist. */
@@ -287,6 +216,12 @@ export function NativeTerminal({
     error.includes('runtime not enabled');
   const notice = operations[sessionId]?.notice ?? '';
   const [opened, setOpened] = useState<string[]>([]);
+  const [orderBySession, setOrderBySession] = useState<
+    Record<string, string[]>
+  >({});
+  const [renameFor, setRenameFor] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const dragId = useRef<string | null>(null);
   const [query, setQuery] = useState('');
   const [found, setFound] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -307,13 +242,25 @@ export function NativeTerminal({
   const searchInput = useRef<HTMLInputElement>(null);
   const tabStrip = useRef<HTMLDivElement>(null);
   const selectedId = selectedBySession[sessionId];
-  const visible = terminals.filter(
+  // A tab is a live console. One whose process is gone is finished: its output
+  // stays in the command history, where its place can be taken again.
+  const live = (item: TerminalSnapshot) =>
+    ['running', 'stopping'].includes(item.status);
+  const sessionTerminals = terminals.filter(
     (item) =>
       item.sessionId === sessionId &&
       (!commandTerminal ||
         (item.id === commandTerminal.resolved.target.terminal.id &&
           item.epoch === commandTerminal.resolved.target.terminal.epoch)),
   );
+  const order = orderBySession[sessionId] ?? [];
+  const orderPosition = (id: string) => {
+    const at = order.indexOf(id);
+    return at === -1 ? Number.MAX_SAFE_INTEGER : at;
+  };
+  const visible = sessionTerminals
+    .filter((item) => commandTerminal || live(item))
+    .sort((a, b) => orderPosition(a.id) - orderPosition(b.id));
   const selected =
     visible.find((item) => item.id === selectedId) ?? visible.at(-1);
   const displayedCommand =
@@ -372,6 +319,17 @@ export function NativeTerminal({
 
   const adopt = useCallback((snapshot: TerminalSnapshot) => {
     setTerminals((current) => mergeTerminalSnapshot(current, snapshot));
+    // A restart replaces its predecessor in the same tab position.
+    if (snapshot.restartOf)
+      setOrderBySession((previous) => {
+        if (previous[snapshot.sessionId]?.includes(snapshot.id))
+          return previous;
+        const list = [...(previous[snapshot.sessionId] ?? [])];
+        const at = list.indexOf(snapshot.restartOf as string);
+        if (at === -1) list.push(snapshot.id);
+        else list.splice(at, 1, snapshot.id);
+        return { ...previous, [snapshot.sessionId]: list };
+      });
   }, []);
 
   useEffect(() => {
@@ -475,6 +433,14 @@ export function NativeTerminal({
     setStopping((previous) => [...previous, id]);
     try {
       adopt(await terminalRequest<TerminalSnapshot>('close', { id }));
+      // A stopped console leaves the strip; the history keeps its output.
+      setOrderBySession((previous) => ({
+        ...previous,
+        [target]: (previous[target] ?? []).filter((item) => item !== id),
+      }));
+      setSelected((previous) =>
+        previous[target] === id ? { ...previous, [target]: '' } : previous,
+      );
     } catch (reason) {
       setOperations((previous) => ({
         ...previous,
@@ -487,6 +453,37 @@ export function NativeTerminal({
       setStopping((previous) => previous.filter((item) => item !== id));
     }
   };
+  const selectTerminal = (id: string) => {
+    focusTarget.current = id;
+    setSelected((previous) => ({ ...previous, [sessionId]: id }));
+  };
+  const moveTab = (from: string, to: string) => {
+    const ids = visible.map((item) => item.id).filter((id) => id !== from);
+    const at = ids.indexOf(to);
+    ids.splice(at === -1 ? ids.length : at, 0, from);
+    setOrderBySession((previous) => ({ ...previous, [sessionId]: ids }));
+  };
+  const closeMany = (ids: string[]) =>
+    run(async () => {
+      await Promise.all(ids.map((id) => stopTerminal(id)));
+    });
+  const openRename = (id: string) => {
+    setRenameValue(terminals.find((item) => item.id === id)?.label ?? '');
+    setRenameFor(id);
+  };
+  const applyRename = () =>
+    run(async () => {
+      const target = renameFor;
+      if (!target) return;
+      adopt(
+        await terminalRequest<TerminalSnapshot>('rename', {
+          id: target,
+          label: renameValue,
+        }),
+      );
+      setRenameFor(null);
+    });
+
   const run = async (action: () => Promise<void>) => {
     if (busy) return;
     const target = sessionId;
@@ -691,58 +688,128 @@ export function NativeTerminal({
           aria-label={t('terminal tabs')}
         >
           {visible.map((item, index) => (
-            <button
-              key={item.id}
-              role="tab"
-              type="button"
-              aria-selected={item.id === selected?.id}
-              className={item.id === selected?.id ? 'active' : ''}
-              tabIndex={item.id === selected?.id ? 0 : -1}
-              aria-controls={`terminal-${item.id}`}
-              title={`${item.cwd} · ${status(item)}`}
-              onClick={() => {
-                focusTarget.current = item.id;
-                setSelected((previous) => ({
-                  ...previous,
-                  [sessionId]: item.id,
-                }));
-              }}
-              onKeyDown={(event) => {
-                const index = visible.findIndex(
-                  (entry) => entry.id === item.id,
-                );
-                const position =
-                  event.key === 'Home'
-                    ? 0
-                    : event.key === 'End'
-                      ? visible.length - 1
-                      : event.key === 'ArrowLeft'
-                        ? (index + visible.length - 1) % visible.length
-                        : event.key === 'ArrowRight'
-                          ? (index + 1) % visible.length
-                          : -1;
-                const next = visible[position];
-                if (!next) return;
-                event.preventDefault();
-                event.stopPropagation();
-                focusTarget.current = null;
-                setSelected((previous) => ({
-                  ...previous,
-                  [sessionId]: next.id,
-                }));
-                event.currentTarget.parentElement
-                  ?.querySelector<HTMLButtonElement>(
-                    `[aria-controls="terminal-${next.id}"]`,
-                  )
-                  ?.focus();
-              }}
-            >
-              <span
-                className={`native-terminal-lamp ${item.serviceState ?? item.status}`}
-                aria-hidden="true"
-              />
-              {item.label} {index + 1}
-            </button>
+            <ContextMenu.Root key={item.id}>
+              <ContextMenu.Trigger asChild>
+                <div
+                  role="tab"
+                  aria-selected={item.id === selected?.id}
+                  aria-controls={`terminal-${item.id}`}
+                  className={`native-terminal-tab${
+                    item.id === selected?.id ? ' active' : ''
+                  }`}
+                  tabIndex={item.id === selected?.id ? 0 : -1}
+                  title={`${item.cwd} · ${status(item)}`}
+                  draggable={!commandTerminal}
+                  onDragStart={(event) => {
+                    dragId.current = item.id;
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', item.id);
+                  }}
+                  onDragEnd={() => {
+                    dragId.current = null;
+                  }}
+                  onDragOver={(event) => {
+                    if (!dragId.current || dragId.current === item.id) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDrop={(event) => {
+                    const from = dragId.current;
+                    dragId.current = null;
+                    if (!from || from === item.id) return;
+                    event.preventDefault();
+                    moveTab(from, item.id);
+                  }}
+                  onClick={() => selectTerminal(item.id)}
+                  onKeyDown={(event) => {
+                    const at = visible.findIndex(
+                      (entry) => entry.id === item.id,
+                    );
+                    const targetIndex =
+                      event.key === 'Home'
+                        ? 0
+                        : event.key === 'End'
+                          ? visible.length - 1
+                          : event.key === 'ArrowLeft'
+                            ? (at + visible.length - 1) % visible.length
+                            : event.key === 'ArrowRight'
+                              ? (at + 1) % visible.length
+                              : -1;
+                    const next = visible[targetIndex];
+                    if (!next) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    focusTarget.current = null;
+                    selectTerminal(next.id);
+                    tabStrip.current
+                      ?.querySelector<HTMLElement>(
+                        `[aria-controls="terminal-${next.id}"]`,
+                      )
+                      ?.focus();
+                  }}
+                >
+                  <span
+                    className={`native-terminal-lamp ${item.serviceState ?? item.status}`}
+                    aria-hidden="true"
+                  />
+                  <span className="native-terminal-tab-label">
+                    {item.label} {index + 1}
+                  </span>
+                  {!commandTerminal && (
+                    <button
+                      type="button"
+                      className="native-terminal-tab-close"
+                      aria-label={t('close terminal tab {n}', {
+                        n: index + 1,
+                      })}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void stopTerminal(item.id);
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+              </ContextMenu.Trigger>
+              {!commandTerminal && (
+                <ContextMenu.Portal>
+                  <ContextMenu.Content className="dropdown session-menu">
+                    <ContextMenu.Item onSelect={() => openRename(item.id)}>
+                      {t('rename…')}
+                    </ContextMenu.Item>
+                    <ContextMenu.Item
+                      onSelect={() => void stopTerminal(item.id)}
+                    >
+                      {t('close')}
+                    </ContextMenu.Item>
+                    <ContextMenu.Item
+                      disabled={visible.length < 2}
+                      onSelect={() =>
+                        void closeMany(
+                          visible
+                            .filter((entry) => entry.id !== item.id)
+                            .map((entry) => entry.id),
+                        )
+                      }
+                    >
+                      {t('close others')}
+                    </ContextMenu.Item>
+                    <ContextMenu.Item
+                      onSelect={() =>
+                        void closeMany(visible.map((entry) => entry.id))
+                      }
+                    >
+                      {t('close all')}
+                    </ContextMenu.Item>
+                    <ContextMenu.Separator className="dropdown-separator" />
+                    <ContextMenu.Item onSelect={() => void create()}>
+                      {t('new terminal')}
+                    </ContextMenu.Item>
+                  </ContextMenu.Content>
+                </ContextMenu.Portal>
+              )}
+            </ContextMenu.Root>
           ))}
         </div>
         <IconButton
@@ -803,7 +870,11 @@ export function NativeTerminal({
       )}
       <div className="native-terminal-surfaces">
         {terminals
-          .filter((item) => opened.includes(item.id))
+          .filter(
+            (item) =>
+              opened.includes(item.id) &&
+              visible.some((tab) => tab.id === item.id),
+          )
           .map((item) => (
             <TerminalSurface
               key={item.id}
@@ -1148,6 +1219,47 @@ export function NativeTerminal({
             </Button>
             <Button type="submit" disabled={busy || !serviceFile.trim()}>
               {t('start service')}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+      <Modal
+        open={renameFor !== null}
+        onOpenChange={(open) => {
+          if (!open) setRenameFor(null);
+        }}
+        title={t('rename terminal')}
+      >
+        <form
+          className="native-service-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void applyRename();
+          }}
+        >
+          <div className="native-service-fields form-stack">
+            <label>
+              {t('terminal name')}
+              <input
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+                maxLength={80}
+                required
+                autoFocus
+              />
+            </label>
+            {error && (
+              <p className="native-terminal-error" role="alert">
+                {error}
+              </p>
+            )}
+          </div>
+          <div className="native-service-actions">
+            <Button type="button" onClick={() => setRenameFor(null)}>
+              {t('cancel')}
+            </Button>
+            <Button type="submit" disabled={busy || !renameValue.trim()}>
+              {t('rename')}
             </Button>
           </div>
         </form>

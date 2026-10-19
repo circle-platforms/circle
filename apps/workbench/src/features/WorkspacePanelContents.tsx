@@ -128,6 +128,16 @@ export function WorkspacePanelContents({
     workspaceRoot ??
     snapshot.sessions.find((item) => item.id === sessionId)?.title ??
     '';
+  // At home there is no conversation yet, so there is nothing to run commands
+  // in: the previous session's consoles stay with that session.
+  if (resourcesPaused && kind === 'terminal')
+    return (
+      <div className="workspace-panel-contents workspace-panel-terminal">
+        <p className="panel-note" role="status">
+          {t('terminals belong to a conversation; start one to open them')}
+        </p>
+      </div>
+    );
   return (
     <div className={`workspace-panel-contents workspace-panel-${kind}`}>
       {resourcesPaused && kind === 'changes' && (

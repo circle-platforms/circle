@@ -312,6 +312,77 @@ export async function runNativeTerminalJourney({
       'multiple real terminals switch without sharing buffers or stopping another shell',
     );
     await screenshot('terminal-independent-tabs');
+    phase = 'tab close, right-click menu and rename';
+    const third = await create();
+    await panel
+      .getByRole('button', { name: 'close terminal tab 3', exact: true })
+      .click();
+    await until(
+      async () =>
+        !['running', 'stopping'].includes(
+          (await list()).find((terminal) => terminal.id === third.id)?.status,
+        ),
+      'the tab close button stops its shell',
+    );
+    await until(
+      async () => (await panel.locator('[role="tab"]').count()) === 2,
+      'a stopped console leaves the tab strip',
+    );
+    const firstTab = selectedTab(first.id);
+    await firstTab.click({ button: 'right' });
+    const menu = page.getByRole('menu');
+    await menu.waitFor();
+    for (const name of ['close', 'close others', 'close all', 'new terminal'])
+      assert.equal(
+        await menu.getByRole('menuitem', { name, exact: true }).count(),
+        1,
+        `the tab menu offers ${name}`,
+      );
+    await menu.getByRole('menuitem', { name: 'rename…', exact: true }).click();
+    const renameDialog = page.getByRole('dialog', {
+      name: 'rename terminal',
+      exact: true,
+    });
+    await renameDialog
+      .getByLabel('terminal name', { exact: true })
+      .fill('renamed shell');
+    await renameDialog
+      .getByRole('button', { name: 'rename', exact: true })
+      .click();
+    await until(
+      async () =>
+        (await list()).find((terminal) => terminal.id === first.id)?.label ===
+        'renamed shell',
+      'the renamed label reaches the runtime',
+    );
+    await panel.getByText('renamed shell 1', { exact: true }).waitFor();
+    checks.push(
+      'tabs close from their own button, and the right-click menu renames, closes and creates',
+    );
+    phase = 'command history keeps finished consoles';
+    await page.locator('#inspector-terminal-tab-original').click();
+    const history = page.locator('#inspector-terminal-original');
+    const closedLabel = (await list()).find(
+      (terminal) => terminal.id === third.id,
+    ).label;
+    const row = history
+      .locator('.terminal-history-row', { hasText: closedLabel })
+      .first();
+    await row.waitFor();
+    await row.locator('.terminal-history-head').click();
+    await until(
+      async () =>
+        (await row.locator('.terminal-history-output').count()) === 1 &&
+        (await row.locator('.terminal-history-output').innerText()).trim()
+          .length > 0,
+      'the history row opens the finished console output',
+    );
+    await screenshot('terminal-history-finished-console');
+    checks.push(
+      'the command history lists a finished console with its real output',
+    );
+    await page.locator('#inspector-terminal-tab-terminal').click();
+    await panel.waitFor();
     const port = await freePort();
     phase = 'start managed service';
     await panel
@@ -381,20 +452,8 @@ export async function runNativeTerminalJourney({
     assert.deepEqual(actual.args, ['space argument', '']);
     assert.deepEqual(service.command.args, args);
     await screenshot('terminal-managed-service-ready');
-    phase = 'stop managed service and release port';
-    await panel
-      .getByRole('button', { name: 'stop service', exact: true })
-      .click();
-    await until(
-      async () =>
-        (await list()).find((terminal) => terminal.id === service.id)
-          ?.serviceState === 'stopped',
-      'managed service stops after confirmation',
-    );
-    await until(() => canBind(port), 'actual service port is released');
-    await screenshot('terminal-managed-service-stopped-port-free');
     const previous = service;
-    phase = 'restart managed service';
+    phase = 'restart managed service in place';
     await panel
       .getByRole('button', { name: 'restart service', exact: true })
       .click();
@@ -421,17 +480,53 @@ export async function runNativeTerminalJourney({
         .serviceState,
       'stopped',
     );
-    await screenshot('terminal-managed-service-restarted-same-identity');
-    checks.push(
-      'UI service argv, actual HTTP readiness, stop port release, and restart preserve service identity with a new process epoch',
+    // A restart replaces its predecessor: one tab, in the same place.
+    await until(
+      async () =>
+        (await selectedTab(previous.id).count()) === 0 &&
+        (await selectedTab(service.id).count()) === 1,
+      'the restart keeps a single tab for the service',
     );
+    await screenshot('terminal-managed-service-restarted-same-identity');
+    phase = 'stop managed service and release port';
     await panel
       .getByRole('button', { name: 'stop service', exact: true })
       .click();
     await until(
-      () => canBind(port),
-      'restarted service port is released after UI stop',
+      async () =>
+        (await list()).find((terminal) => terminal.id === service.id)
+          ?.serviceState === 'stopped',
+      'managed service stops after confirmation',
     );
+    await until(() => canBind(port), 'actual service port is released');
+    await until(
+      async () => (await selectedTab(service.id).count()) === 0,
+      'a stopped service leaves the tab strip',
+    );
+    await screenshot('terminal-managed-service-stopped-port-free');
+    checks.push(
+      'UI service argv, actual HTTP readiness, in-place restart with one tab, and stop releases both the port and the tab',
+    );
+    phase = 'home keeps the session terminals with their session';
+    await page.evaluate(() => {
+      location.hash = '/home';
+    });
+    await until(
+      async () =>
+        (await page.locator('#inspector-terminal-terminal').count()) === 0,
+      'home shows no session terminals',
+    );
+    await page
+      .getByText('terminals belong to a conversation; start one to open them', {
+        exact: true,
+      })
+      .waitFor();
+    await page.evaluate((id) => {
+      location.hash = '/session/' + id;
+    }, sessionId);
+    await panel.waitFor();
+    await selectedTab(first.id).waitFor();
+    checks.push('home shows no terminals until a conversation is open');
     service = undefined;
     const receipt = {
       kind: 'real native xterm and service manager',

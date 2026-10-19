@@ -786,6 +786,22 @@ export class TerminalManager {
     return clone(entry.snapshot);
   }
 
+  /** A person's own name for the tab. The shell, its log and its history are untouched. */
+  async rename(
+    owner: string,
+    id: string,
+    label: string,
+  ): Promise<TerminalSnapshot> {
+    await this.#ready;
+    const entry = this.#get(owner, id);
+    const name = String(label ?? '').trim();
+    if (!name) throw Error('the terminal name is empty');
+    if (name.length > 80) throw Error('the terminal name is too long');
+    entry.snapshot.label = name;
+    await this.#persist(entry);
+    return clone(entry.snapshot);
+  }
+
   /** Terminals that are running, stopping or still hold a live pty after a failed start. */
   async activeIds(owner: string): Promise<string[]> {
     await this.#ready;

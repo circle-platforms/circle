@@ -4,6 +4,7 @@ import { buildFileTreeRows } from '../model/virtual-file-tree';
 import { useOwnerState } from '../model/owner-state';
 import type { CommandTerminalView } from '../model/command-terminal-client';
 import { TerminalSelectionPreview } from '../components/TerminalSelectionPreview';
+import { TerminalHistory } from '../components/TerminalHistory';
 import { WorkspacePanelContents } from './WorkspacePanelContents';
 import { useSources } from '../components/SourceNavigation';
 import { desktopHost } from '../host';
@@ -257,7 +258,7 @@ function InspectorResources(
           id === 'overview' ? (
             <DrawerOverview {...props} />
           ) : id === 'terminal' ? (
-            <TerminalPanel embedded onClose={props.onClose} />
+            <TerminalHistory sessionId={props.sessionId} />
           ) : item ? (
             <PluginBoundary name={item.plugin.title}>
               <item.panel.component
@@ -1137,113 +1138,5 @@ function BrowserPlaceholder() {
         <p>{t('browser preview only')}</p>
       </div>
     </>
-  );
-}
-// What each session's terminal printed, kept while the app runs: switching panels or
-// closing the inspector does not clear it.
-const terminalOutput = new Map<string, string[]>();
-export function TerminalPanel({
-  onClose,
-  embedded = false,
-}: {
-  onClose: () => void;
-  embedded?: boolean;
-}) {
-  const { runtime, snapshot, perform } = useRuntime();
-  const session = currentSession(snapshot);
-  const [input, setInput] = useState('');
-  const greeting = () => [
-    runtime.mode === 'live' ? t('Circle shell') : t('terminal not connected'),
-    runtime.mode === 'live'
-      ? t('Commands run in this session workspace.')
-      : 'commands stay in the preview request log',
-  ];
-  const [output, setLines] = useState<string[]>(
-    () => terminalOutput.get(session.id) ?? greeting(),
-  );
-  const setOutput = (update: (lines: string[]) => string[]) =>
-    setLines((lines) => {
-      const next = update(lines);
-      terminalOutput.set(session.id, next);
-      return next;
-    });
-  useEffect(() => {
-    setInput('');
-    setLines(terminalOutput.get(session.id) ?? greeting());
-  }, [session.id]);
-  return (
-    <section className={`terminal-pane ${embedded ? 'embedded' : ''}`}>
-      <header hidden={embedded}>
-        <span>
-          <Terminal size={14} />
-          {t('terminal')}{' '}
-          <small>
-            {
-              snapshot.workspaces.find(
-                (workspace) => workspace.id === session.workspaceId,
-              )?.name
-            }
-          </small>
-        </span>
-        <div>
-          <span className="muted small">
-            {runtime.mode === 'live' ? t('connected') : t('not connected')}
-          </span>
-          <IconButton label={t('close terminal')} onClick={onClose}>
-            <X size={13} />
-          </IconButton>
-        </div>
-      </header>
-      <pre>{output.join('\n')}</pre>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (input.trim()) {
-            if (runtime.mode === 'live') {
-              const command = input;
-              setInput('');
-              setOutput((lines) => [...lines, '$ ' + command]);
-              perform(async () => {
-                const result = (await runtime.request('execute', {
-                  command,
-                })) as {
-                  output: string;
-                  exit_code?: number;
-                  job?: { id: string };
-                };
-                setOutput((lines) => [
-                  ...lines,
-                  result.output,
-                  result.job
-                    ? t('background job {id}', { id: result.job.id })
-                    : t('exit {code}', {
-                        code: result.exit_code ?? t('unknown'),
-                      }),
-                ]);
-              });
-              return;
-            }
-            runtime.request('execute', { command: input });
-            setOutput((lines) => [
-              ...lines,
-              '$ ' + input,
-              'not executed · runtime connection required',
-            ]);
-            setInput('');
-          }
-        }}
-      >
-        <span>›</span>
-        <input
-          aria-label={t('terminal command')}
-          value={input}
-          placeholder={t('enter a command…')}
-          onChange={(event) => setInput(event.target.value)}
-        />
-        <button aria-label={t('record terminal command')}>
-          <ArrowUpRight size={14} />
-        </button>
-      </form>
-    </section>
   );
 }

@@ -48,6 +48,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'resolveCommand',
     'command',
     'create',
+    'rename',
     'restart',
     'write',
     'resize',
