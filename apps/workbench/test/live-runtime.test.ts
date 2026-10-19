@@ -677,3 +677,81 @@ test('an untrusted project is not given a session from home', async () => {
   );
   assert.deepEqual(host.commands, []);
 });
+
+// A Chinese window said the runtime's stop in English: a command the stop cut off
+// failed with the main process's sentence, and its toast replaced the localized one.
+test('a command cut off by the runtime stopping fails in the interface language with the exit code', async () => {
+  const { setLanguage } = await import('../src/i18n/index.ts');
+  const stopped = (snapshot: RuntimeUpdate['snapshot']) => {
+    const next = structuredClone(snapshot);
+    next.runtime = {
+      connected: false,
+      configured: true,
+      error: 'Circle runtime exited (1)',
+      stopped: {
+        reason: 'exited',
+        code: '1',
+        restarting: true,
+        at: '2026-10-19T00:00:00.000Z',
+      },
+    };
+    return next;
+  };
+  // What a rejected invoke looks like in the window.
+  const wrapped = (message: string) =>
+    Error(
+      `Error invoking remote method 'circle:runtime-command': Error: ${message}`,
+    );
+  const actionError = (runtime: LiveRuntime) =>
+    runtime
+      .getSnapshot()
+      .sessions.find((row) => row.id === runtime.getSnapshot().activeSessionId)!
+      .actionError;
+  try {
+    setLanguage('zh-CN');
+    const expected = 'Circle 运行时已退出 (1) · 正在重启…';
+    // The update that says the runtime stopped comes first, then the rejection of
+    // the command that was under way.
+    {
+      const { runtime, host } = live();
+      host.runtimeCommand = async () => {
+        host.update(stopped(runtime.getSnapshot()));
+        throw wrapped('Circle runtime exited (1)');
+      };
+      await assert.rejects(runtime.request('abort'), { message: expected });
+      assert.equal(actionError(runtime), expected);
+    }
+    // The rejection comes before the update: the window reads the state first.
+    // A command sent once the main process has no runtime is the same stop.
+    for (const said of ['Circle runtime exited (1)', 'runtime disconnected']) {
+      const { runtime, host } = live();
+      const state = await host.runtimeState();
+      host.runtimeState = async () => ({
+        seq: state.seq + 1,
+        connected: false,
+        snapshot: stopped(state.snapshot),
+      });
+      host.runtimeCommand = async () => {
+        throw wrapped(said);
+      };
+      await assert.rejects(runtime.request('abort'), { message: expected });
+      assert.equal(actionError(runtime), expected);
+      assert.equal(runtime.getSnapshot().runtime?.connected, false);
+    }
+    // Any other failure stays as it was said, and a running runtime stays running.
+    {
+      const { runtime, host } = live();
+      const failure = wrapped('the folder is not open');
+      host.runtimeCommand = async () => {
+        throw failure;
+      };
+      await assert.rejects(runtime.request('abort'), {
+        message: failure.message,
+      });
+      assert.equal(actionError(runtime), failure.message);
+      assert.equal(runtime.getSnapshot().runtime?.connected, true);
+    }
+  } finally {
+    setLanguage('en');
+  }
+});

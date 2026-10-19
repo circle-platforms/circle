@@ -3,7 +3,14 @@ import { promisify } from 'node:util';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { resolve, join, dirname, relative, sep, isAbsolute } from 'node:path';
+import path, {
+  resolve,
+  join,
+  dirname,
+  relative,
+  sep,
+  isAbsolute,
+} from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 const exec = promisify(execFile);
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -69,6 +76,11 @@ async function sourceIdentity(root, allowWorkingTree = false) {
     trackedFiles: files.length,
   };
 }
+// @electron/asar finds an entry by splitting its name on the host's path.sep
+// (Filesystem.searchNodeFromDirectory), so the name must keep host separators:
+// a name joined with '/' is one unknown directory on Windows.
+export const asarEntryName = (appPath, file, pathApi = path) =>
+  pathApi.relative(appPath, file);
 export async function captureNativeBuildSource({
   root,
   output,
@@ -124,7 +136,7 @@ export async function generateNativeBuildManifest({
       pathToFileURL(packagedRequire.resolve('@electron/asar')).href
     );
     read = async (file) =>
-      asar.extractFile(appPath, relative(appPath, file).split(sep).join('/'));
+      asar.extractFile(appPath, asarEntryName(appPath, file));
     files = asar
       .listPackage(appPath)
       .filter(

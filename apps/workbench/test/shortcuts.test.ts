@@ -9,6 +9,7 @@ import {
   isDesktopSettings,
   matchingAction,
   normalizeChord,
+  terminalOwnsKey,
   validateKeybindings,
 } from '../src/model/shortcuts.ts';
 
@@ -133,4 +134,40 @@ test('keys are written ⌃ for Control and ⌘ for the command key on macOS', ()
   assert.equal(formatChord('mod+k', false), 'Ctrl+K');
   assert.equal(formatChord('ctrl+c', false), 'Ctrl+C');
   assert.equal(formatChord('F2', true), 'F2');
+});
+
+test('in a terminal the window takes no key on Windows and Linux, and only ⌘ chords on macOS', () => {
+  // The focused element: xterm's helper textarea inside the terminal, or any other.
+  const terminal = {
+    closest: (wanted: string) => (wanted === '.xterm' ? {} : null),
+  };
+  const outside = { closest: () => null };
+  const at = (target: unknown, key: string, mods: Mods) => ({
+    ...press(key, mods),
+    target: target as EventTarget,
+  });
+  for (const [key, mods] of [
+    ['k', { ctrl: true }],
+    ['p', { ctrl: true }],
+    ['n', { ctrl: true }],
+    ['b', { ctrl: true }],
+    [',', { ctrl: true }],
+    ['k', { meta: true }],
+  ] as [string, Mods][]) {
+    assert.equal(terminalOwnsKey(at(terminal, key, mods), false), true, key);
+    assert.equal(terminalOwnsKey(at(outside, key, mods), false), false, key);
+  }
+  // macOS: Control keys are the shell's, ⌘ keys the window's.
+  assert.equal(terminalOwnsKey(at(terminal, 'k', { ctrl: true }), true), true);
+  assert.equal(terminalOwnsKey(at(terminal, 'k', { meta: true }), true), false);
+  assert.equal(
+    terminalOwnsKey(at(terminal, 'p', { meta: true, shift: true }), true),
+    false,
+  );
+  assert.equal(terminalOwnsKey(at(outside, 'k', { ctrl: true }), true), false);
+  // No element (a key sent to the window itself) is no terminal key.
+  assert.equal(terminalOwnsKey(at(null, 'k', { ctrl: true }), false), false);
+  // The search chord the terminal keeps is the one search would have taken.
+  assert.equal(isDesktopSearch(press('k', { ctrl: true }), false), true);
+  assert.equal(isDesktopSearch(press('k', { meta: true }), true), true);
 });

@@ -7,12 +7,45 @@ export interface ShellLifetime {
   started: number;
   ended: number;
 }
+/** One entry of the Windows process list. */
+export interface ProcessEntry {
+  pid: number;
+  /** The PID of the process that started it, which may have ended since. */
+  parent: number;
+  name: string;
+}
+/**
+ * A Windows Job object: the kernel puts every process a member starts into the same Job,
+ * however deep, so it holds a command's whole tree even after the processes between have
+ * ended and left their children pointing at a PID that no longer exists.
+ */
+export interface WindowsJobApi {
+  create(): bigint;
+  /** Puts a running process into the Job; false when Windows refuses. */
+  assign(job: bigint, pid: number): boolean;
+  /** The PIDs of the processes now in the Job. */
+  members(job: bigint): number[];
+  /** Ends the process with this PID only while it is still in the Job, so a reused PID is safe. */
+  terminate(job: bigint, pid: number): boolean;
+  close(job: bigint): void;
+}
 /** The few Windows process calls the sweep needs; tests give their own. */
 export interface WindowsChildrenApi {
   /** Every process now: its PID, the PID of the process that started it, and its image name. */
-  processes(): { pid: number; parent: number; name: string }[];
+  processes(): ProcessEntry[];
   /** When a process started, in ms since 1970, or undefined when it cannot be read. */
   started(pid: number): number | undefined;
+  /** Job objects, where Windows offers them. */
+  job?: WindowsJobApi;
+}
+/**
+ * A process seen to belong to a command's tree: when it started and, once it has ended, the
+ * latest time it can have started a child (ms).
+ */
+export interface TreeProcess {
+  pid: number;
+  started: number;
+  ended?: number;
 }
 // A process's recorded start can lag the clock Circle reads by a timer tick.
 const TICK = 100;
@@ -20,43 +53,198 @@ const TICK = 100;
 // child of that program. It belongs to the console, not to the command, and ends by itself
 // once no program uses that console.
 const CONSOLE_HOST = 'conhost.exe';
+const consoleHost = (name: string): boolean =>
+  name.toLowerCase() === CONSOLE_HOST;
 
 /**
- * The programs a Windows shell started that outlived it. `taskkill /T` ends the tree as it is
- * when taskkill looks at it, so a program the shell starts just after that keeps running, with
- * the ended shell's PID as its parent. Only processes that started while the shell ran count,
- * so a process whose parent merely reused that PID later is never one.
+ * The processes a Windows shell started, at any depth, that are still running after it ended.
+ * `taskkill /T` ends the tree as it is when taskkill looks at it, and it follows only parents
+ * that are still running: a program started by a process that has already ended (`cmd /c start
+ * /b …`) keeps the ended process's PID as its parent and is out of its reach.
+ *
+ * The walk starts from the shell and from `known`, the processes seen in the tree before (Job
+ * members and earlier walks), and takes a process when its parent is in the tree and it started
+ * after that parent started and while that parent still ran. A PID that has been reused belongs
+ * to a process that started later than the one recorded, so its children are never taken.
  */
-export function strandedChildren(
-  api: WindowsChildrenApi,
+export function strandedTree(
+  api: Pick<WindowsChildrenApi, 'processes' | 'started'>,
   shell: ShellLifetime,
-): number[] {
-  return api
-    .processes()
-    .filter(
-      (entry) =>
-        entry.parent === shell.pid &&
-        entry.pid !== shell.pid &&
-        entry.name.toLowerCase() !== CONSOLE_HOST,
-    )
-    .flatMap((entry) => {
-      const started = api.started(entry.pid);
-      return started !== undefined &&
-        started >= shell.started - TICK &&
-        started <= shell.ended
-        ? [entry.pid]
-        : [];
+  known: TreeProcess[] = [],
+): { live: TreeProcess[]; roots: number[]; known: TreeProcess[] } {
+  const list = api.processes();
+  const now = new Map(list.map((entry) => [entry.pid, entry]));
+  const startTimes = new Map<number, number | undefined>();
+  const startOf = (pid: number): number | undefined => {
+    if (!startTimes.has(pid)) startTimes.set(pid, api.started(pid));
+    return startTimes.get(pid);
+  };
+  const tree = new Map<number, TreeProcess>();
+  // The shell has ended; a process holding its PID now is another one.
+  tree.set(shell.pid, {
+    pid: shell.pid,
+    started: shell.started - TICK,
+    ended: shell.ended,
+  });
+  for (const process of known) {
+    if (process.pid === shell.pid) continue;
+    const current = now.get(process.pid);
+    const started = current ? startOf(process.pid) : undefined;
+    let ended = process.ended;
+    if (!current) ended ??= Infinity;
+    else if (started !== process.started)
+      // Its PID now belongs to a later process: the recorded one ended before that started.
+      ended = Math.min(
+        ended ?? Infinity,
+        started === undefined ? Infinity : started - 1,
+      );
+    tree.set(process.pid, {
+      ...process,
+      ...(ended === undefined ? {} : { ended }),
     });
+  }
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const entry of list) {
+      if (tree.has(entry.pid) || consoleHost(entry.name)) continue;
+      const parent = tree.get(entry.parent);
+      if (!parent) continue;
+      const started = startOf(entry.pid);
+      if (
+        started === undefined ||
+        started < parent.started ||
+        started > (parent.ended ?? Infinity)
+      )
+        continue;
+      tree.set(entry.pid, { pid: entry.pid, started });
+      grew = true;
+    }
+  }
+  const live = [...tree.values()].filter(
+    (process) =>
+      process.pid !== shell.pid &&
+      process.ended === undefined &&
+      now.has(process.pid) &&
+      !consoleHost(now.get(process.pid)!.name),
+  );
+  const livePids = new Set(live.map((process) => process.pid));
+  return {
+    live,
+    roots: live
+      .filter((process) => !livePids.has(now.get(process.pid)!.parent))
+      .map((process) => process.pid),
+    known: [...tree.values()].filter((process) => process.pid !== shell.pid),
+  };
+}
+
+/**
+ * The tree of one Windows shell Circle started. The shell is put into a Job object as soon as
+ * it starts, and what is seen in the tree is recorded when the shell ends, so the tree can be
+ * ended later, after the job is marked done, whatever ended in between.
+ */
+export class WindowsCommandTree {
+  private known: TreeProcess[] = [];
+  private job?: bigint;
+  constructor(
+    private readonly api: WindowsChildrenApi,
+    private readonly shell: { pid: number; started: number },
+    private readonly kill: (pid: number) => Promise<void> = taskkill,
+  ) {
+    if (!api.job) return;
+    try {
+      const job = api.job.create();
+      if (api.job.assign(job, shell.pid)) this.job = job;
+      else api.job.close(job);
+    } catch {
+      /* Without a Job the walk still finds what it can. */
+    }
+  }
+  private members(): number[] {
+    if (this.job === undefined) return [];
+    try {
+      return this.api.job!.members(this.job);
+    } catch {
+      return [];
+    }
+  }
+  private walk(ended: number): ReturnType<typeof strandedTree> {
+    const members = this.members().flatMap((pid) => {
+      if (pid === this.shell.pid || this.known.some((p) => p.pid === pid))
+        return [];
+      const started = this.api.started(pid);
+      return started === undefined ? [] : [{ pid, started }];
+    });
+    const result = strandedTree(this.api, { ...this.shell, ended }, [
+      ...this.known,
+      ...members,
+    ]);
+    this.known = result.known;
+    return result;
+  }
+  /** Notes what is in the tree now. True when something the shell started is still running. */
+  record(ended: number): boolean {
+    try {
+      return this.walk(ended).live.length > 0;
+    } catch {
+      return false;
+    }
+  }
+  /** Ends what the shell left running. Returns the PIDs it ended. */
+  async end(ended: number): Promise<number[]> {
+    const done: number[] = [];
+    const names = new Map(
+      this.api.processes().map((entry) => [entry.pid, entry.name]),
+    );
+    this.walk(ended);
+    // A Job member is ended through the Job, which a reused PID is not in.
+    if (this.job !== undefined)
+      for (const pid of this.members()) {
+        const name = names.get(pid);
+        if (pid === this.shell.pid || name === undefined || consoleHost(name))
+          continue;
+        try {
+          if (this.api.job!.terminate(this.job, pid)) done.push(pid);
+        } catch {
+          /* Already gone. */
+        }
+      }
+    // Anything outside the Job, such as a program started before the shell was put in it,
+    // is ended with its own tree.
+    // A terminated process can stay in the list for a moment while it exits.
+    for (const pid of this.walk(ended).roots) {
+      if (done.includes(pid)) continue;
+      await this.kill(pid);
+      done.push(pid);
+    }
+    return done;
+  }
+  dispose(): void {
+    if (this.job === undefined) return;
+    try {
+      this.api.job!.close(this.job);
+    } catch {
+      /* Closing a handle cannot fail in a way that matters here. */
+    }
+    this.job = undefined;
+  }
 }
 
 let childrenApi: Promise<WindowsChildrenApi> | undefined;
+let loadedApi: WindowsChildrenApi | undefined;
 /** The process list, loaded once: koffi refuses to define its struct type twice. */
 export function loadChildrenApi(): Promise<WindowsChildrenApi> {
-  childrenApi ??= loadChildrenApiOnce().catch((error: unknown) => {
-    childrenApi = undefined;
-    throw error;
-  });
+  childrenApi ??= loadChildrenApiOnce().then(
+    (api) => (loadedApi = api),
+    (error: unknown) => {
+      childrenApi = undefined;
+      throw error;
+    },
+  );
   return childrenApi;
+}
+/** The process list when it has loaded already, for a caller that cannot wait. */
+export function loadedChildrenApi(): WindowsChildrenApi | undefined {
+  return loadedApi;
 }
 
 async function loadChildrenApiOnce(): Promise<WindowsChildrenApi> {
@@ -138,6 +326,74 @@ async function loadChildrenApiOnce(): Promise<WindowsChildrenApi> {
         close(handle);
       }
     },
+    ...(process.arch === 'x64' || process.arch === 'arm64'
+      ? { job: jobApi(kernel, open, close, valid) }
+      : {}),
+  };
+}
+
+function jobApi(
+  kernel: { func(declaration: string): (...args: unknown[]) => unknown },
+  open: (...args: unknown[]) => unknown,
+  close: (...args: unknown[]) => unknown,
+  valid: (handle: unknown) => handle is bigint,
+): WindowsJobApi {
+  const create = kernel.func(
+    'void * __stdcall CreateJobObjectW(void *attributes, void *name)',
+  );
+  const assign = kernel.func(
+    'int __stdcall AssignProcessToJobObject(void *job, void *process)',
+  );
+  const query = kernel.func(
+    'int __stdcall QueryInformationJobObject(void *job, int informationClass, void *information, uint32_t length, void *returnedLength)',
+  );
+  const contains = kernel.func(
+    'int __stdcall IsProcessInJob(void *process, void *job, void *result)',
+  );
+  const terminate = kernel.func(
+    'int __stdcall TerminateProcess(void *process, uint32_t code)',
+  );
+  // PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA and PROCESS_TERMINATE.
+  const withProcess = <T>(
+    pid: number,
+    use: (handle: bigint) => T,
+  ): T | false => {
+    const handle: unknown = open(0x1000 | 0x100 | 0x1, 0, pid);
+    if (!valid(handle)) return false;
+    try {
+      return use(handle);
+    } finally {
+      close(handle);
+    }
+  };
+  return {
+    create: () => {
+      const job: unknown = create(null, null);
+      if (!valid(job)) throw new Error('CreateJobObjectW failed');
+      return job;
+    },
+    assign: (job, pid) =>
+      withProcess(pid, (handle) => Boolean(assign(job, handle))) === true,
+    members: (job) => {
+      // JOBOBJECT_BASIC_PROCESS_ID_LIST: two counts, then one ULONG_PTR per process.
+      const data = Buffer.alloc(65536);
+      if (!query(job, 3, data, data.length, null)) return [];
+      const count = Math.min(data.readUInt32LE(4), (data.length - 8) / 8);
+      return Array.from({ length: count }, (_, index) =>
+        Number(data.readBigUInt64LE(8 + index * 8)),
+      ).filter((pid) => pid > 0 && pid <= 0xffffffff);
+    },
+    terminate: (job, pid) =>
+      withProcess(pid, (handle) => {
+        const inJob = Buffer.alloc(4);
+        // The handle holds the process, so the PID cannot be reused meanwhile.
+        if (!contains(handle, job, inJob) || !inJob.readUInt32LE(0))
+          return false;
+        return Boolean(terminate(handle, 1));
+      }) === true,
+    close: (job) => {
+      close(job);
+    },
   };
 }
 
@@ -145,14 +401,3 @@ const taskkill = (pid: number): Promise<void> =>
   new Promise((resolve) =>
     execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => resolve()),
   );
-
-/** Ends what a stopped Windows shell left running. Returns the PIDs it ended. */
-export async function endStranded(
-  shell: ShellLifetime,
-  load: () => Promise<WindowsChildrenApi> = loadChildrenApi,
-  kill: (pid: number) => Promise<void> = taskkill,
-): Promise<number[]> {
-  const pids = strandedChildren(await load(), shell);
-  for (const pid of pids) await kill(pid);
-  return pids;
-}

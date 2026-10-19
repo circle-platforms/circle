@@ -188,7 +188,13 @@ test('accept-edits still asks when the workspace path is a symlink', (t) => {
   // The checks swap which spelling is the workspace and which is the file.
   const temporary = scratch(t);
   const linked = join(scratch(t), 'workspace');
-  symlinkSync(temporary, linked);
+  // A Windows junction needs no symlink privilege and splits the spellings the
+  // same way: realpath of the junction is the temporary folder.
+  symlinkSync(
+    temporary,
+    linked,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
   mkdirSync(join(temporary, 'out'));
   mkdirSync(join(temporary, 'pack'));
   writeFileSync(join(temporary, 'out', 'report.md'), 'old\n');
@@ -454,21 +460,26 @@ test('a settings pattern answers for an always-asking command and never for a de
   const store = new CheckpointStore(root);
   cleanup(t, () => store.close());
   const session = store.create(root, 'scripted');
+  // The system shell's own delete: cmd.exe has no `rm`.
+  const [remove, pattern] =
+    process.platform === 'win32'
+      ? ['rmdir /s /q dist', 'rmdir *']
+      : ['rm -rf dist', 'rm *'];
   const rules = new ApprovalPolicy(
     new ApprovalStore(join(root, 'approvals')),
     root,
     undefined,
     undefined,
-    ['rm *', '*'],
+    [pattern, '*'],
   );
   // the classification still sees the destructive command …
   assert.equal(
-    rules.review('execute', { command: 'rm -rf dist' }).verdict,
+    rules.review('execute', { command: remove }).verdict,
     'ASK_FORCED',
   );
   // … but the pattern answers for it, and DENY stays out of reach
   assert.equal(
-    rules.needsApproval('execute', { command: 'rm -rf dist' }, session.id),
+    rules.needsApproval('execute', { command: remove }, session.id),
     false,
   );
   assert.equal(
@@ -478,7 +489,7 @@ test('a settings pattern answers for an always-asking command and never for a de
   const model = new ScriptedModel([
     {
       message: assistant('', [
-        { id: 'rm', name: 'execute', args: { command: 'rm -rf dist' } },
+        { id: 'rm', name: 'execute', args: { command: remove } },
         { id: 'env', name: 'execute', args: { command: 'cat .env' } },
         { id: 'sudo', name: 'execute', args: { command: 'sudo rm -rf /' } },
       ]),

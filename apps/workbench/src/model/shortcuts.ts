@@ -127,6 +127,23 @@ export function isDesktopSettings(
 ): boolean {
   return isChord(event, DESKTOP_SETTINGS_CHORD, mac);
 }
+/**
+ * Whether a key pressed in a terminal belongs to the terminal and not to the window.
+ * A terminal (the terminal panel, a device console: xterm) sends every key it gets
+ * to its shell, so Ctrl+K there is the byte ^K and Ctrl+B moves the cursor back. On
+ * macOS ⌘ is no terminal key: ⌘K, ⌘P, ⌘, and ⌘B stay the window's commands.
+ */
+export function terminalOwnsKey(
+  event: KeyEvent & { target: EventTarget | null },
+  mac = macKeyboard(),
+): boolean {
+  const target = event.target as {
+    closest?: (selector: string) => unknown;
+  } | null;
+  if (typeof target?.closest !== 'function' || !target.closest('.xterm'))
+    return false;
+  return !(mac && event.metaKey);
+}
 export function formatChord(chord: string, mac = macKeyboard()): string {
   return normalizeChord(chord, mac)
     .split(/\+(?!$)/)

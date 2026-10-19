@@ -24,6 +24,7 @@ import {
 } from './helpers/model-requests.mjs';
 import { patience } from './helpers/patience.mjs';
 import { saveWithShortcut } from './helpers/native-editor-save.mjs';
+import { findOpenssl } from './helpers/openssl.mjs';
 
 // The conversation's browser, driven by a scripted model and by the person, against local
 // HTTPS sites with a self-signed certificate: everything a page asks for reaches both.
@@ -48,7 +49,8 @@ let requestsPath = join(temp, 'requests.jsonl');
 let viewportSizing;
 
 // Every request is local. The certificate exists only inside this test's scratch folder.
-await promisify(execFile)('openssl', [
+const openssl = await findOpenssl();
+await promisify(execFile)(openssl, [
   'req',
   '-x509',
   '-newkey',
@@ -68,7 +70,7 @@ await promisify(execFile)('openssl', [
 const clientCertificates = [];
 for (const name of ['Circle Fixture Operator', 'Circle Fixture Admin']) {
   const path = join(temp, `${name.replaceAll(' ', '-')}.pem`);
-  await promisify(execFile)('openssl', [
+  await promisify(execFile)(openssl, [
     'req',
     '-x509',
     '-newkey',

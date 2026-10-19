@@ -31,8 +31,10 @@ const temp = await mkdtemp(join(tmpdir(), 'circle-terminal-panel-'));
 const dataDir = join(temp, 'data');
 await mkdir(join(dataDir, 'runtime-home'), { recursive: true });
 
-// One console server: greets and records the lines it is given.
+// One console server: greets and records the lines it is given, and counts the ^K
+// bytes (Ctrl+K) that reach it.
 const typed = [];
+let controlK = 0;
 const sockets = new Set();
 const server = createServer((socket) => {
   sockets.add(socket);
@@ -55,6 +57,7 @@ const server = createServer((socket) => {
         } else if (verb >= 236 && verb <= 254) at += 2;
         continue;
       }
+      if (byte === 11) controlK++;
       if (byte === 10 || byte === 13 || (byte >= 32 && byte < 127))
         text += String.fromCharCode(byte);
     }
@@ -189,6 +192,39 @@ try {
     { id: session, one: 't1' },
   );
   await until(() => typed.includes('show ver'), 'the panel keystroke');
+  // A key typed into the console is the device's (#155): on Windows and Linux
+  // Ctrl+K reaches it once as ^K and opens no search; on macOS ⌘K is no terminal
+  // key and opens search from the console.
+  const keys = page.locator('.device-terminal .xterm-helper-textarea');
+  await page.waitForFunction(
+    () => !document.querySelector('.device-terminal textarea[disabled]'),
+  );
+  await keys.focus();
+  const searchOpen = () =>
+    page.evaluate(() => !!document.querySelector('[role="dialog"]'));
+  if (process.platform === 'darwin') {
+    await page.keyboard.press('Meta+k');
+    await page.getByRole('dialog').waitFor();
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(
+      () => !document.querySelector('[role="dialog"]'),
+    );
+    assert.equal(controlK, 0, '⌘K reached the device');
+  } else {
+    await page.keyboard.press('Control+k');
+    await until(() => controlK > 0, 'Ctrl+K at the device');
+    // The device's echo of the key, at most, follows: the window stays as it was.
+    await page.evaluate(
+      () =>
+        new Promise((done) => requestAnimationFrame(() => setTimeout(done))),
+    );
+    assert.equal(controlK, 1, 'Ctrl+K reached the device once');
+    assert.equal(
+      await searchOpen(),
+      false,
+      'Ctrl+K in the console opened search',
+    );
+  }
   // Give it back: the model's actions may run again
   await page.getByRole('button', { name: 'give back', exact: true }).click();
   await page.getByRole('button', { name: 'take over', exact: true }).waitFor();
