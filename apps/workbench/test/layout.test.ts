@@ -100,7 +100,7 @@ test('the sidebar settings control shows its name', () => {
   assert.doesNotMatch(rule, /width:\s*30px/);
 });
 
-test('changes and activity can take the full view, as the browser does', () => {
+test('changes and the browser can take the full view', () => {
   const source = readFileSync(
     fileURLToPath(new URL('../src/plugins/builtins.tsx', import.meta.url)),
     'utf8',
@@ -119,7 +119,6 @@ test('changes and activity can take the full view, as the browser does', () => {
     return false;
   };
   assert.equal(fullView('changes'), true);
-  assert.equal(fullView('activity'), true);
   assert.equal(fullView('browser'), true);
   assert.equal(fullView('files'), false);
 });

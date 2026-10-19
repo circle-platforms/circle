@@ -40,6 +40,14 @@
   opacity: 0.5;
   cursor: default;
 }
+.session-menu-reason {
+  max-width: 240px;
+  padding: 4px 8px;
+  color: var(--secondary);
+  font-size: var(--ui-tiny);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 /* The opening click's pointerup must not land on an item and rename the row. */
 .session-menu[data-state='open'] {
   animation: session-menu-ready 160ms step-end;

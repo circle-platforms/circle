@@ -14,6 +14,8 @@ import {
   assetPath,
   assetType,
   boundedText,
+  MAX_MEDIA_BYTES,
+  parseImageDataUrl,
   safeExternalUrl,
   trustedAppUrl,
   validSaveName,
@@ -279,4 +281,33 @@ test('the window serves its own files under the types a module, worker and style
     'text/javascript; charset=utf-8',
   );
   assert.equal(assetType('/r/assets/unknown.bin'), 'application/octet-stream');
+});
+
+test('a picture handed to the clipboard or a file must be a data URL of a picture type', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const parsed = parseImageDataUrl(
+    `data:image/png;base64,${png.toString('base64')}`,
+  );
+  assert.equal(parsed.mime, 'image/png');
+  assert.deepEqual([...parsed.bytes], [...png]);
+  for (const type of ['jpeg', 'webp', 'gif'])
+    assert.equal(
+      parseImageDataUrl(`data:image/${type};base64,AAAA`).mime,
+      `image/${type}`,
+    );
+  // A script, a page or a vector picture with a script in it is no picture here.
+  for (const value of [
+    'data:image/svg+xml;base64,AAAA',
+    'data:text/html;base64,AAAA',
+    'data:image/png,not-base64',
+    'data:image/png;base64,',
+    'data:image/png;base64,AAAA\nBBBB',
+    'https://example.test/a.png',
+    '',
+    42,
+    undefined,
+  ])
+    assert.throws(() => parseImageDataUrl(value), /invalid image/);
+  const tooBig = `data:image/png;base64,${'A'.repeat(Math.ceil(((MAX_MEDIA_BYTES + 1) * 4) / 3) + 4)}`;
+  assert.throws(() => parseImageDataUrl(tooBig), /invalid image/);
 });

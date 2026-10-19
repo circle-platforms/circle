@@ -491,9 +491,31 @@ try {
   checks.push(
     'native EOF offsets 2 and 120 succeed, a valid reread recovers, and all results reach the next model request',
   );
+  const nativeTerminal = await command('workspace-service', {
+    service: 'terminal',
+    method: 'create',
+    params: { label: 'archive ownership fixture' },
+  });
+  assert.equal(nativeTerminal.ok, true, nativeTerminal.error);
+  const terminal = nativeTerminal.data;
+  assert.ok(terminal.pid);
+  process.kill(terminal.pid, 0);
+  await until(
+    async () =>
+      (await state()).sessions.find((session) => session.id === a)
+        ?.nativeResourcesActive === true,
+    'native resource ownership projected',
+  );
   for (const theme of ['dark', 'light']) {
     await command('save-settings', { settings: { theme } });
     await workspaceMenu().click();
+    // A shell that still runs does not take archiving away: archiving asks.
+    assert.equal(
+      await page
+        .getByRole('menuitem', { name: 'archive all sessions', exact: true })
+        .isDisabled(),
+      false,
+    );
     await page
       .getByRole('menuitem', {
         name:
@@ -542,10 +564,58 @@ try {
   checks.push(
     'worker network trust and workspace actions are visible in both palettes',
   );
-  await workspaceMenu().click();
+  // A shell still runs in the folder: archiving all asks before it closes it,
+  // and keeping the sessions closes nothing (#201).
+  const archiveAll = async (choice) => {
+    await workspaceMenu().click();
+    await page
+      .getByRole('menuitem', { name: 'archive all sessions', exact: true })
+      .click();
+    const dialog = page.getByRole('dialog');
+    await dialog
+      .getByText(
+        /^Close the terminal tabs and stop the tasks in .+, then archive all its sessions\?$/,
+      )
+      .waitFor();
+    if (choice === 'cancel')
+      await page.screenshot({ path: join(output, 'archive-stops-work.png') });
+    await dialog.getByRole('button', { name: choice, exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+  };
+  // The session that owns the shell asks the same from its own menu.
+  const owner = (await state()).sessions.find((session) => session.id === a);
   await page
-    .getByRole('menuitem', { name: 'archive all sessions', exact: true })
+    .getByRole('button', {
+      name: `session actions for ${owner.title}`,
+      exact: true,
+    })
+    .first()
     .click();
+  await page
+    .getByRole('menuitem', { name: 'archive session', exact: true })
+    .click();
+  const sessionDialog = page.getByRole('dialog');
+  await sessionDialog
+    .getByText(
+      /^Close the terminal tabs and stop the tasks of “.+”, then archive it\?$/,
+    )
+    .waitFor();
+  await sessionDialog
+    .getByRole('button', { name: 'keep session', exact: true })
+    .click();
+  await sessionDialog.waitFor({ state: 'hidden' });
+  await archiveAll('cancel');
+  process.kill(terminal.pid, 0);
+  assert.equal(
+    (await state()).sessions.some(
+      (session) => session.workspaceId === workspace.id && session.archivedAt,
+    ),
+    false,
+  );
+  checks.push(
+    'a running shell makes archive session and archive all ask first, and keeping the sessions closes nothing',
+  );
+  await archiveAll('stop work and archive all');
   await until(
     async () =>
       (await state()).sessions
@@ -553,6 +623,14 @@ try {
         .every((session) => session.archivedAt),
     'whole workspace archived',
   );
+  await until(async () => {
+    try {
+      process.kill(terminal.pid, 0);
+      return false;
+    } catch {
+      return true;
+    }
+  }, 'archiving closed the shell it was asked to stop');
   // Archiving a workspace takes the sessions of that folder only. The task started
   // outside it lives in a folder of its own, so its group stays: that is what a task
   // having its own folder means.

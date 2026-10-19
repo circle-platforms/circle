@@ -211,12 +211,10 @@ setInterval(() => {}, 1000);
     dataFolder: data,
     model,
     workspaceTools: {
-      nodeExecutable: process.execPath,
       runtimeExecutable: process.execPath,
       ...(options.native === false
         ? {}
         : { commandSupervisorPath: supervisorPath }),
-      adapterPath: 'unused',
       ghPath: 'unused',
     },
     emit: (update: RuntimeUpdate) => updates.push(update),

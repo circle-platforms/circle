@@ -25,6 +25,7 @@ import {
 } from '../../../src/settings.ts';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import { workspaceRuntimePath } from '../src/runtime-tools.ts';
+import { copyRuntimeAssets } from '../scripts/runtime-assets.mjs';
 
 test('worker runtime PATH preparation preserves original entries and is idempotent', () => {
   const original = process.env.PATH;
@@ -37,15 +38,13 @@ test('worker runtime PATH preparation preserves original entries and is idempote
 
 test('actual scripted desktop worker runs nested npm with strict system PATH through bundled Node', async () => {
   const originalPath = process.env.PATH;
-  const nodeRuntime =
-    process.env.CIRCLE_JS_DEBUG_RUNTIME ??
-    fileURLToPath(
-      new URL(
-        '../dist/tools/node/bin/' +
-          (process.platform === 'win32' ? 'node.exe' : 'node'),
-        import.meta.url,
-      ),
-    );
+  const nodeRuntime = fileURLToPath(
+    new URL(
+      '../dist/tools/node/bin/' +
+        (process.platform === 'win32' ? 'node.exe' : 'node'),
+      import.meta.url,
+    ),
+  );
   const expected = await realpath(nodeRuntime);
   const toolsRoot = dirname(dirname(nodeRuntime));
   const appModules = fileURLToPath(new URL('../node_modules', import.meta.url));
@@ -153,22 +152,12 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
       format: 'esm',
       // Match build.mjs: keep Koffi's loader/native payload external and avoid
       // colliding with module imports bundled from dependencies.
-      external: [
-        'koffi',
-        'node-pty',
-        'typescript-language-server',
-        'typescript',
-      ],
+      external: ['koffi', 'node-pty'],
       banner: {
         js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
       },
     });
-    for (const folder of ['prompts', 'data'])
-      await cp(
-        fileURLToPath(new URL(`../../../src/${folder}`, import.meta.url)),
-        join(app, folder),
-        { recursive: true },
-      );
+    await copyRuntimeAssets(app);
     const wrapper = `let listener,started=false;Object.defineProperty(process,'parentPort',{value:{on(n,cb){listener=cb},postMessage(m){if(m.type==='update'&&!started){started=true;queueMicrotask(()=>listener({data:{id:'auto',name:'set-auto',sessionId:m.update.snapshot.activeSessionId,payload:{enabled:true}}}));}if(m.type==='reply'&&m.reply.id==='auto'){queueMicrotask(()=>listener({data:{id:'prompt',name:'prompt',payload:{text:'Run the nested npm fixture'}}}));}if(m.type==='update'&&m.update.snapshot.sessions.some(s=>s.messages.some(v=>v.text==='worker npm done'))){queueMicrotask(()=>listener({data:{id:'finish',name:'close',payload:{}}}));}if(m.type==='reply'&&m.reply.id==='finish'){console.log('WORKER_NPM_DONE');process.exit(0);}}}});await import(${JSON.stringify(pathToFileURL(bundle).href)});`;
     const systemPath =
       process.platform === 'win32'

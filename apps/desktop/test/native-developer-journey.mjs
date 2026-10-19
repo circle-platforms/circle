@@ -11,6 +11,7 @@ import {
   createNativeChildCommandHandoffFixture,
   runNativeChildCommandHandoffJourney,
   runNativeChildCommandAfterRestart,
+  runNativeReviewerSourceJourney,
 } from './helpers/native-child-command-handoff-journey.mjs';
 import { runNativeGitHubSettingsJourney } from './helpers/native-github-settings-journey.mjs';
 import {
@@ -22,34 +23,24 @@ import {
   browserDebugFixtureSource,
   runNativeBrowserDebugJourney,
 } from './helpers/native-browser-debug-journey.mjs';
-import { nativeTaskJourneyFixture } from './helpers/native-task-fixture.mjs';
+import {
+  nativeTaskJourneyEnqueueCall,
+  nativeTaskJourneyFixture,
+} from './helpers/native-task-fixture.mjs';
 import {
   preserveNativeClipboard,
   restoreNativeClipboard,
   pendingNativeClipboardCheckpoints,
 } from './helpers/native-clipboard.mjs';
 import {
-  createNativeGitFixture,
-  openNativeGitFile,
-  runNativeGitJourney,
-} from './helpers/native-git-journey.mjs';
-import {
+  chooseNewLocalTerminal,
+  chooseTerminalAction,
   createNativeTerminalFixture,
+  openNativeTerminalInspector,
   runNativeTerminalJourney,
 } from './helpers/native-terminal-journey.mjs';
-import {
-  createNativeDebugFixture,
-  runNativeDebugJourney,
-} from './helpers/native-debug-journey.mjs';
+import { openNativeProjectFile } from './helpers/native-project-file.mjs';
 import { runNativeKeyboardJourney } from './helpers/native-keyboard-journey.mjs';
-import {
-  createNativeEditorInteractionsFixture,
-  runNativeEditorInteractions,
-} from './helpers/native-editor-interactions.mjs';
-import {
-  createNativeEditorSemanticsFixture,
-  runNativeEditorSemantics,
-} from './helpers/native-editor-semantics.mjs';
 import { runNativeInputRecovery } from './helpers/native-input-recovery.mjs';
 import { runNativeBrowserStream } from './helpers/native-browser-stream.mjs';
 import {
@@ -69,12 +60,19 @@ import {
 // Real renderer interactions; RPC is limited to fixture preparation and effect queries.
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  realpath,
+  rm,
+} from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -102,8 +100,6 @@ await mkdir(shellHome, { recursive: true });
 const repo = join(data, 'runtime-home', 'workspace');
 await mkdir(repo, { recursive: true });
 const baseline = '# native journey\n\noriginal content\n';
-const program =
-  "function fixture() {\n  const count = 3;\n  const next = count + 1;\n  console.log('DEBUG_RESULT', next);\n  return next;\n}\nfixture();\n";
 const browserDebugFixture = browserDebugFixtureSource(
   "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\nnew EventSource('/events').onmessage = event => { (window.__journeyEvents ||= []).push(event.data); console.log(event.data); };\n",
 );
@@ -114,22 +110,15 @@ await Promise.all([
     '# local fixture rules\nKeep native journey changes isolated.\n',
   ),
   writeFile(join(repo, 'git-probe.txt'), 'baseline\n'),
+  writeFile(join(repo, 'changes-deleted.txt'), 'JOURNEY_DELETED_LINE\n'),
   writeFile(join(repo, 'README.md'), baseline),
-  writeFile(join(repo, 'debug.cjs'), program),
-  writeFile(
-    join(repo, 'debug-args.cjs'),
-    "const args = process.argv.slice(2);\nconsole.log('JOURNEY_LITERAL_ARGS', JSON.stringify(args));\n",
-  ),
   writeFile(join(repo, 'browser-source.js'), browserSource),
   writeFile(
     join(repo, 'package.json'),
     JSON.stringify({ name: 'native-journey', private: true }),
   ),
 ]);
-await createNativeGitFixture(repo);
 await createNativeEditorFixture(repo);
-await createNativeEditorInteractionsFixture(repo);
-await createNativeEditorSemanticsFixture(repo);
 const terminalFixture = await createNativeTerminalFixture(repo);
 const terminalShortcutsFixture =
   await createNativeTerminalShortcutsFixture(repo);
@@ -150,7 +139,6 @@ const commandHandoffFixture = await createNativeCommandHandoffFixture(
     appPath: launchRoot,
   }),
 );
-const debugFixture = await createNativeDebugFixture(repo);
 const childCommandFixture = await createNativeChildCommandHandoffFixture(
   repo,
   commandHandoffFixture.nodePath,
@@ -168,18 +156,13 @@ await git(
   ...continuityFixture.files,
   ...commandHandoffFixture.files,
   ...childCommandFixture.files,
-  debugFixture.program,
-  '.circle-native-debug-interaction.json',
-  'editor-supplement.ts',
-  'editor-keyboard-interactions.ts',
   'editor-main.ts',
   'editor-lib.ts',
   '.circle-editor-journey.json',
   'AGENTS.md',
   'git-probe.txt',
+  'changes-deleted.txt',
   'README.md',
-  'debug.cjs',
-  'debug-args.cjs',
   'browser-source.js',
   'package.json',
 );
@@ -195,11 +178,13 @@ await git(
 await writeFile(join(repo, 'git-probe.txt'), 'baseline\nJOURNEY_GIT_HUNK\n');
 const fixture = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
+// The parent's held turn schedules the tasks once this file exists: Circle makes tasks.
+const startTasks = join(temp, 'start-journey-tasks');
 await writeFile(
   fixture,
   JSON.stringify(
     (() => {
-      const fixture = nativeTaskJourneyFixture(requestsPath);
+      const fixture = nativeTaskJourneyFixture(requestsPath, { startTasks });
       fixture.routes.push(commandHandoffFixture.route);
       fixture.routes.push(...childCommandFixture.routes);
       return fixture;
@@ -287,22 +272,23 @@ const choose = async (button, label) => {
     await button.click({ timeout: 2000 }).catch(() => {});
   }
 };
+const tasksCheckName =
+  'two isolated write tasks and a readonly task Circle schedules with pending Git approval';
 const dependencies = {
   'original file viewer and active-turn manual edit save': [
     'native identity and original panels',
   ],
-  'two isolated write agents and readonly agent with pending Git approval': [
-    'original file viewer and active-turn manual edit save',
-  ],
+  [tasksCheckName]: ['original file viewer and active-turn manual edit save'],
   'native terminal selection enters original unsent context and preserves processes':
     ['native identity and original panels'],
   'real child source ownership and return to child while parent saves another file':
-    ['two isolated write agents and readonly agent with pending Git approval'],
+    [tasksCheckName],
+  "the parent's link to a task opens the task's conversation": [tasksCheckName],
   'original settings enable and disable the native GitHub extension without authorization':
     [
       'native identity and original panels',
-      'draft survives original inspector switches',
-      'two isolated write agents and readonly agent with pending Git approval',
+      'draft survives switching the drawer modes',
+      tasksCheckName,
     ],
 };
 const check = async (name, action) => {
@@ -326,10 +312,24 @@ const check = async (name, action) => {
   const start = Date.now();
   try {
     if (sessionId && page) {
+      // Each phase starts from the parent conversation. A file or a subagent open in the
+      // drawer can fold the sidebar; closing it brings the sidebar back.
+      const closeFile = page
+        .locator('.file-view')
+        .getByRole('button', { name: 'close file', exact: true });
+      if (await closeFile.isVisible()) await closeFile.click();
+      const closeAgent = page.getByRole('button', {
+        name: 'close subagent',
+        exact: true,
+      });
+      if (await closeAgent.isVisible()) await closeAgent.click();
       // The sidebar lists a session under recent and under its project.
       const parent = page
-        .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+        .locator(
+          `.sidebar .session-link[href="#/session/${sessionId}"]:visible`,
+        )
         .first();
+      await parent.waitFor({ timeout: patience(3000) }).catch(() => {});
       if (await parent.isVisible()) await parent.click();
       const quick = page.getByRole('dialog', {
         name: 'quick open',
@@ -431,8 +431,6 @@ for (const file of [
     'native-browser-stream',
     'native-editor-isolation',
     'native-editor-journey',
-    'native-editor-semantics',
-    'native-editor-interactions',
     'native-terminal-journey',
     'native-terminal-shortcuts-journey',
     'native-continuity-journey',
@@ -441,10 +439,9 @@ for (const file of [
     'native-terminal-rendered-match',
     'native-paste-cleanup',
     'native-github-settings-journey',
-    'native-debug-journey',
     'native-panel-acceptance',
     'native-keyboard-journey',
-    'native-git-journey',
+    'native-project-file',
     'native-journey-platform',
     'native-clipboard',
     'native-clipboard-checkpoint',
@@ -586,21 +583,48 @@ try {
     return reply.data;
   };
   const closeFile = async () => {
-    const close = page.getByRole('button', { name: 'close file', exact: true });
-    if (await close.isVisible()) await close.click();
+    const close = page
+      .locator('.file-view')
+      .getByRole('button', { name: 'close file', exact: true });
+    if (await close.isVisible()) {
+      await close.click();
+      await page.locator('.file-view').waitFor({ state: 'hidden' });
+    }
   };
-  const openInspector = async (kind, tab) => {
-    const toggle = page.getByRole('button', {
-      name: `${kind} panel`,
-      exact: true,
-    });
+  // The work drawer's modes, by the buttons in the top bar.
+  const modeButton = (kind) =>
+    page.getByRole('button', { name: `${kind} panel`, exact: true });
+  const openMode = async (kind) => {
+    const toggle = modeButton(kind);
     if ((await toggle.getAttribute('aria-pressed')) !== 'true')
       await toggle.click();
-    await page.locator(`#inspector-${kind}-tab-${tab}`).click();
-    await page
-      .locator(`#inspector-${kind}-${tab}`)
-      .waitFor({ state: 'visible' });
+    await until(
+      async () => (await toggle.getAttribute('aria-pressed')) === 'true',
+      `the ${kind} mode opens`,
+    );
   };
+  // A mode has no title bar: pressing its button again closes the drawer. The
+  // buttons after the divider are the modes; the one before it is the overview.
+  const closeDrawer = async () => {
+    const open = page.locator(
+      '.drawer-mode-toolbar .drawer-mode-divider ~ .drawer-mode-button[aria-pressed="true"]',
+    );
+    if (await open.count()) {
+      await open.first().click();
+      await until(async () => !(await open.count()), 'the drawer closes');
+    }
+  };
+  // What the message box holds besides its text, as the window keeps it for the session.
+  const storedAttachments = (id) =>
+    page.evaluate((id) => {
+      const text = localStorage.getItem('circle.workbench.live.attachments.v1');
+      if (text !== null) return new Map(JSON.parse(text)).get(id) ?? [];
+      const views = JSON.parse(
+        localStorage.getItem('circle.workbench.live.views.v1') ??
+          '{"views":[]}',
+      ).views;
+      return views.find(([key]) => key === id)?.[1]?.attachments ?? [];
+    }, id);
   const send = async (text) => {
     await closeFile();
     await page
@@ -629,7 +653,7 @@ try {
       .waitFor({ state: 'visible' });
     sessionId = (await state()).activeSessionId;
     await page
-      .getByText('Native journey ready: README.md and debug.cjs', {
+      .getByText('Native journey ready: README.md', {
         exact: true,
       })
       .waitFor();
@@ -677,147 +701,55 @@ try {
         ),
         'a real loaded editor icon face is required, not a fallback font',
       );
-      if (
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .isVisible()
-      )
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
-    },
-  );
-  await check('enable the bundled developer extension', async () => {
-    await page.evaluate(() => {
-      location.hash = '#/page/extensions';
-    });
-    await page
-      .getByRole('heading', { name: 'extensions', exact: true })
-      .waitFor();
-    await page
-      .getByRole('button', { name: 'runtime extensions', exact: true })
-      .click();
-    const card = page.locator('.extension-card').filter({
-      has: page.getByRole('heading', {
-        name: 'developer extension',
-        exact: true,
-      }),
-    });
-    const toggle = card.getByRole('checkbox', {
-      name: 'enable developer extension',
-      exact: true,
-    });
-    if (!(await toggle.isChecked())) await toggle.click();
-    // The developer extension applies at once; no reload is asked for.
-    await page.waitForFunction(() => {
-      const card = [...document.querySelectorAll('.extension-card')].find(
-        (item) =>
-          item.querySelector('h2')?.textContent === 'developer extension',
-      );
-      const input = card?.querySelector('input[type="checkbox"]');
-      return (
-        input instanceof HTMLInputElement &&
-        input.checked &&
-        card.textContent.includes('extension enabled')
-      );
-    });
-    await page
-      .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-      .first()
-      .click();
-    await page.waitForFunction(
-      (id) => location.hash === `#/session/${id}`,
-      sessionId,
-    );
-  });
-  await check(
-    'native editor semantic navigation and conflict journey',
-    async () => {
-      await page
-        .getByRole('button', { name: 'files panel', exact: true })
-        .click();
-      const result = await runNativeEditorJourney({
-        page,
-        workspace: repo,
-        sessionId,
-        output,
-      });
-      await writeFile(
-        join(output, 'editor-journey.json'),
-        JSON.stringify(result, null, 2),
-      );
-      if (
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .isVisible()
-      )
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
-    },
-  );
-  await check(
-    'supplemental editor references completion formatting and replacement',
-    async () => {
-      await runNativeEditorSemantics({
-        page,
-        workspace: repo,
-        sessionId,
-        output,
-        assertDevToolsClosed: async () => {
-          const mainWindow = await app.browserWindow(page);
-          const windowId = await mainWindow.evaluate((window) => window.id);
-          const opened = await app.evaluate(({ BrowserWindow }, id) => {
-            const window = BrowserWindow.fromId(id);
-            if (!window || window.isDestroyed())
-              throw new Error('native journey main window is unavailable');
-            return window.webContents.isDevToolsOpened();
-          }, windowId);
-          assert.equal(
-            opened,
-            false,
-            'formatting must keep main DevTools closed',
-          );
-        },
-      });
-    },
-  );
-  await check(
-    'editor references and completion through keyboard UI',
-    async () => {
-      await runNativeEditorInteractions({ page, workspace: repo, output });
       await closeFile();
+      await closeDrawer();
     },
   );
+  await check('native editor save, undo and conflict journey', async () => {
+    const result = await runNativeEditorJourney({
+      page,
+      workspace: repo,
+      sessionId,
+      output,
+    });
+    await writeFile(
+      join(output, 'editor-journey.json'),
+      JSON.stringify(result, null, 2),
+    );
+    await closeFile();
+    await closeDrawer();
+  });
   await check(
     'loaded project instruction source opens actual file',
     async () => {
-      // The work drawer's overview leads to the session context through its context card.
-      await page
-        .getByRole('button', { name: 'overview panel', exact: true })
-        .click();
-      const contextCard = page.locator('.drawer-summary-card').filter({
-        has: page.locator('summary', { hasText: /^context/ }),
+      // The overview's context card lists the instruction files the folder gave Circle;
+      // each opens in the files mode.
+      const overview = page.getByRole('button', {
+        name: 'overview panel',
+        exact: true,
       });
-      if ((await contextCard.getAttribute('open')) === null)
-        await contextCard.locator('summary').first().click();
-      await contextCard
-        .getByRole('button', { name: /attached context/ })
-        .click();
+      if ((await overview.getAttribute('aria-pressed')) !== 'true')
+        await overview.click();
+      const contextCard = page.locator('.overview #overview-context > button');
+      if ((await contextCard.getAttribute('aria-expanded')) !== 'true')
+        await contextCard.click();
+      const instruction = page
+        .locator('.overview #overview-context-body')
+        .getByRole('button', { name: 'AGENTS.md', exact: true });
+      const instructionPath = await instruction.getAttribute('title');
+      assert.equal(
+        await realpath(
+          isAbsolute(instructionPath)
+            ? instructionPath
+            : join(repo, instructionPath),
+        ),
+        await realpath(join(repo, 'AGENTS.md')),
+        'the card names the instruction file the folder actually has',
+      );
+      await instruction.click();
       await page
-        .locator('.inspector details')
-        .filter({ hasText: 'AGENTS.md' })
-        .first()
-        .locator('summary')
-        .click();
-      await page
-        .locator('.inspector')
-        .getByRole('button', { name: /AGENTS\.md/ })
-        .first()
-        .click();
-      await page
-        .locator('.file-view')
-        .filter({ hasText: 'AGENTS.md' })
+        .locator('.file-view-heading strong')
+        .getByText('AGENTS.md', { exact: true })
         .waitFor();
       assert.equal(
         (await readFile(join(repo, 'AGENTS.md'), 'utf8')).includes(
@@ -909,21 +841,37 @@ try {
     },
   );
   await check('interactive PTY stdin and output', async () => {
-    await openInspector('terminal', 'terminal');
-    await page
-      .getByRole('button', { name: 'new terminal', exact: true })
-      .first()
-      .click();
-    const terminal = page
-      .locator('.native-terminal .xterm-helper-textarea')
-      .last();
+    // The + at the end of the terminal tabs makes a shell in the conversation's folder.
+    const panel = await openNativeTerminalInspector(page);
+    const prior = new Set((await query('terminal', 'list')).map((t) => t.id));
+    await chooseNewLocalTerminal(page, panel);
+    let shell;
+    await until(
+      async () =>
+        Boolean(
+          (shell = (await query('terminal', 'list')).find(
+            (item) => !prior.has(item.id),
+          )),
+        ),
+      'a new shell starts',
+    );
+    const tab = panel.locator(
+      `[role="tab"][aria-controls="terminal-${shell.id}"]`,
+    );
+    await until(
+      async () => (await tab.getAttribute('aria-selected')) === 'true',
+      'the new shell is the tab in front',
+    );
+    assert.match((await tab.innerText()).trim(), /^terminal \d+$/);
+    assert.equal(await realpath(shell.cwd), await realpath(repo));
+    const terminal = panel.locator(
+      `#terminal-${shell.id} .xterm-helper-textarea`,
+    );
     await terminal.focus();
     for (const chunk of journeyShellInput()) await page.keyboard.type(chunk);
     await until(async () => {
-      const terminals = await query('terminal', 'list');
-      if (!terminals.length) return false;
       const log = await query('terminal', 'replay', {
-        id: terminals.at(-1).id,
+        id: shell.id,
         limit: 512,
       });
       return JSON.stringify(log).includes('JOURNEY_ECHO:native-input');
@@ -997,197 +945,204 @@ try {
       });
     },
   );
-  await check('Git working diff stage and unstage hunk', async () => {
-    await openInspector('changes', 'git');
-    const panel = page.locator('.native-git');
-    await panel
-      .getByRole('button', { name: 'refresh', exact: true })
-      .first()
-      .click();
-    await openNativeGitFile(page, 'git-probe.txt');
-    await panel
-      .getByLabel('git diff', { exact: true })
-      .filter({ hasText: 'JOURNEY_GIT_HUNK' })
-      .waitFor();
-    await panel
-      .getByRole('button', { name: 'stage this hunk', exact: true })
-      .first()
-      .click();
-    await until(
-      async () =>
-        (await git('diff', '--cached', '--', 'git-probe.txt')).includes(
-          'JOURNEY_GIT_HUNK',
-        ),
-      'actual index hunk staged',
-    );
-    await panel.getByRole('button', { name: 'staged', exact: true }).click();
-    await openNativeGitFile(page, 'git-probe.txt');
-    await screenshot('04-staged-git-hunk');
-    await panel
-      .getByRole('button', { name: 'unstage this hunk', exact: true })
-      .first()
-      .click();
-    await until(
-      async () =>
-        !(await git('diff', '--cached', '--', 'git-probe.txt')).includes(
-          'JOURNEY_GIT_HUNK',
-        ),
-      'actual index hunk unstaged',
-    );
-  });
+  // The window stages, commits and pushes nothing: the changes mode is one list of what
+  // differs, read from Git whoever made the change, with each file's difference and the file
+  // itself one click away.
   await check(
-    'Git consecutive scoped commits local push conflict continue and abort',
+    'changes mode reads the working tree from Git and opens the file itself',
     async () => {
-      await page
-        .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-        .first()
-        .click();
-      const beforeBranch = (await git('branch', '--show-current')).trim();
-      const beforeReadme = await readFile(join(repo, 'README.md'), 'utf8');
-      await runNativeGitJourney({ page, workspace: repo, sessionId, output });
+      await closeFile();
+      await closeDrawer();
       assert.equal(
-        (await git('branch', '--show-current')).trim(),
-        beforeBranch,
+        (await git('diff', '--cached', '--name-only')).trim(),
+        '',
+        'the fixture starts with an empty index',
       );
-      assert.equal(
-        await readFile(join(repo, 'README.md'), 'utf8'),
-        beforeReadme,
-        'extended Git journey preserves existing manual edits',
+      // Work done outside the window: a change staged in a terminal, a deleted file and
+      // a new one, beside the unstaged change to git-probe.txt.
+      await writeFile(
+        join(repo, 'changes-staged.txt'),
+        'JOURNEY_STAGED_LINE\n',
       );
-    },
-  );
-  await check('Node launch breakpoint variables and step', async () => {
-    await openInspector('activity', 'debug');
-    const panel = page.locator('.debug-panel');
-    await panel.getByLabel('program path', { exact: true }).fill('debug.cjs');
-    const breakpoints = panel.locator('details.debug-run');
-    if ((await breakpoints.getAttribute('open')) === null)
-      await breakpoints.locator('summary').click();
-    await panel.getByLabel('breakpoint line', { exact: true }).fill('3');
-    await panel
-      .getByRole('button', { name: 'set breakpoint', exact: true })
-      .click();
-    await panel.getByRole('button', { name: 'launch', exact: true }).click();
-    await until(
-      async () => (await query('debug', 'snapshot')).status === 'paused',
-      'Node hits the breakpoint configured before launch',
-    );
-    await until(async () => {
-      const r = await query('debug', 'stackTrace');
-      return r.stackFrames?.[0]?.line === 3;
-    }, 'real Node breakpoint line3');
-    await panel
-      .getByRole('button', { name: /fixture.*debug\.cjs:3/ })
-      .first()
-      .click();
-    // The work drawer shows one mode at a time: the frame's source opens in files,
-    // and the debug view keeps the frame's variables for the way back.
-    await page
-      .locator('.file-view-heading strong')
-      .getByText('debug.cjs', { exact: true })
-      .waitFor();
-    await openInspector('activity', 'debug');
-    await panel.getByRole('button', { name: 'count', exact: true }).waitFor();
-    assert.equal(
-      await panel
-        .getByRole('button', { name: 'count', exact: true })
-        .locator('code')
-        .innerText(),
-      'count: 3',
-    );
-    await screenshot('05-node-breakpoint');
-    await panel.getByRole('button', { name: 'step over', exact: true }).click();
-    await until(
-      async () =>
-        (await query('debug', 'stackTrace')).stackFrames?.[0]?.line === 4,
-      'Node stepOver line4',
-    );
-    await panel.getByRole('button', { name: 'continue', exact: true }).click();
-    await until(
-      async () =>
-        (await query('debug', 'snapshot')).output.includes('DEBUG_RESULT 4'),
-      'Node continued real output',
-    );
-  });
-  await check('explicit entry pause and literal launch arguments', async () => {
-    await openInspector('activity', 'debug');
-    const panel = page.locator('.debug-panel');
-    await until(
-      async () =>
-        ['idle', 'stopped', 'failed'].includes(
-          (await query('debug', 'snapshot')).status,
-        ),
-      'prior debug process completed',
-    );
-    await panel
-      .getByLabel('program path', { exact: true })
-      .fill('debug-args.cjs');
-    await panel.locator('.debug-launch-options summary').click();
-    await panel
-      .getByRole('checkbox', { name: 'pause at entry', exact: true })
-      .check();
-    const args = ['two words', '"quoted"', ''];
-    for (let index = 0; index < args.length; index++) {
-      await panel
-        .getByRole('button', { name: 'add argument', exact: true })
-        .click();
-      await panel
-        .getByLabel('program argument ' + (index + 1), { exact: true })
-        .fill(args[index]);
-    }
-    await panel.getByRole('button', { name: 'launch', exact: true }).click();
-    await until(
-      async () => (await query('debug', 'snapshot')).status === 'paused',
-      'explicit entry pause takes effect',
-    );
-    const frames = await query('debug', 'stackTrace');
-    assert(
-      frames.stackFrames.some((frame) =>
-        frame.source?.path?.endsWith('debug-args.cjs'),
-      ),
-      'entry pause belongs to actual args fixture',
-    );
-    await screenshot('05-debug-explicit-entry-arguments');
-    await panel.getByRole('button', { name: 'continue', exact: true }).click();
-    await until(
-      async () =>
-        (await query('debug', 'snapshot')).output.includes(
-          'JOURNEY_LITERAL_ARGS ' + JSON.stringify(args),
-        ),
-      'actual process argv preserves spaces quotes and empty argument',
-    );
-    await writeFile(
-      join(output, 'debug-literal-arguments.json'),
-      JSON.stringify(
-        { args, output: (await query('debug', 'snapshot')).output },
-        null,
-        2,
-      ),
-    );
-    await panel
-      .getByRole('checkbox', { name: 'pause at entry', exact: true })
-      .uncheck();
-  });
-  await check(
-    'debug variable editing steps interactive stdin and inspector cleanup',
-    async () => {
-      await runNativeDebugJourney({
-        page,
-        workspace: repo,
-        sessionId,
-        query,
-        until,
-        output,
-        screenshot,
-      });
+      await git('add', '--', 'changes-staged.txt');
+      await rm(join(repo, 'changes-deleted.txt'));
+      await writeFile(
+        join(repo, 'changes-untracked.txt'),
+        'JOURNEY_UNTRACKED_LINE\n',
+      );
+      const index = await git('diff', '--cached', '--binary');
+      const probe = await readFile(join(repo, 'git-probe.txt'), 'utf8');
+      try {
+        await openMode('changes');
+        const mode = page.locator('.changes-mode:visible');
+        // This session's list holds what Circle's file tools changed here: nothing yet.
+        await mode
+          .getByRole('button', { name: 'this session', exact: true })
+          .click();
+        await mode.getByText('no files changed', { exact: true }).waitFor();
+        await mode
+          .getByRole('button', { name: 'all uncommitted', exact: true })
+          .click();
+        // Everything that differs from the last commit, staged or not, new files too.
+        const byPath = (rows) =>
+          rows.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+        const expected = async () => {
+          const rows = new Map();
+          const status = (
+            await git('diff', '--name-status', '-z', 'HEAD', '--')
+          ).split('\0');
+          for (let i = 0; i + 1 < status.length; i += 2)
+            rows.set(
+              status[i + 1],
+              status[i].startsWith('A')
+                ? 'A'
+                : status[i].startsWith('D')
+                  ? 'D'
+                  : 'M',
+            );
+          for (const path of (
+            await git('ls-files', '--others', '--exclude-standard', '-z')
+          )
+            .split('\0')
+            .filter(Boolean))
+            rows.set(path, 'A');
+          return byPath([...rows]);
+        };
+        const list = mode.getByRole('list', {
+          name: 'changed files',
+          exact: true,
+        });
+        const shown = async () =>
+          byPath(
+            await list
+              .locator('.changes-row')
+              .evaluateAll((rows) =>
+                rows.map((row) => [
+                  row.getAttribute('title'),
+                  row.querySelector('.overview-letter')?.textContent,
+                ]),
+              ),
+          );
+        let listed, actual;
+        await until(async () => {
+          actual = await expected();
+          listed = await shown();
+          return JSON.stringify(listed) === JSON.stringify(actual);
+        }, 'the list is every file Git says differs from the last commit');
+        for (const [path, letter] of [
+          ['git-probe.txt', 'M'],
+          ['changes-staged.txt', 'A'],
+          ['changes-deleted.txt', 'D'],
+          ['changes-untracked.txt', 'A'],
+        ])
+          assert(
+            listed.some(
+              ([shownPath, shownLetter]) =>
+                shownPath === path && shownLetter === letter,
+            ),
+            `${path} is listed as ${letter}`,
+          );
+        const row = (path) => list.locator(`.changes-row[title="${path}"]`);
+        const file = mode.locator('.changes-file');
+        const difference = async (path, line) => {
+          await row(path).click();
+          await file
+            .locator('.changes-path')
+            .getByText(path, { exact: true })
+            .waitFor();
+          await file
+            .locator('.changes-diff span.added')
+            .filter({ hasText: line })
+            .waitFor();
+        };
+        // Each difference is Git's own: the line the working tree adds to git-probe.txt.
+        assert.match(
+          await git('diff', 'HEAD', '--', 'git-probe.txt'),
+          /^\+JOURNEY_GIT_HUNK\r?$/m,
+        );
+        await difference('git-probe.txt', 'JOURNEY_GIT_HUNK');
+        await difference('changes-staged.txt', 'JOURNEY_STAGED_LINE');
+        await difference('changes-untracked.txt', 'JOURNEY_UNTRACKED_LINE');
+        // A deleted file has its difference and nothing to open.
+        await row('changes-deleted.txt').click();
+        await file
+          .locator('.changes-path')
+          .getByText('changes-deleted.txt', { exact: true })
+          .waitFor();
+        await file
+          .locator('.changes-diff span.removed')
+          .filter({ hasText: 'JOURNEY_DELETED_LINE' })
+          .waitFor();
+        assert.equal(
+          await file
+            .getByRole('button', { name: 'open file', exact: true })
+            .count(),
+          0,
+        );
+        await screenshot('04-changes-mode-all-uncommitted');
+        // open file shows the file itself in the files mode, not its difference, with
+        // the line Git says is new marked beside it.
+        await row('git-probe.txt').click();
+        await file
+          .locator('.changes-path')
+          .getByText('git-probe.txt', { exact: true })
+          .waitFor();
+        await file
+          .getByRole('button', { name: 'open file', exact: true })
+          .click();
+        const view = page.locator('.file-view:visible');
+        await view
+          .locator('.file-view-heading strong')
+          .getByText('git-probe.txt', { exact: true })
+          .waitFor();
+        assert.equal(
+          await modeButton('files').getAttribute('aria-pressed'),
+          'true',
+        );
+        assert.equal(
+          await view
+            .getByRole('button', { name: 'edit', exact: true })
+            .getAttribute('aria-pressed'),
+          'true',
+        );
+        await until(
+          async () =>
+            (await view.locator('.view-lines').first().textContent()).includes(
+              'JOURNEY_GIT_HUNK',
+            ),
+          'the editor holds the file on disk',
+        );
+        await view
+          .locator('.monaco-editor .change-mark-added')
+          .first()
+          .waitFor({ state: 'attached' });
+        await screenshot('04b-changes-open-file');
+        await closeFile();
+        // Reading the changes staged nothing and changed no file.
+        assert.equal(await git('diff', '--cached', '--binary'), index);
+        assert.equal(
+          await readFile(join(repo, 'git-probe.txt'), 'utf8'),
+          probe,
+        );
+        return { listed };
+      } finally {
+        // Put the fixture back as it was: only git-probe.txt differs.
+        await git('rm', '--cached', '-q', '--', 'changes-staged.txt').catch(
+          () => {},
+        );
+        await rm(join(repo, 'changes-staged.txt'), { force: true });
+        await rm(join(repo, 'changes-untracked.txt'), { force: true });
+        await git('checkout', '--', 'changes-deleted.txt').catch(() => {});
+        await closeFile();
+        await closeDrawer();
+      }
     },
   );
   await check(
     'Chromium developer tools and native page visibility',
     async () => {
-      await page
-        .getByRole('button', { name: 'browser panel', exact: true })
-        .click();
+      await closeFile();
+      await openMode('browser');
       await page
         .getByRole('textbox', { name: 'browser address', exact: true })
         .fill(origin);
@@ -1254,23 +1209,15 @@ try {
           return views.length > 0 && views.every((view) => !view.visible);
         }, label);
       };
-      await page
-        .getByRole('button', { name: 'activity panel', exact: true })
-        .click();
-      await page.getByRole('tab', { name: 'tasks', exact: true }).click();
-      await hide('the page hides on the tasks tab');
-      await page
-        .getByRole('button', { name: 'changes panel', exact: true })
-        .click();
-      await page.getByRole('tab', { name: 'git', exact: true }).click();
-      await hide('the page hides on Git');
-      await page
-        .getByRole('button', { name: 'close inspector', exact: true })
-        .click();
-      await hide('the page hides when the inspector closes');
-      await page
-        .getByRole('button', { name: 'browser panel', exact: true })
-        .click();
+      // The page is a native view over the window: any other mode of the drawer hides it.
+      for (const kind of ['changes', 'files', 'subagents', 'terminal']) {
+        await openMode(kind);
+        await hide(`the page hides in the ${kind} mode`);
+      }
+      await closeDrawer();
+      await hide('the page hides when the drawer closes');
+      await openMode('browser');
+      let pageBounds;
       await until(async () => {
         const views = await pageViews();
         const box = await page.evaluate(() => {
@@ -1285,6 +1232,7 @@ try {
               }
             : null;
         });
+        pageBounds = views[0]?.bounds;
         return (
           views.length > 0 &&
           views.every((view) => view.visible) &&
@@ -1298,21 +1246,58 @@ try {
           )
         );
       }, 'the page returns to its box');
+      // A picture of the page goes into the message box as an attachment, named for
+      // the site and the time; nothing is drawn in the browser for it.
+      const before = (await storedAttachments(sessionId)).map(
+        (item) => item.id,
+      );
       await page
         .getByRole('button', { name: 'browser menu', exact: true })
         .click();
       await page
-        .getByRole('menuitem', { name: 'take screenshot', exact: true })
+        .getByRole('menuitem', { name: 'take page screenshot', exact: true })
         .click();
-      await page.getByText('captured observation', { exact: true }).click();
-      const capture = await page
-        .locator('.native-browser img.attachment-image')
-        .getAttribute('src');
-      assert(capture?.startsWith('data:image/png;base64,'));
-      const png = Buffer.from(capture.split(',')[1], 'base64');
-      assert.ok(png.readUInt32BE(16) > 0 && png.readUInt32BE(20) > 0);
+      let picture;
+      await until(
+        async () =>
+          Boolean(
+            (picture = (await storedAttachments(sessionId)).find(
+              (item) => !before.includes(item.id),
+            )),
+          ),
+        'the page screenshot is an attachment of the unsent message',
+      );
+      assert.equal(picture.kind, 'image');
+      assert.match(picture.name, /^127\.0\.0\.1 \d\d:\d\d\.png$/);
+      assert(picture.content.startsWith('data:image/png;base64,'));
+      const png = Buffer.from(picture.content.split(',')[1], 'base64');
+      const [width, height] = [png.readUInt32BE(16), png.readUInt32BE(20)];
+      assert.ok(width > 0 && height > 0);
+      // A picture of the page as laid out in the mode: the view's own proportions.
+      assert.ok(
+        Math.abs(width / height - pageBounds.width / pageBounds.height) <
+          0.03 * (pageBounds.width / pageBounds.height),
+        `the picture (${width}×${height}) has the page view's proportions (${pageBounds.width}×${pageBounds.height})`,
+      );
       await writeFile(join(output, '07-actual-browser-capture.png'), png);
+      const chip = page
+        .locator('.attachment-strip')
+        .getByRole('button', { name: picture.name, exact: true });
+      await chip.waitFor();
       await screenshot('07-browser-chromium-devtools');
+      // Taken back as any attachment, the message box holds what it held before.
+      await page
+        .locator('.attachment-strip')
+        .getByRole('button', { name: `remove ${picture.name}`, exact: true })
+        .click();
+      await until(
+        async () =>
+          JSON.stringify(
+            (await storedAttachments(sessionId)).map((item) => item.id),
+          ) === JSON.stringify(before),
+        'removing the picture leaves the attachments as they were',
+      );
+      await chip.waitFor({ state: 'detached' });
       if (process.env.CIRCLE_NATIVE_JOURNEY_PUSH === '1') {
         await until(
           async () => browserStreams.size > 0,
@@ -1338,17 +1323,14 @@ try {
       }
     },
   );
-  await check('draft survives original inspector switches', async () => {
+  await check('draft survives switching the drawer modes', async () => {
     await closeFile();
     const message = page.getByRole('textbox', { name: 'message', exact: true });
     await message.fill('JOURNEY_UNSENT_DRAFT');
     await message.evaluate((node) => node.setSelectionRange(3, 10));
-    await openInspector('terminal', 'terminal');
-    await openInspector('changes', 'original');
-    await openInspector('activity', 'original');
-    await page
-      .getByRole('button', { name: 'close inspector', exact: true })
-      .click();
+    for (const kind of ['terminal', 'changes', 'subagents', 'files', 'browser'])
+      await openMode(kind);
+    await closeDrawer();
     assert.equal(await message.inputValue(), 'JOURNEY_UNSENT_DRAFT');
     assert.deepEqual(
       await message.evaluate((node) => [
@@ -1359,203 +1341,258 @@ try {
     );
   });
 
-  await check(
-    'two isolated write agents and readonly agent with pending Git approval',
-    async () => {
-      if (
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .isVisible()
-      )
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
-      await openInspector('activity', 'tasks');
-      const panel = page.locator('.tasks-panel');
-      const queue = async (prompt, access) => {
-        const newTask = panel.getByRole('button', {
-          name: 'new task',
-          exact: true,
-        });
-        if (await newTask.isVisible()) await newTask.click();
-        await panel
-          .getByLabel('task instruction', { exact: true })
-          .fill(prompt);
-        await panel
-          .getByLabel('acceptance criteria', { exact: true })
-          .fill('Inspect actual file and git effects');
-        await panel
-          .locator('label')
-          .filter({ hasText: 'workspace access' })
-          .locator('select')
-          .selectOption(access);
-        await panel
-          .getByRole('button', { name: 'queue task', exact: true })
-          .click();
-        const startReady = panel.getByRole('button', {
-          name: 'start ready tasks',
-          exact: true,
-        });
-        if (await startReady.isEnabled()) await startReady.click();
-      };
-      await queue('JOURNEY_WRITE_A', 'write');
-      await until(
-        async () =>
-          (await query('tasks', 'list')).some(
-            (t) => t.spec.prompt === 'JOURNEY_WRITE_A' && t.state === 'waiting',
-          ),
-        'first task awaits human',
-      );
-      await queue('JOURNEY_WRITE_B', 'write');
-      await until(
-        async () =>
-          (await query('tasks', 'list')).some(
-            (t) => t.spec.prompt === 'JOURNEY_WRITE_B' && t.state === 'waiting',
-          ),
-        'second task independently awaits human',
-      );
-      await queue('JOURNEY_READ_ONLY', 'readonly');
-      await until(
-        async () =>
-          (await query('tasks', 'list')).some(
-            (t) =>
-              t.spec.prompt === 'JOURNEY_READ_ONLY' &&
-              ['succeeded', 'needs_review'].includes(t.state),
-          ),
-        'readonly task completes while writers await',
-      );
-      const concurrent = await query('tasks', 'list');
-      const writers = concurrent.filter((t) => t.spec.access === 'write');
-      assert.equal(writers.length, 2);
-      assert(writers.every((t) => t.state === 'waiting'));
-      assert.notEqual(writers[0].worktree, writers[1].worktree);
-      assert(writers.every((t) => t.worktree !== repo));
-      await screenshot('08a-parallel-task-approvals');
-      let gitApprovalObserved = false;
-      for (const writer of writers) {
-        for (let iteration = 0; iteration < 4; iteration++) {
-          const record = (await query('tasks', 'list')).find(
-            (t) => t.spec.id === writer.spec.id,
-          );
-          if (['succeeded', 'needs_review'].includes(record.state)) break;
-          assert(
-            record.runtimeSessionId,
-            'real task child session identity exists',
-          );
-          await until(async () => {
-            const fresh = (await query('tasks', 'list')).find(
-              (task) => task.spec.id === writer.spec.id,
-            );
-            return (
-              ['succeeded', 'needs_review'].includes(fresh.state) ||
-              (await state()).interactions.some(
-                (i) =>
-                  i.sessionId === record.runtimeSessionId &&
-                  i.status === 'pending',
-              )
-            );
-          }, 'child approval is projected or actual task verification completes');
-          if (
-            ['succeeded', 'needs_review'].includes(
-              (await query('tasks', 'list')).find(
-                (task) => task.spec.id === writer.spec.id,
-              ).state,
-            )
-          )
-            break;
-          const pending = (await state()).interactions.find(
+  await check(tasksCheckName, async () => {
+    await closeFile();
+    await closeDrawer();
+    // Circle makes the tasks, not the person: the parent's turn, still at work, schedules
+    // two that write and one that reads, and asks first in the parent conversation.
+    assert.equal(
+      (await state()).sessions.find((s) => s.id === sessionId)?.state,
+      'waiting',
+      'the parent turn is still at work',
+    );
+    await writeFile(startTasks, 'schedule\n');
+    let schedule;
+    await until(
+      async () =>
+        Boolean(
+          (schedule = (await state()).interactions.find(
             (i) =>
-              i.sessionId === record.runtimeSessionId && i.status === 'pending',
+              i.sessionId === sessionId &&
+              i.callId === nativeTaskJourneyEnqueueCall &&
+              i.status === 'pending',
+          )),
+        ),
+      'the parent asks before it schedules the tasks',
+    );
+    await page
+      .locator('.main-stack .conversation:visible')
+      .locator('.inline-request[data-kind="approval"]')
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
+    await until(
+      async () =>
+        !(await state()).interactions.some(
+          (i) => i.id === schedule.id && i.status === 'pending',
+        ),
+      'the schedule approval is consumed once',
+    );
+    let tasks = [];
+    await until(async () => {
+      tasks = await query('tasks', 'list');
+      return ['JOURNEY_WRITE_A', 'JOURNEY_WRITE_B', 'JOURNEY_READ_ONLY'].every(
+        (prompt) =>
+          tasks.some(
+            (t) => t.spec.prompt === prompt && t.spec.sessionId === sessionId,
+          ),
+      );
+    }, 'the parent conversation owns the three tasks it scheduled');
+    await until(
+      async () =>
+        (await query('tasks', 'list')).some(
+          (t) => t.spec.prompt === 'JOURNEY_WRITE_A' && t.state === 'waiting',
+        ),
+      'first task awaits human',
+    );
+    await until(
+      async () =>
+        (await query('tasks', 'list')).some(
+          (t) => t.spec.prompt === 'JOURNEY_WRITE_B' && t.state === 'waiting',
+        ),
+      'second task independently awaits human',
+    );
+    await until(
+      async () =>
+        (await query('tasks', 'list')).some(
+          (t) =>
+            t.spec.prompt === 'JOURNEY_READ_ONLY' &&
+            ['succeeded', 'needs_review'].includes(t.state),
+        ),
+      'readonly task completes while writers await',
+    );
+    const concurrent = await query('tasks', 'list');
+    const writers = concurrent.filter((t) => t.spec.access === 'write');
+    assert.equal(writers.length, 2);
+    assert(writers.every((t) => t.state === 'waiting'));
+    assert.notEqual(writers[0].worktree, writers[1].worktree);
+    assert(writers.every((t) => t.worktree !== repo));
+    await screenshot('08a-parallel-task-approvals');
+    let gitApprovalObserved = false;
+    for (const writer of writers) {
+      for (let iteration = 0; iteration < 4; iteration++) {
+        const record = (await query('tasks', 'list')).find(
+          (t) => t.spec.id === writer.spec.id,
+        );
+        if (['succeeded', 'needs_review'].includes(record.state)) break;
+        assert(
+          record.runtimeSessionId,
+          'real task child session identity exists',
+        );
+        await until(async () => {
+          const fresh = (await query('tasks', 'list')).find(
+            (task) => task.spec.id === writer.spec.id,
           );
-          if (pending.command?.includes('git status'))
-            gitApprovalObserved = true;
-          await (await taskRow(sessionId, record.runtimeSessionId)).click();
-          await page
-            .getByRole('button', { name: 'allow once', exact: true })
-            .first()
-            .waitFor();
-          await page
-            .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-            .first()
-            .click();
-          assert(
+          return (
+            ['succeeded', 'needs_review'].includes(fresh.state) ||
             (await state()).interactions.some(
+              (i) =>
+                i.sessionId === record.runtimeSessionId &&
+                i.status === 'pending',
+            )
+          );
+        }, 'child approval is projected or actual task verification completes');
+        if (
+          ['succeeded', 'needs_review'].includes(
+            (await query('tasks', 'list')).find(
+              (task) => task.spec.id === writer.spec.id,
+            ).state,
+          )
+        )
+          break;
+        const pending = (await state()).interactions.find(
+          (i) =>
+            i.sessionId === record.runtimeSessionId && i.status === 'pending',
+        );
+        if (pending.command?.includes('git status')) gitApprovalObserved = true;
+        await (await taskRow(sessionId, record.runtimeSessionId)).click();
+        await page
+          .getByRole('button', { name: 'allow once', exact: true })
+          .first()
+          .waitFor();
+        await page
+          .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+          .first()
+          .click();
+        assert(
+          (await state()).interactions.some(
+            (i) => i.id === pending.id && i.status === 'pending',
+          ),
+        );
+        assert.equal(
+          (await state()).sessions.find((s) => s.id === sessionId)?.state,
+          'waiting',
+        );
+        await screenshot(
+          '08b-pending-request-parent-continues-' +
+            writer.spec.id +
+            '-' +
+            iteration,
+        );
+        await (await taskRow(sessionId, record.runtimeSessionId)).click();
+        await page
+          .getByRole('button', { name: 'allow once', exact: true })
+          .first()
+          .click();
+        await page
+          .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+          .first()
+          .click();
+        await until(
+          async () =>
+            !(await state()).interactions.some(
               (i) => i.id === pending.id && i.status === 'pending',
             ),
-          );
-          assert.equal(
-            (await state()).sessions.find((s) => s.id === sessionId)?.state,
-            'waiting',
-          );
-          await screenshot(
-            '08b-pending-request-parent-continues-' +
-              writer.spec.id +
-              '-' +
-              iteration,
-          );
-          await (await taskRow(sessionId, record.runtimeSessionId)).click();
-          await page
-            .getByRole('button', { name: 'allow once', exact: true })
-            .first()
-            .click();
-          await page
-            .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-            .first()
-            .click();
-          await until(
-            async () =>
-              !(await state()).interactions.some(
-                (i) => i.id === pending.id && i.status === 'pending',
-              ),
-            'approval consumed exactly once',
-          );
-        }
+          'approval consumed exactly once',
+        );
       }
-      await until(
-        async () =>
-          (await query('tasks', 'list')).every((t) =>
-            ['succeeded', 'needs_review'].includes(t.state),
-          ),
-        'all three tasks finish without hiding acceptance review',
-      );
-      const complete = await query('tasks', 'list');
-      for (const writer of writers)
-        assert.equal(
-          await readFile(join(writer.worktree, 'agent-result.txt'), 'utf8'),
-          'isolated task output\n',
-        );
+    }
+    await until(
+      async () =>
+        (await query('tasks', 'list')).every((t) =>
+          ['succeeded', 'needs_review'].includes(t.state),
+        ),
+      'all three tasks finish without hiding acceptance review',
+    );
+    const complete = await query('tasks', 'list');
+    for (const writer of writers)
       assert.equal(
-        gitApprovalObserved,
-        true,
-        'actual git command waited while session navigation continued',
+        await readFile(join(writer.worktree, 'agent-result.txt'), 'utf8'),
+        'isolated task output\n',
       );
-      await assert.rejects(readFile(join(repo, 'agent-result.txt'), 'utf8'), {
-        code: 'ENOENT',
-      });
-      await writeFile(
-        join(output, 'task-results.json'),
-        JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
+    assert.equal(
+      gitApprovalObserved,
+      true,
+      'actual git command waited while session navigation continued',
+    );
+    await assert.rejects(readFile(join(repo, 'agent-result.txt'), 'utf8'), {
+      code: 'ENOENT',
+    });
+    // A task whose checks cannot decide waits for review in its own conversation: the
+    // card at its end asks for each criterion and can send the attempt back.
+    const reviewed = [];
+    for (const task of complete.filter((t) => t.state === 'needs_review')) {
+      await (await taskRow(sessionId, task.runtimeSessionId)).click();
+      await until(
+        async () => (await state()).activeSessionId === task.runtimeSessionId,
+        'the task conversation opens from its row',
       );
-      const journal = (await readFile(requestsPath, 'utf8'))
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line));
-      const routes = new Set(
-        journal.map((request) => request.fixture?.routeId).filter(Boolean),
+      const review = page.locator(
+        '.main-stack .conversation:visible .task-review-card',
       );
-      for (const expected of ['writer-a', 'writer-b', 'readonly'])
-        assert(
-          routes.has(expected),
-          'real task routed model conversation ' + expected,
+      await review.waitFor();
+      for (const criterion of task.spec.acceptanceCriteria)
+        await review
+          .locator('.task-review-criterion')
+          .filter({ hasText: criterion })
+          .waitFor();
+      await review
+        .getByRole('button', { name: 'send back', exact: true })
+        .waitFor();
+      if (task.spec.access === 'write') {
+        // What the task wrote, in its worktree, is what its changes list.
+        await review
+          .getByRole('button', { name: '1 file changed', exact: true })
+          .click();
+        const changes = page.locator('.changes-mode:visible');
+        await changes
+          .locator('.changes-row[title="agent-result.txt"]')
+          .waitFor();
+        await until(
+          async () =>
+            (await changes.locator('.changes-diff').innerText()).includes(
+              'isolated task output',
+            ),
+          'the task changes show what the task wrote',
         );
+        await closeDrawer();
+      }
+      reviewed.push(task.spec.prompt);
+      await screenshot('08d-task-review-' + task.spec.id);
+    }
+    assert.deepEqual(
+      reviewed.sort(),
+      complete
+        .filter((t) => t.state === 'needs_review')
+        .map((t) => t.spec.prompt)
+        .sort(),
+    );
+    await page
+      .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+      .first()
+      .click();
+    await writeFile(
+      join(output, 'task-results.json'),
+      JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
+    );
+    const journal = (await readFile(requestsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const routes = new Set(
+      journal.map((request) => request.fixture?.routeId).filter(Boolean),
+    );
+    for (const expected of ['writer-a', 'writer-b', 'readonly'])
       assert(
-        journal.filter((request) => request.fixture?.role === 'reviewer')
-          .length >= 3,
-        'three actual independent reviewer requests recorded',
+        routes.has(expected),
+        'real task routed model conversation ' + expected,
       );
-      await screenshot('08c-parallel-task-results');
-    },
-  );
+    assert(
+      journal.filter((request) => request.fixture?.role === 'reviewer')
+        .length >= 3,
+      'three actual independent reviewer requests recorded',
+    );
+    await screenshot('08c-parallel-task-results');
+  });
   await check(
     'real child source ownership and return to child while parent saves another file',
     async () => {
@@ -1582,18 +1619,77 @@ try {
         state,
         until,
         output,
-        entry: 'activity',
       });
+    },
+  );
+  // The parent's record of scheduling links each task it started. A task is not one of the
+  // drawer's subagents but a conversation of its own, which the sidebar's row and the
+  // overview open; its link in the parent's tool card has to lead there too.
+  await check(
+    "the parent's link to a task opens the task's conversation",
+    async () => {
+      await closeFile();
+      await closeDrawer();
+      const writer = (await query('tasks', 'list')).find(
+        (task) => task.spec.prompt === 'JOURNEY_WRITE_A',
+      );
+      const agent = (await state()).agents.find(
+        (item) => item.id === writer.runtimeSessionId,
+      );
+      assert(agent?.task, 'the writer is a task the parent started');
+      const conversation = page.locator('.main-stack .conversation:visible');
+      for (const summary of await conversation
+        .locator('.tool-group > .tool-summary')
+        .all())
+        if ((await summary.getAttribute('aria-expanded')) !== 'true')
+          await summary.click();
+      const link = conversation
+        .locator('.tool-agent-links button')
+        .filter({ has: page.getByText(agent.name, { exact: true }) });
+      assert.equal(await link.count(), 1, 'the tool card links the task once');
+      await link.click();
+      try {
+        await until(
+          async () =>
+            (await state()).activeSessionId === writer.runtimeSessionId &&
+            new URL(page.url()).hash === `#/session/${writer.runtimeSessionId}`,
+          "the task link opens the task's own conversation",
+          8000,
+        );
+      } finally {
+        // Whatever the link opened, the next phase starts from the parent.
+        await page.screenshot({
+          path: join(output, '08e-parent-task-link.png'),
+        });
+        await closeDrawer();
+        // Closing the drawer brings back a sidebar it folded; one that stays hidden is
+        // shown by hand.
+        const parent = page.locator(
+          `.sidebar .session-link[href="#/session/${sessionId}"]:visible`,
+        );
+        await parent
+          .first()
+          .waitFor({ timeout: patience(3000) })
+          .catch(() => {});
+        if (!(await parent.count()))
+          await page
+            .getByRole('button', {
+              name: 'show or hide the sidebar',
+              exact: true,
+            })
+            .click();
+        await parent.first().click();
+        await until(
+          async () => (await state()).activeSessionId === sessionId,
+          'the parent conversation is shown again',
+        );
+      }
     },
   );
   await check(
     'original settings enable and disable the native GitHub extension without authorization',
     async () => {
       await closeFile();
-      const main = page
-        .locator('.agent-record:visible')
-        .getByRole('button', { name: 'main', exact: true });
-      if (await main.isVisible()) await main.click();
       return runNativeGitHubSettingsJourney({
         page,
         sessionId,
@@ -1653,6 +1749,25 @@ try {
       });
     },
   );
+  const reviewerSourceCheckName =
+    "a task reviewer's source opens read-only in its own conversation";
+  if (!childCommandReceipt)
+    checks.push({
+      name: reviewerSourceCheckName,
+      status: 'blocked',
+      reason: 'requires successful child handoff',
+    });
+  else
+    await check(reviewerSourceCheckName, async () =>
+      runNativeReviewerSourceJourney({
+        page,
+        parentSessionId: sessionId,
+        state,
+        until,
+        output,
+        previous: childCommandReceipt,
+      }),
+    );
   const childCommandPreviousApp = app;
   let childCommandRestartConfirmed = false;
   const inputRecoveryCheckName =
@@ -1810,13 +1925,12 @@ try {
         );
         return sidebar;
       };
+      // The shell the service form needs in front, made here when the conversation has
+      // none, and stopped again when the appearance is restored.
+      let serviceShell;
       const appearance = async ({ locale, theme }) => {
         await closeServiceForm();
-        const close = page.getByRole('button', {
-          name: /^(close inspector|关闭检查器)$/,
-          exact: true,
-        });
-        if (await close.isVisible()) await close.click();
+        await closeDrawer();
         await (
           await visibleNavigation()
         )
@@ -1861,28 +1975,57 @@ try {
           const zh = currentLocale === 'zh-CN';
           const toggle = page.getByRole('button', {
             name:
-              kind === 'debug'
+              kind === 'service'
                 ? zh
-                  ? '活动面板'
-                  : 'activity panel'
-                : kind === 'service'
-                  ? zh
-                    ? '终端面板'
-                    : 'terminal panel'
-                  : zh
-                    ? '浏览器面板'
-                    : 'browser panel',
+                  ? '终端面板'
+                  : 'terminal panel'
+                : zh
+                  ? '浏览器面板'
+                  : 'browser panel',
             exact: true,
           });
           if ((await toggle.getAttribute('aria-pressed')) !== 'true')
             await toggle.click();
-          if (kind === 'debug')
-            await page.locator('#inspector-activity-tab-debug').click();
-          else if (kind === 'service') {
-            await page.locator('#inspector-terminal-tab-terminal').click();
-            await page
-              .locator('.native-terminal')
+          if (kind === 'service') {
+            // The form opens from the ⋮ menu of the terminal in front.
+            const panel = page.locator(
+              '[data-inspector-resource="terminal"] .native-terminal:visible',
+            );
+            await panel.waitFor();
+            if (!(await panel.getByRole('tab').count())) {
+              const prior = new Set(
+                (await query('terminal', 'list')).map((item) => item.id),
+              );
+              await panel
+                .getByRole('button', {
+                  name: zh ? '新建终端或连接设备' : 'new terminal or device',
+                  exact: true,
+                })
+                .click();
+              await page
+                .getByRole('menuitem', {
+                  name: zh ? /^新建本地终端/ : /^new local terminal/,
+                })
+                .click();
+              await until(
+                async () =>
+                  Boolean(
+                    (serviceShell = (await query('terminal', 'list')).find(
+                      (item) => !prior.has(item.id),
+                    )),
+                  ),
+                'a shell for the service form',
+              );
+              await panel.getByRole('tab').first().waitFor();
+            }
+            await panel
               .getByRole('button', {
+                name: zh ? '终端菜单' : 'terminal menu',
+                exact: true,
+              })
+              .click();
+            await page
+              .getByRole('menuitem', {
                 name: zh ? '启动服务' : 'start service',
                 exact: true,
               })
@@ -1910,19 +2053,97 @@ try {
             originalDraft,
             'appearance and original panel controls preserve the original task draft',
           );
+          if (serviceShell) {
+            const panel = await openNativeTerminalInspector(page);
+            const close = panel
+              .locator('.term-tab')
+              .filter({
+                has: page.locator(
+                  `[role="tab"][aria-controls="terminal-${serviceShell.id}"]`,
+                ),
+              })
+              .locator('.term-tab-x');
+            if (await close.count()) await close.click();
+            await until(
+              async () =>
+                !['running', 'stopping'].includes(
+                  (await query('terminal', 'list')).find(
+                    (item) => item.id === serviceShell.id,
+                  )?.status,
+                ),
+              'the shell made for the service form stops',
+            );
+            await closeDrawer();
+          }
         },
       });
     },
   );
+  // At 1050 pixels or less the drawer lies over the conversation. A file opens there with
+  // the tree beside it, and closing the file closes the drawer, back to the conversation.
+  await check(
+    'a narrow window lays an open file over the conversation and closing it closes the drawer',
+    async () => {
+      await closeFile();
+      await closeDrawer();
+      const message = page.getByRole('textbox', {
+        name: 'message',
+        exact: true,
+      });
+      const draft = await message.inputValue();
+      await setViewport(app, page, { width: 760, height: 720 });
+      try {
+        const view = page.locator('.file-view:visible');
+        const heading = (name) =>
+          view
+            .locator('.file-view-heading strong')
+            .getByText(name, { exact: true });
+        await openNativeProjectFile(page, 'README.md');
+        await heading('README.md').waitFor();
+        await page.locator('[data-inspector-mode="overlay"]').waitFor();
+        // The tree beside the file opens the next one.
+        await openNativeProjectFile(page, 'AGENTS.md');
+        await heading('AGENTS.md').waitFor();
+        await until(
+          async () =>
+            (await view.locator('.view-lines').first().textContent())
+              .replaceAll('\u00a0', ' ')
+              .includes('Keep native journey changes isolated.'),
+          'the second file is the file on disk',
+        );
+        await screenshot('09a-narrow-open-file');
+        await view
+          .getByRole('button', { name: 'close file', exact: true })
+          .click();
+        await until(
+          async () =>
+            (await modeButton('files').getAttribute('aria-pressed')) !== 'true',
+          'closing the file closes the drawer in a narrow window',
+        );
+        await message.waitFor({ state: 'visible' });
+        assert.equal(await message.inputValue(), draft);
+        // With the drawer closed, the next file opens the files mode again.
+        await openNativeProjectFile(page, 'README.md');
+        await heading('README.md').waitFor();
+        await view
+          .getByRole('button', { name: 'close file', exact: true })
+          .click();
+        await until(
+          async () =>
+            (await modeButton('files').getAttribute('aria-pressed')) !== 'true',
+          'the drawer closes with the file again',
+        );
+        assert.equal(await message.inputValue(), draft);
+      } finally {
+        await closeFile();
+        await closeDrawer();
+        await desktopViewport();
+      }
+    },
+  );
   await check('English Chinese dark light and narrow UI', async () => {
-    if (
-      await page
-        .getByRole('button', { name: 'close inspector', exact: true })
-        .isVisible()
-    )
-      await page
-        .getByRole('button', { name: 'close inspector', exact: true })
-        .click();
+    await closeFile();
+    await closeDrawer();
     for (const language of ['English', '简体中文'])
       for (const theme of ['dark', 'light']) {
         await page
@@ -2047,7 +2268,6 @@ try {
     'isolation-a.ts',
     'isolation-b.md',
     'git-probe.txt',
-    'debug.cjs',
     'browser-source.js',
     ...terminalShortcutsFixture.files,
     ...continuityFixture.files,

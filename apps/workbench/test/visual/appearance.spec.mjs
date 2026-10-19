@@ -8,9 +8,7 @@ import { resolve, join } from 'node:path';
 const exec = promisify(execFile);
 const workbench = fileURLToPath(new URL('../..', import.meta.url));
 const suites = [
-  ['main and original panels', 'original-shell-ui.mjs', 64],
-  ['git', 'git-conflict-selector-ui.mjs', 8],
-  ['debug', 'debug-panel-embedded.mjs', 8],
+  ['workspace shell', 'workspace-shell-ui.mjs', 72],
   ['github', 'github-plugin-ui.mjs', 16],
   ['recovered inputs', 'recovered-input-ui.mjs', 16],
   ['native browser panel', 'original-browser-shell-ui.mjs', 28],
@@ -34,7 +32,6 @@ for (const [name, script, minimum] of suites) {
           CIRCLE_HOME: join(output, 'home'),
           CIRCLE_COMPONENT_UI_EVIDENCE: output,
           CIRCLE_UI_EVIDENCE: output,
-          CIRCLE_DEBUG_EMBEDDED_EVIDENCE: output,
           CIRCLE_BROWSER_UI_EVIDENCE: output,
           CIRCLE_RECOVERY_UI_EVIDENCE_DIR: output,
           CIRCLE_BROWSER_SHELL_EVIDENCE: output,

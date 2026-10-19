@@ -3,7 +3,6 @@ import { MemoryRouter } from 'react-router-dom';
 import { RuntimeProvider } from '../src/app/context';
 import { PreviewRuntime } from '../src/model/state';
 import { GitHubConnectionCard } from '../src/components/GitHubConnectionCard';
-import { DeliveryPanel } from '../src/components/DeliveryPanel';
 import type { GitHubConnectionState } from '../../../src/github_connection';
 import { applyTheme } from '../src/theme';
 import { setLanguage } from '../src/i18n';
@@ -53,10 +52,6 @@ window.circleDesktop = {
   openExternal: async (url: string) => {
     opened.push(url);
   },
-  runtimeCommand: async () => ({
-    ok: true,
-    data: { authenticated: false, pullRequest: null },
-  }),
 } as unknown as NonNullable<Window['circleDesktop']>;
 runtime.command = (name, args = '') => {
   calls.push({ name, args });
@@ -249,7 +244,6 @@ createRoot(document.getElementById('root')!).render(
     <RuntimeProvider runtime={runtime}>
       <main className="page">
         <GitHubConnectionCard />
-        <DeliveryPanel sessionId="test" />
       </main>
     </RuntimeProvider>
   </MemoryRouter>,

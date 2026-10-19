@@ -181,8 +181,25 @@ export interface TaskRecord {
   branch?: string;
   reason?: string;
   result?: Json;
+  /** Earlier attempts a person sent back, oldest first. This attempt's worker is told each reason. */
+  sentBack?: TaskSendBack[];
   createdAt: number;
   updatedAt: number;
+}
+/**
+ * A person's decision to send back an attempt that needed review. It is the
+ * `result.review` of the attempt it rejected, and an entry in `sentBack` of
+ * every later attempt. The field names follow the record of a passing review.
+ */
+export interface TaskSendBack {
+  reviewer: 'human';
+  decision: 'rejected';
+  /** The attempt sent back, and the candidate patch and HEAD the person was shown. */
+  expectedAttempt: number;
+  expectedPatchSha256: string;
+  head: string;
+  reason: string;
+  at: number;
 }
 export interface TaskReviewerRecord {
   sessionId: string;

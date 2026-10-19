@@ -1,5 +1,6 @@
 // Simplified Chinese for the interface words in the dialogs files. English is the key.
 export const dialogs: Record<string, string> = {
+  'could not delete the session: {reason}': '无法删除会话：{reason}',
   // the connection form
   'The Circle runtime stopped. The saved connection is kept; the connection can be changed once the runtime runs again.':
     'Circle 运行时已停止。已保存的连接仍在；运行时重新运行后才能更改连接。',
@@ -83,6 +84,13 @@ export const dialogs: Record<string, string> = {
   'stop work and delete session': '停止任务并删除会话',
   'Stop all work in “{title}”, then delete its saved conversation?':
     '停止“{title}”中的所有任务，然后删除已保存的对话？',
+  // archiving a session whose terminal tabs or tasks still run
+  'Close the terminal tabs and stop the tasks of “{title}”, then archive it?':
+    '关闭“{title}”的终端标签页并停止它的任务，然后归档？',
+  'stop work and archive': '停止任务并归档',
+  'Close the terminal tabs and stop the tasks in “{name}”, then archive all its sessions?':
+    '关闭“{name}”中的终端标签页并停止任务，然后归档全部会话？',
+  'stop work and archive all': '停止任务并全部归档',
   // the session tree and fork
   'search session tree': '搜索会话树',
   'user messages only': '仅用户消息',

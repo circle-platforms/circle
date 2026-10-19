@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RuntimeProvider } from '../src/app/context.tsx';
 import { PreviewRuntime } from '../src/model/state.ts';
-import { DrawerOverview } from '../src/features/Panels.tsx';
+import { Overview } from '../src/features/Overview.tsx';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'vite';
@@ -47,6 +47,9 @@ test(
         .click();
       const index = page.locator('.drawer-context-index');
       const filter = index.getByRole('textbox');
+      // With no file open the tree is the whole drawer, and there is no title above it.
+      assert.equal(await page.locator('.drawer-document.list-only').count(), 1);
+      assert.equal(await page.locator('.inspector-title').count(), 0);
       await filter.fill('connection');
       await index.getByRole('treeitem', { name: /connection.ts/ }).click();
       const editor = page.locator(
@@ -59,26 +62,15 @@ test(
         await composer.inputValue(),
         'draft retained while reading a source document',
       );
-      await page
-        .getByRole('button', { name: 'file index', exact: true })
-        .click();
-      assert.equal(await index.isVisible(), false);
-      await page
-        .getByRole('button', { name: 'file index', exact: true })
-        .click();
+      // The file opens beside the tree, which keeps its filter.
+      assert.equal(await page.locator('.drawer-document.has-file').count(), 1);
+      // The drawer widens for the file, and there is room for both.
+      await index.waitFor({ state: 'visible' });
       assert.equal(await filter.inputValue(), 'connection');
       assert.equal(
         await page.locator('.drawer-document-header').count(),
         0,
         'the file title is not repeated above the document',
-      );
-      assert.equal(
-        await page
-          .locator('.inspector-title')
-          .getByRole('button', { name: 'file index', exact: true })
-          .count(),
-        1,
-        'the resource header owns its index toggle',
       );
       assert.equal(
         await index.locator('.panel-header-name').isVisible(),
@@ -91,10 +83,11 @@ test(
         'the filter replaces the legacy floating search trigger',
       );
 
+      // Another mode and back: the same editor, the same filter, the same draft.
       await page
-        .getByRole('button', { name: 'overview panel', exact: true })
+        .getByRole('button', { name: 'changes panel', exact: true })
         .click();
-      assert.equal(await page.locator('.drawer-summary-card').count(), 5);
+      assert.equal(await page.locator('.changes-mode').isVisible(), true);
       await page
         .getByRole('button', { name: 'files panel', exact: true })
         .click();
@@ -106,31 +99,6 @@ test(
         true,
       );
       assert.equal(await filter.inputValue(), 'connection');
-      await page
-        .getByRole('button', { name: 'full view', exact: true })
-        .click();
-      await page.locator('.inspector-full .work-drawer').waitFor();
-      assert.equal(
-        await composer.inputValue(),
-        'draft retained while reading a source document',
-      );
-      assert.equal(
-        await editor.evaluate(
-          (node, previous) => node === previous,
-          editorNode,
-        ),
-        true,
-      );
-      await page
-        .getByRole('button', { name: 'exit full view', exact: true })
-        .click();
-      assert.equal(
-        await editor.evaluate(
-          (node, previous) => node === previous,
-          editorNode,
-        ),
-        true,
-      );
       assert.equal(
         await composer.inputValue(),
         'draft retained while reading a source document',
@@ -196,7 +164,7 @@ test(
   },
 );
 
-test('overview is scoped to this session and does not relabel attached input as output', () => {
+test('overview is scoped to this session, shows nothing it was not given, and only reads', () => {
   const runtime = new PreviewRuntime();
   runtime.change((state) => {
     const session = state.sessions.find(
@@ -218,22 +186,11 @@ test('overview is scoped to this session and does not relabel attached input as 
           },
         ],
       },
-      {
-        id: 'output',
-        parentId: 'input',
-        role: 'assistant',
-        at: '',
-        text: '',
-        attachments: [
-          {
-            id: 'output-file',
-            name: 'result.md',
-            kind: 'file',
-            content: 'generated output',
-          },
-        ],
-      },
     ];
+    // A session with no plan, no files changed and nobody working.
+    session.todos = [];
+    session.changes = [];
+    state.agents = [];
     state.jobs = [
       {
         id: 'other',
@@ -260,15 +217,19 @@ test('overview is scoped to this session and does not relabel attached input as 
   const html = renderToStaticMarkup(
     createElement(RuntimeProvider, {
       runtime,
-      children: createElement(DrawerOverview, {
+      children: createElement(Overview, {
         onPanel() {},
-        onFile() {},
-        onDialog() {},
+        onSession() {},
+        onStartPullRequest() {},
       }),
     }),
   );
-  assert.match(html, /result.md/);
   assert.doesNotMatch(html, /private-input.md|other session job|NaN|0%/);
-  assert.equal((html.match(/class="drawer-summary-card"/g) ?? []).length, 5);
+  // A card with nothing in it is not drawn: only the environment, the context and the
+  // changes (the preview has a branch) remain.
+  assert.doesNotMatch(html, />in progress</);
+  assert.doesNotMatch(html, />outputs</);
+  assert.match(html, />environment</);
+  assert.match(html, />context</);
   assert.equal(JSON.stringify(runtime.getSnapshot()), before);
 });

@@ -13,13 +13,13 @@
     "package": "npm run build && node scripts/package.mjs",
     "package:beta": "npm run build && node scripts/package.mjs --beta",
     "package:msi": "node scripts/msi.ts",
-    "test": "node --import tsx --test test/policy.test.ts test/browser-controls.test.ts test/folder-dialog.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/channel.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs test/developer-toolchain.test.mjs test/journey-platform.test.mjs test/native-clipboard.test.mjs test/native-clipboard-checkpoint.test.mjs test/native-paste-cleanup.test.mjs test/native-performance-fixture.test.mjs test/native-build-manifest.test.mjs test/build-manifest-generator.test.mjs test/native-performance-observation.test.mjs test/native-performance-cpu-profile.test.mjs test/native-debug-selector-contract.test.mjs test/native-editor-interactions.test.mjs test/devtools-resume-control.test.mjs test/native-devtools-bridge-handoff.test.mjs test/native-panel-acceptance.test.mjs",
+    "test": "node --import tsx --test test/policy.test.ts test/popouts.test.ts test/popout-attachment.test.ts test/popout-preload.test.ts test/browser-keys.test.ts test/browser-controls.test.ts test/folder-dialog.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/channel.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs test/developer-toolchain.test.mjs test/journey-platform.test.mjs test/native-clipboard.test.mjs test/native-clipboard-checkpoint.test.mjs test/native-paste-cleanup.test.mjs test/native-performance-fixture.test.mjs test/native-build-manifest.test.mjs test/build-manifest-generator.test.mjs test/native-performance-observation.test.mjs test/native-performance-cpu-profile.test.mjs test/devtools-resume-control.test.mjs test/native-devtools-bridge-handoff.test.mjs test/native-panel-acceptance.test.mjs",
     "test:runtime": "node scripts/runtime-tests.mjs",
     "test:live": "node test/extensions-native.mjs && node test/live.mjs && node test/browser-live.mjs && node test/browser-coordinate-live.mjs && node test/ui-issues.mjs && node test/session-management.mjs && node test/parallel-sessions.mjs && node test/network-native.mjs && node test/native-websearch.mjs && node test/connection-issues.mjs && node test/runtime-restart.mjs && node test/completion.mjs && npm run test:thinking",
     "test:websearch": "node test/native-websearch.mjs",
     "test:sessions": "node test/session-management.mjs && node test/parallel-sessions.mjs",
     "test:clipboard": "node test/system-clipboard.mjs",
-    "test:desktop": "node --test test/browser-state.test.mjs test/desktop-readiness.test.mjs test/session-failure.test.mjs && node test/select-all-field.mjs && node test/editing-keys.mjs && node test/desktop.mjs && node test/frame-readiness.mjs && node test/browser-page.mjs && node test/browser-lifecycle.mjs && node test/browser-address.mjs && node test/terminal-panel.mjs && npm run test:mode-tools",
+    "test:desktop": "node --test test/browser-state.test.mjs test/desktop-readiness.test.mjs test/session-failure.test.mjs && node test/select-all-field.mjs && node test/editing-keys.mjs && node test/desktop.mjs && node test/frame-readiness.mjs && node test/browser-page.mjs && node test/browser-lifecycle.mjs && node test/browser-address.mjs && node test/terminal-panel.mjs && node test/popout.mjs && npm run test:mode-tools",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test:interface": "node test/interface.mjs",
@@ -28,7 +28,7 @@
     "test:msi": "node test/msi-package.mjs",
     "test:extensions": "node test/extensions-native.mjs",
     "tools:prepare": "node scripts/developer-toolchain.mjs",
-    "test:developer": "node test/developer-toolchain-smoke.mjs && node test/developer-debug-smoke.mjs",
+    "test:developer": "node test/developer-toolchain-smoke.mjs",
     "postinstall": "node scripts/developer-toolchain.mjs --native-permissions",
     "test:journey": "node test/native-developer-journey.mjs",
     "test:performance": "node --import tsx test/native-performance.mjs",
@@ -50,8 +50,7 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "node-pty": "1.1.0",
-    "typescript-language-server": "6.0.2"
+    "node-pty": "1.1.0"
   },
   "allowScripts": {
     "node-pty": true,

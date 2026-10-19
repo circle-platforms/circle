@@ -23,7 +23,7 @@ test('external-file list and revoke preserve exact owner and prior conversation 
         id: command.id,
         ok: false,
         error:
-          command.name === 'shell'
+          command.name === 'compact'
             ? 'prior conversation failure'
             : 'synthetic file access failure',
       };
@@ -31,7 +31,7 @@ test('external-file list and revoke preserve exact owner and prior conversation 
   } as unknown as DesktopBridge;
   const runtime = new LiveRuntime(host, update);
   await assert.rejects(
-    runtime.request('execute', { command: 'synthetic failure' }, owner),
+    runtime.request('compact', {}, owner),
     /prior conversation failure/,
   );
   const prior = runtime

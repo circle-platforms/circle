@@ -888,6 +888,7 @@ export function Sidebar({
                           ...listed.map((item) => item.id),
                         ])
                       }
+                      onDialog={onDialog}
                     />
                   </div>
                 </div>

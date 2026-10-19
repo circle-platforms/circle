@@ -12,6 +12,8 @@ export interface PluginPage {
 }
 export interface PluginPanelProps extends PluginViewProps {
   selection: string;
+  /** The drawer is open on this mode. */
+  visible?: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
   onDialog: (kind: DialogId, selection?: string) => void;

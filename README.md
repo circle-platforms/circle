@@ -42,7 +42,7 @@ Restart your terminal after installing, then run `circle`. Upgrade with `circle 
 
 ## Desktop application
 
-Each release also has Circle as a desktop application: the same agent in its own window, with a browser panel you and Circle use together. [The desktop application](https://circle-platforms.github.io/circle/desktop/) says what the window shows. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`.
+Each release also has Circle as a desktop application: the same agent in its own window, with a browser you and Circle use together. [The desktop application](https://circle-platforms.github.io/circle/desktop/) says what the window shows. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`.
 
 | System | File |
 |---|---|

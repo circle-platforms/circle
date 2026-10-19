@@ -8,6 +8,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 export interface SkillInfo {
   name: string;
   description: string;
@@ -47,12 +48,25 @@ export function parseFrontmatter(text: string): {
   }
   return { meta, body: text.slice(match[0].length) };
 }
+// The skills that ship with Circle: src/builtin_skills in a checkout, dist/builtin_skills in
+// a build and a release, beside the bundled runtime in the desktop application (inside its
+// app.asar, which Electron's fs reads as a folder).
+export function builtinSkillsRoot(): string {
+  return fileURLToPath(new URL('./builtin_skills/', import.meta.url));
+}
+/** The source label of a skill that ships with Circle. `~/.circle/skills` is 'Circle'. */
+export const BUILTIN_SKILL_SOURCE = 'Built-in';
+// Lowest priority first: a skill replaces one of the same name from an earlier folder, so
+// one of yours or the project's replaces one that ships with Circle. `builtin` is where those
+// are (false for none).
 export function skillSources(
   workspace: string,
   home: string,
   userHome = homedir(),
+  builtin: string | false = builtinSkillsRoot(),
 ): [string, string][] {
   const sources: [string, string][] = [
+    ...(builtin ? [[builtin, BUILTIN_SKILL_SOURCE] as [string, string]] : []),
     [join(userHome, '.agents/skills'), 'Agents'],
     [join(userHome, '.claude/skills'), 'Claude'],
     [join(userHome, '.config/opencode/skills'), 'OpenCode'],
@@ -102,9 +116,15 @@ export function discoverSkills(
   workspace: string,
   home: string,
   userHome = homedir(),
+  builtin: string | false = builtinSkillsRoot(),
 ): SkillInfo[] {
   const byName = new Map<string, SkillInfo>();
-  for (const [root, label] of skillSources(workspace, home, userHome)) {
+  for (const [root, label] of skillSources(
+    workspace,
+    home,
+    userHome,
+    builtin,
+  )) {
     const directories: string[] = [];
     for (const child of folders(root)) {
       const directory = join(root, child);

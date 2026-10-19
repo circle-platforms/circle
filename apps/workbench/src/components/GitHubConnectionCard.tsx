@@ -1,4 +1,4 @@
-import './GitPanel.css';
+import './GitHubConnectionCard.css';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Check, X } from 'lucide-react';

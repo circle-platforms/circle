@@ -26,6 +26,12 @@ stream.onmessage = (event) => {
 (window as any).circleDesktop = {
   // Device consoles: none in this fixture.
   onTerminalEvent: () => () => {},
+  terminalState: async (sessionId: string) => ({
+    sessionId: 'terminal:' + sessionId,
+    conversation: sessionId,
+    sessions: [],
+    profiles: [],
+  }),
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   setTheme: async () => {},

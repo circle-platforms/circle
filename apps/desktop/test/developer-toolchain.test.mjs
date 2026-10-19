@@ -7,6 +7,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   stat,
   writeFile,
@@ -170,24 +171,16 @@ test('unsupported architecture fails explicitly instead of copying host tools', 
   );
 });
 
-test('staged native runtime includes target addons, executable helper and TypeScript libraries', async (t) => {
+test('staged native runtime includes target addons and the executable helper, and no language server', async (t) => {
   const dist = await mkdtemp(join(tmpdir(), 'circle-native-runtime-'));
   t.after(() => rm(dist, { recursive: true, force: true }));
   const root = fileURLToPath(new URL('..', import.meta.url));
   await prepareNativeDependencies(root, dist);
-  const require = createRequire(join(dist, 'probe.cjs'));
-  const ts = require('typescript');
-  assert.match(
-    await readFile(ts.getDefaultLibFilePath({}), 'utf8'),
-    /reference lib="es5"/,
-  );
-  assert.ok(
-    (
-      await stat(
-        join(dist, 'node_modules/typescript-language-server/lib/cli.mjs'),
-      )
-    ).size > 1000,
-  );
+  assert.deepEqual((await readdir(join(dist, 'node_modules'))).sort(), [
+    '@koromix',
+    'koffi',
+    'node-pty',
+  ]);
   // The native addon must be loaded in a child: Windows holds its DLL open
   // until the loading process exits, even after every PTY has been released.
   const cleanupPath = fileURLToPath(
@@ -321,6 +314,24 @@ test('desktop build cleanup preserves the tool cache and removes every old gener
     await readFile(join(tools, 'node'), 'utf8'),
     'cached executable bytes',
   );
+});
+
+test('a JavaScript debug adapter left in the tool cache by an earlier build is removed, not shipped', async (t) => {
+  const dist = await mkdtemp(join(tmpdir(), 'circle-retired-tool-cache-'));
+  t.after(() => rm(dist, { recursive: true, force: true }));
+  await mkdir(join(dist, 'tools/js-debug/src'), { recursive: true });
+  await writeFile(join(dist, 'tools/js-debug/src/dapDebugServer.js'), '');
+  await assert.rejects(
+    prepareDeveloperTools(dist, {
+      platform: 'darwin',
+      arch: 'arm64',
+      fetchArchive: async () => {
+        throw Error('fixture download reached');
+      },
+    }),
+    /fixture download reached/,
+  );
+  await assert.rejects(stat(join(dist, 'tools/js-debug')), { code: 'ENOENT' });
 });
 
 test('an incomplete matching tool receipt cannot suppress preparation of a missing executable', async (t) => {

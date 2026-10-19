@@ -7,7 +7,6 @@ import { agentTools } from './agent-tools.ts';
 import { taskPanel } from './task-panel.ts';
 import { developer } from './developer.ts';
 import { terminal } from './terminal.ts';
-import { debug } from './debug.ts';
 import { editor } from './editor.ts';
 import { app } from './app.ts';
 import { common } from './common.ts';
@@ -18,6 +17,7 @@ import { model } from './model.ts';
 import { pages } from './pages.ts';
 import { panels } from './panels.ts';
 import { plugins } from './plugins.ts';
+import { workspace } from './workspace.ts';
 
 /** Every interface text in Simplified Chinese, keyed by its English. */
 export const ZH_CN: Record<string, string> = {
@@ -30,7 +30,6 @@ export const ZH_CN: Record<string, string> = {
   ...nativeGit,
   ...developer,
   ...terminal,
-  ...debug,
   ...common,
   ...editor,
   ...app,
@@ -41,4 +40,5 @@ export const ZH_CN: Record<string, string> = {
   ...pages,
   ...panels,
   ...plugins,
+  ...workspace,
 };

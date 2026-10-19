@@ -45,8 +45,7 @@
   text-align: left;
   gap: var(--workbench-space-2);
 }
-.page :is(.empty-state, .data-block),
-.task-panel .task-operations.panel-section {
+.page :is(.empty-state, .data-block) {
   border-radius: var(--workbench-radius);
 }
 .page :is(.empty-state, .data-block) {
@@ -58,9 +57,4 @@
 }
 .facts dd {
   overflow-wrap: anywhere;
-}
-@media (prefers-reduced-motion: reduce) {
-  .task-row-chevron {
-    transition: none;
-  }
 }

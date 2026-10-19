@@ -46,8 +46,6 @@ export const conversation: Record<string, string> = {
   'no matching projects': '没有匹配的项目',
   'no project': '无项目',
   'choose a project': '选择项目',
-  'Start with a message, a file, or a question about your project.':
-    '从一条消息、一个文件或一个关于项目的问题开始。',
   you: '你',
   thinking: '思考',
   'thinking {time}': '思考 {time}',
@@ -82,7 +80,7 @@ export const conversation: Record<string, string> = {
   // the composer
   'input completions': '输入补全',
   message: '消息',
-  'Ask anything, or describe a change…': '问任何问题，或描述一个改动…',
+  'ask anything, or describe a change…': '问任何问题，或描述一个改动…',
   'attach files': '附加文件',
   'pause conversation': '暂停对话',
   'resume conversation': '继续对话',

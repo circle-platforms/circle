@@ -141,17 +141,21 @@ export function currentTurnTools(
  * Who the ring around the page says has the browser.
  * Circle's turn keeps it lit from the first browser tool until the turn ends, the
  * person takes the browser, or the session stops. Waiting for an approval is quieter.
+ * A session can be busy before its turn begins: the desktop says so before the new
+ * prompt is saved, when the newest tools are still the last turn's.
  */
 export function browserRing(input: {
   control?: 'shared' | 'agent' | 'user_pending' | 'user';
   operating?: boolean;
   sessionState?: 'idle' | 'waiting' | 'paused';
+  turnStarted?: boolean;
   tools?: readonly { name: string; status: string }[];
 }): BrowserRing {
   if (input.control === 'user') return 'user';
   if (input.control === 'user_pending') return 'pending';
   if (input.operating || input.control === 'agent') return 'driving';
-  if (input.sessionState !== 'waiting') return 'idle';
+  if (input.sessionState !== 'waiting' || input.turnStarted === false)
+    return 'idle';
   const browser = (input.tools ?? []).filter((tool) =>
     tool.name.startsWith('browser_'),
   );

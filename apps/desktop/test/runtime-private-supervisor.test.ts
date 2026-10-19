@@ -602,6 +602,19 @@ test('an unexpected exit keeps the saved connection, says why, logs stderr and r
   );
 });
 
+test('a runtime that stops while it is asked to close lets Circle quit', () =>
+  fixture(async (supervisor, child) => {
+    // A signal to every process of the application stops the runtime just as the main
+    // process asks it to close: the close is never answered
+    child.postMessage = (value) => {
+      child.sent.push(structuredClone(value));
+      if (value.name === 'close')
+        queueMicrotask(() => child.emit('exit', null));
+    };
+    await supervisor.close();
+    assert.equal(child.sent.at(-1)?.name, 'close');
+  }));
+
 test('quitting while a restart waits for stale leases cancels it', async (t) => {
   const logFile = await scratchLog(t);
   const started = Date.now();
@@ -614,4 +627,92 @@ test('quitting while a restart waits for stale leases cancels it', async (t) => 
     configured,
   );
   assert(Date.now() - started < 30_000, 'close did not wait for the restart');
+});
+
+test('what the runtime says of the terminal tabs reaches the window only when it is well formed, and a tab action is the runtime’s to answer', async (t) => {
+  const logFile = await scratchLog(t);
+  await fixture(
+    async (supervisor, child) => {
+      const updates: unknown[] = [];
+      const record = (update: unknown) => void updates.push(update);
+      supervisor.onTerminalTabs(record);
+      const row = {
+        id: 'local:abc',
+        terminal: 'abc',
+        ordinal: 1,
+        state: 'operating',
+        allowed: true,
+      };
+      child.emit('message', {
+        type: 'terminal-tabs',
+        conversation: 'c1',
+        rows: [row],
+      });
+      // a row whose id is not its terminal's, or a conversation that is not an id
+      child.emit('message', {
+        type: 'terminal-tabs',
+        conversation: 'c1',
+        rows: [{ ...row, id: 'local:other' }],
+      });
+      child.emit('message', {
+        type: 'terminal-tabs',
+        conversation: '../c1',
+        rows: [row],
+      });
+      assert.deepEqual(updates, [{ conversation: 'c1', rows: [row] }]);
+      // a window opened later (macOS reopening the application) is told at once
+      const later: unknown[] = [];
+      supervisor.onTerminalTabs((update) => later.push(update));
+      assert.deepEqual(later, [{ conversation: 'c1', rows: [row] }]);
+      // the first window takes over again
+      supervisor.onTerminalTabs(record);
+      const taken = supervisor.terminalTabControl('c1', 'local:abc', 'take');
+      const controls = () =>
+        child.sent.filter((message) => message.type === 'terminal-tab-control');
+      assert.deepEqual(
+        { ...controls()[0], id: undefined },
+        {
+          type: 'terminal-tab-control',
+          id: undefined,
+          conversation: 'c1',
+          session: 'local:abc',
+          action: 'take',
+        },
+      );
+      const held = { ...row, state: 'held', held: 'attach' };
+      child.emit('message', {
+        type: 'terminal-tab-reply',
+        id: controls()[0]!.id,
+        ok: true,
+        rows: [held],
+      });
+      assert.deepEqual(await taken, [held]);
+      const refused = supervisor.terminalTabControl('c1', 'local:abc', 'stop');
+      child.emit('message', {
+        type: 'terminal-tab-reply',
+        id: controls()[1]!.id,
+        ok: false,
+        error: 'no terminal local:abc in this conversation',
+      });
+      await assert.rejects(
+        refused,
+        /no terminal local:abc in this conversation/,
+      );
+      // the runtime ends: the action under way fails and the window forgets the tabs
+      const pending = supervisor.terminalTabControl(
+        'c1',
+        'local:abc',
+        'return',
+      );
+      child.emit('exit', 1);
+      await assert.rejects(pending, /the runtime stopped/);
+      assert.equal(updates.at(-1), 'gone');
+      // and a window opened after that has nothing old to show
+      const afterwards: unknown[] = [];
+      supervisor.onTerminalTabs((update) => afterwards.push(update));
+      assert.deepEqual(afterwards, []);
+    },
+    { logFile, restartDelayMs: 60_000 },
+    configured,
+  );
 });

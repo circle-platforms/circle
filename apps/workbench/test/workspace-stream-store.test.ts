@@ -108,24 +108,6 @@ test('cursor-only, missing endpoint, oversized and malformed checkpoints fail at
   assert.deepEqual(store.checkpoint(), valid);
 });
 
-test('delivery cycle journal checkpoints survive renderer reload', () => {
-  const store = new WorkspaceStreamStore();
-  const cycle = {
-    ...event(1),
-    service: 'cycles',
-    resourceId: 'cycle-one',
-    data: { phase: 'awaiting-review' },
-  } as unknown as WorkspaceStreamEvent;
-  assert.equal(store.apply(cycle), 'applied');
-  const restored = new WorkspaceStreamStore();
-  assert.equal(restored.restore(store.checkpoint()), true);
-  assert.equal(restored.cursor.seq, 1);
-  assert.equal(
-    restored.snapshot(WorkspaceStreamStore.resourceKey(cycle))[0].data.phase,
-    'awaiting-review',
-  );
-});
-
 test('rolling UTF8 accounting is exact across trimming, eviction, reset and checkpoint restoration', () => {
   const store = new WorkspaceStreamStore({
     maxEventsPerResource: 3,
@@ -232,4 +214,20 @@ test('owned snapshots cannot be changed by caller mutation, and retained events 
     store.cachedBytes,
     new TextEncoder().encode(JSON.stringify(store.snapshot(key))).byteLength,
   );
+});
+test('a checkpoint holding events of services an earlier version had restores, so a reload need not replay everything again', () => {
+  const store = new WorkspaceStreamStore();
+  // the journal of a folder used by 1.9.0 still holds automatic delivery's events
+  assert.equal(
+    store.apply({ ...event(1), service: 'cycles' as never, resourceId: 'c1' }),
+    'applied',
+  );
+  assert.equal(store.apply(event(2)), 'applied');
+  const reloaded = new WorkspaceStreamStore();
+  assert.equal(reloaded.restore(store.checkpoint()), true);
+  assert.deepEqual(reloaded.cursor, store.cursor);
+  // a service no version had is still refused
+  const strange = store.checkpoint();
+  strange.resources[0]!.events[0]!.service = 'unknown' as never;
+  assert.equal(new WorkspaceStreamStore().restore(strange), false);
 });

@@ -1,8 +1,6 @@
 import { SafeFileUndo } from './SafeFileUndo';
 import { preserveNativeEditing } from '../model/native-editable-shortcut';
 import { effectiveBindings, matchingAction } from '../model/shortcuts';
-import { planVisible } from '../../../../src/plan_state';
-import { agentActivityText, isAgentActive } from '../model/activity';
 import {
   completionNoticeText,
   withoutDuplicateStops,
@@ -12,8 +10,6 @@ import { PluginBoundary } from '../plugins/Boundary';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
-  ChevronDown,
-  ChevronRight,
   GitBranch,
   Paperclip,
   Plus,
@@ -26,7 +22,6 @@ import {
   FileText,
   X,
   ArrowRight,
-  Check,
 } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { BUILTIN_SLASH } from '../../../../src/tui/slash_commands';
@@ -51,19 +46,14 @@ import {
 } from './BrowserDialog';
 import { useBrowserState } from './useBrowserState';
 import { InlineRequest } from './InlineRequest';
-import {
-  ContextRing,
-  EffortMenu,
-  ModeMenu,
-  ModelMenu,
-  MODE_TEXT,
-} from './Composer';
+import { useSources } from '../components/SourceNavigation';
+import { TaskReviewCard } from './TaskReviewCard';
+import { EffortMenu, ModeMenu, ModelMenu, MODE_TEXT } from './Composer';
 import { nextMode, sessionMode } from '../model/state';
 import type { SessionMode } from '../model/types';
 import { t, tn } from '../i18n';
 import {
   saveSessionScroll,
-  useSessionPresentation,
   transcriptScroll,
   restoreTranscriptAnchor,
   sessionScrollAnchor,
@@ -113,10 +103,10 @@ function revealIn(scroller: HTMLElement, target: Element): void {
 const mediaFiles = (files: FileList): File[] =>
   Array.from(files).filter((file) => MEDIA_TYPES.has(file.type));
 // A transcript item: a message, or the tool calls between two messages, folded together.
-type TranscriptItem =
+export type TranscriptItem =
   | { kind: 'message'; message: Message }
   | { kind: 'tools'; id: string; rows: Message[] };
-function groupMessages(messages: Message[]): TranscriptItem[] {
+export function groupMessages(messages: Message[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   // An answer with no words of its own, only thinking before its calls, folds in with
   // them: a turn reads as your message, a few folded lines, and the answer.
@@ -185,6 +175,7 @@ export function Conversation({
   setFinding,
 }: Props) {
   const { snapshot, runtime, perform, act, notify } = useRuntime();
+  const sources = useSources();
   const session = currentSession(snapshot);
   const { registry, enabled } = usePlugins();
   const contributions = registry.widgets(enabled, 'composerActions');
@@ -217,35 +208,7 @@ export function Conversation({
   const [completionIndex, setCompletionIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const { view, update: updateView } = useSessionPresentation();
   const presentationEpoch = runtime.presentationEpoch;
-  const planCollapsed = view.planCollapsed ?? false;
-  const setPlanCollapsed = (
-    value: boolean | ((previous: boolean) => boolean),
-  ) =>
-    updateView((target) => {
-      target.planCollapsed =
-        typeof value === 'function'
-          ? value(target.planCollapsed ?? false)
-          : value;
-    });
-  const planItems = useRef<HTMLDivElement>(null);
-  // Native snapshots recreate arrays; unrelated events must not undo manual scrolling.
-  const planVersion = JSON.stringify(session.todos);
-  // The plan shows a few rows: the step under way, or else the next one, stays in sight
-  useEffect(() => {
-    const list = planItems.current;
-    const step =
-      list?.querySelector<HTMLElement>(':scope > .running') ??
-      list?.querySelector<HTMLElement>(':scope > .pending');
-    if (!list || !step) return;
-    // From the boxes, which keep fractions of a pixel: the rows shown stay whole
-    const view = list.getBoundingClientRect();
-    const box = step.getBoundingClientRect();
-    if (box.top < view.top) list.scrollTop += box.top - view.top;
-    else if (box.bottom > view.bottom)
-      list.scrollTop += box.bottom - view.bottom;
-  }, [planVersion, planCollapsed]);
   // Pictures and PDFs pasted or dropped on the box go with the message, as attached ones do
   const addMedia = async (files: File[]) => {
     for (const file of files) {
@@ -350,8 +313,9 @@ export function Conversation({
     field.focus({ preventScroll: true });
     field.setSelectionRange(field.value.length, field.value.length);
   }, [session.draft, session.id]);
-  const latestView = useRef({ session, onDialog, onPanel });
-  latestView.current = { session, onDialog, onPanel };
+  // The window's key handler is set up once per session: it reads what is current here.
+  const latestView = useRef({ session, onDialog, onPanel, onCommand });
+  latestView.current = { session, onDialog, onPanel, onCommand };
   const matches = useMemo(
     () =>
       !find
@@ -588,14 +552,14 @@ export function Conversation({
         };
         if (commands[mapped]) act(() => runtime.command(commands[mapped]!));
         else if (mapped === 'find') setFinding((value) => !value);
-        else if (mapped === 'plan.focus') {
-          setPlanCollapsed(false);
-          requestAnimationFrame(() => planItems.current?.focus());
-        }
+        // The plan is a step of the overview's "in progress" card.
+        else if (mapped === 'plan.focus')
+          latestView.current.onPanel('overview');
         // history.search is ctrl+r. It opens the same search as ctrl+k.
-        else if (mapped === 'history.search') onCommand();
-        else if (mapped === 'exit') onDialog('exit');
-        else if (mapped === 'secret.enter') onDialog('secret');
+        else if (mapped === 'history.search') latestView.current.onCommand();
+        else if (mapped === 'exit') latestView.current.onDialog('exit');
+        else if (mapped === 'secret.enter')
+          latestView.current.onDialog('secret');
         else if (mapped === 'suspend' || mapped === 'job.background') {
           runtime.request(mapped === 'suspend' ? 'suspend' : 'background');
           notify(
@@ -671,14 +635,6 @@ export function Conversation({
     snapshot.settings.keybindings,
     session.id,
   ]);
-  const jobs = snapshot.jobs.filter(
-    (job) =>
-      job.sessionId === session.id &&
-      ['running', 'waiting'].includes(job.state),
-  );
-  const agents = snapshot.agents.filter(
-    (agent) => agent.sessionId === session.id && isAgentActive(agent),
-  );
   const pending = snapshot.interactions.filter(
     (item) => item.sessionId === session.id && item.status === 'pending',
   );
@@ -687,6 +643,14 @@ export function Conversation({
   // Approvals sit under the call they wait for; the rest after the last message.
   const toolIds = new Set(
     messages.flatMap((message) => (message.tool ? [message.tool.id] : [])),
+  );
+  // In a task's own conversation, the task: once it has finished it waits for your review.
+  // The review card is the task's, at the end of its own conversation, not its reviewer's.
+  const taskAgent = snapshot.agents.find(
+    (agent) =>
+      agent.task &&
+      agent.task.role !== 'reviewer' &&
+      agent.resourceSessionId === session.id,
   );
   const loose = pending.filter(
     (item) =>
@@ -779,11 +743,6 @@ export function Conversation({
             <div className="welcome">
               <span className="circle-logo large" />
               <h2>{t('what are we working on?')}</h2>
-              <p>
-                {t(
-                  'Start with a message, a file, or a question about your project.',
-                )}
-              </p>
               <button
                 onClick={() => onDialog('trust')}
                 className="workspace-trust"
@@ -795,7 +754,12 @@ export function Conversation({
               </button>
               <div className="welcome-context">
                 {workspace.instructions.map((item) => (
-                  <button key={item.name} onClick={() => onPanel('context')}>
+                  <button
+                    key={item.name}
+                    disabled={!item.path}
+                    title={item.path}
+                    onClick={() => item.path && onFile(item.path)}
+                  >
                     <FileText size={13} />
                     {item.name}
                   </button>
@@ -891,7 +855,6 @@ export function Conversation({
                         <MessageView
                           message={item.message}
                           showThinking={session.showThinking}
-                          onAttachment={() => onPanel('context')}
                         />
                         {item.message.role === 'user' &&
                           session.fileUndoTurns?.includes(item.message.id) && (
@@ -908,6 +871,12 @@ export function Conversation({
                   </div>
                 )
               }
+            />
+          )}
+          {taskAgent && (
+            <TaskReviewCard
+              agent={taskAgent}
+              onChanges={() => onPanel('changes')}
             />
           )}
           {loose.map((item) => (
@@ -969,7 +938,11 @@ export function Conversation({
       {(session.lifecycle === 'deleting' || session.occupied) && (
         <div className="archive-banner" role="status">
           {session.lifecycle === 'deleting'
-            ? t('stopping work before deletion…')
+            ? session.deletionFailed
+              ? t('could not delete the session: {reason}', {
+                  reason: session.deletionFailed,
+                })
+              : t('stopping work before deletion…')
             : t('open in another terminal; view only')}
         </div>
       )}
@@ -994,93 +967,6 @@ export function Conversation({
         <div className="composer-area">
           {snapshot.runtime?.connected && (
             <RecoveredInputs key={session.id} sessionId={session.id} />
-          )}
-          {planVisible(
-            session.todos,
-            pending.some(
-              (item) =>
-                item.kind === 'plan-exit' ||
-                (item.kind === 'question' &&
-                  item.choices?.includes('implement plan')),
-            ),
-          ) && (
-            <div className="plan">
-              <button
-                className="plan-title"
-                aria-label={t('toggle plan')}
-                aria-expanded={!planCollapsed}
-                onClick={() => setPlanCollapsed((value) => !value)}
-              >
-                <span>{t('plan')}</span>
-                <span>
-                  {
-                    session.todos.filter((todo) => todo.status === 'completed')
-                      .length
-                  }{' '}
-                  / {session.todos.length}
-                  {planCollapsed ? (
-                    <ChevronRight size={12} />
-                  ) : (
-                    <ChevronDown size={12} />
-                  )}
-                </span>
-              </button>
-              {!planCollapsed && (
-                <div
-                  className="plan-items"
-                  ref={planItems}
-                  tabIndex={0}
-                  role="region"
-                  aria-label={t('plan steps')}
-                  onClick={() => planItems.current?.focus()}
-                  onKeyDown={(event) => {
-                    if (event.nativeEvent.isComposing) return;
-                    if (
-                      !event.ctrlKey &&
-                      !event.altKey &&
-                      !event.metaKey &&
-                      (event.key === 'ArrowUp' || event.key === 'ArrowDown')
-                    ) {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      const list = event.currentTarget;
-                      const height =
-                        list.firstElementChild?.getBoundingClientRect()
-                          .height ?? 24;
-                      list.scrollTop +=
-                        (event.key === 'ArrowUp' ? -1 : 1) * height;
-                    } else if (event.key === 'Escape') {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      input.current?.focus({ preventScroll: true });
-                    } else if (
-                      event.key.length === 1 &&
-                      !event.ctrlKey &&
-                      !event.metaKey &&
-                      !event.altKey
-                    ) {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setDraft(session.draft + event.key);
-                      input.current?.focus({ preventScroll: true });
-                    }
-                  }}
-                >
-                  {session.todos.map((todo) => (
-                    <div key={todo.id} className={todo.status}>
-                      <span>
-                        {todo.status === 'completed' ? (
-                          <Check size={12} />
-                        ) : (
-                          <i />
-                        )}
-                      </span>
-                      {todo.text}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           )}
           {pending.length > 0 && (
             <button className="interaction-summary" onClick={showRequest}>
@@ -1295,7 +1181,7 @@ export function Conversation({
               style={{ fieldSizing: 'content' }}
               rows={1}
               aria-label={t('message')}
-              placeholder={t('Ask anything, or describe a change…')}
+              placeholder={t('ask anything, or describe a change…')}
               value={session.draft}
               onChange={(event) => setDraft(event.target.value)}
               onPaste={(event) => {
@@ -1459,7 +1345,7 @@ export function Conversation({
                   <FileChip
                     key={file.id}
                     name={file.name}
-                    onClick={() => onPanel('context', file.id)}
+                    onClick={() => sources?.openAttachment(file)}
                     onRemove={() =>
                       perform(() => {
                         const target = runtime
@@ -1517,8 +1403,8 @@ export function Conversation({
               </button>
             </div>
           </div>
-          {/* Under the box, as Claude has it: attach and mode on the left, model,
-            thinking depth and the context ring on the right. */}
+          {/* Under the box, as Claude has it: attach and mode on the left, model and
+            thinking depth on the right. Nothing else sits above or below the box. */}
           <div className="composer-footbar">
             <div>
               <IconButton label={t('attach files')} onClick={onAttach}>
@@ -1564,39 +1450,8 @@ export function Conversation({
                   )
                 }
               />
-              <ContextRing
-                session={session}
-                jobs={jobs}
-                onCompact={() => act(() => runtime.command('compact'))}
-                onJobs={() => onPanel('activity')}
-                onDetails={() =>
-                  onDialog(runtime.mode === 'live' ? 'session' : 'preview')
-                }
-              />
             </div>
           </div>
-          {(jobs.length > 0 || agents.length > 0) && (
-            <div className="running-strip">
-              {agents.slice(0, 2).map((agent) => (
-                <button key={agent.id} onClick={() => onAgent(agent.id)}>
-                  <span className="agent-dot" />
-                  <strong>{agent.name}</strong>
-                  <span>{agentActivityText(agent)}</span>
-                </button>
-              ))}
-              {jobs.slice(0, 2).map((job) => (
-                <button
-                  key={job.id}
-                  onClick={() => onPanel('activity', job.id)}
-                >
-                  {/* The job's internal id is not shown; its title says what runs. */}
-                  <Status value={job.state} />
-                  <span>{job.title}</span>
-                  <small>{job.elapsed}</small>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       )}
     </section>

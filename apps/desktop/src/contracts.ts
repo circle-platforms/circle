@@ -120,6 +120,13 @@ export interface DesktopBridge {
     mime?: string;
   }) => Promise<{ saved: boolean; name?: string }>;
   copyText: (text: string) => Promise<void>;
+  /** A picture to the system clipboard, from a data URL of a picture type. */
+  copyImage: (dataUrl: string) => Promise<void>;
+  /** A picture to a file the person chooses, from a data URL of a picture type. */
+  saveImage: (options: {
+    name: string;
+    dataUrl: string;
+  }) => Promise<{ saved: boolean; name?: string }>;
   windowControl: (
     action: 'minimize' | 'maximize' | 'close' | 'quit',
   ) => Promise<void>;
@@ -226,7 +233,11 @@ export interface DesktopBridge {
     sessionId: string,
     session: string,
   ) => Promise<TerminalState>;
-  /** The person takes a console's keys, or gives them back to Circle. */
+  /**
+   * The person takes a console's keys, or gives them back to Circle. For one of their
+   * own terminal tabs (`local:<id>`, a LocalTerminalRow's `id`) taking it means Circle's
+   * read or wait on it ends at once and its typing is refused until it is given back.
+   */
   terminalAttach: (
     sessionId: string,
     session: string,
@@ -235,6 +246,12 @@ export interface DesktopBridge {
     sessionId: string,
     session: string,
   ) => Promise<TerminalState>;
+  /**
+   * The person stops what Circle is doing on one of their terminal tabs (`local:<id>`)
+   * without taking it: the action under way, and any waiting behind it, ends with an
+   * error the model reads. Nothing is typed into the tab by stopping.
+   */
+  terminalStop?: (sessionId: string, session: string) => Promise<TerminalState>;
   /** What the person types while they hold the console. */
   terminalInput: (
     sessionId: string,
@@ -248,6 +265,50 @@ export interface DesktopBridge {
     rows: number,
   ) => Promise<void>;
   onTerminalEvent: (listener: (event: TerminalEvent) => void) => () => void;
+  /**
+   * Take a mode of the drawer out into a window of its own, or bring that window to the
+   * front when it is already open. The title is the window's. An `address` for the
+   * browser opens there, as it would in the drawer. Only the main window asks.
+   */
+  popoutOpen: (
+    kind: PopoutKind,
+    sessionId: string,
+    title: string,
+    address?: string,
+  ) => Promise<void>;
+  /** Close a mode's window: the mode is in the drawer again. */
+  popoutDock: (kind: PopoutKind, sessionId: string) => Promise<void>;
+  /** Close every such window, as when another conversation is shown. */
+  popoutDockAll: () => Promise<void>;
+  /** The modes that are in windows of their own now. */
+  popouts: () => Promise<PopoutState[]>;
+  onPopoutEvent: (listener: (event: PopoutEvent) => void) => () => void;
+  /**
+   * In the browser's window: the address the main window last asked it to open, once; null
+   * when there is none. `onPopoutAddress` says when there is one to take.
+   */
+  popoutAddress?: () => Promise<string | null>;
+  onPopoutAddress?: (listener: () => void) => () => void;
+  /**
+   * In a window of its own: an attachment for its conversation's message box, which is in
+   * the main window. Resolves once the main window has it, with whether it could also be
+   * saved with the draft.
+   */
+  popoutAttach?: (
+    sessionId: string,
+    attachment: PopoutAttachment,
+  ) => Promise<boolean>;
+  /**
+   * In the main window: an attachment a window of its own puts into a conversation's
+   * message box. What the listener returns (saved or not), or the error it throws, goes
+   * back to that window.
+   */
+  onPopoutAttach?: (
+    listener: (
+      sessionId: string,
+      attachment: PopoutAttachment,
+    ) => boolean | Promise<boolean>,
+  ) => () => void;
   /** Whether the window shows dark or light: the browser's own pages follow it. */
   setTheme: (dark: boolean) => Promise<void>;
   onAction: (listener: (action: DesktopAction) => void) => () => void;
@@ -438,6 +499,28 @@ export interface TerminalHostKeyAsk {
   fingerprint: string;
   privateHost: boolean;
 }
+/**
+ * What Circle is doing with one of the person's own terminal tabs: `waiting` while an
+ * approval for it is open, `operating` while one of its tool actions runs on it, `held`
+ * while the person has it (taken, or handed over by Circle), and `idle` otherwise.
+ */
+export type LocalTerminalState = 'idle' | 'waiting' | 'operating' | 'held';
+/** One running shell of the conversation's terminal tabs, as Circle sees it. */
+export interface LocalTerminalRow {
+  /** How the model's terminal tools name it, and the `session` the commands take. */
+  id: string;
+  /** The terminal service's id: the `id` of its TerminalSnapshot. */
+  terminal: string;
+  /** Its tab is named "terminal N" by this, as terminalTabNumbers numbers it. */
+  ordinal: number;
+  state: LocalTerminalState;
+  /** The person allowed Circle's first command here in this conversation. */
+  allowed: boolean;
+  /** Who has it while `held`: the person took it, or Circle handed it over. */
+  held?: 'attach' | 'handoff';
+  /** Why Circle handed it over, in Circle's words. */
+  reason?: string;
+}
 export interface TerminalState {
   /** `terminal:`+conversation, the way the browser routes its events. */
   sessionId: string;
@@ -446,6 +529,30 @@ export interface TerminalState {
   profiles: TerminalProfileRow[];
   pendingKey?: TerminalHostKeyAsk & { profile: string };
   handoff?: { session: string; reason: string };
+  /** The conversation's running terminal tabs (shells, no background commands). */
+  local?: LocalTerminalRow[];
+}
+/** The parts of the drawer that can live in a window of their own. */
+export type PopoutKind = 'browser' | 'terminal';
+export interface PopoutState {
+  kind: PopoutKind;
+  sessionId: string;
+}
+export interface PopoutEvent extends PopoutState {
+  open: boolean;
+}
+/**
+ * What a window of its own puts into its conversation's message box: a page screenshot
+ * (`image`, a PNG data URL) from the browser's window, a terminal selection (`file`, plain
+ * text) from the terminal's. `size` is its bytes.
+ */
+export interface PopoutAttachment {
+  id: string;
+  name: string;
+  kind: 'image' | 'file';
+  mime: string;
+  size: number;
+  content: string;
 }
 export type TerminalEvent =
   | { kind: 'state'; state: TerminalState }

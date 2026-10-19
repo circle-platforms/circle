@@ -23,13 +23,14 @@ import {
   Suspense,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
+import { Group, Panel, usePanelRef } from 'react-resizable-panels';
 import { DropdownMenu, Tooltip } from 'radix-ui';
 import {
   Folder,
@@ -43,7 +44,6 @@ import {
   Sun,
   Moon,
   X,
-  ChevronLeft,
   Users,
   FileText,
   Command,
@@ -51,7 +51,6 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { useRuntime } from './context';
-import { developerToolsEnabled } from '../plugins/developer';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
 import {
   historyMessages,
@@ -72,13 +71,9 @@ import {
   IconButton,
   Modal,
   SearchInput,
-  Status,
-  Facts,
   DataBlock,
   EmptyState,
 } from '../components/common';
-import { Markdown } from '../components/Markdown';
-import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
 import { Home } from '../features/Home';
 import { homePath, openHome, startPath } from '../features/home-selection';
@@ -95,12 +90,33 @@ import {
 } from '../model/workspace-client';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { SourceNavigation } from '../components/SourceNavigation';
-import { agentState } from '../model/activity';
 import {
   agentSourceOwner,
   type SourceResourceOwner,
 } from '../model/source-resource-owner';
-import { Inspector, PanelButtons } from '../features/Panels';
+import {
+  Inspector,
+  PanelButtons,
+  type DrawerSelection,
+} from '../features/Panels';
+import { DrawerHandle } from '../features/DrawerHandle';
+import { popoutKey, popoutTitle, usePopouts } from '../model/popouts';
+import { addDraftAttachment } from '../model/draft-attachments';
+import { Overview } from '../features/Overview';
+import { ModeChromeProvider } from '../features/mode-chrome';
+import {
+  clampDrawer,
+  clusterWidth,
+  drawerKey,
+  drawerRoom,
+  makeRoomForOverview,
+  MIN_CONVERSATION,
+  MIN_DRAWER,
+  openingWidth,
+  OVERVIEW_WIDTH,
+  overviewFits,
+  sidebarMustFold,
+} from './workspace-layout';
 const FileViewer = lazy(() =>
   import('../features/FileViewer').then((module) => ({
     default: module.FileViewer,
@@ -128,6 +144,21 @@ import {
   matchingAction,
   terminalOwnsKey,
 } from '../model/shortcuts';
+const OVERVIEW_STORAGE = 'circle.workbench.overview';
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The choice only lasts for this window then.
+  }
+}
 function useNarrow() {
   return useSyncExternalStore(
     (listener) => {
@@ -161,33 +192,109 @@ export function App() {
   const narrow = useNarrow();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // The sidebar folded by itself to give a document drawer its room, to unfold with it.
+  const sidebarFoldedForDrawer = useRef(false);
+  // The person showed or hid the sidebar while a document was open: that stands until the
+  // document closes, and the window does not fold it again under them.
+  const sidebarChosen = useRef(false);
+  // What folding the sidebar gives the workspace, as it is drawn now.
+  const sidebarElement = useRef<HTMLDivElement>(null);
   const toggleSidebar = () => {
+    sidebarFoldedForDrawer.current = false;
+    sidebarChosen.current = true;
     if (narrow) setSidebarOpen((open) => !open);
     else setSidebarCollapsed((closed) => !closed);
   };
-  // Closed at first, as Claude's side panel; the top bar's icons open it.
+  // The mode drawer is closed at first; the top bar's icons open it.
   const [inspectorOpen, setInspectorOpen] = useState(false);
   useEffect(() => {
     if (narrow) setInspectorOpen(false);
+    else setOverviewOverlay(false);
   }, [narrow]);
-  const [panel, setPanel] = useState<PanelId>('overview');
-  const drawerPanel = usePanelRef();
-  const drawerWidthMode = useRef<'overview' | 'resource' | null>(null);
-  const resourceDrawerWidth = useRef('52%');
+  const [panel, setPanel] = useState<PanelId>('files');
+  // The browser and the terminal can be in windows of their own, one for each conversation.
+  const popped = usePopouts();
+  // This conversation's, as a value: another conversation's window leaves it as it was.
+  const poppedKey = (['browser', 'terminal'] as const)
+    .filter((kind) => popped.has(popoutKey(kind, session.id)))
+    .join(' ');
+  const poppedModes = useMemo(
+    () => new Set(poppedKey.split(' ').filter(Boolean)),
+    [poppedKey],
+  );
+  // `address`: a page for the browser's window to open, as the drawer's would.
+  const popOut = (kind: 'browser' | 'terminal', address?: string) => {
+    const host = desktopHost();
+    if (!host?.popoutOpen) return;
+    const name = kind === 'browser' ? t('browser') : t('terminal');
+    const title = popoutTitle(name, session.title);
+    void (
+      address
+        ? host.popoutOpen(kind, session.id, title, address)
+        : host.popoutOpen(kind, session.id, title)
+    )
+      .then(() => {
+        // What was in the drawer is in its window now.
+        if (panel === kind) setInspectorOpen(false);
+      })
+      .catch(() => notify(t('the window could not be opened')));
+  };
+  // A window of its own puts a screenshot or a terminal selection into the message box of
+  // its conversation, which is kept here.
+  useEffect(
+    () =>
+      desktopHost()?.onPopoutAttach?.((sessionId, attachment) =>
+        addDraftAttachment(runtime, sessionId, attachment),
+      ),
+    [runtime],
+  );
+  // Another conversation is shown: its windows are not, they come back to their drawer.
+  const shownSession = useRef(session.id);
   useEffect(() => {
-    if (!inspectorOpen || narrow || !drawerPanel.current) return;
-    const mode = panel === 'overview' ? 'overview' : 'resource';
-    if (drawerWidthMode.current === mode) return;
-    if (drawerWidthMode.current === 'resource')
-      resourceDrawerWidth.current = `${drawerPanel.current.getSize().asPercentage}%`;
-    drawerPanel.current.resize(
-      mode === 'overview' ? 320 : resourceDrawerWidth.current,
-    );
-    drawerWidthMode.current = mode;
-  }, [panel, inspectorOpen, narrow]);
+    if (shownSession.current === session.id) return;
+    shownSession.current = session.id;
+    void desktopHost()
+      ?.popoutDockAll?.()
+      .catch(() => {});
+  }, [session.id]);
+  // The overview sits beside the conversation. The person's wish is kept; whether it
+  // fits beside a drawer is decided as the window and the drawer change.
+  const [overviewWanted, setOverviewWanted] = useState(
+    () => readStored(OVERVIEW_STORAGE) !== '0',
+  );
+  const [overviewAside, setOverviewAside] = useState(false);
+  // A narrow window has no room beside the conversation: the overview lies over it, as a
+  // drawer does, and only one of the two at a time.
+  const [overviewOverlay, setOverviewOverlay] = useState(false);
+  // The drawer opens, by whatever way, in the overview's place when that lies over the
+  // conversation. Elsewhere the overview is a column of its own and stays.
+  const showDrawer = () => {
+    setOverviewOverlay(false);
+    setInspectorOpen(true);
+  };
+  const columnsBox = useRef<HTMLDivElement>(null);
+  const [groupWidth, setGroupWidth] = useState(0);
+  useLayoutEffect(() => {
+    const node = columnsBox.current;
+    if (!node) return;
+    const measure = () => setGroupWidth(node.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const clusterPanel = usePanelRef();
+  // Where each kind of drawer was last left by the person, in pixels.
+  const drawerWidths = useRef(new Map<string, number>());
+  const [drawerNow, setDrawerNow] = useState(openingWidth('changes'));
   // A panel the person wants to see whole, for as long as they want it there.
   const [fullView, setFullView] = useState(false);
-  const [selection, setSelection] = useState('');
+  // What the drawer was last asked to show, with the mode it was asked of: each mode reads
+  // only what was meant for it, so opening one does not move what another shows.
+  const [selection, setSelection] = useState<DrawerSelection>({
+    panel: 'files',
+    value: '',
+  });
   const [file, setFile] = useState<string | null>(null);
   const [fileOwner, setFileOwner] = useState<SourceResourceOwner>();
   const sourceOpener = useRef(
@@ -195,21 +302,9 @@ export function App() {
   );
   const [sourceLine, setSourceLine] = useState<number | undefined>();
   const [sourceColumn, setSourceColumn] = useState<number | undefined>();
-  const [debugSourceRequest, setDebugSourceRequest] = useState<{
-    id: string;
-    sessionId: string;
-    path: string;
-    line?: number;
-  }>();
   const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
   const [commandTerminal, setCommandTerminal] = useState<CommandTerminalView>();
-  const [terminalFocusRequest, setTerminalFocusRequest] = useState<{
-    id: string;
-    epoch: string;
-    requestId: string;
-    sessionId: string;
-  }>();
   const commandRequest = useRef(0);
   const commandReturnFocus = useRef<
     { origin: string; trigger: HTMLElement } | undefined
@@ -263,8 +358,8 @@ export function App() {
     commandReturnFocus.current = trigger ? { origin, trigger } : undefined;
     setCommandTerminal({ viewSessionId, requestId: request, resolved: reply });
     setPanel('terminal');
-    setSelection('');
-    setInspectorOpen(true);
+    setSelection({ panel: 'terminal', value: '' });
+    showDrawer();
   };
   const openCommandTerminal = (
     sourceSessionId: string,
@@ -277,13 +372,28 @@ export function App() {
     trigger?: HTMLElement,
   ) => openOriginalCommandTerminal({ sourceSessionId, userShellId }, trigger);
 
+  // A subagent opens beside the conversation, in the drawer's subagent mode. A task is a
+  // conversation of its own: its link opens that conversation, as its row in the sidebar does.
   const selectAgent = (id: string | null) => {
     commandRequest.current++;
-    sourceOpener.current.cancel();
-    setFile(null);
-    setFileOwner(undefined);
+    const current = runtime.getSnapshot();
+    const task = id
+      ? current.agents.find((item) => item.id === id && item.task)
+      : undefined;
+    const conversation = task && (task.resourceSessionId ?? task.id);
+    if (
+      conversation &&
+      current.sessions.some((item) => item.id === conversation)
+    ) {
+      perform(() => selectSessionAndNavigate(conversation));
+      return;
+    }
     setAgent(id);
-    if (narrow) setInspectorOpen(false);
+    if (id) {
+      setPanel('agents');
+      setSelection({ panel: 'agents', value: id });
+      showDrawer();
+    }
   };
   const [dialog, setDialog] = useState<DialogId | null>(null);
   const [dialogSelection, setDialogSelection] = useState('');
@@ -309,18 +419,172 @@ export function App() {
     ? (homeQuery.get('workspace') ?? '')
     : null;
   const inspectorVisible = inspectorOpen && !page;
-  // Only a panel worth the whole workspace offers it: the browser's page and the shell,
-  // plus any component that says so on its own panel.
+  // Only a mode worth the whole workspace offers it: a file or a subagent that is open,
+  // the changes, the browser's page and the terminal.
   const canBeWhole =
     !narrow &&
-    (panel === 'terminal' ||
-      panel === 'files' ||
+    ((panel === 'files' && !!file) ||
+      (panel === 'agents' && !!agent) ||
       panel === 'changes' ||
+      panel === 'terminal' ||
       registry
         .active(enabled)
         .flatMap((plugin) => plugin.panels ?? [])
         .some((item) => item.id === panel && item.fullView));
   const whole = inspectorVisible && canBeWhole && fullView;
+  // The overview and the drawer, side by side as far as the window allows. A list of
+  // files or of subagents is narrow until one is opened, and a document is wide.
+  const drawerOpened =
+    (panel === 'files' && !!file) || (panel === 'agents' && !!agent);
+  const modeKey = drawerKey(panel, drawerOpened);
+  const clusterActive = !page && !home && !whole;
+  const overviewShown =
+    clusterActive &&
+    (narrow ? overviewOverlay : overviewWanted && !overviewAside);
+  const drawerSplit = inspectorVisible && !whole;
+  // The overview steps aside when the conversation would be squeezed, and comes back
+  // when there is room again. What counts is the width the mode wants, not the one it
+  // was squeezed to: a file that opens wide takes the room, and the overview gives way.
+  const wantedDrawer = drawerSplit
+    ? (drawerWidths.current.get(modeKey) ?? openingWidth(modeKey))
+    : null;
+  useEffect(() => {
+    if (narrow || !overviewWanted || !clusterActive || groupWidth === 0) return;
+    const fits = overviewFits({
+      group: groupWidth,
+      drawer: wantedDrawer,
+      showing: !overviewAside,
+    });
+    if (fits === overviewAside) setOverviewAside(!fits);
+  }, [
+    narrow,
+    overviewWanted,
+    clusterActive,
+    groupWidth,
+    drawerSplit,
+    modeKey,
+    wantedDrawer,
+    drawerNow,
+    overviewAside,
+  ]);
+  // Size the right-hand column to what is open in it.
+  useEffect(() => {
+    const handle = clusterPanel.current;
+    if (!handle || narrow || whole || groupWidth === 0) return;
+    const drawer = drawerSplit
+      ? clampDrawer(
+          drawerWidths.current.get(modeKey) ?? openingWidth(modeKey),
+          groupWidth,
+          overviewShown,
+        )
+      : null;
+    if (drawer !== null) setDrawerNow(drawer);
+    // The panel takes its new limits as it renders; asked at once, it would still hold
+    // the old ones and keep the column at the least width the drawer can have.
+    const frame = requestAnimationFrame(() =>
+      handle.resize(clusterWidth({ overviewShown, drawer })),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [overviewShown, drawerSplit, modeKey, narrow, whole, groupWidth]);
+  // A file or a subagent that is open takes 760 pixels: when the window has no room for that
+  // beside the conversation, and the sidebar's room would give it, the sidebar folds, and
+  // unfolds when the document is closed.
+  useEffect(() => {
+    if (narrow || groupWidth === 0 || !clusterActive) return;
+    const documentOpen = drawerSplit && drawerOpened;
+    if (!documentOpen) sidebarChosen.current = false;
+    if (
+      documentOpen &&
+      !sidebarChosen.current &&
+      sidebarMustFold({
+        group: groupWidth,
+        drawer: wantedDrawer ?? 0,
+        sidebarShown: !sidebarCollapsed,
+        sidebar:
+          sidebarElement.current?.getBoundingClientRect().width || undefined,
+      })
+    ) {
+      sidebarFoldedForDrawer.current = true;
+      setSidebarCollapsed(true);
+    } else if (!documentOpen && sidebarFoldedForDrawer.current) {
+      sidebarFoldedForDrawer.current = false;
+      setSidebarCollapsed(false);
+    }
+  }, [
+    narrow,
+    groupWidth,
+    clusterActive,
+    drawerSplit,
+    drawerOpened,
+    wantedDrawer,
+    sidebarCollapsed,
+  ]);
+  // A narrow window lays the drawer over the conversation, beside the sidebar until the
+  // window is narrower still. A file or a subagent that is open there takes the sidebar's
+  // room too when the drawer is narrower than it wants, and gives it back when it closes.
+  const [narrowFolded, setNarrowFolded] = useState(false);
+  useEffect(() => {
+    if (!narrow || !drawerSplit || !drawerOpened) setNarrowFolded(false);
+    else if (groupWidth > 0 && groupWidth < (wantedDrawer ?? 0))
+      setNarrowFolded(true);
+  }, [narrow, drawerSplit, drawerOpened, groupWidth, wantedDrawer]);
+  // The changes card's button: Circle loads the create-pr skill and does it.
+  const startPullRequest = (action: 'create' | 'update') =>
+    perform(async () => {
+      if (!runtime.runSkill) throw Error(t('skills are not available here'));
+      await runtime.runSkill({
+        name: 'create-pr',
+        text:
+          action === 'update'
+            ? "Bring this branch's pull request up to date."
+            : 'Create a pull request for this branch.',
+        display: '/create-pr',
+      });
+    });
+  const toggleOverview = () => {
+    if (narrow) {
+      setOverviewOverlay((on) => !on);
+      setInspectorOpen(false);
+      return;
+    }
+    if (overviewShown) {
+      setOverviewWanted(false);
+      writeStored(OVERVIEW_STORAGE, '0');
+      return;
+    }
+    setOverviewWanted(true);
+    writeStored(OVERVIEW_STORAGE, '1');
+    setOverviewAside(false);
+    // It stepped aside for want of room: the drawer gives way, or closes.
+    if (drawerSplit && groupWidth > 0) {
+      const room = makeRoomForOverview({
+        group: groupWidth,
+        drawer: drawerNow,
+      });
+      if (room.drawer === null) setInspectorOpen(false);
+      else {
+        drawerWidths.current.set(modeKey, room.drawer);
+        setDrawerNow(room.drawer);
+      }
+    }
+  };
+  // The person drags the drawer's edge, or uses the keys on it.
+  const resizeDrawer = (width: number) => {
+    drawerWidths.current.set(modeKey, width);
+    setDrawerNow(width);
+    // Widening the drawer past what the conversation can spare takes the overview's
+    // room too: it steps aside as the width passes, so the column follows at once.
+    const keepOverview =
+      overviewWanted &&
+      overviewFits({
+        group: groupWidth,
+        drawer: width,
+        showing: overviewShown,
+      });
+    clusterPanel.current?.resize(
+      clusterWidth({ overviewShown: keepOverview, drawer: width }),
+    );
+  };
   // A panel that cannot fill the workspace, or a panel that is gone, ends the view.
   useEffect(() => {
     if (!canBeWhole || !inspectorVisible) setFullView(false);
@@ -443,9 +707,24 @@ export function App() {
     if (pendingSecret) onDialog('secret');
   }, [pendingSecret?.id]);
   const onPanel = (kind: PanelId, choice = '') => {
+    // The overview is a column of its own, not one of the drawer's modes.
+    if (kind === 'overview') {
+      if (!overviewShown) toggleOverview();
+      return;
+    }
+    if ((kind === 'browser' || kind === 'terminal') && poppedModes.has(kind)) {
+      // An address for the browser opens in its window, as it would in the drawer.
+      popOut(
+        kind,
+        kind === 'browser' && /^https?:\/\//i.test(choice) ? choice : undefined,
+      );
+      return;
+    }
     setPanel(kind);
-    setSelection(choice);
-    setInspectorOpen(true);
+    setSelection({ panel: kind, value: choice });
+    // The button alone keeps the subagent that is open, as the files button keeps its file.
+    if (kind === 'agents' && choice) setAgent(choice);
+    showDrawer();
   };
   // When Circle starts using this conversation's browser, its panel opens so the person
   // sees it work: once per start, and never by taking the person away from another page.
@@ -453,6 +732,11 @@ export function App() {
   // input box are: there it stays closed until the person opens it.
   const browserOperating = useRef(false);
   const onPage = location.pathname.startsWith('/page/');
+  // Whether a panel may open is read as each event comes. Only another conversation
+  // starts what was seen over: a page, a narrow window or a window popped out or put back
+  // change whether it opens, not whether a start or a console is new.
+  const autoOpen = useRef({ onPage, narrow, poppedModes });
+  autoOpen.current = { onPage, narrow, poppedModes };
   useEffect(() => {
     const host = desktopHost();
     if (!host) return;
@@ -461,13 +745,14 @@ export function App() {
       if (!isSessionBrowser(state, session.id)) return;
       const started = !!state.operating && !browserOperating.current;
       browserOperating.current = !!state.operating;
-      if (started && !onPage && !narrow) {
+      const { onPage, narrow, poppedModes } = autoOpen.current;
+      if (started && !onPage && !narrow && !poppedModes.has('browser')) {
         setPanel('browser');
         setInspectorOpen(true);
       }
     };
     return host.onBrowserEvent(show);
-  }, [session.id, onPage, narrow]);
+  }, [session.id]);
   // The same courtesy for a device console: when Circle opens one, its panel opens too,
   // once per appearance and never over another page or a narrow window.
   const terminalCount = useRef(0);
@@ -480,13 +765,14 @@ export function App() {
         return;
       const opened = event.state.sessions.length > terminalCount.current;
       terminalCount.current = event.state.sessions.length;
-      if (opened && !onPage && !narrow) {
-        setPanel('devices');
+      const { onPage, narrow, poppedModes } = autoOpen.current;
+      if (opened && !onPage && !narrow && !poppedModes.has('terminal')) {
+        setPanel('terminal');
         setInspectorOpen(true);
       }
     };
     return host.onTerminalEvent(show);
-  }, [session.id, onPage, narrow]);
+  }, [session.id]);
   const openSource = async (
     path: string,
     line?: number,
@@ -549,7 +835,7 @@ export function App() {
     setSourceLine(result.source.line);
     setSourceColumn(result.source.column);
     setPanel('files');
-    setInspectorOpen(true);
+    showDrawer();
     navigate(`/session/${sourceSessionId}`);
   };
 
@@ -918,8 +1204,7 @@ export function App() {
         ) === 'sidebar.toggle'
       ) {
         event.preventDefault();
-        if (narrow) setSidebarOpen((open) => !open);
-        else setSidebarCollapsed((closed) => !closed);
+        toggleSidebar();
       }
     };
     addEventListener('keydown', handle, true);
@@ -933,9 +1218,6 @@ export function App() {
     location.pathname,
     location.search,
   ]);
-  const activeAgent = snapshot.agents.find(
-    (item) => item.id === agent && item.sessionId === session.id,
-  );
   const pluginPage = pluginPages.find((item) => item.page.id === page);
   const installedPage = registry.plugins.find((plugin) =>
     plugin.pages?.some((item) => item.id === page),
@@ -950,27 +1232,6 @@ export function App() {
               line={sourceLine}
               column={sourceColumn}
               resourceOwner={fileOwner}
-              onDebugSource={
-                runtime.mode === 'live' &&
-                developerToolsEnabled(snapshot.extensions)
-                  ? (path, line) => {
-                      const owner = fileOwner?.sessionId ?? session.id;
-                      perform(async () => {
-                        if (owner !== runtime.getSnapshot().activeSessionId)
-                          await selectSessionAndNavigate(owner);
-                        if (runtime.getSnapshot().activeSessionId !== owner)
-                          return;
-                        setDebugSourceRequest({
-                          id: crypto.randomUUID(),
-                          sessionId: owner,
-                          path,
-                          line,
-                        });
-                        onPanel('activity', 'debug');
-                      });
-                    }
-                  : undefined
-              }
               onNavigate={(path, line, column) =>
                 openSource(path, line, column, fileOwner)
               }
@@ -1015,84 +1276,27 @@ export function App() {
   ) : (
     <div className="session-resource-stack">
       <div className="session-resource-view">
-        {activeAgent ? (
-          <SourceNavigation onFile={onAgentFile}>
-            <section className="agent-record">
-              <header>
-                <Button onClick={() => selectAgent(null)}>
-                  <ChevronLeft size={13} />
-                  {t('main')}
-                </Button>
-                <strong>{activeAgent.name}</strong>
-                <Status value={agentState(activeAgent)} />
-                {activeAgent.task &&
-                  snapshot.sessions.some(
-                    (item) => item.id === activeAgent.id,
-                  ) && (
-                    <IconButton
-                      label={t('open task conversation')}
-                      onClick={() =>
-                        perform(() => selectSessionAndNavigate(activeAgent.id))
-                      }
-                    >
-                      <ArrowUpRight size={14} />
-                    </IconButton>
-                  )}
-              </header>
-              <div className="agent-record-body">
-                <h2>{activeAgent.description}</h2>
-                <Facts
-                  values={{
-                    [t('model')]: activeAgent.model,
-                    [t('tokens')]: activeAgent.tokens,
-                    [t('record')]: activeAgent.id,
-                  }}
-                />
-                {activeAgent.messages.map((message) =>
-                  message.tool ? (
-                    <ToolMessage
-                      key={message.id}
-                      tool={message.tool}
-                      ownerSessionId={activeAgent.id}
-                      expanded
-                      onAgent={selectAgent}
-                      onFile={onAgentFile}
-                    />
-                  ) : (
-                    <div className="message" key={message.id}>
-                      <Markdown text={message.text} />
-                    </div>
-                  ),
-                )}
-              </div>
-            </section>
-          </SourceNavigation>
-        ) : (
-          <NativeResourceBoundary
-            name={t('conversation')}
-            resetKey={session.id}
-          >
-            <Conversation
-              focusComposer={
-                location.pathname === `/session/${session.id}`
-                  ? (location.state as { focusComposer?: number } | null)
-                      ?.focusComposer
-                  : undefined
-              }
-              onDialog={onDialog}
-              onPanel={onPanel}
-              onAgent={selectAgent}
-              onFile={onFile}
-              onAttach={() => pickFiles()}
-              onCommand={() => {
-                setSearch('');
-                setSearchOpen(true);
-              }}
-              finding={finding}
-              setFinding={setFinding}
-            />
-          </NativeResourceBoundary>
-        )}
+        <NativeResourceBoundary name={t('conversation')} resetKey={session.id}>
+          <Conversation
+            focusComposer={
+              location.pathname === `/session/${session.id}`
+                ? (location.state as { focusComposer?: number } | null)
+                    ?.focusComposer
+                : undefined
+            }
+            onDialog={onDialog}
+            onPanel={onPanel}
+            onAgent={selectAgent}
+            onFile={onFile}
+            onAttach={() => pickFiles()}
+            onCommand={() => {
+              setSearch('');
+              setSearchOpen(true);
+            }}
+            finding={finding}
+            setFinding={setFinding}
+          />
+        </NativeResourceBoundary>
       </div>
     </div>
   );
@@ -1110,6 +1314,20 @@ export function App() {
     [() => t('undo on screen'), () => act(() => runtime.command('undo'))],
     [() => t('redo on screen'), () => act(() => runtime.command('redo'))],
   ] as const;
+  // Closing the drawer, by its mode's button or esc: a command's terminal still on its way
+  // does not open it again, and what opened that terminal has the keyboard back.
+  const closeDrawer = () => {
+    commandRequest.current++;
+    setInspectorOpen(false);
+    const previous = commandReturnFocus.current;
+    if (
+      panel === 'terminal' &&
+      commandTerminal &&
+      previous?.origin === commandOrigin.current &&
+      previous.trigger.isConnected
+    )
+      previous.trigger.focus({ preventScroll: true });
+  };
   const inspector = (
     <NativeResourceBoundary name={t('inspector')} resetKey={panel}>
       <Inspector
@@ -1119,27 +1337,9 @@ export function App() {
         fileOwnerKey={fileOwner?.sessionId ?? session.id}
         panel={panel}
         visible={inspectorVisible}
+        popped={poppedModes}
+        onPopOut={popOut}
         commandTerminal={commandTerminal}
-        terminalFocusRequest={
-          terminalFocusRequest?.sessionId === session.id
-            ? terminalFocusRequest
-            : undefined
-        }
-        onOpenTerminal={(target) => {
-          commandRequest.current++;
-          setCommandTerminal(undefined);
-          setTerminalFocusRequest({
-            ...target,
-            requestId: crypto.randomUUID(),
-            sessionId: session.id,
-          });
-          onPanel('terminal');
-        }}
-        debugSourceRequest={
-          debugSourceRequest?.sessionId === session.id
-            ? debugSourceRequest
-            : undefined
-        }
         onExitCommandTerminal={() => {
           commandRequest.current++;
           commandReturnFocus.current = undefined;
@@ -1148,24 +1348,12 @@ export function App() {
         onSession={(id) => {
           perform(() => selectSessionAndNavigate(id));
         }}
-        whole={whole}
-        canBeWhole={canBeWhole}
-        onWhole={() => setFullView((on) => !on)}
         selection={selection}
         onPanel={onPanel}
-        onClose={() => {
-          commandRequest.current++;
-          setInspectorOpen(false);
-          const previous = commandReturnFocus.current;
-          if (
-            panel === 'terminal' &&
-            commandTerminal &&
-            previous?.origin === commandOrigin.current &&
-            previous.trigger.isConnected
-          )
-            previous.trigger.focus({ preventScroll: true });
-        }}
+        onClose={closeDrawer}
         onFile={onFile}
+        onAgentFile={onAgentFile}
+        agent={agent}
         onAgent={selectAgent}
         onDialog={onDialog}
         onInteraction={(item) => {
@@ -1264,10 +1452,10 @@ export function App() {
     <SourceNavigation onFile={onFile}>
       <Tooltip.Provider delayDuration={300}>
         <div
-          className={`workbench${sidebarCollapsed && !narrow ? ' sidebar-collapsed' : ''}`}
+          className={`workbench${(sidebarCollapsed && !narrow) || narrowFolded ? ' sidebar-collapsed' : ''}`}
         >
           {desktopHost() && <div className="desktop-drag-region" />}
-          <div className="desktop-sidebar">
+          <div className="desktop-sidebar" ref={sidebarElement}>
             <Sidebar
               onSearch={() => setSearchOpen(true)}
               onDialog={onDialog}
@@ -1283,21 +1471,15 @@ export function App() {
                 >
                   <PanelLeft size={16} />
                 </IconButton>
-                {page || file || agent || home ? (
+                {page || home ? (
                   <span className="page-title">
-                    {home
-                      ? t('new session')
-                      : page
-                        ? shellPageTitle(page)
-                        : file
-                          ? file
-                          : t('agent record')}
+                    {home ? t('new session') : shellPageTitle(page!)}
                   </span>
                 ) : (
                   <DropdownMenu.Root>
                     <h1 className="session-title">
                       <DropdownMenu.Trigger asChild>
-                        <button>
+                        <button title={sessionTitle(session.title)}>
                           <span>{sessionTitle(session.title)}</span>
                           <ChevronDown size={14} />
                         </button>
@@ -1345,8 +1527,11 @@ export function App() {
                   <PanelButtons
                     panel={panel}
                     open={inspectorOpen}
+                    overviewShown={overviewShown}
+                    onOverview={toggleOverview}
                     onPanel={(id) => onPanel(id)}
-                    onClose={() => setInspectorOpen(false)}
+                    onClose={closeDrawer}
+                    popped={poppedModes}
                   />
                 )}
                 <DropdownMenu.Root>
@@ -1419,65 +1604,131 @@ export function App() {
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {
                   if (whole) setFullView(false);
-                  else if (inspectorVisible) setInspectorOpen(false);
+                  else if (inspectorVisible) closeDrawer();
+                  else if (narrow && overviewOverlay) setOverviewOverlay(false);
                 }
               }}
             >
               {whole && (
                 <div className="inspector-full" ref={wholeBox} tabIndex={-1} />
               )}
-              <div className={whole ? 'columns whole-under' : 'columns'}>
+              <div
+                ref={columnsBox}
+                className={whole ? 'columns whole-under' : 'columns'}
+              >
                 <Group
                   orientation="horizontal"
                   id="workbench-columns"
-                  disabled={!inspectorVisible || narrow || whole}
+                  disabled
                   data-inspector-mode={
-                    inspectorVisible && !whole
+                    drawerSplit || overviewShown
                       ? narrow
                         ? 'overlay'
                         : 'split'
                       : 'closed'
                   }
                 >
-                  <Panel id="main" defaultSize="68%" minSize="38%">
+                  <Panel
+                    id="main"
+                    defaultSize="68%"
+                    minSize={narrow ? 0 : MIN_CONVERSATION}
+                  >
                     <div className="main-stack">{content}</div>
                   </Panel>
-                  <Separator
-                    className="resize-handle"
-                    style={{
-                      display:
-                        inspectorVisible && !narrow && !whole
-                          ? undefined
-                          : 'none',
-                    }}
-                    aria-label={t('resize inspector')}
-                  />
                   <Panel
                     id="inspector"
-                    panelRef={drawerPanel}
-                    minSize={narrow ? 0 : 290}
-                    maxSize={narrow ? '100%' : '65%'}
-                    defaultSize="46%"
+                    panelRef={clusterPanel}
+                    groupResizeBehavior="preserve-pixel-size"
+                    // What the drawer is, as laid out: the handle and its keys start from it.
+                    onResize={(size) => {
+                      if (narrow || whole || !drawerSplit) return;
+                      const width = Math.round(
+                        size.inPixels - (overviewShown ? OVERVIEW_WIDTH : 0),
+                      );
+                      if (width >= MIN_DRAWER) setDrawerNow(width);
+                    }}
+                    minSize={
+                      narrow
+                        ? 0
+                        : drawerSplit
+                          ? clusterWidth({
+                              overviewShown,
+                              drawer: MIN_DRAWER,
+                            })
+                          : overviewShown
+                            ? OVERVIEW_WIDTH
+                            : 0
+                    }
+                    maxSize={
+                      narrow
+                        ? '100%'
+                        : drawerSplit
+                          ? Math.max(
+                              clusterWidth({
+                                overviewShown,
+                                drawer: MIN_DRAWER,
+                              }),
+                              groupWidth - MIN_CONVERSATION,
+                            )
+                          : overviewShown
+                            ? OVERVIEW_WIDTH
+                            : 0
+                    }
+                    defaultSize={overviewShown ? OVERVIEW_WIDTH : 0}
                     className={
                       narrow
                         ? 'inspector-column inspector-overlay'
                         : 'inspector-column'
                     }
                     style={{
-                      display: inspectorVisible && !whole ? undefined : 'none',
+                      display:
+                        drawerSplit || overviewShown ? undefined : 'none',
                     }}
                   >
-                    <div
-                      ref={splitInspectorBox}
-                      className="inspector-resource-host"
-                      onKeyDown={(event) => {
-                        if (event.key === 'Escape') setInspectorOpen(false);
-                      }}
-                    />
+                    <div className="work-cluster">
+                      {overviewShown && (
+                        <div className="overview-column">
+                          <Overview
+                            onPanel={onPanel}
+                            onSession={(id) =>
+                              perform(() => selectSessionAndNavigate(id))
+                            }
+                            onStartPullRequest={startPullRequest}
+                          />
+                        </div>
+                      )}
+                      {drawerSplit && !narrow && (
+                        <DrawerHandle
+                          width={drawerNow}
+                          min={MIN_DRAWER}
+                          max={drawerRoom(groupWidth, false)}
+                          onResize={resizeDrawer}
+                        />
+                      )}
+                      <div
+                        ref={splitInspectorBox}
+                        className="inspector-resource-host"
+                        hidden={!drawerSplit}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') closeDrawer();
+                        }}
+                      />
+                    </div>
                   </Panel>
                 </Group>
               </div>
-              {createPortal(inspector, inspectorHost)}
+              {createPortal(
+                <ModeChromeProvider
+                  value={{
+                    canBeWhole,
+                    whole,
+                    onWhole: () => setFullView((on) => !on),
+                  }}
+                >
+                  {inspector}
+                </ModeChromeProvider>,
+                inspectorHost,
+              )}
             </div>
           </main>
           <Modal

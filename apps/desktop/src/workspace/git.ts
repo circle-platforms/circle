@@ -703,6 +703,66 @@ export class GitWorkspaceService {
       await rm(directory, { recursive: true, force: true });
     }
   }
+  /**
+   * Every file that differs from the last commit, staged or not, and every new file, with
+   * the lines each adds and removes. The renderer lists them; a file's own diff is asked
+   * for when it is chosen.
+   */
+  private async changes(): Promise<{
+    revision: string;
+    files: GitCommitDiff['entries'];
+  }> {
+    const state = await this.snapshot();
+    const head = (
+      await this.optionalGit(
+        ['rev-parse', '--verify', '--quiet', 'HEAD'],
+        1,
+        '',
+      )
+    ).trim();
+    const options = [
+      'diff',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--no-color',
+      '--no-renames',
+    ];
+    const files: GitCommitDiff['entries'] = head
+      ? changedFiles(
+          await this.git([...options, '--name-status', '-z', 'HEAD', '--']),
+          await this.git([...options, '--numstat', '-z', 'HEAD', '--']),
+        )
+      : [];
+    const root = await realpath(this.root);
+    const untracked = (
+      await this.git(['ls-files', '--others', '--exclude-standard', '-z'])
+    )
+      .split('\0')
+      .filter(Boolean);
+    // A new file's lines are read with the same limits as its preview; a long
+    // list of new files is counted for the first few hundred only.
+    for (const [index, file] of untracked.entries()) {
+      if (index >= 300) {
+        files.push({ path: file, status: 'A', added: null, removed: null });
+        continue;
+      }
+      const preview = await this.untrackedPreview(root, file);
+      files.push({
+        path: file,
+        status: 'A',
+        added:
+          preview.status === 'binary' || preview.status === 'too-large'
+            ? null
+            : preview.text
+                .split('\n')
+                .filter(
+                  (line) => line.startsWith('+') && !line.startsWith('+++'),
+                ).length,
+        removed: preview.status === 'binary' ? null : 0,
+      });
+    }
+    return { revision: state.revision, files };
+  }
   private async untrackedPreview(root: string, relative: string) {
     const quote = (value: string) =>
       '"' +
@@ -948,6 +1008,7 @@ export class GitWorkspaceService {
           .split('\n')
           .filter(Boolean),
       };
+    if (method === 'changes') return this.changes();
     if (method === 'diff') {
       if (
         params.revision !== undefined &&
@@ -955,7 +1016,7 @@ export class GitWorkspaceService {
       )
         throw Error('repository changed; refresh before inspecting changes');
       const scope = params.scope ?? 'working';
-      if (!['working', 'index', 'branch'].includes(String(scope)))
+      if (!['working', 'index', 'branch', 'head'].includes(String(scope)))
         throw Error('invalid diff scope');
       const args = [
         'diff',
@@ -965,6 +1026,8 @@ export class GitWorkspaceService {
         '--no-renames',
       ];
       if (scope === 'index') args.push('--cached');
+      // Everything that differs from the last commit, staged or not.
+      if (scope === 'head') args.push('HEAD');
       if (scope === 'branch') {
         if (typeof params.base !== 'string' || params.base.startsWith('-'))
           throw Error('base revision is required');
@@ -980,7 +1043,7 @@ export class GitWorkspaceService {
         await this.git([...options, '--numstat', '-z', ...paths]),
       );
       const previews = [];
-      if (scope === 'working' && params.paths) {
+      if ((scope === 'working' || scope === 'head') && params.paths) {
         const explicit = this.paths(params.paths);
         const root = await realpath(this.root);
         const untracked = (

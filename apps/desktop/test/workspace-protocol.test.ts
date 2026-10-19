@@ -15,8 +15,32 @@ test('workspace service dispatch admits explicit capabilities only', () => {
     {},
     { service: '__proto__', method: 'toString' },
     { service: 'terminal', method: 'exec' },
-    { service: 'debug', method: 'sendMessage' },
     { service: 'documents', method: 'read', params: [] },
+    // Automatic delivery, the debugger and the language service were removed;
+    // their old requests name no service.
+    { service: 'cycles', method: 'list' },
+    { service: 'cycles', method: 'create' },
+    { service: 'debug', method: 'launch' },
+    { service: 'debug', method: 'setBreakpoints' },
+    { service: 'language', method: 'request' },
+    // The window no longer stages, commits, pushes, merges or publishes.
+    ...[
+      'stage',
+      'unstage',
+      'applyHunk',
+      'discard',
+      'commit',
+      'push',
+      'applyPatch',
+      'conflictContinue',
+      'conflictAbort',
+      'continueMerge',
+      'abortMerge',
+    ].map((method) => ({ service: 'git', method })),
+    ...['publish', 'retry', 'ready'].map((method) => ({
+      service: 'delivery',
+      method,
+    })),
   ]) {
     assert.throws(() => validateWorkspaceRequest(value));
   }
@@ -26,17 +50,15 @@ test('native workflow capabilities and recovery use explicit service routes', ()
   for (const [service, operations] of Object.entries({
     inputs: ['list', 'resolve'],
     events: ['replay'],
-    debug: [
-      'launch',
-      'attach',
-      'snapshot',
-      'setBreakpoints',
-      'stackTrace',
-      'evaluate',
+    git: ['snapshot', 'changes', 'diff'],
+    tasks: [
+      'createIntegration',
+      'mergeCandidates',
+      'settings',
+      'review',
+      'reject',
     ],
-    git: ['snapshot', 'applyPatch', 'conflictContinue', 'conflictAbort'],
-    tasks: ['createIntegration', 'mergeCandidates', 'settings'],
-    delivery: ['login', 'ready'],
+    delivery: ['login'],
   })) {
     for (const method of operations)
       assert.equal(
@@ -44,14 +66,7 @@ test('native workflow capabilities and recovery use explicit service routes', ()
         method,
       );
   }
-  for (const service of [
-    'inputs',
-    'events',
-    'debug',
-    'git',
-    'tasks',
-    'delivery',
-  ])
+  for (const service of ['inputs', 'events', 'git', 'tasks', 'delivery'])
     assert.throws(() =>
       validateWorkspaceRequest({ service, method: 'executeRaw' }),
     );

@@ -30,6 +30,42 @@ export async function copyText(text: string) {
   if (host) await host.copyText(text);
   else await navigator.clipboard.writeText(text);
 }
+/** The clipboard takes PNG and JPEG pictures: another kind is drawn again as a PNG. */
+async function clipboardPicture(dataUrl: string): Promise<string> {
+  if (/^data:image\/(png|jpeg);/i.test(dataUrl)) return dataUrl;
+  const image = new Image();
+  image.src = dataUrl;
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  canvas.getContext('2d')!.drawImage(image, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+/** A picture to the clipboard, as the system takes it. */
+export async function copyImage(dataUrl: string) {
+  const picture = await clipboardPicture(dataUrl);
+  const host = desktopHost();
+  if (host) {
+    await host.copyImage(picture);
+    return;
+  }
+  const blob = await (await fetch(picture)).blob();
+  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+}
+/** A picture to a file the person chooses; false when they chose none. */
+export async function saveImage(
+  name: string,
+  dataUrl: string,
+): Promise<boolean> {
+  const host = desktopHost();
+  if (host) return (await host.saveImage({ name, dataUrl })).saved;
+  const anchor = document.createElement('a');
+  anchor.href = dataUrl;
+  anchor.download = name;
+  anchor.click();
+  return true;
+}
 export async function saveExport(
   name: string,
   content: string,

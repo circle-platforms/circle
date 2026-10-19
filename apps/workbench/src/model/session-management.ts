@@ -362,6 +362,12 @@ export function recentDetails(
   };
 }
 
+/** A deletion is under way. One whose cleanup failed waits for the session to be deleted
+ * again, which retries the cleanup. */
+export function deletionUnderWay(session: Session): boolean {
+  return session.lifecycle === 'deleting' && !session.deletionFailed;
+}
+
 /**
  * Why archive is unavailable, or nothing when it can be archived.
  * A running turn, a pending question and a live job each say so.
@@ -414,6 +420,16 @@ export function disambiguatedSessionTitle(
   const mine = hint(session);
   const shared = duplicates.filter((item) => hint(item) === mine).length;
   return shared < 2 ? mine : `${title} · ${shortSessionId(session.id)}`;
+}
+
+/**
+ * Archiving these sessions first stops their terminal tabs and tasks, so it asks
+ * before it does that (#201). Nothing else is stopped by archiving.
+ */
+export function archiveStopsWork(sessions: readonly Session[]): boolean {
+  return sessions.some(
+    (session) => !session.archivedAt && session.nativeResourcesActive,
+  );
 }
 
 export function canArchiveSession(

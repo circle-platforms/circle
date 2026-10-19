@@ -8,7 +8,7 @@ import type { Interaction } from '../model/types';
 import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { browserApprovalInput, hasToolInput } from '../model/browser';
-import { requestReason } from '../model/reasons.ts';
+import { approvalHeading, requestReason } from '../model/reasons.ts';
 import './conversation-requests.css';
 
 export { requestReason };
@@ -226,7 +226,7 @@ export function InlineRequest({
     >
       <header>
         <ShieldAlert size={14} />
-        <strong id={headingId}>{item.tool ?? item.title}</strong>
+        <strong id={headingId}>{approvalHeading(item)}</strong>
         <span>{requestReason(item.reason)}</span>
         {item.origin?.name && <small>{item.origin.name}</small>}
       </header>

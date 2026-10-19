@@ -299,9 +299,17 @@ try {
       viewportSizing.target,
       viewportSizing.scaleFactor,
     );
+    // A narrow window lays a mode or the overview over the conversation: the request was
+    // answered in the conversation, and nothing was opened over it.
     await page
-      .getByRole('dialog', { name: 'inspector', exact: true })
+      .locator('.inspector-overlay')
       .waitFor({ state: 'hidden', timeout: 1500 });
+    assert.equal(
+      await page
+        .locator('#workbench-columns')
+        .getAttribute('data-inspector-mode'),
+      'closed',
+    );
   }
   assert.equal(
     await readFile(join(workspace, 'native.txt'), 'utf8'),

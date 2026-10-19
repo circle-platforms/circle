@@ -20,7 +20,7 @@ This table records the frontend phase before the user authorized Circle runtime 
 | C work | Session-linked work draft, status and pause/cancel intents | No durable service acceptance asserted |
 | D execution | Workspace/worker/SSH/browser records and control intents | Synthetic remote observations |
 | E methods | Per-session loading, version pins, candidate review and role feedback | Loading and review do not publish a method |
-| Plugin framework | Shared registration, dependencies, conflicts, enable/disable, pages/panels/widgets/actions and rendering boundaries | First-party bundled modules only |
+| Plugin framework | Shared registration, dependencies, conflicts, enable/disable, pages/drawer modes/actions (a declared widget is not drawn) and rendering boundaries | First-party bundled modules only |
 
 Automated checks are in the two application packages. Validation receipts bind actual checks and build bytes; they do not promote schema validity, sample status or UI feedback into an observed backend outcome.
 

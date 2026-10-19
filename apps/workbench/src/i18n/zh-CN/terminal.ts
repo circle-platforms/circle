@@ -1,5 +1,4 @@
 export const terminal: Record<string, string> = {
-  'terminal is no longer available': '此终端已不可用',
   'command pid {pid}': '命令进程 {pid}',
   'pty pid {pid}': '终端进程 {pid}',
   'process pid {pid}': '进程 {pid}',
@@ -25,13 +24,13 @@ export const terminal: Record<string, string> = {
   'original attachment and source details': '原附件与来源详情',
   'copy original attachment': '复制原附件',
   selection: '选区',
-  'add selection to chat': '将选区添加到对话',
+  'add selection to chat': '将选区放进输入框',
   'select terminal output first': '请先选择终端输出',
   'terminal selection expired; select it again': '终端选区已过期，请重新选择',
   'terminal selection source changed': '终端选区来源已变化，请重新选择',
   'terminal selection is over 4 MB': '终端选区超过 4 MB，未添加，请缩小选区',
   'terminal selection could not be saved': '无法保存终端选区，请重试',
-  'terminal selection added to draft': '终端选区已添加到草稿',
+  'terminal selection added to draft': '终端选区已放进输入框',
   optional: '可选',
   stopping: '正在停止',
   'previous match': '上一个匹配',
@@ -70,8 +69,6 @@ export const terminal: Record<string, string> = {
     '每个输入框对应一个参数，空格和引号保持原样',
   'ready port': '就绪端口',
   'ready log text': '就绪日志文字',
-  'when both checks are set, both must pass before the service is ready':
-    '同时设置两项检查时，两项都通过后才会显示服务就绪',
   'keep a development service with its logs, readiness checks and restart action':
     '统一查看开发服务的日志、就绪状态，并随时停止或重启',
   'exited (code {code})': '已退出（代码 {code}）',

@@ -5,6 +5,12 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
+import {
+  TERMINAL_MODE,
+  chooseTerminalMenu,
+  openTerminalMode,
+  terminalMenuItemEnabled,
+} from './helpers/terminal-mode.mjs';
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0 },
@@ -40,10 +46,7 @@ try {
         await page.goto(
           `${server.resolvedUrls.local[0]}test/native-terminal-tabs-ui.html?theme=${theme}`,
         );
-        await page
-          .getByRole('button', { name: 'terminal panel', exact: true })
-          .click();
-        await page.locator('#inspector-terminal-tab-terminal').click();
+        await openTerminalMode(page);
         await page.evaluate(async (locale) => {
           const { setLanguage } = await import('/src/i18n/index.ts');
           setLanguage(locale);
@@ -57,6 +60,7 @@ try {
         const text =
           locale === 'zh-CN'
             ? {
+                menu: '终端菜单',
                 start: '启动服务',
                 cancel: '取消',
                 add: '添加启动参数',
@@ -64,15 +68,15 @@ try {
                 log: '就绪日志文字',
               }
             : {
+                menu: 'terminal menu',
                 start: 'start service',
                 cancel: 'cancel',
                 add: 'add service argument',
                 port: 'ready port',
                 log: 'ready log text',
               };
-        await page
-          .getByRole('button', { name: text.start, exact: true })
-          .click();
+        // Start service is an item of the ⋮ menu; its dialog is the one it always was.
+        await chooseTerminalMenu(page, text.start, { name: text.menu });
         const dialog = page.getByRole('dialog');
         const footerGeometry = () =>
           dialog.evaluate((element) => {
@@ -107,10 +111,13 @@ try {
         };
         const initial = await footerGeometry();
         verifyFooter(initial);
-        assert.ok(
-          initial.fields.scrollHeight > initial.fields.height,
-          'short service form scrolls inside the original dialog',
-        );
+        // A short window is too low for the form even before arguments are added: its
+        // fields scroll inside the dialog. A taller one may fit it whole.
+        if (viewport.height <= 520)
+          assert.ok(
+            initial.fields.scrollHeight > initial.fields.height,
+            'short service form scrolls inside the original dialog',
+          );
         await page.screenshot({
           path: `${output}/${locale}-${theme}-${viewport.width}x${viewport.height}-service.png`,
         });
@@ -196,10 +203,7 @@ try {
       await page.goto(
         `${server.resolvedUrls.local[0]}test/native-terminal-tabs-ui.html?theme=${theme}`,
       );
-      await page
-        .getByRole('button', { name: 'terminal panel', exact: true })
-        .click();
-      await page.locator('#inspector-terminal-tab-terminal').click();
+      await openTerminalMode(page);
       await page.evaluate(async () =>
         (await import('/src/i18n/index.ts')).setLanguage('zh-CN'),
       );
@@ -248,18 +252,46 @@ try {
         name: 'terminal panel',
         exact: true,
       });
-      await toggle.click();
-      await page.locator('#inspector-terminal-tab-terminal').click();
-      const strip = page.locator('.native-terminal-tabs');
-      await strip.getByRole('tab', { name: 'zsh 9', exact: true }).waitFor();
+      await openTerminalMode(page);
+      // What the row asks of the terminal service, in order.
+      await page.evaluate(() => {
+        const actual = window.circleDesktop.runtimeCommand;
+        window.terminalCalls = [];
+        window.circleDesktop.runtimeCommand = async (command) => {
+          window.terminalCalls.push(command);
+          return actual(command);
+        };
+      });
+      const sent = (method) =>
+        page.evaluate(
+          (method) =>
+            window.terminalCalls
+              .filter(
+                (command) =>
+                  command.payload?.service === 'terminal' &&
+                  command.payload.method === method,
+              )
+              .map((command) => command.payload.params),
+          method,
+        );
+      const strip = page.locator('.term-tabs');
+      await strip
+        .getByRole('tab', { name: 'terminal 9', exact: true })
+        .waitFor();
+      const names = () =>
+        strip
+          .locator('.term-tab-main')
+          .evaluateAll((nodes) => nodes.map((node) => node.textContent.trim()));
       const geometry = () =>
         strip.evaluate((el) => {
           const selected = el.querySelector('[aria-selected="true"]');
+          // A tab is its name and its ×: the row keeps both in view.
           const box = el.getBoundingClientRect(),
-            tab = selected.getBoundingClientRect();
+            tab = selected.closest('.term-tab').getBoundingClientRect();
           return {
-            label: selected.textContent,
+            label: selected.textContent.trim(),
             selected: selected.getAttribute('aria-controls'),
+            title: selected.getAttribute('title'),
             left: tab.left,
             right: tab.right,
             viewportLeft: box.left + el.clientLeft,
@@ -271,8 +303,9 @@ try {
         });
       const visible = async () => {
         await page.waitForFunction(() => {
-          const el = document.querySelector('.native-terminal-tabs'),
-            tab = el?.querySelector('[aria-selected="true"]');
+          const el = document.querySelector('.term-tabs'),
+            main = el?.querySelector('[aria-selected="true"]'),
+            tab = main?.closest('.term-tab');
           if (!el || !tab || !el.clientWidth) return false;
           const e = el.getBoundingClientRect(),
             t = tab.getBoundingClientRect();
@@ -280,46 +313,56 @@ try {
             right = left + el.clientWidth;
           if (t.width <= el.clientWidth)
             return t.left >= left - 1 && t.right <= right + 1;
-          // A compact original Inspector can be narrower than a tab's padding
-          // plus lamp. Require every actual label character, not impossible
-          // off-screen border pixels, to fit in that case.
-          const labels = [...tab.childNodes]
-            .filter(
-              (node) =>
-                node.nodeType === Node.TEXT_NODE && node.textContent.trim(),
-            )
-            .map((node) => {
-              const range = document.createRange();
-              range.selectNodeContents(node);
-              return range.getBoundingClientRect();
-            });
+          // A narrow drawer can be narrower than a whole tab. Require every actual
+          // character of its name, not off-screen padding, to fit in that case.
+          const range = document.createRange();
+          range.selectNodeContents(main.querySelector('.term-tab-label'));
+          const label = range.getBoundingClientRect();
           return (
-            labels.length > 0 &&
-            labels.every(
-              (rect) => rect.left >= left - 1 && rect.right <= right + 1,
-            )
+            label.width > 0 &&
+            label.left >= left - 1 &&
+            label.right <= right + 1
           );
         });
         return geometry();
       };
       const initial = await visible();
-      assert.match(initial.label, /zsh 9/);
-      // Process ids stay out of the status line, in the folder's tooltip.
+      assert.equal(initial.label, 'terminal 9');
+      // Process ids are for developers: a running shell shows none. Its tooltip says
+      // where it runs and how it is, and a shell at rest has no dot.
+      assert.equal(initial.title, '/synthetic/workspace · running');
+      assert.doesNotMatch(await page.locator(TERMINAL_MODE).innerText(), /pid/);
+      assert.equal(await page.locator('.term-tab.on .term-dot').count(), 0);
       await page
-        .locator('.native-terminal-status [title$="process pid 41009"]')
-        .waitFor();
-      assert.doesNotMatch(
-        await page.locator('.native-terminal-status').innerText(),
-        /pid/,
-      );
-      await page
-        .getByRole('button', { name: 'new terminal', exact: true })
+        .getByRole('button', { name: 'new terminal or device', exact: true })
         .click();
-      await strip.getByRole('tab', { name: 'zsh 10', exact: true }).waitFor();
+      await page.getByRole('menuitem', { name: /^new local terminal/ }).click();
+      await strip
+        .getByRole('tab', { name: 'terminal 10', exact: true })
+        .waitFor();
       const created = await visible();
-      assert.match(created.label, /zsh 10/);
+      assert.equal(created.label, 'terminal 10');
       assert.equal(created.selected, 'terminal-terminal-10');
-      await page.screenshot({ path: `${output}/${theme}-${width}-zsh10.png` });
+      assert.equal(
+        (await sent('create')).length,
+        1,
+        'one new terminal makes one shell',
+      );
+      // Ten tabs do not fit: the row scrolls, and every tab keeps its whole name.
+      assert.deepEqual(
+        await strip
+          .locator('.term-tab-label')
+          .evaluateAll((labels) =>
+            labels
+              .filter((label) => label.scrollWidth > label.clientWidth)
+              .map((label) => label.textContent),
+          ),
+        [],
+        'no tab name is cut',
+      );
+      await page.screenshot({
+        path: `${output}/${theme}-${width}-terminal10.png`,
+      });
       await page
         .locator('#terminal-terminal-10 .xterm-helper-textarea')
         .focus();
@@ -375,8 +418,8 @@ try {
       });
       const manual = await geometry();
       await page.evaluate(() => window.terminalTabsFixture.log());
-      await page
-        .locator('.native-terminal-status [title^="/synthetic/log-update"]')
+      await strip
+        .locator('.term-tab-main[title^="/synthetic/log-update"]')
         .waitFor();
       const afterLog = await geometry();
       assert.equal(afterLog.scrollLeft, manual.scrollLeft);
@@ -409,21 +452,81 @@ try {
       if ((await toggle.getAttribute('aria-pressed')) !== 'true')
         await toggle.click();
       await visible();
-      // Real tab keyboard changes, including the debug label seen in the CUA report.
-      await strip.getByRole('tab', { name: 'zsh 10', exact: true }).focus();
+      // Real tab keyboard changes. The shell the service labels debug is a shell like any
+      // other: its place among the conversation's shells names it. Each key leaves the
+      // keyboard on the tab row, once the shell it shows has its screen, and sends the
+      // shells nothing.
+      const keyed = (
+        await page.evaluate(() => window.terminalTabsFixture.writes)
+      ).length;
+      const settle = async (id) => {
+        await page.waitForFunction(
+          (id) =>
+            document
+              .querySelector('.term-tabs [aria-selected="true"]')
+              ?.getAttribute('aria-controls') === `terminal-${id}`,
+          id,
+        );
+        await page
+          .locator(`#terminal-${id} .xterm-helper-textarea`)
+          .waitFor({ state: 'attached' });
+        await page.evaluate(
+          () =>
+            new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve)),
+            ),
+        );
+        assert.deepEqual(
+          await page.evaluate(() => ({
+            role: document.activeElement?.getAttribute('role'),
+            controls: document.activeElement?.getAttribute('aria-controls'),
+          })),
+          { role: 'tab', controls: `terminal-${id}` },
+          'the keyboard stays on the tab row',
+        );
+        assert.equal(
+          (await page.evaluate(() => window.terminalTabsFixture.writes)).length,
+          keyed,
+          'keys that move between tabs never reach a shell',
+        );
+        return visible();
+      };
+      await strip
+        .getByRole('tab', { name: 'terminal 10', exact: true })
+        .focus();
       await page.keyboard.press('Home');
-      const first = await visible();
-      assert.match(first.label, /zsh 1/);
+      const first = await settle('terminal-1');
+      assert.equal(first.label, 'terminal 1');
       await page.keyboard.press('ArrowRight');
-      const debug = await visible();
-      assert.match(debug.label, /debug 2/);
+      const debug = await settle('terminal-2');
+      assert.equal(debug.label, 'terminal 2');
       await page.keyboard.press('End');
-      const last = await visible();
-      assert.match(last.label, /zsh 10/);
+      const last = await settle('terminal-10');
+      assert.equal(last.label, 'terminal 10');
+      // A shell's × stops it and takes its tab out of the row; the tab in front stays
+      // in front and every other shell keeps its name.
       await page
-        .getByRole('button', { name: 'stop terminal', exact: true })
+        .getByRole('button', { name: 'stop terminal 1', exact: true })
         .click();
+      await page.waitForFunction(
+        () =>
+          ![...document.querySelectorAll('.term-tab-main')].some(
+            (node) => node.textContent.trim() === 'terminal 1',
+          ),
+      );
+      assert.deepEqual(await sent('close'), [{ id: 'terminal-1' }]);
       assert.equal((await geometry()).selected, created.selected);
+      assert.deepEqual(
+        await names(),
+        Array.from({ length: 9 }, (_, index) => `terminal ${index + 2}`),
+      );
+      assert.deepEqual(
+        await page.evaluate(() =>
+          JSON.parse(localStorage.getItem('circle.workbench.terminal-closed')),
+        ),
+        ['terminal-1'],
+        'the closed tab is remembered',
+      );
       // Reload the session list after a real session switch, preserving selected id
       // even when the backend list order changes.
       await page.evaluate(() => window.terminalTabsFixture.reorder());
@@ -442,48 +545,120 @@ try {
             .click();
         await link.click();
       };
+      // The row reads A's list again when A is shown again.
+      const listsOfA = () =>
+        page.evaluate(
+          () =>
+            window.terminalCalls.filter(
+              (command) =>
+                command.sessionId === 'A' &&
+                command.payload?.service === 'terminal' &&
+                command.payload.method === 'list',
+            ).length,
+        );
+      const lists = await listsOfA();
       await chooseSession('B');
       await chooseSession('A');
-      if ((await toggle.getAttribute('aria-pressed')) !== 'true')
-        await toggle.click();
-      await page.locator('#inspector-terminal-tab-terminal').click();
+      await openTerminalMode(page);
+      await page.waitForFunction(
+        (lists) =>
+          window.terminalCalls.filter(
+            (command) =>
+              command.sessionId === 'A' &&
+              command.payload?.service === 'terminal' &&
+              command.payload.method === 'list',
+          ).length > lists,
+        lists,
+      );
       const reordered = await visible();
       assert.equal(reordered.selected, created.selected);
-      assert.match(reordered.label, /zsh 1/);
+      // A shell keeps its name whatever order the service lists it in.
+      assert.equal(reordered.label, 'terminal 10');
+      assert.equal(
+        await strip
+          .locator('.term-tab-main')
+          .first()
+          .getAttribute('aria-controls'),
+        'terminal-terminal-10',
+        'the row follows the order the service gave',
+      );
       await page.screenshot({ path: `${output}/${theme}-${width}.png` });
       assert.equal(reordered.pageX, initial.pageX);
       assert.equal(reordered.pageY, initial.pageY);
       assert.deepEqual(errors, []);
+      // A command Circle runs in the background: its tab says the command, with a blue
+      // dot, no × while it runs, its stop at the end of the row, and a blue ring.
       await page.evaluate(() =>
         window.terminalTabsFixture.showManagedProcess(),
       );
-      await page
-        .locator('.native-service-details code')
-        .getByText('node managed-display.cjs', { exact: true })
-        .waitFor();
-      await page
-        .locator(
-          '.native-terminal-status [title$="command pid 52010 · pty pid 51010"]',
-        )
-        .waitFor();
+      const command = strip.getByRole('tab', {
+        name: 'node managed-display.cjs',
+        exact: true,
+      });
+      await command.waitFor();
       assert.equal(
-        await page
-          .locator('.native-terminal-status [title*="process pid 51010"]')
-          .count(),
-        0,
-        'supervisor PID must not be mislabeled as the actual command',
+        await command.getAttribute('aria-controls'),
+        'terminal-terminal-10',
       );
-      assert(
-        await page
-          .getByRole('button', { name: 'restart terminal', exact: true })
-          .isDisabled(),
+      assert.equal(await command.getAttribute('aria-selected'), 'true');
+      assert.equal(
+        await command.locator('.term-dot').getAttribute('data-state'),
+        'run',
+      );
+      assert.equal(await page.locator('.term-tab.on .term-tab-x').count(), 0);
+      assert.equal(
+        await page.locator('.term-frame').getAttribute('data-frame'),
+        'run',
+      );
+      assert.equal(
+        await page.locator('.native-service-details').count(),
+        0,
+        "a command's words are its tab, not a details line",
+      );
+      assert.equal(
+        await toggle.locator('.drawer-mode-badge').textContent(),
+        '1',
+      );
+      assert.equal(
+        await terminalMenuItemEnabled(page, 'restart terminal'),
+        false,
         'managed command restart remains disabled',
       );
+      await page.getByRole('button', { name: 'stop', exact: true }).click();
+      const exit = page.locator('.native-terminal-exit');
+      await exit.waitFor();
+      assert.deepEqual((await sent('close')).at(-1), { id: 'terminal-10' });
+      // The ended command keeps its process ids in its tooltip, each named for what it is.
+      assert.match(
+        await exit.getAttribute('title'),
+        /\ncommand pid 52010 · pty pid 51010$/,
+      );
+      assert.equal(
+        (await exit.getAttribute('title')).includes('process pid 51010'),
+        false,
+        'supervisor PID must not be mislabeled as the actual command',
+      );
+      await page
+        .getByRole('button', {
+          name: 'close node managed-display.cjs',
+          exact: true,
+        })
+        .waitFor();
+      assert.equal(
+        await page.getByRole('button', { name: 'stop', exact: true }).count(),
+        0,
+      );
       await page.reload();
-      await toggle.click();
-      await page.locator('#inspector-terminal-tab-terminal').click();
+      await openTerminalMode(page);
       const reloaded = await visible();
       assert.equal(reloaded.selected, 'terminal-terminal-9');
+      assert.equal(
+        (await names()).includes('terminal 1'),
+        false,
+        'a closed tab stays closed after a reload',
+      );
+      assert.equal(reloaded.label, 'terminal 9');
+      assert.deepEqual(errors, []);
       cases.push({
         theme,
         width,
@@ -501,64 +676,6 @@ try {
       });
       await page.close();
     }
-  const focusPage = await browser.newPage();
-  currentPage = focusPage;
-  await focusPage.goto(
-    `${server.resolvedUrls.local[0]}test/native-terminal-tabs-ui.html?target=1`,
-  );
-  await focusPage.getByRole('tab', { name: 'zsh 9', exact: true }).waitFor();
-  await focusPage.evaluate(() =>
-    window.terminalTabsFixture.focusTerminal({
-      id: 'terminal-2',
-      epoch: 'fixture',
-      requestId: 'debug-source-1',
-    }),
-  );
-  await focusPage.waitForFunction(
-    () =>
-      document
-        .querySelector('[role="tab"][aria-selected="true"]')
-        ?.getAttribute('aria-controls') === 'terminal-terminal-2',
-  );
-  await focusPage.evaluate(() =>
-    window.terminalTabsFixture.focusTerminal({
-      id: 'terminal-1',
-      epoch: 'stale',
-      requestId: 'debug-source-2',
-    }),
-  );
-  await focusPage
-    .getByRole('alert')
-    .getByText('terminal is no longer available', { exact: true })
-    .waitFor();
-  assert.equal(
-    await focusPage
-      .locator('[role="tab"][aria-selected="true"]')
-      .getAttribute('aria-controls'),
-    'terminal-terminal-2',
-    'stale epochs cannot select a terminal',
-  );
-  assert.equal(
-    (await focusPage.evaluate(() => window.terminalTabsFixture.observed())).ids
-      .length,
-    9,
-    'focus never creates or restarts a process',
-  );
-  await focusPage.evaluate(() => window.terminalTabsFixture.focusSession('B'));
-  await focusPage.waitForFunction(
-    () => document.querySelectorAll('[role="tab"]').length === 0,
-  );
-  await focusPage.evaluate(() => window.terminalTabsFixture.focusSession('A'));
-  await focusPage.getByRole('tab', { name: 'debug 2', exact: true }).waitFor();
-  await focusPage.waitForFunction(
-    () => !document.querySelector('[role="alert"]'),
-  );
-  assert.equal(
-    (await focusPage.evaluate(() => window.terminalTabsFixture.observed())).ids
-      .length,
-    9,
-  );
-  await focusPage.close();
   await writeFile(
     `${output}/receipt.json`,
     JSON.stringify(
@@ -579,14 +696,16 @@ try {
       .catch(console.error);
     const geometry = await currentPage
       .evaluate(() => {
-        const el = document.querySelector('.native-terminal-tabs');
+        const el = document.querySelector('.term-tabs');
         return {
           tabs: el
             ? {
                 scrollLeft: el.scrollLeft,
                 width: el.clientWidth,
                 tabs: [...el.children].map((tab) => ({
-                  selected: tab.getAttribute('aria-selected'),
+                  selected: tab
+                    .querySelector('[role="tab"]')
+                    ?.getAttribute('aria-selected'),
                   label: tab.textContent,
                   rect: tab.getBoundingClientRect().toJSON(),
                 })),

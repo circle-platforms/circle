@@ -2,15 +2,13 @@
 export type WorkspaceService =
   | 'inputs'
   | 'operations'
-  | 'cycles'
   | 'events'
   | 'documents'
   | 'terminal'
   | 'git'
-  | 'language'
-  | 'debug'
   | 'tasks'
-  | 'delivery';
+  | 'delivery'
+  | 'pulls';
 
 export interface WorkspaceServiceRequest {
   service: WorkspaceService;
@@ -35,7 +33,6 @@ export interface WorkspaceServiceEvent {
 const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   inputs: new Set(['list', 'resolve']),
   operations: new Set(['list', 'review']),
-  cycles: new Set(['list', 'snapshot', 'create', 'advance', 'retryCI']),
   events: new Set(['replay']),
   documents: new Set([
     'read',
@@ -56,47 +53,16 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'list',
     'replay',
   ]),
+  // The window reads Git; staging, committing, pushing and merging are Circle's, in the
+  // conversation, so the window cannot ask for them.
   git: new Set([
     'status',
     'snapshot',
-    'applyPatch',
-    'conflictContinue',
-    'conflictAbort',
+    'changes',
     'diff',
-    'stage',
-    'unstage',
-    'applyHunk',
-    'discard',
-    'commit',
-    'push',
     'branches',
     'history',
     'commitDiff',
-    'continueMerge',
-    'abortMerge',
-  ]),
-  language: new Set(['open', 'change', 'close', 'request']),
-  debug: new Set([
-    'output',
-    'start',
-    'snapshot',
-    'launch',
-    'attach',
-    'setBreakpoints',
-    'stackTrace',
-    'breakpoints',
-    'threads',
-    'stack',
-    'scopes',
-    'variables',
-    'next',
-    'stepIn',
-    'stepOut',
-    'continue',
-    'pause',
-    'stop',
-    'list',
-    'evaluate',
   ]),
   tasks: new Set([
     'enqueue',
@@ -110,18 +76,13 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'createIntegration',
     'mergeCandidates',
     'review',
+    'reject',
     'artifacts',
     'readArtifact',
   ]),
-  delivery: new Set([
-    'status',
-    'publish',
-    'checks',
-    'logs',
-    'retry',
-    'login',
-    'ready',
-  ]),
+  // Publishing a pull request is Circle's, through the GitHub tools or the create-pr skill.
+  delivery: new Set(['status', 'checks', 'logs', 'login']),
+  pulls: new Set(['overview', 'failedLog']),
 };
 
 export function validateWorkspaceRequest(

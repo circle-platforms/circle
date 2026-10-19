@@ -635,12 +635,24 @@ export class ChromeBrowser implements BrowserPort {
       return Number(group) === pid && status && !status.startsWith('Z');
     });
   }
-  /** True when Windows accepted terminating the owned root's own handle. */
+  /** After accepted taskkill, the creation handle can already be terminating (#196). */
   private terminateHandle(child: ChildProcess): boolean {
+    let failure: NodeJS.ErrnoException | undefined;
+    const ending = (error: NodeJS.ErrnoException) =>
+      error.code === 'EPERM' || error.code === 'ESRCH';
+    const failed = (error: NodeJS.ErrnoException) => {
+      failure = error;
+    };
+    child.on('error', failed);
     try {
-      return child.kill('SIGKILL');
-    } catch {
-      return false;
+      const accepted = child.kill('SIGKILL');
+      // Node returns false silently for ESRCH; EPERM is emitted synchronously
+      // while Windows may still report STILL_ACTIVE on this same creation handle.
+      return accepted || failure === undefined || ending(failure);
+    } catch (error) {
+      return ending(error as NodeJS.ErrnoException);
+    } finally {
+      child.off('error', failed);
     }
   }
   private async closeProcess(): Promise<void> {
@@ -683,7 +695,7 @@ export class ChromeBrowser implements BrowserPort {
               this.terminateHandle(child);
             // A failed taskkill callback can precede the owned root's exit.
             // Observe the same bounded exit phase before retaining its error.
-            // Once Windows has accepted the termination of the root's own handle,
+            // Once Windows accepted termination, or its creation handle is already ending,
             // the process runs no more code, but it ends only when its last thread
             // does: on a busy machine that has taken over 5 s (#108). Its exit is
             // still what confirms the stop.

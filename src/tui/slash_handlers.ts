@@ -1408,7 +1408,12 @@ function terminals(host: CommandHost, args: string): void {
 
 async function skill(host: CommandHost, args: string): Promise<void> {
   const runtime = host.runtime;
-  const skills = discoverSkills(host.workspace, host.home);
+  // The folders the runtime reads too; userHome is set only by an embedder or a test.
+  const skills = discoverSkills(
+    host.workspace,
+    host.home,
+    runtime.options.userHome,
+  );
   const token = args.trim();
   if (!token) {
     host.notice(

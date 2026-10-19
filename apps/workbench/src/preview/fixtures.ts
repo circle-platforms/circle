@@ -117,7 +117,85 @@ function session(
     pinned: id === 'session1',
     shared: false,
     updatedAt: 'today',
+    changes: ownMessages === messages ? sampleChanges() : undefined,
   };
+}
+/** What the sample session changed: a line edited, a test added, a file removed. */
+function sampleChanges(): NonNullable<Session['changes']> {
+  return [
+    {
+      path: '/workspace/orbit-api/src/connection.ts',
+      kind: 'modified',
+      at: '10:25',
+      diff: {
+        summary: '+1 -1',
+        rows: [
+          { text: '@@ -1,5 +1,5 @@' },
+          { text: ' export function reconnect(session: Session) {' },
+          { text: '-  const pending = session.pending;', tone: 'removed' },
+          { text: '+  const pending = [...session.pending];', tone: 'added' },
+          { text: '   session.close();' },
+          { text: '   return connect(session.url, { pending });' },
+          { text: ' }' },
+        ],
+      },
+    },
+    {
+      path: '/workspace/orbit-api/tests/reconnect.test.ts',
+      kind: 'added',
+      at: '10:25',
+      diff: {
+        summary: 'new file, 6 lines',
+        rows: [
+          { text: '@@ -0,0 +1,6 @@' },
+          {
+            text: "+test('preserves a response across reconnect', () => {",
+            tone: 'added',
+          },
+          { text: '+  const session = makeSession();', tone: 'added' },
+          { text: "+  session.pending.push('response');", tone: 'added' },
+          { text: '+  const next = reconnect(session);', tone: 'added' },
+          {
+            text: "+  expect(next.pending).toEqual(['response']);",
+            tone: 'added',
+          },
+          { text: '+});', tone: 'added' },
+        ],
+      },
+    },
+    {
+      path: '/workspace/orbit-api/CHANGELOG.md',
+      kind: 'modified',
+      at: '10:25',
+      diff: {
+        summary: '+2 -0',
+        rows: [
+          { text: '@@ -1,3 +1,5 @@' },
+          { text: ' # changelog' },
+          { text: '+', tone: 'added' },
+          {
+            text: '+- A response that arrives while a connection closes is kept.',
+            tone: 'added',
+          },
+          { text: ' ' },
+        ],
+      },
+    },
+    {
+      path: '/workspace/orbit-api/src/legacy-retry.ts',
+      kind: 'deleted',
+      at: '10:26',
+      diff: {
+        summary: 'deleted, 3 lines',
+        rows: [
+          { text: '@@ -1,3 +0,0 @@' },
+          { text: '-export function retryLater() {', tone: 'removed' },
+          { text: '-  return setTimeout(reconnect, 1000);', tone: 'removed' },
+          { text: '-}', tone: 'removed' },
+        ],
+      },
+    },
+  ];
 }
 export function createFixtures(): WorkbenchSnapshot {
   return {
@@ -198,6 +276,36 @@ export function createFixtures(): WorkbenchSnapshot {
         content:
           "test('preserves a response across reconnect', () => {\n  const session = makeSession();\n  session.pending.push('response');\n  const next = reconnect(session);\n  expect(next.pending).toEqual(['response']);\n});\n",
         status: 'added',
+      },
+      {
+        id: 'file6',
+        workspaceId: 'workspace1',
+        path: 'src/index.ts',
+        language: 'typescript',
+        content: "export { reconnect } from './connection';\n",
+      },
+      {
+        id: 'file7',
+        workspaceId: 'workspace1',
+        path: 'src/socket.ts',
+        language: 'typescript',
+        content: 'export type Socket = { close(): void };\n',
+      },
+      {
+        id: 'file8',
+        workspaceId: 'workspace1',
+        path: 'CHANGELOG.md',
+        language: 'markdown',
+        content:
+          '# changelog\n\n- A response that arrives while a connection closes is kept.\n',
+        status: 'modified',
+      },
+      {
+        id: 'file9',
+        workspaceId: 'workspace1',
+        path: 'tsconfig.json',
+        language: 'json',
+        content: '{"compilerOptions":{"strict":true}}',
       },
       {
         id: 'file3',
@@ -520,9 +628,7 @@ export function createFixtures(): WorkbenchSnapshot {
     },
     uiPlugins: [
       'files',
-      'activity',
       'browser',
-      'devices',
       'knowledge',
       'work',
       'execution',

@@ -53,6 +53,14 @@ window.circleDesktop = new Proxy(
     onWorkspaceEvent: () => () => {},
     onBrowserEvent: () => () => {},
     browserState: async () => ({ sessionId: 'none' }),
+    // No mode is in a window of its own, and no device console is open.
+    popouts: async () => [],
+    terminalState: async (sessionId: string) => ({
+      sessionId: 'terminal:' + sessionId,
+      conversation: sessionId,
+      sessions: [],
+      profiles: [],
+    }),
     runtimeCommand: async (command: any) => {
       if (command.name !== 'workspace-service') {
         sends++;

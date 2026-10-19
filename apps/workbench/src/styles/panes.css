@@ -16,34 +16,14 @@
 .inspector[data-inspector-whole-button] {
   --header-end: 64px;
 }
-.inspector .inspector-title {
-  gap: 2px;
-  height: 40px;
-  padding: 0 6px 0 8px;
-  font-weight: 500;
-  border-bottom-color: transparent;
-}
-.inspector .inspector-title-name {
-  flex: 1;
-  min-width: 0;
-  padding-left: 6px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.inspector .inspector-actions {
-  gap: 2px;
-}
-.inspector .inspector-title .icon-button,
+
 .inspector .panel-header-actions .icon-button,
-.inspector .native-terminal-toolbar > .icon-button,
 .inspector .browser-tabs > .icon-button {
   width: 26px;
   height: 26px;
   border-radius: 6px;
   color: var(--muted);
 }
-.inspector .inspector-title .icon-button:hover:not(:disabled),
 .inspector .panel-header-actions .icon-button:hover:not(:disabled) {
   color: var(--fg);
 }
@@ -59,19 +39,8 @@
 ) {
   background: var(--bg);
 }
-.inspector:is(
-    [data-inspector-panel='terminal'],
-    [data-inspector-panel='browser'],
-    [data-inspector-panel='files']
-  )
-  .inspector-title {
-  border-bottom-color: transparent;
-}
+
 .inspector .inspector-body.flush .native-browser > .browser-tabs,
-.inspector
-  .inspector-body.flush
-  .native-terminal.embedded
-  > .native-terminal-toolbar,
 .inspector .inspector-body.flush .files-panel > .panel-header-name {
   position: absolute;
   z-index: 1;
@@ -101,22 +70,6 @@
   white-space: nowrap;
 }
 
-.inspector .workspace-panel-contents > .panel-header-tabs {
-  position: absolute;
-  z-index: 1;
-  top: 6px;
-  left: 8px;
-  right: calc(var(--header-end) + 2px);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 28px;
-  margin: 0;
-  padding: 0;
-  background: none;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
 .inspector .panel-header-tabs > button {
   flex-shrink: 0;
   height: 28px;
@@ -124,71 +77,6 @@
   font-size: var(--ui-small);
   white-space: nowrap;
 }
-
-/* Terminal and history: two icons before full view and close. */
-.inspector .inspector-body.flush .workspace-panel-terminal > .panel-switch {
-  position: absolute;
-  z-index: 1;
-  top: 7px;
-  right: calc(var(--header-end) + 2px);
-  gap: 0;
-  margin: 0;
-  padding: 2px;
-  border-radius: 7px;
-}
-.inspector .panel-switch button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border-radius: 6px;
-}
-
-/* Terminal tabs in the header row */
-.inspector
-  .inspector-body.flush
-  .native-terminal.embedded
-  > .native-terminal-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  right: calc(var(--header-end) + 60px);
-  height: 28px;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-}
-.inspector .native-terminal-toolbar .native-terminal-tabs {
-  flex: 0 1 auto;
-  gap: 2px;
-  padding: 0;
-  background: none;
-  scrollbar-width: none;
-}
-.inspector .native-terminal-tabs.segmented > button.active {
-  box-shadow: none;
-}
-.inspector .native-terminal-tabs > button {
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: calc(var(--ui-size) - 0.5px);
-  font-weight: 500;
-}
-.inspector .native-terminal-tabs > button:hover {
-  background: var(--hover);
-  color: var(--fg);
-}
-.inspector .native-terminal-tabs > button.active {
-  color: var(--fg);
-}
-.inspector .native-terminal-tabs > button.active:not(:only-child) {
-  background: var(--hover);
-}
-
 /* The terminal itself: the screen to the edges, a quiet bar under it. */
 .inspector .native-terminal.embedded {
   background: var(--bg);
@@ -220,38 +108,13 @@
   outline: none;
   box-shadow: none;
 }
-.inspector .native-terminal-bar .native-terminal-search .icon-button,
-.inspector .native-terminal-actions .icon-button {
+.inspector .native-terminal-bar .native-terminal-search .icon-button {
   width: 26px;
   height: 26px;
   border-radius: 6px;
   color: var(--muted);
 }
-.inspector .native-terminal-actions .icon-button:hover:not(:disabled) {
-  color: var(--fg);
-}
-.inspector .native-terminal-actions .icon-button:disabled {
-  opacity: 0.4;
-}
-.inspector .native-terminal-actions {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  margin-left: auto;
-}
-.inspector .native-terminal-status {
-  gap: 10px;
-  padding: 0 10px 5px;
-  border-top: 0;
-  font-size: var(--ui-tiny);
-}
-.inspector .native-terminal-title {
-  padding: 0 8px;
-  color: var(--fg);
-  font-size: calc(var(--ui-size) - 0.5px);
-  font-weight: 500;
-  white-space: nowrap;
-}
+
 .inspector .native-terminal-surfaces:empty {
   display: none;
 }
@@ -344,6 +207,15 @@
 .inspector .native-browser .browser-address > .icon-button:disabled {
   opacity: 0.4;
 }
+/* "take over" stands in the row as tall as the address field, so the page does not move
+   when Circle starts or stops driving. */
+.inspector .native-browser .browser-address > .button {
+  flex: none;
+  height: 28px;
+  min-height: 0;
+  margin-block: 0;
+  padding-block: 0;
+}
 .inspector .browser-url {
   position: relative;
   display: flex;
@@ -400,11 +272,15 @@
   text-overflow: ellipsis;
 }
 .inspector .browser-url-display > b {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--fg);
   font-weight: 400;
+  text-overflow: ellipsis;
 }
 .inspector .browser-url-display > span {
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -500,16 +376,14 @@
   border-radius: 6px;
   background: var(--bg);
 }
-/* Circle is driving the page: a clear ring, softened so it is not a neon edge. */
+/* Circle is working in the page: ringed in blue. It waits for you: ringed in orange. */
 .inspector .native-browser-frame.driving {
-  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
-  box-shadow: inset 0 0 0 3px
-    color-mix(in srgb, var(--accent) 72%, var(--border));
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--accent);
 }
 .inspector .native-browser-frame.awaiting {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  box-shadow: inset 0 0 0 3px
-    color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-color: var(--attention);
+  box-shadow: inset 0 0 0 3px var(--attention);
 }
 .inspector .native-browser-viewport {
   flex: 1 1 auto;
@@ -599,28 +473,9 @@
   flex: none;
   color: var(--muted);
 }
-.inspector .file-icon.code {
-  color: var(--accent);
-}
-.inspector .file-icon.data {
-  color: var(--attention);
-}
-.inspector .file-icon.image {
-  color: var(--violet);
-}
 .inspector .files-panel > .panel-note {
   margin: 10px 6px;
 }
-/* The tab's view sits in a display: contents fieldset, so it is not the flex child the
-   terminal's own rule expects; make it fill the panel here. */
-.inspector .workspace-panel-terminal fieldset > .inspector-resource-view {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
 /* The drawer owns the resource title and index toggle. The nested file index
    already has a real filter; its legacy absolute heading must not cover the document. */
 .inspector .drawer-context-index .files-panel > .panel-header-name,

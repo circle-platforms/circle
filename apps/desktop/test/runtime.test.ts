@@ -41,6 +41,10 @@ import {
 import { fallbackTitle, TITLE_MAX_TOKENS } from '../../../src/session_title.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
 import {
+  browserRing,
+  currentTurnTools,
+} from '../../workbench/src/model/browser.ts';
+import {
   historyMessages,
   visibleSessions,
 } from '../../workbench/src/model/session-management.ts';
@@ -2137,6 +2141,115 @@ test('subagent interaction remains bound to its actual parent and child sessions
     f.model.requests[3]!.messages.some(
       (m) => m.role === 'tool' && m.content.includes('child done'),
     ),
+  );
+});
+
+test("a background subagent's job is projected with its record, while it works and after it ends, and a foreground subagent has no job", async (t) => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  // Requests of the parent and of a background child can come in either order, so
+  // every reply reads whose conversation asks.
+  const route = async (request: ModelRequest) => {
+    const users = request.messages.filter(
+      (m) => m.role === 'user' && !m.internal,
+    );
+    const last = users.at(-1)!;
+    const answered = request.messages
+      .slice(request.messages.indexOf(last))
+      .some((m) => m.role === 'tool');
+    if (users[0]!.content === 'background research') {
+      // Held until the test has looked at the running job; a failed check closes the
+      // runtime, and its stop ends the wait.
+      await new Promise<void>((resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        );
+        void released.then(resolve);
+      });
+      return { message: assistant('background report'), usage: emptyUsage() };
+    }
+    if (users[0]!.content === 'foreground research')
+      return { message: assistant('foreground report'), usage: emptyUsage() };
+    const background = last.content === 'research in the background';
+    return {
+      message: answered
+        ? assistant('started')
+        : assistant('', [
+            {
+              id: `task-${users.length}`,
+              name: 'task',
+              args: {
+                description: background
+                  ? 'background research'
+                  : 'foreground research',
+                subagent_type: 'general-purpose',
+                ...(background ? { background: true } : {}),
+              },
+            },
+          ]),
+      usage: emptyUsage(),
+    };
+  };
+  const f = await setup(
+    t,
+    Array.from({ length: 8 }, () => route),
+  );
+  await f.call('prompt', { text: 'research in the background' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .jobs.some((job) => job.kind === 'agent' && job.state === 'running'),
+    'the running subagent job',
+  );
+  const running = f.controller.snapshot();
+  const job = running.jobs.find((item) => item.kind === 'agent')!;
+  assert(job.agentId, 'the job names its subagent');
+  const agent = running.agents.find((item) => item.id === job.agentId);
+  assert(agent, "the job's subagent is a record of the subagents mode");
+  assert.equal(agent.sessionId, running.activeSessionId);
+  assert.equal(job.sessionId, running.activeSessionId);
+  assert.equal(job.stopRequested, false);
+  release();
+  await wait(
+    () =>
+      f.controller.snapshot().jobs.find((item) => item.id === job.id)?.state ===
+      'completed',
+    'the subagent job ends',
+  );
+  assert.equal(
+    f.controller.snapshot().jobs.find((item) => item.id === job.id)!.agentId,
+    agent.id,
+    'the finished list keeps its time',
+  );
+  await wait(
+    () => f.controller.snapshot().sessions[0]!.state === 'idle',
+    'the first turn ends',
+  );
+
+  await f.call('prompt', { text: 'research in the foreground' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .agents.some((item) =>
+          item.messages.some((m) => m.text === 'foreground report'),
+        ) && f.controller.snapshot().sessions[0]!.state === 'idle',
+    'the foreground subagent reports',
+  );
+  const after = f.controller.snapshot();
+  const foreground = after.agents.find((item) =>
+    item.messages.some((m) => m.text === 'foreground report'),
+  )!;
+  assert.notEqual(foreground.id, agent.id);
+  assert.deepEqual(
+    after.jobs
+      .filter((item) => item.kind === 'agent')
+      .map((item) => item.agentId),
+    [agent.id],
+    'a subagent the turn waits for has no job, so no stop of its own',
   );
 });
 
@@ -6130,4 +6243,143 @@ test('trust is given and taken away for the folder the settings page names', asy
     (await call('archive-workspace', { workspaceId: 'nope' })).ok,
     false,
   );
+});
+
+test('the browser ring stays out while the next turn has not begun, though the last one used the browser', async (t) => {
+  const browser = fakeBrowser();
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'look', name: 'browser_snapshot', args: {} },
+        ]),
+      },
+      { message: assistant('looked') },
+      { message: assistant('hello') },
+    ],
+    true,
+    browser.port,
+  );
+  await f.call('prompt', { text: 'look at the page' });
+  await wait(
+    () => f.model.requests.length === 2 && activeSession(f).state === 'idle',
+    'the browser turn',
+  );
+  assert.deepEqual(
+    browser.requests.map((request) => request.action),
+    ['snapshot'],
+  );
+  const id = activeSession(f).id;
+  f.updates.length = 0;
+  await f.call('prompt', { text: 'say hello' });
+  await wait(
+    () => f.model.requests.length === 3 && activeSession(f).state === 'idle',
+    'the next turn',
+  );
+  const sessions = f.updates.flatMap((update) =>
+    update.snapshot.sessions.filter((row) => row.id === id),
+  );
+  const prompt = (session: (typeof sessions)[number]) =>
+    visibleMessages(session).findLast((row) => row.role === 'user')?.text;
+  // The window is told the session is busy before the prompt is saved. Once it
+  // is told the turn began, the prompt is there, so the turn's tools are its own.
+  assert(sessions.some((session) => session.turn));
+  for (const session of sessions)
+    if (session.turn) assert.equal(prompt(session), 'say hello');
+  // As the browser panel reads it, no update lights the ring: this turn never
+  // touched the browser.
+  for (const session of sessions)
+    assert.equal(
+      browserRing({
+        control: 'shared',
+        sessionState: session.state,
+        turnStarted: session.turn !== undefined,
+        tools: currentTurnTools(visibleMessages(session)),
+      }),
+      'idle',
+      `${session.state}, ${session.turn ? 'begun' : 'not begun'}, after "${prompt(session)}"`,
+    );
+});
+
+test('a deletion whose cleanup fails tells the window why and keeps the history, and deleting it again finishes (#195)', async (t) => {
+  let fail = true;
+  const f = await setup(
+    t,
+    [{ message: assistant('noted') }],
+    true,
+    undefined,
+    async () => {
+      if (fail) throw new Error('cleanup failed');
+    },
+  );
+  assert.equal((await f.call('prompt', { text: 'keep me' })).ok, true);
+  await wait(
+    () => f.model.requests.length === 1 && activeSession(f).state === 'idle',
+    'the turn',
+  );
+  const id = activeSession(f).id;
+  const failed = await f.call('delete-session', { id, confirmed: true });
+  assert.equal(failed.ok, false);
+  assert.match(String(failed.error), /cleanup failed/);
+  // Not stopping work for ever: what the window was last told says the cleanup failed and
+  // why, so it can offer to delete the session again
+  const shown = f.updates
+    .at(-1)!
+    .snapshot.sessions.find((row) => row.id === id);
+  assert.equal(shown?.lifecycle, 'deleting');
+  assert.match(shown?.deletionFailed ?? '', /cleanup failed/);
+  assert.ok(
+    visibleMessages(shown!).some((row) => row.text === 'keep me'),
+    'its history is still there',
+  );
+  const store = new CheckpointStore(f.home);
+  try {
+    assert.ok(store.get(id), 'its history is still saved');
+  } finally {
+    store.close();
+  }
+  fail = false;
+  assert.equal(
+    (await f.call('delete-session', { id, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(
+    f.controller.snapshot().sessions.some((row) => row.id === id),
+    false,
+  );
+  const after = new CheckpointStore(f.home);
+  try {
+    assert.equal(after.get(id), undefined);
+  } finally {
+    after.close();
+  }
+});
+
+test('what a hub command finds shows in the conversation, and its sign-in status is a notice in passing (#199)', async (t) => {
+  const f = await setup(t, []);
+  saveSettingsChange(f.home, (settings) => {
+    settings.extensions.hub = { enabled: true };
+  });
+  assert.equal((await f.call('reload')).ok, true);
+  const notices = () =>
+    activeSession(f)
+      .messages.filter((row) => row.role === 'notice')
+      .map((row) => row.text);
+  // A command's own result is the conversation's, as every extension's is.
+  const help = await f.call('custom-command', { name: 'hub', args: 'help' });
+  assert.equal(help.ok, true, help.error);
+  assert.ok(
+    notices().some((text) => text.includes('/hub packs')),
+    'the hub commands are listed in the conversation',
+  );
+  // Where you are signed in is status: said in passing, not a row of the conversation.
+  const before = notices().length;
+  const status = await f.call('custom-command', { name: 'hub', args: '' });
+  assert.equal(status.ok, true, status.error);
+  assert.match(
+    String((status.data as { notice?: string }).notice),
+    /not signed in/,
+  );
+  assert.equal(notices().length, before);
 });

@@ -22,6 +22,35 @@ export function isAgentActive(
     : agent.status !== 'completed';
 }
 
+const AGENT_DOTS: Record<string, 'run' | 'wait' | 'fail'> = {
+  running: 'run',
+  preparing: 'run',
+  queued: 'run',
+  cancelling: 'run',
+  waiting: 'wait',
+  needs_review: 'wait',
+  blocked: 'wait',
+  failed: 'fail',
+  interrupted: 'fail',
+};
+/**
+ * The dot a subagent or a task has: blue while it works, orange while it waits for you,
+ * red when it failed or was cut off, a grey ring when it is done. A subagent that ended
+ * with a failure says so in its activity, not in its status.
+ */
+export function agentDot(
+  agent: Pick<AgentRecord, 'status' | 'activity' | 'task'>,
+  waiting = false,
+): 'run' | 'wait' | 'fail' | 'done' {
+  if (waiting) return 'wait';
+  const state = agentState(agent);
+  const dot = AGENT_DOTS[state];
+  if (dot) return dot;
+  if (agent.activity === 'failed' || agent.activity === 'interrupted')
+    return 'fail';
+  return isAgentActive(agent) ? 'run' : 'done';
+}
+
 /** Localize only interface state words; tool names/paths remain the actual event text. */
 export function agentActivityText(
   agent: Pick<AgentRecord, 'status' | 'activity' | 'description' | 'task'>,

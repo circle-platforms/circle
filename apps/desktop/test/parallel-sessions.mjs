@@ -268,6 +268,15 @@ try {
     .fill('A unsent draft');
   await addPicture();
   await page.locator('details.thinking > summary').click();
+  // The transcript takes a scroll in the same frame as a change of its size for
+  // that change, and keeps the reader's place: let the open fold be drawn and
+  // measured before scrolling, as it is for a person (#202).
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  );
   await page.evaluate(() => {
     const box = document.querySelector('.transcript');
     box.scrollTo({ top: 120, behavior: 'instant' });

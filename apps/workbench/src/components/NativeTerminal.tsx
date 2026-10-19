@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { DropdownMenu, Popover } from 'radix-ui';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
@@ -14,12 +15,8 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
-  Copy,
-  MessageSquarePlus,
+  Ellipsis,
   Plus,
-  Play,
-  RotateCcw,
-  Search,
   Square,
   X,
 } from 'lucide-react';
@@ -50,7 +47,19 @@ import {
   type TerminalRequest,
 } from '../model/command-terminal-client';
 import type { TerminalSelectionCapture } from '../model/terminal-context';
-import { Button, IconButton, Modal, Status } from './common';
+import { Button, IconButton, Modal } from './common';
+import { terminalTabNumbers } from '../../../desktop/src/terminal-tabs';
+import { TerminalTabs, type TerminalTab } from './TerminalTabs';
+import {
+  DeviceNotices,
+  DeviceSurface,
+  deviceStateWord,
+  useDeviceTerminals,
+} from '../features/TerminalDevice';
+import { TerminalConnect } from '../features/TerminalConnect';
+import { ModeButtons } from '../features/mode-chrome';
+import { useRuntime } from '../app/context';
+import { currentSession } from '../model/state';
 import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
 
@@ -195,12 +204,33 @@ function processDetails(snapshot: TerminalSnapshot) {
     .join('\n');
 }
 
+const DISMISSED_KEY = 'circle.workbench.terminal-closed';
+/** The tabs you closed: a shell that ended stays listed by the service, but not in the row. */
+function readDismissed(): Set<string> {
+  try {
+    const saved: unknown = JSON.parse(
+      localStorage.getItem(DISMISSED_KEY) ?? '[]',
+    );
+    return new Set(
+      Array.isArray(saved) ? saved.filter((id) => typeof id === 'string') : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+function rememberDismissed(ids: Set<string>) {
+  try {
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify([...ids].slice(-200)));
+  } catch {
+    // The row only forgets them in the next window then.
+  }
+}
+
 /** Keep mounted while the Inspector is hidden. Its PTYs and reading position persist. */
 export function NativeTerminal({
   sessionId: parentSessionId,
   commandTerminal,
   onExitCommandTerminal,
-  focusRequest,
   active = true,
   embedded = false,
   onAddToDraft,
@@ -208,7 +238,6 @@ export function NativeTerminal({
   sessionId: string;
   commandTerminal?: CommandTerminalView;
   onExitCommandTerminal?: () => void;
-  focusRequest?: { id: string; epoch: string; requestId: string };
   active?: boolean;
   embedded?: boolean;
   onAddToDraft?: (capture: TerminalSelectionCapture) => Promise<void>;
@@ -258,34 +287,16 @@ export function NativeTerminal({
       sessionId,
     );
   }, [commandKey, sessionId]);
-  const focusOwner = useRef<
-    { requestId: string; sessionId: string } | undefined
-  >(undefined);
-  const focusSession = useRef(sessionId);
-  if (focusSession.current !== sessionId) {
-    focusSession.current = sessionId;
-    // Leaving a session permanently cancels its old focus request, including
-    // if the user later returns with the same prop still present.
-    if (focusOwner.current) focusOwner.current.sessionId = '';
-  }
-  if (focusRequest && focusOwner.current?.requestId !== focusRequest.requestId)
-    focusOwner.current = { requestId: focusRequest.requestId, sessionId };
-  const requestedFocus =
-    !commandTerminal && focusOwner.current?.sessionId === sessionId
-      ? focusRequest
-      : undefined;
-  const focusKey = requestedFocus ? JSON.stringify(requestedFocus) : '';
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([]);
   const [selectedBySession, setSelected] = useState<Record<string, string>>({});
   const [operations, setOperations] = useState<
-    Record<string, { busy?: boolean; error?: string; notice?: string }>
+    Record<string, { busy?: boolean; error?: string }>
   >({});
   const busy = operations[sessionId]?.busy ?? false;
   const error = operations[sessionId]?.error ?? '';
   const disconnected =
     error.includes('native workspace services are not connected') ||
     error.includes('runtime not enabled');
-  const notice = operations[sessionId]?.notice ?? '';
   const [opened, setOpened] = useState<string[]>([]);
   const [query, setQuery] = useState('');
   const [found, setFound] = useState(true);
@@ -305,11 +316,33 @@ export function NativeTerminal({
   const [hasSelection, setHasSelection] = useState<Record<string, boolean>>({});
   const focusTarget = useRef<string | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
-  const tabStrip = useRef<HTMLDivElement>(null);
   const selectedId = selectedBySession[sessionId];
+  const { snapshot: appSnapshot, notify } = useRuntime();
+  const [dismissed, setDismissed] = useState(readDismissed);
+  // Every command Circle runs has a terminal; only a command that runs in the background,
+  // which has a row of its own in the jobs, is a tab. A foreground one is seen from its
+  // tool row, and in the view of one command.
+  const backgroundTerminals = new Set(
+    appSnapshot.jobs.flatMap((job) =>
+      job.kind === 'command' && job.terminal ? [job.terminal.id] : [],
+    ),
+  );
+  // A command's tab is named by its command: the terminal knows it when Circle wrote it
+  // with variables, and the job always does.
+  const jobTitles = new Map(
+    appSnapshot.jobs.flatMap((job) =>
+      job.kind === 'command' && job.terminal
+        ? [[job.terminal.id, job.title] as const]
+        : [],
+    ),
+  );
   const visible = terminals.filter(
     (item) =>
       item.sessionId === sessionId &&
+      !dismissed.has(item.id) &&
+      (!item.managedCommand ||
+        !!commandTerminal ||
+        backgroundTerminals.has(item.id)) &&
       (!commandTerminal ||
         (item.id === commandTerminal.resolved.target.terminal.id &&
           item.epoch === commandTerminal.resolved.target.terminal.epoch)),
@@ -327,40 +360,6 @@ export function NativeTerminal({
         ].join(' ')
       : undefined);
   currentSearch.current = { sessionId, query, selectedId: selected?.id ?? '' };
-  const tabOrder = visible.map((item) => item.id).join('\n');
-  useLayoutEffect(() => {
-    const strip = tabStrip.current;
-    if (!active || !strip) return;
-    const reveal = () => {
-      if (!strip.clientWidth) return;
-      const tab = strip.querySelector<HTMLButtonElement>(
-        '[aria-selected="true"]',
-      );
-      if (!tab) return;
-      const viewport = strip.getBoundingClientRect();
-      const item = tab.getBoundingClientRect();
-      const left = viewport.left + strip.clientLeft;
-      const right = left + strip.clientWidth;
-      // Adjust only this horizontal scroller. scrollIntoView could move the
-      // Inspector or conversation and disrupt the developer's reading position.
-      if (item.width > strip.clientWidth) strip.scrollLeft += item.left - left;
-      else if (item.left < left) strip.scrollLeft += item.left - left;
-      else if (item.right > right) strip.scrollLeft += item.right - right;
-    };
-    reveal();
-    let width = strip.clientWidth;
-    const observer = new ResizeObserver(() => {
-      const next = strip.clientWidth;
-      if (next !== width) {
-        width = next;
-        reveal();
-      }
-    });
-    observer.observe(strip);
-    return () => observer.disconnect();
-    // Output/status updates retain the same identity/order and must not undo
-    // the user's manual horizontal browsing of terminal history.
-  }, [active, sessionId, selected?.id, tabOrder]);
 
   useEffect(() => {
     searchRequest.current++;
@@ -406,22 +405,6 @@ export function NativeTerminal({
             throw Error(t('command terminal source changed; open it again'));
           focusTarget.current = target.terminal.id;
         }
-        const requested = requestedFocus
-          ? items.find(
-              (item) =>
-                item.id === requestedFocus.id &&
-                item.epoch === requestedFocus.epoch &&
-                item.sessionId === sessionId,
-            )
-          : undefined;
-        if (requestedFocus && !requested) {
-          focusTarget.current = null;
-          throw Error(t('terminal is no longer available'));
-        }
-        if (requested) {
-          focusTarget.current = requested.id;
-          if (active) controls.current.get(requested.id)?.focus();
-        }
         setTerminals((previous) => [
           ...previous.filter((item) => item.sessionId !== sessionId),
           ...items,
@@ -429,7 +412,6 @@ export function NativeTerminal({
         setSelected((previous) => ({
           ...previous,
           [sessionId]:
-            requested?.id ??
             items.find((item) => item.id === previous[sessionId])?.id ??
             items.at(-1)?.id ??
             '',
@@ -448,7 +430,7 @@ export function NativeTerminal({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, reload, terminalRequest, focusKey]);
+  }, [sessionId, reload, terminalRequest]);
 
   useEffect(
     () =>
@@ -583,13 +565,7 @@ export function NativeTerminal({
         }),
       );
       await copyText(stripAnsi(output));
-      setOperations((previous) => ({
-        ...previous,
-        [captured.sessionId]: {
-          ...previous[captured.sessionId],
-          notice: t('complete terminal output copied'),
-        },
-      }));
+      notify(t('complete terminal output copied'));
     });
 
   const addToDraft = () => {
@@ -601,13 +577,7 @@ export function NativeTerminal({
       if (!capture || !onAddToDraft)
         throw Error(t('select terminal output first'));
       await onAddToDraft(capture);
-      setOperations((previous) => ({
-        ...previous,
-        [capture.sourceSessionId]: {
-          ...previous[capture.sourceSessionId],
-          notice: t('terminal selection added to draft'),
-        },
-      }));
+      notify(t('terminal selection added to draft'));
     });
   };
 
@@ -639,6 +609,7 @@ export function NativeTerminal({
   };
 
   const openSearchRef = useRef(() => {});
+  const wantsFind = useRef(false);
   const openSearch = () => {
     if (searchInput.current) {
       searchInput.current.focus();
@@ -657,6 +628,276 @@ export function NativeTerminal({
     if (selected) controls.current.get(selected.id)?.focus();
   };
 
+  // Devices, tabs and what the selected tab can be told to do.
+  const devices = useDeviceTerminals(sessionId);
+  const workspaceFolder = (() => {
+    const owner =
+      appSnapshot.sessions.find((item) => item.id === sessionId) ??
+      currentSession(appSnapshot);
+    const path = appSnapshot.workspaces.find(
+      (item) => item.id === owner.workspaceId,
+    )?.path;
+    return path ? folderName(path) : '';
+  })();
+  const deviceRows = commandTerminal ? [] : devices.rows;
+  const [deviceChosen, setDeviceChosen] = useState('');
+  const [deviceRefresh, setDeviceRefresh] = useState(0);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const wantsConnect = useRef(false);
+  // With no shell in front, the first console is: the row never shows a blank screen.
+  const deviceSelected =
+    deviceRows.find((row) => row.id === deviceChosen) ??
+    (selected ? undefined : deviceRows[0]);
+  // The shell or command in front: none while a device console is.
+  const inFront = deviceSelected ? undefined : selected;
+  const selectedKey = deviceSelected
+    ? `dev:${deviceSelected.id}`
+    : selected
+      ? `local:${selected.id}`
+      : '';
+  const selectDevice = (id: string) => setDeviceChosen(id);
+  const selectTab = (key: string, fromKeyboard = false) => {
+    if (key.startsWith('dev:')) return selectDevice(key.slice(4));
+    const id = key.slice(6);
+    setDeviceChosen('');
+    // A click hands the keyboard to the terminal; arrows keep it on the tab row, so the
+    // next arrow moves along the row instead of reaching a shell.
+    focusTarget.current = fromKeyboard ? null : id;
+    setSelected((previous) => ({ ...previous, [sessionId]: id }));
+  };
+  const closeTab = (id: string) =>
+    setDismissed((previous) => {
+      const next = new Set(previous).add(id);
+      rememberDismissed(next);
+      return next;
+    });
+  // A shell keeps its number while others close around it, and the model's terminal tools
+  // and the cards in the conversation name it the same way: terminalTabNumbers is the rule.
+  const numbers = terminalTabNumbers(
+    terminals.filter((item) => item.sessionId === sessionId),
+  );
+  // What Circle is doing in each of your shells, by the terminal's id.
+  const circleIn = new Map(devices.local.map((row) => [row.terminal, row]));
+  const tabs: TerminalTab[] = [
+    ...visible.map((item): TerminalTab => {
+      const command = !!item.managedCommand;
+      const running = ['running', 'stopping'].includes(item.status);
+      const failed =
+        item.status === 'failed' ||
+        (!running && ((item.exitCode ?? 0) !== 0 || !!item.signal));
+      const named = command || item.kind === 'service';
+      const label = command
+        ? (item.managedCommand?.displayCommand ??
+          jobTitles.get(item.id) ??
+          item.label)
+        : named
+          ? item.label
+          : t('terminal {n}', { n: numbers.get(item.id) ?? 0 });
+      const circle = circleIn.get(item.id);
+      return {
+        key: `local:${item.id}`,
+        label,
+        title: `${item.cwd} · ${status(item)}`,
+        // A quiet shell has no dot; what runs for you or Circle does, and so does
+        // Circle waiting on you for this shell or working in it.
+        state:
+          circle?.state === 'waiting'
+            ? 'wait'
+            : circle?.state === 'operating'
+              ? 'run'
+              : running
+                ? named
+                  ? 'run'
+                  : undefined
+                : failed
+                  ? 'fail'
+                  : named
+                    ? 'done'
+                    : undefined,
+        controls: `terminal-${item.id}`,
+        // A command Circle runs cannot be closed until it ends: it has its stop.
+        ...(command && running
+          ? {}
+          : {
+              closeLabel: running
+                ? t('stop {name}', { name: label })
+                : t('close {name}', { name: label }),
+              onClose: () => {
+                if (running) void stopTerminal(item.id);
+                closeTab(item.id);
+              },
+            }),
+      };
+    }),
+    ...deviceRows.map((row): TerminalTab => ({
+      key: `dev:${row.id}`,
+      label: `${row.name} · ${row.transport === 'ssh' ? 'SSH' : 'Telnet'}`,
+      title: `${row.target} · ${deviceStateWord(row)}`,
+      state:
+        row.state === 'connecting'
+          ? 'run'
+          : row.state === 'error'
+            ? 'fail'
+            : undefined,
+      controls: `device-${row.id}`,
+      closeLabel: t('disconnect {name}', { name: row.name }),
+      onClose: () => devices.disconnect(row),
+    })),
+  ];
+  const commandRunning =
+    !!inFront?.managedCommand &&
+    ['running', 'stopping'].includes(inFront.status);
+  // What Circle is doing in the shell in front: it asks about it, works in it, or you hold it.
+  const circleInFront = inFront ? circleIn.get(inFront.id) : undefined;
+  // Ringed orange while Circle waits for your answer about this shell, blue while it
+  // works in it or a command it started runs here.
+  const frame =
+    circleInFront?.state === 'waiting'
+      ? 'wait'
+      : commandRunning || circleInFront?.state === 'operating'
+        ? 'run'
+        : '';
+  const frontName = inFront
+    ? (tabs.find((tab) => tab.key === `local:${inFront.id}`)?.label ?? '')
+    : '';
+  const rowActions = deviceSelected ? (
+    deviceSelected.held ? (
+      <Button onClick={() => devices.detach(deviceSelected)}>
+        {t('give back')}
+      </Button>
+    ) : deviceSelected.state === 'ready' ? (
+      <Button onClick={() => devices.attach(deviceSelected)}>
+        {t('take over')}
+      </Button>
+    ) : null
+  ) : commandRunning && inFront ? (
+    <Button
+      disabled={
+        stopping.includes(inFront.id) ||
+        (!!commandTerminal && !capabilities?.stop)
+      }
+      onClick={() => void stopTerminal(inFront.id)}
+    >
+      <Square size={12} aria-hidden /> {t('stop')}
+    </Button>
+  ) : circleInFront?.held ? (
+    <Button onClick={() => devices.giveBackTab(circleInFront)}>
+      {t('give back')}
+    </Button>
+  ) : circleInFront?.state === 'operating' ? (
+    <>
+      <Button onClick={() => devices.takeTab(circleInFront)}>
+        {t('take over')}
+      </Button>
+      <Button
+        aria-label={t('stop Circle in {name}', { name: frontName })}
+        onClick={() => devices.stopTab(circleInFront)}
+      >
+        <Square size={12} aria-hidden /> {t('stop')}
+      </Button>
+    </>
+  ) : null;
+  const terminalMenu =
+    deviceSelected || inFront ? (
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <IconButton label={t('terminal menu')}>
+            <Ellipsis size={14} />
+          </IconButton>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            className="dropdown term-menu"
+            align="end"
+            sideOffset={6}
+            // Find opens once the menu has handed the keyboard back to its button: opened
+            // while the menu closes, the keyboard would land on the button after it.
+            onCloseAutoFocus={(event) => {
+              if (!wantsFind.current) return;
+              event.preventDefault();
+              wantsFind.current = false;
+              openSearch();
+            }}
+          >
+            {deviceSelected ? (
+              <DropdownMenu.Item
+                onSelect={() => setDeviceRefresh((value) => value + 1)}
+              >
+                {t('refresh the screen')}
+              </DropdownMenu.Item>
+            ) : (
+              inFront && (
+                <>
+                  <DropdownMenu.Item
+                    onSelect={() => {
+                      wantsFind.current = true;
+                    }}
+                  >
+                    {t('find in terminal')}
+                  </DropdownMenu.Item>
+                  {onAddToDraft && (
+                    <DropdownMenu.Item
+                      disabled={
+                        busy ||
+                        !active ||
+                        !hasSelection[inFront.id] ||
+                        (!!commandTerminal && !capabilities?.addToDraft)
+                      }
+                      onSelect={addToDraft}
+                    >
+                      {t('add selection to chat')}
+                    </DropdownMenu.Item>
+                  )}
+                  <DropdownMenu.Item disabled={busy} onSelect={copyAll}>
+                    {t('copy complete output')}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator className="dropdown-separator" />
+                  <DropdownMenu.Item
+                    disabled={
+                      busy ||
+                      !!commandTerminal ||
+                      !!inFront.managedCommand ||
+                      inFront.status === 'stopping'
+                    }
+                    onSelect={restart}
+                  >
+                    {inFront.kind === 'service' && !inFront.managedCommand
+                      ? t('restart service')
+                      : t('restart terminal')}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    disabled={
+                      busy ||
+                      inFront.status !== 'running' ||
+                      (!!commandTerminal && !capabilities?.input)
+                    }
+                    onSelect={() =>
+                      run(async () => {
+                        adopt(
+                          await terminalRequest<TerminalSnapshot>('signal', {
+                            id: inFront.id,
+                            signal: 'SIGINT',
+                          }),
+                        );
+                      })
+                    }
+                  >
+                    {t('interrupt command')}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    disabled={busy || !sessionId || !!commandTerminal}
+                    onSelect={() => setServiceOpen(true)}
+                  >
+                    {t('start service')}
+                  </DropdownMenu.Item>
+                </>
+              )
+            )}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    ) : null;
+
   return (
     <section
       className={`native-terminal${embedded ? ' embedded' : ''}`}
@@ -672,98 +913,142 @@ export function NativeTerminal({
         }
       }}
     >
-      <div className="native-terminal-toolbar">
-        {commandTerminal && onExitCommandTerminal && (
-          <IconButton
-            label={t('session terminals')}
-            onClick={onExitCommandTerminal}
-          >
-            <ArrowLeft size={14} />
-          </IconButton>
-        )}
-        {!visible.length && (
-          <span className="native-terminal-title">{t('terminal')}</span>
-        )}
-        <div
-          className="native-terminal-tabs segmented"
-          ref={tabStrip}
-          role="tablist"
-          aria-label={t('terminal tabs')}
-        >
-          {visible.map((item, index) => (
-            <button
-              key={item.id}
-              role="tab"
-              type="button"
-              aria-selected={item.id === selected?.id}
-              className={item.id === selected?.id ? 'active' : ''}
-              tabIndex={item.id === selected?.id ? 0 : -1}
-              aria-controls={`terminal-${item.id}`}
-              title={`${item.cwd} · ${status(item)}`}
-              onClick={() => {
-                focusTarget.current = item.id;
-                setSelected((previous) => ({
-                  ...previous,
-                  [sessionId]: item.id,
-                }));
-              }}
-              onKeyDown={(event) => {
-                const index = visible.findIndex(
-                  (entry) => entry.id === item.id,
-                );
-                const position =
-                  event.key === 'Home'
-                    ? 0
-                    : event.key === 'End'
-                      ? visible.length - 1
-                      : event.key === 'ArrowLeft'
-                        ? (index + visible.length - 1) % visible.length
-                        : event.key === 'ArrowRight'
-                          ? (index + 1) % visible.length
-                          : -1;
-                const next = visible[position];
-                if (!next) return;
-                event.preventDefault();
-                event.stopPropagation();
-                focusTarget.current = null;
-                setSelected((previous) => ({
-                  ...previous,
-                  [sessionId]: next.id,
-                }));
-                event.currentTarget.parentElement
-                  ?.querySelector<HTMLButtonElement>(
-                    `[aria-controls="terminal-${next.id}"]`,
-                  )
-                  ?.focus();
-              }}
+      <TerminalTabs
+        leading={
+          commandTerminal && onExitCommandTerminal ? (
+            <IconButton
+              label={t('session terminals')}
+              onClick={onExitCommandTerminal}
             >
-              <span
-                className={`native-terminal-lamp ${item.serviceState ?? item.status}`}
-                aria-hidden="true"
-              />
-              {item.label} {index + 1}
-            </button>
-          ))}
-        </div>
-        <IconButton
-          label={t('new terminal')}
-          disabled={busy || !sessionId || !!commandTerminal}
-          onClick={create}
-        >
-          <Plus size={15} />
-        </IconButton>
-      </div>
-      {selected && displayedCommand && (
+              <ArrowLeft size={14} />
+            </IconButton>
+          ) : undefined
+        }
+        tabs={tabs}
+        selected={selectedKey}
+        active={active}
+        onSelect={selectTab}
+        menu={
+          commandTerminal ? undefined : (
+            <Popover.Root open={connectOpen} onOpenChange={setConnectOpen}>
+              <Popover.Anchor asChild>
+                <span className="term-plus">
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger asChild>
+                      <IconButton
+                        label={t('new terminal or device')}
+                        disabled={!sessionId}
+                      >
+                        <Plus size={15} />
+                      </IconButton>
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content
+                        className="dropdown term-menu"
+                        align="start"
+                        sideOffset={6}
+                        // The form opens once the menu has let go of the focus: opened
+                        // while the menu closes, it would be dismissed by that hand-over.
+                        onCloseAutoFocus={(event) => {
+                          if (!wantsConnect.current) return;
+                          event.preventDefault();
+                          wantsConnect.current = false;
+                          setConnectOpen(true);
+                        }}
+                      >
+                        <DropdownMenu.Item disabled={busy} onSelect={create}>
+                          {t('new local terminal')}
+                          {workspaceFolder && <small>{workspaceFolder}</small>}
+                        </DropdownMenu.Item>
+                        {devices.available && (
+                          <>
+                            <DropdownMenu.Separator className="dropdown-separator" />
+                            {devices.profiles.length > 0 && (
+                              <DropdownMenu.Label className="dropdown-label">
+                                {t('connect to a device')}
+                              </DropdownMenu.Label>
+                            )}
+                            {devices.profiles.map((profile) => (
+                              <DropdownMenu.Item
+                                key={profile.name}
+                                onSelect={() =>
+                                  void devices
+                                    .connectProfile(profile.name)
+                                    .then((id) => id && selectDevice(id))
+                                    .catch(() => {})
+                                }
+                              >
+                                {profile.name}
+                                <small>
+                                  {profile.target} ·{' '}
+                                  {profile.transport === 'ssh'
+                                    ? 'SSH'
+                                    : 'Telnet'}
+                                </small>
+                              </DropdownMenu.Item>
+                            ))}
+                            <DropdownMenu.Item
+                              onSelect={() => {
+                                wantsConnect.current = true;
+                              }}
+                            >
+                              {t('connect new device…')}
+                            </DropdownMenu.Item>
+                          </>
+                        )}
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                </span>
+              </Popover.Anchor>
+              <Popover.Portal>
+                <Popover.Content
+                  className="popover term-connect-pop"
+                  align="start"
+                  sideOffset={6}
+                >
+                  <TerminalConnect
+                    onCancel={() => setConnectOpen(false)}
+                    onConnect={async (target) => {
+                      const id = await devices.connectTarget(target);
+                      if (id) selectDevice(id);
+                      setConnectOpen(false);
+                    }}
+                  />
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
+          )
+        }
+        actions={rowActions}
+        end={
+          <>
+            {terminalMenu}
+            <ModeButtons popOut />
+          </>
+        }
+      />
+      {inFront && displayedCommand && !inFront.managedCommand && (
         <div className="native-service-details">
           <code title={displayedCommand}>{displayedCommand}</code>
-          {selected.readiness?.port && (
-            <span>localhost:{selected.readiness.port}</span>
+          {inFront.readiness?.port && (
+            <span>localhost:{inFront.readiness.port}</span>
           )}
-          {selected.readiness?.pattern && (
-            <span title={selected.readiness.pattern}>
-              {t('ready log text')}: {selected.readiness.pattern}
+          {inFront.readiness?.pattern && (
+            <span title={inFront.readiness.pattern}>
+              {t('ready log text')}: {inFront.readiness.pattern}
             </span>
           )}
+        </div>
+      )}
+      {inFront && !['running', 'stopping'].includes(inFront.status) && (
+        <div
+          className="native-terminal-exit"
+          role="status"
+          title={processDetails(inFront)}
+        >
+          {status(inFront)}
+          {extraExitReason(inFront) ? ` · ${extraExitReason(inFront)}` : ''}
         </div>
       )}
       {error && !serviceOpen && (
@@ -780,17 +1065,25 @@ export function NativeTerminal({
           )}
         </div>
       )}
-      {selected?.readiness?.error && (
+      {inFront?.readiness?.error && (
         <div className="native-terminal-error" role="alert">
-          {selected.readiness.error}
+          {inFront.readiness.error}
         </div>
       )}
-      {selected?.error && (
+      {inFront?.error && (
         <div className="native-terminal-error" role="alert">
-          {selected.error}
+          {inFront.error}
         </div>
       )}
-      {!selected && !error && (
+      {!commandTerminal && (
+        <DeviceNotices
+          devices={devices}
+          row={deviceSelected}
+          tab={circleInFront}
+          tabName={frontName}
+        />
+      )}
+      {!selected && !deviceRows.length && !error && (
         <div className="native-terminal-empty">
           <p>{t('run commands here while agents keep working')}</p>
           <Button
@@ -801,222 +1094,122 @@ export function NativeTerminal({
           </Button>
         </div>
       )}
-      <div className="native-terminal-surfaces">
-        {terminals
-          .filter((item) => opened.includes(item.id))
-          .map((item) => (
-            <TerminalSurface
-              key={item.id}
-              onFind={() => openSearchRef.current()}
-              snapshot={item}
-              request={
-                commandTerminal &&
-                item.id === commandTerminal.resolved.target.terminal.id
-                  ? terminalRequest
-                  : undefined
-              }
-              inputAllowed={!commandTerminal || !!capabilities?.input}
-              active={
-                active &&
-                item.id === selected?.id &&
-                item.sessionId === sessionId
-              }
-              visible={item.id === selected?.id && item.sessionId === sessionId}
-              adopt={adopt}
-              onSelectionChange={(selected) => {
-                setHasSelection((current) =>
-                  current[item.id] === selected
-                    ? current
-                    : { ...current, [item.id]: selected },
-                );
-              }}
-              register={(value) => {
-                if (value) {
-                  controls.current.set(item.id, value);
-                  if (
-                    focusTarget.current === item.id &&
-                    active &&
-                    selected?.id === item.id
-                  )
-                    value.focus();
-                } else controls.current.delete(item.id);
-              }}
-            />
-          ))}
-      </div>
-      <div className="native-terminal-bar">
-        {selected && searchOpen ? (
-          <div className="native-terminal-search find-bar">
-            <input
-              ref={(node) => {
-                searchInput.current = node;
-                if (node && focusSearch.current) {
-                  focusSearch.current = false;
-                  node.focus();
+      <div className="term-frame" data-frame={frame}>
+        <div className="native-terminal-surfaces">
+          {terminals
+            .filter((item) => opened.includes(item.id))
+            .map((item) => (
+              <TerminalSurface
+                key={item.id}
+                onFind={() => openSearchRef.current()}
+                snapshot={item}
+                request={
+                  commandTerminal &&
+                  item.id === commandTerminal.resolved.target.terminal.id
+                    ? terminalRequest
+                    : undefined
                 }
-              }}
-              aria-label={t('find in terminal')}
-              placeholder={t('find in terminal')}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              value={query}
-              onChange={(event) => {
-                searchRequest.current++;
-                setQuery(event.target.value);
-                setFound(true);
-              }}
-              onKeyDown={(event) => {
-                event.stopPropagation();
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void find(event.shiftKey);
+                inputAllowed={!commandTerminal || !!capabilities?.input}
+                active={
+                  active &&
+                  !deviceSelected &&
+                  item.id === selected?.id &&
+                  item.sessionId === sessionId
                 }
-                if (event.key === 'Escape') {
-                  event.preventDefault();
-                  closeSearch();
+                visible={
+                  !deviceSelected &&
+                  item.id === selected?.id &&
+                  item.sessionId === sessionId
                 }
-              }}
-            />
-            {!found && <span role="status">{t('no matches')}</span>}
-            <IconButton
-              label={t('previous match')}
-              disabled={!query}
-              onClick={() => {
-                void find(true);
-              }}
-            >
-              <ArrowUp size={14} />
-            </IconButton>
-            <IconButton
-              label={t('next match')}
-              disabled={!query}
-              onClick={() => {
-                void find(false);
-              }}
-            >
-              <ArrowDown size={14} />
-            </IconButton>
-            <IconButton label={t('close search')} onClick={closeSearch}>
-              <X size={14} />
-            </IconButton>
-          </div>
-        ) : (
-          selected && (
-            <div className="native-terminal-status" role="status">
-              <span
-                className="native-terminal-folder"
-                title={processDetails(selected)}
-              >
-                {folderName(selected.cwd)}
-              </span>
-              <span title={selected.exitReason}>
-                <Status value={status(selected)} />
-                {extraExitReason(selected)
-                  ? ` · ${extraExitReason(selected)}`
-                  : ''}
-              </span>
-              {notice && (
-                <span className="native-terminal-notice">{notice}</span>
-              )}
-            </div>
-          )
-        )}
-        <div className="native-terminal-actions">
-          <IconButton
-            label={t('find in terminal')}
-            disabled={!selected}
-            aria-expanded={searchOpen}
-            onClick={openSearch}
-          >
-            <Search size={14} />
-          </IconButton>
-          <IconButton
-            label={t('start service')}
-            disabled={busy || !sessionId || !!commandTerminal}
-            onClick={() => setServiceOpen(true)}
-          >
-            <Play size={14} />
-          </IconButton>
-          <IconButton
-            label={
-              selected?.kind === 'service' && !selected.managedCommand
-                ? t('restart service')
-                : t('restart terminal')
-            }
-            disabled={
-              busy ||
-              !selected ||
-              !!commandTerminal ||
-              ('managedCommand' in selected && !!selected.managedCommand) ||
-              selected.status === 'stopping'
-            }
-            onClick={restart}
-          >
-            <RotateCcw size={14} />
-          </IconButton>
-          <IconButton
-            label={t('interrupt command')}
-            disabled={
-              busy ||
-              selected?.status !== 'running' ||
-              (!!commandTerminal && !capabilities?.input)
-            }
-            onClick={() =>
-              run(async () => {
-                if (selected)
-                  adopt(
-                    await terminalRequest<TerminalSnapshot>('signal', {
-                      id: selected.id,
-                      signal: 'SIGINT',
-                    }),
+                adopt={adopt}
+                onSelectionChange={(selected) => {
+                  setHasSelection((current) =>
+                    current[item.id] === selected
+                      ? current
+                      : { ...current, [item.id]: selected },
                   );
-              })
-            }
-          >
-            <Square size={13} />
-          </IconButton>
-          <IconButton
-            label={
-              selected?.kind === 'service' && !selected.managedCommand
-                ? t('stop service')
-                : t('stop terminal')
-            }
-            disabled={
-              !selected ||
-              stopping.includes(selected.id) ||
-              !['running', 'stopping'].includes(selected.status) ||
-              (!!commandTerminal && !capabilities?.stop)
-            }
-            onClick={() => {
-              if (selected) void stopTerminal(selected.id);
-            }}
-          >
-            <X size={15} />
-          </IconButton>
-          <IconButton
-            label={t('copy complete output')}
-            disabled={busy || !selected}
-            onClick={copyAll}
-          >
-            <Copy size={14} />
-          </IconButton>
-          {onAddToDraft && (
-            <IconButton
-              label={t('add selection to chat')}
-              disabled={
-                busy ||
-                !active ||
-                !selected ||
-                !hasSelection[selected.id] ||
-                (!!commandTerminal && !capabilities?.addToDraft)
-              }
-              onClick={addToDraft}
-            >
-              <MessageSquarePlus size={14} />
-            </IconButton>
+                }}
+                register={(value) => {
+                  if (value) {
+                    controls.current.set(item.id, value);
+                    if (
+                      focusTarget.current === item.id &&
+                      active &&
+                      selected?.id === item.id
+                    )
+                      value.focus();
+                  } else controls.current.delete(item.id);
+                }}
+              />
+            ))}
+          {(deviceRows.length > 0 || deviceChosen) && (
+            <DeviceSurface
+              sessionId={sessionId}
+              row={deviceSelected}
+              visible={!!deviceSelected}
+              refresh={deviceRefresh}
+            />
           )}
         </div>
+        {inFront && searchOpen && (
+          <div className="native-terminal-bar">
+            <div className="native-terminal-search find-bar">
+              <input
+                ref={(node) => {
+                  searchInput.current = node;
+                  if (node && focusSearch.current) {
+                    focusSearch.current = false;
+                    node.focus();
+                  }
+                }}
+                aria-label={t('find in terminal')}
+                placeholder={t('find in terminal')}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                value={query}
+                onChange={(event) => {
+                  searchRequest.current++;
+                  setQuery(event.target.value);
+                  setFound(true);
+                }}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void find(event.shiftKey);
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closeSearch();
+                  }
+                }}
+              />
+              {!found && <span role="status">{t('no matches')}</span>}
+              <IconButton
+                label={t('previous match')}
+                disabled={!query}
+                onClick={() => {
+                  void find(true);
+                }}
+              >
+                <ArrowUp size={14} />
+              </IconButton>
+              <IconButton
+                label={t('next match')}
+                disabled={!query}
+                onClick={() => {
+                  void find(false);
+                }}
+              >
+                <ArrowDown size={14} />
+              </IconButton>
+              <IconButton label={t('close search')} onClick={closeSearch}>
+                <X size={14} />
+              </IconButton>
+            </div>
+          </div>
+        )}
       </div>
       <Modal
         open={serviceOpen}
@@ -1131,11 +1324,6 @@ export function NativeTerminal({
                 autoCorrect="off"
               />
             </label>
-            <p>
-              {t(
-                'when both checks are set, both must pass before the service is ready',
-              )}
-            </p>
             {error && (
               <p className="native-terminal-error" role="alert">
                 {error}

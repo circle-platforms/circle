@@ -75,12 +75,20 @@ await new Promise((done) => server.listen(0, '127.0.0.1', done));
 const devicePort = server.address().port;
 
 // The saved profile the panel lists and connects.
+const longProfile =
+  'a synthetic console with a very long name for Windows ellipsis verification';
 await writeFile(
   join(dataDir, 'runtime-home', 'terminal-sessions.json'),
   JSON.stringify({
     sessions: [
       {
         name: 'rack',
+        transport: 'telnet',
+        host: '127.0.0.1',
+        port: devicePort,
+      },
+      {
+        name: longProfile,
         transport: 'telnet',
         host: '127.0.0.1',
         port: devicePort,
@@ -142,32 +150,35 @@ try {
     { id: session, profile: 'rack' },
   );
   assert.equal(state.sessions[0].state, 'ready');
-  // A console that appears opens its own panel, except in a narrow window (1050 px
-  // or less, as a Windows runner's screen gives), where it waits for the top-bar
+  // A console that appears opens the terminal mode on its own, except in a narrow window
+  // (1050 px or less, as a Windows runner's screen gives), where it waits for the top-bar
   // button; the button toggles it either way.
   const narrow = await page.evaluate(
     () => matchMedia('(max-width: 1050px)').matches,
   );
+  const button = page.getByRole('button', {
+    name: 'terminal panel',
+    exact: true,
+  });
   if (narrow) {
     // Had it opened, this click would close it and the wait below would fail.
     assert.equal(
-      await page.locator('.device-terminal').isVisible(),
+      await page.locator('.term-tabbar').isVisible(),
       false,
-      'a console does not open its panel over a narrow window',
+      'a console does not open the terminal over a narrow window',
     );
-    await page
-      .getByRole('button', { name: 'device terminals panel', exact: true })
-      .click();
+    await button.click();
   }
-  await page.locator('.device-terminal').waitFor({ timeout: 15000 });
-  await page
-    .getByRole('button', { name: 'device terminals panel', exact: true })
-    .click();
-  await page.locator('.device-terminal').waitFor({ state: 'hidden' });
-  await page
-    .getByRole('button', { name: 'device terminals panel', exact: true })
-    .click();
-  const screen = page.locator('.device-terminal .terminal-screen .xterm');
+  await page.locator('.term-tabbar').waitFor({ timeout: 15000 });
+  await button.click();
+  await page.locator('.term-tabbar').waitFor({ state: 'hidden' });
+  await button.click();
+  // The console is a tab of the row, named by the device, and in front when no shell is.
+  const rack = page
+    .locator('.term-tab-main')
+    .filter({ hasText: 'rack · Telnet' });
+  await rack.waitFor();
+  const screen = page.locator('.device-screen .xterm');
   await screen.waitFor({ state: 'visible', timeout: 15000 });
   const shown = await page.evaluate(
     ({ id, one }) =>
@@ -177,9 +188,11 @@ try {
   if (!shown.includes('TELNET panel fixture'))
     failures.push(`the screen snapshot missed the banner: ${shown}`);
   // The person takes the console: their keys reach the device
+  await page.getByRole('button', { name: 'take over', exact: true }).click();
+  await page.getByRole('button', { name: 'give back', exact: true }).waitFor();
   const held = await page.evaluate(
-    ({ id, one }) => window.circleDesktop.terminalAttach(id, one),
-    { id: session, one: 't1' },
+    (id) => window.circleDesktop.terminalState(id),
+    session,
   );
   assert.equal(held.sessions[0].held, 'attach');
   await page.evaluate(
@@ -190,9 +203,14 @@ try {
   // A key typed into the console is the device's (#155): on Windows and Linux
   // Ctrl+K reaches it once as ^K and opens no search; on macOS ⌘K is no terminal
   // key and opens search from the console.
-  const keys = page.locator('.device-terminal .xterm-helper-textarea');
+  const keys = page.locator(
+    '.device-screen:not([hidden]) .xterm-helper-textarea',
+  );
   await page.waitForFunction(
-    () => !document.querySelector('.device-terminal textarea[disabled]'),
+    () =>
+      !document.querySelector(
+        '.device-screen:not([hidden]) textarea[disabled]',
+      ),
   );
   await keys.focus();
   const searchOpen = () =>
@@ -221,30 +239,29 @@ try {
     );
   }
   // Give it back: the model's actions may run again
+  await page.getByRole('button', { name: 'give back', exact: true }).click();
+  await page.getByRole('button', { name: 'take over', exact: true }).waitFor();
   const free = await page.evaluate(
-    ({ id, one }) => window.circleDesktop.terminalDetach(id, one),
-    { id: session, one: 't1' },
+    (id) => window.circleDesktop.terminalState(id),
+    session,
   );
   assert.equal(free.sessions[0].held, '');
   // A person reaches a device by address, with no saved profile: quick connect.
-  const panel = page.locator('.device-terminal');
-  await panel
-    .getByRole('button', { name: 'new connection', exact: true })
-    .click();
-  await panel
-    .getByRole('textbox', { name: 'host', exact: true })
-    .fill('127.0.0.1');
-  await panel
-    .getByRole('textbox', { name: 'port', exact: true })
-    .fill(String(devicePort));
-  await panel.getByRole('button', { name: 'connect', exact: true }).click();
+  await page.getByRole('button', { name: 'new terminal or device' }).click();
+  await page.getByRole('menuitem', { name: /connect new device/ }).click();
+  const form = page.locator('.term-connect');
+  await form.getByRole('button', { name: 'Telnet', exact: true }).click();
+  await form.getByLabel('address').fill('127.0.0.1');
+  await form.getByLabel('port').fill(String(devicePort));
+  await form.getByRole('button', { name: 'connect', exact: true }).click();
   // The console the person connected gets its own tab, named by the device.
-  const quick = panel
-    .locator('.terminal-tab')
-    .filter({ hasText: `127.0.0.1:${devicePort}` });
+  const quick = page
+    .locator('.term-tab')
+    .filter({ hasText: `127.0.0.1` })
+    .filter({ hasNotText: 'rack' });
   await quick.waitFor();
   // The tabs are the consoles: closing one disconnects only that device.
-  await quick.getByRole('button').click();
+  await quick.getByRole('button', { name: /^disconnect / }).click();
   await quick.waitFor({ state: 'hidden' });
   const left = await page.evaluate(
     (id) => window.circleDesktop.terminalState(id),
@@ -292,6 +309,25 @@ try {
     );
   if (!/invalid conversation/.test(gated))
     failures.push(`a bad conversation id was not gated: ${gated}`);
+  // Saved display names are content, including spaces. The menu must connect the
+  // actual profile, and its long tab keeps a close control beside the ellipsis.
+  await page.getByRole('button', { name: 'new terminal or device' }).click();
+  await page.getByRole('menuitem').filter({ hasText: longProfile }).click();
+  const longTab = page.locator('.term-tab').filter({ hasText: longProfile });
+  await longTab.waitFor();
+  const connected = await page.evaluate(
+    (id) => window.circleDesktop.terminalState(id),
+    session,
+  );
+  assert.equal(connected.sessions.at(-1).name, longProfile);
+  assert.equal(connected.sessions.at(-1).state, 'ready');
+  const label = await longTab.locator('.term-tab-label').evaluate((node) => ({
+    overflow: getComputedStyle(node).textOverflow,
+    clipped: node.scrollWidth > node.clientWidth,
+  }));
+  assert.deepEqual(label, { overflow: 'ellipsis', clipped: true });
+  await longTab.getByRole('button', { name: /^disconnect / }).click();
+  await longTab.waitFor({ state: 'hidden' });
 } catch (error) {
   failures.push(error instanceof Error ? error.message : String(error));
 } finally {

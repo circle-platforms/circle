@@ -46,7 +46,7 @@ npm --prefix apps/desktop run package:beta
 
 It leaves `out/Circle (beta)-<os>-<arch>/` (on macOS `Circle (beta).app`, signed again ad hoc) and no archive. The beta has a bundle id of its own (`com.qingshanfeihu.circle.beta`) and a data folder of its own, `Circle (beta)` under the application-data directory, so it shares no settings, credentials or sessions with the release and both can run at once. It does not update itself, as the release would take its place; check now links to the release page. Copy it where you like, such as `/Applications/Circle (beta).app`.
 
-The desktop package includes the renderer, Circle runtime/dependencies, prompts, model metadata, icon, license and third-party notices. It needs no globally installed Node or Circle executable. Build dependencies are pinned in the repository and application lockfiles.
+The desktop package includes the renderer, Circle runtime/dependencies, prompts, the [skills that ship with Circle](../../docs/skills.md#built-in-skills), model metadata, icon, license and third-party notices. It needs no globally installed Node or Circle executable. Build dependencies are pinned in the repository and application lockfiles.
 
 ## Components
 
@@ -55,7 +55,7 @@ The desktop package includes the renderer, Circle runtime/dependencies, prompts,
 - `src/runtime-supervisor.ts` owns the native core process. `src/runtime-controller.ts` translates named commands into existing core APIs and projects actual state; `runtime-worker.ts` hosts it.
 - `src/files.ts` reads user-selected files and indexes selected folders. Workspace reads require opaque granted handles and reject unknown handles or symlink escapes.
 - `src/browser.ts` keeps one sandboxed native browser per Circle session, which the model drives through the browser tools and the person uses in the panel. It covers dialogs, certificate warnings, downloads, uploads, sign-ins, permissions, client certificates and handoff. The browser identity is stable across inspector switches; capture records its identity, time and content hash.
-- `../workbench` provides Circle's session interface and its file/activity/browser components.
+- `../workbench` provides Circle's session interface and its files, changes, browser, subagents and terminal modes.
 
 Quitting waits for Circle to cancel and close its owned jobs, then waits for its native process to exit. Renderer reload preserves that process. Window close remains separate from future C/D service control. The native browser is shared: the model acts in it with approval, and the person can take it over.
 

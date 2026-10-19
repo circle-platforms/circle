@@ -251,7 +251,9 @@ export class TerminalManager {
   readonly #options: TerminalManagerOptions;
   readonly #onEvent: (event: TerminalEvent) => void | Promise<void>;
   readonly #entries = new Map<string, Entry>();
+  readonly #observers = new Set<(event: TerminalEvent) => void>();
   readonly #ready: Promise<void>;
+  #settled = false;
   #workspaceRoot = '';
   #shells: string[] = [];
   #disposed = false;
@@ -264,6 +266,56 @@ export class TerminalManager {
     this.#options = options;
     this.#onEvent = onEvent;
     this.#ready = this.#initialize();
+    void this.#ready.then(
+      () => (this.#settled = true),
+      () => {},
+    );
+  }
+
+  /**
+   * Trusted host code only (the runtime's terminal-tab tools), never the workspace RPC:
+   * every event as it is appended, in order. An observer must not throw or change it.
+   */
+  observe(listener: (event: TerminalEvent) => void): () => void {
+    this.#observers.add(listener);
+    return () => this.#observers.delete(listener);
+  }
+
+  /** `list`, for a caller that cannot wait: nothing before the service is ready. */
+  listNow(owner: string): TerminalSnapshot[] {
+    if (!this.#settled) return [];
+    identity(owner, 'owner');
+    return byStart(
+      [...this.#entries.values()]
+        .filter((entry) => entry.snapshot.owner === owner)
+        .map((entry) => clone(entry.snapshot)),
+    );
+  }
+
+  /**
+   * Trusted host only: a terminal's newest output still in memory, about `maxLength`
+   * characters, with the sequence it ends at and when its last part arrived. Later
+   * output comes to the observers from the next sequence on.
+   */
+  recentOutput(
+    owner: string,
+    id: string,
+    maxLength: number,
+  ): { data: string; sequence: number; at?: string } | undefined {
+    const entry = this.#entries.get(id);
+    if (!this.#settled || !entry || entry.snapshot.owner !== owner) return;
+    const parts: string[] = [];
+    let size = 0;
+    let at: string | undefined;
+    for (let index = entry.ring.length - 1; index >= 0; index--) {
+      const event = entry.ring[index]!;
+      if (event.kind !== 'data' || !event.data) continue;
+      at ??= event.at;
+      size += event.data.length;
+      if (size > maxLength && parts.length) break;
+      parts.unshift(event.data);
+    }
+    return { data: parts.join(''), sequence: entry.snapshot.lastSequence, at };
   }
 
   async create(options: TerminalCreateOptions): Promise<TerminalSnapshot> {
@@ -752,7 +804,7 @@ export class TerminalManager {
       );
     if (old.transientEnvironment && !previous.environment)
       throw Error(
-        'per-launch environment is unavailable after restart; relaunch from its debugger or task',
+        'per-launch environment is unavailable after restart; start it again from where it was launched',
       );
     await this.close(owner, id);
     const next = await this.#create(
@@ -789,6 +841,10 @@ export class TerminalManager {
   /** Terminals that are running, stopping or still hold a live pty after a failed start. */
   async activeIds(owner: string): Promise<string[]> {
     await this.#ready;
+    return this.activeIdsNow(owner);
+  }
+  /** Current ownership for synchronous runtime snapshots; never opens a terminal. */
+  activeIdsNow(owner: string): string[] {
     identity(owner, 'owner');
     return [...this.#entries.values()]
       .filter(
@@ -800,12 +856,15 @@ export class TerminalManager {
       .map((entry) => entry.snapshot.id);
   }
 
+  /** Oldest first, by when each started: the order tabs are numbered in. */
   async list(owner: string): Promise<TerminalSnapshot[]> {
     await this.#ready;
     identity(owner, 'owner');
-    return [...this.#entries.values()]
-      .filter((entry) => entry.snapshot.owner === owner)
-      .map((entry) => clone(entry.snapshot));
+    return byStart(
+      [...this.#entries.values()]
+        .filter((entry) => entry.snapshot.owner === owner)
+        .map((entry) => clone(entry.snapshot)),
+    );
   }
 
   async replay(
@@ -1058,6 +1117,13 @@ export class TerminalManager {
     entry.eventBytes += Buffer.byteLength(line);
     this.#write(entry, entry.events, line);
     entry.ring.push(event);
+    for (const observe of this.#observers) {
+      try {
+        observe(event);
+      } catch {
+        /* An observer's failure cannot stop a shell or its log. */
+      }
+    }
     entry.ringBytes += size(event);
     const budget = Math.max(
       OUTPUT_CHUNK * 4,
@@ -1256,6 +1322,20 @@ function checkpoint(entry: Entry, sequence: number, offset: number): void {
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
+/** Oldest first; two that started in the same millisecond keep their order. */
+function byStart(snapshots: TerminalSnapshot[]): TerminalSnapshot[] {
+  return snapshots
+    .map((snapshot, index) => ({ snapshot, index }))
+    .sort(
+      (a, b) =>
+        (a.snapshot.startedAt < b.snapshot.startedAt
+          ? -1
+          : a.snapshot.startedAt > b.snapshot.startedAt
+            ? 1
+            : 0) || a.index - b.index,
+    )
+    .map(({ snapshot }) => snapshot);
+}
 function size(event: TerminalEvent): number {
   return Buffer.byteLength(JSON.stringify(event));
 }
@@ -1355,7 +1435,7 @@ async function terminateOwnedTree(
     await exec('taskkill', ['/pid', String(terminal.pid), '/T', '/F'], {
       windowsHide: true,
     }).catch(async (error: NodeJS.ErrnoException) => {
-      // The debugger may have ended it between the native-exit check and
+      // It may have ended by itself between the native-exit check and
       // taskkill. Success still requires its actual onExit and flushed logs.
       if (entry.pty === terminal && !(await untilStopped(entry, 3000)))
         throw error;

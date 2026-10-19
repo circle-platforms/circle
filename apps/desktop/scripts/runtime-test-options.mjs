@@ -46,7 +46,6 @@ export const WINDOWS_NATIVE_TEST_PRIORITY = Object.freeze([
   'workspace-terminal-windows.test.ts',
   'workspace-terminal-drain.test.ts',
   'workspace-bundled-terminal.test.ts',
-  'workspace-debug-terminal.test.ts',
 ]);
 
 /** Keep every discovered file; prioritize real Windows lifecycle evidence. */

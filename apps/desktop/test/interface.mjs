@@ -207,8 +207,9 @@ const expected = {
   mcp: ['heading', 'mcp servers'],
   extensions: ['heading', 'extensions'],
   approvals: ['heading', 'approvals'],
-  jobs: ['tab', 'activity'],
-  terminals: ['heading', 'device terminals'],
+  // Background commands and device consoles are tabs of the terminal mode
+  jobs: ['region', 'interactive terminal'],
+  terminals: ['region', 'interactive terminal'],
   new: ['heading', 'new session'],
   resume: ['heading', 'sessions'],
   continue: ['heading', 'Fix the reconnect race'],
@@ -673,18 +674,52 @@ try {
     checks.push('/' + command.name);
   }
   await reset();
-  await page.getByRole('button', { name: 'toggle plan', exact: true }).click();
-  assert.equal(await page.locator('.plan-items').count(), 0);
-  await page.getByRole('button', { name: 'toggle plan', exact: true }).click();
-  assert.equal(await page.locator('.plan-items').count(), 1);
-  checks.push('plan folds in place without changing its records');
-  // A long plan shows whole rows, with the step under way in sight
+  // The plan is in the overview's in progress card, beside the conversation. A narrow
+  // window lays the overview over the conversation only when its top-bar button asks.
+  const overview = page.getByRole('complementary', {
+    name: 'overview',
+    exact: true,
+  });
+  const showOverview = async () => {
+    const button = page.getByRole('button', {
+      name: 'overview panel',
+      exact: true,
+    });
+    if ((await button.getAttribute('aria-pressed')) !== 'true')
+      await button.click();
+    await overview.waitFor();
+  };
+  const progress = overview.getByRole('region', { name: /^in progress\b/ });
+  const progressFold = progress.getByRole('button', { name: /^in progress\b/ });
+  const planRow = (text) =>
+    progress.locator('.overview-row', { hasText: text }).filter({
+      has: page.locator('.overview-end', { hasText: /^plan$/ }),
+    });
   const message = page.getByRole('textbox', { name: 'message', exact: true });
-  await message.fill('x');
-  await page.waitForFunction(() =>
-    localStorage.getItem('circle.workbench.preview.v1'),
-  );
-  await message.fill('');
+  // The stored plan, after the conversation writes its state
+  const storedPlan = async () => {
+    await message.fill('x');
+    await page.waitForFunction(() =>
+      JSON.parse(
+        localStorage.getItem('circle.workbench.preview.v1') ?? 'null',
+      )?.sessions.some((row) => row.draft === 'x'),
+    );
+    await message.fill('');
+    return (await state()).sessions.find((row) => row.id === 'session1').todos;
+  };
+  await showOverview();
+  const planBefore = await storedPlan();
+  const under = planBefore.find((todo) => todo.status === 'running');
+  assert.ok(under, 'the sample plan has a step under way');
+  await planRow(under.text).waitFor();
+  await progressFold.click();
+  await planRow(under.text).waitFor({ state: 'detached' });
+  assert.equal(await progressFold.getAttribute('aria-expanded'), 'false');
+  await progressFold.click();
+  await planRow(under.text).waitFor();
+  assert.deepEqual(await storedPlan(), planBefore);
+  checks.push('the plan folds in place without changing its records');
+  // A long plan: the card keeps the step under way in sight, with how far the plan is
   await page.evaluate(() => {
     const key = 'circle.workbench.preview.v1';
     const saved = JSON.parse(localStorage.getItem(key));
@@ -703,32 +738,31 @@ try {
     );
   });
   await page.reload();
-  await page.locator('.plan-items .running').waitFor();
-  const plan = await page.evaluate(() => {
-    const list = document.querySelector('.plan-items');
-    // The list scrolls exactly its rows: whatever shows between its edges is a row
-    const box = list.getBoundingClientRect();
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .waitFor();
+  await showOverview();
+  // The card names the step under way, not the finished ones or the next
+  await planRow('Step 6').waitFor();
+  assert.equal(
+    await progress.locator('.overview-row', { hasText: /^Step \d/ }).count(),
+    1,
+  );
+  assert.match(await progressFold.innerText(), /plan 5\/7/);
+  const step = await planRow('Step 6').evaluate((row) => {
+    const card = row.closest('.overview').getBoundingClientRect();
+    const rect = row.getBoundingClientRect();
     return {
-      top: box.top,
-      bottom: box.bottom,
-      rows: [...list.children].map((row) => {
-        const rect = row.getBoundingClientRect();
-        return { status: row.className, top: rect.top, bottom: rect.bottom };
-      }),
+      inside:
+        rect.top >= card.top - 1 &&
+        rect.bottom <= card.bottom + 1 &&
+        rect.height > 0,
+      shown: row.checkVisibility(),
     };
   });
-  const shown = plan.rows.filter(
-    (row) => row.bottom > plan.top + 1 && row.top < plan.bottom - 1,
-  );
-  for (const row of shown)
-    assert(
-      row.top >= plan.top - 1 && row.bottom <= plan.bottom + 1,
-      `a plan row is cut: ${JSON.stringify({ row, plan: [plan.top, plan.bottom] })}`,
-    );
-  assert(shown.some((row) => row.status === 'running'));
-  assert(shown.length >= 3 && shown.length < 7, `rows shown: ${shown.length}`);
+  assert.ok(step.inside && step.shown, JSON.stringify(step));
   checks.push(
-    'a long plan shows whole rows and keeps the step under way in sight',
+    'a long plan keeps the step under way in sight, with how far the plan is',
   );
   await reset();
   await page
@@ -776,24 +810,18 @@ try {
   );
   checks.push('connection secret excluded from stored state');
   await reset();
-  if (
-    !(await page
-      .getByRole('button', { name: 'activity panel', exact: true })
-      .isVisible())
-  )
-    await page
-      .getByRole('button', { name: 'toggle inspector', exact: true })
-      .click();
+  // A request waiting for the person is a card in the conversation, counted by the bar
+  // above the input box
   await page
-    .getByRole('button', { name: 'activity panel', exact: true })
-    .click();
+    .getByRole('button', { name: /^\d+ requests? waiting for you$/ })
+    .waitFor();
   await page
-    .getByRole('button', { name: /execute needs your permission approval/ })
-    .click();
-  await page
-    .getByRole('dialog')
+    .getByRole('region', { name: 'execute', exact: true })
     .getByRole('button', { name: 'allow once', exact: true })
     .click();
+  await page
+    .getByRole('region', { name: 'execute', exact: true })
+    .waitFor({ state: 'detached' });
   const decision = await state();
   assert.equal(decision.interactions[0].status, 'recorded');
   assert.equal(decision.jobs[0].state, 'running');
@@ -807,25 +835,23 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Three plain components, the device-terminal pane, GitHub, the developer
-  // extension, and the hub interface with the four platform objects. Paired
-  // ones stay off in preview.
-  assert.equal(await page.getByRole('checkbox').count(), 11);
-  await page
-    .getByRole('checkbox', {
-      name: 'enable device terminal pane interface',
-      exact: true,
-    })
-    .waitFor();
+  // Two plain components (files and changes, the browser), GitHub, and the hub
+  // interface with the four platform objects. Paired ones stay off in preview. The
+  // activity and device terminal components went with their panels: the overview and
+  // the terminal mode, which are Circle's own, hold that work now.
+  assert.equal(await page.getByRole('checkbox').count(), 8);
+  for (const name of ['file and diff inspector', 'browser pane'])
+    assert.equal(
+      await page
+        .getByRole('checkbox', {
+          name: `enable ${name} interface`,
+          exact: true,
+        })
+        .isChecked(),
+      true,
+    );
   // Each switch is named by the interface's shown title.
-  for (const id of [
-    'GitHub',
-    'developer extension',
-    'knowledge',
-    'work',
-    'execution',
-    'methods',
-  ])
+  for (const id of ['GitHub', 'knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page
         .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
@@ -1223,7 +1249,10 @@ try {
   assert.equal(workspace.kind, 'scratch');
   checks.push('the first message keeps the thinking depth chosen on home');
   await route('/session/session1');
+  // The title's menu, in the top bar; the overview's pull request of the same name is
+  // a button too
   await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
     .getByRole('button', { name: 'Fix the reconnect race', exact: true })
     .click();
   await page.getByRole('menuitem', { name: 'rename', exact: true }).click();
@@ -1319,7 +1348,9 @@ try {
     for (const session of saved.sessions) delete session.presentation;
     const { createFixtures } =
       await import('../../workbench/src/preview/fixtures.ts');
-    assert.deepEqual(saved, createFixtures());
+    // As stored: JSON keeps no key whose value is undefined, such as the changes of a
+    // sample session that has none
+    assert.deepEqual(saved, JSON.parse(JSON.stringify(createFixtures())));
   };
   await assertResetData();
   assert.equal(
@@ -1387,6 +1418,10 @@ try {
     .getByRole('button', { name: 'terminal panel', exact: true })
     .click();
   await page.locator('.inspector').waitFor();
+  // The terminal loads with its own toolbar, which ends with what the drawer offers
+  await page
+    .getByRole('region', { name: 'interactive terminal', exact: true })
+    .waitFor();
   // A display narrower than the split (a macOS runner's screen is 1024 pixels wide) lays
   // the panel over the conversation, where the full view has nothing to fill: there it is
   // not offered, and the split checks below need a wider window.
@@ -1411,12 +1446,28 @@ try {
     await page
       .getByRole('button', { name: 'files panel', exact: true })
       .click();
-    // The files drawer holds the project index and the editor, so it is worth
-    // the whole workspace as well.
+    // The list of files alone is a narrow column; a file that is open is worth the
+    // whole workspace, and its heading offers it.
+    await page
+      .getByRole('tree', { name: 'files', exact: true })
+      .getByRole('treeitem', { name: 'README.md', exact: true })
+      .click();
+    await page
+      .getByRole('button', { name: 'close file', exact: true })
+      .waitFor();
     assert.equal(
       await wholeButton('full view').count(),
       1,
-      'the files drawer offers it too',
+      'an open file offers it too',
+    );
+    await page.getByRole('button', { name: 'close file', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'close file', exact: true })
+      .waitFor({ state: 'detached' });
+    assert.equal(
+      await wholeButton('full view').count(),
+      0,
+      'the list of files alone does not offer it',
     );
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })
@@ -1507,9 +1558,9 @@ try {
     width: 800,
     height: 650,
   });
-  await page
-    .getByRole('dialog', { name: 'inspector', exact: true })
-    .waitFor({ state: 'hidden' });
+  // Nothing lies over the conversation until the person opens it
+  await page.locator('.inspector').waitFor({ state: 'hidden' });
+  await page.locator('.overview').waitFor({ state: 'hidden' });
   // A narrow window already lays the panel over the conversation: there is nothing
   // left to fill, so the view is not offered there.
   const terminalButton = page.getByRole('button', {
@@ -1518,6 +1569,9 @@ try {
   });
   if (await terminalButton.isVisible()) {
     await terminalButton.click();
+    await page
+      .getByRole('region', { name: 'interactive terminal', exact: true })
+      .waitFor();
     assert.equal(
       await page.getByRole('button', { name: 'full view' }).count(),
       0,

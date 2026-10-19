@@ -54,8 +54,10 @@ try {
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })
       .click();
-    const panel = page.locator('#inspector-terminal-terminal');
-    const input = panel.locator('.xterm-helper-textarea');
+    const panel = page.locator('[data-inspector-resource="terminal"]');
+    const input = panel
+      .locator('.native-terminal-surfaces .xterm-helper-textarea')
+      .first();
     await input.waitFor({ state: 'attached' });
     await input.focus();
     if (platform === 'darwin') {
@@ -113,16 +115,17 @@ try {
         () => !document.querySelector('[role="dialog"]'),
       );
 
-      // A device console the person holds: its keys go to the device.
-      await page
-        .getByRole('button', { name: 'device terminals panel', exact: true })
-        .click();
-      const consoleInput = page.locator(
-        '.device-terminal .xterm-helper-textarea',
+      // A device console the person holds, a tab of the same row: its keys go to the device.
+      await page.getByRole('tab', { name: 'lab switch · Telnet' }).click();
+      const consoleInput = panel.locator(
+        '.device-screen:not([hidden]) .xterm-helper-textarea',
       );
       await consoleInput.waitFor({ state: 'attached' });
       await page.waitForFunction(
-        () => !document.querySelector('.device-terminal textarea[disabled]'),
+        () =>
+          !document.querySelector(
+            '.device-screen:not([hidden]) textarea[disabled]',
+          ),
       );
       await consoleInput.focus();
       await page.keyboard.press('Control+k');
@@ -136,7 +139,7 @@ try {
         1,
       );
       checks.push(
-        `${platform}: Control+K, P and B in the terminal panel and a device console go to the shell once and open nothing; outside, Control+K opens search`,
+        `${platform}: Control+K, P and B in a terminal tab and a device console go to the shell once and open nothing; outside, Control+K opens search`,
       );
     }
     assert.deepEqual(errors, []);

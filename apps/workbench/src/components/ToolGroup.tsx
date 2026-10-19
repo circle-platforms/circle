@@ -5,6 +5,7 @@ import type { Message, Session } from '../model/types';
 import { toolSummary } from '../model/tool-summary';
 import { TurnClock } from './TurnClock';
 import { ToolMessage } from './ToolMessage';
+import { ImageThumb } from './ImageThumb';
 import { t, tn } from '../i18n';
 import '../features/conversation-requests.css';
 
@@ -64,6 +65,10 @@ export function ToolGroup({
   );
   const summary = toolSummary(rows);
   const running = tools.find((tool) => tool.status === 'running');
+  // A picture a tool brought back, such as the browser's screenshot, shows under the line.
+  const shots = rows.flatMap((row) =>
+    (row.attachments ?? []).filter((file) => file.kind === 'image'),
+  );
   return (
     <div
       className="tool-group"
@@ -112,6 +117,13 @@ export function ToolGroup({
         {turn && <TurnClock turn={turn} />}
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
+      {shots.length > 0 && (
+        <div className="tool-shots">
+          {shots.map((shot) => (
+            <ImageThumb key={shot.id} attachment={shot} />
+          ))}
+        </div>
+      )}
       {open && (
         <div id={detailsId} className="tool-group-calls">
           {rows.map((row) =>

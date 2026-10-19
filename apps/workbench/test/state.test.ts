@@ -21,8 +21,10 @@ import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
   activityAge,
   archiveBlockReason,
+  archiveStopsWork,
   afterDeleteRoute,
   canArchiveSession,
+  deletionUnderWay,
   disambiguatedSessionTitle,
   historyMessages,
   orderedProjects,
@@ -101,6 +103,24 @@ test('session lists separate archived records, preserve their history, and rejec
   ];
   assert.equal(canArchiveSession(state, session), false);
 });
+test('terminal tabs or tasks still running make archive ask before it stops them (#201)', () => {
+  const runtime = new PreviewRuntime();
+  const snapshot = runtime.getSnapshot();
+  const session = currentSession(snapshot);
+  snapshot.interactions = [];
+  snapshot.jobs = [];
+  session.state = 'idle';
+  session.nativeResourcesActive = true;
+  assert.equal(canArchiveSession(snapshot, session), true);
+  assert.equal(archiveBlockReason(snapshot, session), undefined);
+  assert.equal(archiveStopsWork([session]), true);
+  session.archivedAt = new Date().toISOString();
+  assert.equal(archiveStopsWork([session]), false);
+  session.archivedAt = undefined;
+  session.nativeResourcesActive = false;
+  assert.equal(archiveStopsWork([session]), false);
+});
+
 test('free input is preserved without an invented reply or task', () => {
   const runtime = new PreviewRuntime();
   const before = runtime.getSnapshot().sessions[0]!.messages.length;
@@ -1057,6 +1077,20 @@ test('recent lists every context newest first, and its hover names only a projec
   assert.deepEqual(
     projectFolders(workspaces, [older], scratch.id).map((item) => item.id),
     ['proj'],
+  );
+});
+
+test('a session whose deletion failed can be deleted again, one being deleted cannot (#195)', () => {
+  const session = { id: 's', title: 'kept work' } as Session;
+  assert.equal(deletionUnderWay({ ...session, lifecycle: 'open' }), false);
+  assert.equal(deletionUnderWay({ ...session, lifecycle: 'deleting' }), true);
+  assert.equal(
+    deletionUnderWay({
+      ...session,
+      lifecycle: 'deleting',
+      deletionFailed: 'browser cleanup failed',
+    }),
+    false,
   );
 });
 

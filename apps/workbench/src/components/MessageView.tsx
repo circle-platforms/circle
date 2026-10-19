@@ -26,7 +26,8 @@ export function MessageView({
 }: {
   message: Message;
   showThinking: boolean;
-  onAttachment: () => void;
+  /** Used where no preview window is provided. */
+  onAttachment?: () => void;
 }) {
   const { notify } = useRuntime();
   const sources = useSources();
@@ -104,7 +105,7 @@ export function MessageView({
                 key={file.id}
                 name={file.name}
                 onClick={() =>
-                  sources ? sources.openAttachment(file) : onAttachment()
+                  sources ? sources.openAttachment(file) : onAttachment?.()
                 }
               />
             ))}

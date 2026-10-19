@@ -17,13 +17,22 @@ import type {
   TerminalRequest,
   TerminalResult,
 } from '../../../src/terminal/protocol.js';
+import { isLocalTerminal } from '../../../src/terminal/protocol.js';
 import type {
+  LocalTerminalRow,
   TerminalEvent,
   TerminalHostKeyAsk,
   TerminalProfileRow,
   TerminalSessionRow,
   TerminalState,
 } from './contracts';
+
+/** The person's say over one of their own terminal tabs, carried to the runtime. */
+export type TerminalTabControl = (
+  conversation: string,
+  session: string,
+  action: 'take' | 'return' | 'stop',
+) => Promise<LocalTerminalRow[]>;
 
 // Raw device bytes travel in coalesced batches: a scrolling console must not turn into
 // one IPC message a line.
@@ -46,6 +55,15 @@ const validConversation = (value: unknown): string => {
 const validSession = (value: unknown): string => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(value))
     throw Error('invalid terminal');
+  return value;
+};
+// A saved profile's display name follows profiles.ts, not the session-id grammar.
+const validProfile = (value: unknown): string => {
+  if (
+    typeof value !== 'string' ||
+    !/^[^\s\x00-\x1f\x7f][^\x00-\x1f\x7f]{0,99}$/.test(value)
+  )
+    throw Error('invalid terminal profile');
   return value;
 };
 // A quick connect names a device, not a profile: the same shape the tools take,
@@ -104,12 +122,16 @@ export class TerminalPanelHost {
     string,
     { chunks: Buffer[]; size: number; timer: ReturnType<typeof setTimeout> }
   >();
+  // The conversation's own terminal tabs as the runtime last told them: they live in
+  // the runtime with their shells, not here
+  private tabs = new Map<string, LocalTerminalRow[]>();
   constructor(
     private readonly emit: (event: TerminalEvent) => void,
     private readonly home: string,
     trustFile: string,
     private readonly secret: (name: string) => string,
     private readonly modeOf: (conversation: string) => string | undefined,
+    private readonly tabControl?: TerminalTabControl,
   ) {
     this.manager = new TerminalSessions({
       connectors: { ssh: sshConnector, telnet: telnetConnector },
@@ -150,8 +172,15 @@ export class TerminalPanelHost {
     return {
       sessionId: `terminal:${own}`,
       conversation: own,
-      sessions: this.manager.views(own).map(rowOf),
+      sessions: this.manager
+        .views(own)
+        .flatMap((view) =>
+          view.transport === 'local'
+            ? []
+            : [rowOf({ ...view, transport: view.transport })],
+        ),
       profiles: this.profiles(),
+      local: this.tabs.get(own) ?? [],
       ...(this.pendingKey.get(own)
         ? { pendingKey: this.pendingKey.get(own) }
         : {}),
@@ -190,7 +219,7 @@ export class TerminalPanelHost {
     profile: unknown,
   ): Promise<TerminalState> {
     const own = validConversation(conversation);
-    const name = validSession(profile);
+    const name = validProfile(profile);
     const stop = new AbortController();
     let result = await this.manager.request(
       own,
@@ -296,6 +325,41 @@ export class TerminalPanelHost {
     this.giveBack(own);
     return this.state(own);
   }
+  /** Whether a session the window names is one of the person's terminal tabs. */
+  isTab(session: unknown): boolean {
+    return isLocalTerminal(session);
+  }
+  /**
+   * The person takes one of their own terminal tabs (`local:<id>`), hands it back, or
+   * stops what Circle does on it without taking it. The tab is the runtime's, where its
+   * shell is; the answer is the state once the runtime has done it.
+   */
+  async tab(
+    conversation: unknown,
+    session: unknown,
+    action: 'take' | 'return' | 'stop',
+  ): Promise<TerminalState> {
+    const own = validConversation(conversation);
+    const name = validSession(session);
+    if (!/^local:[A-Za-z0-9-]{1,100}$/.test(name))
+      throw Error("that is not one of the user's terminal tabs");
+    if (!this.tabControl) throw Error('the runtime is not connected');
+    this.tabsChanged(own, await this.tabControl(own, name, action));
+    return this.state(own);
+  }
+  /** What the runtime says Circle is doing with a conversation's terminal tabs. */
+  tabsChanged(conversation: unknown, rows: LocalTerminalRow[]): void {
+    const own = validConversation(conversation);
+    if (rows.length) this.tabs.set(own, rows);
+    else this.tabs.delete(own);
+    this.pushState(own);
+  }
+  /** The runtime stopped: nothing it held of the tabs holds any more. */
+  tabsGone(): void {
+    const known = [...this.tabs.keys()];
+    this.tabs.clear();
+    for (const own of known) this.pushState(own);
+  }
   /** What the person types on the console they hold. */
   input(conversation: unknown, session: unknown, text: unknown): boolean {
     return this.manager.input(
@@ -332,11 +396,13 @@ export class TerminalPanelHost {
     this.pendingKey.delete(own);
     this.giveBack(own);
     this.manager.releaseSession(own);
+    this.tabs.delete(own);
     this.pushState(own);
   }
   close(): void {
     this.manager.close();
     this.pendingKey.clear();
+    this.tabs.clear();
     for (const batch of this.batches.values()) clearTimeout(batch.timer);
     this.batches.clear();
   }
@@ -405,7 +471,9 @@ export class TerminalPanelHost {
   }
 }
 
-function rowOf(view: TerminalView): TerminalSessionRow {
+function rowOf(
+  view: TerminalView & { transport: 'ssh' | 'telnet' },
+): TerminalSessionRow {
   return {
     id: view.id,
     name: view.name,

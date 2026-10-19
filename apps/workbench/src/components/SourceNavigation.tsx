@@ -2,6 +2,10 @@ import { createContext, useContext, useState, type ReactNode } from 'react';
 import type { Attachment } from '../model/types';
 import { attachmentImage, sourceLocation } from '../model/source-navigation';
 import { Modal, DataBlock } from './common';
+import {
+  TerminalSelectionPreview,
+  terminalSelectionDisplay,
+} from './TerminalSelectionPreview';
 import { NativeResourceBoundary } from './NativeResourceBoundary';
 import { t } from '../i18n';
 
@@ -48,6 +52,8 @@ export function SourceNavigation({
                 </a>
               ) : attachment.kind === 'image' ? (
                 <p role="status">{t('image data unavailable')}</p>
+              ) : terminalSelectionDisplay(attachment) ? (
+                <TerminalSelectionPreview file={attachment} />
               ) : (
                 <DataBlock title={attachment.name} value={attachment.content} />
               )}

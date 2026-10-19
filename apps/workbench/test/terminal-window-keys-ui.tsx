@@ -1,5 +1,5 @@
-// Keys typed in a terminal are the terminal's. The workspace terminal panel and a
-// device console under a desktop platform the page names (?platform=win32).
+// Keys typed in a terminal are the terminal's. A shell and a device console of the
+// terminal mode, under a desktop platform the page names (?platform=win32).
 import { createRoot } from 'react-dom/client';
 import { CircleWorkbench } from '../src/workbench';
 import { PreviewRuntime } from '../src/model/state';

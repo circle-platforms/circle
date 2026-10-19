@@ -50,18 +50,14 @@ test('the component gate preserves prior journeys and includes each native regre
     'resource-boundary-ui.mjs',
     'pending-operations-ui.mjs',
     'recovered-input-ui.mjs',
-    'git-continuity-ui.mjs',
-    'debug-panel-ui.mjs',
     'keyboard-navigation-ui.mjs',
   ];
   assert.deepEqual(
     COMPONENT_SUITES.filter(
       (name) =>
         ![
-          'git-conflict-selector-ui.mjs',
           'external-file-access-ui.mjs',
           'external-file-entry-ui.mjs',
-          'git-large-index-ui.mjs',
           'context-index-resize-ui.mjs',
           'virtual-file-tree-ui.mjs',
           'project-index-journey-ui.mjs',
@@ -69,23 +65,18 @@ test('the component gate preserves prior journeys and includes each native regre
           'safe-file-undo-ui.mjs',
           'large-file-tree-ui.mjs',
           'settings-navigation-ui.mjs',
-          'native-tools-drawer-ui.mjs',
           'child-terminal-rendered-match-ui.mjs',
-          'tasks-panel-ui.mjs',
-          'task-config-recovery-ui.mjs',
           'paste-default-ui.mjs',
           'native-editable-shortcuts-ui.mjs',
-          'tasks-refresh-race-ui.mjs',
           'windowed-mount-ui.mjs',
           'native-terminal-search-ui.mjs',
-          'original-shell-ui.mjs',
-          'debug-panel-embedded.mjs',
+          'workspace-shell-ui.mjs',
           'original-browser-shell-ui.mjs',
           'native-terminal-fit-ui.mjs',
           'runtime-failure-ui.mjs',
           'session-navigation-ui.mjs',
           'response-readability-ui.mjs',
-          'inspector-width-ui.mjs',
+          'workspace-layout-ui.mjs',
           'agent-source-return-ui.mjs',
           'agent-source-owner-ui.mjs',
           'native-terminal-context-ui.mjs',
@@ -108,15 +99,19 @@ test('the component gate preserves prior journeys and includes each native regre
           'browser-chrome-ui.mjs',
           'github-authorization-phase-ui.mjs',
           'terminal-accessibility-ui.mjs',
-          'git-owner-ui.mjs',
           'tool-text-output-ui.mjs',
+          'terminal-mode-ui.mjs',
+          'screenshot-thumb-ui.mjs',
+          'task-review-ui.mjs',
+          'gutter-marks-ui.mjs',
+          'task-limits-recovery-ui.mjs',
+          'overview-actions-ui.mjs',
+          'files-git-marks-ui.mjs',
+          'drawer-auto-open-ui.mjs',
+          'overview-cards-ui.mjs',
         ].includes(name),
     ),
     original,
-  );
-  assert.equal(
-    COMPONENT_SUITES.filter((name) => name === 'tasks-panel-ui.mjs').length,
-    1,
   );
   assert.equal(
     COMPONENT_SUITES.filter((name) => name === 'windowed-mount-ui.mjs').length,
@@ -128,19 +123,16 @@ test('the component gate preserves prior journeys and includes each native regre
     1,
   );
   for (const name of [
-    'git-conflict-selector-ui.mjs',
     'child-terminal-rendered-match-ui.mjs',
-    'tasks-refresh-race-ui.mjs',
     'paste-default-ui.mjs',
     'native-editable-shortcuts-ui.mjs',
-    'original-shell-ui.mjs',
-    'debug-panel-embedded.mjs',
+    'workspace-shell-ui.mjs',
     'original-browser-shell-ui.mjs',
     'native-terminal-fit-ui.mjs',
     'runtime-failure-ui.mjs',
     'session-navigation-ui.mjs',
     'response-readability-ui.mjs',
-    'inspector-width-ui.mjs',
+    'workspace-layout-ui.mjs',
     'agent-source-return-ui.mjs',
     'agent-source-owner-ui.mjs',
     'native-terminal-context-ui.mjs',
@@ -163,19 +155,19 @@ test('the component gate preserves prior journeys and includes each native regre
     'browser-chrome-ui.mjs',
     'github-authorization-phase-ui.mjs',
     'terminal-accessibility-ui.mjs',
-    'git-owner-ui.mjs',
     'tool-text-output-ui.mjs',
+    'terminal-mode-ui.mjs',
+    'screenshot-thumb-ui.mjs',
+    'task-review-ui.mjs',
+    'gutter-marks-ui.mjs',
+    'task-limits-recovery-ui.mjs',
+    'overview-actions-ui.mjs',
+    'files-git-marks-ui.mjs',
+    'drawer-auto-open-ui.mjs',
+    'overview-cards-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 59);
-});
-
-test('task configuration recovery remains a required component journey', () => {
-  assert.equal(
-    COMPONENT_SUITES.filter((name) => name === 'task-config-recovery-ui.mjs')
-      .length,
-    1,
-  );
+  assert.equal(new Set(COMPONENT_SUITES).size, 58);
 });
 
 test('safe file undo remains a required component journey', () => {
@@ -196,7 +188,6 @@ test('remaining-goal journeys stay required once', () => {
   for (const name of [
     'virtual-file-tree-ui.mjs',
     'context-index-resize-ui.mjs',
-    'git-large-index-ui.mjs',
     'external-file-access-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((value) => value === name).length, 1);

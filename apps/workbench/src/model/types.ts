@@ -30,6 +30,8 @@ export type PageId =
 export type DialogId =
   | 'rename'
   | 'delete-session'
+  | 'archive-session'
+  | 'archive-workspace'
   | 'tree'
   | 'fork'
   | 'session'
@@ -129,8 +131,13 @@ export interface Session {
   /** Desktop-only organization; the core transcript and project files stay intact. */
   archivedAt?: string;
   lifecycle?: 'open' | 'deleting';
+  /** Why the last deletion failed. The session stays in deletion, with its history, until
+   * deleting it again succeeds. */
+  deletionFailed?: string;
   /** Another process owns execution of this conversation. */
   occupied?: boolean;
+  /** Owned native processes, terminal tabs or tasks still prevent archiving. */
+  nativeResourcesActive?: boolean;
   /** The last renderer action failure, kept with its source session for this window. */
   actionError?: string;
   /** Renderer-only state; never changes the core conversation or execution. */
@@ -140,7 +147,6 @@ export interface Session {
       follow: boolean;
       anchor?: { messageId: string; offset: number };
     };
-    planCollapsed?: boolean;
     disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
     toolTabs?: Record<string, 'input' | 'output'>;
   };
@@ -282,6 +288,8 @@ export interface Job {
   outputPath: string;
   stopRequested: boolean;
   agentId?: string;
+  /** The terminal a background command runs in, so its row and its terminal tab are one. */
+  terminal?: { id: string; epoch: string };
 }
 export interface Interaction {
   callId?: string;
@@ -328,7 +336,8 @@ export interface Skill {
   name: string;
   description: string;
   path: string;
-  scope: 'project' | 'user';
+  /** bundled: ships with Circle; a project or user skill of the same name replaces it. */
+  scope: 'project' | 'user' | 'bundled';
   content: string;
 }
 export interface PromptCommand {
@@ -542,10 +551,26 @@ export interface RuntimePort {
     payload?: Record<string, unknown>,
     sessionId?: string,
   ) => string | Promise<unknown>;
+  /**
+   * Load a skill into the open conversation and send a message that asks for it, as one
+   * step; the person's own draft and attachments are left alone. `display` is what the
+   * transcript shows as the person's message.
+   */
+  runSkill?: (input: {
+    name: string;
+    text: string;
+    display: string;
+  }) => Promise<void>;
   /** Drop a session error the page is already showing, so it is not also a toast. */
   dismissActionError?: (sessionId?: string) => void;
   /** Start the desktop runtime again after it stopped. */
   restartRuntime?: () => Promise<void>;
+  /**
+   * Another window of the application wrote `key` to the storage this one read at start
+   * (any key, when null), such as the main window's text size: a window that only reads
+   * that storage, as a mode's window of its own does, takes the change in.
+   */
+  storageChanged?: (key: string | null) => void;
   newSession: (workspaceId?: string) => string | Promise<string>;
   beginConversation: (
     input: BeginConversation,

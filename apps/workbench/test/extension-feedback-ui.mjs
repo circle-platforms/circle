@@ -187,12 +187,6 @@ try {
         await page
           .getByRole('button', { name: labels.runtime, exact: true })
           .click();
-        const developer = page.locator('.extension-card').filter({
-          has: page.getByRole('heading', {
-            name: labels.developer,
-            exact: true,
-          }),
-        });
         const replyLatest = async (failure = false) => {
           const index = await page.evaluate(() => {
             const commands = window.extensionFeedbackFixture.commands;
@@ -202,39 +196,35 @@ try {
           });
           await reply(index, failure);
         };
-        await developer.getByRole('checkbox').click();
+        // A bundled extension that applies at once asks for no reload, and a
+        // stale enabled snapshot after turning it off keeps the switch off.
+        await toggle.click();
         await count(14);
         await replyLatest();
-        await developer.getByText(labels.loading, { exact: true }).waitFor();
+        await status('loading');
         assert.equal(
-          await developer.getByText(labels.reload, { exact: true }).count(),
+          await row.getByText(labels.reload, { exact: true }).count(),
           0,
-          'developer applies without a reload',
+          'github applies without a reload',
         );
-        await page.evaluate(() =>
-          window.extensionFeedbackFixture.loadDeveloper(),
-        );
-        await developer.getByText(labels.enabled, { exact: true }).waitFor();
-        assert.equal(await developer.getByRole('checkbox').isChecked(), true);
-        await developer.getByRole('checkbox').click();
+        await page.evaluate(() => window.extensionFeedbackFixture.load());
+        await status('enabled');
+        assert.equal(await toggle.isChecked(), true);
+        await toggle.click();
         await count(15);
         await replyLatest();
-        await developer.getByText(labels.disabled, { exact: true }).waitFor();
-        assert.equal(await developer.getByRole('checkbox').isChecked(), false);
-        await page.evaluate(() =>
-          window.extensionFeedbackFixture.staleDeveloper(),
-        );
-        await developer.getByText(labels.disabling, { exact: true }).waitFor();
+        await status('disabled');
+        assert.equal(await toggle.isChecked(), false);
+        await page.evaluate(() => window.extensionFeedbackFixture.stale());
+        await status('disabling');
         assert.equal(
-          await developer.getByRole('checkbox').isChecked(),
+          await toggle.isChecked(),
           false,
           'a stale enabled snapshot must not turn the switch back on',
         );
-        await page.evaluate(() =>
-          window.extensionFeedbackFixture.settleDeveloper(),
-        );
-        await developer.getByText(labels.disabled, { exact: true }).waitFor();
-        assert.equal(await developer.getByRole('checkbox').isChecked(), false);
+        await page.evaluate(() => window.extensionFeedbackFixture.settle());
+        await status('disabled');
+        assert.equal(await toggle.isChecked(), false);
         const commands = await page.evaluate(
           () => window.extensionFeedbackFixture.commands,
         );

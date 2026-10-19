@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { useRuntime } from '../app/context';
 import { Button, Modal, Status } from '../components/common';
-import { workspaceSessions } from '../model/session-management';
+import {
+  archiveStopsWork,
+  workspaceSessions,
+} from '../model/session-management';
 import { currentSession } from '../model/state';
 import { workspaceLabel } from '../model/workspace-label';
 import type { Workspace } from '../model/types';
@@ -26,9 +29,11 @@ export function WorkspaceTrustSettings({
   const remove = async (workspace: Workspace) => {
     const sessions = workspaceSessions(snapshot, workspace.id);
     if (runtime.mode === 'live') {
+      // This dialog is the confirmation: tabs and tasks still running stop.
       if (sessions.length)
         await runtime.request('archive-workspace', {
           workspaceId: workspace.id,
+          confirmed: true,
         });
       await runtime.request('trust-workspace', {
         enabled: false,
@@ -52,6 +57,8 @@ export function WorkspaceTrustSettings({
   const sessions = removing
     ? workspaceSessions(snapshot, removing.id).length
     : 0;
+  const stops =
+    !!removing && archiveStopsWork(workspaceSessions(snapshot, removing.id));
   return (
     <section className="settings-block">
       <h2>{t('workspace trust')}</h2>
@@ -103,6 +110,13 @@ export function WorkspaceTrustSettings({
                 'Circle stops trusting this folder and hides its conversations from the sidebar. The files stay where they are, and so does the history: archived sessions stay under all sessions, and opening the folder again trusts it once you confirm.',
               )}
             </p>
+            {stops && (
+              <p className="dialog-paragraph">
+                {t(
+                  'Terminal tabs and tasks still running in these conversations stop.',
+                )}
+              </p>
+            )}
             <p className="dialog-paragraph muted">
               {tn(sessions, '{n} conversation', '{n} conversations')}
             </p>

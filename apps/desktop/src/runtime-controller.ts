@@ -15,9 +15,6 @@ import {
   commandTerminalAction,
   type CommandTerminalSource,
 } from './workspace/command-handoff.js';
-import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
-import { GitWorkspaceService } from './workspace/git.js';
-import { DeliveryService } from './workspace/delivery.js';
 import { NativeGitHubConnection } from './workspace/github-connection.js';
 import { githubWorkspaceBackend } from './workspace/github-backend.js';
 import type { GitHubConnectionBackend } from '../../../src/github_connection.js';
@@ -85,7 +82,7 @@ import {
   discoverCustomCommands,
   substituteArguments,
 } from '../../../src/commands.js';
-import { loadSkillBody } from '../../../src/skills.js';
+import { BUILTIN_SKILL_SOURCE, loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import {
@@ -110,7 +107,12 @@ import {
   runtimeTerminalOptions,
   type TerminalPort,
 } from '../../../src/terminal/tools.js';
-import type { TerminalHostKeyApproval } from '../../../src/terminal/protocol.js';
+import {
+  isLocalTerminal,
+  type TerminalHostKeyApproval,
+} from '../../../src/terminal/protocol.js';
+import { LocalTerminals, type LocalTerminalControl } from './local-terminals';
+import type { LocalTerminalRow } from './contracts';
 import {
   loadSecrets,
   removeSecret,
@@ -309,9 +311,7 @@ export interface ControllerOptions {
   emitTokenDelta?: (delta: RuntimeTokenDelta) => void;
   credentialStore?: RuntimeCredentialStore;
   workspaceTools?: {
-    nodeExecutable: string;
     runtimeExecutable: string;
-    adapterPath: string;
     ghPath: string;
     /** Bundled static supervisor; no source-directory or PATH fallback. */
     commandSupervisorPath?: string;
@@ -331,6 +331,11 @@ export interface ControllerOptions {
   browser?: BrowserPort;
   /** The conversation device terminals in the main process. */
   terminal?: TerminalPort;
+  /**
+   * What Circle is doing with a conversation's own terminal tabs changed: the window's
+   * terminal state carries it (TerminalState.local).
+   */
+  emitTerminalTabs?: (conversation: string, rows: LocalTerminalRow[]) => void;
   beforeDelete?: (sessionId: string) => Promise<void>;
 }
 
@@ -353,6 +358,23 @@ export class RuntimeController {
   private runtimes = new SessionRuntimeManager((workspace, sessionId) =>
     this.createRuntime(workspace, sessionId),
   );
+  // The person's own terminal tabs, as the model's terminal tools reach them, and what
+  // the window was last told of each conversation's
+  private readonly terminalTabs = new LocalTerminals({
+    host: (conversation) => this.terminalTabHost(conversation),
+    changed: (conversation) => this.terminalTabsChanged(conversation),
+    mode: (conversation) =>
+      (
+        this.runtimes.get(conversation) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === conversation,
+        )
+      )?.mode,
+    waiting: (conversation) =>
+      new Set(this.terminalTabApprovals().get(conversation) ?? []),
+  });
+  private terminalTabRows = new Map<string, string>();
+  private terminalTabWaits = new Map<string, string>();
   private workspaceSessions = new Map<string, string>();
   private readonly store: CheckpointStore;
   // The last link an extension asked to open; the window opens each id once.
@@ -776,7 +798,7 @@ export class RuntimeController {
       owner.applyThinkingChoice(level);
     }
   }
-  private synchronizeSharedSettings(settings: CircleSettings): Promise<void> {
+  private synchronizeSharedSettings(settings: CircleSettings): void {
     if (settings.extensions.github?.enabled !== true) {
       this.githubLeases.clear();
       this.githubProviderLifetime.abort();
@@ -807,7 +829,6 @@ export class RuntimeController {
         void owner.setBundledExtensionEnabled('github', true).catch(() => {});
       }
     }
-    const developerApplied = this.applyDeveloperExtension(settings);
     for (const owner of this.runtimes.values()) {
       if (
         !owner.options.localContext &&
@@ -837,36 +858,6 @@ export class RuntimeController {
         trusted_folders: [...settings.trusted_folders],
       });
     }
-    return developerApplied;
-  }
-  /** Turn the developer extension on or off in every runtime, without a reload. */
-  private applyDeveloperExtension(settings: CircleSettings): Promise<void> {
-    const enabled = settings.extensions.developer?.enabled === true;
-    const active = this.active;
-    const owners = [
-      ...this.runtimes.values(),
-      ...this.taskRuntimes.values(),
-    ].filter((owner) => !owner.isClosing);
-    owners.sort((left, right) =>
-      left === active ? -1 : right === active ? 1 : 0,
-    );
-    const pending: Promise<void>[] = [];
-    for (const owner of owners) {
-      const previous =
-        owner.options.settings.extensions.developer?.enabled === true;
-      owner.options.settings.extensions.developer = {
-        ...owner.options.settings.extensions.developer,
-        enabled,
-      };
-      if (previous === enabled) continue;
-      pending.push(
-        owner.setBundledExtensionEnabled('developer', enabled).then(
-          () => undefined,
-          () => undefined,
-        ),
-      );
-    }
-    return Promise.all(pending).then(() => undefined);
   }
   private async releaseSessionResources(
     sessionId: string,
@@ -888,6 +879,10 @@ export class RuntimeController {
     if (errors.length)
       throw new AggregateError(errors, 'session task cleanup failed');
     for (const [id, root] of owned) {
+      // Circle lets go of the conversation's terminal tabs before their shells close
+      this.terminalTabs.release(id);
+      this.terminalTabRows.delete(id);
+      this.terminalTabWaits.delete(id);
       await this.workspaceServices
         .get(this.workspaceRoots.get(root)?.canonical ?? root)
         ?.releaseSession(id);
@@ -906,6 +901,19 @@ export class RuntimeController {
       (await this.workspaceServices
         .get(workspace)
         ?.hasActiveSession(sessionId)) === true
+    );
+  }
+  private nativeSessionActiveNow(
+    sessionId: string,
+    workspace: string,
+  ): boolean {
+    return (
+      [...this.taskServices.values()].some((service) =>
+        service.hasActiveSession(sessionId),
+      ) ||
+      this.workspaceServices
+        .get(this.workspaceRoots.get(workspace)?.canonical ?? workspace)
+        ?.hasActiveSessionNow(sessionId) === true
     );
   }
   private workspaceEvent(
@@ -1104,16 +1112,9 @@ export class RuntimeController {
     const root = this.trustedWorkspace(workspace);
     let services = this.workspaceServices.get(root);
     if (!services) {
+      const resourceStates = new Map<string, boolean>();
       const tools = this.options.workspaceTools ?? {
-        nodeExecutable: process.execPath,
         runtimeExecutable: process.execPath,
-        adapterPath: join(
-          this.home,
-          'tools',
-          'js-debug',
-          'src',
-          'dapDebugServer.js',
-        ),
         ghPath: 'gh',
       };
       services = new WorkspaceServices({
@@ -1126,8 +1127,6 @@ export class RuntimeController {
         githubConnection: this.githubConnection(),
         enforceGitHubConnection: true,
         githubEnabled: (id) => this.githubAvailable(id),
-        developerEnabled: () =>
-          loadSettings(this.home).extensions.developer?.enabled === true,
         githubInvocation: (id) => this.githubInvocation(id),
         credentialStore: this.options.credentialStore
           ? {
@@ -1137,137 +1136,94 @@ export class RuntimeController {
               delete: () => this.options.credentialStore!.delete('github.com'),
             }
           : undefined,
-        cyclePorts: async (sessionId) => {
-          const ownerRuntime =
-            this.runtimes.get(sessionId) ?? this.taskRuntimes.get(sessionId);
-          if (
-            ownerRuntime &&
-            loadSettings(this.home).extensions.github?.enabled === true
-          )
-            await ownerRuntime.setBundledExtensionEnabled('github', true);
-          const githubInvocation = this.githubInvocation(sessionId);
-          const githubConnection = this.githubConnection();
-          const githubEpoch = githubConnection?.snapshot().epoch;
-          const cycleScopes = new Map<
-            string,
-            {
-              invocation: ReturnType<RuntimeController['githubInvocation']>;
-              epoch: number | undefined;
-            }
-          >();
-          const scopeFor = (cycle: { id: string }) => {
-            const scope = cycleScopes.get(cycle.id);
-            if (!scope) throw Error('cycle authorization scope is missing');
-            return scope;
-          };
-          const git = new GitWorkspaceService(root);
-          const [name, email] = await Promise.all([
-            git.git(['config', '--get', 'user.name']),
-            git.git(['config', '--get', 'user.email']),
-          ]);
-          return createWorkspaceCyclePorts({
-            workspace: root,
-            sessionId,
-            bindCycle: (cycle, mode) => {
-              if (!cycleScopes.has(cycle.id))
-                cycleScopes.set(cycle.id, {
-                  invocation:
-                    mode === 'created'
-                      ? this.githubInvocation(sessionId)
-                      : githubInvocation,
-                  epoch:
-                    mode === 'created'
-                      ? githubConnection?.snapshot().epoch
-                      : githubEpoch,
-                });
-            },
-            invocation: (cycle) => {
-              const scope = scopeFor(cycle);
-              return {
-                signal: scope.invocation.signal,
-                assertActive: () => {
-                  scope.invocation.assertActive();
-                  if (!githubConnection || scope.epoch === undefined)
-                    throw Error('connect GitHub in the GitHub plugin details');
-                  githubConnection.assertEpoch(scope.epoch);
-                },
-              };
-            },
-            dataDir: join(
-              this.options.dataFolder ?? this.home,
-              'cycle-adapters',
-              identity(root),
-            ),
-            identity: { name: name.trim(), email: email.trim() },
-            getTaskService: () => this.collaboration(root, sessionId),
-            verify: (task, context) =>
-              this.taskVerifier(root, task.spec.baseline)(task, context),
-            withResource: (resource, run) =>
-              this.taskResources.withResource(resource, run),
-            pushAuthentication: async (ownedPath, cycle) => {
-              const scope = scopeFor(cycle);
-              scope.invocation.assertActive();
-              const remote = (
-                await new GitWorkspaceService(ownedPath).git([
-                  'remote',
-                  'get-url',
-                  '--push',
-                  '--all',
-                  'origin',
-                ])
-              ).trim();
-              scope.invocation.assertActive();
-              const match =
-                /^https:\/\/github\.com\/([-\w.]+\/[-\w.]+?)(?:\.git)?$/.exec(
-                  remote,
-                );
-              if (!match)
-                throw Error(
-                  'select an authorized GitHub HTTPS push destination',
-                );
-              return githubConnection?.gitPushAuthentication(
-                scope.epoch!,
-                match[1]!,
-                scope.invocation.signal,
-                scope.invocation.assertActive,
-              );
-            },
-            createDelivery: (ownedPath, cycle) =>
-              new DeliveryService(ownedPath, tools.ghPath, {
-                spawn: (file, args, options) => spawnPty(file, args, options),
-                connection: githubConnection,
-                epoch: scopeFor(cycle).epoch,
-                ...scopeFor(cycle).invocation,
-                credentialStore: this.options.credentialStore
-                  ? {
-                      get: () =>
-                        this.options.credentialStore!.get('github.com'),
-                      put: (token) =>
-                        this.options.credentialStore!.put('github.com', token),
-                    }
-                  : undefined,
-              }),
-            redact: (value) =>
-              this.runtimes.get(sessionId)?.redact(value) ?? value,
-          });
-        },
         workspaceId: identity(root),
         credentialFiles: settingsForRun(this.home, root).settings
           .credential_files,
-        emit: (event) => this.options.emitWorkspaceEvent?.(event),
+        emit: (event) => {
+          this.options.emitWorkspaceEvent?.(event);
+          // Output stays on its own stream. Publish session availability only
+          // when resource ownership changes, including a shell exiting by itself.
+          const active = this.nativeSessionActiveNow(event.sessionId, root);
+          if ((resourceStates.get(event.sessionId) ?? false) !== active) {
+            resourceStates.set(event.sessionId, active);
+            this.publish();
+          }
+        },
         onPersistenceError: (error) => this.workspaceFailure(root, error),
       });
       this.workspaceServices.set(root, services);
+      this.terminalTabs.watch(services.terminals);
     }
     services.setCredentialFiles(
       settingsForRun(this.home, root).settings.credential_files,
     );
     return services;
   }
+  /** The terminal service of a conversation's folder, if one was opened; never opens one. */
+  private terminalTabHost(conversation: string) {
+    const row = this.store.get(conversation);
+    const root = row && this.workspaceRoots.get(row.workspace)?.canonical;
+    return root ? this.workspaceServices.get(root)?.terminals : undefined;
+  }
+  /** The window is told what Circle does with a conversation's tabs, when that changed. */
+  private terminalTabsChanged(conversation: string): void {
+    if (this.closing) return;
+    const rows = this.terminalTabs.rows(conversation);
+    const shown = JSON.stringify(rows);
+    if (this.terminalTabRows.get(conversation) === shown) return;
+    this.terminalTabRows.set(conversation, shown);
+    this.options.emitTerminalTabs?.(conversation, rows);
+  }
+  /** The tabs each conversation's open approvals are for, as `local:<id>`. */
+  private terminalTabApprovals(): Map<string, string[]> {
+    const waits = new Map<string, string[]>();
+    for (const { row } of this.pending.values()) {
+      const terminal =
+        row.kind === 'approval' ? row.input?.terminal : undefined;
+      if (isLocalTerminal(terminal))
+        waits.set(row.sessionId, [
+          ...(waits.get(row.sessionId) ?? []),
+          terminal,
+        ]);
+    }
+    return waits;
+  }
+  /** An approval for a tab opened or closed: its state is `waiting`, or no longer. */
+  private refreshTerminalTabWaits(): void {
+    const waits = this.terminalTabApprovals();
+    for (const conversation of new Set([
+      ...waits.keys(),
+      ...this.terminalTabWaits.keys(),
+    ])) {
+      const now = JSON.stringify((waits.get(conversation) ?? []).sort());
+      if ((this.terminalTabWaits.get(conversation) ?? '[]') === now) continue;
+      if (now === '[]') this.terminalTabWaits.delete(conversation);
+      else this.terminalTabWaits.set(conversation, now);
+      this.terminalTabsChanged(conversation);
+    }
+  }
+  /**
+   * The person takes one of their terminal tabs (`take`), hands it back (`return`) or
+   * stops what Circle does on it (`stop`), from the window. The answer is the
+   * conversation's tabs as they are now.
+   */
+  async terminalTabControl(
+    conversation: string,
+    session: string,
+    action: LocalTerminalControl,
+  ): Promise<LocalTerminalRow[]> {
+    if (!this.store.get(conversation)) throw Error('session not found');
+    const rows = await this.terminalTabs.control(conversation, session, action);
+    this.terminalTabRows.set(conversation, JSON.stringify(rows));
+    return rows;
+  }
   private externalFiles?: ExternalFileGrants;
   private externalGrantOwners = new Map<string, AgentRuntime>();
   private externalSelectionEpoch = 0;
   private externalBlocked = new Set<string>();
+  /** Why a session's last deletion failed. It stays in deletion, with its history, until
+   * deleting it again succeeds (#195). */
+  private deletionFailures = new Map<string, string>();
   private externalRegistry(): ExternalFileGrants {
     const registry = (this.externalFiles ??= new ExternalFileGrants({
       protectedRoots: [
@@ -1769,8 +1725,6 @@ export class RuntimeController {
         const code = (error as { code?: string })?.code;
         if (code === 'DOCUMENT_CONFLICT')
           return 'file changed on disk; reload and compare your draft before saving';
-        if (code === 'DEBUG_TARGET_MISSING' || code === 'DEVELOPER_TOOLS_OFF')
-          return error instanceof Error ? error.message : String(error);
         return 'operation failed; inspect effects before retrying';
       },
     }));
@@ -1784,33 +1738,12 @@ export class RuntimeController {
     const reads: Record<string, string[]> = {
       documents: ['read', 'refresh', 'resolveSource'],
       terminal: ['list', 'replay', 'resolveCommand'],
-      git: ['status', 'snapshot', 'diff', 'branches'],
-      debug: [
-        'snapshot',
-        'list',
-        'output',
-        'threads',
-        'stack',
-        'stackTrace',
-        'scopes',
-        'variables',
-        'setBreakpoints',
-        'breakpoints',
-        'pause',
-        'stop',
-      ],
+      git: ['status', 'snapshot', 'changes', 'diff', 'branches'],
       tasks: ['list', 'events', 'artifacts', 'readArtifact'],
       delivery: ['status', 'checks', 'logs'],
+      pulls: ['overview', 'failedLog'],
     };
     const read =
-      (request.service === 'language' &&
-        !['stop', 'restart'].includes(
-          String(
-            request.method === 'request'
-              ? request.params?.method
-              : request.method,
-          ),
-        )) ||
       request.service === 'events' ||
       (request.service === 'terminal' &&
         request.method === 'command' &&
@@ -1966,14 +1899,10 @@ export class RuntimeController {
       throw Error('session is deleting or deleted');
     const request = validateWorkspaceRequest(command.payload);
     if (
-      ['documents', 'language'].includes(request.service) &&
+      request.service === 'documents' &&
       this.sourceTask(id)?.spec.access === 'readonly'
     )
-      assertReadonlyTaskRequest(
-        request.service,
-        request.method,
-        request.params,
-      );
+      assertReadonlyTaskRequest(request.service, request.method);
     if (
       request.service === 'inputs' &&
       (request.method === 'list' || request.params?.action !== 'resume')
@@ -2027,7 +1956,6 @@ export class RuntimeController {
     const emergency =
       (request.service === 'terminal' &&
         ['signal', 'close'].includes(request.method)) ||
-      (request.service === 'debug' && request.method === 'stop') ||
       (request.service === 'delivery' &&
         request.method === 'login' &&
         request.params?.action === 'cancel');
@@ -2125,6 +2053,13 @@ export class RuntimeController {
         }
         return service.call(id, request.method, request.params);
       });
+    // What the person types in a tab Circle is operating takes it over, before it lands
+    if (request.service === 'terminal' && request.method === 'write')
+      this.terminalTabs.typed(
+        id,
+        String(request.params?.id ?? request.params?.terminalId ?? ''),
+        String(request.params?.data ?? ''),
+      );
     return this.workspaceOperation(command, workspace, request, () =>
       this.services(workspace).call(
         id,
@@ -2269,9 +2204,11 @@ export class RuntimeController {
               }).map((tool) => bindToolResource(tool, 'browser'))
             : []),
           ...(this.options.terminal
-            ? terminalTools(this.options.terminal, {
+            ? terminalTools(this.terminalTabs.port(this.options.terminal), {
                 confirm: (_sessionId, approval, signal, callId) =>
                   this.confirmHostKey(runtime, approval, signal, callId),
+                // The person's own terminal tabs, beside the device consoles
+                tabs: this.terminalTabs,
                 ...runtimeTerminalOptions(() => runtime),
               })
             : []),
@@ -2840,7 +2777,14 @@ export class RuntimeController {
         archivedAt: this.metadata.archivedAt(row.id),
         lifecycle:
           this.runtimes.lifecycle(row.id) === 'deleting' ? 'deleting' : 'open',
+        ...(this.deletionFailures.has(row.id)
+          ? { deletionFailed: this.deletionFailures.get(row.id) }
+          : {}),
         occupied: !owner && sessionOccupied(this.home, row.id),
+        nativeResourcesActive: this.nativeSessionActiveNow(
+          row.id,
+          row.workspace,
+        ),
         title: row.title || 'new session',
         workspaceId: identity(row.workspace),
         model: selected ? owner.harness.model.model : row.model,
@@ -3017,6 +2961,12 @@ export class RuntimeController {
           output: existsSync(job.outputPath) ? outputTail(job.outputPath) : '',
           outputPath: job.virtualPath,
           stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
+          // A background subagent's job, by the session its record is: its stop and its
+          // time in the subagents mode, while it works and after it has ended.
+          ...(job.kind === 'agent' && job.agent ? { agentId: job.agent } : {}),
+          ...(job.execution?.terminal
+            ? { terminal: job.execution.terminal }
+            : {}),
         })),
       ),
       interactions: [
@@ -3045,11 +2995,14 @@ export class RuntimeController {
             name: skill.name,
             description: skill.description,
             path: skill.path,
+            // One that ships with Circle is bundled, as an extension that does is.
             scope:
-              skill.source_label.startsWith('Project') ||
-              skill.source_label.startsWith('Ancestor')
-                ? 'project'
-                : 'user',
+              skill.source_label === BUILTIN_SKILL_SOURCE
+                ? 'bundled'
+                : skill.source_label.startsWith('Project') ||
+                    skill.source_label.startsWith('Ancestor')
+                  ? 'project'
+                  : 'user',
             content: loadSkillBody(skill.name, runtime.skills),
           })),
       commands:
@@ -3152,7 +3105,7 @@ export class RuntimeController {
                 : 'Approval is enforced by the Circle core.',
             schema: tool.parameters,
           })),
-      uiPlugins: ['files', 'activity', 'browser', 'devices'],
+      uiPlugins: ['files', 'browser'],
       openUrl: this.openRequest,
       ...(this.whatsNew ? { whatsNew: this.whatsNew } : {}),
       settings: {
@@ -3334,6 +3287,7 @@ export class RuntimeController {
       event,
     };
     this.options.emit(update);
+    this.refreshTerminalTabWaits();
     return update;
   }
   private event(
@@ -4041,13 +3995,16 @@ export class RuntimeController {
     id: string,
     workspace: string,
     action = 'archiving',
+    // Whether its terminal tabs and tasks count: a confirmed archive stops them.
+    stoppable = true,
   ): Promise<void> {
     const owner = this.runtimes.get(id);
-    if (await this.nativeSessionActive(id, workspace))
+    if (stoppable && (await this.nativeSessionActive(id, workspace)))
       throw Error(
         `stop this session's native resources and tasks before ${action} it`,
       );
     if (
+      stoppable &&
       [...this.taskServices.values()].some((service) =>
         service.hasActiveSession(id),
       )
@@ -4061,6 +4018,22 @@ export class RuntimeController {
       [...this.pending.values()].some((pending) => pending.row.sessionId === id)
     )
       throw Error(`stop this session before ${action} it`);
+  }
+  // Archiving stops nothing unasked. Once the person confirmed it, the sessions'
+  // terminal tabs and tasks stop first, as for a deletion (#201), and only when
+  // nothing else keeps any of the sessions from being archived.
+  private async prepareArchive(
+    rows: { id: string; workspace: string }[],
+    confirmed: boolean,
+  ): Promise<void> {
+    if (confirmed) {
+      for (const row of rows)
+        await this.assertArchivable(row.id, row.workspace, 'archiving', false);
+      for (const row of rows)
+        if (await this.nativeSessionActive(row.id, row.workspace))
+          await this.releaseSessionResources(row.id, row.workspace);
+    }
+    for (const row of rows) await this.assertArchivable(row.id, row.workspace);
   }
   private resetPlan(runtime: AgentRuntime): void {
     const tracker = new PlanCompletionTracker();
@@ -4287,7 +4260,7 @@ export class RuntimeController {
     if (command.name === 'workspace-service')
       return this.workspaceCommand(command);
     this.metadata.refresh();
-    void this.synchronizeSharedSettings(loadSettings(this.home));
+    this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
     // These capability operations address their explicit owner and must never
     // open or acquire the unrelated session currently being inspected.
@@ -4560,6 +4533,7 @@ export class RuntimeController {
           throw Error(
             'confirm stopping this session and its tasks before deleting it',
           );
+        this.deletionFailures.delete(id);
         for (const target of owned) this.externalBlocked.add(target);
         await Promise.all(
           [...owned].map((target) => this.externalFiles?.revokeSession(target)),
@@ -4568,7 +4542,18 @@ export class RuntimeController {
           confirmed: p.confirmed === true,
         });
         this.publish();
-        await deletion;
+        try {
+          await deletion;
+        } catch (error) {
+          // A cleanup that failed leaves the session in deletion with its history (#195):
+          // the window says why, and deleting it again retries the cleanup.
+          this.deletionFailures.set(
+            id,
+            error instanceof Error ? error.message : String(error),
+          );
+          this.publish();
+          throw error;
+        }
         this.metadata.set([...owned], false);
         for (const target of owned) {
           await this.externalFiles?.revokeSession(target);
@@ -4577,6 +4562,7 @@ export class RuntimeController {
           this.activeRuns.delete(target);
           this.failures.delete(target);
           this.notices.delete(target);
+          this.deletionFailures.delete(target);
           this.planCompletions.delete(target);
           this.turns.delete(target);
           this.turnUsage.delete(target);
@@ -4617,7 +4603,7 @@ export class RuntimeController {
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
         const archive = flag(p.archived);
-        if (archive) await this.assertArchivable(id, row.workspace);
+        if (archive) await this.prepareArchive([row], p.confirmed === true);
         if (archive) {
           this.externalBlocked.add(id);
           await this.externalFiles?.revokeSession(id);
@@ -4635,8 +4621,7 @@ export class RuntimeController {
         // A folder that only holds archived sessions is still one the settings page
         // can name, so ask workspaceById before deciding there is nothing to hide.
         this.workspaceById(workspaceId);
-        for (const row of rows)
-          await this.assertArchivable(row.id, row.workspace);
+        await this.prepareArchive(rows, p.confirmed === true);
         for (const row of rows) this.externalBlocked.add(row.id);
         for (const row of rows) {
           await this.externalFiles?.revokeSession(row.id);
@@ -5003,7 +4988,7 @@ export class RuntimeController {
               };
           }
         });
-        await this.synchronizeSharedSettings(settings);
+        this.synchronizeSharedSettings(settings);
         if (data.defaultEffort !== undefined)
           this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)
@@ -5273,6 +5258,13 @@ export class RuntimeController {
         }
         if (found) {
           const extension = found.command;
+          // Hub sign-in and sign-out are status: the hub page shows them, and the window
+          // says them in passing rather than in the conversation. What any other hub
+          // command finds is the conversation's, as every extension's output is.
+          const hubStatus =
+            name === 'hub' &&
+            /^(?:(?:login|logout)(?:\s|$)|$)/.test(args.trim());
+          const status: string[] = [];
           await extension.handler(args, {
             workspace: found.owner.options.workspace,
             ...(secret ? { secret } : {}),
@@ -5289,10 +5281,11 @@ export class RuntimeController {
               this.notices.set(id, rows);
               this.publish();
             },
-            // Hub sign-in and sign-out are status. The page shows them. They
-            // are not messages in the conversation.
             append: (content) => {
-              if (name === 'hub') return;
+              if (hubStatus) {
+                status.push(content);
+                return;
+              }
               const runtimeNotice = githubStatusNotice(
                 content,
                 name === 'github' &&
@@ -5330,7 +5323,7 @@ export class RuntimeController {
               this.track(runtime.harness.run(prompt), runtime);
             },
           });
-          return {};
+          return status.length ? { notice: status.join('\n') } : {};
         }
         const custom = discoverCustomCommands(
           runtime.options.workspace,
@@ -5584,6 +5577,7 @@ export class RuntimeController {
     for (const pending of this.pending.values())
       pending.reject(new Error('runtime closed'));
     this.pending.clear();
+    this.terminalTabs.close();
     await Promise.all(
       [...this.taskServices.values()].map((service) => service.close()),
     );

@@ -92,6 +92,29 @@ export function validSaveName(value: unknown) {
     throw Error('invalid export name');
   return value;
 }
+// A picture the window hands to the system: copied to the clipboard or saved to a file.
+// The bytes come from a data URL of a picture type the window itself shows.
+const IMAGE_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+]);
+export function parseImageDataUrl(value: unknown): {
+  mime: string;
+  bytes: Buffer;
+} {
+  if (typeof value !== 'string' || value.length > MAX_MEDIA_BYTES * 1.4)
+    throw Error('invalid image');
+  const match = /^data:([a-z]+\/[a-z]+);base64,([A-Za-z0-9+/]+={0,2})$/.exec(
+    value,
+  );
+  if (!match || !IMAGE_TYPES.has(match[1]!)) throw Error('invalid image');
+  const bytes = Buffer.from(match[2]!, 'base64');
+  if (!bytes.length || bytes.length > MAX_MEDIA_BYTES)
+    throw Error('invalid image');
+  return { mime: match[1]!, bytes };
+}
 export function safeExternalUrl(value: string) {
   try {
     const url = new URL(value);

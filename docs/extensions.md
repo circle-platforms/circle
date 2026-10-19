@@ -56,8 +56,6 @@ To turn one off, set it in `settings.json`, or run `/extensions disable sample`:
 
 An extension shipped with Circle is off until `"enabled": true`, which `/extensions enable <name>` saves for you. `/extensions` lists it with `off · /extensions enable <name>`.
 
-**developer** (desktop label 开发者工具) is one of these. It turns on Node debugging and the TypeScript and JavaScript language service in the desktop application. While it is off, the editor still opens, highlights syntax and saves with the version check, and there is no debug tab, no debug-file button and no language service. The js-debug adapter is not started. Turn it on with `/extensions enable developer` or from **extensions → runtime extensions**. The desktop switch applies at once. `/extensions enable` reloads integrations, as it does for every extension. With it on, debugging and the language service behave as they do in [Developing in the window](desktop.md#developing-in-the-window).
-
 A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.0", "description": "...", "commands": ["hello"] }`. `/extensions` and the desktop application show the version and description. `commands` names slash commands the folder will register, so a bundled extension that is still off can say `/extensions enable <name>` instead of treating the command as a typo. It is optional, and an unreadable one is ignored.
 
 ## An interface in the desktop application
@@ -87,6 +85,8 @@ What these pages show is what the server last returned to `/hub refresh`, which 
 Connects Circle to a [circle-hub](https://github.com/circle-platforms/circle-hub), which keeps work for a team: it takes a task with your files, runs it on its own, and delivers results. Turn it on with `/extensions enable hub`.
 
 This extension's own version is **0.1.0**. That number is the Circle plugin version: the desktop pages pair with it and show only while it matches. It is not the hub server's version. The extension speaks circle-hub **client API 1.0.0**, which **circle-hub 0.2.0** serves. The two version lines are different series; 0.1.0 here does not mean the server is old, and a server 0.2.0 does not mean this extension is behind. The range a client should declare is described in the hub's [compatibility matrix](https://github.com/circle-platforms/circle-hub/blob/main/docs/compatibility.md).
+
+In the desktop application, what a `/hub` command finds shows in the conversation, as in the terminal. `/hub`, `/hub login` and `/hub logout` say where you are signed in as a notice in passing instead, and the hub page shows it.
 
 | Command | What it does |
 |---|---|
@@ -151,7 +151,7 @@ Not wired yet: installing modules (`POST /v1/modules/install`), registering prov
 | `api.ToolError` | Throw it from a tool to report a failed call to the model. |
 | `api.Watch` | `new api.Watch(title, poll, options)`: return it from a tool to have Circle wait for something slow. See [Waiting for something slow](#waiting-for-something-slow). |
 | `api.setStatus(text, lamp)` | One line at the right of the footer while it holds, such as what the extension is connected to. `lamp` is `running` (yellow), `ok` (green), `error` (red), `wait` (cyan) or `none`. The text is one line of up to 60 characters, with [secrets](#secrets) masked; `null` removes it. The terminal shows it at the right of the footer; the desktop application, above the footer of its sidebar. |
-| `api.openUrl(url)` | Open an `http` or `https` address. The terminal opens it in the system's browser, passed to the system's opener as one argument and never through a shell. The desktop application opens it in its own browser panel, beside the session; with that panel turned off, or no window, the system's browser opens it. An address with a user name or password, or of another kind, is refused. |
+| `api.openUrl(url)` | Open an `http` or `https` address. The terminal opens it in the system's browser, passed to the system's opener as one argument and never through a shell. The desktop application opens it in its own browser, beside the session, or in the browser's window when the browser is in [a window of its own](desktop.md#in-a-window-of-its-own); with that browser turned off, or no window, the system's browser opens it. An address with a user name or password, or of another kind, is refused. |
 | `api.setView(data)` | Publish data for the extension's own [interface in the desktop application](#an-interface-in-the-desktop-application): JSON only, up to 64 KB, with [secrets](#secrets) masked. `null` removes it. |
 | `api.workspace` | The folder Circle works in, for a tool that reads or saves the user's files there. |
 | `api.settings` | A copy of the extension's own entry under `extensions` in `settings.json`, as it was when the extension loaded, such as `{ "enabled": true, "url": "…" }`. Changing the copy saves nothing. |

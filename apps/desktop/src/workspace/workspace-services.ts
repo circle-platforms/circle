@@ -7,19 +7,9 @@ import { spawnPty } from './native-pty.ts';
 import { WorkspaceDocuments, type WorkspaceDocumentEdit } from './documents.ts';
 import { TerminalManager, type TerminalSignal } from './terminal.ts';
 import { GitWorkspaceService } from './git.ts';
-import {
-  WorkspaceLanguageService,
-  languageDiagnosticMetadata,
-} from './lsp-language.ts';
-import type { LspServer } from '../../../../src/lsp_tool.ts';
-import { WorkspaceDebugService } from './debug.ts';
 import { DeliveryService } from './delivery.ts';
+import { PullRequestReader } from './pulls.ts';
 import type { NativeGitHubConnection } from './github-connection.ts';
-import {
-  DeliveryCycleService,
-  type CyclePorts,
-  type CycleSpec,
-} from './delivery-cycle.ts';
 import type { CredentialStore } from './delivery-login.ts';
 import {
   WorkspaceEventStream,
@@ -35,18 +25,11 @@ export interface WorkspaceServicesOptions {
   workspaceRoot: string;
   workspaceId?: string;
   dataDir: string;
-  nodeExecutable: string;
   runtimeExecutable: string;
-  adapterPath: string;
   ghPath: string;
   githubConnection?: NativeGitHubConnection;
   enforceGitHubConnection?: boolean;
   githubEnabled?: (sessionId: string) => boolean;
-  /**
-   * The bundled developer extension. Omitted means on, so a direct service
-   * test keeps today's debugger and language service. The desktop always sets it.
-   */
-  developerEnabled?: () => boolean;
   githubInvocation?: (sessionId: string) => {
     signal: AbortSignal;
     assertActive: () => void;
@@ -54,10 +37,6 @@ export interface WorkspaceServicesOptions {
   credentialStore?: CredentialStore;
   credentialFiles?: string[];
   terminalEnv?: NodeJS.ProcessEnv;
-  /** Only the trusted host can choose optional non-JS language servers. */
-  languageServers?: Readonly<Record<string, LspServer>>;
-  cyclePorts?: (sessionId: string) => CyclePorts | Promise<CyclePorts>;
-  cycleIntervalMs?: number;
   emit: (event: WorkspaceServiceEvent) => void;
   onPersistenceError?: (error: Error) => void;
   maxPendingEventBytes?: number;
@@ -71,9 +50,6 @@ export class WorkspaceServices {
   private ready: Promise<WorkspaceEventStream>;
   private git: Promise<GitWorkspaceService>;
   private delivery: Promise<DeliveryService>;
-  private languages = new Map<string, WorkspaceLanguageService>();
-  private debuggers = new Map<string, WorkspaceDebugService>();
-  private debugTerminals = new Map<string, Set<string>>();
   private sessions = new Set<string>();
   private epoch = randomUUID();
   private seq = 0;
@@ -85,11 +61,10 @@ export class WorkspaceServices {
   private closed = false;
   private disposed = false;
   private disposePromise?: Promise<void>;
-  private ownerCycles = new Map<string, OwnedCycles>();
-  private cycleDirectory: string;
   private releasing = new Set<string>();
   private loginOwners = new Map<string, string>();
   private activeDelivery?: DeliveryService;
+  private pullRequests?: PullRequestReader;
   private watch: ReturnType<WorkspaceDocuments['watch']>;
   /** Subscription identity only. Session authorization is checked by the host. */
   get id(): string {
@@ -102,7 +77,6 @@ export class WorkspaceServices {
       .digest('hex');
     this.workspaceId = options.workspaceId ?? rootHash.slice(0, 24);
     const directory = path.join(options.dataDir, 'workspaces', rootHash);
-    this.cycleDirectory = path.join(directory, 'delivery');
     this.ready = WorkspaceEventStream.open(
       path.join(directory, 'events.jsonl'),
       options.eventStreamOptions,
@@ -115,9 +89,6 @@ export class WorkspaceServices {
     });
     this.watch = this.documents.watch(
       (snapshot) => {
-        const paths = snapshot.changes.map((change) => change.file.path);
-        for (const language of this.languages.values())
-          language.invalidate(paths);
         for (const session of this.sessions)
           this.publish(session, 'documents', 'files', {
             kind: 'files',
@@ -189,146 +160,12 @@ export class WorkspaceServices {
   deliveryAdapter() {
     return this.delivery;
   }
-  private async cyclesFor(sessionId: string): Promise<DeliveryCycleService> {
-    if (!this.options.cyclePorts)
-      throw Error(
-        'automated delivery is unavailable until trusted task and verification services are connected',
-      );
-    let entry = this.ownerCycles.get(sessionId);
-    if (entry?.stopped) throw Error('session delivery cycles are closed');
-    if (!entry) {
-      const owned: OwnedCycles = {
-        service: undefined as unknown as Promise<DeliveryCycleService>,
-        stopped: false,
-      };
-      owned.service = Promise.resolve().then(async () => {
-        const ports = await this.options.cyclePorts!(sessionId);
-        if (owned.stopped || this.closed)
-          throw Error('session delivery cycles are closed');
-        const check = () => {
-          if (owned.stopped || this.closed || this.failure)
-            throw Error('session delivery cycle has stopped');
-        };
-        const guarded = <T extends object>(target: T): T =>
-          new Proxy(target, {
-            get(object, key) {
-              const value = Reflect.get(object, key);
-              if (typeof value !== 'function') return value;
-              return (...args: unknown[]) => {
-                check();
-                return Reflect.apply(value, object, args);
-              };
-            },
-          });
-        const service = await DeliveryCycleService.open({
-          dataDir: path.join(
-            this.cycleDirectory,
-            createHash('sha256').update(sessionId).digest('hex'),
-          ),
-          ports: {
-            bind: (cycle, mode) => {
-              check();
-              ports.bind?.(cycle, mode);
-            },
-            tasks: guarded(ports.tasks),
-            git: guarded(ports.git),
-            delivery: guarded(ports.delivery),
-            verify: (cycle) => {
-              check();
-              return ports.verify(cycle);
-            },
-          },
-          onEvent: (cycle) => {
-            void this.publish(sessionId, 'cycles', cycle.id, {
-              kind: 'cycle',
-              id: cycle.id,
-              state: cycle.state,
-              attempt: cycle.attempt,
-            });
-          },
-        });
-        if (owned.stopped || this.closed) {
-          await service.close();
-          return service;
-        }
-        owned.timer = setInterval(
-          () => this.advanceCycles(sessionId, owned),
-          this.options.cycleIntervalMs ?? 1000,
-        );
-        owned.timer.unref();
-        return service;
-      });
-      this.ownerCycles.set(sessionId, owned);
-      entry = owned;
-      owned.service
-        .then(() => this.advanceCycles(sessionId, owned))
-        .catch(() => {
-          if (!owned.stopped && this.ownerCycles.get(sessionId) === owned)
-            this.ownerCycles.delete(sessionId);
-        });
-    }
-    return entry.service;
-  }
-  private advanceCycles(sessionId: string, owned: OwnedCycles) {
-    if (this.closed || this.failure || owned.stopped || owned.tick) return;
-    owned.tick = (async () => {
-      const service = await owned.service;
-      for (const cycle of service.list()) {
-        if (this.closed || this.failure || owned.stopped) break;
-        if (['needs_review', 'pending_human_merge'].includes(cycle.state))
-          continue;
-        try {
-          await service.advance(cycle.id);
-        } catch (error) {
-          await this.publish(sessionId, 'cycles', cycle.id, {
-            kind: 'cycle-error',
-            id: cycle.id,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'cycle advancement failed',
-          });
-        }
-      }
-    })()
-      .catch((error) => this.failPersistence(error))
-      .finally(() => {
-        owned.tick = undefined;
-      });
-  }
-  private async closeCycles(sessionId: string) {
-    const owned = this.ownerCycles.get(sessionId);
-    if (!owned) return;
-    owned.stopped = true;
-    if (owned.timer) clearInterval(owned.timer);
-    await owned.tick;
-    await owned.service.then(
-      (service) => service.close(),
-      () => undefined,
-    );
-  }
   async hasActiveSession(sessionId: string): Promise<boolean> {
-    const owned = this.ownerCycles.get(sessionId);
-    if (owned && !owned.stopped) {
-      const cycles = await owned.service.catch(() => undefined);
-      if (
-        cycles &&
-        cycles
-          .list()
-          .some(
-            (cycle) =>
-              !['needs_review', 'pending_human_merge'].includes(cycle.state),
-          )
-      )
-        return true;
-    }
-    if ((await this.terminals.activeIds(sessionId)).length) return true;
-    const debug = this.debuggers.get(sessionId)?.snapshot();
-    if (
-      debug &&
-      ['starting', 'running', 'paused', 'stopping'].includes(debug.status)
-    )
-      return true;
+    await this.terminals.activeIds(sessionId);
+    return this.hasActiveSessionNow(sessionId);
+  }
+  hasActiveSessionNow(sessionId: string): boolean {
+    if (this.terminals.activeIdsNow(sessionId).length) return true;
     for (const [id, owner] of this.loginOwners)
       if (owner === sessionId) {
         try {
@@ -350,25 +187,11 @@ export class WorkspaceServices {
       throw Error('session resources are already closing');
     this.releasing.add(sessionId);
     try {
-      let cycleCloseError: unknown;
-      const closingCycles = this.closeCycles(sessionId).catch((error) => {
-        cycleCloseError = error;
-      });
       await Promise.all(
         (await this.terminals.activeIds(sessionId)).map((id) =>
           this.terminals.close(sessionId, id),
         ),
       );
-      const debug = this.debuggers.get(sessionId);
-      if (debug) {
-        await debug.dispose();
-        this.debuggers.delete(sessionId);
-      }
-      await closingCycles;
-      if (cycleCloseError) throw cycleCloseError;
-      this.debugTerminals.delete(sessionId);
-      await this.languages.get(sessionId)?.dispose();
-      this.languages.delete(sessionId);
       for (const [id, owner] of this.loginOwners)
         if (owner === sessionId) {
           await this.activeDelivery?.login?.cancel(id);
@@ -406,15 +229,7 @@ export class WorkspaceServices {
     try {
       this.options.onPersistenceError?.(this.failure);
     } catch {}
-    this.failureCleanup = (async () => {
-      await Promise.allSettled([
-        this.terminals.dispose(),
-        ...[...this.debuggers.values()].map((debug) => debug.dispose()),
-        ...[...this.ownerCycles.keys()].map((session) =>
-          this.closeCycles(session),
-        ),
-      ]);
-    })();
+    this.failureCleanup = this.terminals.dispose().catch(() => {});
   }
   private persist(event: WorkspaceServiceEvent): Promise<void> {
     if (this.disposed)
@@ -476,12 +291,6 @@ export class WorkspaceServices {
     result.catch(() => {});
     return result;
   }
-  private assertDeveloper() {
-    if (this.options.developerEnabled && !this.options.developerEnabled())
-      throw Object.assign(new Error('developer tools are off'), {
-        code: 'DEVELOPER_TOOLS_OFF',
-      });
-  }
   async call(
     sessionId: string,
     service: WorkspaceService,
@@ -502,57 +311,17 @@ export class WorkspaceServices {
     await this.ready;
     const emergency =
       (service === 'terminal' && ['signal', 'close'].includes(method)) ||
-      (service === 'debug' && method === 'stop') ||
       (service === 'delivery' &&
         method === 'login' &&
         params.action === 'cancel');
     if (this.failure && !emergency) throw this.failure;
     this.sessions.add(sessionId);
-    if (service === 'cycles') {
-      const cycles = await this.cyclesFor(sessionId);
-      if (this.ownerCycles.get(sessionId)?.stopped)
-        throw Error('session delivery cycles are closed');
-      if (method === 'list') return cycles.list();
-      const id = requiredString(params, 'id');
-      if (method === 'snapshot') return cycles.snapshot(id);
-      if (method === 'create') {
-        if (params.workspace !== undefined)
-          throw Error('cycle workspace is assigned by the trusted host');
-        const title = requiredString(params, 'title');
-        const body = requiredString(params, 'body', true);
-        if (
-          !Array.isArray(params.acceptanceCriteria) ||
-          !params.acceptanceCriteria.length ||
-          params.acceptanceCriteria.some(
-            (item) => typeof item !== 'string' || !item.trim(),
-          )
-        )
-          throw Error('acceptance criteria must be nonempty strings');
-        const spec: CycleSpec = {
-          id,
-          title,
-          body,
-          workspace: this.options.workspaceRoot,
-          acceptanceCriteria: params.acceptanceCriteria,
-        };
-        const result = await cycles.create(spec, {
-          operationId: requiredString(params, 'operationId'),
-        });
-        this.advanceCycles(sessionId, this.ownerCycles.get(sessionId)!);
-        return result;
-      }
-      if (method === 'advance') {
-        const result = await cycles.advance(id);
-        this.advanceCycles(sessionId, this.ownerCycles.get(sessionId)!);
-        return result;
-      }
-      if (method === 'retryCI')
-        return cycles.retryCI(
-          id,
-          requiredInteger(params, 'runId', 1, Number.MAX_SAFE_INTEGER),
-          { operationId: requiredString(params, 'operationId') },
-        );
-      throw Error('unknown delivery cycle method');
+    if (service === 'pulls') {
+      // What the overview shows of the repository and its pull requests; reads only.
+      this.pullRequests ??= new PullRequestReader(this.options.workspaceRoot, {
+        ghPath: this.options.ghPath,
+      });
+      return this.pullRequests.call(method, params);
     }
     if (service === 'documents') {
       if (method === 'resolveSource') {
@@ -614,12 +383,6 @@ export class WorkspaceServices {
           params.edits as WorkspaceDocumentEdit[],
         );
       } else throw Error('unknown document method');
-      const changedPaths =
-        method === 'save'
-          ? [file]
-          : (params.edits as WorkspaceDocumentEdit[]).map((edit) => edit.path);
-      for (const language of this.languages.values())
-        language.invalidate(changedPaths);
       await this.publish(sessionId, 'documents', file || 'batch', {
         kind: method,
         paths:
@@ -705,213 +468,6 @@ export class WorkspaceServices {
         );
       throw Error('unknown terminal method');
     }
-    if (service === 'language') {
-      this.assertDeveloper();
-      let language = this.languages.get(sessionId);
-      if (!language) {
-        language = new WorkspaceLanguageService(this.options.workspaceRoot, {
-          servers: this.options.languageServers,
-          authorizePath: async (file) => {
-            // The same document grant and credential exclusions apply to both providers.
-            await this.documents.snapshot(file);
-            return path.resolve(this.documents.root, file);
-          },
-        });
-        this.languages.set(sessionId, language);
-      }
-      const result = await language.call(method, params);
-      if (
-        (method === 'diagnostics' ||
-          (method === 'request' && params.method === 'diagnostics')) &&
-        Array.isArray(result)
-      ) {
-        const body = JSON.stringify(result);
-        const chunks: string[] = [];
-        let chunk = '',
-          escapedBytes = 0;
-        // Bound the actual JSON-escaped event bytes, not UTF-16 length. Code points
-        // stay intact and every byte of the original diagnostic array is retained.
-        for (const character of body) {
-          const bytes = Buffer.byteLength(JSON.stringify(character)) - 2;
-          if (escapedBytes + bytes > 32 * 1024) {
-            chunks.push(chunk);
-            chunk = '';
-            escapedBytes = 0;
-          }
-          chunk += character;
-          escapedBytes += bytes;
-        }
-        chunks.push(chunk);
-        const batchId = randomUUID();
-        const metadata = languageDiagnosticMetadata(result);
-        for (const [index, body] of chunks.entries())
-          await this.publish(
-            sessionId,
-            'language',
-            requiredString(params, 'path'),
-            {
-              kind: 'diagnostics',
-              batchId,
-              index,
-              count: chunks.length,
-              body,
-              ...(metadata ?? {}),
-            },
-          );
-      }
-
-      if (method === 'open' || method === 'change' || method === 'close')
-        await this.publish(
-          sessionId,
-          'language',
-          requiredString(params, 'path'),
-          {
-            kind: method,
-          },
-        );
-      return result;
-    }
-    if (service === 'debug') {
-      if (this.options.developerEnabled && !this.options.developerEnabled()) {
-        if (method === 'stop') {
-          await this.debuggers.get(sessionId)?.dispose();
-          this.debuggers.delete(sessionId);
-          return { status: 'idle', output: '', breakpoints: {} };
-        }
-        throw Object.assign(new Error('developer tools are off'), {
-          code: 'DEVELOPER_TOOLS_OFF',
-        });
-      }
-      if (method === 'output') {
-        await this.debuggers.get(sessionId)?.flushOutput();
-        const throughSeq =
-          params.throughSeq === undefined
-            ? (await this.ready).cursor.seq
-            : params.throughSeq;
-        if (
-          typeof throughSeq !== 'number' ||
-          !Number.isSafeInteger(throughSeq) ||
-          throughSeq < 0 ||
-          throughSeq > (await this.ready).cursor.seq
-        )
-          throw Error('invalid debug output boundary');
-        const page = await this.replay(
-          params.after as StreamCursor | undefined,
-          32,
-        );
-        return {
-          ...page,
-          throughSeq,
-          hasMore: page.hasMore && page.cursor.seq < throughSeq,
-          events: page.events.filter(
-            (event) =>
-              event.seq <= throughSeq &&
-              event.sessionId === sessionId &&
-              event.service === 'debug' &&
-              event.resourceId === sessionId &&
-              event.data.kind === 'output',
-          ),
-        };
-      }
-      let debug = this.debuggers.get(sessionId);
-      if (!debug) {
-        debug = new WorkspaceDebugService({
-          ...this.options,
-          stopTerminals: async () => {
-            await Promise.all(
-              [...(this.debugTerminals.get(sessionId) ?? [])].map((id) =>
-                this.terminals.close(sessionId, id),
-              ),
-            );
-            this.debugTerminals.delete(sessionId);
-          },
-          runInTerminal: async (request) => {
-            if (
-              !Array.isArray(request.args) ||
-              !request.args.length ||
-              request.args.some(
-                (arg) => typeof arg !== 'string' || arg.includes('\0'),
-              )
-            )
-              throw Error('debug terminal arguments are invalid');
-            const options = {
-              owner: sessionId,
-              sessionId,
-              cwd: request.cwd,
-              command: { file: request.args[0], args: request.args.slice(1) },
-              env: request.env,
-              label: 'debug',
-            };
-            const terminal = await this.terminals.create(options);
-            const ids = this.debugTerminals.get(sessionId) ?? new Set<string>();
-            ids.add(terminal.id);
-            this.debugTerminals.set(sessionId, ids);
-            if (!terminal.pid)
-              throw Error('debug terminal did not return a process id');
-            return { processId: terminal.pid };
-          },
-          output: async (text) => {
-            // Bound JSON-escaped bytes as well as UTF-8; never split a code point.
-            let chunk = '',
-              bytes = 0;
-            for (const character of text) {
-              const size = Buffer.byteLength(JSON.stringify(character)) - 2;
-              if (bytes + size > 32 * 1024) {
-                await this.publish(sessionId, 'debug', sessionId, {
-                  kind: 'output',
-                  text: chunk,
-                });
-                chunk = '';
-                bytes = 0;
-              }
-              chunk += character;
-              bytes += size;
-            }
-            if (chunk)
-              await this.publish(sessionId, 'debug', sessionId, {
-                kind: 'output',
-                text: chunk,
-              });
-          },
-          emit: ({ output: _preview, ...snapshot }) => {
-            void this.publish(sessionId, 'debug', sessionId, { snapshot });
-          },
-        });
-        this.debuggers.set(sessionId, debug);
-      }
-      try {
-        const result = await debug.handle(
-          method === 'list'
-            ? 'snapshot'
-            : method === 'start'
-              ? 'launch'
-              : method,
-          params,
-        );
-        if (method === 'snapshot' || method === 'list') {
-          const owned = this.debugTerminals.get(sessionId);
-          const terminals = owned?.size
-            ? await this.terminals.list(sessionId)
-            : [];
-          return {
-            ...result,
-            debugTerminals: terminals
-              .filter((terminal) => owned?.has(terminal.id))
-              .map(({ id, epoch }) => ({ id, epoch })),
-          };
-        }
-        return result;
-      } finally {
-        if (method === 'stop') {
-          await Promise.all(
-            [...(this.debugTerminals.get(sessionId) ?? [])].map((id) =>
-              this.terminals.close(sessionId, id),
-            ),
-          );
-          this.debugTerminals.delete(sessionId);
-        }
-      }
-    }
     if (service === 'git' || service === 'delivery') {
       if (
         service === 'delivery' &&
@@ -964,6 +520,7 @@ export class WorkspaceServices {
         ![
           'status',
           'snapshot',
+          'changes',
           'diff',
           'branches',
           'history',
@@ -987,17 +544,8 @@ export class WorkspaceServices {
   }
   private async disposeOwned() {
     this.closed = true;
-    await Promise.allSettled(
-      [...this.ownerCycles.keys()].map((session) => this.closeCycles(session)),
-    );
     this.watch.close();
     this.documents.close();
-    await Promise.all(
-      [...this.languages.values()].map((language) => language.dispose()),
-    );
-    await Promise.allSettled(
-      [...this.debuggers.values()].map((debug) => debug.dispose()),
-    );
     await this.terminals.dispose();
     await this.failureCleanup;
     await this.delivery.then(
@@ -1102,13 +650,6 @@ function validateServiceOptions(params: Record<string, unknown>) {
     ...(command ? { command } : {}),
     ...(readiness ? { readiness } : {}),
   };
-}
-
-interface OwnedCycles {
-  service: Promise<DeliveryCycleService>;
-  timer?: ReturnType<typeof setInterval>;
-  tick?: Promise<void>;
-  stopped: boolean;
 }
 
 export class WorkspaceServicesClosedError extends Error {

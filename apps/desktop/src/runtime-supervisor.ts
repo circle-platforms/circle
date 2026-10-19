@@ -15,6 +15,7 @@ import type {
 } from './runtime-protocol';
 import { RuntimeTokenBuffer } from './runtime-token-stream';
 import type { PrivateExternalFileRequest } from './runtime-external-file-channel';
+import type { LocalTerminalRow } from './contracts';
 import {
   describeRuntimeExit,
   redactRuntimeOutput,
@@ -41,6 +42,46 @@ export type TerminalHandler = (
   request: TerminalRequest,
   signal: AbortSignal,
 ) => Promise<TerminalResult>;
+/** A conversation's terminal tabs as the runtime tells them, or `gone` when it stops. */
+export type TerminalTabsHandler = (
+  update: { conversation: string; rows: LocalTerminalRow[] } | 'gone',
+) => void;
+const TERMINAL_TAB_ACTIONS = new Set(['take', 'return', 'stop']);
+const TAB_STATES = new Set(['idle', 'waiting', 'operating', 'held']);
+/** A tab row from the runtime, checked before the window is given it. */
+function tabRows(value: unknown): LocalTerminalRow[] | undefined {
+  if (!Array.isArray(value) || value.length > 256) return undefined;
+  const rows: LocalTerminalRow[] = [];
+  for (const row of value as Record<string, unknown>[]) {
+    if (
+      !row ||
+      typeof row !== 'object' ||
+      typeof row.id !== 'string' ||
+      !/^local:[A-Za-z0-9-]{1,100}$/.test(row.id) ||
+      typeof row.terminal !== 'string' ||
+      row.id !== `local:${row.terminal}` ||
+      !Number.isSafeInteger(row.ordinal) ||
+      !TAB_STATES.has(String(row.state)) ||
+      typeof row.allowed !== 'boolean' ||
+      (row.held !== undefined &&
+        row.held !== 'attach' &&
+        row.held !== 'handoff') ||
+      (row.reason !== undefined &&
+        (typeof row.reason !== 'string' || row.reason.length > 4000))
+    )
+      return undefined;
+    rows.push({
+      id: row.id,
+      terminal: row.terminal,
+      ordinal: row.ordinal as number,
+      state: row.state as LocalTerminalRow['state'],
+      allowed: row.allowed,
+      ...(row.held ? { held: row.held as 'attach' | 'handoff' } : {}),
+      ...(row.reason ? { reason: row.reason as string } : {}),
+    });
+  }
+  return rows;
+}
 
 const STDERR_TAIL = 16 * 1024;
 const LOG_LIMIT = 1024 * 1024;
@@ -88,6 +129,19 @@ export class RuntimeSupervisor {
   private terminalHandler?: TerminalHandler;
   private sessionCleanup?: (sessionId: string) => Promise<void>;
   private terminalCleanup?: (sessionId: string) => Promise<void>;
+  // The person's own terminal tabs live in the runtime with their shells: what it says
+  // of them goes to the window, and the person's take, return and stop come back
+  private terminalTabsHandler?: TerminalTabsHandler;
+  /** What Circle last said it does with each conversation's tabs, for a window opened later. */
+  private readonly terminalTabRows = new Map<string, LocalTerminalRow[]>();
+  private terminalTabRequests = new Map<
+    string,
+    {
+      resolve: (rows: LocalTerminalRow[]) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   constructor(
     readonly home: string,
     readonly directory: string,
@@ -138,6 +192,10 @@ export class RuntimeSupervisor {
           sessionId?: unknown;
           event?: WorkspaceServiceEvent;
           delta?: RuntimeTokenDelta;
+          conversation?: unknown;
+          rows?: unknown;
+          ok?: unknown;
+          error?: unknown;
         }) => {
           if (message.type === 'token-delta' && message.delta) {
             const result = this.tokenBuffer.apply(message.delta);
@@ -189,6 +247,9 @@ export class RuntimeSupervisor {
             this.releaseTerminal(message.id, message.sessionId);
           if (message.type === 'terminal-cancel')
             this.terminalRequests.get(String(message.id))?.abort();
+          if (message.type === 'terminal-tabs') this.terminalTabs(message);
+          if (message.type === 'terminal-tab-reply')
+            this.terminalTabReply(message);
           if (message.type === 'update' && message.update) {
             if (!this.tokenBuffer.acceptFull(message.update)) return;
             this.latest = message.update;
@@ -248,6 +309,13 @@ export class RuntimeSupervisor {
     this.browserRequests.clear();
     for (const request of this.terminalRequests.values()) request.abort();
     this.terminalRequests.clear();
+    for (const request of this.terminalTabRequests.values()) {
+      clearTimeout(request.timer);
+      request.reject(Error('the runtime stopped'));
+    }
+    this.terminalTabRequests.clear();
+    this.terminalTabRows.clear();
+    this.terminalTabsHandler?.('gone');
     const error = Error(exit.message);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
@@ -508,6 +576,79 @@ export class RuntimeSupervisor {
   onTerminalCleanup(handler: (sessionId: string) => Promise<void>) {
     this.terminalCleanup = handler;
   }
+  /** Who shows what Circle does with the person's own terminal tabs: the window. */
+  onTerminalTabs(handler: TerminalTabsHandler) {
+    this.terminalTabsHandler = handler;
+    // A window opened again (macOS keeps the application without one) learns at once
+    // what Circle is doing with the tabs: rows that did not change are not sent again.
+    for (const [conversation, rows] of this.terminalTabRows)
+      handler({ conversation, rows });
+  }
+  /** The person takes a terminal tab, hands it back or stops Circle on it. */
+  terminalTabControl(
+    conversation: string,
+    session: string,
+    action: 'take' | 'return' | 'stop',
+  ): Promise<LocalTerminalRow[]> {
+    const child = this.child;
+    if (!child) return Promise.reject(Error('runtime disconnected'));
+    if (!TERMINAL_TAB_ACTIONS.has(action))
+      return Promise.reject(Error('invalid terminal action'));
+    const id = randomUUID();
+    return new Promise<LocalTerminalRow[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.terminalTabRequests.delete(id);
+        reject(Error('the runtime did not answer'));
+      }, 15_000);
+      this.terminalTabRequests.set(id, { resolve, reject, timer });
+      try {
+        child.postMessage({
+          type: 'terminal-tab-control',
+          id,
+          conversation,
+          session,
+          action,
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        this.terminalTabRequests.delete(id);
+        reject(error instanceof Error ? error : Error(String(error)));
+      }
+    });
+  }
+  private terminalTabs(message: { conversation?: unknown; rows?: unknown }) {
+    const rows = tabRows(message.rows);
+    if (
+      !rows ||
+      typeof message.conversation !== 'string' ||
+      !/^[a-zA-Z0-9_-]{1,100}$/.test(message.conversation)
+    )
+      return;
+    if (rows.length) this.terminalTabRows.set(message.conversation, rows);
+    else this.terminalTabRows.delete(message.conversation);
+    this.terminalTabsHandler?.({ conversation: message.conversation, rows });
+  }
+  private terminalTabReply(message: {
+    id?: unknown;
+    ok?: unknown;
+    rows?: unknown;
+    error?: unknown;
+  }) {
+    const pending = this.terminalTabRequests.get(String(message.id));
+    if (!pending) return;
+    this.terminalTabRequests.delete(String(message.id));
+    clearTimeout(pending.timer);
+    const rows = tabRows(message.rows);
+    if (message.ok === true && rows) pending.resolve(rows);
+    else
+      pending.reject(
+        Error(
+          typeof message.error === 'string'
+            ? message.error
+            : 'the terminal tab action failed',
+        ),
+      );
+  }
   private releaseSession(id: unknown, sessionId: unknown) {
     if (
       typeof id !== 'string' ||
@@ -737,12 +878,22 @@ export class RuntimeSupervisor {
     if (this.closing) return this.closing;
     this.closing = (async () => {
       this.cancelRestartWait?.();
-      if (!this.child) return;
-      const reply = await this.command({
-        id: randomUUID(),
-        name: 'close',
-        payload: {},
-      });
+      const child = this.child;
+      if (!child) return;
+      let reply;
+      try {
+        reply = await this.command({
+          id: randomUUID(),
+          name: 'close',
+          payload: {},
+        });
+      } catch (error) {
+        // A runtime that stopped while it was asked to close has nothing left to stop. A
+        // signal to every process of the application (pkill, the end of a Linux session)
+        // stops it just as the main process asks, and quitting goes on.
+        if (this.child !== child) return;
+        throw error;
+      }
       if (!reply.ok) throw Error(reply.error ?? 'runtime close failed');
       this.child?.kill();
       await this.exited;

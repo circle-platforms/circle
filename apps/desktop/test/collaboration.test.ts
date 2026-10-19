@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,6 +11,10 @@ import {
   CollaborationScheduler,
   DEFAULT_COLLABORATION_LIMITS,
   OperationNeedsReviewError,
+  type CollaborationEvent,
+  type Json,
+  type TaskArtifact,
+  type TaskSendBack,
   type TaskSpec,
   type TaskExecutor,
 } from '../src/workspace/collaboration.js';
@@ -256,6 +261,233 @@ test('failed dependency blocks descendants, explicit retry creates a fresh attem
   assert.equal(scheduler.attempts('a').length, 2);
   assert.equal(scheduler.attempts('a')[0]!.state, 'failed');
   assert.ok(scheduler.list().every((task) => task.state === 'succeeded'));
+});
+
+/** A person's send-back of the attempt they were shown, as TaskService records it. */
+function sendBack(
+  scheduler: CollaborationScheduler,
+  data: string,
+  id: string,
+  decision: TaskSendBack,
+) {
+  return scheduler.rejectHumanReview(id, {
+    decision,
+    result: {
+      verdict: 'failed',
+      review: decision as unknown as Json,
+      changes: { sha256: decision.expectedPatchSha256 },
+    },
+    artifact: {
+      id: randomUUID(),
+      taskId: id,
+      attempt: decision.expectedAttempt,
+      baseline: decision.head,
+      path: join(data, `${randomUUID()}.json`),
+      sha256: '0'.repeat(64),
+      kind: 'human-review',
+      createdAt: Date.now(),
+    } satisfies TaskArtifact,
+  });
+}
+
+test('sending back an attempt records the decision on it, queues the next attempt with the reason and keeps dependents waiting', async (t) => {
+  const repo = scratch(t),
+    data = scratch(t);
+  const baseline = await repository(repo);
+  const patch = (attempt: number) => String(attempt).repeat(64);
+  const started = gate(),
+    second = gate();
+  const ran: string[] = [],
+    dependencies = new Map<string, string[]>();
+  const scheduler = new CollaborationScheduler({
+    dataDir: data,
+    executor: async (task, context) => {
+      ran.push(`${task.spec.id}:${task.attempt}`);
+      dependencies.set(
+        task.spec.id,
+        context.dependencies.map(
+          ({ task: dependency }) =>
+            `${dependency.spec.id}:${dependency.attempt}:${dependency.state}`,
+        ),
+      );
+      if (task.spec.id !== 'a') return { passed: true };
+      if (task.attempt === 1)
+        return {
+          passed: false,
+          verdict: 'needs_review',
+          reason: 'not every acceptance criterion has independent evidence',
+          result: { changes: { sha256: patch(1) } },
+        };
+      started.resolve();
+      await second.promise;
+      return { passed: true, result: { changes: { sha256: patch(2) } } };
+    },
+  });
+  cleanup(t, () => scheduler.close());
+  const events: CollaborationEvent[] = [];
+  scheduler.subscribe((event) => events.push(event));
+  await scheduler.enqueue(
+    [
+      spec('a', repo),
+      spec('b', repo, { dependencies: ['a'] }),
+      spec('c', repo, { dependencies: ['b'] }),
+    ],
+    { operationId: 'graph' },
+  );
+  scheduler.start();
+  await scheduler.waitForIdle();
+  assert.deepEqual(
+    scheduler.list().map((task) => task.state),
+    ['needs_review', 'blocked', 'blocked'],
+  );
+  const shownTree = scheduler.get('a')!.worktree!;
+  const decision = (fields: Partial<TaskSendBack> = {}): TaskSendBack => ({
+    reviewer: 'human',
+    decision: 'rejected',
+    expectedAttempt: 1,
+    expectedPatchSha256: patch(1),
+    head: baseline,
+    reason: 'the summary must also list the second file',
+    at: Date.now(),
+    ...fields,
+  });
+  for (const stale of [
+    decision({ expectedAttempt: 2 }),
+    decision({ expectedPatchSha256: patch(2) }),
+  ])
+    assert.throws(() => sendBack(scheduler, data, 'a', stale), /stale/);
+  assert.throws(() => sendBack(scheduler, data, 'b', decision()), /stale/);
+  assert.equal(scheduler.attempts('a').length, 1);
+  assert.equal(scheduler.get('a')!.state, 'needs_review');
+
+  const before = events.length;
+  const next = sendBack(scheduler, data, 'a', decision());
+  assert.equal(next.attempt, 2);
+  assert.equal(next.state, 'queued');
+  assert.deepEqual(
+    next.sentBack!.map((entry) => [entry.expectedAttempt, entry.reason]),
+    [[1, 'the summary must also list the second file']],
+  );
+  const [shown] = scheduler.attempts('a');
+  assert.equal(shown!.state, 'failed');
+  assert.equal(shown!.reason, 'a person sent this attempt back');
+  assert.equal(shown!.worktree, shownTree);
+  assert.equal(
+    (shown!.result as unknown as { review: TaskSendBack }).review.decision,
+    'rejected',
+  );
+  // Dependents wait for the new attempt: none is cancelled, none is started.
+  assert.deepEqual(
+    ['b', 'c'].map((id) => scheduler.get(id)!.state),
+    ['queued', 'queued'],
+  );
+  assert.deepEqual(
+    events
+      .slice(before, before + 4)
+      .map((event) => [
+        event.type,
+        event.attempt,
+        (event.payload as { decision?: string; retryOf?: number }).decision ??
+          (event.payload as { retryOf?: number }).retryOf ??
+          null,
+      ]),
+    [
+      ['artifact.created', 1, null],
+      ['task.reviewed', 1, 'rejected'],
+      ['task.failed', 1, null],
+      ['task.queued', 2, 1],
+    ],
+  );
+  await started.promise;
+  assert.equal(scheduler.get('a')!.state, 'running');
+  assert.notEqual(scheduler.get('a')!.worktree, shownTree);
+  assert.deepEqual(
+    ['b', 'c'].map((id) => scheduler.get(id)!.state),
+    ['queued', 'queued'],
+  );
+  assert.deepEqual(ran, ['a:1', 'a:2']);
+
+  // The same decision again changes nothing; a different one is refused.
+  assert.equal(sendBack(scheduler, data, 'a', decision()).attempt, 2);
+  assert.throws(
+    () => sendBack(scheduler, data, 'a', decision({ reason: 'another' })),
+    /different reason/,
+  );
+  assert.equal(scheduler.attempts('a').length, 2);
+
+  second.resolve();
+  await scheduler.waitForIdle();
+  assert.deepEqual(ran, ['a:1', 'a:2', 'b:1', 'c:1']);
+  assert.deepEqual(dependencies.get('b'), ['a:2:succeeded']);
+  assert.ok(scheduler.list().every((task) => task.state === 'succeeded'));
+});
+
+test('later attempts keep what people sent back: a retry carries the reasons and another send-back adds to them', async (t) => {
+  const repo = scratch(t),
+    data = scratch(t);
+  const baseline = await repository(repo);
+  const patch = (attempt: number) => String(attempt).repeat(64);
+  const told = new Map<number, string[]>();
+  const scheduler = new CollaborationScheduler({
+    dataDir: data,
+    executor: async (task) => {
+      told.set(
+        task.attempt,
+        (task.sentBack ?? []).map(
+          (entry) => `${entry.expectedAttempt}: ${entry.reason}`,
+        ),
+      );
+      if (task.attempt <= 2)
+        return {
+          passed: false,
+          verdict: 'needs_review',
+          result: { changes: { sha256: patch(task.attempt) } },
+        };
+      return { passed: task.attempt === 4, reason: 'acceptance' };
+    },
+  });
+  cleanup(t, () => scheduler.close());
+  await scheduler.enqueue([spec('a', repo)], { operationId: 'one' });
+  scheduler.start();
+  const decision = (attempt: number, reason: string): TaskSendBack => ({
+    reviewer: 'human',
+    decision: 'rejected',
+    expectedAttempt: attempt,
+    expectedPatchSha256: patch(attempt),
+    head: baseline,
+    reason,
+    at: Date.now(),
+  });
+  await scheduler.waitForIdle();
+  sendBack(scheduler, data, 'a', decision(1, 'use the existing parser'));
+  await scheduler.waitForIdle();
+  assert.equal(scheduler.get('a')!.state, 'needs_review');
+  sendBack(scheduler, data, 'a', decision(2, 'keep the old flag working'));
+  await scheduler.waitForIdle();
+  assert.equal(scheduler.get('a')!.state, 'failed');
+  scheduler.retry('a', { operationId: 'after-failure' });
+  await scheduler.waitForIdle();
+  const both = ['1: use the existing parser', '2: keep the old flag working'];
+  assert.deepEqual(Object.fromEntries(told), {
+    1: [],
+    2: ['1: use the existing parser'],
+    3: both,
+    4: both,
+  });
+  assert.deepEqual(
+    scheduler.attempts('a').map((attempt) => attempt.state),
+    ['failed', 'failed', 'failed', 'succeeded'],
+  );
+  assert.deepEqual(
+    scheduler
+      .attempts('a')
+      .map(
+        (attempt) =>
+          (attempt.result as { review?: TaskSendBack } | undefined)?.review
+            ?.reason ?? null,
+      ),
+    ['use the existing parser', 'keep the old flag working', null, null],
+  );
 });
 
 test('resource queues do not block unrelated work; UI serializes, build defaults to two, agent limits resize', async (t) => {

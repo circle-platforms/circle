@@ -15,7 +15,9 @@ export const TASK_LIMITS_CHANGED = 'circle-task-limits-changed';
 
 /**
  * How many task agents may run at once. The limits are kept for the whole application; the
- * session only routes the request. The other pools are sent back as they were read.
+ * session only routes the request. The other pools are sent back as they were read. After
+ * limits that could not be read were repaired here, queued tasks wait until the person
+ * starts them, folder by folder: the start is here, for the folder of this session.
  */
 export function TaskLimitsSettings({ sessionId }: { sessionId: string }) {
   const id = useId();
@@ -25,20 +27,20 @@ export function TaskLimitsSettings({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [requiresStart, setRequiresStart] = useState(false);
   const generation = useRef(0);
   const load = useCallback(async () => {
     const epoch = ++generation.current;
     try {
-      const value = await workspaceCall<Limits & { error?: string }>(
-        sessionId,
-        'tasks',
-        'settings',
-      );
+      const value = await workspaceCall<
+        Limits & { error?: string; requiresStart?: boolean }
+      >(sessionId, 'tasks', 'settings');
       if (epoch !== generation.current) return;
       const { agents, builds, ui, browsers } = value;
       setLimits({ agents, builds, ui, browsers });
       setAgents(String(agents));
       setProblem(value.error ?? '');
+      setRequiresStart(value.requiresStart === true);
       setError('');
     } catch (reason) {
       if (epoch === generation.current) {
@@ -110,6 +112,23 @@ export function TaskLimitsSettings({ sessionId }: { sessionId: string }) {
       {saved && !problem && !error && (
         <p role="status" className="panel-note">
           {t('saved')}
+        </p>
+      )}
+      {requiresStart && !problem && (
+        <p role="status" className="task-limits-start">
+          <Button
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError('');
+              void workspaceCall(sessionId, 'tasks', 'start')
+                .then(load)
+                .catch((reason) => setError(String(reason)))
+                .finally(() => setBusy(false));
+            }}
+          >
+            {t('start queued tasks')}
+          </Button>
         </p>
       )}
       {problem && (

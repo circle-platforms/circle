@@ -187,13 +187,17 @@ export async function verifyNativeClipboardPayload({ clipboard }, payload) {
     for (const entry of payload[i]) {
       const value = await actual[i].getType(entry.readType);
       if (entry.kind === 'bytes') {
+        const restored = value
+          ? new Uint8Array(await value.arrayBuffer())
+          : undefined;
+        // The format and the sizes say which one did not come back, never its content
         if (
-          !value ||
-          JSON.stringify(
-            Array.from(new Uint8Array(await value.arrayBuffer())),
-          ) !== JSON.stringify(entry.bytes)
+          !restored ||
+          JSON.stringify(Array.from(restored)) !== JSON.stringify(entry.bytes)
         )
-          throw Error('clipboard restoration byte verification failed');
+          throw Error(
+            `clipboard restoration byte verification failed for ${entry.readType} (${restored ? restored.length : 'no'} bytes restored, ${entry.bytes.length} expected)`,
+          );
       } else if (
         value?.title !== entry.value.title ||
         value?.url !== entry.value.url

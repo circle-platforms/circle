@@ -1,19 +1,24 @@
-// The device terminals of this conversation, shared with the main process: every console
-// the model opened, painted here by xterm.js from the raw device bytes. The person attaches
-// to type on a device themselves — the model's actions wait while they hold it — and gives
-// it back. A first host key is answered here, in the panel, as a certificate is.
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+// The device consoles of this conversation, shared with the main process: every console
+// the model opened or you opened, painted here by xterm.js from the raw device bytes. You
+// take one to type on the device yourself — the model's actions wait while you hold it —
+// and give it back. They are tabs of the terminal mode, beside your shells.
+import { useCallback, useEffect, useRef } from 'react';
+import { Hand, KeyRound } from 'lucide-react';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { RefreshCw, Unplug, Hand, KeyRound, Plus, X } from 'lucide-react';
 import { hexToRgb, palette, terminalAnsiHex } from '../../../../src/ink/theme';
-import type { TerminalSessionRow } from '../../../desktop/src/contracts';
+import type {
+  LocalTerminalRow,
+  TerminalProfileRow,
+  TerminalSessionRow,
+  TerminalState,
+  TerminalTargetRow,
+} from '../../../desktop/src/contracts';
 import { desktopHost } from '../host';
 import { useTerminalState } from './useTerminalState';
-import { Button, EmptyState, IconButton } from '../components/ui';
+import { Button } from '../components/ui';
 import { t } from '../i18n';
-import type { PluginPanelProps } from '../plugins/types';
 
 // The emulator's colours come from Circle's own palette, so the screen sits on the
 // window: background, text and the sixteen ANSI slots alike, refreshed on a theme switch.
@@ -32,7 +37,71 @@ function xtermTheme(): Partial<ITheme> {
 const bytes = (base64: string): Uint8Array =>
   Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 
-function stateWord(row: TerminalSessionRow): string {
+/** A console that is still there to use: connecting, ready, or held by someone. */
+const isLive = (row: TerminalSessionRow) =>
+  row.state === 'connecting' || row.state === 'ready' || !!row.held;
+
+export interface DeviceTerminals {
+  /** The desktop application is here to hold device consoles. */
+  available: boolean;
+  rows: TerminalSessionRow[];
+  profiles: TerminalProfileRow[];
+  /** A device whose host key must be trusted before the login goes on. */
+  asking: TerminalState['pendingKey'];
+  /** A console Circle handed to the person. */
+  handoff: TerminalState['handoff'];
+  /** What Circle is doing in each of the person's own terminal tabs. */
+  local: LocalTerminalRow[];
+  /** Reach a saved device; the id of the console that opened. */
+  connectProfile: (name: string) => Promise<string>;
+  /** Reach a device by its address, without saving it; the id of the console. */
+  connectTarget: (target: TerminalTargetRow) => Promise<string>;
+  disconnect: (row: TerminalSessionRow) => void;
+  attach: (row: TerminalSessionRow) => void;
+  detach: (row: TerminalSessionRow) => void;
+  /** Take one of the person's terminal tabs from Circle, or give it back. */
+  takeTab: (row: LocalTerminalRow) => void;
+  giveBackTab: (row: LocalTerminalRow) => void;
+  /** End what Circle is doing in a tab, without taking it. */
+  stopTab: (row: LocalTerminalRow) => void;
+  answerHostKey: (decision: 'once' | 'always' | 'reject') => void;
+}
+
+export function useDeviceTerminals(sessionId: string): DeviceTerminals {
+  const host = desktopHost();
+  const state = useTerminalState(sessionId);
+  const quiet = useCallback(() => {}, []);
+  return {
+    available: !!host,
+    rows: (state?.sessions ?? []).filter(isLive),
+    profiles: state?.profiles ?? [],
+    asking: state?.pendingKey,
+    handoff: state?.handoff,
+    local: state?.local ?? [],
+    connectProfile: async (name) => {
+      const next = await host!.terminalConnect(sessionId, name);
+      return next.sessions.at(-1)?.id ?? '';
+    },
+    connectTarget: async (target) => {
+      const next = await host!.terminalConnectTarget(sessionId, target);
+      return next.sessions.at(-1)?.id ?? '';
+    },
+    disconnect: (row) =>
+      void host?.terminalDisconnect(sessionId, row.id).catch(quiet),
+    attach: (row) => void host?.terminalAttach(sessionId, row.id).catch(quiet),
+    detach: (row) => void host?.terminalDetach(sessionId, row.id).catch(quiet),
+    takeTab: (row) => void host?.terminalAttach(sessionId, row.id).catch(quiet),
+    giveBackTab: (row) =>
+      void host?.terminalDetach(sessionId, row.id).catch(quiet),
+    stopTab: (row) =>
+      void host?.terminalStop?.(sessionId, row.id)?.catch(quiet),
+    answerHostKey: (decision) =>
+      void host?.terminalHostKey(sessionId, decision).catch(quiet),
+  };
+}
+
+/** What a console says about itself, for its tab's tooltip. */
+export function deviceStateWord(row: TerminalSessionRow): string {
   if (row.held === 'handoff') return t('Circle handed it to you');
   if (row.held === 'attach') return t('you have the terminal');
   if (row.state === 'connecting') return t('connecting');
@@ -43,34 +112,30 @@ function stateWord(row: TerminalSessionRow): string {
   return row.state === 'error' ? row.detail || t('failed') : t('closed');
 }
 
-export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
+/**
+ * The screen of the selected console. One emulator serves every console: choosing
+ * another repaints it from the recent raw stream, so it never waits for the device to
+ * speak again to show where it stands. Typing is live only while you hold the console.
+ */
+export function DeviceSurface({
+  sessionId,
+  row,
+  visible,
+  refresh,
+}: {
+  sessionId: string;
+  row: TerminalSessionRow | undefined;
+  visible: boolean;
+  /** Bumped to repaint the screen from the device's recent stream. */
+  refresh?: number;
+}) {
   const host = desktopHost();
-  const state = useTerminalState(sessionId);
-  const rows = state?.sessions ?? [];
-  const live = rows.filter(
-    (row) => row.state === 'connecting' || row.state === 'ready' || row.held,
-  );
-  const [chosen, setChosen] = useState('');
-  // A quick connect, SecureCRT-style: reach a device by address with no profile.
-  const [form, setForm] = useState<{
-    transport: 'ssh' | 'telnet';
-    host: string;
-    port: string;
-    user: string;
-  } | null>(null);
-  const [problem, setProblem] = useState('');
-  const active =
-    live.find((row) => row.id === (selection || chosen)) ?? live[0];
-  const activeId = active?.id ?? '';
+  const activeId = row?.id ?? '';
   const screenRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | undefined>(undefined);
   const fitRef = useRef<FitAddon | undefined>(undefined);
   const holder = useRef({ activeId: '', held: '', sessionId });
-  holder.current = {
-    activeId,
-    held: active?.held ?? '',
-    sessionId,
-  };
+  holder.current = { activeId, held: row?.held ?? '', sessionId };
 
   useEffect(() => {
     const el = screenRef.current;
@@ -87,7 +152,7 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
     term.open(el);
     termRef.current = term;
     fitRef.current = fit;
-    // What the person types goes to the device they hold; nobody else's keystrokes move.
+    // What you type goes to the device you hold; nobody else's keystrokes move.
     term.onData((data) => {
       const now = holder.current;
       if (now.held && now.activeId)
@@ -97,6 +162,8 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
     const sizeSoon = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
+        // A hidden surface has no size to fit to.
+        if (!el.clientWidth) return;
         fit.fit();
         const now = holder.current;
         if (!now.activeId) return;
@@ -126,7 +193,6 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
       termRef.current = undefined;
       fitRef.current = undefined;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Raw device bytes, in the main process's coalesced batches, straight to the emulator.
@@ -142,8 +208,6 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
     });
   }, [host, sessionId]);
 
-  // A newly seen console paints its screen from the recent raw stream: the panel never
-  // waits for the device to speak again to show where it stands.
   useEffect(() => {
     const term = termRef.current;
     if (!term || !host || !activeId) return;
@@ -158,220 +222,58 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
     return () => {
       gone = true;
     };
-  }, [host, sessionId, activeId]);
+  }, [host, sessionId, activeId, refresh]);
 
-  // Typing is only live while the person holds this very console.
   useEffect(() => {
     const term = termRef.current;
-    if (term) term.options.disableStdin = !(active?.held ?? '');
-  }, [active?.held]);
+    if (term) term.options.disableStdin = !(row?.held ?? '');
+  }, [row?.held]);
 
-  if (!host)
-    return (
-      <EmptyState title={t('no device terminals yet')}>
-        {t('the desktop application shows Circle device terminals here')}
-      </EmptyState>
-    );
-  const asking = state?.pendingKey;
-  const handoff = state?.handoff;
-  const refresh = () => {
-    const term = termRef.current;
-    if (!term || !host || !activeId) return;
-    term.reset();
-    void host
-      .terminalSnapshot(sessionId, activeId)
-      .then((raw) => raw && term.write(bytes(raw)))
-      .catch(() => {});
-  };
-  const disconnect = (row: TerminalSessionRow) =>
-    void host.terminalDisconnect(sessionId, row.id).catch(() => {});
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (!form || !host) return;
-    const port = form.port.trim() ? Number(form.port.trim()) : undefined;
-    setProblem('');
-    void host
-      .terminalConnectTarget(sessionId, {
-        transport: form.transport,
-        host: form.host.trim(),
-        ...(port ? { port } : {}),
-        ...(form.user.trim() ? { user: form.user.trim() } : {}),
-      })
-      .then((next) => {
-        const last = next.sessions.at(-1);
-        if (last) setChosen(last.id);
-        setForm(null);
-      })
-      .catch((error) =>
-        setProblem(error instanceof Error ? error.message : String(error)),
-      );
-  };
+  // Showing the surface again fits it to the room it has now.
+  useEffect(() => {
+    if (!visible) return;
+    const timer = setTimeout(() => {
+      if (screenRef.current?.clientWidth) fitRef.current?.fit();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [visible]);
+
   return (
-    <section className="device-terminal">
-      <div className="terminal-toolbar">
-        <Button
-          className={form ? 'primary' : ''}
-          onClick={() => {
-            setProblem('');
-            setForm(
-              form
-                ? null
-                : { transport: 'telnet', host: '', port: '', user: '' },
-            );
-          }}
-        >
-          <Plus size={13} /> {t('new connection')}
-        </Button>
-        {active && (
-          <>
-            <span className="terminal-status muted small">
-              {stateWord(active)} · {active.cols}×{active.rows}
-            </span>
-            <span className="terminal-toolbar-actions">
-              <IconButton label={t('refresh the screen')} onClick={refresh}>
-                <RefreshCw size={13} />
-              </IconButton>
-              {active.held ? (
-                <Button
-                  onClick={() =>
-                    void host
-                      .terminalDetach(sessionId, active.id)
-                      .catch(() => {})
-                  }
-                >
-                  <Hand size={13} /> {t('give back')}
-                </Button>
-              ) : (
-                <Button
-                  disabled={active.state !== 'ready'}
-                  onClick={() =>
-                    void host
-                      .terminalAttach(sessionId, active.id)
-                      .catch(() => {})
-                  }
-                >
-                  <Hand size={13} /> {t('take the terminal')}
-                </Button>
-              )}
-              <Button
-                disabled={active.state === 'closed'}
-                onClick={() => disconnect(active)}
-              >
-                <Unplug size={13} /> {t('disconnect')}
-              </Button>
-            </span>
-          </>
-        )}
-      </div>
-      {form && (
-        <form className="terminal-connect" onSubmit={submit}>
-          <label>
-            {t('transport')}
-            <select
-              value={form.transport}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  transport: event.target.value as 'ssh' | 'telnet',
-                })
-              }
-            >
-              <option value="telnet">telnet</option>
-              <option value="ssh">ssh</option>
-            </select>
-          </label>
-          <label>
-            {t('host')}
-            <input
-              required
-              autoFocus
-              spellCheck={false}
-              placeholder="172.16.6.85"
-              value={form.host}
-              onChange={(event) =>
-                setForm({ ...form, host: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            {t('port')}
-            <input
-              inputMode="numeric"
-              spellCheck={false}
-              placeholder={form.transport === 'ssh' ? '22' : '23'}
-              value={form.port}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  port: event.target.value.replace(/[^0-9]/g, ''),
-                })
-              }
-            />
-          </label>
-          <label>
-            {t('user')}
-            <input
-              spellCheck={false}
-              value={form.user}
-              onChange={(event) =>
-                setForm({ ...form, user: event.target.value })
-              }
-            />
-          </label>
-          <p className="panel-note">
-            {t(
-              'ssh signs in from a saved profile; a telnet console answers its own login',
-            )}
-          </p>
-          {problem && (
-            <p className="field-problem" role="status">
-              {problem}
-            </p>
-          )}
-          <div className="dialog-actions">
-            <Button type="button" onClick={() => setForm(null)}>
-              {t('cancel')}
-            </Button>
-            <Button type="submit" className="primary">
-              {t('connect')}
-            </Button>
-          </div>
-        </form>
-      )}
-      {live.length > 0 && (
-        <div
-          className="terminal-tabs"
-          role="tablist"
-          aria-label={t('device terminals')}
-        >
-          {live.map((row) => (
-            <div
-              key={row.id}
-              role="tab"
-              tabIndex={0}
-              aria-selected={row.id === activeId}
-              className={`terminal-tab ${row.id === activeId ? 'active' : ''}`}
-              onClick={() => setChosen(row.id)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') setChosen(row.id);
-              }}
-            >
-              <i className={`lamp lamp-${row.held ? 'wait' : row.state}`} />
-              <span className="terminal-tab-name">
-                {row.id} {row.name}
-              </span>
-              <button
-                className="terminal-tab-close"
-                aria-label={t('disconnect {name}', { name: row.name })}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  disconnect(row);
-                }}
-              >
-                <X size={11} />
-              </button>
-            </div>
-          ))}
+    <div
+      className="device-screen"
+      id={activeId ? `device-${activeId}` : undefined}
+      hidden={!visible}
+      ref={screenRef}
+    />
+  );
+}
+
+/**
+ * What a device asks of you outside its screen: to trust a host key before the login goes
+ * on, and the console Circle handed to you. A tab of yours that Circle handed over says why.
+ */
+export function DeviceNotices({
+  devices,
+  row,
+  tab,
+  tabName,
+}: {
+  devices: DeviceTerminals;
+  row: TerminalSessionRow | undefined;
+  /** What Circle is doing in the tab in front, when that is a terminal tab of yours. */
+  tab?: LocalTerminalRow;
+  tabName?: string;
+}) {
+  const { asking, handoff } = devices;
+  return (
+    <>
+      {tab?.held === 'handoff' && (
+        <div className="terminal-handoff" role="status">
+          <Hand size={14} />
+          <span>
+            {t('Circle hands you {name}', { name: tabName ?? '' })}
+            {tab.reason ? `: ${tab.reason}` : ''}
+          </span>
         </div>
       )}
       {asking && (
@@ -384,78 +286,30 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
             <code>{asking.fingerprint}</code>
           </span>
           <div>
-            <Button
-              onClick={() =>
-                void host.terminalHostKey(sessionId, 'once').catch(() => {})
-              }
-            >
+            <Button onClick={() => devices.answerHostKey('once')}>
               {t('connect once')}
             </Button>
             {asking.privateHost && (
-              <Button
-                onClick={() =>
-                  void host.terminalHostKey(sessionId, 'always').catch(() => {})
-                }
-              >
+              <Button onClick={() => devices.answerHostKey('always')}>
                 {t('trust for good')}
               </Button>
             )}
-            <Button
-              onClick={() =>
-                void host.terminalHostKey(sessionId, 'reject').catch(() => {})
-              }
-            >
+            <Button onClick={() => devices.answerHostKey('reject')}>
               {t('reject')}
             </Button>
           </div>
         </div>
       )}
-      {handoff && active && (
+      {handoff && row && (
         <div className="terminal-handoff">
           <Hand size={14} />
           <span>
             {t('Circle hands you {name}', { name: handoff.session })}
             {handoff.reason ? `: ${handoff.reason}` : ''}
           </span>
-          <Button
-            onClick={() =>
-              void host.terminalDetach(sessionId, active.id).catch(() => {})
-            }
-          >
-            {t('give back')}
-          </Button>
+          <Button onClick={() => devices.detach(row)}>{t('give back')}</Button>
         </div>
       )}
-      <div className="terminal-screen" ref={screenRef} />
-      <div className="terminal-profiles">
-        <h3>{t('saved profiles')}</h3>
-        {state?.profiles.length ? (
-          state.profiles.map((profile) => (
-            <button
-              key={profile.name}
-              className="terminal-profile"
-              onClick={() =>
-                void host
-                  .terminalConnect(sessionId, profile.name)
-                  .then((next) => setChosen(next.sessions.at(-1)?.id ?? ''))
-                  .catch(() => {})
-              }
-            >
-              <strong>{profile.name}</strong>
-              <small>
-                {profile.transport} {profile.target}
-                {profile.user ? ` · ${profile.user}` : ''}
-              </small>
-            </button>
-          ))
-        ) : (
-          <p className="panel-note">
-            {t(
-              'no saved profiles yet; a new connection reaches a device by address',
-            )}
-          </p>
-        )}
-      </div>
-    </section>
+    </>
   );
 }

@@ -24,6 +24,7 @@ import {
   type TaskSpec,
   type TaskState,
   type TaskReviewerUpdate,
+  type TaskSendBack,
   proposedTasks,
   type TaskProposal,
   type TaskProposalReceipt,
@@ -37,6 +38,7 @@ export type {
   TaskArtifact,
   TaskRecord,
   TaskResource,
+  TaskSendBack,
   TaskSpec,
   TaskState,
 } from './task-store.js';
@@ -1375,6 +1377,111 @@ export class CollaborationScheduler {
     this.schedule();
     return task;
   }
+  /**
+   * A person sent back the attempt they were shown. That attempt fails with
+   * their decision as its review, and the task runs again as a new attempt,
+   * as a retry runs it, whose worker is told the reason. Tasks that depend on
+   * it go back to waiting for the new attempt; none is cancelled or started.
+   */
+  rejectHumanReview(
+    id: string,
+    options: {
+      decision: TaskSendBack;
+      result: Json;
+      artifact: TaskArtifact;
+      allowedResources?: readonly TaskResource[];
+    },
+  ): TaskRecord {
+    this.assertOpen();
+    const { decision } = options;
+    const operationId = `human-rejection:${fingerprint([id, decision.expectedAttempt, decision.expectedPatchSha256])}`;
+    const hash = fingerprint(decision.reason);
+    const previous = this.store.operation(operationId);
+    if (previous) {
+      if (previous.fingerprint !== hash)
+        throw new Error('task was already sent back with a different reason');
+      return this.store.get(id)!;
+    }
+    if (this.failedCleanups.has(id))
+      throw new Error('finish task cleanup before retrying');
+    const task = this.store.get(id);
+    const changes = (
+      task?.result as { changes?: { sha256?: string } } | undefined
+    )?.changes;
+    if (
+      !task ||
+      task.state !== 'needs_review' ||
+      this.active.has(id) ||
+      task.attempt !== decision.expectedAttempt ||
+      changes?.sha256 !== decision.expectedPatchSha256
+    )
+      throw new Error('task review is stale; reload the task and its patch');
+    const next: TaskRecord = {
+      ...this.nextAttempt(task, options.allowedResources),
+      sentBack: [...(task.sentBack ?? []), decision],
+    };
+    const events: CollaborationEvent[] = [];
+    this.store.transaction(() => {
+      task.state = 'failed';
+      task.result = options.result;
+      task.reason = 'a person sent this attempt back';
+      task.updatedAt = Date.now();
+      // Written while it is still the current attempt, then kept as history.
+      this.store.put(task);
+      this.store.addArtifact(options.artifact);
+      this.store.put(next);
+      this.store.putOperation({
+        id: operationId,
+        kind: 'human-rejection',
+        fingerprint: hash,
+        state: 'succeeded',
+        taskId: id,
+        attempt: task.attempt,
+        result: {
+          reviewer: 'human',
+          decision: 'rejected',
+          patchSha256: decision.expectedPatchSha256,
+          nextAttempt: next.attempt,
+        },
+      });
+      events.push(
+        this.store.event(
+          'artifact.created',
+          {
+            id: options.artifact.id,
+            path: options.artifact.path,
+            sha256: options.artifact.sha256,
+            kind: options.artifact.kind,
+          },
+          task,
+        ),
+        this.store.event(
+          'task.reviewed',
+          {
+            reviewer: 'human',
+            decision: 'rejected',
+            patchSha256: decision.expectedPatchSha256,
+            reason: decision.reason,
+          },
+          task,
+        ),
+        this.store.event(
+          'task.failed',
+          { state: 'failed', reviewer: 'human', reason: task.reason },
+          task,
+        ),
+        this.store.event(
+          'task.queued',
+          { state: 'queued', retryOf: task.attempt, sentBack: true },
+          next,
+        ),
+      );
+    });
+    for (const event of events) this.publish(event);
+    this.reconcile();
+    this.schedule();
+    return next;
+  }
   hasActiveTask(id: string): boolean {
     const task = this.store.get(id);
     return (
@@ -1446,21 +1553,7 @@ export class CollaborationScheduler {
       )
     )
       throw new Error('only a settled unsuccessful task can be retried');
-    const next: TaskRecord = {
-      spec: options.allowedResources
-        ? {
-            ...task.spec,
-            allowedResources: taskResourceGrants(
-              options.allowedResources,
-              this.allowedResources,
-            ),
-          }
-        : task.spec,
-      state: 'queued',
-      attempt: task.attempt + 1,
-      createdAt: task.createdAt,
-      updatedAt: Date.now(),
-    };
+    const next = this.nextAttempt(task, options.allowedResources);
     const event = this.store.transaction(() => {
       this.store.put(next);
       this.store.putOperation({
@@ -1480,6 +1573,36 @@ export class CollaborationScheduler {
     this.reconcile();
     this.schedule();
     return next;
+  }
+  /**
+   * The next attempt of a settled task, for a retry and for a person's send-back.
+   * When it starts, it gets a worktree and branch of its own from the pinned
+   * baseline (TaskWorktrees names them by attempt), so it never builds on the
+   * previous attempt's changes. The previous attempt keeps its worktree, branch
+   * and artifacts, and its record keeps their paths: its patch stays readable
+   * and nothing a person was shown is deleted.
+   */
+  private nextAttempt(
+    task: TaskRecord,
+    allowedResources?: readonly TaskResource[],
+  ): TaskRecord {
+    return {
+      spec: allowedResources
+        ? {
+            ...task.spec,
+            allowedResources: taskResourceGrants(
+              allowedResources,
+              this.allowedResources,
+            ),
+          }
+        : task.spec,
+      state: 'queued',
+      attempt: task.attempt + 1,
+      // A fresh start still has to answer what people sent back before.
+      ...(task.sentBack?.length ? { sentBack: task.sentBack } : {}),
+      createdAt: task.createdAt,
+      updatedAt: Date.now(),
+    };
   }
   async removeCleanWorktree(id: string): Promise<boolean> {
     this.assertOpen();

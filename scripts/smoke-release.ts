@@ -24,6 +24,7 @@ import {
 } from '../src/install_layout.js';
 import { VERSION } from '../src/version.js';
 import { TITLE_MAX_TOKENS } from '../src/session_title.js';
+import { parseFrontmatter } from '../src/skills.js';
 import {
   defaultSettings,
   saveSettings,
@@ -135,13 +136,22 @@ try {
   const workspace = join(temporary, 'workspace');
   mkdirSync(home);
   mkdirSync(workspace);
+  // The skill that ships with Circle, as the relocated release has it: the model must see it.
+  const builtinSkill = parseFrontmatter(
+    readFileSync(
+      join(root, 'app/dist/builtin_skills/create-pr/SKILL.md'),
+      'utf8',
+    ),
+  ).meta;
+  assert.equal(builtinSkill.name, 'create-pr');
+  let firstSystem = '';
   let calls = 0;
   let titles = 0;
   server = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
     const payload = JSON.parse(body) as {
-      messages: unknown[];
+      messages: { role?: string; content?: unknown }[];
       max_tokens?: number;
     };
     // The prompt is long enough for a session title, asked after the turn. It
@@ -167,6 +177,11 @@ try {
       return;
     }
     calls++;
+    if (calls === 1)
+      firstSystem = String(
+        payload.messages.find((message) => message.role === 'system')
+          ?.content ?? '',
+      );
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     const delta =
       calls === 1
@@ -253,6 +268,10 @@ try {
   assert.match(answer, /release verified/);
   assert.equal(calls, 2);
   assert.ok(titles <= 1, `${titles} title requests`);
+  assert.ok(
+    firstSystem.includes(`\n- create-pr: ${builtinSkill.description}`),
+    'the built-in create-pr skill is listed in the system prompt',
+  );
   assert.equal(
     readFileSync(join(workspace, 'receipt.txt'), 'utf8'),
     'release smoke',
@@ -398,6 +417,7 @@ try {
       dataPreserved: true,
       defaultLocation: true,
       modelRequests: calls,
+      builtinSkill: builtinSkill.name,
       sideEffect: 'receipt.txt',
     }) + '\n',
   );

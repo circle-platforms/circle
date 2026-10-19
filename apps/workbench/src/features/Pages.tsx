@@ -647,7 +647,7 @@ function SkillsPage() {
                   <BookOpen size={16} />
                   <span>
                     <strong>{skill.name}</strong>
-                    <small>{skill.scope}</small>
+                    <small>{scopeLabel(skill.scope)}</small>
                   </span>
                 </button>
               ))}

@@ -1,12 +1,19 @@
+// The browser's page stays inside the drawer it is shown in, on macOS and Linux: beside
+// the conversation, across the whole workspace in full view (reached by the button at the
+// end of the address row, and left with Escape) with the conversation's input still
+// below it, and over the conversation in a narrow window.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { settledLayout } from './helpers/settled-layout.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out =
   process.env.CIRCLE_FULLVIEW_BROWSER_EVIDENCE ||
-  '/tmp/circle-original-browser-shell-ui';
+  (process.env.CIRCLE_COMPONENT_UI_EVIDENCE
+    ? process.env.CIRCLE_COMPONENT_UI_EVIDENCE + '/fullview-browser'
+    : '/tmp/circle-fullview-browser-shell-ui');
 await mkdir(out, { recursive: true });
 const server = await createServer({
   root,
@@ -63,6 +70,8 @@ try {
           stream: { epoch: 'e', sequence: 0 },
         }),
         onBrowserDiagnosticEvent: () => () => {},
+        // No mode of this window is in a window of its own.
+        popouts: async () => [],
       },
       {
         get: (target, key) =>
@@ -112,20 +121,38 @@ try {
             assert.equal(await page.locator('.browser-diagnostics').count(), 0);
             sawClosedTools = true;
           }
+          // Beside the conversation in a wide window, over it in a narrow one
+          await page
+            .locator(
+              `#workbench-columns[data-inspector-mode='${mode === 'overlay' ? 'overlay' : 'split'}']`,
+            )
+            .waitFor({ state: 'attached' });
           if (mode === 'full') {
+            // Full view is the button at the end of the address row
+            const whole = page
+              .locator('.native-browser .browser-address')
+              .getByRole('button', { name: 'full view', exact: true });
+            assert.equal(
+              await whole.evaluate(
+                (node) => node === node.parentElement.lastElementChild,
+              ),
+              true,
+            );
+            await whole.click();
             await page
-              .getByRole('button', { name: 'full view', exact: true })
-              .click();
-            await page.locator('.inspector-full .inspector').waitFor();
+              .locator('.workspace-content.whole > .inspector-full .inspector')
+              .waitFor();
+            assert.equal(
+              await page
+                .locator('.native-browser .browser-address')
+                .getByRole('button', { name: 'exit full view', exact: true })
+                .getAttribute('aria-pressed'),
+              'true',
+            );
           }
           for (const expanded of [false]) {
             assert.equal(await page.locator('.browser-diagnostics').count(), 0);
-            await page.evaluate(
-              () =>
-                new Promise((r) =>
-                  requestAnimationFrame(() => requestAnimationFrame(r)),
-                ),
-            );
+            await settledLayout(page);
             const geometry = await page.evaluate(() => {
               const selectors = [
                 '.inspector-body',
@@ -298,10 +325,16 @@ try {
             });
           }
           if (mode === 'full') {
+            // Escape leaves full view, and the split comes back with the page in it
             await page.keyboard.press('Escape');
             await page
               .locator('.inspector-full')
               .waitFor({ state: 'detached' });
+            await page
+              .locator(
+                "#workbench-columns[data-inspector-mode='split'] .work-drawer .native-browser",
+              )
+              .waitFor();
           }
         }
   assert.deepEqual(errors, [], 'full application renders without page errors');

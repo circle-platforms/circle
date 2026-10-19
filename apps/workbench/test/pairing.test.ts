@@ -8,7 +8,6 @@ import {
   pairing,
 } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
-import { developerToolsEnabled } from '../src/plugins/developer.tsx';
 
 const icon = (() => null) as unknown as WorkbenchPlugin['icon'];
 const page = (id: string) => ({
@@ -88,6 +87,28 @@ test('a paired page shows only when it is chosen and its extension is live', () 
   );
 });
 
+test('a page chosen in an earlier version that the application no longer has is ignored', () => {
+  // Earlier versions had a developer page paired with a developer extension.
+  const extensions = [
+    row(),
+    { name: 'developer', version: '0.1.0', enabled: true },
+  ];
+  assert.deepEqual(
+    effectivePlugins(
+      [plain, paired],
+      ['developer', 'files', 'hub'],
+      extensions,
+    ),
+    ['files', 'hub'],
+  );
+  assert.deepEqual(
+    new PluginRegistry([plain, paired])
+      .pages(effectivePlugins([plain, paired], ['developer'], extensions))
+      .map((item) => item.page.id),
+    [],
+  );
+});
+
 test('pairing reasons and a missing module use the interface language', () => {
   setLanguage('zh-CN');
   try {
@@ -112,27 +133,5 @@ test('pairing reasons and a missing module use the interface language', () => {
   assert.match(
     pairing(paired, []).reason,
     /runtime extension hub is not installed/,
-  );
-});
-
-test('developer tools follow the bundled extension and stay off until it is enabled', () => {
-  assert.equal(developerToolsEnabled([]), false);
-  assert.equal(
-    developerToolsEnabled([
-      { name: 'developer', version: '0.1.0', enabled: false },
-    ]),
-    false,
-  );
-  assert.equal(
-    developerToolsEnabled([
-      { name: 'developer', version: '0.1.0', enabled: true, error: 'boom' },
-    ]),
-    false,
-  );
-  assert.equal(
-    developerToolsEnabled([
-      { name: 'developer', version: '0.1.0', enabled: true },
-    ]),
-    true,
   );
 });

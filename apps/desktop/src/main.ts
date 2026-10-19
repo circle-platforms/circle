@@ -17,9 +17,11 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   nativeTheme,
   net,
   Notification,
@@ -33,12 +35,14 @@ import type {
   WebContents,
   WebFrameMain,
 } from 'electron';
+import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import originalFs from 'original-fs';
 import { join, dirname, basename } from 'node:path';
 import { WorkspaceGrants, nativeFile } from './files';
+import { WorkspaceListings } from './workspace-listings';
 import { selectedFolder } from './folder-dialog';
 import { attention } from './attention';
 import {
@@ -54,6 +58,7 @@ import {
   MAX_FILE_BYTES,
   safeExternalUrl,
   trustedAppUrl,
+  parseImageDataUrl,
   validSaveName,
 } from './policy';
 import type {
@@ -66,6 +71,15 @@ import { installation, Updater } from './updater';
 import { circleAppVersion } from './circle-version';
 import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
 import { channelOf } from './channel';
+import {
+  Popouts,
+  type PopoutHooks,
+  validPopoutAddress,
+  validPopoutKind,
+  validPopoutSession,
+  validPopoutTitle,
+} from './popouts';
+import { validPopoutAttachment } from './popout-attachment';
 // A release, or a beta that package:beta wrote into the packaged package.json
 const channel = channelOf(
   (() => {
@@ -117,6 +131,15 @@ protocol.registerSchemesAsPrivileged([
 ]);
 const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
+// The browser and the terminal can leave the drawer for a window of their own.
+let popouts: Popouts<BrowserWindow> | null = null;
+// The address each browser window is to open next, until its page takes it.
+const popoutAddresses = new Map<BrowserWindow, string>();
+// What a window of its own put into a message box, waiting for the main window's answer
+const attachmentAnswers = new Map<
+  string,
+  { to: WebContents; answer: (saved: boolean, error: string) => void }
+>();
 let browsers: BrowserSessions | null = null;
 let browserClosePending: Promise<void> = Promise.resolve();
 let terminals: TerminalPanelHost | null = null;
@@ -162,24 +185,45 @@ if (startupLocale() === 'zh-CN') {
   // It does not create the catalog: Recent and Home stay English until gtk30.mo exists.
   if (!process.env.LANGUAGE) process.env.LANGUAGE = 'zh_CN';
 }
+/** The window and the windows the drawer's modes were popped out into. */
+function appWindows(): BrowserWindow[] {
+  return [window, ...(popouts?.all() ?? [])].filter(
+    (one): one is BrowserWindow => !!one && !one.isDestroyed(),
+  );
+}
+/** What the runtime, the browser and the terminals tell the window, told to every window. */
+function broadcast(channel: string, ...args: unknown[]) {
+  for (const one of appWindows()) one.webContents.send(channel, ...args);
+}
+/** The application's window that sent a message, or a throw for anything else. */
 function checkSender(event: {
   sender: WebContents;
   senderFrame: WebFrameMain | null;
-}) {
+}): BrowserWindow {
+  const own = appWindows().find((one) => one.webContents === event.sender);
   if (
-    !window ||
-    event.sender !== window.webContents ||
-    event.senderFrame?.routingId !== window.webContents.mainFrame.routingId ||
-    event.senderFrame?.processId !== window.webContents.mainFrame.processId ||
+    !own ||
+    event.senderFrame?.routingId !== own.webContents.mainFrame.routingId ||
+    event.senderFrame?.processId !== own.webContents.mainFrame.processId ||
     !trustedAppUrl(event.senderFrame.url)
   )
     throw Error('untrusted IPC sender');
+  return own;
 }
 function handle(channel: string, handler: (...args: unknown[]) => unknown) {
   ipcMain.handle(channel, (event, ...args) => {
     checkSender(event);
     return handler(...args);
   });
+}
+/** Like `handle`, for a handler that has to know which window asked. */
+function handleFrom(
+  channel: string,
+  handler: (from: BrowserWindow, ...args: unknown[]) => unknown,
+) {
+  ipcMain.handle(channel, (event, ...args) =>
+    handler(checkSender(event), ...args),
+  );
 }
 const sendAction = (action: DesktopAction) =>
   window?.webContents.send('circle:action', action);
@@ -422,6 +466,119 @@ function showAttention(update: Parameters<typeof attention>[0]) {
     note.show();
   }
 }
+/**
+ * What every window of the application does with the right button, a link that wants a
+ * window of its own, and a page address that is not the application's: the same for the
+ * main window and for one a mode of the drawer was popped out into.
+ */
+function installWindowChrome(target: BrowserWindow) {
+  // Electron gives the window no right-click menu of its own. A text field gets the
+  // system's editing commands, selected text gets Copy; the page asks nothing of the
+  // main process for it, so the preload bridge stays as it is.
+  target.webContents.on('context-menu', (_event, params) => {
+    const items = windowContextMenu(params);
+    if (!items.length || target.isDestroyed()) return;
+    Menu.buildFromTemplate(
+      items.map((item): MenuItemConstructorOptions => {
+        if (item === 'separator') return { type: 'separator' };
+        if (item.command === 'selectAll')
+          return {
+            ...selectAllMenuItem(text(item.label)),
+            enabled: item.enabled,
+          };
+        // A click of its own rather than a role: on macOS a role item only sends the
+        // system's selector, so its click() does nothing and cannot be checked.
+        const command = item.command;
+        return {
+          label: text(item.label),
+          enabled: item.enabled,
+          click: () => {
+            if (!target.isDestroyed()) target.webContents[command]();
+          },
+        };
+      }),
+    ).popup({ window: target });
+  });
+  target.webContents.setWindowOpenHandler(({ url }) => {
+    const allowed = safeExternalUrl(url);
+    if (allowed && !fixtureProfile) void shell.openExternal(allowed);
+    return { action: 'deny' };
+  });
+  target.webContents.on(
+    'did-start-navigation',
+    (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame) externalFilePicker.invalidate();
+      // A page that loads again has no browser panel with the keyboard, until it says so.
+      if (mainFrame && !inPlace) browsers?.windowGone(target);
+    },
+  );
+  target.webContents.on('will-navigate', (event, url) => {
+    if (!trustedAppUrl(url)) event.preventDefault();
+  });
+  // The system's menu takes some of the browser's keys (⌘W closes the window) before
+  // the window sees them: while this window's browser panel has the keyboard, they are
+  // its. Keys typed in another window are that window's.
+  target.webContents.on('before-input-event', (event, input) =>
+    browsers?.windowKey(event, input, target),
+  );
+  target.once('closed', () => browsers?.windowGone(target));
+}
+/**
+ * A window for one mode of the drawer: the browser or the terminal of a conversation, in
+ * the same application page, which then shows only that mode. A browser brings its pages
+ * along; closing the window sends them back to the main window first.
+ */
+async function createPopoutWindow(
+  kind: 'browser' | 'terminal',
+  sessionId: string,
+  title: string,
+  hooks: PopoutHooks<BrowserWindow>,
+): Promise<BrowserWindow> {
+  const popout = new BrowserWindow({
+    width: 920,
+    height: 640,
+    minWidth: 420,
+    minHeight: 300,
+    title,
+    icon: join(
+      __dirname,
+      process.platform === 'darwin'
+        ? 'assets/circle-macos.png'
+        : 'assets/circle.png',
+    ),
+    show: false,
+    autoHideMenuBar: process.platform !== 'darwin',
+    webPreferences: {
+      preload: join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  // The page asks the main process for what it starts with: from here it is answered.
+  hooks.created(popout);
+  // The title is the mode and the conversation, not the page's.
+  popout.on('page-title-updated', (event) => event.preventDefault());
+  installWindowChrome(popout);
+  if (kind === 'browser') browsers?.moveToWindow(sessionId, popout);
+  // Before it is gone, so its pages are not lost with it. From here the window is gone for
+  // the application: pressing its mode again makes a new one.
+  popout.on('close', () => {
+    if (kind === 'browser') browsers?.moveToWindow(sessionId, null);
+    popoutAddresses.delete(popout);
+    hooks.closing();
+  });
+  popout.once('closed', () => {
+    popoutAddresses.delete(popout);
+    hooks.closed();
+  });
+  popout.once('ready-to-show', () => popout.show());
+  await popout.loadURL(
+    `circle://workbench/index.html#/popout/${kind}/${sessionId}`,
+  );
+  return popout;
+}
 async function createWindow() {
   window = new BrowserWindow({
     width: 1440,
@@ -450,7 +607,7 @@ async function createWindow() {
   });
   browsers = new BrowserSessions(
     window,
-    (state) => window?.webContents.send('circle:browser-event', state),
+    (state) => broadcast('circle:browser-event', state),
     () => interfaceLocale,
     join(dataPath, 'browser-certificates.json'),
     browserCertificates,
@@ -463,15 +620,12 @@ async function createWindow() {
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
   );
+  // A browser shortcut goes to the window that has the page, wherever the panel is.
   browsers.sendKey = (event) => {
-    if (window && !window.isDestroyed())
-      window.webContents.send('circle:browser-key', event);
+    const target = browsers?.windowOf(event.sessionId.replace(/^browser:/, ''));
+    if (target && !target.isDestroyed())
+      target.webContents.send('circle:browser-key', event);
   };
-  // The system's menu takes some of the browser's keys (⌘W closes the window) before
-  // the window sees them: while the browser panel has the keyboard, they are its.
-  window.webContents.on('before-input-event', (event, input) =>
-    browsers?.windowKey(event, input),
-  );
   runtime?.onSessionCleanup(async (id) => {
     await browsers?.deleteSession(id);
     browserCertificates.delete(id);
@@ -481,63 +635,36 @@ async function createWindow() {
     return browsers.agent(request, signal);
   });
   terminals = new TerminalPanelHost(
-    (event: TerminalEvent) =>
-      window?.webContents.send('circle:terminal-event', event),
+    (event: TerminalEvent) => broadcast('circle:terminal-event', event),
     join(dataPath, 'runtime-home'),
     join(dataPath, 'terminal-host-keys.json'),
     (name) => loadSecrets(join(dataPath, 'runtime-home'))[name] ?? '',
     // Plan mode does not hand a console over, as it does not hand the browser over
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
+    // The person's own terminal tabs are the runtime's, where their shells are
+    (conversation, session, action) =>
+      runtime
+        ? runtime.terminalTabControl(conversation, session, action)
+        : Promise.reject(Error('the runtime is not connected')),
   );
+  popouts = new Popouts<BrowserWindow>({
+    create: createPopoutWindow,
+    onChange: (event) => broadcast('circle:popout-event', event),
+  });
+  runtime?.onTerminalTabs((update) => {
+    if (update === 'gone') terminals?.tabsGone();
+    else terminals?.tabsChanged(update.conversation, update.rows);
+  });
   runtime?.onTerminalCleanup(async (id) => terminals?.releaseSession(id));
   runtime?.onTerminal((request, signal) => {
     if (!terminals) throw Error('the terminal host is closed');
     return terminals.agent(request, signal);
   });
-  // Electron gives the window no right-click menu of its own. A text field gets the
-  // system's editing commands, selected text gets Copy; the page asks nothing of the
-  // main process for it, so the preload bridge stays as it is.
-  window.webContents.on('context-menu', (_event, params) => {
-    const items = windowContextMenu(params);
-    if (!items.length || !window) return;
-    Menu.buildFromTemplate(
-      items.map((item): MenuItemConstructorOptions => {
-        if (item === 'separator') return { type: 'separator' };
-        if (item.command === 'selectAll')
-          return {
-            ...selectAllMenuItem(text(item.label)),
-            enabled: item.enabled,
-          };
-        // A click of its own rather than a role: on macOS a role item only sends the
-        // system's selector, so its click() does nothing and cannot be checked.
-        const command = item.command;
-        return {
-          label: text(item.label),
-          enabled: item.enabled,
-          click: () => {
-            if (window && !window.isDestroyed()) window.webContents[command]();
-          },
-        };
-      }),
-    ).popup({ window });
-  });
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    const allowed = safeExternalUrl(url);
-    if (allowed && !fixtureProfile) void shell.openExternal(allowed);
-    return { action: 'deny' };
-  });
-  window.webContents.on(
-    'did-start-navigation',
-    (_event, _url, _inPlace, mainFrame) => {
-      if (mainFrame) externalFilePicker.invalidate();
-    },
-  );
-  window.webContents.on('will-navigate', (event, url) => {
-    if (!trustedAppUrl(url)) event.preventDefault();
-  });
+  installWindowChrome(window);
   window.once('ready-to-show', () => window?.show());
   window.on('close', () => {
+    popouts?.dockAll();
     terminals?.close();
     if (!browsers) return;
     browserClosePending = Promise.all([
@@ -555,6 +682,7 @@ async function createWindow() {
   window.on('closed', () => {
     browsers = null;
     terminals = null;
+    popouts = null;
     window = null;
   });
   await window.loadURL('circle://workbench/index.html');
@@ -634,14 +762,12 @@ app
             : {}),
         }),
       );
-      runtime.onWorkspaceEvent((event) => {
-        if (window && !window.isDestroyed())
-          window.webContents.send('circle:workspace-event', event);
-      });
-      runtime.onTokenDelta((delta) => {
-        if (window && !window.isDestroyed())
-          window.webContents.send('circle:runtime-token-delta', delta);
-      });
+      runtime.onWorkspaceEvent((event) =>
+        broadcast('circle:workspace-event', event),
+      );
+      runtime.onTokenDelta((delta) =>
+        broadcast('circle:runtime-token-delta', delta),
+      );
       runtime.subscribe((update) => {
         externalFilePicker.observe({
           connected: update.connected,
@@ -658,7 +784,7 @@ app
             browserCertificates.delete(id);
           }
         runtimeSessions = current;
-        window?.webContents.send('circle:runtime-update', update);
+        broadcast('circle:runtime-update', update);
         showAttention(update);
       });
       await runtime.start();
@@ -857,9 +983,9 @@ app
     });
     // The files of the folder the runtime works in, when it is trusted: the app's own
     // workspace, or one you opened and trusted. Reads still go through granted handles.
-    let listing:
-      { sessionId: string; workspaceId: string; cursor?: string } | undefined;
-    handle('circle:list-workspace', async (workspaceId, cursor) => {
+    const listings = new WorkspaceListings(grants);
+    const listingWindows = new WeakSet<BrowserWindow>();
+    handleFrom('circle:list-workspace', async (from, workspaceId, cursor) => {
       if (
         !runtime ||
         typeof workspaceId !== 'string' ||
@@ -875,6 +1001,7 @@ app
         const current = runtime!.state().snapshot;
         if (
           !runtime!.connected ||
+          from.isDestroyed() ||
           current.activeSessionId !== sessionId ||
           current.sessions.find((row) => row.id === sessionId)?.workspaceId !==
             workspaceId ||
@@ -889,32 +1016,20 @@ app
           workspaceId
       )
         return null;
-      assertActive();
-      if (
-        cursor &&
-        (!listing ||
-          listing.sessionId !== sessionId ||
-          listing.workspaceId !== workspaceId ||
-          listing.cursor !== cursor)
-      )
-        throw Error('file listing cursor is not owned by this session');
-      if (!cursor && listing?.cursor) await grants.cancel(listing.cursor);
-      const owner = {
+      if (!listingWindows.has(from)) {
+        listingWindows.add(from);
+        from.once('closed', () => {
+          void listings.close(from).catch((error) => console.error(error));
+        });
+      }
+      const listed = await listings.list(
+        from,
         sessionId,
         workspaceId,
-        cursor: undefined as string | undefined,
-      };
-      if (!cursor) listing = owner;
-      const selected = listing!;
-      const check = () => {
-        assertActive();
-        if (listing !== selected) throw Error('file listing was superseded');
-      };
-      const listed = cursor
-        ? await grants.nextPage(cursor, check)
-        : await grants.open(workspace.path, check);
-      check();
-      selected.cursor = listed.nextCursor;
+        workspace.path,
+        cursor,
+        assertActive,
+      );
       workspaceSelections.set(listed.id, listed.path);
       return listed;
     });
@@ -957,6 +1072,7 @@ app
         : await dialog.showSaveDialog(window!, {
             title: text('export session'),
             defaultPath: name,
+            properties: ['showOverwriteConfirmation'],
           });
       if (result.canceled || !result.filePath) return { saved: false };
       await writeFile(result.filePath, content, {
@@ -967,6 +1083,39 @@ app
     });
     handle('circle:copy-text', (value) => {
       return clipboard.writeText(boundedText(value, MAX_EXPORT_BYTES));
+    });
+    handle('circle:copy-image', async (value) => {
+      const image = nativeImage.createFromBuffer(
+        parseImageDataUrl(value).bytes,
+      );
+      if (image.isEmpty()) throw Error('invalid image');
+      // The clipboard takes a picture as PNG, whatever type it came in.
+      await clipboard.write([
+        new ClipboardItem({
+          'image/png': new Blob([new Uint8Array(image.toPNG())], {
+            type: 'image/png',
+          }),
+        }),
+      ]);
+    });
+    handle('circle:save-image', async (value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value))
+        throw Error('invalid export');
+      const options = value as Record<string, unknown>;
+      const name = validSaveName(options.name);
+      const { bytes } = parseImageDataUrl(options.dataUrl);
+      const result = fixtureProfile?.exportPath
+        ? { canceled: false, filePath: fixtureProfile.exportPath }
+        : await dialog.showSaveDialog(window!, {
+            title: text('save image'),
+            defaultPath: name,
+            // Every screenshot has a name like the last one: asking before replacing a
+            // file is the default on macOS and Windows, and asked for here on Linux
+            properties: ['showOverwriteConfirmation'],
+          });
+      if (result.canceled || !result.filePath) return { saved: false };
+      await writeFile(result.filePath, bytes, { mode: 0o600 });
+      return { saved: true, name: basename(result.filePath) };
     });
     handle('circle:open-external', async (value) => {
       const url = nativeHttpsUrl(value);
@@ -980,11 +1129,96 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.navigate(id, url);
     });
-    handle('circle:browser-bounds', (id, bounds, visible) => {
+    // Only the window that has a conversation's pages places them: the drawer of the main
+    // window keeps its hands off while the browser is in a window of its own.
+    handleFrom('circle:browser-bounds', (from, id, bounds, visible) => {
       if (!browsers) throw Error('window not ready');
+      if (browsers.windowOf(id) !== from) return browsers.state(id);
       return browsers.bounds(id, bounds, visible);
     });
-    handle('circle:browser-hide', (id) => browsers?.hide(id));
+    handleFrom('circle:browser-hide', (from, id) => {
+      if (browsers && browsers.windowOf(id) === from) browsers.hide(id);
+    });
+    // The main window's drawer opens the windows, and may give the browser's an address.
+    handleFrom('circle:popout-open', async (from, kind, id, title, address) => {
+      if (!popouts) throw Error('window not ready');
+      if (from !== window) throw Error('untrusted IPC sender');
+      const mode = validPopoutKind(kind);
+      const sessionId = validPopoutSession(id);
+      const name = validPopoutTitle(title);
+      if (address !== undefined && mode !== 'browser')
+        throw Error('invalid address');
+      const url =
+        address === undefined ? undefined : validPopoutAddress(address);
+      await popouts.open(mode, sessionId, name);
+      const opened = popouts.window(mode, sessionId);
+      if (!url || !opened || opened.isDestroyed()) return;
+      // Its page takes it when it starts, or now when it is up.
+      popoutAddresses.set(opened, url);
+      opened.webContents.send('circle:popout-address');
+    });
+    handleFrom('circle:popout-address', (from) => {
+      if (popouts?.owner(from)?.kind !== 'browser') return null;
+      const url = popoutAddresses.get(from) ?? null;
+      popoutAddresses.delete(from);
+      return url;
+    });
+    handle('circle:popout-dock', (kind, id) => {
+      popouts?.dock(validPopoutKind(kind), validPopoutSession(id));
+    });
+    handle('circle:popout-dock-all', () => popouts?.dockAll());
+    handle('circle:popouts', () => popouts?.list() ?? []);
+    // A window of its own puts a screenshot or a terminal selection into its conversation's
+    // message box. That box is the main window's, which adds it as the drawer would and
+    // answers whether it could save it with the draft.
+    handleFrom('circle:popout-attach', (from, id, value) => {
+      const owner = popouts?.owner(from);
+      if (!owner) throw Error('untrusted IPC sender');
+      const sessionId = validPopoutSession(id);
+      if (sessionId !== owner.sessionId) throw Error('invalid conversation');
+      const attachment = validPopoutAttachment(owner.kind, value);
+      const target = window;
+      if (!target || target.isDestroyed()) throw Error('window not ready');
+      const request = randomUUID();
+      return new Promise<boolean>((resolve, reject) => {
+        const answer = (saved: boolean, error: string) => {
+          clearTimeout(timer);
+          attachmentAnswers.delete(request);
+          if (error) reject(Error(error));
+          else resolve(saved);
+        };
+        const timer = setTimeout(
+          () => answer(false, 'the main window did not answer'),
+          15_000,
+        );
+        attachmentAnswers.set(request, { to: target.webContents, answer });
+        target.webContents.send('circle:popout-attachment', {
+          request,
+          sessionId,
+          attachment,
+        });
+      });
+    });
+    ipcMain.on(
+      'circle:popout-attachment-answer',
+      (event, request, saved, error) => {
+        try {
+          checkSender(event);
+        } catch {
+          return;
+        }
+        const pending =
+          typeof request === 'string'
+            ? attachmentAnswers.get(request)
+            : undefined;
+        // Only the window the attachment was given to answers for it.
+        if (!pending || pending.to !== event.sender) return;
+        pending.answer(
+          saved === true,
+          typeof error === 'string' ? error.slice(0, 300) : '',
+        );
+      },
+    );
     handle('circle:browser-capture', (id) => {
       if (!browsers) throw Error('window not ready');
       return browsers.capture(id);
@@ -1022,21 +1256,26 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.control(id, action);
     });
-    handle('circle:browser-page', (id, action, value) => {
+    handleFrom('circle:browser-page', (from, id, action, value) => {
       if (!browsers) throw Error('window not ready');
+      // Whether a panel has the keyboard is for the window it is in.
+      if (action === 'keys') {
+        browsers.keys(id, value, from);
+        return null;
+      }
       return browsers.page(id, action, value);
     });
     ipcMain.on('circle:browser-keys', (event, id, focused) => {
       // sendSync waits until returnValue is set. Set it before any throw.
       event.returnValue = null;
       try {
-        checkSender(event);
+        const from = checkSender(event);
+        // Set before the click returns, so the next key finds the panel focused.
+        browsers?.keys(id, focused, from);
       } catch {
-        return;
+        // A sender or a conversation that is not one: nothing changes hands, and the
+        // main process carries on.
       }
-      if (!browsers) return;
-      // Set before the click returns, so the next key finds the panel focused.
-      void browsers.page(id, 'keys', focused).catch(() => {});
     });
     handle('circle:browser-reveal', (id, download) => {
       if (!browsers) throw Error('window not ready');
@@ -1072,13 +1311,22 @@ app
       if (!terminals) throw Error('window not ready');
       return terminals.disconnect(id, session);
     });
+    // A `local:` session is one of the person's own terminal tabs, held in the runtime
     handle('circle:terminal-attach', (id, session) => {
       if (!terminals) throw Error('window not ready');
-      return terminals.attach(id, session);
+      return terminals.isTab(session)
+        ? terminals.tab(id, session, 'take')
+        : terminals.attach(id, session);
     });
     handle('circle:terminal-detach', (id, session) => {
       if (!terminals) throw Error('window not ready');
-      return terminals.detach(id, session);
+      return terminals.isTab(session)
+        ? terminals.tab(id, session, 'return')
+        : terminals.detach(id, session);
+    });
+    handle('circle:terminal-stop', (id, session) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.tab(id, session, 'stop');
     });
     handle('circle:terminal-input', (id, session, text) => {
       if (!terminals) throw Error('window not ready');

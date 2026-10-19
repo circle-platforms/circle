@@ -70,6 +70,8 @@ const bridge: DesktopBridge = {
   setLanguage: (locale) => ipcRenderer.invoke('circle:set-language', locale),
   saveFile: (options) => ipcRenderer.invoke('circle:save-file', options),
   copyText: (text) => ipcRenderer.invoke('circle:copy-text', text),
+  copyImage: (dataUrl) => ipcRenderer.invoke('circle:copy-image', dataUrl),
+  saveImage: (options) => ipcRenderer.invoke('circle:save-image', options),
   windowControl: (action) =>
     ipcRenderer.invoke('circle:window-control', action),
   openExternal: (url) => ipcRenderer.invoke('circle:open-external', url),
@@ -141,10 +143,71 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:terminal-attach', id, session),
   terminalDetach: (id, session) =>
     ipcRenderer.invoke('circle:terminal-detach', id, session),
+  terminalStop: (id, session) =>
+    ipcRenderer.invoke('circle:terminal-stop', id, session),
   terminalInput: (id, session, text) =>
     ipcRenderer.invoke('circle:terminal-input', id, session, text),
   terminalResize: (id, session, cols, rows) =>
     ipcRenderer.invoke('circle:terminal-resize', id, session, cols, rows),
+  popoutOpen: (kind, id, title, address) =>
+    address === undefined
+      ? ipcRenderer.invoke('circle:popout-open', kind, id, title)
+      : ipcRenderer.invoke('circle:popout-open', kind, id, title, address),
+  popoutDock: (kind, id) => ipcRenderer.invoke('circle:popout-dock', kind, id),
+  popoutDockAll: () => ipcRenderer.invoke('circle:popout-dock-all'),
+  popouts: () => ipcRenderer.invoke('circle:popouts'),
+  onPopoutEvent: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:popout-event', handler);
+    return () => ipcRenderer.removeListener('circle:popout-event', handler);
+  },
+  popoutAddress: () => ipcRenderer.invoke('circle:popout-address'),
+  onPopoutAddress: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on('circle:popout-address', handler);
+    return () => ipcRenderer.removeListener('circle:popout-address', handler);
+  },
+  popoutAttach: (id, attachment) =>
+    ipcRenderer
+      .invoke('circle:popout-attach', id, attachment)
+      .catch(raiseBrowserError),
+  onPopoutAttach: (listener) => {
+    const handler = (
+      _event: unknown,
+      value: {
+        request: string;
+        sessionId: string;
+        attachment: Parameters<typeof listener>[1];
+      },
+    ) => {
+      const answer = (saved: boolean, error: string) =>
+        ipcRenderer.send(
+          'circle:popout-attachment-answer',
+          value.request,
+          saved,
+          error,
+        );
+      void Promise.resolve()
+        .then(() => listener(value.sessionId, value.attachment))
+        .then(
+          (saved) => answer(saved === true, ''),
+          // The page's own error, from the page's world: its words, not its class.
+          (error: unknown) =>
+            answer(
+              false,
+              String(
+                (error && typeof error === 'object' && 'message' in error
+                  ? error.message
+                  : error) || 'failed',
+              ),
+            ),
+        );
+    };
+    ipcRenderer.on('circle:popout-attachment', handler);
+    return () =>
+      ipcRenderer.removeListener('circle:popout-attachment', handler);
+  },
   onTerminalEvent: (listener) => {
     const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
       listener(value);

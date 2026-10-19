@@ -257,12 +257,7 @@ test(
       format: 'esm',
       // Match the shipped worker: native dependencies resolve at runtime and
       // must not inject a second createRequire binding into this ESM fixture.
-      external: [
-        'node-pty',
-        'typescript-language-server',
-        'typescript',
-        'koffi',
-      ],
+      external: ['node-pty', 'koffi'],
       banner: {
         js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
       },

@@ -114,9 +114,7 @@ const controller = new RuntimeController({
   dataFolder: data,
   model,
   workspaceTools: {
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'unused',
     ghPath: 'unused',
   },
   emit: (value) => emit('update', value),
@@ -237,13 +235,17 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   phase('eight-real-runtimes-running');
+  // The drawer's terminal mode; its + menu makes a shell in the conversation's folder.
+  const terminalMode = '[data-inspector-resource="terminal"]';
   await page
     .getByRole('button', { name: 'terminal panel', exact: true })
     .click();
   await page
-    .locator('#inspector-terminal-terminal button[aria-label="new terminal"]')
+    .locator(terminalMode)
+    .getByRole('button', { name: 'new terminal or device', exact: true })
     .click();
-  await page.locator('#inspector-terminal-terminal .xterm').first().waitFor();
+  await page.getByRole('menuitem', { name: /^new local terminal/ }).click();
+  await page.locator(`${terminalMode} .xterm`).first().waitFor();
   terminal = (await service('terminal', 'list'))[0];
   assert.ok(terminal, 'the actual UI-created PTY is present in the ledger');
   receipt.ownedTerminal = terminal;
@@ -299,7 +301,7 @@ try {
         selector: 'button[aria-label="terminal panel"]',
         attribute: 'aria-pressed',
         equals: String(open),
-        panel: { selector: '#inspector-terminal-terminal', visible: open },
+        panel: { selector: terminalMode, visible: open },
       },
     });
     await page

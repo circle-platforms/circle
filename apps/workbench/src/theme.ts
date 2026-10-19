@@ -1,7 +1,7 @@
 import {
   buildPalette,
   DEFAULT_DARK,
-  DEFAULT_LIGHT,
+  DESKTOP_LIGHT,
   hexToRgb,
   mix,
   palette,
@@ -22,13 +22,16 @@ export function applyTheme(choice: Theme, size: TextSize = 'default') {
     choice === 'auto'
       ? matchMedia('(prefers-color-scheme: dark)').matches
       : choice === 'dark';
-  setPalette(buildPalette(...(dark ? DEFAULT_DARK : DEFAULT_LIGHT)));
+  setPalette(buildPalette(...(dark ? DEFAULT_DARK : DESKTOP_LIGHT)));
   const p = palette();
   const rgb = (color: string) => `rgb(${hexToRgb(color).join(' ')})`;
   const values: Record<string, string> = {
     bg: p.bg_hex,
     fg: p.fg_hex,
-    sidebar: mix(p.bg_hex, p.fg_hex, 0.035),
+    // The light theme is one white ground: the sidebar and the drawer are on it too, set
+    // apart by their borders. The dark theme keeps them a shade off its ground.
+    sidebar: dark ? mix(p.bg_hex, p.fg_hex, 0.035) : p.bg_hex,
+    drawer: dark ? mix(p.bg_hex, p.fg_hex, 0.025) : p.bg_hex,
     surface: mix(p.bg_hex, p.fg_hex, 0.045),
     hover: mix(p.bg_hex, p.fg_hex, 0.085),
     active: mix(p.bg_hex, p.fg_hex, 0.12),

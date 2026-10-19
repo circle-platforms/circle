@@ -115,10 +115,15 @@ export interface WorkspaceDocumentsOptions {
   maxFiles?: number;
   maxDepth?: number;
   ignoredDirectories?: string[];
+  /** Whose filesystem rules apply; Windows lets another program hold a file for a moment. */
+  platform?: NodeJS.Platform;
 }
 
 const TORN_READ_ATTEMPTS = 5;
 const TORN_READ_PAUSE_MS = 20;
+// How long a save waits on Windows for another program to let go of the file.
+const HELD_FILE_WAIT_MS = 2000;
+const HELD_FILE_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
 export class TornReadError extends Error {}
 
 export class DocumentConflictError extends Error {
@@ -204,6 +209,7 @@ export class WorkspaceDocuments {
       maxFiles: options.maxFiles ?? 2000,
       maxDepth: options.maxDepth ?? 12,
       ignoredDirectories: options.ignoredDirectories ?? ignoredDirectories,
+      platform: options.platform ?? process.platform,
     };
   }
 
@@ -526,6 +532,42 @@ export class WorkspaceDocuments {
     return { full, temporary, identity };
   }
 
+  private async commit(
+    edit: WorkspaceDocumentChange,
+    staged: { full: string; temporary?: string },
+  ): Promise<void> {
+    if (edit.content === null) await unlink(staged.full);
+    else await rename(staged.temporary!, staged.full);
+  }
+
+  // Replace or delete the file while its revision still matches. On Windows a
+  // program that has the file open, as a virus scan or Git reading it does,
+  // makes that fail with EBUSY, EPERM or EACCES until it lets go: wait for it a
+  // moment, checking the revision before each attempt so no write is lost.
+  private async commitChecked(
+    edit: WorkspaceDocumentChange,
+    staged: { full: string; temporary?: string },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const deadline = Date.now() + HELD_FILE_WAIT_MS;
+    for (let attempt = 1; ; attempt++) {
+      await this.check(edit, signal);
+      signal?.throwIfAborted();
+      this.access?.check(edit.path);
+      try {
+        return await this.commit(edit, staged);
+      } catch (error) {
+        if (
+          this.options.platform !== 'win32' ||
+          !HELD_FILE_CODES.has((error as NodeJS.ErrnoException).code ?? '') ||
+          Date.now() >= deadline
+        )
+          throw error;
+      }
+      await delay(Math.min(10 * attempt, 100), undefined, { signal });
+    }
+  }
+
   async save(
     path: string,
     content: string,
@@ -539,10 +581,7 @@ export class WorkspaceDocuments {
       try {
         // External programs do not share our queue. Re-check after staging, as
         // close to the atomic replacement as the filesystem permits.
-        await this.check(edit, options.signal);
-        options.signal?.throwIfAborted();
-        this.access?.check(path);
-        await rename(staged.temporary, staged.full);
+        await this.commitChecked(edit, staged, options.signal);
         this.access?.committed(path, staged.identity);
         return await this.readWritten(staged.full, path, content);
       } finally {
@@ -604,11 +643,7 @@ export class WorkspaceDocuments {
       }
       for (const [index, edit] of edits.entries()) {
         active = index;
-        await this.check(edit, options.signal);
-        options.signal?.throwIfAborted();
-        this.access?.check(edit.path);
-        if (edit.content === null) await unlink(staged[index]!.full);
-        else await rename(staged[index]!.temporary!, staged[index]!.full);
+        await this.commitChecked(edit, staged[index]!, options.signal);
         committedPaths.push(edit.path);
         this.access?.committed(
           edit.path,

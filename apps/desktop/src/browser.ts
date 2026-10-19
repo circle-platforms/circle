@@ -102,12 +102,13 @@ import {
   type BrowserContextCommand,
   type BrowserKeyAction,
 } from './browser-controls';
+import { PanelKeys, windowShortcut } from './browser-keys';
 import {
   buildPalette,
   palette,
   setPalette,
   DEFAULT_DARK,
-  DEFAULT_LIGHT,
+  DESKTOP_LIGHT,
 } from '../../../src/ink/theme.js';
 
 /** One site's downloads that wait for the person. */
@@ -237,6 +238,8 @@ interface Tab {
 }
 interface Conversation {
   id: string;
+  /** The window that shows the conversation's pages: the main one unless popped out. */
+  window?: BrowserWindow;
   tabs: Map<string, Tab>;
   active?: string;
   nextTab: number;
@@ -357,8 +360,11 @@ export class BrowserSessions {
   private dark = nativeTheme.shouldUseDarkColors;
   /** Hands a browser shortcut to the window, which does it as its panel's buttons do. */
   sendKey: (event: BrowserKeyEvent) => void = () => {};
-  // The conversation whose browser panel has the window's keyboard
-  private keyTarget?: string;
+  // For each window, the conversation whose browser panel has that window's keyboard
+  private panelKeys = new PanelKeys<BrowserWindow>((id) => {
+    const conversation = this.conversations.get(id);
+    return conversation ? this.hostOf(conversation) : undefined;
+  });
   constructor(
     private window: BrowserWindow,
     private emit: (state: BrowserState) => void = () => {},
@@ -383,6 +389,59 @@ export class BrowserSessions {
   }
   private publish(id: string) {
     if (!this.window.isDestroyed()) this.emit(this.state(id));
+  }
+  /** The window that shows a conversation's pages. */
+  private hostOf(conversation: Conversation): BrowserWindow {
+    const own = conversation.window;
+    return own && !own.isDestroyed() ? own : this.window;
+  }
+  /**
+   * A conversation's pages move to another window, as when its browser pops out of the
+   * drawer, or back to the main one. Its views, and the layer over them while Circle acts,
+   * leave the old window and join the new; the new window's panel then places them.
+   */
+  moveToWindow(idValue: unknown, target: BrowserWindow | null) {
+    const id = this.validId(idValue);
+    const next = target && !target.isDestroyed() ? target : this.window;
+    // A browser with no page yet goes too: the pages it opens are that window's.
+    const conversation =
+      this.conversations.get(id) ??
+      (next !== this.window && !this.closed && !this.deletedSessions.has(id)
+        ? this.conversation(id)
+        : undefined);
+    if (!conversation) return;
+    const previous = this.hostOf(conversation);
+    conversation.window = next === this.window ? undefined : next;
+    if (previous === next) return;
+    // The panel the pages left had the keyboard for them; the new window's says for itself.
+    this.panelKeys.forgetConversation(id);
+    const views = [
+      ...[...conversation.tabs.values()].map((tab) => tab.view),
+      ...(conversation.mask ? [conversation.mask] : []),
+    ];
+    // A view the old window has already let go of, or a window that is closing, is no
+    // reason to leave the rest behind.
+    const settle = (action: () => void) => {
+      try {
+        action();
+      } catch {
+        /* The window or the view may be gone. */
+      }
+    };
+    for (const view of views) {
+      if (!previous.isDestroyed())
+        settle(() => previous.contentView.removeChildView(view));
+      settle(() => next.contentView.addChildView(view));
+    }
+    // The new window's panel measures its own page: until it does, nothing shows.
+    conversation.wantedVisible = false;
+    this.visibility(conversation);
+    this.publish(id);
+  }
+  /** The window a conversation's pages are in, for who may place them. */
+  windowOf(idValue: unknown): BrowserWindow {
+    const conversation = this.conversations.get(this.validId(idValue));
+    return conversation ? this.hostOf(conversation) : this.window;
   }
   // ---- conversations and tabs
   private deletedSessions = new Set<string>();
@@ -432,9 +491,10 @@ export class BrowserSessions {
     return tab ?? this.createTab(conversation, { activate: true });
   }
   private visibility(conversation: Conversation) {
-    const [windowWidth, windowHeight] = this.window.isDestroyed()
+    const host = this.hostOf(conversation);
+    const [windowWidth, windowHeight] = host.isDestroyed()
       ? [0, 0]
-      : this.window.getContentSize();
+      : host.getContentSize();
     // Off the window as well as invisible: a native view that only flips its
     // flag can stay composited over the conversation on Linux.
     const away = { x: windowWidth, y: windowHeight, width: 1, height: 1 };
@@ -708,11 +768,11 @@ export class BrowserSessions {
     conversation.tabs.set(tab.id, tab);
     view.setBounds(conversation.bounds);
     view.setVisible(false);
-    this.window.contentView.addChildView(view);
+    this.hostOf(conversation).contentView.addChildView(view);
     // A tab Circle's action opens (a new tab, a popup) stays under the layer that takes the
     // person's clicks while Circle acts
     if (conversation.mask && conversation.operating)
-      this.window.contentView.addChildView(conversation.mask);
+      this.hostOf(conversation).contentView.addChildView(conversation.mask);
     this.prepareSession(conversation, contents.session);
     this.handle(conversation, tab);
     tab.fromPage = !!options.opener;
@@ -918,8 +978,9 @@ export class BrowserSessions {
     if (choice) settle(() => choice.answer());
     settle(() => this.dropPermissions(conversation, tab));
     try {
-      if (!this.window.isDestroyed())
-        settle(() => this.window.contentView.removeChildView(tab.view));
+      const host = this.hostOf(conversation);
+      if (!host.isDestroyed())
+        settle(() => host.contentView.removeChildView(tab.view));
       if (!contents.isDestroyed()) settle(() => contents.close());
     } finally {
       this.visibility(conversation);
@@ -1098,7 +1159,7 @@ export class BrowserSessions {
       event.preventDefault();
       // The address bar and the find field are the window's
       if (action === 'address' || action === 'find')
-        this.window.webContents.focus();
+        this.hostOf(conversation).webContents.focus();
       this.sendKey({ sessionId: 'browser:' + id, action, tab: tab.id });
     });
     contents.on('context-menu', (_event, params) =>
@@ -1623,11 +1684,14 @@ export class BrowserSessions {
     const chooser = tab?.chooser;
     if (!conversation || !tab || !chooser?.backendNodeId)
       throw Error('no such file chooser');
-    const picked = await systemDialog.showOpenDialog(this.window, {
-      properties: chooser.multiple
-        ? ['openFile', 'multiSelections']
-        : ['openFile'],
-    });
+    const picked = await systemDialog.showOpenDialog(
+      this.hostOf(conversation),
+      {
+        properties: chooser.multiple
+          ? ['openFile', 'multiSelections']
+          : ['openFile'],
+      },
+    );
     if (picked.canceled || !picked.filePaths.length) return this.state(id);
     if (tab.chooser !== chooser)
       throw Error('the file chooser was answered meanwhile');
@@ -1656,7 +1720,7 @@ export class BrowserSessions {
     if (!value || typeof value !== 'object')
       throw Error('invalid browser bounds');
     const bounds = value as BrowserBounds;
-    const [width, height] = this.window.getContentSize();
+    const [width, height] = this.windowOf(id).getContentSize();
     if (
       !['x', 'y', 'width', 'height'].every((key) =>
         Number.isFinite(bounds[key as keyof BrowserBounds]),
@@ -1697,32 +1761,42 @@ export class BrowserSessions {
     );
   }
   /**
-   * A key the window is about to get. While the browser panel has the keyboard, the
-   * browser's shortcuts are its own, before the menu's (⌘W would close the window).
-   * Escape stays the field's.
+   * A key a window of the application is about to get. While that window's browser panel
+   * has the keyboard, the browser's shortcuts are its own, before the menu's (⌘W would
+   * close the window). Any other window keeps its keys. Escape stays the field's.
    */
-  windowKey(event: { preventDefault: () => void }, input: Input) {
-    if (input.type !== 'keyDown' || !this.keyTarget) return;
-    const conversation = this.conversations.get(this.keyTarget);
-    if (!conversation) return;
-    const action = browserShortcut(input, process.platform);
-    if (!action || action === 'stop') return;
+  windowKey(
+    event: { preventDefault: () => void },
+    input: Input,
+    from: BrowserWindow,
+  ) {
+    const action = windowShortcut(input, process.platform);
+    if (!action) return;
+    const id = this.panelKeys.holder(from);
+    if (!id) return;
     event.preventDefault();
-    this.sendKey({ sessionId: 'browser:' + conversation.id, action });
+    this.sendKey({ sessionId: 'browser:' + id, action });
+  }
+  /**
+   * Whether the browser panel of the window `from` has that window's keyboard; see
+   * DesktopBridge.browserKeys. Only the window that shows the conversation's pages takes
+   * it; any window may let it go.
+   */
+  keys(idValue: unknown, focused: unknown, from: BrowserWindow) {
+    const id = this.validId(idValue);
+    if (!this.panelKeys.report(from, id, focused === true)) return;
+    // A click on the address bar has to take the keyboard from the page view.
+    // Until the window has it, the first F12 reaches neither of them.
+    if (!from.isDestroyed() && !from.webContents.isFocused())
+      from.webContents.focus();
+  }
+  /** A window's page went away, closed or reloaded: its panel has the keyboard no more. */
+  windowGone(window: BrowserWindow) {
+    this.panelKeys.forgetWindow(window);
   }
   /** What the person does to the shown page from the panel; see DesktopBridge.browserPage. */
   async page(idValue: unknown, action: unknown, value: unknown) {
     const id = this.validId(idValue);
-    if (action === 'keys') {
-      if (value === true) {
-        this.keyTarget = id;
-        // A click on the address bar has to take the keyboard from the page view.
-        // Until the window has it, the first F12 reaches neither of them.
-        if (!this.window.isDestroyed() && !this.window.webContents.isFocused())
-          this.window.webContents.focus();
-      } else if (this.keyTarget === id) this.keyTarget = undefined;
-      return null;
-    }
     const conversation = this.conversations.get(id);
     const tab = conversation?.active
       ? conversation.tabs.get(conversation.active)
@@ -1841,7 +1915,7 @@ export class BrowserSessions {
                 this.contextCommand(conversation, tab, item.command, params),
             },
       ),
-    ).popup({ window: this.window });
+    ).popup({ window: this.hostOf(conversation) });
   }
   private contextCommand(
     conversation: Conversation,
@@ -2137,7 +2211,7 @@ export class BrowserSessions {
       conversation.mask = mask;
     }
     // Added again, it is the topmost view
-    this.window.contentView.addChildView(mask);
+    this.hostOf(conversation).contentView.addChildView(mask);
     mask.setBounds(conversation.bounds);
     mask.setVisible(conversation.wantedVisible);
   }
@@ -2763,7 +2837,8 @@ export class BrowserSessions {
       }
       // The person's typing stays in the conversation's input box, wherever Circle clicks
       const composer =
-        allContents.getFocusedWebContents() === this.window.webContents;
+        allContents.getFocusedWebContents() ===
+        this.hostOf(conversation).webContents;
       conversation.operating = true;
       conversation.control = 'agent';
       this.mask(conversation);
@@ -2783,8 +2858,8 @@ export class BrowserSessions {
           this.watchReturn(conversation);
         } else if (control === 'agent') conversation.control = 'shared';
         this.visibility(conversation);
-        if (composer && !this.window.isDestroyed())
-          this.window.webContents.focus();
+        if (composer && !this.hostOf(conversation).isDestroyed())
+          this.hostOf(conversation).webContents.focus();
         this.publish(conversation.id);
       }
     };
@@ -2807,7 +2882,7 @@ export class BrowserSessions {
     );
   }
   private overlayColors() {
-    setPalette(buildPalette(...(this.dark ? DEFAULT_DARK : DEFAULT_LIGHT)));
+    setPalette(buildPalette(...(this.dark ? DEFAULT_DARK : DESKTOP_LIGHT)));
     const p = palette();
     return {
       color: `rgb(${p.rainbow_stops[0]![1].join(',')})`,
@@ -3475,6 +3550,7 @@ export class BrowserSessions {
   /** Retire only this conversation; other sessions keep their pages and approvals. */
   async deleteSession(id: string): Promise<void> {
     this.deletedSessions.add(id);
+    this.panelKeys.forgetConversation(id);
     const conversation = this.conversations.get(id);
     if (!conversation) return;
     clearInterval(conversation.autoReturn);

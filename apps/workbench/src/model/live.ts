@@ -50,11 +50,22 @@ const LOCAL_SESSION = [
   'presentation',
 ] as const;
 const LOCAL_SETTINGS = ['textSize', 'keybindings'] as const;
+// Each session's view but its attachments, and the window's own settings
+const VIEWS_KEY = 'circle.workbench.live.views.v1';
 // Each session's draft attachments, apart from the rest of its view
 const ATTACHMENTS_KEY = 'circle.workbench.live.attachments.v1';
 const equal = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 type View = Partial<Pick<Session, (typeof LOCAL_SESSION)[number]>>;
+/** The settings this window keeps itself, from what it stored. */
+const localSettings = (value: {
+  settings?: Record<string, unknown>;
+}): Partial<WorkbenchSnapshot['settings']> =>
+  Object.fromEntries(
+    LOCAL_SETTINGS.filter((key) => value.settings && key in value.settings).map(
+      (key) => [key, value.settings![key]],
+    ),
+  );
 
 /** Local drafts/view preferences are separate from core-owned history and execution state. */
 export class LiveRuntime implements RuntimePort {
@@ -94,9 +105,7 @@ export class LiveRuntime implements RuntimePort {
   ) {
     this.snapshot = initial.snapshot;
     try {
-      const value = JSON.parse(
-        storage?.getItem('circle.workbench.live.views.v1') ?? '{}',
-      );
+      const value = JSON.parse(storage?.getItem(VIEWS_KEY) ?? '{}');
       this.views = new Map(
         (value.views ?? [])
           .filter(
@@ -112,11 +121,7 @@ export class LiveRuntime implements RuntimePort {
             ),
           ]),
       );
-      this.settings = Object.fromEntries(
-        LOCAL_SETTINGS.filter(
-          (key) => value.settings && key in value.settings,
-        ).map((key) => [key, value.settings[key]]),
-      );
+      this.settings = localSettings(value);
       this.plugins =
         Array.isArray(value.plugins) &&
         value.plugins.every((id: unknown) => typeof id === 'string')
@@ -151,7 +156,7 @@ export class LiveRuntime implements RuntimePort {
     if (this.disposed) return false;
     try {
       this.storage?.setItem(
-        'circle.workbench.live.views.v1',
+        VIEWS_KEY,
         JSON.stringify({
           views: [...this.views].map(([id, view]) => {
             const { attachments: _, ...rest } = view;
@@ -420,6 +425,26 @@ export class LiveRuntime implements RuntimePort {
     if (!this.host.restartRuntime)
       throw Error(t('Circle runtime disconnected'));
     await this.host.restartRuntime();
+  };
+  // The main window wrote its settings (the text size): a window that only reads them
+  // follows.
+  storageChanged = (key: string | null) => {
+    if (this.disposed || (key !== null && key !== VIEWS_KEY)) return;
+    let settings: Partial<WorkbenchSnapshot['settings']>;
+    try {
+      settings = localSettings(
+        JSON.parse(this.storage?.getItem(VIEWS_KEY) ?? '{}'),
+      );
+    } catch {
+      return;
+    }
+    if (equal(settings, this.settings)) return;
+    this.settings = settings;
+    this.snapshot = {
+      ...this.snapshot,
+      settings: { ...this.snapshot.settings, ...settings },
+    };
+    for (const listener of this.listeners) listener();
   };
   dispose() {
     this.disposed = true;
@@ -905,7 +930,6 @@ export class LiveRuntime implements RuntimePort {
         'save-secret': 'save-secret',
         'remove-secret': 'remove-secret',
         'create-skill': 'create-skill',
-        execute: 'shell',
       };
       if (kind === 'export-session') {
         const data = (await this.native(
@@ -1034,6 +1058,39 @@ export class LiveRuntime implements RuntimePort {
       );
     });
     return {};
+  };
+  runSkill = async (
+    input: { name: string; text: string; display: string },
+    sessionId = this.snapshot.activeSessionId,
+  ): Promise<void> => {
+    await this.changes;
+    const session = this.snapshot.sessions.find(
+      (item) => item.id === sessionId,
+    );
+    if (!session) throw Error(t('session not found'));
+    const loaded = (await this.native(
+      'load-skill',
+      { name: input.name },
+      session.id,
+    )) as { name: string; content: string };
+    const folded = promptAttachments(input.text, [
+      {
+        id: crypto.randomUUID(),
+        name: loaded.name,
+        kind: 'skill',
+        content: loaded.content,
+      },
+    ]);
+    await this.native(
+      'prompt',
+      {
+        text: folded.text,
+        display: input.display,
+        kind: 'steering',
+        attachments: folded.attachments,
+      },
+      session.id,
+    );
   };
   command = async (
     name: string,
@@ -1196,7 +1253,9 @@ export class LiveRuntime implements RuntimePort {
       await native('reload');
       return { notice: t('Circle integrations reloaded') };
     }
-    if (name === 'jobs') return { panel: 'activity', selection: args };
+    // Background commands are tabs of the terminal, beside its shells and device consoles.
+    if (name === 'jobs' || name === 'terminals')
+      return { panel: 'terminal', selection: args };
     if (name === 'copy') return { effect: 'copy' };
     if (name === 'import') return { effect: 'import' };
     if (name === 'init') {
@@ -1213,8 +1272,10 @@ export class LiveRuntime implements RuntimePort {
       };
     }
     if (this.snapshot.commands.some((command) => command.name === name)) {
-      await native('custom-command', { name, args });
-      return {};
+      const data = (await native('custom-command', { name, args })) as
+        { notice?: string } | undefined;
+      // What an extension says in passing, such as the hub's sign-in, is a notice.
+      return data?.notice ? { notice: data.notice } : {};
     }
     const dialogs: Record<string, CommandResult['dialog']> = {
       login: 'connect',

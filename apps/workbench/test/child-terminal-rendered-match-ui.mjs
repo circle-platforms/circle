@@ -7,7 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { createCommandTerminalControllerFixture } from '../../desktop/test/helpers/command-terminal-controller-fixture.ts';
-import { assertRenderedTerminalMatch } from '../../desktop/test/helpers/native-terminal-rendered-match.mjs';
+import {
+  assertRenderedTerminalMatch,
+  terminalMenuItemEnabled,
+} from './helpers/terminal-mode.mjs';
 const output =
   process.env.CIRCLE_CHILD_ECHO_EVIDENCE ??
   process.env.CIRCLE_COMPONENT_UI_EVIDENCE ??
@@ -147,22 +150,30 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
   let composer = page.getByRole('textbox', { name: 'message', exact: true });
   await composer.waitFor();
   await composer.fill('PARENT_DRAFT_EXACT 保留');
+  // A task is a conversation of its own: the task fold under its parent's row in the
+  // sidebar opens it, and its command card opens the original terminal from there.
   const openOriginalChildTerminal = async () => {
-    await page
-      .getByRole('button', { name: 'activity panel', exact: true })
-      .click();
     const agent = f.controller
       .snapshot()
       .agents.find((row) => row.id === child.sessionId);
-    assert(agent);
-    await page
-      .locator('.activity-row')
-      .filter({ has: page.locator('strong', { hasText: agent.name }) })
-      .click();
-    await page
-      .getByRole('button', { name: 'close inspector', exact: true })
-      .click();
-    const record = page.locator('.agent-record');
+    assert(agent?.task);
+    const task = page.locator(
+      `.sidebar [data-row-key="recent:${parent.sessionId}/task:${child.sessionId}"] .session-link`,
+    );
+    if (!(await task.isVisible()))
+      await page
+        .locator('.sidebar .session-with-tasks')
+        .filter({
+          has: page.locator(`[data-row-key="recent:${parent.sessionId}"]`),
+        })
+        .locator('.session-tasks-toggle')
+        .click();
+    await task.click();
+    await page.waitForFunction(
+      (id) => location.hash === `#/session/${id}`,
+      child.sessionId,
+    );
+    const record = page.locator('.conversation');
     await record.waitFor();
     for (const group of await record.locator('.tool-group').all()) {
       const summary = group.locator(':scope > button').first();
@@ -181,10 +192,13 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
     await card
       .getByRole('button', { name: 'open in terminal', exact: true })
       .click();
-    const resolved = await f.service('terminal', 'resolveCommand', {
-      sourceSessionId: child.sessionId,
-      toolCallId: f.toolCallId,
-    });
+    // The task's own conversation is the view the terminal is opened from.
+    const resolved = await f.service(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: child.sessionId, toolCallId: f.toolCallId },
+      child.sessionId,
+    );
     assert.equal(resolved.available, true);
     const target = resolved.target;
     const panel = page.locator('.native-terminal:visible');
@@ -275,6 +289,7 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
     return rows;
   };
   const rendered = await assertRenderedTerminalMatch({
+    page,
     panel,
     surface,
     text: expected,
@@ -325,20 +340,27 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
     server.resolvedUrls.local[0] +
       `test/command-terminal-handoff-ui.html?theme=light#/session/${parent.sessionId}`,
   );
-  const main = page
-    .locator('.agent-record:visible')
-    .getByRole('button', { name: 'main', exact: true });
-  if (await main.isVisible()) await main.click();
   await composer.waitFor();
   assert.equal(await composer.inputValue(), 'PARENT_DRAFT_EXACT 保留');
   const restored = await openOriginalChildTerminal();
   assert.deepEqual(restored.target, target);
+  // Read only now. Seen from the task's own conversation, a selection of it may still
+  // be quoted there; a parent viewing it may not.
   assert.deepEqual(restored.resolved.capabilities, {
     read: true,
     input: false,
     stop: false,
-    addToDraft: false,
+    addToDraft: true,
   });
+  assert.deepEqual(
+    (
+      await f.service('terminal', 'resolveCommand', {
+        sourceSessionId: child.sessionId,
+        toolCallId: f.toolCallId,
+      })
+    ).capabilities,
+    { read: true, input: false, stop: false, addToDraft: false },
+  );
   if (accessibilityEnabled) {
     await f.until(
       async () =>
@@ -349,6 +371,7 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
   const restoredDomText = await restored.surface.innerText();
 
   const restoredMatch = await assertRenderedTerminalMatch({
+    page,
     panel: restored.panel,
     surface: restored.surface,
     text: expected,
@@ -360,13 +383,14 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
     ).length >= 2,
   );
   const restoredPhysicalRows = await physicalRows(restored.surface);
-  for (const name of ['stop terminal', 'restart terminal'])
-    assert.equal(
-      await restored.panel
-        .getByRole('button', { name, exact: true })
-        .isEnabled(),
-      false,
-    );
+  // Nothing stops or restarts it: no stop is offered, and restart cannot be chosen.
+  assert.equal(
+    await restored.panel
+      .getByRole('button', { name: 'stop', exact: true })
+      .count(),
+    0,
+  );
+  assert.equal(await terminalMenuItemEnabled(page, 'restart terminal'), false);
   const rejected = await f.serviceReply('terminal', 'command', {
     target,
     action: 'write',

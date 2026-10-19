@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { readModelRequests } from './helpers/model-requests.mjs';
 import { patience } from './helpers/patience.mjs';
+import { setViewport } from './helpers/viewport.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-ui-issues-'));
@@ -134,49 +135,68 @@ try {
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const info = await page.evaluate(() => window.circleDesktop.info());
   assert.equal(info.frontendOnly, false);
+  // Wide enough for the overview to be pinned beside the conversation, as a window made
+  // on a small screen is not: the plan and the subagents at work are its cards now.
+  await setViewport(
+    application,
+    page,
+    { width: 1400, height: 900 },
+    { show: true },
+  );
+  const overview = page.getByRole('complementary', {
+    name: 'overview',
+    exact: true,
+  });
+  const inProgress = overview.getByRole('region', { name: /^in progress\b/ });
+  // The step under way is a row of the card, marked as the plan's
+  const planStep = (text) =>
+    inProgress.locator('.overview-row').filter({
+      has: page.locator('.overview-end', { hasText: /^plan$/ }),
+      hasText: text,
+    });
   await send('show pending plan');
-  const plan = page.getByRole('region', { name: 'plan steps' });
-  await plan.waitFor();
+  await planStep('fixture step 1').waitFor();
+  assert.match(await inProgress.getByRole('heading').innerText(), /plan 0\/12/);
   await until(
     async () => (await readModelRequests(requestsPath)).length >= 2,
     'waiting model request',
   );
+  const composer = page.getByRole('textbox', {
+    name: 'message',
+    exact: true,
+  });
+  const overviewButton = page.getByRole('button', {
+    name: 'overview panel',
+    exact: true,
+  });
   for (const theme of ['dark', 'light']) {
     await command('save-settings', { settings: { theme } });
     await page.waitForFunction(
       (theme) => document.documentElement.dataset.theme === theme,
       theme,
     );
-    const composer = page.getByRole('textbox', {
-      name: 'message',
-      exact: true,
-    });
     await composer.fill('kept draft\nsecond line');
+    // The plan key shows the overview, where the plan is, and leaves the input box as it was.
+    await overviewButton.click();
+    await overview.waitFor({ state: 'hidden' });
     await composer.press('Alt+p');
-    await page.waitForFunction(
-      () => document.activeElement?.getAttribute('aria-label') === 'plan steps',
-    );
-    await plan.evaluate((element) => {
-      element.scrollTop = 0;
-    });
-    await plan.press('ArrowDown');
-    assert((await plan.evaluate((element) => element.scrollTop)) > 0);
-    await page.screenshot({ path: join(output, `plan-focus-${theme}.png`) });
-    await plan.press('Escape');
+    await planStep('fixture step 1').waitFor();
+    assert.equal(await overviewButton.getAttribute('aria-pressed'), 'true');
     assert(
-      await page
-        .getByRole('textbox', { name: 'message', exact: true })
-        .evaluate((element) => document.activeElement === element),
+      await composer.evaluate((element) => document.activeElement === element),
     );
     assert.equal(await composer.inputValue(), 'kept draft\nsecond line');
+    await page.screenshot({ path: join(output, `plan-overview-${theme}.png`) });
   }
   checks.push(
-    'native plan owns arrow scrolling and Escape returns to the unchanged composer in both themes',
+    "native pending plan is the overview's step in progress; the plan key shows the overview and leaves the composer and its draft unchanged, in both themes",
   );
   await command('abort');
   await send('complete the plan');
   await page.getByText('completion answer', { exact: true }).waitFor();
-  assert.equal(await page.locator('.plan').count(), 0);
+  // A completed plan has no step under way: nothing of it stays in progress.
+  await planStep('fixture step').waitFor({ state: 'detached' });
+  await inProgress.waitFor({ state: 'detached' });
   assert.equal(
     await page.getByText('plan completed · 12 steps', { exact: true }).count(),
     1,
@@ -201,7 +221,7 @@ try {
         ),
   );
   checks.push(
-    'native completed plan hides, keeps runtime steps and emits one anchored notice despite a duplicate todo update',
+    "native completed plan leaves the overview's in progress, keeps runtime steps and emits one anchored notice despite a duplicate todo update",
   );
   await page.evaluate(() => {
     location.hash = '/page/settings';
@@ -248,26 +268,66 @@ try {
       2,
     ),
   );
-  await plan.waitFor();
   await page
     .getByRole('radio', { name: 'continue planning', exact: true })
     .check();
   await page.getByRole('button', { name: 'send answer', exact: true }).click();
   await page.getByText('plan retained', { exact: true }).waitFor();
-  assert.equal(await page.locator('.plan').count(), 0);
+  // The answer given in the conversation reaches the model, and plan mode stays on.
+  const exitResult = (
+    await readModelRequests(requestsPath, { requireComplete: true })
+  )
+    .at(-1)
+    .messages.find((message) => message.tool_call_id === 'exit-plan-tool');
+  assert.equal(
+    exitResult?.content,
+    'The user kept read-only mode active. Continue planning.',
+  );
+  await until(async () => {
+    const current = await state();
+    return current.sessions.find((row) => row.id === current.activeSessionId)
+      .readOnly;
+  }, 'plan mode stays on after continue planning');
+  await inProgress.waitFor({ state: 'detached' });
   checks.push(
-    'native plan-exit approval retains the completed plan for review',
+    'native plan-exit question is answered in the conversation: continue planning reaches the model and keeps plan mode',
   );
   await command('set-plan-mode', { enabled: false });
   await send('start activity fixture');
-  await page.locator('.inline-request[data-kind="approval"]').waitFor();
-  assert.match(
-    await page.locator('.running-strip').innerText(),
-    /waiting for you/,
+  // Nothing under the input box lists the subagent: its request is a card in the main
+  // conversation with its name on it, the subagents button counts it, and the overview's
+  // in progress card says it needs approval, with what it asked to run as the tooltip.
+  const childRequest = page.locator('.inline-request[data-kind="approval"]');
+  await childRequest.waitFor();
+  assert.equal(
+    await childRequest.locator('header small').innerText(),
+    'general-purpose',
   );
-  await page.getByRole('button', { name: 'allow once', exact: true }).click();
+  const subagentsBadge = page
+    .getByRole('button', { name: 'subagents panel', exact: true })
+    .locator('.drawer-mode-badge');
+  assert.equal(await subagentsBadge.innerText(), '1');
+  const subagentRow = inProgress.locator('.overview-row').filter({
+    has: page.locator('.overview-name', { hasText: /^general-purpose$/ }),
+  });
+  const waitingOn = async (asked) => {
+    await subagentRow.locator('.overview-dot[data-state="wait"]').waitFor();
+    const end = subagentRow.locator('.overview-end-text');
+    assert.equal(await end.innerText(), 'needs approval');
+    assert.equal(await end.getAttribute('title'), asked);
+  };
+  await waitingOn(childCommand);
+  await childRequest
+    .getByRole('button', { name: 'allow once', exact: true })
+    .click();
   await until(
-    async () => /Bash\(/.test(await page.locator('.running-strip').innerText()),
+    async () =>
+      /Bash\(/.test(
+        await subagentRow
+          .locator('.overview-end')
+          .innerText()
+          .catch(() => ''),
+      ),
     'actual running command activity',
   );
   await page.screenshot({ path: join(output, 'agent-actual-step.png') });
@@ -280,13 +340,15 @@ try {
         ),
     ),
   );
-  await page.locator('.inline-request[data-kind="approval"]').waitFor();
-  assert.match(
-    await page.locator('.running-strip').innerText(),
-    /waiting for you/,
-  );
-  await page.getByRole('button', { name: 'allow once', exact: true }).click();
+  await childRequest.waitFor();
+  await waitingOn('write_file');
+  await childRequest
+    .getByRole('button', { name: 'allow once', exact: true })
+    .click();
   await page.getByText('parent fixture finished', { exact: true }).waitFor();
+  // Finished, the subagent is no longer at work: neither counted nor in progress.
+  await subagentsBadge.waitFor({ state: 'detached' });
+  await subagentRow.waitFor({ state: 'detached' });
   await until(async () => {
     const current = await state();
     return !current.sessions.find((row) => row.id === current.activeSessionId)
@@ -316,7 +378,7 @@ try {
       ),
   );
   checks.push(
-    'native tool-only child activity comes from real events, approvals gate actual effects and the parent receives the result',
+    "native tool-only child activity comes from real events into the overview and the subagents button's count, its approvals in the main conversation gate actual effects and the parent receives the result",
   );
   await command('archive-session', {
     id: result.activeSessionId,

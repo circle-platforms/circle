@@ -89,9 +89,7 @@ test('workspace disposal commits PTY tail and exit queued behind the durable wri
   const service = new WorkspaceServices({
     workspaceRoot: root,
     dataDir: join(root, 'data'),
-    nodeExecutable: process.execPath,
     runtimeExecutable: process.execPath,
-    adapterPath: 'absent',
     ghPath: 'absent',
     emit: () => {},
     eventStreamOptions: { beforeWrite: () => gate },
