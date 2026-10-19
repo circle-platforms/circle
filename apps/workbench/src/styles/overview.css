@@ -127,9 +127,11 @@ button.overview-row:hover .overview-name {
   flex: none;
   color: var(--secondary);
 }
+/* A row keeps its name whole while it can, and a share of what follows it; what it ends
+   with is capped and cut short inside the card, with all of it in the tooltip. */
 .overview-name {
-  flex: none;
-  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -137,7 +139,7 @@ button.overview-row:hover .overview-name {
 .overview-detail,
 .overview-path {
   flex: 1;
-  min-width: 0;
+  min-width: 4em;
   overflow: hidden;
   color: var(--muted);
   font-size: var(--ui-small);
@@ -153,19 +155,28 @@ button.overview-row:hover .overview-name {
   flex: none;
   align-items: center;
   gap: 6px;
-  max-width: 55%;
+  max-width: 40%;
   margin-left: auto;
   overflow: hidden;
   color: var(--muted);
   font-size: var(--ui-small);
   white-space: nowrap;
+}
+.overview-end-text {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
 }
-.overview-end code {
-  overflow: hidden;
-  font-family: var(--mono);
-  font-size: var(--ui-small);
-  text-overflow: ellipsis;
+/* A subagent's row keeps its name whole and a share of what Circle sent it to do: what
+   it is doing, however long, gives way first. */
+.overview-agent .overview-name {
+  flex-shrink: 0;
+  max-width: 50%;
+}
+.overview-agent > .overview-end {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
 }
 .overview-dot {
   flex: none;

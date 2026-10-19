@@ -19,7 +19,7 @@ const WORDS = {
     tokens: 'tokens',
     cost: 'cost',
     cache: 'cache',
-    waitingApproval: 'waiting for your approval',
+    waitingApproval: 'needs approval',
     waiting: 'waiting for you',
   },
   'zh-CN': {
@@ -33,6 +33,27 @@ const WORDS = {
     waitingApproval: '等你批准',
     waiting: '等待你处理',
   },
+};
+// How a row of the in progress card fits: anything past the row's or the card's right
+// edge, whether the name, the description and the words at the end are cut short.
+const rowFit = (row) => {
+  const box = (node) => node.getBoundingClientRect();
+  const name = row.querySelector('.overview-name');
+  const detail = row.querySelector('.overview-detail');
+  const end = row.querySelector('.overview-end-text');
+  return {
+    overflow:
+      Math.max(
+        ...[...row.querySelectorAll('*')].map((node) => box(node).right),
+      ) - box(row).right,
+    cardOverflow: box(row).right - box(row.closest('.overview-body')).right,
+    nameCut: name.scrollWidth > name.clientWidth,
+    detail: detail ? Math.round(box(detail).width) : null,
+    endCut: end.scrollWidth > end.clientWidth,
+    endWidth: Math.round(box(end).width),
+    ellipsis: getComputedStyle(end).textOverflow,
+    tooltip: end.title,
+  };
 };
 let browser;
 try {
@@ -235,12 +256,102 @@ try {
       await agentRow.getAttribute('title'),
       'Which target should the build use?',
     );
+    assert.equal(
+      await agentRow.locator('.overview-end-text').getAttribute('title'),
+      'Which target should the build use?',
+      'the tooltip over the words is the request too',
+    );
+    const waitingFit = await agentRow.evaluate(rowFit);
+    assert.ok(waitingFit.overflow <= 0.5, JSON.stringify(waitingFit));
+    assert.equal(waitingFit.nameCut, false);
+    assert.equal(waitingFit.endCut, false, 'the waiting words are whole');
+
+    // A long activity is cut short inside the card, as a 1400-pixel window showed it: the
+    // name stays whole, a share of what the subagent was sent to do stays, and the
+    // activity ends in an ellipsis with all of it in the tooltip.
+    const activity =
+      'Bash(npm run test -- --reporter=dot --test-name-pattern="reconnect after close")';
+    await page.evaluate(
+      (activity) =>
+        window.readabilityFixture.runtime.change((state) => {
+          state.interactions = [];
+          state.agents = [
+            {
+              id: 'busy-agent',
+              sessionId: 'session1',
+              name: 'general-purpose: clean the build directory and rebuild',
+              description:
+                'general-purpose: clean the build directory and rebuild',
+              status: 'running',
+              activity,
+              model: 'sample-code-model',
+              tokens: 0,
+              messages: [],
+            },
+          ];
+        }),
+      activity,
+    );
+    const busyRow = progress.locator('.overview-row').filter({
+      has: page
+        .locator('.overview-name')
+        .getByText('general-purpose', { exact: true }),
+    });
+    await busyRow
+      .locator('.overview-end-text')
+      .getByText(activity, { exact: true })
+      .waitFor();
+    const busyFit = await busyRow.evaluate(rowFit);
+    assert.ok(
+      busyFit.overflow <= 0.5 && busyFit.cardOverflow <= 0,
+      `nothing runs past the row or the card: ${JSON.stringify(busyFit)}`,
+    );
+    assert.equal(busyFit.nameCut, false, 'the name is whole');
+    assert.ok(busyFit.detail >= 40, 'a share of the description stays');
+    assert.deepEqual(
+      [busyFit.endCut, busyFit.ellipsis, busyFit.tooltip],
+      [true, 'ellipsis', activity],
+    );
+    // The same subagent waiting for an approval: the state words fit whole beside the
+    // default subagent's name, and the long command is only in the tooltips.
+    const command = `npm run test -- --reporter=dot ${'--flag '.repeat(20)}`;
+    await page.evaluate(
+      (command) =>
+        window.readabilityFixture.runtime.change((state) => {
+          state.agents[0].status = 'waiting';
+          state.interactions = [
+            {
+              id: 'busy-approval',
+              sessionId: 'session1',
+              kind: 'approval',
+              title: 'execute needs your permission',
+              tool: 'execute',
+              command,
+              status: 'pending',
+              revision: 1,
+              origin: { agent: 'busy-agent', name: 'general-purpose' },
+            },
+          ];
+        }),
+      command,
+    );
+    await busyRow
+      .locator('.overview-end-text')
+      .getByText(words.waitingApproval, { exact: true })
+      .waitFor();
+    const askingFit = await busyRow.evaluate(rowFit);
+    assert.ok(askingFit.overflow <= 0.5, JSON.stringify(askingFit));
+    assert.deepEqual(
+      [askingFit.nameCut, askingFit.endCut, askingFit.tooltip],
+      [false, false, command],
+    );
+    assert.equal(await busyRow.getAttribute('title'), command);
 
     assert.deepEqual(errors, []);
     await page.close();
   }
   console.log(
-    'overview cards: in progress, context and waiting subagents, in English and Chinese',
+    'overview cards: in progress, context, waiting subagents and long activities, in English and Chinese',
   );
 } finally {
   await browser?.close();
