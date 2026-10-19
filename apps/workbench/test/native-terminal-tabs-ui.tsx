@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Tooltip } from 'radix-ui';
 import { NativeTerminal } from '../src/components/NativeTerminal';
 import { CircleWorkbench } from '../src/workbench';
+import { RuntimeProvider } from '../src/app/context';
 import { PreviewRuntime } from '../src/model/state';
 import { createFixtures } from '../src/preview/fixtures';
 import { connectWorkspaceStreams } from '../src/model/workspace-client';
@@ -56,7 +57,8 @@ let items = Array.from({ length: 9 }, (_, index) => ({
   cols: 80,
   rows: 24,
   status: 'running',
-  startedAt: new Date(0).toISOString(),
+  // Shells are numbered in the order they were made, whatever order the list has.
+  startedAt: new Date((index + 1) * 1000).toISOString(),
   lastSequence: 0,
   logPath: '/synthetic/log',
   kind: 'shell',
@@ -88,6 +90,12 @@ window.circleDesktop = {
   setTheme: async () => {},
   // Device consoles: none in this fixture.
   onTerminalEvent: () => () => {},
+  terminalState: async (sessionId: string) => ({
+    sessionId: 'terminal:' + sessionId,
+    conversation: sessionId,
+    sessions: [],
+    profiles: [],
+  }),
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
   browserState: async () => ({ sessionId: 'none' }),
@@ -114,6 +122,7 @@ window.circleDesktop = {
         id: 'terminal-' + (items.length + 1),
         label: 'zsh',
         pid: 41001 + items.length,
+        startedAt: new Date((items.length + 1) * 1000).toISOString(),
         lastSequence: 0,
       };
       items = [...items, item];
@@ -163,7 +172,22 @@ if (query.has('accessibility'))
 connectWorkspaceStreams(workspaceId, 'A');
 Object.assign(window, {
   terminalTabsFixture: {
+    // A command Circle runs in the background: its terminal, and the job that names it.
     showManagedProcess: () => {
+      runtime.change((state) => {
+        state.jobs.push({
+          id: 'A:managed-job',
+          sessionId: 'A',
+          kind: 'command',
+          title: 'node managed-display.cjs',
+          state: 'running',
+          elapsed: '1s',
+          output: '',
+          outputPath: 'preview/background_jobs/managed.log',
+          stopRequested: false,
+          terminal: { id: 'terminal-10', epoch: 'fixture' },
+        });
+      });
       const item = items.find((item) => item.id === 'terminal-10')!;
       Object.assign(item, {
         pid: 51010,
@@ -255,9 +279,11 @@ function FocusFixture() {
     },
   );
   return (
-    <Tooltip.Provider>
-      <NativeTerminal sessionId={sessionId} focusRequest={request} />
-    </Tooltip.Provider>
+    <RuntimeProvider runtime={runtime}>
+      <Tooltip.Provider>
+        <NativeTerminal sessionId={sessionId} focusRequest={request} />
+      </Tooltip.Provider>
+    </RuntimeProvider>
   );
 }
 createRoot(document.getElementById('root')!).render(

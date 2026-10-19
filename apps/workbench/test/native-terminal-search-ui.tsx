@@ -2,8 +2,15 @@ import { Tooltip } from 'radix-ui';
 import { createRoot } from 'react-dom/client';
 import { useState } from 'react';
 import { NativeTerminal } from '../src/components/NativeTerminal';
+import { TerminalMode } from '../src/features/TerminalMode';
+import { RuntimeProvider } from '../src/app/context';
+import { PreviewRuntime } from '../src/model/state';
+import { createFixtures } from '../src/preview/fixtures';
 import { applyTheme } from '../src/theme';
 import '../src/styles/app.css';
+import '../src/styles/workbench-unified.css';
+import '../src/styles/developer-workbench.css';
+import '../src/styles/panes.css';
 const options = new URLSearchParams(location.search);
 const embedded = options.get('embedded') === 'true';
 applyTheme(options.get('theme') === 'dark' ? 'dark' : 'light');
@@ -45,11 +52,33 @@ const snapshot = (sessionId: string) => ({
   logPath: '/fixture/log',
   kind: 'shell',
 });
+// The terminal reads the conversation, its jobs and its folder from the runtime.
+const data = createFixtures();
+data.sessions = data.sessions.slice(0, 2).map((session, index) => ({
+  ...session,
+  id: index ? 'B' : 'A',
+  state: 'idle',
+}));
+data.activeSessionId = 'A';
+data.jobs = [];
+const runtime = new PreviewRuntime({
+  getItem: () => JSON.stringify(data),
+  setItem: () => {},
+  removeItem: () => {},
+});
 (window as any).circleDesktop = {
   copyText: async (text: string) => {
     copied = text;
   },
   onWorkspaceEvent: () => () => {},
+  // Device consoles: none in this fixture.
+  onTerminalEvent: () => () => {},
+  terminalState: async (sessionId: string) => ({
+    sessionId: 'terminal:' + sessionId,
+    conversation: sessionId,
+    sessions: [],
+    profiles: [],
+  }),
   runtimeCommand: async (command: any) => {
     const { method, params } = command.payload;
     const item = snapshot(command.sessionId);
@@ -89,7 +118,6 @@ function Fixture() {
   const [session, setSession] = useState('A');
   const [mounted, setMounted] = useState(true);
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState('history');
   (window as any).__terminalFixture = {
     release: () => {
       ready = true;
@@ -102,54 +130,46 @@ function Fixture() {
     unmount: () => setMounted(false),
     remount: () => setMounted(true),
   };
+  // Embedded, the terminal is the drawer's terminal mode: the top bar's button opens it
+  // and a second press closes it, and the mode stays mounted while it is closed.
+  if (embedded)
+    return (
+      <div style={{ height: 600, display: 'flex', flexDirection: 'column' }}>
+        <button
+          aria-label="terminal panel"
+          aria-pressed={open}
+          onClick={() => setOpen(!open)}
+        >
+          terminal panel
+        </button>
+        <div
+          className="inspector-resource-host"
+          hidden={!open}
+          style={{ flex: 1, minHeight: 0, display: open ? 'flex' : 'none' }}
+        >
+          <aside className="inspector work-drawer" style={{ flex: 1 }}>
+            <div className="inspector-body flush">
+              <div
+                className="inspector-resource-view"
+                data-inspector-resource="terminal"
+              >
+                {mounted && <TerminalMode sessionId={session} visible={open} />}
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    );
   return (
     <div style={{ height: 600, display: 'flex', flexDirection: 'column' }}>
-      {embedded && (
-        <>
-          <button
-            aria-label="terminal panel"
-            aria-pressed={open}
-            onClick={() => setOpen(!open)}
-          >
-            terminal panel
-          </button>
-          <div role="tablist" aria-label="terminal sections">
-            {['terminal', 'history'].map((item) => (
-              <button
-                key={item}
-                id={`inspector-terminal-tab-${item}`}
-                role="tab"
-                aria-selected={tab === item}
-                onClick={() => setTab(item)}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-      <div
-        className={embedded ? 'inspector-body flush' : undefined}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: embedded && (!open || tab !== 'terminal') ? 'none' : 'flex',
-        }}
-        id={embedded ? 'inspector-terminal-terminal' : undefined}
-      >
-        {mounted && (
-          <NativeTerminal
-            sessionId={session}
-            active={!embedded || (open && tab === 'terminal')}
-            embedded={embedded}
-          />
-        )}
-      </div>
+      {mounted && <NativeTerminal sessionId={session} />}
     </div>
   );
 }
 createRoot(document.getElementById('root')!).render(
-  <Tooltip.Provider>
-    <Fixture />
-  </Tooltip.Provider>,
+  <RuntimeProvider runtime={runtime}>
+    <Tooltip.Provider>
+      <Fixture />
+    </Tooltip.Provider>
+  </RuntimeProvider>,
 );

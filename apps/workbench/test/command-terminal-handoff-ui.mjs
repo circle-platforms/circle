@@ -6,6 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { createCommandTerminalControllerFixture } from '../../desktop/test/helpers/command-terminal-controller-fixture.ts';
+import {
+  chooseTerminalMenu,
+  closeTerminalMode,
+  openTerminalFind,
+  terminalMenuItemEnabled,
+} from './helpers/terminal-mode.mjs';
 const output =
   process.env.CIRCLE_COMMAND_HANDOFF_EVIDENCE ??
   (await mkdtemp(join(tmpdir(), 'command-handoff-ui-')));
@@ -234,9 +240,8 @@ fs.writeFileSync('human-pid', String(process.pid));
         const originalSurface = await terminal
           .locator(`#terminal-${resolution.target.terminal.id}`)
           .elementHandle();
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
+        // The terminal mode closes from its top-bar button; the card opens it again.
+        await closeTerminalMode(page);
         assert.equal(await composer.inputValue(), 'PARENT_DRAFT_EXACT 保留');
         await parentOpen.click();
         await input.waitFor();
@@ -254,10 +259,8 @@ fs.writeFileSync('human-pid', String(process.pid));
         assert.equal(listing.value[0].managedCommand.commandPid, parent.pid);
         assert.equal(listing.value[0].managedCommand.userShellId, userShellId);
         assert.equal(
-          await terminal
-            .getByRole('button', { name: 'restart terminal', exact: true })
-            .isDisabled(),
-          true,
+          await terminalMenuItemEnabled(page, 'restart terminal'),
+          false,
         );
         await input.focus();
         await page.keyboard.type('human-exact-input');
@@ -270,9 +273,7 @@ fs.writeFileSync('human-pid', String(process.pid));
           'human-exact-input\r',
         );
         assert.equal(await f.read(parent.workspace, 'human-starts'), 'once\n');
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
+        await closeTerminalMode(page);
         await parentCard.waitFor();
         await page
           .locator('.conversation article.message.user')
@@ -316,17 +317,16 @@ fs.writeFileSync('human-pid', String(process.pid));
             .join('')
             .includes('HUMAN-ECHO:human-exact-input'),
         );
+        // Nothing stops or restarts it now: no stop is offered and restart cannot be chosen.
         assert.equal(
           await terminal
-            .getByRole('button', { name: 'stop terminal', exact: true })
-            .isDisabled(),
-          true,
+            .getByRole('button', { name: 'stop', exact: true })
+            .count(),
+          0,
         );
         assert.equal(
-          await terminal
-            .getByRole('button', { name: 'restart terminal', exact: true })
-            .isDisabled(),
-          true,
+          await terminalMenuItemEnabled(page, 'restart terminal'),
+          false,
         );
         assert.equal(await composer.inputValue(), 'PARENT_DRAFT_EXACT 保留');
         assert.equal(f.controller.snapshot().activeSessionId, parent.sessionId);
@@ -411,42 +411,55 @@ fs.writeFileSync('human-pid', String(process.pid));
         );
         assert.equal(await f.read(child.workspace, f.files.input), '');
         assert.equal(
-          await terminal
-            .getByRole('button', { name: 'restart terminal', exact: true })
-            .isDisabled(),
-          true,
+          await terminalMenuItemEnabled(page, 'restart terminal'),
+          false,
         );
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
+        // The terminal mode closes from its top-bar button, as it opened.
+        await closeTerminalMode(page);
         assert.equal(
           await parentOpen.evaluate((node) => document.activeElement === node),
           true,
           'close returns focus without scrolling the command card',
         );
         assert.equal(await composer.inputValue(), 'PARENT_DRAFT_EXACT 保留');
-        await page
-          .getByRole('button', { name: 'activity panel', exact: true })
-          .click();
+        // A task is a conversation of its own: the task fold under the parent's row in
+        // the sidebar opens it, and its command card opens the original terminal there.
         const agent = f.controller
           .snapshot()
           .agents.find((row) => row.id === child.sessionId);
-        assert(agent);
-        await page
-          .locator('.activity-row')
-          .filter({ has: page.locator('strong', { hasText: agent.name }) })
-          .click();
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
-        const record = page.locator('.agent-record');
-        await record
-          .locator('header strong')
-          .getByText(agent.name, { exact: true })
-          .waitFor();
+        assert(agent?.task);
+        const parentRow = page.locator(
+          `.sidebar [data-row-key="recent:${parent.sessionId}"] .session-link`,
+        );
+        const taskRow = page.locator(
+          `.sidebar [data-row-key="recent:${parent.sessionId}/task:${child.sessionId}"] .session-link`,
+        );
+        if (!(await taskRow.isVisible()))
+          await page
+            .locator('.sidebar .session-with-tasks')
+            .filter({
+              has: page.locator(`[data-row-key="recent:${parent.sessionId}"]`),
+            })
+            .locator('.session-tasks-toggle')
+            .click();
+        await taskRow.click();
+        await page.waitForFunction(
+          (id) => location.hash === `#/session/${id}`,
+          child.sessionId,
+        );
+        const record = page.locator('.conversation');
         const childCard = record
           .locator('.tool-call')
           .filter({ hasText: 'command-input.cjs' });
+        // The turn's tools fold into one line once they end; unfold it to reach the card.
+        const showChildCard = async () => {
+          if (!(await childCard.isVisible()))
+            await record.locator('.tool-group > button').first().click();
+          await childCard.waitFor();
+          if (!(await childCard.locator('.tool-content').isVisible()))
+            await childCard.locator('.tool-head').click();
+        };
+        await showChildCard();
         const childOpen = childCard.getByRole('button', {
           name: 'open in terminal',
           exact: true,
@@ -454,7 +467,7 @@ fs.writeFileSync('human-pid', String(process.pid));
         await childOpen.evaluate((node) =>
           node.scrollIntoView({ block: 'center', behavior: 'instant' }),
         );
-        const recordBody = record.locator('.agent-record-body');
+        const recordBody = record.locator('.transcript');
         const beforeScroll = await recordBody.evaluate(
           (node) => node.scrollTop,
         );
@@ -471,10 +484,13 @@ fs.writeFileSync('human-pid', String(process.pid));
         }));
         const recordNode = await recordBody.elementHandle();
         await childOpen.click();
-        const childResolution = await f.service('terminal', 'resolveCommand', {
-          sourceSessionId: child.sessionId,
-          toolCallId: f.toolCallId,
-        });
+        // The task's own conversation is the view its terminal is opened from.
+        const childResolution = await f.service(
+          'terminal',
+          'resolveCommand',
+          { sourceSessionId: child.sessionId, toolCallId: f.toolCallId },
+          child.sessionId,
+        );
         assert.equal(childResolution.available, true);
         const childTarget = childResolution.target;
         assert.notEqual(childTarget.terminal.id, target.terminal.id);
@@ -494,7 +510,8 @@ fs.writeFileSync('human-pid', String(process.pid));
           await f.read(parent.workspace, f.files.input),
           'parent-exact-input',
         );
-        assert.equal(f.controller.snapshot().activeSessionId, parent.sessionId);
+        // Typing in a terminal never changes the conversation that is shown.
+        assert.equal(f.controller.snapshot().activeSessionId, child.sessionId);
         const surface = await terminal
           .locator(`#terminal-${childTarget.terminal.id}`)
           .elementHandle();
@@ -515,28 +532,64 @@ fs.writeFileSync('human-pid', String(process.pid));
             .evaluate((node, previous) => node === previous, surface),
           true,
         );
-        await terminal
-          .getByRole('button', { name: 'find in terminal', exact: true })
+        const find = await openTerminalFind(page, terminal);
+        await find.fill('READY');
+        await find.press('Enter');
+        await f.until(
+          async () =>
+            (await terminal
+              .locator(
+                `#terminal-${childTarget.terminal.id} .xterm-selection div`,
+              )
+              .count()) > 0,
+          'the child terminal selects its own output',
+        );
+        // A selection of the task's terminal is quoted in the conversation that shows
+        // it, the task's own, and never in the parent's draft.
+        const drafts = () =>
+          page.evaluate(
+            (ids) =>
+              ids.map((id) => {
+                const session = window.commandTerminalRuntime
+                  .getSnapshot()
+                  .sessions.find((item) => item.id === id);
+                return {
+                  draft: session?.draft ?? '',
+                  attachments: (session?.attachments ?? []).map(
+                    (item) => item.content,
+                  ),
+                };
+              }),
+            [parent.sessionId, child.sessionId],
+          );
+        await chooseTerminalMenu(page, 'add selection to chat');
+        await f.until(
+          async () => (await drafts())[1].attachments.length === 1,
+          'the selection is quoted in the task conversation',
+        );
+        const [parentDraft, childDraft] = await drafts();
+        assert.deepEqual(parentDraft, {
+          draft: 'PARENT_DRAFT_EXACT 保留',
+          attachments: [],
+        });
+        assert(
+          childDraft.attachments[0].startsWith('READY'),
+          'actual child output is the quote',
+        );
+        const quote = await page
+          .locator('.attachment-strip .file-chip > button')
+          .first()
+          .textContent();
+        await page
+          .getByRole('button', { name: `remove ${quote}`, exact: true })
           .click();
-        await terminal
-          .getByRole('textbox', { name: 'find in terminal', exact: true })
-          .fill('READY');
-        await terminal
-          .getByRole('textbox', { name: 'find in terminal', exact: true })
-          .press('Enter');
-        await page.waitForTimeout(100);
-        assert.equal(
-          await terminal
-            .getByRole('button', { name: 'add selection to chat', exact: true })
-            .isDisabled(),
-          true,
-          'actual child target never appends to parent draft',
+        await f.until(
+          async () => (await drafts())[1].attachments.length === 0,
+          'the quote is removed again',
         );
         assert.equal(
-          await terminal
-            .getByRole('button', { name: 'restart terminal', exact: true })
-            .isDisabled(),
-          true,
+          await terminalMenuItemEnabled(page, 'restart terminal'),
+          false,
         );
         const rejectedRestart = await f.serviceReply(
           'terminal',
@@ -572,9 +625,7 @@ fs.writeFileSync('human-pid', String(process.pid));
           await f.read(child.workspace, f.files.input),
           'child-exact-input',
         );
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
+        await closeTerminalMode(page);
         assert.equal(
           await recordBody.evaluate(
             (node, previous) => node === previous,
@@ -617,8 +668,9 @@ fs.writeFileSync('human-pid', String(process.pid));
         );
         await childOpen.click();
         await terminal.waitFor();
+        // A running command's stop stands at the end of the row.
         await terminal
-          .getByRole('button', { name: 'stop terminal', exact: true })
+          .getByRole('button', { name: 'stop', exact: true })
           .click();
         await f.until(async () => {
           const reply = await f.service('terminal', 'command', {
@@ -635,16 +687,20 @@ fs.writeFileSync('human-pid', String(process.pid));
           await f.read(child.workspace, f.files.starts),
           childStarts,
         );
-        await page
-          .getByRole('button', { name: 'close inspector', exact: true })
-          .click();
+        await closeTerminalMode(page);
+        await showChildCard();
         deferResolve = true;
         await childOpen.click();
         await f.until(
           () => !!releaseResolve,
           'actual host resolve reply held in transport',
         );
-        await record.getByRole('button', { name: 'main', exact: true }).click();
+        // Back to the parent's conversation while the reply is held.
+        await parentRow.click();
+        await page.waitForFunction(
+          (id) => location.hash === `#/session/${id}`,
+          parent.sessionId,
+        );
         await composer.waitFor();
         releaseResolve();
         releaseResolve = undefined;
@@ -660,8 +716,9 @@ fs.writeFileSync('human-pid', String(process.pid));
         checks.push(
           'actual parent and task-ledger child same call ID select separate original PTYs',
           'real UI stdin bytes, original PID/start count, repeated open and backend restart denial',
+          "a child's selection is quoted in its own conversation, never in the parent's draft",
           'Registry stop, stale epoch refusal, exact child DOM/reading offset and parent draft',
-          'late actual resolve reply cannot reopen terminal after returning to main',
+          'late actual resolve reply cannot reopen terminal after returning to the parent',
         );
         const targetCalls = calls.filter(
           (call) =>
@@ -669,10 +726,12 @@ fs.writeFileSync('human-pid', String(process.pid));
             call.payload?.method === 'command',
         );
         assert(targetCalls.length > 0);
+        // Each command is driven from the conversation that shows it, with its whole target.
         assert(
           targetCalls.every(
             (call) =>
-              call.sessionId === parent.sessionId &&
+              call.sessionId ===
+                call.payload.params.target.executionSessionId &&
               call.payload.params.target.epoch &&
               call.payload.params.target.terminal.epoch,
           ),
