@@ -2755,6 +2755,7 @@ export class RuntimeController {
           (task) => task.session.id === row.id,
         );
       const selected = owner?.session.id === row.id;
+      const plan = selected ? owner.plan() : undefined;
       const queue = selected
         ? owner.harness.queuedMessages
         : { steering: [], followUp: [] };
@@ -2848,6 +2849,7 @@ export class RuntimeController {
               status: todo.status === 'in_progress' ? 'running' : todo.status,
             }))
           : [],
+        ...(plan ? { plan } : {}),
         pinned: false,
         shared: false,
         updatedAt: new Date(row.updated).toISOString(),
@@ -3834,15 +3836,18 @@ export class RuntimeController {
       options: { label: string; description: string }[];
       multiple: boolean;
     }[];
+    // plan_exit's question: the plan card, beside the plan it is about
+    const plan = (args.plan as { file?: unknown } | undefined)?.file;
     const answers: (string | string[])[] = [];
     for (const question of questions) {
       const answer = await this.wait(
         runtime,
         {
-          kind: 'question',
+          kind: typeof plan === 'string' ? 'plan-exit' : 'question',
           title: question.question,
           choices: question.options.map((option) => option.label),
           multiple: question.multiple,
+          ...(typeof plan === 'string' ? { target: plan } : {}),
         },
         signal,
         origin,
