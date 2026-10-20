@@ -717,10 +717,14 @@ export class TerminalManager {
     rows: number,
   ): Promise<TerminalSnapshot> {
     await this.#ready;
-    const entry = this.#get(owner, id, true);
+    const entry = this.#get(owner, id);
     cols = dimension(cols);
     rows = dimension(rows);
-    entry.pty!.resize(cols, rows);
+    // The shell has gone. Fitting the screen to the exited state is not a
+    // failed operation, and it must not be reported as one.
+    if (!entry.pty || entry.snapshot.status !== 'running')
+      return clone(entry.snapshot);
+    entry.pty.resize(cols, rows);
     entry.snapshot.cols = cols;
     entry.snapshot.rows = rows;
     this.#append(entry, 'resized', undefined, true);
@@ -808,6 +812,9 @@ export class TerminalManager {
     await this.#ready;
     const entry = this.#get(owner, id);
     entry.snapshot.hidden = true;
+    // A closed tab does not keep a number. Leaving it stored made the next
+    // shell reuse that number when the closed tab was still the one counted.
+    delete entry.snapshot.tabNumber;
     await this.#persist(entry);
     return clone(entry.snapshot);
   }

@@ -50,6 +50,7 @@ import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal } from './common';
 import type { LocalTerminalRow } from '../../../desktop/src/contracts';
 import { terminalTabNumbers } from '../../../desktop/src/terminal-tabs';
+import { presentHostError, quietWhenTerminalExited } from '../model/host-error';
 import { claimTerminalKeyboard } from '../model/terminal-keyboard';
 import { TerminalTabs, type TerminalTab } from './TerminalTabs';
 import {
@@ -555,6 +556,21 @@ export function NativeTerminal({
   const create = () =>
     run(async () => {
       const capturedSession = sessionId;
+      // A tab closed in the row still holds its number until hide lands. Wait
+      // for that, so the shell created next takes the lowest number now free.
+      const closing = terminals.filter(
+        (item) =>
+          item.sessionId === capturedSession &&
+          dismissed.has(item.id) &&
+          !item.hidden,
+      );
+      await Promise.all(
+        closing.map((item) =>
+          terminalRequest<TerminalSnapshot>('hide', { id: item.id })
+            .then(adopt)
+            .catch(() => undefined),
+        ),
+      );
       const snapshot = await workspaceCall<TerminalSnapshot>(
         capturedSession,
         'terminal',
@@ -1551,6 +1567,12 @@ function TerminalSurface({
   const [retry, setRetry] = useState(0);
   activeRef.current = active;
   statusRef.current = snapshot.status;
+  // The banner can land while the snapshot still says running, then the shell
+  // is exited. Leaving the shell is the exited state, not a failed operation.
+  useEffect(() => {
+    if (snapshot.status === 'running') return;
+    setError((current) => (quietWhenTerminalExited(current) ? '' : current));
+  }, [snapshot.status]);
 
   useLayoutEffect(() => {
     const visibility = timingVisibility.current;
@@ -1626,8 +1648,12 @@ function TerminalSurface({
         : workspaceCall<T>(snapshot.sessionId, 'terminal', method, params);
 
     const showError = (reason: unknown) => {
-      if (!cancelled)
-        setError(reason instanceof Error ? reason.message : String(reason));
+      if (cancelled) return;
+      const message = reason instanceof Error ? reason.message : String(reason);
+      // A resize or a write that races the shell exiting is not a failure.
+      if (statusRef.current !== 'running' && quietWhenTerminalExited(message))
+        return;
+      setError(message);
     };
     const synchronize = (): Promise<void> => {
       dirty = true;
@@ -2001,7 +2027,7 @@ function TerminalSurface({
     >
       {error && (
         <div className="native-terminal-error" role="alert">
-          <span>{error}</span>
+          <span>{presentHostError(error)}</span>
           <Button
             onClick={() => {
               setError('');

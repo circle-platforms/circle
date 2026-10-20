@@ -33,6 +33,7 @@ import {
 import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 import { t } from '../i18n/index.ts';
+import { presentHostError } from './host-error.ts';
 import { SessionActionError } from './action-error';
 import { runtimeStoppedNotice } from './runtime-notice';
 import { armComposerFocus, cancelComposerFocus } from './composer-focus';
@@ -394,8 +395,9 @@ export class LiveRuntime implements RuntimePort {
   private report(error: unknown, sessionId = this.snapshot.activeSessionId) {
     if (this.disposed) return;
     if (error instanceof SessionActionError) sessionId = error.sessionId;
-    const message =
-      error instanceof Error ? error.message : t('runtime action failed');
+    const message = presentHostError(
+      error instanceof Error ? error.message : t('runtime action failed'),
+    );
     if (!this.snapshot.sessions.some((session) => session.id === sessionId))
       return;
     this.sessionErrors.set(sessionId, message);

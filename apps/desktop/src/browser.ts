@@ -434,11 +434,18 @@ export class BrowserSessions {
         /* The window or the view may be gone. */
       }
     };
+    // A view added to a window that is not on screen, while it is set to keep
+    // painting in the background, is marked shown without a surface. It then
+    // stays blank after the window appears, and reloading the document does
+    // not build one. Hold painting until this window is actually up.
+    const deferPaint = next.isDestroyed() || !next.isVisible();
     for (const view of views) {
+      if (deferPaint) this.holdPaint(view);
       if (!previous.isDestroyed())
         settle(() => previous.contentView.removeChildView(view));
       settle(() => next.contentView.addChildView(view));
     }
+    this.logAttachment(conversation, 'moved');
     // The new window's panel measures its own page: until it does, nothing shows.
     // Attached again on the first show, so the move paints instead of a blank area.
     conversation.freshHost = true;
@@ -520,10 +527,15 @@ export class BrowserSessions {
       ...(conversation.mask ? [conversation.mask] : []),
     ];
   }
-  /** Drop a view and add it again, so Linux composites a page that moved windows. */
+  /**
+   * Drop a view and add it again, so Linux composites a page that moved windows.
+   * A page that had already painted needs its surface embedded again once the
+   * window is visible: a reload leaves the blank area in place.
+   */
   private reattachViews(conversation: Conversation) {
     const host = this.hostOf(conversation);
     if (host.isDestroyed()) return;
+    const visible = host.isVisible();
     for (const view of this.viewsOf(conversation)) {
       try {
         host.contentView.removeChildView(view);
@@ -535,7 +547,70 @@ export class BrowserSessions {
       } catch {
         /* The window or the view may be gone. */
       }
+      if (visible) this.wakeSurface(view);
     }
+    if (visible) this.logAttachment(conversation, 'shown');
+  }
+  /** Stop a view painting while its window is still hidden. */
+  private holdPaint(view: WebContentsView) {
+    try {
+      if (!view.webContents.isDestroyed())
+        view.webContents.setBackgroundThrottling(true);
+    } catch {
+      /* The view may be gone. */
+    }
+  }
+  /**
+   * Embed a view's surface in the window that is now showing it. Nudging the
+   * box counts as a resize, which is what paints a page whose surface was left
+   * behind by the move. `reload` does not.
+   */
+  private wakeSurface(view: WebContentsView) {
+    try {
+      const bounds = view.getBounds();
+      if (bounds.width > 2 && bounds.height > 2) {
+        view.setBounds({
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width - 1,
+          height: bounds.height,
+        });
+        view.setBounds(bounds);
+      }
+      const contents = view.webContents;
+      if (contents.isDestroyed()) return;
+      contents.setBackgroundThrottling(false);
+      contents.invalidate();
+    } catch {
+      /* The window or the view may be gone. */
+    }
+  }
+  /** Which page is in which window, and the box it was given. */
+  private logAttachment(conversation: Conversation, reason: string) {
+    const host = this.hostOf(conversation);
+    if (host.isDestroyed()) return;
+    const views = this.viewsOf(conversation).map((view) => {
+      let id = -1;
+      let url = '';
+      try {
+        id = view.webContents.id;
+        url = view.webContents.getURL();
+      } catch {
+        /* The view may be gone. */
+      }
+      let bounds = { x: 0, y: 0, width: 0, height: 0 };
+      let visible = false;
+      try {
+        bounds = view.getBounds();
+        visible = view.getVisible();
+      } catch {
+        /* The view may be gone. */
+      }
+      return { id, url, visible, bounds };
+    });
+    console.info(
+      `circle browser: ${reason} session=${conversation.id} window=${host.id} views=${JSON.stringify(views)}`,
+    );
   }
   private viewsDetached(conversation: Conversation): boolean {
     const host = this.hostOf(conversation);

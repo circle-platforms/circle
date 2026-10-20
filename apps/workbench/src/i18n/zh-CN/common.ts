@@ -1,6 +1,12 @@
 // Simplified Chinese for words shared across the window. English is the key.
 export const common: Record<string, string> = {
   'restarting…': '正在重启…',
+  'operation failed; inspect effects before retrying':
+    '操作失败，请先查看影响再重试',
+  'operation outcome needs review; inspect effects before retrying':
+    '操作结果需要核对，请先查看影响再重试',
+  'stored operation result is unavailable; inspect effects before retrying':
+    '已保存的操作结果不可用，请先查看影响再重试',
   // approval modes
   'approval mode': '审批模式',
   manual: '手动',

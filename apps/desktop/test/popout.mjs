@@ -37,7 +37,7 @@ const site = createServer((request, response) => {
   response.end(
     request.url.startsWith('/live')
       ? '<!doctype html><title>extension link fixture</title><h1>opened by an extension</h1>'
-      : '<!doctype html><title>pop</title><h1 id="mark">popped page</h1>',
+      : '<!doctype html><title>pop</title><body style="margin:0;background:#00aa44"><h1 id="mark" style="color:#fff">popped page</h1></body>',
   );
 });
 await new Promise((done) => site.listen(0, '127.0.0.1', done));
@@ -102,6 +102,65 @@ try {
   // that is closing stays listed for a moment after its page is gone, so only live ones count.
   // The open page in a window: its text, and where its view sits. A parked view is
   // a 1×1 box off the window, which is the blank area a move used to leave.
+  // The window as the compositor drew it. executeJavaScript still reads a
+  // page whose view is blank, so the green of the fixture has to be on screen.
+  const compositedGreen = (electronApp, which) =>
+    electronApp.evaluate(async ({ BrowserWindow, desktopCapturer }, which) => {
+      const target = BrowserWindow.getAllWindows()
+        .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
+        .find((one) => {
+          const url = one.webContents.getURL();
+          return which === 'main'
+            ? !url.includes('#/popout/')
+            : url.includes('#/popout/browser/');
+        });
+      if (!target) return { ratio: 0, reason: 'no window' };
+      const attached = target.contentView.children.flatMap((child) => {
+        try {
+          return [
+            {
+              id: child.webContents.id,
+              url: child.webContents.getURL(),
+              bounds: child.getBounds(),
+              visible: child.getVisible(),
+            },
+          ];
+        } catch {
+          return [];
+        }
+      });
+      const sources = await desktopCapturer.getSources({
+        types: ['window'],
+        thumbnailSize: { width: 900, height: 700 },
+      });
+      const source = sources.find((one) => one.id.endsWith(':' + target.id));
+      if (!source)
+        return {
+          ratio: 0,
+          reason: 'no capture',
+          attached,
+          titles: sources.map((one) => one.name),
+        };
+      const image = source.thumbnail;
+      const { width, height } = image.getSize();
+      const bitmap = image.toBitmap();
+      let green = 0;
+      let seen = 0;
+      for (let y = 0; y < height; y += 6)
+        for (let x = 0; x < width; x += 6) {
+          const index = (y * width + x) * 4;
+          const red = bitmap[index + 2];
+          const mid = bitmap[index + 1];
+          const blue = bitmap[index];
+          seen++;
+          if (red < 50 && mid > 110 && blue < 110) green++;
+        }
+      return {
+        ratio: seen ? green / seen : 0,
+        title: source.name,
+        attached,
+      };
+    }, which);
   const shownPage = (which) =>
     app.evaluate(({ BrowserWindow }, which) => {
       const target = BrowserWindow.getAllWindows()
@@ -181,13 +240,23 @@ try {
   // out, is reloaded, comes back, and is reloaded again.
   const painted = async (which) => {
     const page = await shownPage(which);
+    const screen = await compositedGreen(app, which);
+    const enough = which === 'browser' ? 0.12 : 0.03;
     return (
       page.text === 'popped page' &&
       page.bounds &&
       page.bounds.width > 80 &&
       page.bounds.height > 80 &&
       page.bounds.x >= 0 &&
-      page.bounds.y >= 0
+      page.bounds.y >= 0 &&
+      screen.ratio > enough &&
+      screen.attached?.some(
+        (view) =>
+          view.visible &&
+          view.url.startsWith('http') &&
+          view.bounds.width > 80 &&
+          view.bounds.height > 80,
+      )
     );
   };
   await main
@@ -722,6 +791,71 @@ try {
     .getByRole('button', { name: 'browser panel', exact: true })
     .click();
   await live.locator('.native-browser').waitFor();
+  // The packaged path: the address is typed in the drawer's field, which
+  // navigates through the renderer, and the page has to stay painted when it
+  // moves. A direct navigate in the main process is a different path.
+  await live.getByText('browse the web', { exact: true }).waitFor();
+  const typed = live.getByRole('textbox', { name: 'browser address' });
+  await typed.fill(pageUrl);
+  await typed.press('Enter');
+  const livePainted = async (which) => {
+    const screen = await compositedGreen(liveApp, which);
+    const enough = which === 'browser' ? 0.12 : 0.03;
+    return screen.ratio > enough;
+  };
+  await until(
+    () => livePainted('main'),
+    'the page typed in the drawer is on screen',
+  );
+  const typedBefore = (await compositedGreen(liveApp, 'main')).attached?.find(
+    (view) => view.url.startsWith('http'),
+  );
+  assert.ok(typedBefore, 'the typed page has a view in the drawer');
+  await live
+    .locator('.inspector .browser-address')
+    .getByRole('button', { name: 'open in a window', exact: true })
+    .click();
+  const liveBrowser = await until(
+    async () => liveWindows('#/popout/browser/')[0],
+    'the browser window',
+  );
+  await liveBrowser.locator('.native-browser').waitFor();
+  await until(
+    () => livePainted('browser'),
+    'the typed page is on screen in the window',
+  );
+  const typedAfter = (await compositedGreen(liveApp, 'browser')).attached?.find(
+    (view) => view.url.startsWith('http'),
+  );
+  assert.equal(
+    typedAfter?.id,
+    typedBefore.id,
+    'pop-out attaches the view the address bar opened',
+  );
+  await liveBrowser
+    .getByRole('button', { name: 'reload page', exact: true })
+    .click();
+  await until(
+    () => livePainted('browser'),
+    'reloading the typed page still paints it',
+  );
+  await liveBrowser
+    .getByRole('button', { name: 'put back in the drawer' })
+    .click();
+  await until(
+    async () => (await liveWindows('#/popout/browser/')).length === 0,
+    'the typed page returns to the drawer',
+  );
+  await live.locator('.work-drawer').waitFor({ state: 'visible' });
+  await until(
+    () => livePainted('main'),
+    'the typed page is on screen back in the drawer',
+  );
+  await live.getByRole('button', { name: 'reload page', exact: true }).click();
+  await until(
+    () => livePainted('main'),
+    'reloading the typed page in the drawer still paints it',
+  );
   await live
     .locator('.inspector .browser-address')
     .getByRole('button', { name: 'open in a window', exact: true })

@@ -467,6 +467,60 @@ test(
 );
 
 test(
+  'closing the only shell frees its number for the next one',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const first = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(first.tabNumber, 1);
+    const second = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(second.tabNumber, 2);
+    await manager.hide(owner, first.id);
+    // The shell that is still open keeps 2. Number 1 is free, but this tab
+    // is not renamed.
+    assert.equal(
+      terminalTabNumbers(await manager.list(owner)).get(second.id),
+      2,
+    );
+    await manager.hide(owner, second.id);
+    const hidden = (await manager.list(owner)).find(
+      (item) => item.id === second.id,
+    );
+    assert.equal(hidden?.hidden, true);
+    assert.equal(hidden?.tabNumber, undefined);
+    const created = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(created.tabNumber, 1);
+    assert.equal(
+      terminalTabNumbers(await manager.list(owner)).get(created.id),
+      1,
+    );
+  },
+);
+
+test(
+  'resizing a shell that has exited is not a failure',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const shell = await manager.create({ owner, sessionId: 'session-a' });
+    await manager.signal(owner, shell.id, 'SIGKILL');
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((item) => item.id === shell.id)
+          ?.status === 'exited',
+      'the shell exited',
+    );
+    const resized = await manager.resize(owner, shell.id, 100, 40);
+    assert.equal(resized.status, 'exited');
+    assert.equal(resized.cols, shell.cols);
+    await assert.rejects(
+      manager.write(owner, shell.id, 'exit\r'),
+      /terminal is not running/,
+    );
+  },
+);
+
+test(
   'service readiness, stopping and restart are proven by the real port lifecycle',
   { skip: !unix },
   async (t) => {
