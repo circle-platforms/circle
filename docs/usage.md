@@ -26,9 +26,11 @@ To show the model a picture, put it in your message:
 
 The model gets each picture with its path, so it can look at it again with `read_file`. The conversation shows your message as you saw it; the input history keeps each picture's path, so a message you recall sends the picture again. A file that cannot go (over the size limit, empty, or more than 16 pictures and PDFs in one message) is left out, and both you and the model are told which and why. A PNG larger than about 1,568 pixels on its long side is scaled down before it is sent (models scale larger ones down anyway), and the model is told both sizes.
 
-The model can also take a screenshot itself with the `screenshot` tool: of the main screen, or of the front window of one application, to see how an app it is building looks or the problem you describe. It asks you first each time, unless you allow screenshots for the session, and it does not run in `read-only` mode or over `ssh`. On macOS the terminal needs the Screen Recording permission (System Settings → Privacy & Security → Screen Recording); without it the picture shows only the desktop. An application's window is taken by itself, without the windows over it. On Linux it takes the whole screen with `grim`, `gnome-screenshot`, `spectacle`, ImageMagick's `import` or `scrot`. `esc` stops a screenshot under way, and a model that does not read images is not given one. Screenshots are kept in `screenshots/` in the project's folder in the data folder. The tool only looks: it cannot click or type. To let the model use a web page, add a browser [MCP server](mcp.md#drive-a-browser).
+The model can also take a screenshot itself with the `screenshot` tool: of the main screen, or of the front window of one application, to see how an app it is building looks or the problem you describe. It asks you first each time, unless you allow screenshots for the session, and it does not run in `read-only` mode or over `ssh`. On macOS the terminal needs the Screen Recording permission (System Settings → Privacy & Security → Screen Recording); without it the picture shows only the desktop. An application's window is taken by itself, without the windows over it. On Linux it takes the whole screen with `grim`, `gnome-screenshot`, `spectacle`, ImageMagick's `import` or `scrot`. `esc` stops a screenshot under way, and a model that does not read images is not given one unless a side vision model describes it (below). Screenshots are kept in `screenshots/` in the project's folder in the data folder. The tool only looks: it cannot click or type. To let the model use a web page, add a browser [MCP server](mcp.md#drive-a-browser).
 
-Not every model reads images. When models.dev says the model in use does not, the footer says so as you paste, the model gets the paths only, and a tool that returns a picture tells it so. If models.dev is wrong about your model, set `"images": true` (or `false`) for it under `models` in the [settings](settings.md).
+Not every model reads images. When models.dev says the model in use does not, the footer says so as you paste, the model gets the paths only, and a tool that returns a picture tells it so. If models.dev is wrong about your model, set `"images": true` (or `false`) for it under `models` in the [settings](settings.md). When the endpoint itself refuses pictures for a model models.dev does not list, that request says so; the model is then treated as text-only for the rest of the session.
+
+A side vision model can describe pictures for a model that cannot read them. Set `vision` in the [settings](settings.md) — the `base_url` and `model` of an OpenAI-compatible chat/completions endpoint, with the key in `credentials.json` under `api_key_ref` (default `vision_key`) — or give the same three parts as `CIRCLE_VISION_BASE_URL`, `CIRCLE_VISION_MODEL` and `CIRCLE_VISION_KEY`. Then `read_file` on a picture returns its description, the `screenshot` and `browser_screenshot` tools take a picture, save it and describe it, and the model can ask its own question about one with the `vision` tool. Without one, the model is told honestly that it cannot look, and a screenshot is not taken.
 
 A conversation can collect many pictures. Once a request would carry more than 8 images or PDFs, or more than 16 MB of their encoded data (about 12 MB of files), the older ones are left out of the requests until only the newest 3 remain (fewer when those are large; the newest message keeps all of its own), and the model is told which were left out. The conversation keeps them all.
 
@@ -73,11 +75,11 @@ To change or drop a waiting message, take it back into the input box. `↑` in a
 
 Three modes change what Circle is allowed to do. The current one is shown in the bottom-right corner of the input box. Normal mode (`manual`, asking before each change and command) shows nothing.
 
-| Mode | Turn on | What it does |
-|---|---|---|
-| `accept edits` | `/mode accept-edits` | Circle changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask. |
-| `read-only` | `/plan` or `/mode plan` | Circle can read and search, and change only a file named `plan.md`. It cannot run commands or change other files. It writes its plan to `plan.md` for you to review. The model can turn it on itself, and asks you before it turns it off: you can answer that it should then accept edits. |
-| `auto` | `/yolo`, `/auto` or `/mode auto` | Circle stops asking. Every command and file change runs without a card. Use `/yolo off` to go back. |
+| Mode           | Turn on                          | What it does                                                                                                                                                                                                                                                                                |
+| -------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accept edits` | `/mode accept-edits`             | Circle changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask.                                                                                                                                                                    |
+| `read-only`    | `/plan` or `/mode plan`          | Circle can read and search, and change only a file named `plan.md`. It cannot run commands or change other files. It writes its plan to `plan.md` for you to review. The model can turn it on itself, and asks you before it turns it off: you can answer that it should then accept edits. |
+| `auto`         | `/yolo`, `/auto` or `/mode auto` | Circle stops asking. Every command and file change runs without a card. Use `/yolo off` to go back.                                                                                                                                                                                         |
 
 `shift+tab` moves to the next mode: manual, accept edits, read-only, auto, and back to manual. `/mode` with no argument does the same, and works while a turn runs; `/mode manual` goes back to asking. Leaving `read-only` returns to manual. Read [Security](security.md#auto-mode) before you use auto.
 
@@ -97,14 +99,14 @@ While `task` subagents run, a strip below the footer lists them. Press `↓` in 
 
 ## See more, or less
 
-| Key | Effect |
-|---|---|
-| `ctrl+o` | Expand or collapse tool output. Long output is folded by default: `… +15 lines · ctrl+o`. |
-| `ctrl+t` | Expand or collapse the model's thinking. |
-| `/thinking` | Hide or show thinking rows altogether. |
-| `alt+l` | Choose a model. `ctrl+l` redraws the screen. |
-| `pageup`, `pagedown`, `home`, `end` | Scroll the conversation when the prompt is empty. |
-| `ctrl+f` | Find text in the conversation; `enter` goes to the next match. |
+| Key                                 | Effect                                                                                    |
+| ----------------------------------- | ----------------------------------------------------------------------------------------- |
+| `ctrl+o`                            | Expand or collapse tool output. Long output is folded by default: `… +15 lines · ctrl+o`. |
+| `ctrl+t`                            | Expand or collapse the model's thinking.                                                  |
+| `/thinking`                         | Hide or show thinking rows altogether.                                                    |
+| `alt+l`                             | Choose a model. `ctrl+l` redraws the screen.                                              |
+| `pageup`, `pagedown`, `home`, `end` | Scroll the conversation when the prompt is empty.                                         |
+| `ctrl+f`                            | Find text in the conversation; `enter` goes to the next match.                            |
 
 ## Get text out
 

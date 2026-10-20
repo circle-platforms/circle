@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { basename, extname } from 'node:path';
+import {
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, extname, join } from 'node:path';
 import type { MediaAttachment, Message } from './types.js';
 import { isRecord } from './settings.js';
 import { fitPng, MAX_EDGE, MAX_PIXELS } from './image_fit.js';
@@ -107,6 +112,34 @@ export function attachmentFromBase64(
   if (item.data !== data) throw new Error('invalid attachment base64');
   validateAttachments([item]);
   return item;
+}
+const EXTENSION: Record<MediaAttachment['mime_type'], string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'application/pdf': '.pdf',
+};
+/**
+ * A picture written under `dir` once, named by its bytes, so a path can stand for it when
+ * the model in use cannot read it.
+ */
+export function saveMediaAttachment(
+  dir: string,
+  item: MediaAttachment,
+): string {
+  const folder = join(dir, 'images');
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const target = join(
+    folder,
+    item.sha256.slice(0, 16) + EXTENSION[item.mime_type],
+  );
+  if (!existsSync(target))
+    writeFileSync(target, Buffer.from(item.data, 'base64'), {
+      mode: 0o600,
+      flag: 'wx',
+    });
+  return target;
 }
 export async function readAttachment(
   path: string,

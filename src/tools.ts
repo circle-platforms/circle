@@ -45,6 +45,15 @@ export interface ToolHooks {
   compact?: (hint: string, context: ToolContext) => Promise<string>;
   /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
+  /**
+   * Describes image files with the run's side vision model; adds the `vision` tool and
+   * the picture descriptions of the tools above when set.
+   */
+  vision?: (
+    paths: string[],
+    question: string,
+    context: ToolContext,
+  ) => Promise<{ model: string; text: string }>;
 }
 const string = (args: Record<string, unknown>, ...keys: string[]): string => {
   for (const key of keys)
@@ -147,6 +156,17 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       if (mediaType(path)) {
         if (!context.emitAttachments)
           throw new Error('this caller does not accept media attachments');
+        // A model that cannot read pictures gets the side vision model's words for one
+        if (context.imageInput === false && hooks.vision) {
+          try {
+            const described = await hooks.vision([path], '', context);
+            return `${path} as the side vision model ${described.model} describes it:\n\n${described.text}`;
+          } catch (error) {
+            return `${path} is an image the model in use does not read, and the side vision model could not describe it: ${
+              error instanceof Error ? error.message : String(error)
+            }. The picture stays on disk.`;
+          }
+        }
         const { attachment, size } = await readMedia(path, context.signal);
         context.emitAttachments([attachment]);
         read.add(path);
@@ -551,29 +571,78 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           typeof args.app === 'string' && args.app.trim()
             ? args.app.trim()
             : undefined;
-        if (!context.emitAttachments)
-          throw new Error('this caller does not accept media attachments');
         const folder = join(sandbox.offloadRoot ?? tmpdir(), 'screenshots');
         mkdirSync(folder, { recursive: true, mode: 0o700 });
         const target = join(
           folder,
           new Date().toISOString().replace(/[:.]/g, '-') + '.png',
         );
-        // Nothing is taken for a model that could not look at it
-        if (context.imageInput === false)
-          throw new Error('the model in use does not read images');
+        // Nothing is taken for a model that could not look at it, unless the side vision
+        // model will describe what was taken
+        if (context.imageInput === false && !hooks.vision)
+          throw new Error(
+            'the model in use does not read images; no side vision model is configured (CIRCLE_VISION_BASE_URL, CIRCLE_VISION_KEY, CIRCLE_VISION_MODEL)',
+          );
+        const of = app ? `the front window of ${app}` : 'the main screen';
         const hint = await takeScreenshot({
           ...hooks.screenshot,
           app,
           target,
           signal: context.signal,
         });
+        if (context.imageInput === false) {
+          try {
+            const described = await hooks.vision!(
+              [target],
+              `This is a screenshot of ${of}. Describe the applications, windows and text a coding agent would care about.`,
+              context,
+            );
+            return `Screenshot of ${of} saved as ${target}.\nDescribed by the side vision model ${described.model}:\n${described.text}`;
+          } catch (error) {
+            return `Screenshot of ${of} saved as ${target}.\nThe side vision model could not describe it: ${
+              error instanceof Error ? error.message : String(error)
+            }`;
+          }
+        }
+        if (!context.emitAttachments)
+          throw new Error('this caller does not accept media attachments');
         const { attachment, size } = await readMedia(target, context.signal);
         context.emitAttachments([attachment]);
         return (
-          `Screenshot of ${app ? `the front window of ${app}` : 'the main screen'} (${size}), saved as ${target}.` +
+          `Screenshot of ${of} (${size}), saved as ${target}.` +
           (hint ? `\n${hint}` : '')
         );
+      },
+    );
+  if (hooks.vision)
+    add(
+      'vision',
+      'read',
+      schema(
+        {
+          path: text('Path to the picture to describe'),
+          question: text(
+            'What to look for and report; the side vision model answers only this',
+          ),
+        },
+        ['path'],
+      ),
+      async (args, context) => {
+        const path = sandbox.resolvePath(
+          string(args, 'path', 'file_path', 'filePath'),
+        );
+        sandbox.checkCredentialPath(path);
+        const type = mediaType(path);
+        if (!type) throw new Error('not a picture file');
+        if (type === 'application/pdf')
+          throw new Error('the vision model reads pictures, not PDFs');
+        if (!statSync(path).isFile()) throw new Error(`no such file: ${path}`);
+        const described = await hooks.vision!(
+          [path],
+          typeof args.question === 'string' ? args.question : '',
+          context,
+        );
+        return `${path} as the side vision model ${described.model} describes it:\n\n${described.text}`;
       },
     );
   add(

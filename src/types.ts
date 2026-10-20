@@ -139,6 +139,14 @@ export interface ToolContext {
   emitAttachments?: (attachments: MediaAttachment[]) => void;
   /** Whether the model in use reads images: false when it is known not to. */
   imageInput?: boolean;
+  /**
+   * Describes image files with the run's configured side vision model; undefined when
+   * none is configured.
+   */
+  vision?: (
+    paths: string[],
+    question: string,
+  ) => Promise<{ model: string; text: string }>;
   /** Bound to this harness's model and connection, including child harnesses. */
   webSearch?: (query: string, numResults: number) => Promise<string>;
   recordModelCall?: (call: ToolModelCall) => void;

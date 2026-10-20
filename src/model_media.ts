@@ -24,6 +24,27 @@ export function checkRequestMedia(messages: Message[]): void {
       'media in this request exceeds 28 MiB of encoded data; compact the conversation or use smaller files',
     );
 }
+/**
+ * History keeps the pictures a prompt came with; a model that does not read images gets
+ * their names in the message instead, on every request, not only the first.
+ */
+export function leaveOutImages(
+  messages: Message[],
+  leaveOut: boolean,
+): Message[] {
+  if (!leaveOut) return messages;
+  return messages.map((message) => {
+    const images =
+      message.attachments?.filter((item) => item.kind === 'image') ?? [];
+    if (!images.length) return message;
+    const rest = message.attachments!.filter((item) => item.kind !== 'image');
+    return {
+      ...message,
+      attachments: rest.length ? rest : undefined,
+      content: `${message.content}\n\n[${images.map((item) => item.filename).join(', ')} left out: the model in use does not read images. The picture stays at its path.]`,
+    };
+  });
+}
 export function openAIContent(
   text: string,
   attachments: MediaAttachment[] = [],

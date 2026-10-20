@@ -39,9 +39,10 @@ import {
   supportsThinkingDisplay,
 } from './model_profiles.js';
 import { priceCall } from './pricing.js';
-import { isNetworkFailure, networkError } from './net.js';
+import { isNetworkFailure, networkError, networkErrorReason } from './net.js';
 import {
   checkRequestMedia,
+  leaveOutImages,
   openAIContent,
   anthropicContent,
 } from './model_media.js';
@@ -185,9 +186,18 @@ export class GatewayModel implements ChatModel {
     );
   }
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    request = { ...request, messages: orderModeToolResults(request.messages) };
+    request = {
+      ...request,
+      messages: leaveOutImages(
+        orderModeToolResults(request.messages),
+        this.imageInput === false,
+      ),
+    };
     checkRequestMedia(request.messages);
     let response: ModelResponse;
+    const hadImages = request.messages.some((message) =>
+      (message.attachments ?? []).some((item) => item.kind === 'image'),
+    );
     try {
       response = await this.guard.execute(request, (current) =>
         this.anthropic
@@ -195,7 +205,27 @@ export class GatewayModel implements ChatModel {
           : this.completeOpenAI(current),
       );
     } catch (error) {
-      if (request.signal.aborted || !isNetworkFailure(error)) throw error;
+      if (request.signal.aborted) throw error;
+      // A model Circle does not know may not read images; the endpoint says so as a 400
+      // the field-dropping guard cannot fix, so say which part of the request that was
+      const status =
+        (error as { status?: number; statusCode?: number }).status ??
+        (error as { status?: number; statusCode?: number }).statusCode;
+      if (
+        hadImages &&
+        this.imageInput === undefined &&
+        [400, 415, 422].includes(Number(status)) &&
+        /image|vision|multimodal|modalit|content_part|unsupported (type|part|media)|media type/i.test(
+          networkErrorReason(error),
+        )
+      ) {
+        this.catalog.reportUnknownImage(this.model);
+        throw new Error(
+          `the endpoint rejected the request with pictures (${status}); it seems ${this.model} does not read images. Set "models": {"${this.model}": {"images": false}} in settings.json to send their paths only, or /models lists what this endpoint offers.`,
+          { cause: error },
+        );
+      }
+      if (!isNetworkFailure(error)) throw error;
       throw networkError(error, this.settings.auth.base_url);
     }
     response.message.cost = priceCall(

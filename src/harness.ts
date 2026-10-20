@@ -142,6 +142,17 @@ export interface HarnessOptions {
     numResults: number,
     context: ToolContext,
   ) => Promise<string>;
+  /**
+   * Describes image files with the run's configured side vision model, for tools whose
+   * pictures the model in use cannot read; undefined when none is configured.
+   */
+  vision?: (
+    paths: string[],
+    question: string,
+    context: ToolContext,
+  ) => Promise<{ model: string; text: string }>;
+  /** Writes a picture the model cannot read under the run's project data, returning its path. */
+  saveImageAttachment?: (item: MediaAttachment) => string;
   toolBoundary?: (
     tool: Tool,
     args: Record<string, unknown>,
@@ -622,6 +633,7 @@ export class Harness {
       (path) => this.promptFileAllowed(path),
       this.model.imageInput !== false,
       given,
+      this.options.saveImageAttachment,
     );
     if (leftOut)
       this.bus.emit('info', {
@@ -630,6 +642,7 @@ export class Harness {
             event: 'images_left_out',
             model: this.model.model,
             count: leftOut,
+            ...(this.options.saveImageAttachment ? { saved: true } : {}),
           },
         },
       });
@@ -1586,6 +1599,12 @@ export class Harness {
           ? {
               webSearch: (query: string, numResults: number) =>
                 this.options.webSearch!(callModel, query, numResults, context),
+            }
+          : {}),
+        ...(this.options.vision
+          ? {
+              vision: (paths: string[], question: string) =>
+                this.options.vision!(paths, question, context),
             }
           : {}),
         recordModelCall: (record) => {

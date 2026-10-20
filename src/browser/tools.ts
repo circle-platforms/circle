@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { loadToolPrompt } from '../system_prompt.js';
 import { fitMedia } from '../media.js';
 import type { Effect, Message, Tool, ToolContext } from '../types.js';
@@ -169,6 +170,11 @@ export interface BrowserToolOptions {
    * credential file or a job's output. Without it only full paths are taken.
    */
   writable?: (path: string) => string;
+  /**
+   * Names the file a screenshot for a model that cannot read images is saved as. Without
+   * it such a screenshot lands in the system's temporary folder.
+   */
+  screenshotTarget?: () => string;
   /** A conversation's stored messages, which `browser_record` writes a script from. */
   history?: (sessionId: string) => Message[];
   /** Reuse the runtime's versioned file writer without a second tool call. */
@@ -203,9 +209,11 @@ export function browserToolsWanted(messages: Message[], prompt = ''): boolean {
  * What the tools take of a runtime: paths as the file tools take them, its stored
  * conversations, its variables and its secrets. `runtime` is read when a tool runs.
  */
-export function runtimeBrowserOptions(
-  runtime: () => AgentRuntime,
-): Required<Omit<BrowserToolOptions, 'confirm'>> {
+export function runtimeBrowserOptions(runtime: () => AgentRuntime): Required<
+  Omit<BrowserToolOptions, 'confirm' | 'screenshotTarget'>
+> & {
+  screenshotTarget: () => string;
+} {
   return {
     files: (path) => {
       const full = runtime().sandbox.resolvePath(path);
@@ -217,6 +225,12 @@ export function runtimeBrowserOptions(
       runtime().sandbox.checkMutablePath(full);
       return full;
     },
+    screenshotTarget: () =>
+      join(
+        runtime().sandbox.offloadRoot ?? tmpdir(),
+        'screenshots',
+        new Date().toISOString().replace(/[:.]/g, '-') + '-browser.png',
+      ),
     history: (sessionId) => runtime().store.messages(sessionId),
     prepareWrite: async (path, content, context) =>
       runtime()
@@ -430,13 +444,44 @@ export function browserTools(
       additionalProperties: false,
     },
     async run(args, context) {
-      // Nothing is taken for a model that could not look at it
-      if (action === 'screenshot' && context.imageInput === false)
+      // Nothing is taken for a model that could not look at it, unless the side vision
+      // model will describe what was taken
+      if (
+        action === 'screenshot' &&
+        context.imageInput === false &&
+        !context.vision
+      )
         throw Error(
           'the model in use does not read images; use browser_snapshot',
         );
       const result = await perform(action, args, context);
       if (!result.image) return result.text;
+      // The page's picture is saved and described: the model in use cannot look at it
+      if (context.imageInput === false) {
+        const target = options.screenshotTarget
+          ? options.screenshotTarget()
+          : join(
+              tmpdir(),
+              'circle-browser-' +
+                new Date().toISOString().replace(/[:.]/g, '-') +
+                '.png',
+            );
+        mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+        writeFileSync(target, Buffer.from(result.image, 'base64'), {
+          mode: 0o600,
+        });
+        try {
+          const described = await context.vision!(
+            [target],
+            'This is a screenshot of a web page. Describe the page a coding agent sees: its purpose, its controls, and the text that matters.',
+          );
+          return `${result.text}\nThe picture is saved as ${target}.\nDescribed by the side vision model ${described.model}:\n${described.text}`;
+        } catch (error) {
+          return `${result.text}\nThe picture is saved as ${target}.\nThe side vision model could not describe it: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+        }
+      }
       if (!context.emitAttachments)
         throw Error('this caller does not accept media attachments');
       const { attachment, size } = fitMedia(
