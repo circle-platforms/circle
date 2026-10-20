@@ -19,8 +19,9 @@ import {
   stripAnsi,
 } from '../src/ink/string_width.js';
 import type { Picker } from '../src/ink/components/picker.js';
+import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
 import { SessionApp } from '../src/tui/session_app.js';
-import { renderScreen } from '../src/tui/render.js';
+import { renderScreen, transcriptRows } from '../src/tui/render.js';
 import {
   parseSlash,
   closeMatch,
@@ -1695,4 +1696,119 @@ test('the terminal asks for files a page would get or gave, and for passing a ce
   await key('enter');
   await handoff;
   assert.equal(handed, true);
+});
+
+function descriptionColumn(line: string): number | undefined {
+  const match = line.match(/^(.*\S)( {2,})(\S.*)$/);
+  if (!match) return undefined;
+  return stringWidth(match[1]!) + match[2]!.length;
+}
+
+test('/help, /hotkeys and /hub help hang continuations under the description column at 80 columns', async (t) => {
+  const saved = {
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LANGUAGE: process.env.LANGUAGE,
+  };
+  const savedColumns = process.stdout.columns;
+  process.env.LANG = 'zh_CN.UTF-8';
+  delete process.env.LC_ALL;
+  delete process.env.LANGUAGE;
+  Object.defineProperty(process.stdout, 'columns', {
+    configurable: true,
+    value: 80,
+  });
+  try {
+    const { app, home, workspace } = await session(t, []);
+    const shown = async (command: string): Promise<string[]> => {
+      await app.submit(command);
+      return transcriptRows(app.state, 80).map((row) =>
+        stripAnsi(row).replace(/ +$/, ''),
+      );
+    };
+    const help = await shown('/help');
+    const helpRow = help.find((row) => row.includes('/hooks'));
+    assert.ok(helpRow, help.join('\n'));
+    assert.match(helpRow, /^ {5}\//);
+    const helpWrap = help.findIndex((row) =>
+      row.includes('登录。不写用户时用已保存的'),
+    );
+    if (helpWrap >= 0) {
+      const column = descriptionColumn(help[helpWrap]!);
+      assert.ok(column && column > 5, help[helpWrap]);
+      const next = help[helpWrap + 1]!;
+      assert.equal(next.slice(0, column), ' '.repeat(column), next);
+      assert.notEqual(next[column], ' ');
+    }
+    const hotkeys = await shown('/hotkeys');
+    const labelColumn = (line: string, label: string): number => {
+      const at = line.indexOf(label);
+      assert.ok(at > 0, line);
+      const gap = line.slice(at + label.length).match(/^ */)?.[0].length ?? 0;
+      return stringWidth(line.slice(0, at + label.length)) + gap;
+    };
+    const list = hotkeys.find((row) => row.includes('在列表里'));
+    const drag = hotkeys.find((row) => row.includes('拖动鼠标'));
+    assert.ok(list && drag, hotkeys.join('\n'));
+    const hotkeyColumn = labelColumn(list, '在列表里');
+    assert.equal(labelColumn(drag, '拖动鼠标'), hotkeyColumn);
+    assert.match(list, /^ {5}/);
+    const hung = hotkeys.find(
+      (row, index) =>
+        index > 0 &&
+        row.startsWith(' '.repeat(hotkeyColumn)) &&
+        row[hotkeyColumn] !== ' ' &&
+        !row.includes('在列表里'),
+    );
+    assert.ok(hung, hotkeys.join('\n'));
+    const hubHost = await new ExtensionHost({
+      home,
+      workspace,
+      trusted: true,
+      bundledRoot: bundledExtensionsRoot(),
+      settings: { hub: { enabled: true } },
+    }).load();
+    cleanup(t, () => hubHost.close());
+    const hubLines: string[] = [];
+    await hubHost
+      .commands()
+      .get('hub')!
+      .handler('help', {
+        workspace,
+        toast: (text: string) => hubLines.push(text),
+        append: (text: string) => hubLines.push(text),
+        sendUserMessage: () => {},
+      });
+    app.state.notices = [hubLines.at(-1)!];
+    app.state.noticeAnchors = [''];
+    const hub = transcriptRows(app.state, 80).map((row) =>
+      stripAnsi(row).replace(/ +$/, ''),
+    );
+    const login = hub.findIndex((row) =>
+      row.includes('/hub login [url] [user]'),
+    );
+    assert.ok(login >= 0, hub.join('\n'));
+    const column = descriptionColumn(hub[login]!);
+    assert.ok(column && column > 3, hub[login]);
+    const next = hub[login + 1]!;
+    assert.equal(next.slice(0, column), ' '.repeat(column), next);
+    assert.match(next, /密码/);
+    const commands = hub.filter(
+      (row) =>
+        row.includes('/hub ') && (row.match(/^ */)?.[0].length ?? 0) < column,
+    );
+    assert.ok(commands.length > 1, hub.join('\n'));
+    assert.ok(
+      commands.every((row) => descriptionColumn(row) === column),
+      commands.join('\n'),
+    );
+  } finally {
+    for (const [name, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: savedColumns,
+    });
+  }
 });

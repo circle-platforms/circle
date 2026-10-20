@@ -1,7 +1,7 @@
 // The slash commands of the full-screen interface. SessionApp keeps /models, /login, /reload
 // and /editor, which use its own state, and routes every command through runCommand.
 import { randomUUID } from 'node:crypto';
-import { t, uiText } from '../locale.js';
+import { t, uiParen, uiText } from '../locale.js';
 import { networkSummary } from '../net.js';
 import {
   mkdirSync,
@@ -54,7 +54,8 @@ import { exportKind, toHtml } from '../session_export.js';
 import { discoverCustomCommands, expandCommandTemplate } from '../commands.js';
 import { discoverSkills, loadSkillBody } from '../skills.js';
 import { readPrompt } from '../system_prompt.js';
-import { BUILTIN_SLASH, hotkeysText, variableCopy } from './slash_commands.js';
+import { formatHotkeys } from './hotkeys_text.js';
+import { BUILTIN_SLASH, variableCopy } from './slash_commands.js';
 import { hubText } from '../hub_text.js';
 import type { ScreenSnapshot, UndoHistory } from './undo_history.js';
 import {
@@ -325,7 +326,7 @@ function help(host: CommandHost): void {
   const lines = [t('Available commands:'), ''];
   for (const command of BUILTIN_SLASH) {
     const alias = command.aliases?.length
-      ? ' (' + command.aliases.map((name) => '/' + name).join(', ') + ')'
+      ? ' ' + uiParen(command.aliases.map((name) => '/' + name).join(', '))
       : '';
     lines.push(
       aligned(`  /${command.name.padEnd(10)} `, t(command.description) + alias),
@@ -1470,7 +1471,7 @@ async function skill(host: CommandHost, args: string): Promise<void> {
             ...skills.map((skill) => {
               const description = uiText(skill.description);
               const source = skill.source_label
-                ? ` (${uiText(skill.source_label)})`
+                ? ` ${uiParen(uiText(skill.source_label))}`
                 : '';
               return aligned(
                 `  ${pad(skill.name, 20)} `,
@@ -2114,7 +2115,7 @@ const HANDLERS: Record<string, Handler> = {
   fork: (host, args) => tree(host, args, true),
   clone,
   help,
-  hotkeys: (host) => host.notice(hotkeysText()),
+  hotkeys: (host) => host.notice(formatHotkeys()),
   plan,
   yolo,
   mode,

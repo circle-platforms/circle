@@ -178,20 +178,28 @@ function translateHooks(text: string): string {
     .replace(/^hooks active/, '钩子已启用')
     .replace(/^project hooks need trust$/, '项目钩子需要先信任文件夹')
     .replace(/^project hooks changed$/, '项目钩子已更改，尚未加载')
-    .replaceAll(', project)', ', 项目)')
-    .replaceAll(', user)', ', 用户)')
-    .replaceAll(', skill:', ', 技能:')
+    .replace(/ \(([^),]+), project\)/g, '（$1，项目）')
+    .replace(/ \(([^),]+), user\)/g, '（$1，用户）')
+    .replace(/ \(([^),]+), skill:([^)]+)\)/g, '（$1，技能:$2）')
     .replace(/^hook /, '钩子 ');
 }
 
 const EFFORT_WORDS: Record<string, string> = {
-  minimal: '推理 最低',
-  low: '推理 低',
-  medium: '推理 中',
-  high: '推理 高',
-  xhigh: '推理 很高',
-  max: '推理 最大',
+  minimal: '推理：最低',
+  low: '推理：低',
+  medium: '推理：中',
+  high: '推理：高',
+  xhigh: '推理：很高',
+  max: '推理：最大',
 };
+
+/** Parentheses around a label. Chinese uses the full-width pair. */
+export function uiParen(
+  text: string,
+  locale: InterfaceLocale = interfaceLocale(),
+): string {
+  return locale === 'zh-CN' ? `（${text}）` : `(${text})`;
+}
 
 /** Header and welcome depth. English stays the level name; Chinese says 推理 plus the depth. */
 export function effortLabel(

@@ -78,7 +78,12 @@ import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
-import { HookRunner, loadHooks, type HookDefinition } from './hooks.js';
+import {
+  HookRunner,
+  loadHooks,
+  type HookChange,
+  type HookDefinition,
+} from './hooks.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -1296,7 +1301,7 @@ export class AgentRuntime {
   listHooks(): {
     hooks: { hook: HookDefinition; active: boolean }[];
     projectIgnored: boolean;
-    projectChanged: { file: string; digest: string }[];
+    projectChanged: HookChange[];
   } {
     const runner = this.ensureHooks();
     return {

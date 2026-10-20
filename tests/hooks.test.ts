@@ -236,6 +236,14 @@ test('a changed project hooks file is not loaded until those bytes are approved'
   );
   assert.equal(unseen.projectChanged.length, 1);
   assert.equal(unseen.projectChanged[0]?.file, file);
+  assert.deepEqual(unseen.projectChanged[0]?.hooks, [
+    {
+      name: 'first',
+      event: 'before_tool',
+      command: 'true',
+      mark: 'new',
+    },
+  ]);
   rememberHookFile(home, file, unseen.projectChanged[0]!.digest);
   const approved = loadHooks({ workspace, home, trusted: true, userHome });
   assert.deepEqual(
@@ -253,6 +261,32 @@ test('a changed project hooks file is not loaded until those bytes are approved'
   );
   assert.equal(edited.projectChanged.length, 1);
   assert.equal(edited.projectIgnored, false);
+  assert.equal(edited.projectChanged[0]?.hooks[0]?.mark, 'new');
+  writeJson(file, {
+    hooks: {
+      before_tool: [
+        { name: 'first', command: 'true' },
+        { name: 'second', command: 'false' },
+      ],
+    },
+  });
+  rememberHookFile(home, file);
+  writeJson(file, {
+    hooks: {
+      before_tool: [
+        { name: 'first', command: 'echo changed' },
+        { name: 'second', command: 'false' },
+      ],
+    },
+  });
+  const compared = loadHooks({ workspace, home, trusted: true, userHome });
+  assert.deepEqual(
+    compared.projectChanged[0]?.hooks.map((hook) => [hook.name, hook.mark]),
+    [
+      ['first', 'changed'],
+      ['second', 'unchanged'],
+    ],
+  );
 });
 
 test('a hook reads JSON on stdin and a deny, ask or allow is the strictest decision', async (t) => {

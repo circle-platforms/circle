@@ -111,7 +111,12 @@ test('Chinese and graphemes occupy terminal cells, and truncation preserves file
 });
 test('wrap breaks CJK anywhere and keeps ASCII runs and quoted spans whole', () => {
   assert.deepEqual(wrap('detail page', 8), ['detail', 'page']);
-  assert.deepEqual(wrap('中文中文', 6), ['中文中', '文']);
+  // A lone Han glyph is pulled back onto the previous break, so the last line is not one character.
+  assert.deepEqual(wrap('中文中文', 6), ['中文', '中文']);
+  assert.deepEqual(wrap('MCP 服务器', 8), ['MCP 服', '务器']);
+  assert.deepEqual(wrap('甲（乙丙丁', 4), ['甲', '（乙', '丙丁']);
+  assert.ok(!wrap('甲（乙丙丁', 4).some((line) => line.endsWith('（')));
+  assert.deepEqual(wrap('    密码在卡片上', 12), ['    密码在卡', '    片上']);
   assert.deepEqual(wrap('abc readers', 10), ['abc', 'readers']);
   assert.deepEqual(wrap('run hook191-command please', 16), [
     'run',

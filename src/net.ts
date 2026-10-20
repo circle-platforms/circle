@@ -10,7 +10,7 @@
 // replaces the store instead of adding to it.
 import http from 'node:http';
 import tls from 'node:tls';
-import { t } from './locale.js';
+import { interfaceLocale, t, uiParen } from './locale.js';
 import { createHash, X509Certificate } from 'node:crypto';
 import {
   existsSync,
@@ -69,10 +69,13 @@ export const currentNetworkStatus = (): NetworkStatus =>
   structuredClone(status);
 export function networkSummary(value = currentNetworkStatus()): string {
   const sources = value.sources
-    .map(
-      (source) =>
-        `${t(source.name)}${source.path ? ` (${source.path})` : ''}: ${source.certificates}`,
-    )
+    .map((source) => {
+      const name = t(source.name);
+      const path = source.path ? ` ${uiParen(source.path)}` : '';
+      return interfaceLocale() === 'zh-CN'
+        ? `${name}${path} ${source.certificates}`
+        : `${name}${path}: ${source.certificates}`;
+    })
     .join(', ');
   const proxyWhere = value.proxyFrom
     ? value.proxyHost

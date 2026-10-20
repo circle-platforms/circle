@@ -294,6 +294,7 @@ test('approval keys: a allows the kind of call for the session, esc and an empty
   assert.match(card, /a\.txt/);
   assert.match(card, /new file, 1 line/);
   assert.match(card, /\+ {2}1 {2}A/);
+  (s.app as any).dialogOpenedAt = 0;
   s.key('a');
   // the second write is covered by the rule: no second card
   await until(() => Boolean(s.app.state.dialog));
@@ -442,6 +443,7 @@ test('a card waits until typing has paused for a second, keys typed meanwhile st
   // the card has the frame; the draft is set aside, not lost
   assert.equal(s.app.state.draft, '');
   assert.doesNotMatch(s.screen(), /helnylo|helny▏lo/);
+  (s.app as any).dialogOpenedAt = 0;
   s.key('y');
   await run;
   assert.equal(readFileSync(join(s.root, 'x.txt'), 'utf8'), 'X\n');
@@ -800,6 +802,7 @@ test('a background agent asks while the turn that started it is still running', 
   await until(() => shownDuringTurn);
   assert.equal(busyWhenShown, true);
   assert.match(s.app.state.dialog!.title, /^j\d+ general-purpose · /);
+  (s.app as any).dialogOpenedAt = 0;
   s.key('y');
   assert.equal((await run).answer, 'started');
   await until(() =>
@@ -824,6 +827,7 @@ test('a folded paste in the draft survives a card and reaches the model whole', 
   const run = s.runtime.harness.run('write it');
   await until(() => Boolean(s.app.state.dialog), 3000);
   assert.equal(s.app.state.draft, '');
+  (s.app as any).dialogOpenedAt = 0;
   s.key('y');
   await run;
   assert.equal(s.app.state.draft, '[Pasted text #1 +11 lines]');

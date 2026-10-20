@@ -31,7 +31,7 @@ import { SessionApp } from '../src/tui/session_app.js';
 import {
   helpText,
   hotkeysText,
-  HOTKEY_LINES,
+  HOTKEY_ROWS,
   BUILTIN_SLASH,
   variableCopy,
 } from '../src/tui/slash_commands.js';
@@ -74,8 +74,16 @@ test('every terminal interface sentence has Simplified Chinese', () => {
     for (const key of [copy.variables, copy.secrets])
       if (!Object.hasOwn(TUI_ZH, key)) missing.add(key);
   }
-  for (const line of HOTKEY_LINES)
-    if (!Object.hasOwn(TUI_ZH, line)) missing.add(line);
+  for (const row of HOTKEY_ROWS) {
+    if (!Object.hasOwn(TUI_ZH, row.text)) missing.add(row.text);
+    if (
+      ['in a list', 'down (empty)', 'mouse drag', 'mouse wheel'].includes(
+        row.key,
+      ) &&
+      !Object.hasOwn(TUI_ZH, row.key)
+    )
+      missing.add(row.key);
+  }
   for (const verb of BUSY_VERBS)
     if (!Object.hasOwn(TUI_ZH, verb)) missing.add(verb);
   assert.deepEqual([...missing].sort(), []);
@@ -119,7 +127,10 @@ test('the phrases on the screen change under zh-CN and keep commands and ids', (
     '2 个在 .circle/skills',
   );
   assert.equal(zh('New session circle-1'), '新会话 circle-1');
-  assert.match(zh('hooks active · 1 · lint (before_tool, project)'), /项目/);
+  assert.equal(
+    zh('hooks active · 1 · lint (before_tool, project)'),
+    '钩子已启用 · 1 · lint（before_tool，项目）',
+  );
   assert.equal(
     zh('Unknown command /modles · did you mean /models?'),
     '未知命令 /modles · 你是说 /models？',
@@ -385,6 +396,56 @@ test('enter while view-only keeps the draft and sends it only on the next enter'
   assert.equal(app.state.draft, 'later please');
   await app.submit('later please', 'later please');
   assert.ok(users().includes('later please'));
+});
+
+test('a startup card ignores letter shortcuts and does not send the typed keys', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const app = new SessionApp(workspace, home, defaultSettings());
+  const ui = app as unknown as {
+    screen: ScreenRenderer;
+    askChoice: (
+      title: string,
+      body: string,
+      options: string[],
+      signal?: AbortSignal,
+      startup?: boolean,
+    ) => Promise<string>;
+    dataListener: (data: string) => void;
+    handle: (event: { type: 'key'; key: string; char: string }) => void;
+    dialogOpenedAt: number;
+    dialogLettersLocked: boolean;
+    input: { close: () => void };
+    theme: { close: () => void };
+  };
+  ui.screen = new ScreenRenderer(() => {});
+  cleanup(t, () => {
+    ui.theme.close();
+    ui.input.close();
+  });
+  const pending = ui.askChoice(
+    'hooks',
+    "hooks.json\nThis project's hooks file changed.",
+    ['approve these hooks', 'skip'],
+    undefined,
+    true,
+  );
+  assert.equal(app.state.dialog?.title, 'hooks');
+  ui.dataListener('/hotkeys');
+  assert.equal(app.state.dialog?.title, 'hooks');
+  assert.equal(app.state.draft, '');
+  ui.dialogOpenedAt = 0;
+  ui.handle({ type: 'key', key: 'y', char: 'y' });
+  assert.equal(app.state.dialog?.title, 'hooks');
+  assert.equal(app.state.draft, '');
+  ui.handle({ type: 'key', key: '2', char: '2' });
+  assert.equal(await pending, 'skip');
+  const later = ui.askChoice('q', 'body', ['yes', 'no']);
+  ui.dialogOpenedAt = 0;
+  ui.dialogLettersLocked = false;
+  ui.dataListener('ys');
+  assert.equal(await later, 'yes');
+  assert.equal(app.state.draft, '');
 });
 
 test('--trust remembers the folder without a card', async (t) => {

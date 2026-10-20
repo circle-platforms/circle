@@ -362,93 +362,84 @@ export const TUI_ZH: Record<string, string> = {
   'Incomplete release': '发布不完整',
   'Run circle, or {bin}.': '运行 circle，或 {bin}。',
 
-  // hotkeys, whole lines so the key column stays put
-  '  enter           send; while busy, the model reads it after its current step':
-    '  enter           发送；忙时，模型在当前步骤之后再读',
-  '                  enter on an empty prompt: the model reads it now':
-    '                  空提示上按 enter：模型现在就读',
-  '  up              on an empty prompt, take back the last message not read yet':
-    '  up              空提示上，收回还没被读到的上一条',
-  '  ctrl+q          queue a follow-up: sent when the turn ends (also alt+enter)':
-    '  ctrl+q          把追加消息排队：回合结束时发送（alt+enter 也行）',
-  '  alt+up          take back messages the model has not read yet':
-    '  alt+up          收回模型还没读到的消息',
-  '  ctrl+v          paste the picture on the clipboard (also alt+v)':
-    '  ctrl+v          粘贴剪贴板上的图片（alt+v 也行）',
-  '  esc             stop the turn; with a draft, press again to clear (ctrl+y restores)':
-    '  esc             停止回合；有草稿时再按一次清空（ctrl+y 恢复）',
-  '  esc esc         clear a draft, or the session tree (/tree) when the box is empty':
-    '  esc esc         清空草稿；输入框空着时打开会话树（/tree）',
-  '  ctrl+c          abort turn; clear the prompt; on an empty prompt twice to exit':
-    '  ctrl+c          中止回合；清空提示；空提示上按两次退出',
-  '  ctrl+d          exit (with an empty prompt; otherwise delete forward)':
-    '  ctrl+d          退出（空提示时；否则向前删除）',
-  '  ctrl+z          suspend to the shell; fg comes back':
-    '  ctrl+z          挂起回到 shell；fg 回来',
-  '  ctrl+b          move a running command to the background (/jobs lists them)':
-    '  ctrl+b          把正在跑的命令放到后台（/jobs 列出它们）',
-  '  \\ enter         line break (also shift+enter, ctrl+j)':
-    '  \\ enter         换行（shift+enter、ctrl+j 也行）',
-  '  ctrl+t          expand/collapse thinking':
-    '  ctrl+t          展开或收起思考',
-  '  ctrl+o          expand/collapse tool output':
-    '  ctrl+o          展开或收起工具输出',
-  '  ctrl+r          reverse-i-search history':
-    '  ctrl+r          反向搜索历史',
-  '  ctrl+l          redraw the screen': '  ctrl+l          重画屏幕',
-  '  alt+l           choose a model (/models)':
-    '  alt+l           选择模型（/models）',
-  '  alt+s           switch sessions, including while an approval waits':
-    '  alt+s           切换会话，审批等待时也可以',
-  '  alt+m           next model, for this session':
-    '  alt+m           下一个模型，只对这个会话',
-  '  ctrl+p / ctrl+n earlier / next prompt (also up / down)':
-    '  ctrl+p / ctrl+n 上一条 / 下一条提示（up / down 也行）',
-  '  shift+tab       next session mode (manual, accept edits, read-only, auto)':
-    '  shift+tab       下一个会话模式（手动、自动接受编辑、只读、自动）',
-  '  alt+t           next thinking depth, for this session':
-    '  alt+t           下一个思考深度，只对这个会话',
-  '  ctrl+g          edit the draft in $VISUAL / $EDITOR (/editor)':
-    '  ctrl+g          用 $VISUAL / $EDITOR 编辑草稿（/editor）',
-  '  alt+c           copy the last answer (/copy)':
-    '  alt+c           复制上一条回答（/copy）',
-  '  alt+k           enter a secret a task left waiting':
-    '  alt+k           输入任务正在等的密钥',
-  '  ctrl+f          find in the conversation; enter next, esc closes':
-    '  ctrl+f          在对话里查找；enter 下一个，esc 关闭',
-  '  alt+left/right  move by word (also ctrl+left/right, alt+b / alt+f)':
-    '  alt+left/right  按词移动（ctrl+left/right、alt+b / alt+f 也行）',
-  '  ctrl+w          delete the word before the cursor (also alt+backspace)':
-    '  ctrl+w          删除光标前的一个词（alt+backspace 也行）',
-  '  alt+d           delete the word after the cursor':
-    '  alt+d           删除光标后的一个词',
-  '  ctrl+k / ctrl+u delete to the end / back to the start of the line; ctrl+y restores':
-    '  ctrl+k / ctrl+u 删到行尾 / 删回行首；ctrl+y 恢复',
-  '  in a list       alt+d saves a default · ctrl+k deletes or stops · ctrl+r renames':
-    '  在列表里       alt+d 保存默认 · ctrl+k 删除或停止 · ctrl+r 重命名',
-  '  up/down         prompt history; with an empty prompt and no more history,':
-    '  up/down         提示历史；空提示且没有更多历史时，',
-  '                  scroll the transcript': '                  滚动对话',
-  '  down (empty)    select a running subagent; up/down move, enter opens it':
-    '  空着按 down    选中正在跑的子代理；up/down 移动，enter 打开',
-  '  left/right      previous/next subagent on its detail page; esc goes back':
-    '  left/right      在详情页上一个/下一个子代理；esc 返回',
-  '  pageup/pagedown scroll transcript (or the detail page) when the prompt is empty':
-    '  pageup/pagedown 提示为空时滚动对话（或详情页）',
-  '  home/end        top / bottom of the transcript when the prompt is empty':
-    '  home/end        提示为空时到对话顶部 / 底部',
-  '  mouse drag      select and copy; dragging to the top or bottom edge scrolls':
-    '  拖动鼠标      选择并复制；拖到上沿或下沿会滚动',
-  '  tab             complete a /command or an @path':
-    '  tab             补全 /命令 或 @路径',
-  '  ?               this list (with an empty prompt)':
-    '  ?               这个列表（空提示时）',
-  '  /               slash commands (/help)':
-    '  /               斜杠命令（/help）',
-  '  1-9, up/down    answer a permission or question card; enter confirms, esc rejects,':
-    '  1-9, up/down    回答审批或提问卡；enter 确认，esc 拒绝，',
-  '                  y / a / n also work on permission cards':
-    '                  审批卡上 y / a / n 也可以',
-  '  mouse wheel     over the plan box scrolls it; elsewhere it scrolls the transcript':
-    '  鼠标滚轮     在计划框上滚动计划；别处滚动对话',
+  // hotkey labels and descriptions; the column is padded by display width
+  'in a list': '在列表里',
+  'down (empty)': '空着按 down',
+  'mouse drag': '拖动鼠标',
+  'mouse wheel': '鼠标滚轮',
+  'send; while busy, the model reads it after its current step':
+    '发送；忙时，模型在当前步骤之后再读',
+  'enter on an empty prompt: the model reads it now':
+    '空提示上按 enter：模型现在就读',
+  'on an empty prompt, take back the last message not read yet':
+    '空提示上，收回还没被读到的上一条',
+  'queue a follow-up: sent when the turn ends (also alt+enter)':
+    '把追加消息排队：回合结束时发送（alt+enter 也行）',
+  'take back messages the model has not read yet': '收回模型还没读到的消息',
+  'paste the picture on the clipboard (also alt+v)':
+    '粘贴剪贴板上的图片（alt+v 也行）',
+  'stop the turn; with a draft, press again to clear (ctrl+y restores)':
+    '停止回合；有草稿时再按一次清空（ctrl+y 恢复）',
+  'clear a draft, or the session tree (/tree) when the box is empty':
+    '清空草稿；输入框空着时打开会话树（/tree）',
+  'abort turn; clear the prompt; on an empty prompt twice to exit':
+    '中止回合；清空提示；空提示上按两次退出',
+  'exit (with an empty prompt; otherwise delete forward)':
+    '退出（空提示时；否则向前删除）',
+  'suspend to the shell; fg comes back': '挂起回到 shell；fg 回来',
+  'move a running command to the background (/jobs lists them)':
+    '把正在跑的命令放到后台（/jobs 列出它们）',
+  'line break (also shift+enter, ctrl+j)': '换行（shift+enter、ctrl+j 也行）',
+  'expand/collapse thinking': '展开或收起思考',
+  'expand/collapse tool output': '展开或收起工具输出',
+  'reverse-i-search history': '反向搜索历史',
+  'redraw the screen': '重画屏幕',
+  'choose a model (/models)': '选择模型（/models）',
+  'switch sessions, including while an approval waits':
+    '切换会话，审批等待时也可以',
+  'next model, for this session': '下一个模型，只对这个会话',
+  'earlier / next prompt (also up / down)':
+    '上一条 / 下一条提示（up / down 也行）',
+  'next session mode (manual, accept edits, read-only, auto)':
+    '下一个会话模式（手动、自动接受编辑、只读、自动）',
+  'next thinking depth, for this session': '下一个思考深度，只对这个会话',
+  'edit the draft in $VISUAL / $EDITOR (/editor)':
+    '用 $VISUAL / $EDITOR 编辑草稿（/editor）',
+  'copy the last answer (/copy)': '复制上一条回答（/copy）',
+  'enter a secret a task left waiting': '输入任务正在等的密钥',
+  'find in the conversation; enter next, esc closes':
+    '在对话里查找；enter 下一个，esc 关闭',
+  'move by word (also ctrl+left/right, alt+b / alt+f)':
+    '按词移动（ctrl+left/right、alt+b / alt+f 也行）',
+  'delete the word before the cursor (also alt+backspace)':
+    '删除光标前的一个词（alt+backspace 也行）',
+  'delete the word after the cursor': '删除光标后的一个词',
+  'delete to the end / back to the start of the line; ctrl+y restores':
+    '删到行尾 / 删回行首；ctrl+y 恢复',
+  'alt+d saves a default · ctrl+k deletes or stops · ctrl+r renames':
+    'alt+d 保存默认 · ctrl+k 删除或停止 · ctrl+r 重命名',
+  'prompt history; with an empty prompt and no more history,':
+    '提示历史；空提示且没有更多历史时，',
+  'scroll the transcript': '滚动对话',
+  'select a running subagent; up/down move, enter opens it':
+    '选中正在跑的子代理；up/down 移动，enter 打开',
+  'previous/next subagent on its detail page; esc goes back':
+    '在详情页上一个/下一个子代理；esc 返回',
+  'scroll transcript (or the detail page) when the prompt is empty':
+    '提示为空时滚动对话（或详情页）',
+  'top / bottom of the transcript when the prompt is empty':
+    '提示为空时到对话顶部 / 底部',
+  'select and copy; dragging to the top or bottom edge scrolls':
+    '选择并复制；拖到上沿或下沿会滚动',
+  'complete a /command or an @path': '补全 /命令 或 @路径',
+  'this list (with an empty prompt)': '这个列表（空提示时）',
+  'slash commands (/help)': '斜杠命令（/help）',
+  'answer a permission or question card; enter confirms, esc rejects,':
+    '回答审批或提问卡；enter 确认，esc 拒绝，',
+  'y / a / n also work on permission cards': '审批卡上 y / a / n 也可以',
+  'over the plan box scrolls it; elsewhere it scrolls the transcript':
+    '在计划框上滚动计划；别处滚动对话',
+  'new hook': '新的',
+  'changed hook': '已更改',
+  'unchanged hook': '未改',
 };

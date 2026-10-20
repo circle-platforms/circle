@@ -172,25 +172,123 @@ function layout(parts: Atom[], first: number, rest: number): string[] {
   return lines;
 }
 
+// Opening marks stay with the next glyph. Closing marks stay with the previous one.
+const OPEN_PUNCT = new Set([
+  '（',
+  '【',
+  '「',
+  '『',
+  '《',
+  '〈',
+  '〖',
+  '〔',
+  '｛',
+]);
+const CLOSE_PUNCT = new Set([
+  '）',
+  '】',
+  '」',
+  '』',
+  '》',
+  '〉',
+  '〗',
+  '〕',
+  '｝',
+  '、',
+  '。',
+  '，',
+  '．',
+  '！',
+  '？',
+  '：',
+  '；',
+]);
+
+function isHan(glyph: string): boolean {
+  return /\p{Script=Han}/u.test(glyph);
+}
+
 /**
- * Wrap `text` to `width` columns. Later lines are indented by `hang` columns,
- * so a list can continue under its text instead of at the left edge. CJK breaks
- * anywhere. An ASCII run, and a quoted span (`"…"`, `'…'`, `「…」`, `“…"`), stays
- * whole unless it is wider than the line.
+ * A line does not end on an opening mark or begin on a closing one, and a single
+ * Han glyph is not left on a line of its own when the previous line can spare one.
+ */
+function kinsoku(lines: string[], first: number, rest: number): string[] {
+  const rows = lines.map((line) => glyphsOf(line));
+  const room = (index: number): number => (index === 0 ? first : rest);
+  for (let pass = 0; pass < rows.length + 2; pass++) {
+    let changed = false;
+    for (let i = 0; i < rows.length - 1; i++) {
+      const line = rows[i]!;
+      const last = line[line.length - 1];
+      if (last && OPEN_PUNCT.has(last) && line.length > 1) {
+        line.pop();
+        rows[i + 1]!.unshift(last);
+        changed = true;
+      }
+    }
+    for (let i = 1; i < rows.length; i++) {
+      const line = rows[i]!;
+      const glyph = line[0];
+      if (glyph && CLOSE_PUNCT.has(glyph) && rows[i - 1]!.length) {
+        line.shift();
+        rows[i - 1]!.push(glyph);
+        changed = true;
+      }
+    }
+    for (let i = 1; i < rows.length; i++) {
+      const line = rows[i]!;
+      const prev = rows[i - 1]!;
+      if (line.length !== 1 || !isHan(line[0]!)) continue;
+      const steal = prev[prev.length - 1];
+      if (!steal || prev.length < 2) continue;
+      // A closing quote stays with the span it ends. The orphan stays instead.
+      if ('」』”’'.includes(steal)) continue;
+      if (!isHan(steal) && !CLOSE_PUNCT.has(steal) && !OPEN_PUNCT.has(steal))
+        continue;
+      if (stringWidth(steal + line[0]) > room(i)) continue;
+      prev.pop();
+      line.unshift(steal);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  const kept = rows.filter((line) => line.length);
+  return (kept.length ? kept : [[]]).map((line) => line.join(''));
+}
+
+/**
+ * Wrap `text` to `width` columns. A line's own indent is kept, and later lines of
+ * that paragraph are indented by at least `hang` columns, so a list continues
+ * under its text. CJK breaks anywhere except an orphaned Han glyph. An ASCII run,
+ * and a quoted span (`"…"`, `'…'`, `「…」`, `“…"`), stays whole unless it is wider
+ * than the line. Opening punctuation does not end a line, and closing punctuation
+ * does not start one.
  */
 export function wrapHang(text: string, width: number, hang = 0): string[] {
   const columns = Math.max(1, width);
   const indent = Math.min(Math.max(0, hang), Math.max(0, columns - 1));
-  const rest = Math.max(1, columns - indent);
-  const pad = ' '.repeat(indent);
   const result: string[] = [];
   for (const source of stripAnsi(text).replace(/\t/g, '    ').split('\n')) {
-    const lines = layout(atoms(source, true), columns, rest);
-    result.push(
-      ...lines.map((line, index) =>
-        index === 0 || !indent ? line : pad + line,
-      ),
+    const lead = source.match(/^ */)?.[0].length ?? 0;
+    const body = source.slice(lead);
+    if (!body) {
+      result.push('');
+      continue;
+    }
+    const leadCols = Math.min(lead, Math.max(0, columns - 1));
+    const cont = Math.min(Math.max(leadCols, indent), Math.max(0, columns - 1));
+    const firstRoom = Math.max(1, columns - leadCols);
+    const restRoom = Math.max(1, columns - cont);
+    const laid = kinsoku(
+      layout(atoms(body, true), firstRoom, restRoom),
+      firstRoom,
+      restRoom,
     );
+    laid.forEach((line, index) => {
+      result.push(
+        (index === 0 ? ' '.repeat(leadCols) : ' '.repeat(cont)) + line,
+      );
+    });
   }
   return result;
 }

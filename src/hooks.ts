@@ -81,7 +81,20 @@ export interface LoadedHooks {
    * Project hook files that were not loaded because their bytes are not the
    * digest last approved for that path.
    */
-  projectChanged: { file: string; digest: string }[];
+  projectChanged: HookChange[];
+}
+
+export interface HookPreview {
+  name: string;
+  event: HookEvent;
+  command: string;
+  mark: 'new' | 'changed' | 'unchanged';
+}
+
+export interface HookChange {
+  file: string;
+  digest: string;
+  hooks: HookPreview[];
 }
 
 export interface HookOutcome {
@@ -478,21 +491,129 @@ function hookTrustPath(home: string): string {
   return join(home, 'hook-trust.json');
 }
 
-/** Approved project-hook digests, keyed by the file's canonical path. */
-export function readHookTrust(home: string): Record<string, string> {
+interface ApprovedHook {
+  name: string;
+  event: string;
+  command: string;
+}
+
+interface HookTrustEntry {
+  digest: string;
+  /** Missing when an older file stored only the digest. */
+  hooks?: ApprovedHook[];
+}
+
+function approvedHooks(value: unknown): ApprovedHook[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hooks: ApprovedHook[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      typeof item.name !== 'string' ||
+      typeof item.event !== 'string' ||
+      typeof item.command !== 'string'
+    )
+      continue;
+    hooks.push({
+      name: item.name,
+      event: item.event,
+      command: item.command,
+    });
+  }
+  return hooks;
+}
+
+function readHookTrustEntries(home: string): Record<string, HookTrustEntry> {
   try {
     const value: unknown = JSON.parse(
       readFileSync(hookTrustPath(home), 'utf8'),
     );
     if (!isRecord(value) || !isRecord(value.files)) return {};
-    const files: Record<string, string> = {};
-    for (const [path, digest] of Object.entries(value.files))
-      if (typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest))
-        files[path] = digest;
+    const files: Record<string, HookTrustEntry> = {};
+    for (const [path, stored] of Object.entries(value.files)) {
+      if (typeof stored === 'string' && /^[a-f0-9]{64}$/.test(stored))
+        files[path] = { digest: stored };
+      else if (
+        isRecord(stored) &&
+        typeof stored.digest === 'string' &&
+        /^[a-f0-9]{64}$/.test(stored.digest)
+      )
+        files[path] = {
+          digest: stored.digest,
+          hooks: approvedHooks(stored.hooks),
+        };
+    }
     return files;
   } catch {
     return {};
   }
+}
+
+/** Approved project-hook digests, keyed by the file's canonical path. */
+export function readHookTrust(home: string): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(readHookTrustEntries(home)).map(([path, entry]) => [
+      path,
+      entry.digest,
+    ]),
+  );
+}
+
+function writeHookTrust(
+  home: string,
+  entries: Record<string, HookTrustEntry>,
+): void {
+  const files: Record<string, unknown> = {};
+  for (const [path, entry] of Object.entries(entries))
+    files[path] =
+      entry.hooks === undefined
+        ? entry.digest
+        : { digest: entry.digest, hooks: entry.hooks };
+  writeFileSync(
+    hookTrustPath(home),
+    JSON.stringify({ version: 1, files }, null, 2) + '\n',
+    { mode: 0o600 },
+  );
+}
+
+function previewHooks(
+  file: string,
+  source: HookSource,
+  label: string,
+  previous: HookTrustEntry | undefined,
+  skill?: string,
+): HookPreview[] {
+  const read = readHookFile(file, source, label, skill);
+  const current = read.hooks.map((hook) => ({
+    name: hook.name,
+    event: hook.event,
+    command: hook.command,
+  }));
+  if (!previous) return current.map((hook) => ({ ...hook, mark: 'new' }));
+  if (!previous.hooks)
+    return current.map((hook) => ({ ...hook, mark: 'changed' }));
+  const used = new Set<number>();
+  return current.map((hook) => {
+    const exact = previous.hooks!.findIndex(
+      (item, index) =>
+        !used.has(index) &&
+        item.event === hook.event &&
+        item.name === hook.name &&
+        item.command === hook.command,
+    );
+    if (exact >= 0) {
+      used.add(exact);
+      return { ...hook, mark: 'unchanged' as const };
+    }
+    const sameName = previous.hooks!.findIndex(
+      (item, index) =>
+        !used.has(index) &&
+        item.event === hook.event &&
+        item.name === hook.name,
+    );
+    if (sameName >= 0) used.add(sameName);
+    return { ...hook, mark: sameName >= 0 ? 'changed' : 'new' };
+  });
 }
 
 /** Remember that these bytes of a project hooks file are approved. */
@@ -501,13 +622,17 @@ export function rememberHookFile(
   file: string,
   digest = hookFileDigest(file),
 ): void {
-  const files = readHookTrust(home);
-  files[canonicalPath(file)] = digest;
-  writeFileSync(
-    hookTrustPath(home),
-    JSON.stringify({ version: 1, files }, null, 2) + '\n',
-    { mode: 0o600 },
-  );
+  const entries = readHookTrustEntries(home);
+  const read = readHookFile(file, 'project', 'project');
+  entries[canonicalPath(file)] = {
+    digest,
+    hooks: read.hooks.map((hook) => ({
+      name: hook.name,
+      event: hook.event,
+      command: hook.command,
+    })),
+  };
+  writeHookTrust(home, entries);
 }
 
 export function loadHooks(options: {
@@ -518,8 +643,8 @@ export function loadHooks(options: {
 }): LoadedHooks {
   const hooks: HookDefinition[] = [];
   const errors: HookLoadError[] = [];
-  const approved = readHookTrust(options.home);
-  const projectChanged: { file: string; digest: string }[] = [];
+  const approved = readHookTrustEntries(options.home);
+  const projectChanged: HookChange[] = [];
   let projectIgnored = false;
   const take = (
     file: string,
@@ -545,8 +670,13 @@ export function loadHooks(options: {
       return;
     }
     const digest = hookFileDigest(file);
-    if (approved[canonicalPath(file)] !== digest) {
-      projectChanged.push({ file, digest });
+    const previous = approved[canonicalPath(file)];
+    if (previous?.digest !== digest) {
+      projectChanged.push({
+        file,
+        digest,
+        hooks: previewHooks(file, source, label, previous, skill),
+      });
       return;
     }
     take(file, source, label, skill);

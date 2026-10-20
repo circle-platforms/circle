@@ -24,7 +24,7 @@ import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
 import { ExtensionError } from './extension_error.js';
-import { interfaceLocale, t } from './locale.js';
+import { interfaceLocale, t, uiParen } from './locale.js';
 import {
   SecretPromptError,
   cancelRequest,
@@ -1091,7 +1091,7 @@ export class ExtensionHost {
           interfaceLocale() === 'zh-CN' && ext.descriptionZh
             ? ext.descriptionZh
             : ext.description;
-        return `${ext.name}${ext.version ? ' ' + ext.version : ''} (${t(ext.source)}) · ${state}${description ? '\n  ' + description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`;
+        return `${ext.name}${ext.version ? ' ' + ext.version : ''} ${uiParen(t(ext.source))} · ${state}${description ? '\n  ' + description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`;
       })
       .join('\n');
   }
