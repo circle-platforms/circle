@@ -305,6 +305,8 @@ test(
       wait(returned.opened),
       step('terminal_sessions', () => ({})),
       done,
+      // The give-back comes as a message of its own once that turn is done
+      done,
     ]);
     await f.call('set-mode', { mode: 'plan' });
     await f.call('prompt', { text: 'watch my terminal' });
@@ -341,30 +343,58 @@ test(
     const held = f.rows().find((row) => row.id === tab.session)!;
     assert.equal(held.state, 'held');
     assert.equal(held.held, 'attach');
-    // the person hands it back from the window
-    const back = await f.controller.terminalTabControl(
-      f.controller.snapshot().activeSessionId,
-      tab.session,
-      'return',
+    // the person hands it back from the window: it is Circle's again, to go on with
+    // the wait they cut short
+    let back: LocalTerminalRow[];
+    try {
+      back = await f.controller.terminalTabControl(
+        f.controller.snapshot().activeSessionId,
+        tab.session,
+        'return',
+      );
+    } finally {
+      returned.open();
+    }
+    assert.equal(
+      back.find((row) => row.id === tab.session)?.state,
+      'operating',
     );
-    assert.equal(back.find((row) => row.id === tab.session)?.state, 'idle');
-    returned.open();
-    // the next wait runs until the person closes the tab under it
+    // the next wait runs until the person closes the tab under it. The tab already
+    // reads as Circle's, so the wait is seen in the conversation.
     await until(
       () =>
-        f.rows().find((row) => row.id === tab.session)?.state === 'operating',
+        f.controller
+          .snapshot()
+          .sessions.find(
+            (row) => row.id === f.controller.snapshot().activeSessionId,
+          )!
+          .messages.filter((message) => message.tool?.name === 'terminal_wait')
+          .at(-1)?.tool?.status === 'running' && f.model.requests.length === 3,
       'Circle waits again',
     );
     // closing returns once the shell has exited; the turn may have gone on by then
     await f.terminal('close', { id: shell.id });
-    await until(() => f.model.requests.length === 5, 'the end of the turn');
+    await until(
+      () => f.model.requests.length === 6,
+      'the end of the turn and the give-back message',
+    );
     const [, , closed, listed] = toolResults(f.model);
     assert.equal(closed!.status, 'error');
     assert.match(
       closed!.content,
       /terminal 1 was closed while you waited; it is gone from terminal_sessions/,
     );
-    assert.equal(listed!.content.includes('local:'), false);
+    // An exited shell stays listed until its tab is closed in the row
+    assert.match(
+      listed!.content,
+      new RegExp(`- terminal 1 · local:${shell.id} · exited\\.`),
+    );
+    const told = f.model.requests.at(-1)!.messages.at(-1)!;
+    assert.equal(told.role, 'user');
+    assert.match(
+      told.content,
+      /The user gave terminal 1 back\. It is yours again\. You were waiting on it: call terminal_wait on terminal 1 now/,
+    );
     assert.deepEqual(f.rows(), []);
   },
 );
