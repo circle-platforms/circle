@@ -90,6 +90,32 @@ export function mixWithFloor(
   }
   return rgbToHex(hexToRgb(fg));
 }
+// `color` itself when it reads at `floor` on `bg` and every surface; otherwise mixed
+// toward black on a light background, or toward white on a dark one, 5% at a time,
+// until it does. mixWithFloor only lightens toward the background, so it cannot help
+// a colour that is too light to begin with.
+export function readableColor(
+  color: string,
+  bg: string,
+  floor: number,
+  surfaces: string[] = [],
+): string {
+  const away = relativeLuminance(bg) < 0.5 ? '#ffffff' : '#000000';
+  for (
+    let amount = 0;
+    amount < 1;
+    amount = Math.round((amount + 0.05) * 10000) / 10000
+  ) {
+    const candidate = mix(color, away, amount);
+    if (
+      [bg, ...surfaces].every(
+        (surface) => contrastRatio(candidate, surface) >= floor,
+      )
+    )
+      return candidate;
+  }
+  return away;
+}
 export function fgSgr(color: string): string {
   return `\x1b[38;2;${hexToRgb(color).join(';')}m`;
 }
@@ -187,7 +213,11 @@ export interface Palette {
   agent_bg: string;
   read_bg_hex: string;
   write_bg_hex: string;
-  /** The write green at label strength: readable on this background in both themes. */
+  /**
+   * The write green as text, such as a folder's trust: the green slot, darkened on a
+   * light background and lightened on a dark one as far as it takes to read at 4.5:1
+   * on the background and on every surface here.
+   */
   write_hex: string;
   think_bg_hex: string;
   agent_bg_hex: string;
@@ -243,10 +273,9 @@ export function buildPalette(
     agent_bg: bgSgr(tints.agent_bg),
     read_bg_hex: tints.read_bg,
     write_bg_hex: tints.write_bg,
-    write_hex: mixWithFloor(
+    write_hex: readableColor(
       rgbToHex(slots[2] ?? [60, 160, 90]),
       bg,
-      0.2,
       4.5,
       surfaces,
     ),
