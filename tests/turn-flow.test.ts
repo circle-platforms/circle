@@ -267,13 +267,11 @@ test('the cards of subagents running at the same time come one at a time while t
     ? ['alpha', 'beta']
     : ['beta', 'alpha'];
   assert.doesNotMatch(first, new RegExp(`${other}\\.txt`));
-  (s.app as any).dialogOpenedAt = 0;
   s.key('y');
   await until(() => existsSync(join(s.workspace, `${mine}.txt`)));
   await until(() => /Write needs your permission/.test(s.card()));
   assert.match(s.card(), new RegExp(`${other}\\.txt`));
   assert.equal(existsSync(join(s.workspace, `${other}.txt`)), false);
-  (s.app as any).dialogOpenedAt = 0;
   s.key('y');
   assert.equal((await run).answer, 'both written');
   assert.equal(readFileSync(join(s.workspace, `${other}.txt`), 'utf8'), other);
@@ -808,7 +806,7 @@ test('setup in the full-screen interface saves the URL that answered, and reques
   assert.deepEqual(app.state.dialog!.options, ['m-one']);
   key('enter');
   await until(() => app.state.dialog?.title === 'trust');
-  key('enter');
+  key('y');
   assert.equal(await done, true);
   assert.ok(seen.includes('GET /models') && seen.includes('GET /v1/models'));
   const saved = loadSettings(home);

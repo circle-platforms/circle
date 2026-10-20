@@ -153,6 +153,35 @@ test('wrap breaks CJK anywhere and keeps ASCII runs and quoted spans whole', () 
     shown.some((line) => line.trim() === '，不'),
     false,
   );
+  // English breaks at spaces only: an apostrophe is part of its word, a quote
+  // that is not closed does not hold the rest of the line, and a quoted span wider
+  // than what is left flows from where the line is.
+  assert.deepEqual(wrap("I don't know what", 12), ["I don't know", 'what']);
+  assert.deepEqual(wrap("Circle's settings live in the data folder", 30), [
+    "Circle's settings live in the",
+    'data folder',
+  ]);
+  assert.deepEqual(wrap("rock 'n' roll and the users' files", 12), [
+    "rock 'n'",
+    'roll and the',
+    "users' files",
+  ]);
+  assert.deepEqual(wrap("abc 'tis the season", 18), ["abc 'tis the", 'season']);
+  assert.deepEqual(wrap('he said "this one is long" and left', 20), [
+    'he said',
+    '"this one is long"',
+    'and left',
+  ]);
+  assert.deepEqual(wrap('he said "this one is long enough" and left', 20), [
+    'he said "this one is',
+    'long enough" and',
+    'left',
+  ]);
+  assert.deepEqual(wrap('it says "hi". then more', 12), [
+    'it says',
+    '"hi". then',
+    'more',
+  ]);
   const hung = hangingWrap('  /hub  ', 'revoke the token at the server', 24);
   assert.equal(hung[0]?.startsWith('  /hub  '), true);
   assert.ok(hung.length > 1);

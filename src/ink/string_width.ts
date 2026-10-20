@@ -44,42 +44,83 @@ interface Atom {
   gap: boolean;
 }
 
+const blank = (glyph: string | undefined): boolean =>
+  glyph === ' ' || glyph === '\t';
+const wide = (glyph: string | undefined): boolean =>
+  glyph !== undefined && stringWidth(glyph) > 1;
+const wordGlyph = (glyph: string | undefined): boolean =>
+  glyph !== undefined && /^[\p{L}\p{N}_]/u.test(glyph) && !wide(glyph);
+
+/**
+ * Where the quote that opens at `index` closes, or -1 when it does not open one.
+ * `「…」` and `“…”` need only their closer. A straight `'` or `"` opens only at the
+ * start of a word and closes at the end of one, so the apostrophe in `don't` or
+ * `Circle's` is part of its word.
+ */
+function quoteEnd(glyphs: string[], index: number): number {
+  const close = QUOTE_CLOSE[glyphs[index]!];
+  if (!close) return -1;
+  if (close !== glyphs[index]) {
+    const end = glyphs.indexOf(close, index + 1);
+    return end;
+  }
+  const before = glyphs[index - 1];
+  if (
+    (before !== undefined &&
+      !blank(before) &&
+      !wide(before) &&
+      !'([{<'.includes(before)) ||
+    glyphs[index + 1] === undefined ||
+    blank(glyphs[index + 1])
+  )
+    return -1;
+  for (let end = index + 2; end < glyphs.length; end++)
+    if (
+      glyphs[end] === close &&
+      !blank(glyphs[end - 1]) &&
+      !wordGlyph(glyphs[end + 1])
+    )
+      return end;
+  return -1;
+}
+
 // CJK and other wide glyphs are their own atoms, so a line can break between
-// them. An ASCII run, and a quoted span that fits, stays whole.
+// them. An ASCII run, and a quoted span that fits, stays whole. Atoms that touch
+// without a space and without a wide glyph between them are one word: a line
+// never breaks between `"hi"` and the `.` after it.
 function atoms(source: string, quotes: boolean): Atom[] {
   const glyphs = glyphsOf(source);
   const out: Atom[] = [];
+  const push = (text: string): void => {
+    const last = out[out.length - 1];
+    if (
+      last &&
+      !last.gap &&
+      !wide(glyphsOf(last.text).at(-1)) &&
+      !wide(glyphsOf(text)[0])
+    )
+      last.text += text;
+    else out.push({ text, gap: false });
+  };
   let index = 0;
   while (index < glyphs.length) {
     const glyph = glyphs[index]!;
-    if (glyph === ' ' || glyph === '\t') {
+    if (blank(glyph)) {
       let text = '';
-      while (
-        index < glyphs.length &&
-        (glyphs[index] === ' ' || glyphs[index] === '\t')
-      ) {
+      while (index < glyphs.length && blank(glyphs[index])) {
         text += glyphs[index] === '\t' ? '    ' : ' ';
         index++;
       }
       out.push({ text, gap: true });
       continue;
     }
-    const close = quotes ? QUOTE_CLOSE[glyph] : undefined;
-    if (close) {
-      let text = glyph;
-      index++;
-      while (index < glyphs.length && glyphs[index] !== close) {
-        text += glyphs[index];
-        index++;
-      }
-      if (index < glyphs.length) {
-        text += glyphs[index];
-        index++;
-      }
-      out.push({ text, gap: false });
+    const end = quotes ? quoteEnd(glyphs, index) : -1;
+    if (end > index) {
+      push(glyphs.slice(index, end + 1).join(''));
+      index = end + 1;
       continue;
     }
-    if (stringWidth(glyph) > 1) {
+    if (wide(glyph)) {
       out.push({ text: glyph, gap: false });
       index++;
       continue;
@@ -88,36 +129,17 @@ function atoms(source: string, quotes: boolean): Atom[] {
     while (index < glyphs.length) {
       const current = glyphs[index]!;
       if (
-        current === ' ' ||
-        current === '\t' ||
-        stringWidth(current) > 1 ||
-        (quotes && QUOTE_CLOSE[current])
+        blank(current) ||
+        wide(current) ||
+        (quotes && text && quoteEnd(glyphs, index) > index)
       )
         break;
       text += current;
       index++;
     }
-    out.push({ text, gap: false });
+    push(text);
   }
   return out;
-}
-
-function hardWrap(text: string, columns: number): string[] {
-  const lines: string[] = [];
-  let line = '';
-  let used = 0;
-  for (const glyph of glyphsOf(text)) {
-    const size = Math.max(stringWidth(glyph), 1);
-    if (line && used + size > columns) {
-      lines.push(line);
-      line = '';
-      used = 0;
-    }
-    line += glyph;
-    used += size;
-  }
-  if (line || !lines.length) lines.push(line);
-  return lines;
 }
 
 function layout(parts: Atom[], first: number, rest: number): string[] {
@@ -130,7 +152,9 @@ function layout(parts: Atom[], first: number, rest: number): string[] {
     line = '';
     used = 0;
   };
-  for (const part of parts) {
+  const queue = [...parts];
+  while (queue.length) {
+    const part = queue.shift()!;
     if (part.gap) {
       if (!line) continue;
       const size = stringWidth(part.text);
@@ -142,29 +166,24 @@ function layout(parts: Atom[], first: number, rest: number): string[] {
       continue;
     }
     const size = stringWidth(part.text);
-    if (line && used + size > limit()) commit();
-    const room = limit();
-    if (size > room) {
+    if (size > limit()) {
+      // Wider than a whole line. A quoted span flows like the words in it.
       const softer = atoms(part.text, false);
-      const splittable =
-        softer.length > 1 ||
-        (softer.length === 1 && softer[0]!.text !== part.text);
-      const chunks = splittable
-        ? layout(softer, room, rest)
-        : hardWrap(part.text, room);
-      for (let at = 0; at < chunks.length; at++) {
-        const chunk = chunks[at]!;
-        if (at < chunks.length - 1) {
-          if (line) commit();
-          lines.push(chunk);
-          continue;
-        }
-        if (line && used + stringWidth(chunk) > limit()) commit();
-        line += chunk;
-        used += stringWidth(chunk);
+      if (softer.length > 1) {
+        queue.unshift(...softer);
+        continue;
+      }
+      // One long word starts its own line and is cut where each line ends.
+      if (line) commit();
+      for (const glyph of glyphsOf(part.text)) {
+        const width = Math.max(stringWidth(glyph), 1);
+        if (line && used + width > limit()) commit();
+        line += glyph;
+        used += width;
       }
       continue;
     }
+    if (line && used + size > limit()) commit();
     line += part.text;
     used += size;
   }
@@ -303,10 +322,12 @@ function kinsoku(lines: string[], first: number, rest: number): string[] {
 /**
  * Wrap `text` to `width` columns. A line's own indent is kept, and later lines of
  * that paragraph are indented by at least `hang` columns, so a list continues
- * under its text. CJK breaks anywhere except an orphaned Han glyph. An ASCII run,
- * and a quoted span (`"…"`, `'…'`, `「…」`, `“…"`), stays whole unless it is wider
- * than the line. Opening punctuation does not end a line, and closing punctuation
- * does not start one.
+ * under its text. CJK breaks anywhere except an orphaned Han glyph. Other text
+ * breaks at spaces only. A word, and a quoted span (`"…"`, `'…'`, `「…」`, `“…”`),
+ * stays whole unless it is wider than the line; a span that is wider flows from
+ * where the line is. A straight quote opens a span only at the start of a word, so
+ * the apostrophe in `don't` is part of its word. Opening punctuation does not end a
+ * line, and closing punctuation does not start one.
  */
 export function wrapHang(text: string, width: number, hang = 0): string[] {
   const columns = Math.max(1, width);
