@@ -1296,11 +1296,13 @@ export class AgentRuntime {
   listHooks(): {
     hooks: { hook: HookDefinition; active: boolean }[];
     projectIgnored: boolean;
+    projectChanged: { file: string; digest: string }[];
   } {
     const runner = this.ensureHooks();
     return {
       hooks: runner.listing(),
       projectIgnored: runner.loaded.projectIgnored,
+      projectChanged: runner.loaded.projectChanged,
     };
   }
   /** Skills whose hooks are armed for the current session. */
@@ -1451,17 +1453,8 @@ export class AgentRuntime {
       );
   }
   private requireTurnConnection(): void {
-    try {
-      this.requireCurrentConnection();
-    } catch (error) {
-      this.bus.emit('run_error', {
-        payload: {
-          message: error instanceof Error ? error.message : String(error),
-          connection_changed: true,
-        },
-      });
-      throw error;
-    }
+    // The harness reports the failure once. Emitting here as well printed it twice.
+    this.requireCurrentConnection();
   }
   private gatewayModel(
     settings: CircleSettings,

@@ -1,7 +1,7 @@
 import { scratch, cleanup } from './helpers.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
 import {
@@ -89,4 +89,42 @@ test('/extensions enable developer names no extension and leaves the saved entry
     /No extension named developer/,
   );
   assert.deepEqual(loadSettings(home).extensions.developer, { enabled: true });
+});
+
+test('a leftover developer folder from an older install is not an extension', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  const bundled = join(root, 'bundled');
+  mkdirSync(workspace);
+  for (const folder of [
+    join(bundled, 'developer'),
+    join(home, 'extensions', 'developer'),
+  ]) {
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(
+      join(folder, 'extension.json'),
+      JSON.stringify({
+        version: '0.1.0',
+        description: 'Node debugging and the language service',
+      }),
+    );
+    writeFileSync(
+      join(folder, 'extension.mjs'),
+      'export function register() {}',
+    );
+  }
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundled,
+  }).load();
+  cleanup(t, () => host.close());
+  assert.equal(
+    host.extensions.some((ext) => ext.name === 'developer'),
+    false,
+  );
+  assert.doesNotMatch(host.describe(), /developer/);
+  assert.doesNotMatch(host.describe(), /Node debugging/);
 });

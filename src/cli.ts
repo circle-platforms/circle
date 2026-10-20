@@ -39,6 +39,7 @@ import { mention } from './mentions.js';
 import { EFFORT_LEVELS } from './model.js';
 import { installExitGuard } from './exit_guard.js';
 import { initializeNetwork } from './network_bootstrap.js';
+import { hangingWrap, pad, stringWidth } from './ink/string_width.js';
 import { t } from './locale.js';
 import { networkSummary } from './net.js';
 import { VERSION } from './version.js';
@@ -307,44 +308,56 @@ function conflict(
     return '-r opens a list to choose from; send the message once the session is open';
   return '';
 }
-export function helpText(): string {
-  return (
-    [
-      'usage: circle [options] [folder] [@file ...] [message ...]',
-      '',
-      'A terminal coding agent for your own model endpoint.',
-      '',
-      '  -p, --print [PROMPT]  Print the answer and exit',
-      '  --mode text|json|rpc  Output mode',
-      '  -c, --continue       Continue the last session',
-      '  -r, --resume         Choose a saved session',
-      '  --session ID         Resume by ID',
-      '  --session-id ID      Open or create this ID',
-      '  --fork ID            Copy a saved session',
-      '  --no-session         In-memory conversation',
-      '  -m, --model ID       Model for this run',
-      '  --thinking LEVEL     Thinking depth',
-      '  --list-models [TEXT] List endpoint models',
-      '  --export ID [OUT]    Export a saved session',
-      '  --system-prompt TEXT|FILE',
-      '  --append-system-prompt TEXT|FILE',
-      '  --no-context-files   Skip instruction files',
-      '  --tools LIST         Limit tools',
-      '  --exclude-tools LIST Exclude tools',
-      '  --no-tools           No tools except compaction',
-      '  --yolo               Auto mode for print or line',
-      '  --trust              Trust this folder and remember it',
-      '  --extensions         Load extensions and MCP servers in print, line or rpc mode',
-      '  --line               Plain line mode',
-      '  --init               Model setup',
-      "  --task [NAME]        Work in a folder of Circle's own for this task, under the task folder",
-      '  --print-home         Print the data directory',
-      '  -v, --version        Print version',
-      '  -h, --help           Show help',
-    ]
-      .map((line) => t(line))
-      .join('\n') + '\n'
-  );
+const HELP_ROWS: [string, string][] = [
+  ['-p, --print [PROMPT]', 'Print the answer and exit'],
+  ['--mode text|json|rpc', 'Output mode'],
+  ['-c, --continue', 'Continue the last session'],
+  ['-r, --resume', 'Choose a saved session'],
+  ['--session ID', 'Resume by ID'],
+  ['--session-id ID', 'Open or create this ID'],
+  ['--fork ID', 'Copy a saved session'],
+  ['--no-session', 'In-memory conversation'],
+  ['-m, --model ID', 'Model for this run'],
+  ['--thinking LEVEL', 'Thinking depth'],
+  ['--list-models [TEXT]', 'List endpoint models'],
+  ['--export ID [OUT]', 'Export a saved session'],
+  ['--system-prompt TEXT|FILE', 'Replace the system prompt'],
+  ['--append-system-prompt TEXT|FILE', 'Append to the system prompt'],
+  ['--no-context-files', 'Skip instruction files'],
+  ['--tools LIST', 'Limit tools'],
+  ['--exclude-tools LIST', 'Exclude tools'],
+  ['--no-tools', 'No tools except compaction'],
+  ['--yolo', 'Auto mode for print or line'],
+  ['--trust', 'Trust this folder and remember it'],
+  [
+    '--extensions',
+    'Load extensions and MCP servers in print, line or rpc mode',
+  ],
+  ['--line', 'Plain line mode'],
+  ['--init', 'Model setup'],
+  [
+    '--task [NAME]',
+    "Work in a folder of Circle's own for this task, under the task folder",
+  ],
+  ['--print-home', 'Print the data directory'],
+  ['-v, --version', 'Print version'],
+  ['-h, --help', 'Show help'],
+];
+export function helpText(width = process.stdout.columns || 80): string {
+  const columns = Math.max(40, width);
+  const flagWidth =
+    Math.max(...HELP_ROWS.map(([flag]) => stringWidth(flag))) + 2;
+  const lines = [
+    t('usage: circle [options] [folder] [@file ...] [message ...]'),
+    '',
+    t('A terminal coding agent for your own model endpoint.'),
+    '',
+  ];
+  for (const [flag, description] of HELP_ROWS) {
+    const prefix = '  ' + pad(flag, flagWidth);
+    lines.push(...hangingWrap(prefix, t(description), columns));
+  }
+  return lines.join('\n') + '\n';
 }
 // How long `-p PROMPT` waits for piped input to start before going on without it.
 const STDIN_WAIT_MS = 3000;
@@ -683,6 +696,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         ...runtimeOptions,
         settings,
         init: options.init,
+        trust: options.trust,
         pickSession: options.resume,
         prompts,
         shown,

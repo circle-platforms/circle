@@ -101,9 +101,8 @@ test('the hub footer and /hub follow a server that is down or a sign-in that exp
   const down = host.statuses().find((item) => item.extension === 'hub')!;
   assert.match(down.text, /cannot reach/);
   await command.handler('', context);
-  assert.match(lines.at(-1)!, /^○ /);
+  assert.match(lines.at(-1)!, /^● /);
   assert.match(lines.at(-1)!, /cannot reach/);
-  assert.equal(lines.at(-1)!.includes('●'), false);
 
   const again = createServer((request, response) => {
     const send = (status: number, value: unknown) => {
@@ -156,7 +155,6 @@ test('the hub footer and /hub follow a server that is down or a sign-in that exp
       ),
   );
   await command.handler('help', context);
-  assert.match(lines.at(-1)!, /^○ /);
+  assert.match(lines.at(-1)!, /^● /);
   assert.match(lines.at(-1)!, /sign-in expired/);
-  assert.equal(/^●/m.test(lines.at(-1)!), false);
 });

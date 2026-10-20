@@ -251,7 +251,20 @@ export function resultRows(
   if (job) return jobResultRows(job, bg, options);
   const error = result.status === 'error';
   const recoverable = error && Boolean(result.recoverable);
-  const output = uiText(terminalText(result.content));
+  const raw = terminalText(result.content);
+  const whole = uiText(raw);
+  const output =
+    whole !== raw
+      ? whole
+      : raw
+          .split('\n')
+          .map((line) =>
+            /^Exit code: -?\d+$/.test(line) ||
+            line.startsWith('The user rejected this tool call.')
+              ? uiText(line)
+              : line,
+          )
+          .join('\n');
   if (call.name === 'read_file' && !error && !options.expanded) {
     const window = readWindow(output);
     if (window)

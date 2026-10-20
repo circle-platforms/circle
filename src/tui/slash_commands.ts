@@ -81,8 +81,7 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   },
   {
     name: 'hooks',
-    description:
-      'List hooks: name, source, event, command and whether they run',
+    description: 'List hooks: name, source, event, command and trust',
   },
   {
     name: 'approvals',

@@ -11,7 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { ExtensionError } from '../../extension_error.js';
 import { hubLocaleChinese, hubText } from '../../hub_text.js';
-import { wrap } from '../../ink/string_width.js';
+import { hangingWrap, noticeColumns, pad } from '../../ink/string_width.js';
 import {
   existsSync,
   mkdirSync,
@@ -143,20 +143,11 @@ function usage(rows: [string, string][]): string {
   const width = Math.max(...rows.map(([command]) => command.length)) + 2;
   // The transcript wraps a notice at width-3. Pre-wrap here so a long
   // description continues under its own column instead of at column 0.
-  const columns =
-    typeof process !== 'undefined' && process.stdout?.columns
-      ? process.stdout.columns
-      : 80;
-  const room = Math.max(8, columns - 3 - width);
+  const room = noticeColumns();
   return rows
-    .map(([command, description]) => {
-      const lines = wrap(description, room);
-      return lines
-        .map((line, index) =>
-          index === 0 ? command.padEnd(width) + line : ' '.repeat(width) + line,
-        )
-        .join('\n');
-    })
+    .map(([command, description]) =>
+      hangingWrap(pad(command, width), description, room).join('\n'),
+    )
     .join('\n');
 }
 // Built when the line is shown, so a Chinese locale translates the descriptions
@@ -5401,7 +5392,6 @@ export async function register(api: ExtensionAPI): Promise<void> {
         url: string,
         config: Config | undefined,
       ): string => {
-        const live = signedIn && !expired && !down;
         const note = !signedIn
           ? hubText(' · not signed in')
           : expired
@@ -5409,7 +5399,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
             : down
               ? hubText(' · cannot reach')
               : '';
-        return `${live ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${
+        // The footer lamp is a filled ● whenever this window is signed in,
+        // including when the server cannot be reached or the sign-in expired.
+        return `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${
           config?.scopeId
             ? hubText(' · scope {id}', { id: config.scopeId })
             : ''

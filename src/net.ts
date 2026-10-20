@@ -71,7 +71,7 @@ export function networkSummary(value = currentNetworkStatus()): string {
   const sources = value.sources
     .map(
       (source) =>
-        `${source.name}${source.path ? ` (${source.path})` : ''}: ${source.certificates}`,
+        `${t(source.name)}${source.path ? ` (${source.path})` : ''}: ${source.certificates}`,
     )
     .join(', ');
   const proxyWhere = value.proxyFrom

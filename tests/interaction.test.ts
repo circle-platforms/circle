@@ -1025,7 +1025,7 @@ async function occupiedPair(
   return { owner, ...opened };
 }
 
-test('enter sends once the other terminal has released a view-only session', async (t) => {
+test('enter while view-only keeps the draft until enter after the session is writable', async (t) => {
   const { app, owner, runtime, ui } = await occupiedPair(t, [
     answer('continued'),
   ]);
@@ -1036,10 +1036,19 @@ test('enter sends once the other terminal has released a view-only session', asy
   owner.yieldLease();
   await app.submit('now it sends');
   assert.equal(runtime.viewOnly, false);
+  assert.equal(app.state.draft, 'now it sends');
   assert.ok(
     app.state.notices.includes('this session is writable again'),
     app.state.notices.join('\n'),
   );
+  assert.ok(app.state.notices.includes('view only, the draft stays'));
+  assert.equal(
+    runtime.harness.messages.some((message) =>
+      (message.content ?? '').includes('now it sends'),
+    ),
+    false,
+  );
+  await app.submit('now it sends');
   assert.ok(
     runtime.harness.messages.some((message) =>
       (message.content ?? '').includes('now it sends'),

@@ -30,7 +30,7 @@ test('interface locale follows LANG the same way a Chinese system does', () => {
 });
 
 test('a Chinese locale translates the session list, resume line, view only and search quota', () => {
-  assert.equal(uiText('view only', 'zh-CN'), '只读');
+  assert.equal(uiText('view only', 'zh-CN'), '仅查看');
   assert.equal(uiText('Sessions · this folder', 'zh-CN'), '会话 · 此文件夹');
   assert.equal(uiText('Sessions · every folder', 'zh-CN'), '会话 · 所有文件夹');
   assert.equal(
@@ -40,14 +40,23 @@ test('a Chinese locale translates the session list, resume line, view only and s
   assert.equal(uiText('↑ 6 more above', 'zh-CN'), '↑ 上方还有 6 个');
   assert.equal(
     uiText('this session is writable again', 'zh-CN'),
-    '此会话可以继续写入',
+    '另一端已关闭，可以继续对话了',
   );
   assert.equal(
     uiText(
       'Open in another terminal · view only · circle --fork circle-abc copies it here',
       'zh-CN',
     ),
-    '已在另一终端打开 · 只读 · circle --fork circle-abc 可复制到此处',
+    '已在另一终端打开 · 仅查看 · 用 circle --fork circle-abc 复制一份到这里继续',
+  );
+  assert.equal(
+    uiText('Allow "echo …" for this session', 'zh-CN'),
+    '本会话内允许“echo …”',
+  );
+  assert.equal(uiText('Exit code: 0', 'zh-CN'), '退出码 0');
+  assert.equal(
+    uiText('The user rejected this tool call. The user said: no', 'zh-CN'),
+    '已拒绝 · 你说：no',
   );
   assert.equal(
     uiText('Native search unavailable: search quota exceeded', 'zh-CN'),
@@ -152,12 +161,12 @@ test('a Chinese locale translates the session list, resume line, view only and s
     } as ScreenState;
     const transcript = stripAnsi(transcriptRows(screen, 80).join('\n'));
     assert.match(transcript, /已恢复 circle-abc · title/);
-    assert.match(transcript, /已在另一终端打开 · 只读/);
-    assert.match(transcript, /此会话可以继续写入/);
+    assert.match(transcript, /已在另一终端打开 · 仅查看/);
+    assert.match(transcript, /另一端已关闭，可以继续对话了/);
     assert.equal(transcript.includes('view only'), false);
     assert.equal(transcript.includes('Resumed'), false);
     const frame = stripAnsi(renderScreen(screen, 80, 24).join('\n'));
-    assert.match(frame, /只读/);
+    assert.match(frame, /仅查看/);
     assert.equal(
       frame.split('\n').filter((line) => line.includes('正在等待数据库…'))
         .length,

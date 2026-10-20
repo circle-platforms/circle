@@ -10,13 +10,15 @@ Hooks are code execution. Circle shows which ones are active, runs a project's h
 
 ## Where hooks live
 
-| File                                                            | When it runs                                                                                                                  |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `hooks.json` in the data folder (`~/.circle`, or `CIRCLE_HOME`) | Every session                                                                                                                 |
-| `<workspace>/.circle/hooks.json`                                | Only after the folder is trusted                                                                                              |
-| `hooks.json` next to a skill's `SKILL.md`                       | With that skill. A project skill's hooks run only in a trusted folder. See [A skill can ship hooks](#a-skill-can-ship-hooks). |
+| File                                                            | When it runs                                                                                                                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hooks.json` in the data folder (`~/.circle`, or `CIRCLE_HOME`) | Every session. These are your own hooks.                                                                                                                      |
+| `<workspace>/.circle/hooks.json`                                | After the folder is trusted, and after you approve this version of the file.                                                                                  |
+| `hooks.json` next to a skill's `SKILL.md`                       | With that skill. A project skill's hooks also wait for the folder trust and for approval of that file. See [A skill can ship hooks](#a-skill-can-ship-hooks). |
 
 Hooks are not a key in `settings.json`. A project settings file has a closed list of keys, and a bad `settings.json` stops Circle; a hooks file is separate so a mistake there does not.
+
+Trusting the folder is not enough for a project hooks file. Circle stores a SHA-256 digest of each project hooks file you approve in `hook-trust.json` in the data folder. The first time that file is seen, and again whenever its bytes change, those hooks are not loaded. The full-screen interface asks you to approve them; until you do, `/hooks` lists the file as needing approval and the commands do not run. Approving writes the new digest. Skipping leaves them unloaded, and the next session asks again. Your own `hooks.json` in the data folder, and a `hooks.json` next to a skill that is not the project's, are not asked again. `/reload` reads the files again and asks when the digest does not match.
 
 Circle reads the files when a session starts, on `/new`, when you switch or import a session, and on `/reload`. `/reload` applies the new files to later events in the same session. It does not run `session_start` again, and it resets each `before_stop` hook's block count.
 
@@ -45,14 +47,14 @@ A file whose `version` is present and is not `1` is skipped. A file can hold at 
 }
 ```
 
-| Field        | Meaning                                                                                                                                                                                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`    | Required. The shell command, at most 4,000 characters. Circle starts it with `shell: true` in the workspace, so `/bin/sh` runs it on macOS and Linux and `cmd.exe` on Windows (write `node script.mjs` for a hook that runs on every system), with the [filtered environment](security.md#the-shell-environment) used for other commands.                                                                  |
-| `name`       | Optional, at most 80 characters. The transcript and the desktop settings use it. Without one, the command is the name.                                                                                                                                                    |
-| `timeout_ms` | Optional. Default 30 seconds. Clamped between 100 milliseconds and 10 minutes. On timeout the process group is stopped (on Windows, `taskkill /T /F`, the same stop Circle uses for other commands).                                                                      |
-| `loop_limit` | Optional, only for `before_stop`. Default 5, clamped from 1 to 20. After this many blocks the hook is not run again for that session, until `/reload` or a new session.                                                                                                   |
-| `tools`      | Optional. A tool name, a list, or several names separated by `\|` or a comma. `*` or omitting it matches every tool. `matcher` is the same field. There is no regular expression. `session_start` and `before_stop` ignore it, so a copied matcher does not disable them. |
-| `paths`      | Optional globs. Empty matches every call. A call that names no path does not match a hook that has globs. See [Path globs](#path-globs). Ignored for `session_start` and `before_stop`.                                                                                   |
+| Field        | Meaning                                                                                                                                                                                                                                                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`    | Required. The shell command, at most 4,000 characters. Circle starts it with `shell: true` in the workspace, so `/bin/sh` runs it on macOS and Linux and `cmd.exe` on Windows (write `node script.mjs` for a hook that runs on every system), with the [filtered environment](security.md#the-shell-environment) used for other commands. |
+| `name`       | Optional, at most 80 characters. The transcript and the desktop settings use it. Without one, the command is the name.                                                                                                                                                                                                                    |
+| `timeout_ms` | Optional. Default 30 seconds. Clamped between 100 milliseconds and 10 minutes. On timeout the process group is stopped (on Windows, `taskkill /T /F`, the same stop Circle uses for other commands).                                                                                                                                      |
+| `loop_limit` | Optional, only for `before_stop`. Default 5, clamped from 1 to 20. After this many blocks the hook is not run again for that session, until `/reload` or a new session.                                                                                                                                                                   |
+| `tools`      | Optional. A tool name, a list, or several names separated by `\|` or a comma. `*` or omitting it matches every tool. `matcher` is the same field. There is no regular expression. `session_start` and `before_stop` ignore it, so a copied matcher does not disable them.                                                                 |
+| `paths`      | Optional globs. Empty matches every call. A call that names no path does not match a hook that has globs. See [Path globs](#path-globs). Ignored for `session_start` and `before_stop`.                                                                                                                                                   |
 
 ## Events
 
@@ -142,7 +144,7 @@ Each run appends one JSON line to `hooks.log` in the data folder. The fields are
 
 ## A skill can ship hooks
 
-A skill folder may contain `hooks.json` beside `SKILL.md`. Installing the skill does not run those commands. They run only after this session loads that skill, with `/skill` or with the model's `skill` tool, and they stop applying when you switch, import or start another session. A project skill's hooks still require the folder to be trusted; until then they are not loaded. Settings names the skill and, until it is loaded, that the hook is waiting.
+A skill folder may contain `hooks.json` beside `SKILL.md`. Installing the skill does not run those commands. They run only after this session loads that skill, with `/skill` or with the model's `skill` tool, and they stop applying when you switch, import or start another session. A project skill's hooks still require the folder to be trusted, and approval of that file's bytes, the same way as `.circle/hooks.json`. Until then they are not loaded. Settings names the skill and, until it is loaded, that the hook is waiting.
 
 A `session_start` hook in the skill runs with the session when the skill was loaded first, and runs once when the skill is loaded later. The other events apply to tool calls after that moment.
 

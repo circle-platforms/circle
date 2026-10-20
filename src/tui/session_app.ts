@@ -121,6 +121,7 @@ import {
 import { PlanPanel } from '../ink/components/plan_panel.js';
 import { stripAnsi, truncate } from '../ink/string_width.js';
 import { modelScope, sameModel } from '../model_scope.js';
+import { rememberHookFile } from '../hooks.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
 import { browserTools, runtimeBrowserOptions } from '../browser/tools.js';
@@ -968,9 +969,11 @@ export class SessionApp {
     const anchors = (this.state.noticeAnchors ??= []);
     while (anchors.length < this.state.notices.length) anchors.push(undefined);
     this.state.notices.push(text);
+    if (text.startsWith('✖ ') && this.state.notices.at(-1) === text) return;
     const trail =
       /^(?:Resumed|Continued|Forked|Open in another terminal) /.test(text) ||
-      text === 'this session is writable again';
+      text === 'this session is writable again' ||
+      text === 'view only, the draft stays';
     anchors.push(
       trail
         ? undefined
@@ -997,7 +1000,7 @@ export class SessionApp {
     this.composer.set(text);
     this.state.completion = undefined;
   }
-  async initialize(force = false): Promise<boolean> {
+  async initialize(force = false, trust = false): Promise<boolean> {
     // Set up, but with no URL or model (an older release's OAuth sign-in): ask again, as
     // print mode does
     if (force || !isReady(this.settings)) {
@@ -1017,13 +1020,16 @@ export class SessionApp {
       this.settingUp = false;
     }
     if (!isFolderTrusted(this.settings, this.workspace)) {
-      const answer = await this.askChoice(
-        'trust',
-        `${this.workspace}\nThis folder can supply instructions, skills, commands, extensions and hooks. Extensions and hooks execute code.`,
-        ['trust this folder', 'quit'],
-      );
-      if (answer !== 'trust this folder') return false;
-      this.trustWorkspace();
+      if (trust) this.trustWorkspace();
+      else {
+        const answer = await this.askChoice(
+          'trust',
+          `${this.workspace}\nThis folder can supply instructions, skills, commands, extensions and hooks. Extensions and hooks execute code.`,
+          ['trust this folder', 'quit'],
+        );
+        if (answer !== 'trust this folder') return false;
+        this.trustWorkspace();
+      }
     }
     return !this.ended;
   }
@@ -1130,6 +1136,7 @@ export class SessionApp {
         `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`,
       );
     runtime.repairRecentTitles();
+    await this.offerHookApproval();
     this.repaint();
   }
   private createRuntime(
@@ -1404,9 +1411,19 @@ export class SessionApp {
                 `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
               );
             } else if (notice.event === 'title_failed') {
-              const text = `title failed · ${String(notice.message).replace(/\s+/g, ' ').slice(0, 120)}`;
-              this.notice(text);
-              this.flash(text, 5000);
+              const message = String(notice.message)
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 120);
+              const text = `title failed · ${message}`;
+              // The turn already said this, for example a missing key.
+              if (
+                !message ||
+                !this.state.notices.some((note) => note.includes(message))
+              ) {
+                this.notice(text);
+                this.flash(text, 5000);
+              }
             } else if (notice.event === 'param_dropped')
               this.notice(
                 `Endpoint does not support ${notice.param}; continuing without it`,
@@ -1458,6 +1475,40 @@ export class SessionApp {
     this.watchedHead = stamp;
     this.repaint();
   }
+  private offeringHooks = false;
+  /**
+   * A changed project hooks file does not run until these bytes are approved.
+   * Headless runs and tests never take the card; the transcript still says so.
+   */
+  private async offerHookApproval(): Promise<void> {
+    if (
+      this.offeringHooks ||
+      this.ended ||
+      !this.started ||
+      !process.stdin.isTTY
+    )
+      return;
+    const runtime = this.runtime;
+    if (!runtime || runtime.viewOnly || runtime.isClosing) return;
+    const pending = runtime.listHooks().projectChanged;
+    if (!pending.length) return;
+    this.offeringHooks = true;
+    try {
+      for (const change of pending) {
+        if (this.ended) return;
+        const answer = await this.askChoice(
+          'hooks',
+          `${change.file}\nThis project's hooks file changed.\nThese hooks run shell commands and stay off until you approve them.`,
+          ['approve these hooks', 'skip'],
+        );
+        if (answer === 'approve these hooks')
+          rememberHookFile(this.home, change.file, change.digest);
+      }
+      if (!this.ended && !runtime.isClosing) runtime.reloadHooks();
+    } finally {
+      this.offeringHooks = false;
+    }
+  }
   /**
    * A view-only session stays that way until something asks again. The screen
    * asks on its timer, and enter and picking the session ask at once.
@@ -1473,6 +1524,7 @@ export class SessionApp {
     const text = 'this session is writable again';
     if (this.state.notices.at(-1) !== text) this.notice(text);
     else this.repaint();
+    void this.offerHookApproval();
   }
   private async selectRuntime(runtime: AgentRuntime): Promise<void> {
     await runtime.initialize();
@@ -3160,7 +3212,6 @@ export class SessionApp {
       }
     }
     const runtime = this.runtime;
-    const view = this.view;
     if (
       !runtime ||
       (this.sessions && this.sessions.lifecycle(runtime.session.id) !== 'open')
@@ -3168,14 +3219,13 @@ export class SessionApp {
       return;
     if (runtime.viewOnly) {
       // The other terminal may have left since this one opened the session.
+      // A draft typed while this side could only watch is not sent on the
+      // enter that discovers the lease is free. The next enter sends it.
       this.watchLease();
-      if (runtime.viewOnly) {
-        // The box already gave the text up. Put it back and say why it was not sent.
-        this.composer.restore(raw, pastes);
-        const text = `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`;
-        if (this.state.notices.at(-1) !== text) this.notice(text);
-        return;
-      }
+      this.composer.restore(raw, pastes);
+      const text = 'view only, the draft stays';
+      if (this.state.notices.at(-1) !== text) this.notice(text);
+      return;
     }
     if (!plain && message.startsWith('!')) {
       try {
@@ -3185,9 +3235,9 @@ export class SessionApp {
         );
       } finally {
         if (!runtime.busy && runtime.harness.pendingMessageCount)
-          void runtime.harness
-            .run()
-            .catch((error) => this.inView(view, () => this.fail(error)));
+          void runtime.harness.run().catch(() => {
+            /* Run error is already displayed by the event bus. */
+          });
         this.repaint();
       }
       return;
@@ -3519,6 +3569,12 @@ export class SessionApp {
   }
   async command(name: string, args: string): Promise<void> {
     const view = this.view;
+    if (view.state.flash) {
+      view.state.flash = '';
+      if (this.flashTimer) clearTimeout(this.flashTimer);
+      this.flashTimer = undefined;
+      this.repaint();
+    }
     if (!this.runtime) return;
     if (['login', 'logout'].includes(name) && this.connectionBusy()) {
       const reason =
@@ -4080,6 +4136,7 @@ export class SessionApp {
 export async function runTui(
   options: Omit<RuntimeOptions, 'approve' | 'question'> & {
     init?: boolean;
+    trust?: boolean;
     pickSession?: boolean;
     prompts?: string[];
     // What the conversation shows for each prompt, when it differs (`@file`)
@@ -4089,7 +4146,7 @@ export async function runTui(
   const app = new SessionApp(options.workspace, options.home, options.settings);
   app.start();
   try {
-    if (!(await app.initialize(options.init))) return 0;
+    if (!(await app.initialize(options.init, options.trust))) return 0;
     app.applyRunSettings(options.modelOverride);
     await app.attach(options);
     void app.checkForUpdate();

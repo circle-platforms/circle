@@ -33,7 +33,13 @@ import type {
   PickerOptions,
 } from '../ink/components/picker.js';
 import { palette } from '../ink/theme.js';
-import { stripAnsi } from '../ink/string_width.js';
+import {
+  hangingWrap,
+  noticeColumns,
+  pad,
+  stripAnsi,
+  wrapHang,
+} from '../ink/string_width.js';
 import { plainPreview, sessionRowLabel } from './session_label.js';
 import {
   isSessionMode,
@@ -48,7 +54,7 @@ import { exportKind, toHtml } from '../session_export.js';
 import { discoverCustomCommands, expandCommandTemplate } from '../commands.js';
 import { discoverSkills, loadSkillBody } from '../skills.js';
 import { readPrompt } from '../system_prompt.js';
-import { helpText, hotkeysText, variableCopy } from './slash_commands.js';
+import { BUILTIN_SLASH, hotkeysText, variableCopy } from './slash_commands.js';
 import { hubText } from '../hub_text.js';
 import type { ScreenSnapshot, UndoHistory } from './undo_history.js';
 import {
@@ -303,6 +309,9 @@ export async function runCommand(
   return true;
 }
 
+function aligned(prefix: string, body: string): string {
+  return hangingWrap(prefix, body, noticeColumns()).join('\n');
+}
 function help(host: CommandHost): void {
   const custom: [string, string][] = discoverCustomCommands(
     host.workspace,
@@ -313,10 +322,31 @@ function help(host: CommandHost): void {
   ]);
   for (const command of host.runtime.extensions.commands().values())
     custom.push([command.name, command.description]);
-  host.notice(helpText(custom));
+  const lines = [t('Available commands:'), ''];
+  for (const command of BUILTIN_SLASH) {
+    const alias = command.aliases?.length
+      ? ' (' + command.aliases.map((name) => '/' + name).join(', ') + ')'
+      : '';
+    lines.push(
+      aligned(`  /${command.name.padEnd(10)} `, t(command.description) + alias),
+    );
+  }
+  if (custom.length) {
+    lines.push('', t('Custom commands:'));
+    for (const [name, description] of custom)
+      lines.push(aligned(`  /${name.padEnd(10)} `, t(description)));
+  }
+  lines.push('', t('Type text without / to chat. Skills also: /skill:name'));
+  host.notice(lines.join('\n'));
 }
 
+function refuseViewOnly(host: CommandHost): boolean {
+  if (!host.runtime.viewOnly) return false;
+  host.flash('view only, the mode stays');
+  return true;
+}
 function plan(host: CommandHost, args: string): void {
+  if (refuseViewOnly(host)) return;
   const runtime = host.runtime;
   const token = args.trim().toLowerCase();
   let want: boolean;
@@ -373,6 +403,7 @@ const MODE_META: Record<SessionMode, string> = {
 
 // /mode with no argument moves to the next mode; shift+tab does the same.
 function mode(host: CommandHost, args: string): void {
+  if (refuseViewOnly(host)) return;
   const runtime = host.runtime;
   const token = args
     .trim()
@@ -401,6 +432,7 @@ function mode(host: CommandHost, args: string): void {
 // The mode list from /settings: enter uses a mode in this session, alt+d
 // also writes default_mode, as /effort does for the thinking depth.
 function modePicker(host: CommandHost): void {
+  if (refuseViewOnly(host)) return;
   const now = host.runtime.mode;
   let saved: SessionMode | '' = '';
   try {
@@ -1436,11 +1468,14 @@ async function skill(host: CommandHost, args: string): Promise<void> {
             t('Skills:'),
             '',
             ...skills.map((skill) => {
-              const description = uiText(skill.description).slice(0, 80);
+              const description = uiText(skill.description);
               const source = skill.source_label
                 ? ` (${uiText(skill.source_label)})`
                 : '';
-              return `  ${skill.name.padEnd(20)} ${description}${source}`;
+              return aligned(
+                `  ${pad(skill.name, 20)} `,
+                `${description}${source}`,
+              );
             }),
             '',
             t('Load with /skill <name>'),
@@ -2023,29 +2058,50 @@ function hookSource(label: string): string {
   return label;
 }
 function hooks(host: CommandHost): void {
-  const { hooks: rows, projectIgnored } = host.runtime.listHooks();
+  const {
+    hooks: rows,
+    projectIgnored,
+    projectChanged,
+  } = host.runtime.listHooks();
+  const width = noticeColumns();
   const line = (row: (typeof rows)[number], waiting: boolean): string => {
     const hook = row.hook;
     const state = waiting
       ? t('waiting for /skill {name}', { name: hook.skill ?? hook.name })
       : t('trusted');
-    return `  ${hook.name} · ${hookSource(hook.sourceLabel)} · ${hook.event} · ${hook.command} · ${state}`;
+    return wrapHang(
+      `  ${hook.name} · ${hookSource(hook.sourceLabel)} · ${hook.event} · ${hook.command} · ${state}`,
+      width,
+      2,
+    ).join('\n');
   };
   const running = rows.filter((row) => row.active);
   const waiting = rows.filter((row) => !row.active);
   const lines: string[] = [];
   if (projectIgnored) lines.push(t('project hooks need trust'), '');
-  if (!rows.length) {
+  if (projectChanged.length) {
+    lines.push(t('project hooks changed'), '');
+    for (const change of projectChanged)
+      lines.push(
+        wrapHang(`  ${change.file} · ${t('needs approval')}`, width, 2).join(
+          '\n',
+        ),
+      );
+    lines.push('');
+  }
+  if (!rows.length && !projectChanged.length) {
     lines.push(t('No hooks configured.'));
     host.notice(lines.join('\n'));
     return;
   }
-  lines.push(t('Hooks:'), '');
-  if (running.length) lines.push(...running.map((row) => line(row, false)));
-  if (waiting.length) {
-    if (running.length) lines.push('');
-    lines.push(t('Skill hooks waiting for load:'), '');
-    lines.push(...waiting.map((row) => line(row, true)));
+  if (rows.length) {
+    lines.push(t('Hooks:'), '');
+    if (running.length) lines.push(...running.map((row) => line(row, false)));
+    if (waiting.length) {
+      if (running.length) lines.push('');
+      lines.push(t('Skill hooks waiting for load:'), '');
+      lines.push(...waiting.map((row) => line(row, true)));
+    }
   }
   host.notice(lines.join('\n'));
 }

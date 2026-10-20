@@ -21,7 +21,11 @@ import {
 } from '../src/locale.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { SessionOccupiedError } from '../src/session_lock.js';
-import { defaultSettings } from '../src/settings.js';
+import {
+  isFolderTrusted,
+  loadSettings,
+  defaultSettings,
+} from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import {
@@ -327,4 +331,76 @@ test('/hooks lists what is configured and what a skill has not loaded', async (t
   assert.match(text, /project hooks need trust/);
   await app.submit('/help');
   assert.match(app.state.notices.at(-1)!, /\/hooks\s+List hooks/);
+});
+
+test('enter while view-only keeps the draft and sends it only on the next enter', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const settings = defaultSettings();
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings,
+    model: new ScriptedModel([
+      { message: { id: 'stored', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const app = new SessionApp(workspace, home, settings);
+  const ui = app as any;
+  ui.screen = new ScreenRenderer(() => {});
+  await app.attach({
+    workspace,
+    home,
+    settings,
+    model: new ScriptedModel([
+      { message: { id: 'later', role: 'assistant', content: 'sent' } },
+    ]),
+    continue: true,
+  });
+  cleanup(t, async () => {
+    ui.off?.();
+    ui.offSignals?.();
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    ui.input.close();
+    await (ui.sessions?.close() ?? app.runtime?.close());
+  });
+  const users = (): string[] =>
+    app
+      .runtime!.harness.messages.filter(
+        (message) => message.role === 'user' && !message.internal,
+      )
+      .map((message) => message.content);
+  await app.submit('later please', 'later please');
+  assert.equal(app.runtime!.viewOnly, true);
+  assert.deepEqual(users(), ['hello from the owner']);
+  assert.equal(app.state.draft, 'later please');
+  assert.ok(app.state.notices.includes('view only, the draft stays'));
+  owner.yieldLease();
+  await app.submit('later please', 'later please');
+  assert.equal(app.runtime!.viewOnly, false);
+  assert.deepEqual(users(), ['hello from the owner']);
+  assert.equal(app.state.draft, 'later please');
+  await app.submit('later please', 'later please');
+  assert.ok(users().includes('later please'));
+});
+
+test('--trust remembers the folder without a card', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const settings = defaultSettings();
+  settings.initialized = true;
+  settings.auth.model = 'm';
+  settings.auth.base_url = 'http://127.0.0.1:9/v1';
+  const app = new SessionApp(workspace, home, settings);
+  const ui = app as any;
+  ui.screen = new ScreenRenderer(() => {});
+  cleanup(t, () => {
+    ui.theme.close();
+    ui.input.close();
+  });
+  assert.equal(await app.initialize(false, true), true);
+  assert.equal(isFolderTrusted(loadSettings(home), workspace), true);
 });

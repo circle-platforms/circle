@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { ApprovalPolicy, ApprovalStore, ruleTool } from '../src/approvals.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
 import { Harness } from '../src/harness.js';
-import { HookRunner, loadHooks } from '../src/hooks.js';
+import { HookRunner, loadHooks, rememberHookFile } from '../src/hooks.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message, Tool } from '../src/types.js';
 import { cleanup, scratch } from './helpers.js';
@@ -180,6 +180,7 @@ test('a hook that allows the call still leaves the tab’s first use to the pers
       },
     }),
   );
+  rememberHookFile(home, join(workspace, '.circle', 'hooks.json'));
   const store = new CheckpointStore(home);
   cleanup(t, () => store.close());
   const session = store.create(workspace, 'scripted');

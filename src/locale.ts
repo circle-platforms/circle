@@ -100,12 +100,27 @@ function translatePatterns(
       text,
     );
   if (occupied)
-    return `已在另一终端打开 · 只读 · circle --fork ${occupied[1]} 可复制到此处`;
+    return `已在另一终端打开 · 仅查看 · 用 circle --fork ${occupied[1]} 复制一份到这里继续`;
   const permission = /^(?:(.*?) · )?(\S.*) needs your permission$/.exec(text);
   if (permission && !permission[2]!.includes(' needs your permission'))
     return `${permission[1] ? permission[1] + ' · ' : ''}${permission[2]} 需要你的批准`;
   const allow = /^Allow (.+) for this session$/.exec(text);
-  if (allow) return `本会话内允许${uiText(allow[1]!, locale)}`;
+  if (allow)
+    return `本会话内允许${uiText(allow[1]!, locale).replace(
+      /"([^"]*)"/g,
+      '“$1”',
+    )}`;
+  const exit = /^Exit code: (-?\d+)$/.exec(text);
+  if (exit) return `退出码 ${exit[1]}`;
+  const rejected =
+    /^The user rejected this tool call\.(?: A hook asked: (.*?))?(?: The user said: (.*))?$/.exec(
+      text,
+    );
+  if (rejected) {
+    const hook = rejected[1] ? ` · ${rejected[1]}` : '';
+    const said = rejected[2] !== undefined ? ` · 你说：${rejected[2]}` : '';
+    return `已拒绝${hook}${said}`;
+  }
   const read = /^Read (\d+) lines?( · ctrl\+o)?$/.exec(text);
   if (read) return `读取了 ${read[1]} 行${read[2] ?? ''}`;
   const edited = /^Edited (.+)$/.exec(text);
@@ -162,10 +177,29 @@ function translateHooks(text: string): string {
     .replace(/^hook failed/, '钩子失败')
     .replace(/^hooks active/, '钩子已启用')
     .replace(/^project hooks need trust$/, '项目钩子需要先信任文件夹')
+    .replace(/^project hooks changed$/, '项目钩子已更改，尚未加载')
     .replaceAll(', project)', ', 项目)')
     .replaceAll(', user)', ', 用户)')
     .replaceAll(', skill:', ', 技能:')
     .replace(/^hook /, '钩子 ');
+}
+
+const EFFORT_WORDS: Record<string, string> = {
+  minimal: '推理 最低',
+  low: '推理 低',
+  medium: '推理 中',
+  high: '推理 高',
+  xhigh: '推理 很高',
+  max: '推理 最大',
+};
+
+/** Header and welcome depth. English stays the level name; Chinese says 推理 plus the depth. */
+export function effortLabel(
+  depth: string,
+  locale: InterfaceLocale = interfaceLocale(),
+): string {
+  if (locale !== 'zh-CN') return depth;
+  return EFFORT_WORDS[depth] ?? depth;
 }
 
 setSlashTranslator(t);

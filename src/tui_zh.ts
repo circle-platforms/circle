@@ -4,7 +4,9 @@
 
 export const TUI_ZH: Record<string, string> = {
   // session list and resume
-  'view only': '只读',
+  'view only': '仅查看',
+  'view only, the draft stays': '仅查看，草稿会保留',
+  'view only, the mode stays': '仅查看，不能切换模式',
   current: '当前',
   'type to search': '输入以搜索',
   'Sessions · this folder': '会话 · 此文件夹',
@@ -16,7 +18,7 @@ export const TUI_ZH: Record<string, string> = {
   'No sessions saved': '没有已保存的会话',
   'No sessions in this folder': '此文件夹没有会话',
   'No matches': '没有匹配',
-  'this session is writable again': '此会话可以继续写入',
+  'this session is writable again': '另一端已关闭，可以继续对话了',
   'this session is open in another terminal. Close it there to continue, or copy it with circle --fork {id}':
     '此会话已在另一终端打开。请在那边关闭后再继续，或用 circle --fork {id} 复制一份',
   'search quota exceeded': '搜索额度不足',
@@ -84,7 +86,7 @@ export const TUI_ZH: Record<string, string> = {
   'Accept edits · workspace file edits run without asking, commands and deletes still ask':
     '自动接受编辑 · 直接编辑工作区内的文件；命令和删除仍会询问',
   'Read-only on · writes and shell are blocked, /plan.md is allowed':
-    '只读 · 不能改文件、不能跑命令，/plan.md 可以',
+    '只读：不能改文件，也不能跑命令。可以写 /plan.md。',
   'Read-only off': '已关闭只读',
   'Auto on · nothing asks: commands that delete, certificate warnings and uploads go ahead · use it where that is safe':
     '自动 · 不再询问：删除命令、证书警告和文件上传都会直接执行 · 只在安全的地方使用',
@@ -104,6 +106,7 @@ export const TUI_ZH: Record<string, string> = {
   off: '关',
   'network: proxy {state}; trust {count} authorities ({sources}){bundle}{problems}':
     '网络：代理 {state}；信任 {count} 个证书机构（{sources}）{bundle}{problems}',
+  default: '默认',
   '; bundle {path}': '；证书包 {path}',
 
   // trust
@@ -124,6 +127,11 @@ export const TUI_ZH: Record<string, string> = {
   'missing API key': '缺少 API 密钥',
   'missing API key; re-run circle --init':
     '缺少 API 密钥；请重新运行 circle --init',
+  'To resume this session: {command}': '继续这个会话：{command}',
+  'cache N/A': '缓存不可用',
+  'cache {rate}': '缓存 {rate}',
+  'ctx {used}/N/A': '上下文 {used}/不可用',
+  'ctx {used}/{window} ({percent}%)': '上下文 {used}/{window}（{percent}%）',
   'circle: nothing arrived on stdin within {seconds}s; going on without it (use </dev/null to skip the wait)\n':
     'circle：标准输入在 {seconds} 秒内没有内容，将不使用它继续（用 </dev/null 可跳过等待）\n',
 
@@ -148,16 +156,16 @@ export const TUI_ZH: Record<string, string> = {
   'Values the model uses as %NAME%: /variables [NAME=value]':
     '模型写成 %NAME% 来使用的值：/variables [NAME=value]',
   'Named values Circle fills in unseen: /secrets [NAME]':
-    'Circle 会悄悄填入的具名值：/secrets [NAME]',
+    '具名的值，Circle 在工具运行时填入，你看不到：/secrets [NAME]',
   'Values the model uses as %NAME% unseen: /secrets [NAME]':
-    '模型写成 %NAME% 来使用、你看不见的值：/secrets [NAME]',
+    '模型在工具参数里写成 %NAME%，Circle 在运行时填入，你看不到：/secrets [NAME]',
   'Show or set the theme: /themes [auto|dark|light]':
     '显示或设置主题：/themes [auto|dark|light]',
   'List / reload MCP servers and tools': '列出或重新加载 MCP 服务器和工具',
   'List extensions: /extensions [reload | enable <name> | disable <name>]':
     '列出扩展：/extensions [reload | enable <名称> | disable <名称>]',
-  'List hooks: name, source, event, command and whether they run':
-    '列出钩子：名称、来源、事件、命令，以及是否在运行',
+  'List hooks: name, source, event, command and trust':
+    '列出钩子：名称、来源、事件、命令和信任状态',
   'Session approvals: /approvals [add P|remove P|revoke N]':
     '会话审批规则：/approvals [add P|remove P|revoke N]',
   'Background jobs: open one, or stop it': '后台任务：打开或停止',
@@ -251,57 +259,49 @@ export const TUI_ZH: Record<string, string> = {
   'not trusted': '未信任',
   active: '运行中',
   'project hooks need trust': '项目钩子需要先信任文件夹',
+  'project hooks changed': '项目钩子已更改，尚未加载',
+  'needs approval': '需要重新批准',
+  'approve these hooks': '批准这些钩子',
+  skip: '跳过',
+  "This project's hooks file changed.": '这个项目的钩子文件变了。',
+  'These hooks run shell commands and stay off until you approve them.':
+    '这些钩子会执行 shell 命令，批准之前不会运行。',
+  bundled: '内置',
 
   // circle --help
   'usage: circle [options] [folder] [@file ...] [message ...]':
     '用法：circle [选项] [文件夹] [@文件 ...] [消息 ...]',
   'A terminal coding agent for your own model endpoint.':
     '面向你自己的模型端点的终端编程代理。',
-  '  -p, --print [PROMPT]  Print the answer and exit':
-    '  -p, --print [PROMPT]  打印回答并退出',
-  '  --mode text|json|rpc  Output mode': '  --mode text|json|rpc  输出模式',
-  '  -c, --continue       Continue the last session':
-    '  -c, --continue       继续上一个会话',
-  '  -r, --resume         Choose a saved session':
-    '  -r, --resume         选择一个已保存的会话',
-  '  --session ID         Resume by ID': '  --session ID         按 ID 恢复',
-  '  --session-id ID      Open or create this ID':
-    '  --session-id ID      打开或创建这个 ID',
-  '  --fork ID            Copy a saved session':
-    '  --fork ID            复制一个已保存的会话',
-  '  --no-session         In-memory conversation':
-    '  --no-session         只在内存里对话',
-  '  -m, --model ID       Model for this run':
-    '  -m, --model ID       这一次使用的模型',
-  '  --thinking LEVEL     Thinking depth': '  --thinking LEVEL     思考深度',
-  '  --list-models [TEXT] List endpoint models':
-    '  --list-models [TEXT] 列出端点上的模型',
-  '  --export ID [OUT]    Export a saved session':
-    '  --export ID [OUT]    导出一个已保存的会话',
-  '  --system-prompt TEXT|FILE': '  --system-prompt TEXT|FILE  系统提示',
-  '  --append-system-prompt TEXT|FILE':
-    '  --append-system-prompt TEXT|FILE  追加系统提示',
-  '  --no-context-files   Skip instruction files':
-    '  --no-context-files   跳过说明文件',
-  '  --tools LIST         Limit tools': '  --tools LIST         只使用这些工具',
-  '  --exclude-tools LIST Exclude tools': '  --exclude-tools LIST 排除这些工具',
-  '  --no-tools           No tools except compaction':
-    '  --no-tools           除压缩外不使用工具',
-  '  --yolo               Auto mode for print or line':
-    '  --yolo               打印或逐行模式使用自动',
-  '  --trust              Trust this folder and remember it':
-    '  --trust              信任这个文件夹并记住',
-  '  --extensions         Load extensions and MCP servers in print, line or rpc mode':
-    '  --extensions         在打印、逐行或 rpc 模式加载扩展和 MCP 服务器',
-  '  --line               Plain line mode':
-    '  --line               普通逐行模式',
-  '  --init               Model setup': '  --init               模型设置',
-  "  --task [NAME]        Work in a folder of Circle's own for this task, under the task folder":
-    '  --task [NAME]        在任务文件夹下，用 Circle 自己的文件夹做这件事',
-  '  --print-home         Print the data directory':
-    '  --print-home         打印数据目录',
-  '  -v, --version        Print version': '  -v, --version        打印版本',
-  '  -h, --help           Show help': '  -h, --help           显示帮助',
+  'Print the answer and exit': '打印回答并退出',
+  'Output mode': '输出模式',
+  'Continue the last session': '继续上一个会话',
+  'Choose a saved session': '选择一个已保存的会话',
+  'Resume by ID': '按 ID 恢复',
+  'Open or create this ID': '打开或创建这个 ID',
+  'Copy a saved session': '复制一个已保存的会话',
+  'In-memory conversation': '只在内存里对话',
+  'Model for this run': '这一次使用的模型',
+  'Thinking depth': '思考深度',
+  'List endpoint models': '列出端点上的模型',
+  'Export a saved session': '导出一个已保存的会话',
+  'Replace the system prompt': '替换系统提示',
+  'Append to the system prompt': '追加到系统提示后面',
+  'Skip instruction files': '跳过说明文件',
+  'Limit tools': '只使用这些工具',
+  'Exclude tools': '排除这些工具',
+  'No tools except compaction': '不使用工具，压缩除外',
+  'Auto mode for print or line': '在打印模式和逐行模式里使用自动模式',
+  'Trust this folder and remember it': '信任这个文件夹并记住',
+  'Load extensions and MCP servers in print, line or rpc mode':
+    '在打印、逐行或 rpc 模式里加载扩展和 MCP 服务器',
+  'Plain line mode': '普通逐行模式',
+  'Model setup': '设置模型和接口',
+  "Work in a folder of Circle's own for this task, under the task folder":
+    '在任务文件夹下，用 Circle 自己的文件夹做这件事',
+  'Print the data directory': '打印数据目录',
+  'Print version': '打印版本',
+  'Show help': '显示帮助',
 
   // circle update and the installer
   'usage: circle update [version] [--check]':
@@ -425,20 +425,20 @@ export const TUI_ZH: Record<string, string> = {
   '  ctrl+k / ctrl+u delete to the end / back to the start of the line; ctrl+y restores':
     '  ctrl+k / ctrl+u 删到行尾 / 删回行首；ctrl+y 恢复',
   '  in a list       alt+d saves a default · ctrl+k deletes or stops · ctrl+r renames':
-    '  in a list       alt+d 保存默认 · ctrl+k 删除或停止 · ctrl+r 重命名',
+    '  在列表里       alt+d 保存默认 · ctrl+k 删除或停止 · ctrl+r 重命名',
   '  up/down         prompt history; with an empty prompt and no more history,':
     '  up/down         提示历史；空提示且没有更多历史时，',
-  '                  scroll the transcript': '                  滚动转录',
+  '                  scroll the transcript': '                  滚动对话',
   '  down (empty)    select a running subagent; up/down move, enter opens it':
-    '  down (empty)    选中正在跑的子代理；up/down 移动，enter 打开',
+    '  空着按 down    选中正在跑的子代理；up/down 移动，enter 打开',
   '  left/right      previous/next subagent on its detail page; esc goes back':
     '  left/right      在详情页上一个/下一个子代理；esc 返回',
   '  pageup/pagedown scroll transcript (or the detail page) when the prompt is empty':
-    '  pageup/pagedown 提示为空时滚动转录（或详情页）',
+    '  pageup/pagedown 提示为空时滚动对话（或详情页）',
   '  home/end        top / bottom of the transcript when the prompt is empty':
-    '  home/end        提示为空时到转录顶部 / 底部',
+    '  home/end        提示为空时到对话顶部 / 底部',
   '  mouse drag      select and copy; dragging to the top or bottom edge scrolls':
-    '  mouse drag      选择并复制；拖到上沿或下沿会滚动',
+    '  拖动鼠标      选择并复制；拖到上沿或下沿会滚动',
   '  tab             complete a /command or an @path':
     '  tab             补全 /命令 或 @路径',
   '  ?               this list (with an empty prompt)':
@@ -450,5 +450,5 @@ export const TUI_ZH: Record<string, string> = {
   '                  y / a / n also work on permission cards':
     '                  审批卡上 y / a / n 也可以',
   '  mouse wheel     over the plan box scrolls it; elsewhere it scrolls the transcript':
-    '  mouse wheel     在计划框上滚动计划；别处滚动转录',
+    '  鼠标滚轮     在计划框上滚动计划；别处滚动对话',
 };

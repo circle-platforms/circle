@@ -24,7 +24,7 @@ import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
 import { ExtensionError } from './extension_error.js';
-import { t, uiText } from './locale.js';
+import { interfaceLocale, t } from './locale.js';
 import {
   SecretPromptError,
   cancelRequest,
@@ -102,6 +102,8 @@ export interface Extension {
   /** From an optional extension.json beside the entry file. */
   version: string;
   description: string;
+  /** Simplified Chinese description from extension.json, when the manifest has one. */
+  descriptionZh: string;
   /** Slash commands named in extension.json, even while the extension is off. */
   declaredCommands: string[];
   enabled: boolean;
@@ -636,7 +638,13 @@ export class ExtensionHost {
   }
   discover(): Pick<
     Extension,
-    'name' | 'source' | 'path' | 'version' | 'description' | 'declaredCommands'
+    | 'name'
+    | 'source'
+    | 'path'
+    | 'version'
+    | 'description'
+    | 'descriptionZh'
+    | 'declaredCommands'
   >[] {
     const found = new Map<
       string,
@@ -647,6 +655,7 @@ export class ExtensionHost {
         | 'path'
         | 'version'
         | 'description'
+        | 'descriptionZh'
         | 'declaredCommands'
       >
     >();
@@ -671,6 +680,9 @@ export class ExtensionHost {
           !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(directory.name)
         )
           continue;
+        // 1.9.1 removed the bundled developer extension. A leftover folder
+        // from an older install is not an extension of that name.
+        if (directory.name === 'developer') continue;
         const entry = ['extension.ts', 'extension.mjs', 'extension.js']
           .map((file) => join(root, directory.name, file))
           .find((path) => existsSync(path));
@@ -1075,7 +1087,11 @@ export class ExtensionHost {
           : ext.error
             ? t('failed to load: {error}', { error: ext.error })
             : `${counted(ext.tools.length, 'tool', 'tools')} · ${counted(ext.commands.length, 'command', 'commands')}`;
-        return `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${state}${ext.description ? '\n  ' + uiText(ext.description) : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`;
+        const description =
+          interfaceLocale() === 'zh-CN' && ext.descriptionZh
+            ? ext.descriptionZh
+            : ext.description;
+        return `${ext.name}${ext.version ? ' ' + ext.version : ''} (${t(ext.source)}) · ${state}${description ? '\n  ' + description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`;
       })
       .join('\n');
   }
@@ -1084,6 +1100,7 @@ export class ExtensionHost {
 function manifest(path: string): {
   version: string;
   description: string;
+  descriptionZh: string;
   declaredCommands: string[];
 } {
   try {
@@ -1095,6 +1112,10 @@ function manifest(path: string): {
         description:
           typeof value.description === 'string'
             ? value.description.slice(0, 200)
+            : '',
+        descriptionZh:
+          typeof value.descriptionZh === 'string'
+            ? value.descriptionZh.slice(0, 200)
             : '',
         declaredCommands: Array.isArray(value.commands)
           ? value.commands
@@ -1109,5 +1130,10 @@ function manifest(path: string): {
   } catch {
     /* No manifest, or one that cannot be read: the extension still loads. */
   }
-  return { version: '', description: '', declaredCommands: [] };
+  return {
+    version: '',
+    description: '',
+    descriptionZh: '',
+    declaredCommands: [],
+  };
 }

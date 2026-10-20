@@ -12,7 +12,12 @@ import type { AddressInfo } from 'node:net';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { stringWidth, stripAnsi } from '../src/ink/string_width.js';
+import {
+  hangingWrap,
+  noticeColumns,
+  stringWidth,
+  stripAnsi,
+} from '../src/ink/string_width.js';
 import type { Picker } from '../src/ink/components/picker.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { renderScreen } from '../src/tui/render.js';
@@ -731,15 +736,26 @@ test('/skill lists the skill that ships with Circle as built-in, loads it, and l
   const rows = list.split('\n');
   assert.deepEqual(rows.slice(0, 2), ['Skills:', '']);
   assert.deepEqual(rows.slice(-2), ['', 'Load with /skill <name>']);
+  const prefix = `  ${'create-pr'.padEnd(20)} `;
+  const body = `${shipped.meta.description} (Built-in)`;
+  const createPr = hangingWrap(prefix, body, noticeColumns());
+  assert.ok(list.includes(createPr.join('\n')), list);
+  if (stringWidth(prefix + body) > noticeColumns()) {
+    assert.ok(createPr.length > 1, createPr.join('\n'));
+    assert.ok(
+      createPr.slice(1).every((line) => line.startsWith(' '.repeat(23))),
+      createPr.join('\n'),
+    );
+  }
+  // No skill folder of this session's has any: each listed skill ships with Circle.
+  // A wrapped description continues under the name; the block still ends (Built-in).
+  const blocks: string[][] = [];
+  for (const row of rows.slice(2, -2)) {
+    if (row[2] !== ' ') blocks.push([row]);
+    else blocks.at(-1)!.push(row);
+  }
   assert.ok(
-    rows.includes(
-      `  ${'create-pr'.padEnd(20)} ${shipped.meta.description!.slice(0, 80)} (Built-in)`,
-    ),
-    list,
-  );
-  // No skill folder of this session's has any: each row is one that ships with Circle.
-  assert.ok(
-    rows.slice(2, -2).every((row) => row.endsWith(' (Built-in)')),
+    blocks.every((block) => block.at(-1)!.endsWith(' (Built-in)')),
     list,
   );
   await app.submit('/skill create-pr');

@@ -1296,6 +1296,7 @@ export class Harness {
     if (!runner) return;
     const loaded = runner.loaded;
     if (loaded.projectIgnored) this.saveHook({ kind: 'untrusted' });
+    if (loaded.projectChanged.length) this.saveHook({ kind: 'changed' });
     for (const error of loaded.errors)
       this.saveHook({
         kind: 'failed',

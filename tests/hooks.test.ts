@@ -16,6 +16,7 @@ import {
   hookNoticeText,
   loadHooks,
   matchHookPath,
+  rememberHookFile,
   type HookDefinition,
 } from '../src/hooks.js';
 import { canonicalPath } from '../src/paths.js';
@@ -164,6 +165,8 @@ test('project hooks load only for a trusted folder, and a skill can ship hooks',
       after_tool: [{ name: 'skill lint', command: 'true', paths: ['**/*.ts'] }],
     },
   });
+  rememberHookFile(home, join(workspace, '.circle', 'hooks.json'));
+  rememberHookFile(home, join(skill, 'hooks.json'));
   const ignored = loadHooks({
     workspace,
     home,
@@ -220,6 +223,38 @@ test('project hooks load only for a trusted folder, and a skill can ship hooks',
   assert.ok(!broken.hooks.some((hook) => hook.source === 'user'));
 });
 
+test('a changed project hooks file is not loaded until those bytes are approved', (t) => {
+  const { home, workspace, userHome } = layout(t);
+  const file = join(workspace, '.circle', 'hooks.json');
+  writeJson(file, {
+    hooks: { before_tool: [{ name: 'first', command: 'true' }] },
+  });
+  const unseen = loadHooks({ workspace, home, trusted: true, userHome });
+  assert.deepEqual(
+    unseen.hooks.map((hook) => hook.name),
+    [],
+  );
+  assert.equal(unseen.projectChanged.length, 1);
+  assert.equal(unseen.projectChanged[0]?.file, file);
+  rememberHookFile(home, file, unseen.projectChanged[0]!.digest);
+  const approved = loadHooks({ workspace, home, trusted: true, userHome });
+  assert.deepEqual(
+    approved.hooks.map((hook) => hook.name),
+    ['first'],
+  );
+  assert.deepEqual(approved.projectChanged, []);
+  writeJson(file, {
+    hooks: { before_tool: [{ name: 'edited', command: 'true' }] },
+  });
+  const edited = loadHooks({ workspace, home, trusted: true, userHome });
+  assert.deepEqual(
+    edited.hooks.map((hook) => hook.name),
+    [],
+  );
+  assert.equal(edited.projectChanged.length, 1);
+  assert.equal(edited.projectIgnored, false);
+});
+
 test('a hook reads JSON on stdin and a deny, ask or allow is the strictest decision', async (t) => {
   const { home, workspace, userHome } = layout(t);
   const seen = join(workspace, 'seen.json');
@@ -253,6 +288,7 @@ if (input.tool_name === 'delete') {
       ],
     },
   });
+  rememberHookFile(home, join(workspace, '.circle', 'hooks.json'));
   writeFileSync(
     join(workspace, 'allow.mjs'),
     `process.stdout.write(JSON.stringify({ decision: 'allow' }));`,
@@ -480,6 +516,7 @@ if (input.tool_name === 'write_file') {
       before_tool: [{ name: 'gate', command: nodeCommand(script) }],
     },
   });
+  rememberHookFile(dirs.home, join(dirs.workspace, '.circle', 'hooks.json'));
   const denied = await turn({
     ...dirs,
     t,
@@ -938,6 +975,7 @@ process.exit(2);
       ],
     },
   });
+  rememberHookFile(dirs.home, join(dirs.workspace, '.circle', 'hooks.json'));
   writeFileSync(
     join(dirs.workspace, 'hello.mjs'),
     `process.stdout.write('hello from hook');`,
@@ -1003,6 +1041,7 @@ test('the runtime runs project hooks only after the folder is trusted', async (t
       ],
     },
   });
+  rememberHookFile(dirs.home, join(dirs.workspace, '.circle', 'hooks.json'));
   const settings = defaultSettings();
   settings.trusted_folders = [dirs.workspace];
   const model = new ScriptedModel([
@@ -1100,6 +1139,7 @@ test('a skill hook runs only after that skill is loaded in this session', async 
       ],
     },
   });
+  rememberHookFile(dirs.home, join(skill, 'hooks.json'));
   const settings = defaultSettings();
   settings.trusted_folders = [dirs.workspace];
   const model = new ScriptedModel([

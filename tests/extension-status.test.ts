@@ -17,7 +17,7 @@ const meters = {
   contextWindow: 0,
 };
 
-test('an extension status stays at the right of the footer, gives way to a flash and is dropped whole when it does not fit', () => {
+test('an extension status stays at the right of the footer, gives way to a flash and keeps a short form when the row is narrow', () => {
   const status = [{ text: 'hub · tester', lamp: 'ok' as const }];
   const wide = footerRow(meters, '', 100, status);
   const plain = stripAnsi(wide);
@@ -28,8 +28,32 @@ test('an extension status stays at the right of the footer, gives way to a flash
   assert.ok(!flashing.includes('hub'));
   assert.ok(flashing.trimEnd().endsWith('Copied'));
   const narrow = stripAnsi(footerRow(meters, '', 40, status));
-  assert.ok(!narrow.includes('hub'));
-  assert.equal(narrow, stripAnsi(footerRow(meters, '', 40)));
+  assert.ok(narrow.includes('● hub · tester'));
+  assert.equal(stringWidth(narrow), 40);
+  const dropped = stripAnsi(footerRow(meters, '', 20, status));
+  assert.ok(!dropped.includes('hub'));
+  assert.equal(dropped, stripAnsi(footerRow(meters, '', 20)));
+  const crowded = stripAnsi(
+    footerRow(
+      {
+        usage: {
+          input_tokens: 36_600,
+          output_tokens: 560,
+          cache_read_tokens: 23_300,
+          cache_write_tokens: 0,
+        },
+        costText: '$0.0145',
+        contextInput: 12_500,
+        contextWindow: 1_000_000,
+      },
+      '',
+      60,
+      [{ text: '枢纽 · tester@127.0.0.1 · 无法连接', lamp: 'error' }],
+    ),
+  );
+  assert.ok(crowded.includes('● 枢纽 · 无法连接'));
+  assert.ok(!crowded.includes('tester@'));
+  assert.equal(stringWidth(crowded), 60);
   const unlit = stripAnsi(
     footerRow(meters, '', 100, [{ text: 'syncing', lamp: 'none' }]),
   );

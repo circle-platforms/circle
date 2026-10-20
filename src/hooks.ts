@@ -4,7 +4,14 @@
 // are decided before any hook runs, and a hook cannot undo them. A file tool
 // still refuses a credential file when it runs, after the hooks.
 import { spawn, execFile } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join, posix, win32 } from 'node:path';
 import { canonicalPath } from './paths.js';
 import { redactSecrets } from './secrets.js';
@@ -34,7 +41,8 @@ export interface HookNotice {
     | 'limit'
     | 'failed'
     | 'active'
-    | 'untrusted';
+    | 'untrusted'
+    | 'changed';
   tool?: string;
   name?: string;
   reason?: string;
@@ -69,6 +77,11 @@ export interface LoadedHooks {
   errors: HookLoadError[];
   /** A project hooks file exists and this folder is not trusted, so it did not load. */
   projectIgnored: boolean;
+  /**
+   * Project hook files that were not loaded because their bytes are not the
+   * digest last approved for that path.
+   */
+  projectChanged: { file: string; digest: string }[];
 }
 
 export interface HookOutcome {
@@ -145,6 +158,8 @@ export function hookNoticeText(notice: HookNotice): string {
       return `hooks active${notice.count !== undefined ? ` · ${notice.count}` : ''}${tail}`;
     case 'untrusted':
       return 'project hooks need trust';
+    case 'changed':
+      return 'project hooks changed';
   }
 }
 
@@ -454,6 +469,47 @@ function fileExists(path: string): boolean {
   }
 }
 
+/** SHA-256 of a hooks file's bytes. Approval is of this digest, not of the folder alone. */
+export function hookFileDigest(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
+
+function hookTrustPath(home: string): string {
+  return join(home, 'hook-trust.json');
+}
+
+/** Approved project-hook digests, keyed by the file's canonical path. */
+export function readHookTrust(home: string): Record<string, string> {
+  try {
+    const value: unknown = JSON.parse(
+      readFileSync(hookTrustPath(home), 'utf8'),
+    );
+    if (!isRecord(value) || !isRecord(value.files)) return {};
+    const files: Record<string, string> = {};
+    for (const [path, digest] of Object.entries(value.files))
+      if (typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest))
+        files[path] = digest;
+    return files;
+  } catch {
+    return {};
+  }
+}
+
+/** Remember that these bytes of a project hooks file are approved. */
+export function rememberHookFile(
+  home: string,
+  file: string,
+  digest = hookFileDigest(file),
+): void {
+  const files = readHookTrust(home);
+  files[canonicalPath(file)] = digest;
+  writeFileSync(
+    hookTrustPath(home),
+    JSON.stringify({ version: 1, files }, null, 2) + '\n',
+    { mode: 0o600 },
+  );
+}
+
 export function loadHooks(options: {
   workspace: string;
   home: string;
@@ -462,6 +518,9 @@ export function loadHooks(options: {
 }): LoadedHooks {
   const hooks: HookDefinition[] = [];
   const errors: HookLoadError[] = [];
+  const approved = readHookTrust(options.home);
+  const projectChanged: { file: string; digest: string }[] = [];
+  let projectIgnored = false;
   const take = (
     file: string,
     source: HookSource,
@@ -473,11 +532,31 @@ export function loadHooks(options: {
     hooks.push(...read.hooks);
     if (read.error) errors.push(read.error);
   };
+  // A project file runs only when the folder is trusted and these bytes were approved.
+  const considerProject = (
+    file: string,
+    source: HookSource,
+    label: string,
+    skill?: string,
+  ) => {
+    if (!fileExists(file)) return;
+    if (!options.trusted) {
+      projectIgnored = true;
+      return;
+    }
+    const digest = hookFileDigest(file);
+    if (approved[canonicalPath(file)] !== digest) {
+      projectChanged.push({ file, digest });
+      return;
+    }
+    take(file, source, label, skill);
+  };
   take(join(options.home, 'hooks.json'), 'user', 'user');
-  let projectIgnored = false;
-  const projectFile = join(options.workspace, '.circle', 'hooks.json');
-  if (!options.trusted && fileExists(projectFile)) projectIgnored = true;
-  else if (options.trusted) take(projectFile, 'project', 'project');
+  considerProject(
+    join(options.workspace, '.circle', 'hooks.json'),
+    'project',
+    'project',
+  );
   let skills: ReturnType<typeof discoverSkills> = [];
   try {
     skills = discoverSkills(options.workspace, options.home, options.userHome);
@@ -488,13 +567,11 @@ export function loadHooks(options: {
     const projectSkill = skill.source_label.startsWith('Project');
     const file = join(dirname(skill.path), 'hooks.json');
     if (!fileExists(file)) continue;
-    if (projectSkill && !options.trusted) {
-      projectIgnored = true;
-      continue;
-    }
-    take(file, 'skill', `skill:${skill.name}`, skill.name);
+    if (projectSkill)
+      considerProject(file, 'skill', `skill:${skill.name}`, skill.name);
+    else take(file, 'skill', `skill:${skill.name}`, skill.name);
   }
-  return { hooks, errors, projectIgnored };
+  return { hooks, errors, projectIgnored, projectChanged };
 }
 
 function textField(value: unknown): string {
