@@ -248,6 +248,7 @@ export function footerRow(
     parts.lines.find((line) => stringWidth(line) <= room) ??
     parts.lines[parts.lines.length - 1]!;
   const plain = stringWidth(fitted) <= room ? fitted : truncate(fitted, room);
+  const showsContext = Boolean(context) && plain.includes(context);
   if (flash) {
     // The flash is its own segment. Meters give way on a ` · ` boundary, so a
     // narrow row does not become `cach  cleared`.
@@ -261,71 +262,31 @@ export function footerRow(
     );
     return p.faint + ' ' + left + ' '.repeat(gap) + shown + ' ' + p.reset;
   }
-  const lit = (lamp: LampState): boolean => lamp !== 'none';
-  const rightWidth = (items: { text: string; lamp: LampState }[]): number =>
-    items.reduce(
-      (sum, item) => sum + (lit(item.lamp) ? 2 : 0) + stringWidth(item.text),
-      0,
-    ) +
-    2 * Math.max(0, items.length - 1);
-  // Drop the account and host (the middle of `hub · user@host · cannot reach`)
-  // before giving up the status. Meters shrink from the right so a short
-  // status still has a place.
-  const forms = status.map((item) => {
-    const parts = item.text
-      .split(' · ')
-      .map((part) => part.trim())
-      .filter(Boolean);
-    const texts =
-      parts.length > 2
-        ? [item.text, `${parts[0]} · ${parts[parts.length - 1]}`]
-        : [item.text];
-    return [...new Set(texts)].map((text) => ({ ...item, text }));
-  });
-  let combos: { text: string; lamp: LampState }[][] = [[]];
-  for (const choices of forms) {
-    const next: { text: string; lamp: LampState }[][] = [];
-    for (const combo of combos)
-      for (const choice of choices) next.push([...combo, choice]);
-    combos = next;
-  }
-  let chosenMeter = plain;
-  let chosenStatus = status;
-  let fittedGap = status.length
-    ? width - 2 - stringWidth(plain) - rightWidth(status)
-    : 3;
-  if (status.length) {
-    fittedGap = -1;
-    for (const meter of parts.lines) {
-      if (stringWidth(meter) > room) continue;
-      for (const combo of combos) {
-        const gap = width - 2 - stringWidth(meter) - rightWidth(combo);
-        if (gap >= 3) {
-          chosenMeter = meter;
-          chosenStatus = combo;
-          fittedGap = gap;
-          break;
-        }
-      }
-      if (fittedGap >= 3) break;
-    }
-  }
-  const shownContext = Boolean(context) && chosenMeter.includes(context);
   const left =
-    !shownContext || percent < 70
-      ? p.faint + ' ' + chosenMeter + p.reset
+    !showsContext || percent < 70
+      ? p.faint + ' ' + plain + p.reset
       : p.faint +
         ' ' +
-        chosenMeter.slice(0, chosenMeter.length - context.length) +
+        plain.slice(0, plain.length - context.length) +
         p.reset +
         (percent >= 90 ? p.red : p.yellow) +
         context +
         p.reset;
-  if (!status.length || fittedGap < 3) return left;
+  if (!status.length) return left;
+  const lit = (lamp: LampState): boolean => lamp !== 'none';
+  const rightWidth =
+    status.reduce(
+      (sum, item) => sum + (lit(item.lamp) ? 2 : 0) + stringWidth(item.text),
+      0,
+    ) +
+    2 * (status.length - 1);
+  // The right edge stops at the second-to-last column, as the flash does.
+  const gap = width - 2 - stringWidth(plain) - rightWidth;
+  if (gap < 3) return left;
   return (
     left +
-    ' '.repeat(fittedGap) +
-    chosenStatus
+    ' '.repeat(gap) +
+    status
       .map(
         (item) =>
           (lit(item.lamp) ? statusLight(item.lamp) + ' ' : '') +
