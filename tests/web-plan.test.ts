@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   webFetch,
   webSearch,
@@ -10,6 +10,8 @@ import {
 } from '../src/websearch.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
+import { projectDataDir } from '../src/paths.js';
+import { emptyUsage } from '../src/types.js';
 import { defaultSettings } from '../src/settings.js';
 import { scratch, cleanup } from './helpers.js';
 import type { Message } from '../src/types.js';
@@ -220,56 +222,97 @@ test('web fetch upgrades HTTP, preserves JSON and HTML formats, limits streamed 
   assert.match(large, /truncated to 500000 bytes/);
   assert.ok(large.length < 501000);
 });
-test('read-only mode allows plan files and plan-only patches but blocks other effects and leaves the model an explicit boundary', async (t) => {
+test("plan mode writes only the conversation's own plan file, in the data folder and without asking, and blocks every other effect", async (t) => {
+  const home = scratch(t);
   const root = scratch(t);
+  let file = '';
   const model = new ScriptedModel([
-    {
-      message: reply('plan', '', [
-        {
-          id: 'plan-write',
-          name: 'write_file',
-          args: { file_path: 'plan.md', content: 'plan' },
-        },
-        {
-          id: 'normal-write',
-          name: 'write_file',
-          args: { file_path: 'code.ts', content: 'bad' },
-        },
-        {
-          id: 'mixed-patch',
-          name: 'apply_patch',
-          args: {
-            patchText:
-              '*** Begin Patch\n*** Add File: plan\n+ok\n*** Add File: code.ts\n+bad\n*** End Patch',
+    async (request) => {
+      // The system prompt names the plan file
+      file = /`(\/session_plans\/[\w-]+\.md)`/.exec(request.system)![1]!;
+      return {
+        message: reply('plan', '', [
+          {
+            id: 'plan-write',
+            name: 'write_file',
+            args: { file_path: file, content: '# Plan\n' },
           },
-        },
-      ]),
+          {
+            id: 'workspace-plan',
+            name: 'write_file',
+            args: { file_path: 'plan.md', content: 'not here' },
+          },
+          {
+            id: 'other-plan',
+            name: 'write_file',
+            args: { file_path: '/session_plans/other.md', content: 'not mine' },
+          },
+          {
+            id: 'normal-write',
+            name: 'write_file',
+            args: { file_path: 'code.ts', content: 'bad' },
+          },
+          {
+            id: 'mixed-patch',
+            name: 'apply_patch',
+            args: {
+              patchText: `*** Begin Patch\n*** Update File: ${file}\n@@\n-# Plan\n+# Mixed\n*** Add File: code.ts\n+bad\n*** End Patch`,
+            },
+          },
+          {
+            id: 'plan-patch',
+            name: 'apply_patch',
+            args: {
+              patchText: `*** Begin Patch\n*** Update File: ${file}\n@@\n-# Plan\n+# Plan, revised\n*** End Patch`,
+            },
+          },
+        ]),
+        usage: emptyUsage(),
+      };
     },
     { message: reply('done', 'planned') },
   ]);
+  // Headless and in manual mode: a call that asked could not run at all
   const runtime = new AgentRuntime({
-    home: root,
+    home,
     workspace: root,
     settings: defaultSettings(),
     model,
     headless: true,
   });
   cleanup(t, () => runtime.close());
-  runtime.policy.setYolo(runtime.session.id, true);
   runtime.setPlanMode(true);
   await runtime.harness.run('plan');
-  assert.equal(readFileSync(join(root, 'plan.md'), 'utf8'), 'plan');
-  assert.equal(existsSync(join(root, 'code.ts')), false);
-  assert.equal(existsSync(join(root, 'plan')), false);
+  const { path } = runtime.planFile;
+  assert.equal(file, runtime.planFile.file);
+  assert.equal(file, `/session_plans/${runtime.session.id}.md`);
+  assert.equal(
+    path,
+    join(
+      realpathSync(projectDataDir(root, home)),
+      'session_plans',
+      `${runtime.session.id}.md`,
+    ),
+  );
+  assert.equal(readFileSync(path, 'utf8'), '# Plan, revised\n');
+  for (const name of ['plan.md', 'code.ts'])
+    assert.equal(existsSync(join(root, name)), false, name);
+  assert.equal(existsSync(join(dirname(path), 'other.md')), false);
+  const status = (id: string) =>
+    runtime.harness.messages.find((message) => message.tool_call_id === id)!
+      .status;
+  assert.equal(status('plan-write'), 'success');
+  assert.equal(status('plan-patch'), 'success');
+  for (const id of [
+    'workspace-plan',
+    'other-plan',
+    'normal-write',
+    'mixed-patch',
+  ])
+    assert.equal(status(id), 'error', id);
   assert.match(
     JSON.stringify(model.requests[0]!.messages),
-    /Plan mode is now ON/,
-  );
-  assert.equal(
-    runtime.harness.messages.find(
-      (message) => message.tool_call_id === 'normal-write',
-    )!.status,
-    'error',
+    /Plan mode is now ON.*session_plans/,
   );
 });
 test('delete remains a forced headless approval, and leaving plan mode requires a real affirmative panel answer', async (t) => {

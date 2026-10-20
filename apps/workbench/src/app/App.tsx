@@ -117,6 +117,9 @@ import {
   overviewFits,
   sidebarMustFold,
 } from './workspace-layout';
+/** In the files mode's document slot, the plan in place of a workspace file. No file's
+ * path holds a NUL. */
+const PLAN = '\u0000plan';
 const FileViewer = lazy(() =>
   import('../features/FileViewer').then((module) => ({
     default: module.FileViewer,
@@ -124,6 +127,7 @@ const FileViewer = lazy(() =>
 );
 import { ManagementPage } from '../features/Pages';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
+import { PlanView } from '../features/PlanView';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
 import { platformTitle, shellPageTitle } from '../plugins/labels';
@@ -839,8 +843,53 @@ export function App() {
     navigate(`/session/${sourceSessionId}`);
   };
 
+  // Plan mode's plan opens where a file opens. Circle keeps it in its data folder, so a
+  // tool row that wrote it opens it here, not as a workspace file.
+  const openPlan = () => {
+    sourceOpener.current.cancel();
+    setFileOwner(undefined);
+    setFile(PLAN);
+    setPanel('files');
+    showDrawer();
+  };
+  const closeFile = () => {
+    sourceOpener.current.cancel();
+    setFile(null);
+    setFileOwner(undefined);
+    if (narrow) setInspectorOpen(false);
+  };
   const onFile = (path: string, line?: number, column?: number) =>
-    openSource(path, line, column);
+    session.plan && path.replace(/^\/*/, '/') === session.plan.file
+      ? openPlan()
+      : openSource(path, line, column);
+  // When Circle writes the plan, it opens: once in a turn, so a plan closed while Circle
+  // works stays closed until the plan card asks about it, and then it opens again. It
+  // never opens over another page or in a narrow window, where it would cover the
+  // conversation and the card.
+  const planCard = snapshot.interactions.find(
+    (item) =>
+      item.sessionId === session.id &&
+      item.kind === 'plan-exit' &&
+      item.status === 'pending',
+  )?.id;
+  const planSeen = useRef<{ at?: string; turn?: number; card?: string }>({});
+  useEffect(() => {
+    planSeen.current = { at: session.plan?.updatedAt, card: planCard };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id]);
+  useEffect(() => {
+    const seen = planSeen.current;
+    const at = session.plan?.updatedAt;
+    const turn = session.turn?.startedAt;
+    const wrote = !!at && at !== seen.at && turn !== seen.turn;
+    const asked = !!planCard && planCard !== seen.card && !!at;
+    seen.at = at;
+    seen.card = planCard;
+    if (!(wrote || asked) || onPage || narrow) return;
+    if (wrote) seen.turn = turn;
+    openPlan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.plan?.updatedAt, planCard]);
   const onAgentFile = (path: string, line?: number, column?: number) => {
     const origin = snapshot.agents.find(
       (item) => item.id === agent && item.sessionId === session.id,
@@ -1224,26 +1273,25 @@ export function App() {
   );
   const fileView = (
     <div className="session-resource-view" hidden={!file}>
-      {file && (
-        <NativeResourceBoundary name={t('editor')} resetKey={file}>
-          <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
-            <FileViewer
-              path={file}
-              line={sourceLine}
-              column={sourceColumn}
-              resourceOwner={fileOwner}
-              onNavigate={(path, line, column) =>
-                openSource(path, line, column, fileOwner)
-              }
-              onClose={() => {
-                sourceOpener.current.cancel();
-                setFile(null);
-                setFileOwner(undefined);
-                if (narrow) setInspectorOpen(false);
-              }}
-            />
-          </Suspense>
-        </NativeResourceBoundary>
+      {file === PLAN ? (
+        <PlanView onClose={closeFile} />
+      ) : (
+        file && (
+          <NativeResourceBoundary name={t('editor')} resetKey={file}>
+            <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
+              <FileViewer
+                path={file}
+                line={sourceLine}
+                column={sourceColumn}
+                resourceOwner={fileOwner}
+                onNavigate={(path, line, column) =>
+                  openSource(path, line, column, fileOwner)
+                }
+                onClose={closeFile}
+              />
+            </Suspense>
+          </NativeResourceBoundary>
+        )
       )}
     </div>
   );
