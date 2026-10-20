@@ -97,6 +97,8 @@ export async function attachPrompt(
 ): Promise<{
   message: { content: string; attachments?: MediaAttachment[] };
   leftOut: number;
+  /** How many of the pictures left out were written by `save`, their paths in the text. */
+  saved: number;
   problems: string[];
 }> {
   root = realpathSync(root);
@@ -189,6 +191,7 @@ export async function attachPrompt(
       ...(attachments.length ? { attachments } : {}),
     },
     leftOut,
+    saved: savedImages.length,
     problems,
   };
 }

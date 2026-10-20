@@ -148,13 +148,18 @@ export class VisionService {
       this.cache.set(key, cached);
       return { model: connection.model, text: cached };
     }
-    const total = AbortSignal.any([
-      signal,
-      AbortSignal.timeout(
-        this.options.timeoutMs ?? timeoutFromEnv(process.env),
-      ),
-    ]);
+    const deadline = this.options.timeoutMs ?? timeoutFromEnv(process.env);
+    const total = AbortSignal.any([signal, AbortSignal.timeout(deadline)]);
     const url = endpoint(connection);
+    // A stop is the caller's and keeps its reason; the deadline says how long it waited,
+    // before the answer starts and while it arrives alike
+    const stopped = (): void => {
+      signal.throwIfAborted();
+      if (total.aborted)
+        throw new Error(
+          `vision model ${connection.model} on ${url.host} did not answer within ${Number((deadline / 1000).toFixed(1))} s (CIRCLE_VISION_TIMEOUT_MS)`,
+        );
+    };
     let response: Response;
     try {
       response = await (this.options.request ?? fetch)(url, {
@@ -185,7 +190,7 @@ export class VisionService {
         redirect: 'error',
       });
     } catch (error) {
-      total.throwIfAborted();
+      stopped();
       throw new Error(
         `vision model ${connection.model} on ${url.host}: ${
           isNetworkFailure(error)
@@ -195,7 +200,16 @@ export class VisionService {
         { cause: error },
       );
     }
-    const raw = await response.text();
+    let raw: string;
+    try {
+      raw = await response.text();
+    } catch (error) {
+      stopped();
+      throw new Error(
+        `vision model ${connection.model} on ${url.host}: the answer broke off: ${networkErrorReason(error)}`,
+        { cause: error },
+      );
+    }
     if (raw.length > MAX_RESPONSE_CHARS)
       throw new Error('vision model response exceeds 2 MiB');
     if (!response.ok) {

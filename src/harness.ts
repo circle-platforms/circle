@@ -626,7 +626,7 @@ export class Harness {
     signal: AbortSignal,
     given?: MediaAttachment[],
   ): Promise<Pick<Message, 'content' | 'attachments'>> {
-    const { message, leftOut, problems } = await attachPrompt(
+    const { message, leftOut, saved, problems } = await attachPrompt(
       prompt,
       workspace,
       signal,
@@ -642,7 +642,8 @@ export class Harness {
             event: 'images_left_out',
             model: this.model.model,
             count: leftOut,
-            ...(this.options.saveImageAttachment ? { saved: true } : {}),
+            // Some were written as files, their paths given to the model
+            ...(saved ? { saved: true } : {}),
           },
         },
       });
@@ -1468,7 +1469,12 @@ export class Harness {
       // After the arguments were checked, from the values: the model cannot give these itself.
       // The rules judge them as they are; the card and the hooks see each secret's value
       // back as its name, as they see the arguments.
-      const facts = tool.approvalFacts?.(resolved, this.sessionId, call.args);
+      const facts = tool.approvalFacts?.(
+        resolved,
+        this.sessionId,
+        call.args,
+        callModel.imageInput,
+      );
       if (facts) {
         call = {
           ...call,

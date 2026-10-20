@@ -477,6 +477,7 @@ export function browserTools(
           );
           return `${result.text}\nThe picture is saved as ${target}.\nDescribed by the side vision model ${described.model}:\n${described.text}`;
         } catch (error) {
+          context.signal.throwIfAborted();
           return `${result.text}\nThe picture is saved as ${target}.\nThe side vision model could not describe it: ${
             error instanceof Error ? error.message : String(error)
           }`;

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import {
-  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -430,7 +429,7 @@ test('a model known not to read images gets the paths only, with a notice, and a
   await runtime.harness.run('what is in @shot.png');
   assert.equal(model.requests[0]!.messages.at(-1)!.attachments, undefined);
   assert.deepEqual(notices, [
-    { event: 'images_left_out', model: 'scripted', count: 1, saved: true },
+    { event: 'images_left_out', model: 'scripted', count: 1 },
     { event: 'title_failed', message: 'model has no side request' },
   ]);
   const result = model.requests[1]!.messages.at(-1)!;
