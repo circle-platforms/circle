@@ -81,10 +81,11 @@ handled as signature errors, and signature errors do not disable thinking.
 | `websearch_service.ts` | Runtime-owned native search capability cache, deadlines, normalized results and DuckDuckGo fallback. |
 | `native_websearch.ts` | Provider search protocols, structured execution evidence, citations and auxiliary model usage. |
 | `questions.ts` | The `question` tool and its answers. |
+| `plan_file.ts` | Plan mode's plan: where each conversation's plan file is kept, and the choices `plan_exit` offers and how their answers read. |
 | `secret_prompt.ts` | Secret requests: the files a task and Circle exchange, and writing the value into its target file. |
 | `approvals.ts` | Sorts commands and tool calls, keeps the session's rules and decides what needs your answer. |
 | `hooks.ts` | Declarative hooks: `hooks.json` for you, a trusted project and an optional skill, the shell protocol, and decisions that override the approval mode. |
-| `sandbox.ts` | Resolves paths (including `/conversation_history/`, `/large_tool_results/` and `/background_jobs/`, which live in the data folder), refuses credential files, runs commands with secret variables stripped from their environment, and stops their process groups. It is a policy boundary, not an operating-system sandbox. |
+| `sandbox.ts` | Resolves paths (including `/conversation_history/`, `/large_tool_results/`, `/background_jobs/` and `/session_plans/`, which live in the data folder), refuses credential files, runs commands with secret variables stripped from their environment, and stops their process groups. It is a policy boundary, not an operating-system sandbox. |
 | `redact.ts` | Hides passwords and tokens in command and job output. |
 | `secrets.ts` | Variables and saved secrets written `%NAME%`: `secrets.json`, putting values into a call's arguments after its approval, and turning a secret's value back into `%NAME%` in what the model reads. |
 | `browser/` | The conversation browser. `tools.ts` has the `browser_*` tools, each action's site for its approval and the handshake with the person. `page.ts` is the script that reads a page and moves the pointer. `protocol.ts`, `format.ts`, `hosts.ts`, `certificates.ts` and `files.ts` are what both browsers share. `chrome.ts` and `cdp.ts` drive Chrome, Edge or Chromium for the terminal; the desktop's browser is `apps/desktop/src/browser.ts`. |

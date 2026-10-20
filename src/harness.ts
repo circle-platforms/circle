@@ -168,7 +168,12 @@ export interface HarnessOptions {
   prepareMessages?: (signal: AbortSignal) => Promise<Message[]>;
   approvalSessionId?: string;
   parentPlanMode?: () => boolean;
+  /** A call that writes only this conversation's plan file: plan mode lets it run, and
+   * it never asks. */
   planFileMutation?: (call: ToolCall) => boolean;
+  /** What plan mode tells the model, with the path of its plan file. Without it, a
+   * read-only harness, such as a subagent's, may change nothing. */
+  planPrompt?: () => string;
   /**
    * Leave a sentence untitled until its generated title arrives, instead of
    * saving the short title first. The desktop shows it as a new session.
@@ -1077,8 +1082,8 @@ export class Harness {
               this.system +
               (this.hookPreface ? `\n\n${this.hookPreface}` : '') +
               (this.readOnly
-                ? this.options.planFileMutation
-                  ? '\nRead-only mode: inspect and plan; only plan.md or plan files may be changed, subject to approval. Do not run shell commands.'
+                ? this.options.planPrompt
+                  ? '\n\n' + this.options.planPrompt()
                   : '\nRead-only mode: inspect and plan; do not change files or run commands.'
                 : ''),
             messages: orderModeToolResults(
@@ -1527,6 +1532,7 @@ export class Harness {
       signal.throwIfAborted();
       const wouldAsk =
         !settingsAllowed &&
+        !this.options.planFileMutation?.(call) &&
         tool.effect !== 'read' &&
         tool.approval !== false &&
         (this.options.policy.needsApproval(

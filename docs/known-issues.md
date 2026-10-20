@@ -68,10 +68,6 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **`terminal_wait` matches a screen, not a byte stream.** The `pattern` is tested against the last 400 lines joined with newlines, so it sees what is on the screen now: a device that printed the answer and cleared it, or scrolls it past the buffer, is gone before it can be matched. Read or wait soon after the device rests.
 - **A device that prints with a bare line feed can look staggered.** Circle normalises `\r\n`, but a device that emits lone `\n` or lone `\r` at wrap can leave a phantom blank or a short line; `terminal_read` trims trailing blanks to keep the tail clean.
 
-## Read-only mode
-
-Any file whose name is `plan.md` or `plan` can be written, edited or deleted in any folder, with the usual approval. Everything else that changes something is refused.
-
 ## Slow failures
 
 If your endpoint is slow or never answers, a turn can take a long time to give up. A timeout is retried 10 times, and each try waits longer for the answer, up to 5 minutes, so an endpoint that accepts the connection and then sends nothing takes about 50 minutes. Press `esc` to stop sooner. An endpoint that refuses the connection gives up within about five minutes.
