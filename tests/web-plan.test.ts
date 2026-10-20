@@ -289,7 +289,7 @@ test("plan mode writes only the conversation's own plan file, in the data folder
   assert.equal(
     path,
     join(
-      realpathSync(projectDataDir(root, home)),
+      realpathSync.native(projectDataDir(root, home)),
       'session_plans',
       `${runtime.session.id}.md`,
     ),
