@@ -146,6 +146,8 @@ const document = `<!doctype html>
 // What each request for the admin page sent to sign in, decoded
 const authorizations = [];
 let releaseHeld = () => {};
+let releaseSlow = () => {};
+const slowReleased = new Promise((resolve) => (releaseSlow = resolve));
 const handler = async (request, response) => {
   if (request.url === '/close-opener' || request.url === '/close-popup') {
     response.writeHead(200, { 'Content-Type': 'text/html' });
@@ -209,7 +211,9 @@ const handler = async (request, response) => {
     return;
   }
   if (request.url === '/slow') {
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    // Answers once the test has seen the person ask for the browser while Circle
+    // opens it, whenever the page was asked for (#205)
+    await slowReleased;
     response.writeHead(200, { 'Content-Type': 'text/html' });
     response.end('<!doctype html><title>Slow page</title><p>slow</p>');
     return;
@@ -1530,6 +1534,12 @@ try {
     assert.equal((await browserState(sessionId)).control, 'shared');
     await send('open the slow page');
     await page.getByTestId('browser-operating').waitFor();
+    // The ring lights once the turn's browser tool runs; the browser takes the page,
+    // and puts its clear layer on top, when the action itself starts (#205)
+    await waitFor(
+      async () => (await browserState(sessionId)).control === 'agent',
+      'Circle acts in the browser',
+    );
     const driving = await controlRing();
     assert.equal(driving.driving, true);
     assert.equal(driving.label, 'Circle is operating');
@@ -1604,6 +1614,7 @@ try {
     });
     assert.equal(masked, 0);
     await page.getByTestId('browser-pending').waitFor();
+    releaseSlow();
     // The model's next look waits for the browser back, then shows the page as it is;
     // a message to Circle hands it back, and reaches the model with the page
     await handoffCard.waitFor();
