@@ -1401,20 +1401,11 @@ test('a text-only model cannot capture a browser screenshot', async (t) => {
   );
   assert.equal(browser.requests.length, 0);
   assert.equal(f.controller.snapshot().interactions.length, 0);
-  assert.equal(
-    f.model.requests[0]!.tools.some(
-      (tool) =>
-        tool.name === 'browser_screenshot' || tool.name === 'screenshot',
-    ),
-    false,
-    'a text-only model is not offered a screenshot',
-  );
   const result = f.model.requests[1]!.messages.find(
     (message) => message.tool_call_id === 'screenshot',
   )!;
   assert.equal(result.status, 'error');
-  assert.match(result.content, /Call browser_snapshot first/);
-  assert.match(result.content, /no page snapshot has been taken yet/);
+  assert.match(result.content, /does not read images; use browser_snapshot/);
   assert.equal(result.attachments, undefined);
 });
 

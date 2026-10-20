@@ -4,12 +4,6 @@ import { isRecord } from './settings.js';
 export class RecoverableToolError extends Error {
   readonly recoverable = true;
 }
-/**
- * What a text-only model is told when it calls `browser_screenshot`. The tool is not
- * offered, and this must not read as if a page snapshot were already in the thread.
- */
-export const BROWSER_SCREENSHOT_UNAVAILABLE =
-  'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.';
 export function canonical(name: string): string {
   const match = name.match(/^mcp__(.+?)__(.+)$/);
   return (match ? match[1] + '_' + match[2] : name)
@@ -163,11 +157,7 @@ export function prepareToolCall(
     );
     const found = tools.find((tool) => tool.name === resolved);
     if (!found || found.effect !== 'read' || found.approval === true)
-      throw new RecoverableToolError(
-        call.name === 'browser_screenshot' || resolved === 'browser_screenshot'
-          ? BROWSER_SCREENSHOT_UNAVAILABLE
-          : `tool is not available: ${call.name}`,
-      );
+      throw new RecoverableToolError(`tool is not available: ${call.name}`);
     tool = found;
   }
   const args = normalize(structuredClone(call.args), tool.parameters);

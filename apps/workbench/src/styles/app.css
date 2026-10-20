@@ -851,12 +851,6 @@ pre {
 .tool-head code {
   font-size: var(--ui-small);
 }
-.tool-error-cause {
-  margin: 0;
-  padding: 0 12px 10px 36px;
-  color: var(--fg);
-  font-size: var(--ui-small);
-}
 .tool-target {
   min-width: 0;
   overflow: hidden;
