@@ -439,7 +439,61 @@ export const TUI_ZH: Record<string, string> = {
   'y / a / n also work on permission cards': '审批卡上 y / a / n 也可以',
   'over the plan box scrolls it; elsewhere it scrolls the transcript':
     '在计划框上滚动计划；别处滚动对话',
-  'new hook': '新的',
+  'new hook': '新增',
   'changed hook': '已更改',
-  'unchanged hook': '未改',
+  'unchanged hook': '未变',
+  'removed hook': '已删除',
+  'pending hook': '待确认',
+  'enter confirms · esc cancels': '回车确认 · esc 取消',
+  'enter saves · esc cancels': '回车保存 · esc 取消',
+  Rename: '重命名',
+  'typing replaces the name · enter saves · esc cancels':
+    '输入会替换名称 · 回车保存 · esc 取消',
+  '(untitled)': '（无标题）',
+  deleting: '正在删除',
+  'base url': '基础 URL',
+  'api key': 'API 密钥',
+  'enter continues · esc closes': '回车继续 · esc 关闭',
+  'enter continues · esc goes back': '回车继续 · esc 返回',
+  'Label (empty removes it)': '标签（留空则去掉）',
+  'Session mode': '会话模式',
+  'enter uses it in this session · alt+d also makes it the default':
+    '回车用于本会话 · alt+d 同时设为默认',
+  'enter uses it in this session · alt+d also makes it the default · alt+t cycles':
+    '回车用于本会话 · alt+d 同时设为默认 · alt+t 切换',
+  'Session approvals': '本会话的批准',
+  Settings: '设置',
+  'enter changes it, saved at once · esc closes':
+    '回车修改并立即保存 · esc 关闭',
+  'Background jobs': '后台任务',
+  'enter opens · ctrl+k stops': '回车打开 · ctrl+k 停止',
+  'No jobs': '没有任务',
+  'Device terminals': '设备终端',
+  'enter opens · ctrl+d cuts': '回车打开 · ctrl+d 断开',
+  'No terminals': '没有终端',
+  'Fork from a message': '从一条消息分叉',
+  'a new session with everything before it; the message comes back to edit':
+    '新会话带上它之前的全部内容，这条消息回到输入框里修改',
+  'Session tree': '会话树',
+  'enter goes back there · L labels · ctrl+u only your messages':
+    '回车回到那里 · L 加标签 · ctrl+u 只看你的消息',
+  Variables: '变量',
+  'enter puts the command in the input box · NAME= removes':
+    '回车把命令放进输入框 · NAME= 则删除',
+  'no variables': '没有变量',
+  'Task details': '任务详情',
+  Model: '模型',
+  'No model matches · /models <id> uses an id the endpoint does not list':
+    '没有匹配的模型 · /models <id> 使用端点未列出的 id',
+  'No model matches · enter uses what you typed':
+    '没有匹配的模型 · 回车使用你输入的',
+  'which provider?': '哪个提供方？',
+  'enter uses it in this session · alt+d also makes it the default · tab adds it to alt+m or takes it out':
+    '回车用于本会话 · alt+d 同时设为默认 · tab 加入或移出 alt+m',
+  'in alt+m': '在 alt+m 里',
+  'No always-allow rules this session.': '本会话没有始终允许的规则。',
+  '/approvals add <pattern> allows commands by pattern':
+    '/approvals add <pattern> 按模式允许命令',
+  'Sign in': '登录',
+  'other session': '其他会话',
 };

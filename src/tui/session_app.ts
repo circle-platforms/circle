@@ -83,8 +83,6 @@ import { PlanCompletionTracker, planVisible } from '../plan_state.js';
 import { nextAgentActivity } from '../session_activity.js';
 import { networkSummary } from '../net.js';
 import { terminalText } from '../ink/components/markdown_renderer.js';
-import { t } from '../locale.js';
-import type { HookChange } from '../hooks.js';
 import { WelcomeState } from './welcome_state.js';
 import { contextInputOf, windowTitle } from './status_rows.js';
 import { loadRemap } from '../keybindings.js';
@@ -123,7 +121,7 @@ import {
 import { PlanPanel } from '../ink/components/plan_panel.js';
 import { stripAnsi, truncate } from '../ink/string_width.js';
 import { modelScope, sameModel } from '../model_scope.js';
-import { rememberHookFile } from '../hooks.js';
+import { describeHookChange, rememberHookFile } from '../hooks.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
 import { browserTools, runtimeBrowserOptions } from '../browser/tools.js';
@@ -1499,25 +1497,6 @@ export class SessionApp {
    * A changed project hooks file does not run until these bytes are approved.
    * Headless runs and tests never take the card; the transcript still says so.
    */
-  private hookCardBody(change: HookChange): string {
-    const mark = (kind: HookChange['hooks'][number]['mark']): string =>
-      t(
-        kind === 'new'
-          ? 'new hook'
-          : kind === 'changed'
-            ? 'changed hook'
-            : 'unchanged hook',
-      );
-    return [
-      change.file,
-      "This project's hooks file changed.",
-      'These hooks run shell commands and stay off until you approve them.',
-      ...change.hooks.map(
-        (hook) =>
-          `${hook.name} · ${hook.event} · ${hook.command} · ${mark(hook.mark)}`,
-      ),
-    ].join('\n');
-  }
   private async offerHookApproval(startup = false): Promise<void> {
     if (
       this.offeringHooks ||
@@ -1536,7 +1515,7 @@ export class SessionApp {
         if (this.ended) return;
         const answer = await this.askChoice(
           'hooks',
-          this.hookCardBody(change),
+          describeHookChange(change),
           ['approve these hooks', 'skip'],
           undefined,
           startup,
@@ -3760,9 +3739,7 @@ export class SessionApp {
                 .join(' · '),
             }));
           this.picker('Model', rows(), (item) => choose(item.key), {
-            hint:
-              'enter uses it in this session · alt+d also makes it the default · ' +
-              'tab adds it to alt+m or takes it out',
+            hint: 'enter uses it in this session · alt+d also makes it the default · tab adds it to alt+m or takes it out',
             empty:
               'No model matches · /models <id> uses an id the endpoint does not list',
             focusKey:

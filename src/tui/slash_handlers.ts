@@ -1,7 +1,7 @@
 // The slash commands of the full-screen interface. SessionApp keeps /models, /login, /reload
 // and /editor, which use its own state, and routes every command through runCommand.
 import { randomUUID } from 'node:crypto';
-import { t, uiParen, uiText } from '../locale.js';
+import { t, uiAside, uiText } from '../locale.js';
 import { networkSummary } from '../net.js';
 import {
   mkdirSync,
@@ -326,7 +326,7 @@ function help(host: CommandHost): void {
   const lines = [t('Available commands:'), ''];
   for (const command of BUILTIN_SLASH) {
     const alias = command.aliases?.length
-      ? ' ' + uiParen(command.aliases.map((name) => '/' + name).join(', '))
+      ? uiAside(command.aliases.map((name) => '/' + name).join(', '))
       : '';
     lines.push(
       aligned(`  /${command.name.padEnd(10)} `, t(command.description) + alias),
@@ -753,9 +753,10 @@ function approvalsList(host: CommandHost): void {
   });
   host.picker('Session approvals', items, choose, {
     hint: [
-      rules.length ? '' : 'No always-allow rules this session.',
+      rules.length ? '' : t('No always-allow rules this session.'),
       recent.length
-        ? 'recent: ' +
+        ? t('recent') +
+          ': ' +
           recent
             .map(
               (entry) =>
@@ -763,7 +764,7 @@ function approvalsList(host: CommandHost): void {
             )
             .join(' · ')
         : '',
-      '/approvals add <pattern> allows commands by pattern',
+      t('/approvals add <pattern> allows commands by pattern'),
     ]
       .filter(Boolean)
       .join(' · '),
@@ -1471,7 +1472,7 @@ async function skill(host: CommandHost, args: string): Promise<void> {
             ...skills.map((skill) => {
               const description = uiText(skill.description);
               const source = skill.source_label
-                ? ` ${uiParen(uiText(skill.source_label))}`
+                ? uiAside(uiText(skill.source_label))
                 : '';
               return aligned(
                 `  ${pad(skill.name, 20)} `,

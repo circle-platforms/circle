@@ -144,6 +144,25 @@ function translatePatterns(
   if (created) return `新会话 ${created[1]}`;
   const more = /^… \+(\d+) more · \/resume$/.exec(text);
   if (more) return `… 还有 ${more[1]} 个 · /resume`;
+  const drop = /^(Stop and delete|Delete) “([\s\S]*)” and its messages\?$/.exec(
+    text,
+  );
+  if (drop) {
+    const verb = drop[1] === 'Delete' ? '删除' : '停止并删除';
+    return `${verb}“${drop[2]}”及其消息？`;
+  }
+  const stopped = /^Stop (\S+) ([\s\S]+)\?$/.exec(text);
+  if (stopped) return `停止 ${stopped[1]} ${stopped[2]}？`;
+  const cut = /^Cut (\S+) ([\s\S]+)\?$/.exec(text);
+  if (cut) return `断开 ${cut[1]} ${cut[2]}？`;
+  const deleted = /^Deleted (.+)$/.exec(text);
+  if (deleted) return `已删除 ${deleted[1]}`;
+  const asking = /^asking (\S+) for its models…$/.exec(text);
+  if (asking) return `正在向 ${asking[1]} 询问它的模型…`;
+  const kept = /^api key \(enter keeps the saved one\)$/.exec(text);
+  if (kept) return 'API 密钥（回车保留已保存的）';
+  if (text.startsWith('Sign in · '))
+    return `登录 · ${text.slice('Sign in · '.length)}`;
   const mode = /^Mode is already (.+)$/.exec(text);
   if (mode) return `已经是${uiText(mode[1]!, locale)}`;
   const retry =
@@ -199,6 +218,28 @@ export function uiParen(
   locale: InterfaceLocale = interfaceLocale(),
 ): string {
   return locale === 'zh-CN' ? `（${text}）` : `(${text})`;
+}
+
+/** A parenthetical note. Chinese has no space before the full-width pair. */
+export function uiAside(
+  text: string,
+  locale: InterfaceLocale = interfaceLocale(),
+): string {
+  return `${locale === 'zh-CN' ? '' : ' '}${uiParen(text, locale)}`;
+}
+
+/** A picker meta field. An age such as `50m` uses the welcome's words; other pieces are translated on their own. */
+export function uiMeta(
+  text: string,
+  locale: InterfaceLocale = interfaceLocale(),
+): string {
+  return text
+    .split(' · ')
+    .map((part) => {
+      const aged = uiAge(part, locale);
+      return aged === part ? uiText(part, locale) : aged;
+    })
+    .join(' · ');
 }
 
 /** Header and welcome depth. English stays the level name; Chinese says 推理 plus the depth. */

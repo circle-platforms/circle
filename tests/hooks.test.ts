@@ -14,6 +14,7 @@ import { Harness } from '../src/harness.js';
 import {
   HookRunner,
   hookNoticeText,
+  describeHookChange,
   loadHooks,
   matchHookPath,
   rememberHookFile,
@@ -285,6 +286,46 @@ test('a changed project hooks file is not loaded until those bytes are approved'
     [
       ['first', 'changed'],
       ['second', 'unchanged'],
+    ],
+  );
+  const card = describeHookChange(compared.projectChanged[0]!);
+  assert.match(card, /first · before_tool · echo changed · changed hook/);
+  assert.match(card, /unchanged hook · second/);
+  assert.equal(card.includes('second · before_tool'), false);
+  writeJson(file, {
+    hooks: { before_tool: [{ name: 'second', command: 'false' }] },
+  });
+  const dropped = loadHooks({ workspace, home, trusted: true, userHome });
+  assert.deepEqual(
+    dropped.projectChanged[0]?.hooks.map((hook) => [hook.name, hook.mark]),
+    [
+      ['second', 'unchanged'],
+      ['first', 'removed'],
+    ],
+  );
+  const trustPath = join(home, 'hook-trust.json');
+  const trust = JSON.parse(readFileSync(trustPath, 'utf8')) as {
+    files: Record<string, { digest: string } | string>;
+  };
+  for (const key of Object.keys(trust.files)) {
+    const entry = trust.files[key]!;
+    trust.files[key] = typeof entry === 'string' ? entry : entry.digest;
+  }
+  writeFileSync(trustPath, JSON.stringify(trust));
+  writeJson(file, {
+    hooks: {
+      before_tool: [
+        { name: 'second', command: 'echo later' },
+        { name: 'brand', command: 'true' },
+      ],
+    },
+  });
+  const upgraded = loadHooks({ workspace, home, trusted: true, userHome });
+  assert.deepEqual(
+    upgraded.projectChanged[0]?.hooks.map((hook) => [hook.name, hook.mark]),
+    [
+      ['second', 'pending'],
+      ['brand', 'pending'],
     ],
   );
 });

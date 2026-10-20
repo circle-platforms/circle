@@ -10,7 +10,7 @@
 // replaces the store instead of adding to it.
 import http from 'node:http';
 import tls from 'node:tls';
-import { interfaceLocale, t, uiParen } from './locale.js';
+import { interfaceLocale, t, uiAside } from './locale.js';
 import { createHash, X509Certificate } from 'node:crypto';
 import {
   existsSync,
@@ -71,7 +71,7 @@ export function networkSummary(value = currentNetworkStatus()): string {
   const sources = value.sources
     .map((source) => {
       const name = t(source.name);
-      const path = source.path ? ` ${uiParen(source.path)}` : '';
+      const path = source.path ? uiAside(source.path) : '';
       return interfaceLocale() === 'zh-CN'
         ? `${name}${path} ${source.certificates}`
         : `${name}${path}: ${source.certificates}`;

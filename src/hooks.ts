@@ -13,6 +13,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, posix, win32 } from 'node:path';
+import { t } from './locale.js';
+import { truncate } from './ink/string_width.js';
 import { canonicalPath } from './paths.js';
 import { redactSecrets } from './secrets.js';
 import { isHostAbsolutePath, shellEnvironment } from './sandbox.js';
@@ -88,7 +90,8 @@ export interface HookPreview {
   name: string;
   event: HookEvent;
   command: string;
-  mark: 'new' | 'changed' | 'unchanged';
+  /** `pending` is an older approval that stored no per-hook list, so nothing is known to have changed. */
+  mark: 'new' | 'changed' | 'unchanged' | 'removed' | 'pending';
 }
 
 export interface HookChange {
@@ -589,11 +592,13 @@ function previewHooks(
     event: hook.event,
     command: hook.command,
   }));
-  if (!previous) return current.map((hook) => ({ ...hook, mark: 'new' }));
+  if (!previous)
+    return current.map((hook) => ({ ...hook, mark: 'new' as const }));
+  // A digest from before per-hook snapshots: there is nothing to diff against.
   if (!previous.hooks)
-    return current.map((hook) => ({ ...hook, mark: 'changed' }));
+    return current.map((hook) => ({ ...hook, mark: 'pending' as const }));
   const used = new Set<number>();
-  return current.map((hook) => {
+  const rows = current.map((hook) => {
     const exact = previous.hooks!.findIndex(
       (item, index) =>
         !used.has(index) &&
@@ -612,8 +617,58 @@ function previewHooks(
         item.name === hook.name,
     );
     if (sameName >= 0) used.add(sameName);
-    return { ...hook, mark: sameName >= 0 ? 'changed' : 'new' };
+    return {
+      ...hook,
+      mark: sameName >= 0 ? ('changed' as const) : ('new' as const),
+    };
   });
+  const removed = previous.hooks
+    .filter((_, index) => !used.has(index))
+    .map((hook): HookPreview => ({
+      name: hook.name,
+      event: hook.event as HookEvent,
+      command: hook.command,
+      mark: 'removed',
+    }));
+  return [...rows, ...removed];
+}
+
+function hookMark(mark: HookPreview['mark']): string {
+  switch (mark) {
+    case 'new':
+      return t('new hook');
+    case 'changed':
+      return t('changed hook');
+    case 'unchanged':
+      return t('unchanged hook');
+    case 'removed':
+      return t('removed hook');
+    case 'pending':
+      return t('pending hook');
+  }
+}
+
+/** Lines for the approval card. Unchanged hooks share one short line. */
+export function describeHookChange(change: HookChange): string {
+  const marked = (hook: HookPreview): string =>
+    `${hook.name} · ${hook.event} · ${hook.command} · ${hookMark(hook.mark)}`;
+  const lines = change.hooks
+    .filter((hook) => hook.mark !== 'unchanged')
+    .map(marked);
+  const same = change.hooks.filter((hook) => hook.mark === 'unchanged');
+  if (same.length)
+    lines.push(
+      truncate(
+        `${hookMark('unchanged')} · ${same.map((hook) => hook.name).join(', ')}`,
+        64,
+      ),
+    );
+  return [
+    change.file,
+    "This project's hooks file changed.",
+    'These hooks run shell commands and stay off until you approve them.',
+    ...lines,
+  ].join('\n');
 }
 
 /** Remember that these bytes of a project hooks file are approved. */

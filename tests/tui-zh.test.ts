@@ -16,9 +16,12 @@ import {
   interfaceLocale,
   t,
   uiAge,
+  uiAside,
   uiFolderCount,
+  uiMeta,
   uiText,
 } from '../src/locale.js';
+import { describeHookChange } from '../src/hooks.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { SessionOccupiedError } from '../src/session_lock.js';
 import {
@@ -93,6 +96,31 @@ test('every terminal interface sentence has Simplified Chinese', () => {
   }
 });
 
+test('picker titles, hints and questions have Simplified Chinese', () => {
+  const files = [
+    'ink/components/picker.ts',
+    'tui/slash_handlers.ts',
+    'tui/session_app.ts',
+    'tui/session_label.ts',
+  ].map((name) => join(root, name));
+  const found = new RegExp(
+    String.raw`(?:hint|empty|keys):\s*'([^'\\]+)'|picker\(\s*'([^'\\]+)'|\.ask\(\s*'([^'\\]+)'|\.confirm\(\s*'([^'\\]+)'`,
+    'g',
+  );
+  const missing: string[] = [];
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8');
+    for (const match of text.matchAll(found)) {
+      const key = match.slice(1).find((part) => part !== undefined);
+      if (!key || key.length < 2) continue;
+      const translated = uiText(key, 'zh-CN');
+      if (translated === key || !han(translated))
+        missing.push(`${key} (${file})`);
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
 test('the phrases on the screen change under zh-CN and keep commands and ids', () => {
   const zh = (text: string): string => uiText(text, 'zh-CN');
   assert.equal(zh('Bash needs your permission'), 'Bash 需要你的批准');
@@ -122,6 +150,23 @@ test('the phrases on the screen change under zh-CN and keep commands and ids', (
   assert.equal(zh('recent'), '最近');
   assert.equal(uiAge('now', 'zh-CN'), '刚刚');
   assert.equal(uiAge('3m', 'zh-CN'), '3 分钟前');
+  assert.equal(uiAge('50m', 'zh-CN'), '50 分钟前');
+  assert.equal(uiAge('1h', 'zh-CN'), '1 小时前');
+  assert.equal(uiMeta('50m · deleting', 'zh-CN'), '50 分钟前 · 正在删除');
+  assert.equal(uiAside('/connect', 'zh-CN'), '（/connect）');
+  assert.equal(uiAside('/connect', 'en'), ' (/connect)');
+  assert.equal(
+    uiText('Delete “s” and its messages?', 'zh-CN'),
+    '删除“s”及其消息？',
+  );
+  assert.equal(
+    uiText('Stop and delete “s” and its messages?', 'zh-CN'),
+    '停止并删除“s”及其消息？',
+  );
+  assert.equal(
+    uiText('api key (enter keeps the saved one)', 'zh-CN'),
+    'API 密钥（回车保留已保存的）',
+  );
   assert.equal(
     uiFolderCount('2 in .circle/skills', 'zh-CN'),
     '2 个在 .circle/skills',
@@ -147,6 +192,40 @@ test('the phrases on the screen change under zh-CN and keep commands and ids', (
   delete process.env.LANGUAGE;
   try {
     assert.equal(interfaceLocale(), 'zh-CN');
+    const hooksCard = describeHookChange({
+      file: 'hooks.json',
+      digest: 'abc',
+      hooks: [
+        {
+          name: 'lint',
+          event: 'before_tool',
+          command: 'npm test',
+          mark: 'pending',
+        },
+        {
+          name: 'kept',
+          event: 'before_tool',
+          command: 'true',
+          mark: 'unchanged',
+        },
+        {
+          name: 'also',
+          event: 'before_tool',
+          command: 'true',
+          mark: 'unchanged',
+        },
+        {
+          name: 'gone',
+          event: 'before_tool',
+          command: 'old',
+          mark: 'removed',
+        },
+      ],
+    });
+    assert.match(hooksCard, /lint · before_tool · npm test · 待确认/);
+    assert.match(hooksCard, /gone · before_tool · old · 已删除/);
+    assert.match(hooksCard, /未变 · kept, also/);
+    assert.equal(hooksCard.includes('kept · before_tool'), false);
     assert.equal(busyLabel('Considering', 2, 10), '思考… · 2s · ↓ 10');
     const card = cardRows(
       {

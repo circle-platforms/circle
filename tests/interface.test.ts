@@ -130,6 +130,29 @@ test('wrap breaks CJK anywhere and keeps ASCII runs and quoted spans whole', () 
   const quoted = wrap('see 「事件 N」 please', 14);
   assert.ok(quoted.some((line) => line.includes('「事件 N」')));
   assert.deepEqual(wrap('readers', 4), ['read', 'ers']);
+  const flow =
+    '把这个文件交给它做，跟随，并保存结果（module-execute 要的是流程输入 JSON，不是文件）';
+  const forbidden = /^[，。、）」』》〉〗〕｝！？：；]/;
+  const at = wrap(flow, 39);
+  assert.ok(
+    at.every((line) => !forbidden.test(line)),
+    at.join('\n'),
+  );
+  assert.equal(
+    at.some((line) => line === '，不' || line.startsWith('，')),
+    false,
+  );
+  const prefix = '/hub submit <pack> <file>'.padEnd(38);
+  const shown = wrap(hangingWrap(prefix, flow, 77).join('\n'), 77);
+  assert.ok(shown.some((line) => line.includes('module-execute')));
+  assert.ok(
+    shown.every((line) => !forbidden.test(line.trimStart())),
+    shown.join('\n'),
+  );
+  assert.equal(
+    shown.some((line) => line.trim() === '，不'),
+    false,
+  );
   const hung = hangingWrap('  /hub  ', 'revoke the token at the server', 24);
   assert.equal(hung[0]?.startsWith('  /hub  '), true);
   assert.ok(hung.length > 1);

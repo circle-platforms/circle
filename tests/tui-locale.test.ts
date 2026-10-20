@@ -101,6 +101,34 @@ test('a Chinese locale translates the session list, resume line, view only and s
       false,
     );
     assert.match(listed, /session 11 · 当前/);
+    const aged = new Picker(
+      'Sessions · this folder',
+      [
+        { key: 's', label: 's', meta: '50m' },
+        { key: 'h', label: 'later', meta: '1h · running' },
+      ],
+      () => {},
+      () => {},
+    );
+    const ages = stripAnsi(aged.rows(80, 6).join('\n'));
+    assert.match(ages, /50 分钟前/);
+    assert.match(ages, /1 小时前/);
+    assert.match(ages, /运行中/);
+    assert.equal(ages.includes('50m'), false);
+    assert.equal(ages.includes('1h'), false);
+    aged.confirm('Delete “s” and its messages?', () => {});
+    const confirm = stripAnsi(aged.rows(80, 6).join('\n'));
+    assert.match(confirm, /删除“s”及其消息？/);
+    assert.match(confirm, /回车确认 · esc 取消/);
+    assert.equal(confirm.includes('enter confirms'), false);
+    assert.equal(confirm.includes('Delete'), false);
+    aged.ask('Rename', 's', () => {}, {
+      replace: true,
+      keys: 'typing replaces the name · enter saves · esc cancels',
+    });
+    const rename = stripAnsi(aged.rows(80, 6).join('\n'));
+    assert.match(rename, /重命名: s/);
+    assert.match(rename, /输入会替换名称 · 回车保存 · esc 取消/);
 
     const quota = stripAnsi(
       resultRows(

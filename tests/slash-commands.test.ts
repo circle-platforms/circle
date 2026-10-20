@@ -1802,6 +1802,33 @@ test('/help, /hotkeys and /hub help hang continuations under the description col
       commands.every((row) => descriptionColumn(row) === column),
       commands.join('\n'),
     );
+    assert.equal(
+      help.some((row) => /\S （/.test(row)),
+      false,
+      help.filter((row) => row.includes('（')).join('\n'),
+    );
+    assert.ok(help.some((row) => row.includes('（/connect）')));
+    assert.ok(help.some((row) => row.includes('（/quit, /q）')));
+    const submitAt = hub.findIndex((row) =>
+      row.includes('/hub submit <pack> <file>'),
+    );
+    assert.ok(submitAt >= 0, hub.join('\n'));
+    const submitRows: string[] = [];
+    for (let index = submitAt; index < hub.length; index++) {
+      const row = hub[index]!;
+      const lead = row.match(/^ */)?.[0].length ?? 0;
+      if (index > submitAt && row.trim() && lead < column) break;
+      submitRows.push(row);
+    }
+    assert.ok(
+      submitRows.some((row) => row.includes('module-execute')),
+      submitRows.join('\n'),
+    );
+    const broken = submitRows.filter((row) => {
+      const body = row.trimStart();
+      return /^[，。、）」』》〉〗〕｝！？：；]/.test(body) || body === '，不';
+    });
+    assert.deepEqual(broken, [], submitRows.join('\n'));
   } finally {
     for (const [name, value] of Object.entries(saved))
       if (value === undefined) delete process.env[name];

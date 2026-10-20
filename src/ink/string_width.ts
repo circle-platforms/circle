@@ -208,14 +208,24 @@ function isHan(glyph: string): boolean {
   return /\p{Script=Han}/u.test(glyph);
 }
 
+function lineWidth(glyphs: string[]): number {
+  return stringWidth(glyphs.join(''));
+}
+
 /**
  * A line does not end on an opening mark or begin on a closing one, and a single
  * Han glyph is not left on a line of its own when the previous line can spare one.
+ * A closer that would start a line takes the previous glyph with it. A trailing
+ * closer may stick out by its own width; anything wider is given to the next line.
  */
 function kinsoku(lines: string[], first: number, rest: number): string[] {
   const rows = lines.map((line) => glyphsOf(line));
   const room = (index: number): number => (index === 0 ? first : rest);
-  for (let pass = 0; pass < rows.length + 2; pass++) {
+  const ensure = (index: number): string[] => {
+    while (rows.length <= index) rows.push([]);
+    return rows[index]!;
+  };
+  for (let pass = 0; pass < 8; pass++) {
     let changed = false;
     for (let i = 0; i < rows.length - 1; i++) {
       const line = rows[i]!;
@@ -226,13 +236,37 @@ function kinsoku(lines: string[], first: number, rest: number): string[] {
         changed = true;
       }
     }
+    for (let i = 0; i < rows.length; i++) {
+      const line = rows[i]!;
+      while (lineWidth(line) > room(i) && line.length > 1) {
+        const tail = line[line.length - 1]!;
+        if (
+          CLOSE_PUNCT.has(tail) &&
+          lineWidth(line) - room(i) <= stringWidth(tail)
+        )
+          break;
+        const glyph = line.pop()!;
+        const next = ensure(i + 1);
+        next.unshift(glyph);
+        changed = true;
+        if (next[0] && CLOSE_PUNCT.has(next[0]) && line.length)
+          next.unshift(line.pop()!);
+      }
+    }
     for (let i = 1; i < rows.length; i++) {
       const line = rows[i]!;
-      const glyph = line[0];
-      if (glyph && CLOSE_PUNCT.has(glyph) && rows[i - 1]!.length) {
-        line.shift();
-        rows[i - 1]!.push(glyph);
+      const prev = rows[i - 1]!;
+      while (line[0] && CLOSE_PUNCT.has(line[0]) && prev.length) {
+        const before = prev[prev.length - 1]!;
+        if (prev.length >= 2 && lineWidth([before, ...line]) <= room(i)) {
+          prev.pop();
+          line.unshift(before);
+          changed = true;
+          continue;
+        }
+        prev.push(line.shift()!);
         changed = true;
+        break;
       }
     }
     for (let i = 1; i < rows.length; i++) {
@@ -243,8 +277,18 @@ function kinsoku(lines: string[], first: number, rest: number): string[] {
       if (!steal || prev.length < 2) continue;
       // A closing quote stays with the span it ends. The orphan stays instead.
       if ('」』”’'.includes(steal)) continue;
-      if (!isHan(steal) && !CLOSE_PUNCT.has(steal) && !OPEN_PUNCT.has(steal))
+      if (CLOSE_PUNCT.has(steal)) {
+        const before = prev[prev.length - 2];
+        if (!before || prev.length < 3) continue;
+        if (stringWidth(before + steal + line[0]) > room(i)) continue;
+        prev.pop();
+        prev.pop();
+        line.unshift(steal);
+        line.unshift(before);
+        changed = true;
         continue;
+      }
+      if (!isHan(steal) && !OPEN_PUNCT.has(steal)) continue;
       if (stringWidth(steal + line[0]) > room(i)) continue;
       prev.pop();
       line.unshift(steal);
