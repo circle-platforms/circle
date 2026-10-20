@@ -50,6 +50,7 @@ import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal } from './common';
 import type { LocalTerminalRow } from '../../../desktop/src/contracts';
 import { terminalTabNumbers } from '../../../desktop/src/terminal-tabs';
+import { claimTerminalKeyboard } from '../model/terminal-keyboard';
 import { TerminalTabs, type TerminalTab } from './TerminalTabs';
 import {
   DeviceNotices,
@@ -398,6 +399,7 @@ export function NativeTerminal({
   const visible = terminals.filter(
     (item) =>
       item.sessionId === sessionId &&
+      !item.hidden &&
       !dismissed.has(item.id) &&
       (!item.managedCommand ||
         !!commandTerminal ||
@@ -601,11 +603,19 @@ export function NativeTerminal({
   const restart = () =>
     run(async () => {
       if (!selected) return;
+      const previousId = selected.id;
       const snapshot = await terminalRequest<TerminalSnapshot>('restart', {
-        id: selected.id,
+        id: previousId,
       });
       focusTarget.current = snapshot.id;
-      adopt(snapshot);
+      setTerminals((current) =>
+        mergeTerminalSnapshot(
+          current.map((item) =>
+            item.id === previousId ? { ...item, hidden: true } : item,
+          ),
+          snapshot,
+        ),
+      );
       setSelected((previous) => ({
         ...previous,
         [snapshot.sessionId]: snapshot.id,
@@ -730,10 +740,12 @@ export function NativeTerminal({
       rememberDismissed(next);
       return next;
     });
-  // A shell keeps its number while others close around it, and the model's terminal tools
-  // and the cards in the conversation name it the same way: terminalTabNumbers is the rule.
+  // A tab keeps a stored number; a closed tab does not. The model's tools use the same rule.
   const numbers = terminalTabNumbers(
-    terminals.filter((item) => item.sessionId === sessionId),
+    terminals.filter(
+      (item) =>
+        item.sessionId === sessionId && !item.hidden && !dismissed.has(item.id),
+    ),
   );
   // What Circle is doing in each of your shells, by every id the row or a tool call uses.
   const circleKnown = new Map<string, LocalTerminalRow>();
@@ -752,7 +764,10 @@ export function NativeTerminal({
     ...visible.map((item): TerminalTab => {
       const command = !!item.managedCommand;
       const running = ['running', 'stopping'].includes(item.status);
+      const shellDead =
+        !command && item.kind !== 'service' && !running && !item.hidden;
       const failed =
+        shellDead ||
         item.status === 'failed' ||
         (!running && ((item.exitCode ?? 0) !== 0 || !!item.signal));
       const named = command || item.kind === 'service';
@@ -795,6 +810,11 @@ export function NativeTerminal({
               onClose: () => {
                 if (running) void stopTerminal(item.id);
                 closeTab(item.id);
+                void terminalRequest<TerminalSnapshot>('hide', {
+                  id: item.id,
+                })
+                  .then(adopt)
+                  .catch(() => {});
               },
             }),
       };
@@ -974,6 +994,29 @@ export function NativeTerminal({
       aria-label={t('interactive terminal')}
       onKeyDown={(event) => {
         if (
+          event.key === 'Enter' &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.shiftKey &&
+          inFront &&
+          !inFront.managedCommand &&
+          inFront.kind !== 'service' &&
+          !['running', 'stopping'].includes(inFront.status)
+        ) {
+          const target = event.target;
+          // The xterm handler restarts on Enter in the screen. Handling it here
+          // as well would start a second shell.
+          if (
+            target instanceof Element &&
+            target.closest('input, button, textarea, [role="menu"], .xterm')
+          )
+            return;
+          event.preventDefault();
+          restart();
+          return;
+        }
+        if (
           (event.metaKey || event.ctrlKey) &&
           event.key.toLowerCase() === 'f'
         ) {
@@ -1111,16 +1154,30 @@ export function NativeTerminal({
           )}
         </div>
       )}
-      {inFront && !['running', 'stopping'].includes(inFront.status) && (
-        <div
-          className="native-terminal-exit"
-          role="status"
-          title={processDetails(inFront)}
-        >
-          {status(inFront)}
-          {extraExitReason(inFront) ? ` · ${extraExitReason(inFront)}` : ''}
-        </div>
-      )}
+      {inFront &&
+        !inFront.managedCommand &&
+        inFront.kind !== 'service' &&
+        !['running', 'stopping'].includes(inFront.status) && (
+          <div className="native-terminal-dead" role="status" tabIndex={0}>
+            <p>{t('this terminal has exited')}</p>
+            <p>{t('press enter to restart')}</p>
+            <Button disabled={busy} onClick={restart}>
+              {t('restart')}
+            </Button>
+          </div>
+        )}
+      {inFront &&
+        (inFront.managedCommand || inFront.kind === 'service') &&
+        !['running', 'stopping'].includes(inFront.status) && (
+          <div
+            className="native-terminal-exit"
+            role="status"
+            title={processDetails(inFront)}
+          >
+            {status(inFront)}
+            {extraExitReason(inFront) ? ` · ${extraExitReason(inFront)}` : ''}
+          </div>
+        )}
       {error && !serviceOpen && (
         <div className="native-terminal-error" role="alert">
           <span>{disconnected ? t('not connected') : error}</span>
@@ -1140,11 +1197,14 @@ export function NativeTerminal({
           {inFront.readiness.error}
         </div>
       )}
-      {inFront?.error && (
-        <div className="native-terminal-error" role="alert">
-          {inFront.error}
-        </div>
-      )}
+      {inFront?.error &&
+        (inFront.managedCommand ||
+          inFront.kind === 'service' ||
+          ['running', 'stopping'].includes(inFront.status)) && (
+          <div className="native-terminal-error" role="alert">
+            {inFront.error}
+          </div>
+        )}
       {!commandTerminal && (
         <DeviceNotices
           devices={devices}
@@ -1192,6 +1252,11 @@ export function NativeTerminal({
                   item.sessionId === sessionId
                 }
                 adopt={adopt}
+                onRestart={
+                  item.managedCommand || item.kind === 'service'
+                    ? undefined
+                    : restart
+                }
                 onSelectionChange={(selected) => {
                   setHasSelection((current) =>
                     current[item.id] === selected
@@ -1424,6 +1489,7 @@ function TerminalSurface({
   register,
   onSelectionChange,
   onFind,
+  onRestart,
 }: {
   snapshot: TerminalSnapshot;
   request?: TerminalRequest;
@@ -1434,10 +1500,13 @@ function TerminalSurface({
   register: (controls?: Controls) => void;
   onSelectionChange: (selected: boolean) => void;
   onFind: () => void;
+  onRestart?: () => void;
 }) {
   const language = useLocale();
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
+  const onRestartRef = useRef(onRestart);
+  onRestartRef.current = onRestart;
   const container = useRef<HTMLDivElement>(null);
   const screenReaderMode = useTerminalScreenReader();
   const instance = useRef<{ terminal: Terminal; fit: FitAddon } | null>(null);
@@ -1756,6 +1825,21 @@ function TerminalSurface({
       }).catch(showError);
     });
     terminal.attachCustomKeyEventHandler((event) => {
+      // A shell that has exited restarts on Enter, as its button does.
+      if (
+        event.type === 'keydown' &&
+        event.key === 'Enter' &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        statusRef.current !== 'running' &&
+        statusRef.current !== 'stopping'
+      ) {
+        event.preventDefault();
+        onRestartRef.current?.();
+        return false;
+      }
       // Ctrl+V and Ctrl+Shift+V paste, as in Windows Terminal: the browser's paste
       // event sends the text once, and no ^V control character goes to the shell.
       if (
@@ -1885,15 +1969,16 @@ function TerminalSurface({
         onPointerDown={() => {
           const term = instance.current?.terminal;
           if (!term) return;
-          // The click is the person's: the shell takes the keyboard, and a render
-          // that focuses the composer in the same frame gives it back.
-          term.focus();
-          requestAnimationFrame(() => {
-            if (instance.current?.terminal !== term) return;
-            const active = document.activeElement;
-            if (active instanceof Element && active.closest('.composer'))
-              term.focus();
-          });
+          // The click is the person's. A render after it can focus the composer
+          // again before the next key; the claim types that key here instead.
+          claimTerminalKeyboard(
+            () => {
+              if (instance.current?.terminal === term) term.focus();
+            },
+            (text) => {
+              if (instance.current?.terminal === term) term.input(text, true);
+            },
+          );
         }}
       >
         <div ref={container} className="native-terminal-fit" />

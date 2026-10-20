@@ -732,8 +732,89 @@ try {
     .getByRole('button', { name: 'terminal panel', exact: true })
     .click();
   await live.locator('.term-tabbar').waitFor();
+  // A local shell in this window. A key goes out within about 50ms of the
+  // click, and a composer focus is forced just after, so the first character
+  // cannot stay in the draft. An exited shell then shows restart, and the
+  // replacement keeps the lowest free number.
+  const terminalPane = live.locator('[data-inspector-resource="terminal"]');
+  await terminalPane
+    .getByRole('button', { name: 'new terminal', exact: true })
+    .click();
+  const localScreen = live.locator('.native-terminal-screen').first();
+  await localScreen
+    .locator('.xterm-screen')
+    .waitFor({ timeout: patience(20000) });
+  await until(
+    async () => (await live.locator('.native-terminal-dead').count()) === 0,
+    'the local shell is running',
+  );
+  await message.click();
+  await message.fill('stays in the composer');
+  await localScreen.click({ delay: 0 });
+  const localTyping = live.keyboard.type('abc', { delay: 12 });
+  await live.evaluate(() => {
+    setTimeout(() => {
+      document.querySelector('.composer textarea')?.focus();
+    }, 25);
+  });
+  await localTyping;
+  await until(
+    () =>
+      live
+        .locator('.native-terminal-surface:not([hidden]) .xterm-rows')
+        .innerText()
+        .then((text) => text.includes('abc')),
+    'the keys after the click reached the shell',
+  );
+  assert.equal(await message.inputValue(), 'stays in the composer');
+  await live.evaluate(async (sessionId) => {
+    const listed = await window.circleDesktop.runtimeCommand({
+      id: crypto.randomUUID(),
+      name: 'workspace-service',
+      sessionId,
+      payload: { service: 'terminal', method: 'list', params: {} },
+    });
+    if (!listed.ok) throw Error(listed.error || 'terminal list failed');
+    const shell = listed.data.find(
+      (item) =>
+        item.kind === 'shell' && !item.hidden && item.status === 'running',
+    );
+    if (!shell) throw Error('no running local shell');
+    const signalled = await window.circleDesktop.runtimeCommand({
+      id: crypto.randomUUID(),
+      name: 'workspace-service',
+      sessionId,
+      payload: {
+        service: 'terminal',
+        method: 'signal',
+        params: { id: shell.id, signal: 'SIGKILL' },
+      },
+    });
+    if (!signalled.ok) throw Error(signalled.error || 'terminal signal failed');
+  }, liveSession);
+  await live.getByText('this terminal has exited', { exact: true }).waitFor({
+    timeout: patience(15000),
+  });
+  await live.getByText('press enter to restart', { exact: true }).waitFor();
+  await live.getByRole('button', { name: 'restart', exact: true }).waitFor();
+  await live.locator('.native-terminal-dead p').first().click();
+  await live.keyboard.press('Enter');
+  await until(
+    async () => (await live.locator('.native-terminal-dead').count()) === 0,
+    'the shell restarted',
+  );
+  await live.getByRole('tab', { name: 'terminal 1', exact: true }).waitFor();
+  assert.equal(
+    await live.getByRole('tab', { name: 'terminal 2', exact: true }).count(),
+    0,
+  );
   await live
-    .locator('[data-inspector-resource="terminal"]')
+    .getByRole('button', { name: 'stop terminal 1', exact: true })
+    .click();
+  await terminalPane
+    .getByRole('button', { name: 'new terminal', exact: true })
+    .waitFor();
+  await terminalPane
     .getByRole('button', { name: 'open in a window', exact: true })
     .click();
   const liveTerminal = await until(

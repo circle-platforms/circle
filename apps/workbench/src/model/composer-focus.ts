@@ -1,3 +1,5 @@
+import { terminalKeyboardClaimed } from './terminal-keyboard';
+
 /** Ctrl+N / new session. The keyboard moves to the composer in the same turn
  * the gesture starts, including off a sidebar row. Keys typed before the empty
  * session is committed are kept here so they are not written onto the previous
@@ -158,7 +160,7 @@ export function keyboardIsInTerminal(): boolean {
 export function focusMessageComposer(
   node: HTMLTextAreaElement | null | undefined,
 ): void {
-  if (!node || keyboardIsInTerminal()) return;
+  if (!node || keyboardIsInTerminal() || terminalKeyboardClaimed()) return;
   if (document.activeElement !== node) node.focus({ preventScroll: true });
 }
 
@@ -169,7 +171,12 @@ function scheduleRefocus(): void {
   // One frame later, only if the menu or the window took the keyboard back.
   raf = requestAnimationFrame(() => {
     raf = 0;
-    if (gen !== generation || keyboardIsInTerminal()) return;
+    if (
+      gen !== generation ||
+      keyboardIsInTerminal() ||
+      terminalKeyboardClaimed()
+    )
+      return;
     const node = composerNode();
     if (node && document.activeElement !== node)
       node.focus({ preventScroll: true });

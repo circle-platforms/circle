@@ -43,6 +43,8 @@ export interface LocalTerminalHost {
   ): { data: string; sequence: number; at?: string } | undefined;
   observe(listener: (event: TerminalEvent) => void): () => void;
   write(owner: string, id: string, data: string): Promise<unknown>;
+  /** Start the shell again. The exited tab leaves the row; the result is the new one. */
+  restart?(owner: string, id: string): Promise<TerminalSnapshot>;
 }
 
 export interface LocalTerminalsOptions {
@@ -258,7 +260,10 @@ export class LocalTerminals implements TerminalTabFacts {
     args: Record<string, unknown>,
     shown: Record<string, unknown>,
   ): Record<string, unknown> {
-    const { host, terminal } = this.find(conversation, args.session);
+    const { host, snapshot, terminal } = this.locate(
+      conversation,
+      args.session,
+    );
     const name = this.name(host, conversation, terminal);
     if (action === 'disconnect')
       throw Error(
@@ -273,6 +278,7 @@ export class LocalTerminals implements TerminalTabFacts {
       first_use: !own.granted.has(terminal),
       command: undefined,
       typed: undefined,
+      ...(snapshot.status === 'running' ? {} : { exited: true }),
     };
     const before = () =>
       line.clean
@@ -361,30 +367,33 @@ export class LocalTerminals implements TerminalTabFacts {
     const numbers = terminalTabNumbers(list);
     const own = this.conversations.get(conversation);
     const waiting = this.options.waiting(conversation);
-    return list.filter(running).map((snapshot) => {
-      const id = terminalTabSession(snapshot.id);
-      const held = this.tabs.get(key(conversation, snapshot.id))?.session.held;
-      const given = own?.handoffs.get(snapshot.id)?.reason;
-      const reason =
-        given && given.length > MAX_REASON
-          ? given.slice(0, MAX_REASON - 1) + '…'
-          : given;
-      return {
-        id,
-        terminal: snapshot.id,
-        ordinal: numbers.get(snapshot.id) ?? 0,
-        state: held
-          ? 'held'
-          : waiting.has(id)
-            ? 'waiting'
-            : own?.active.has(snapshot.id) || own?.resuming.has(snapshot.id)
-              ? 'operating'
-              : 'idle',
-        allowed: own?.granted.has(snapshot.id) === true,
-        ...(held ? { held } : {}),
-        ...(reason ? { reason } : {}),
-      };
-    });
+    return list
+      .filter((snapshot) => running(snapshot) && !snapshot.hidden)
+      .map((snapshot) => {
+        const id = terminalTabSession(snapshot.id);
+        const held = this.tabs.get(key(conversation, snapshot.id))?.session
+          .held;
+        const given = own?.handoffs.get(snapshot.id)?.reason;
+        const reason =
+          given && given.length > MAX_REASON
+            ? given.slice(0, MAX_REASON - 1) + '…'
+            : given;
+        return {
+          id,
+          terminal: snapshot.id,
+          ordinal: numbers.get(snapshot.id) ?? 0,
+          state: held
+            ? 'held'
+            : waiting.has(id)
+              ? 'waiting'
+              : own?.active.has(snapshot.id) || own?.resuming.has(snapshot.id)
+                ? 'operating'
+                : 'idle',
+          allowed: own?.granted.has(snapshot.id) === true,
+          ...(held ? { held } : {}),
+          ...(reason ? { reason } : {}),
+        };
+      });
   }
   /** The conversation is gone: Circle lets go of its tabs; their shells are the window's. */
   release(conversation: string): void {
@@ -439,8 +448,25 @@ export class LocalTerminals implements TerminalTabFacts {
     args: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<TerminalResult> {
-    const { host, snapshot, terminal } = this.find(conversation, args.session);
+    const { host, snapshot, terminal } = this.locate(
+      conversation,
+      args.session,
+    );
     const own = this.own(conversation);
+    if (snapshot.status !== 'running') {
+      if ((action !== 'send' && action !== 'press') || !host.restart)
+        throw Error(this.exitedMessage(host, conversation, terminal));
+      const next = await host.restart(conversation, terminal);
+      if (args.first_use === true || own.granted.has(terminal))
+        own.granted.add(next.id);
+      if (own.asked.has(terminal)) own.asked.set(next.id, 0);
+      return this.request(
+        conversation,
+        action,
+        { ...args, session: terminalTabSession(next.id) },
+        signal,
+      );
+    }
     own.resuming.delete(terminal);
     const writes = action === 'send' || action === 'press';
     if (writes) {
@@ -701,7 +727,15 @@ export class LocalTerminals implements TerminalTabFacts {
     const host = this.options.host(conversation);
     if (!host) return [];
     const lines: string[] = [];
-    for (const snapshot of host.listNow(conversation).filter(running)) {
+    for (const snapshot of host
+      .listNow(conversation)
+      .filter((one) => isShell(one) && !one.hidden)) {
+      if (!running(snapshot)) {
+        lines.push(
+          `- ${this.name(host, conversation, snapshot.id)} · ${terminalTabSession(snapshot.id)} · exited. The shell is gone. Sending to ${terminalTabSession(snapshot.id)} restarts it and then types. The tab's restart button and Enter do the same. Do not ask for a new terminal. Do not use execute.`,
+        );
+        continue;
+      }
       const tab = this.adopt(conversation, host, snapshot);
       await tab.ready;
       const line = this.sessions.describe(conversation, tab.session.id);
@@ -709,7 +743,7 @@ export class LocalTerminals implements TerminalTabFacts {
     }
     return lines;
   }
-  private find(
+  private locate(
     conversation: string,
     session: unknown,
   ): { host: LocalTerminalHost; snapshot: TerminalSnapshot; terminal: string } {
@@ -717,16 +751,28 @@ export class LocalTerminals implements TerminalTabFacts {
     const host = terminal ? this.options.host(conversation) : undefined;
     const snapshot = host
       ?.listNow(conversation)
-      .find((one) => one.id === terminal && isShell(one));
+      .find((one) => one.id === terminal && isShell(one) && !one.hidden);
     if (!terminal || !host || !snapshot)
       throw Error(
         `no terminal ${String(session ?? '') || '(none given)'} in this conversation; see terminal_sessions`,
       );
-    if (snapshot.status !== 'running')
-      throw Error(
-        `${this.name(host, conversation, terminal)} was closed; it is gone from terminal_sessions`,
-      );
     return { host, snapshot, terminal };
+  }
+  private exitedMessage(
+    host: LocalTerminalHost,
+    conversation: string,
+    terminal: string,
+  ): string {
+    return `${this.name(host, conversation, terminal)} has exited. The shell is gone. Restart that tab: its screen has a restart button, and Enter in the tab restarts it. Sending to it restarts it and then types. Do not ask for a new terminal. Do not use execute.`;
+  }
+  private find(
+    conversation: string,
+    session: unknown,
+  ): { host: LocalTerminalHost; snapshot: TerminalSnapshot; terminal: string } {
+    const found = this.locate(conversation, session);
+    if (found.snapshot.status !== 'running')
+      throw Error(this.exitedMessage(found.host, conversation, found.terminal));
+    return found;
   }
   private ordinal(
     host: LocalTerminalHost,

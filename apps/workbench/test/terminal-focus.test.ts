@@ -45,19 +45,35 @@ test(
       await screen.locator('.xterm-screen').waitFor();
       await composer.focus();
       await composer.fill('stays in the composer');
-      await screen.click();
-      await page.waitForFunction(
-        () =>
-          document.activeElement instanceof HTMLTextAreaElement &&
-          !!document.activeElement.closest('.xterm'),
+      // A key within about 50ms of the click, and a composer focus forced just
+      // after it. Waiting until xterm is focused first hides the race.
+      await page.evaluate(() => {
+        document.querySelector('.native-terminal-screen')?.addEventListener(
+          'pointerdown',
+          () => {
+            setTimeout(() => {
+              document
+                .querySelector<HTMLTextAreaElement>('.composer textarea')
+                ?.focus();
+            }, 20);
+          },
+          { capture: true, once: true },
+        );
+      });
+      await screen.click({ delay: 0 });
+      const typing = page.keyboard.type('abc', { delay: 10 });
+      await page.evaluate(
+        () => new Promise((resolve) => setTimeout(resolve, 40)),
       );
-      await page.keyboard.type('z');
+      await typing;
+      assert.equal(await composer.inputValue(), 'stays in the composer');
       await page.waitForFunction(() =>
-        window.__terminalKeys.written.some((data: string) =>
-          data.includes('z'),
+        ['a', 'b', 'c'].every((char) =>
+          window.__terminalKeys.written.some((data: string) =>
+            data.includes(char),
+          ),
         ),
       );
-      assert.equal(await composer.inputValue(), 'stays in the composer');
       await page.evaluate(
         () =>
           new Promise((resolve) =>

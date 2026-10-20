@@ -70,6 +70,7 @@ import {
   subscribeComposerFocus,
   takeComposerText,
 } from '../model/composer-focus';
+import { terminalKeyboardClaimed } from '../model/terminal-keyboard';
 interface Props {
   focusComposer?: number;
   onDialog: (dialog: DialogId, selection?: string) => void;
@@ -311,7 +312,7 @@ export function Conversation({
     const field = input.current;
     if (!field || (field.value.length === 0 && composerTextPlaced())) return;
     placeCaret.current = false;
-    if (keyboardIsInTerminal()) return;
+    if (keyboardIsInTerminal() || terminalKeyboardClaimed()) return;
     field.focus({ preventScroll: true });
     field.setSelectionRange(field.value.length, field.value.length);
   }, [session.draft, session.id]);

@@ -667,6 +667,7 @@ interface TerminalTabWrite {
   firstUse: boolean;
   command?: string;
   uncertain: boolean;
+  exited: boolean;
 }
 const TERMINAL_TAB_WRITES = new Set(['terminal_send', 'terminal_press']);
 function terminalTabWrite(
@@ -683,6 +684,7 @@ function terminalTabWrite(
     firstUse: args.first_use === true,
     ...(typeof args.command === 'string' ? { command: args.command } : {}),
     uncertain: args.uncertain === true,
+    exited: args.exited === true,
   };
 }
 /** Where a call's "allow for this session" rule is kept: a tab's lines with commands. */
@@ -771,6 +773,8 @@ export class ApprovalPolicy {
   review(tool: string, args: Record<string, unknown>): Review {
     const tab = terminalTabWrite(tool, args);
     if (tab) {
+      if (tab.exited && tab.command === undefined)
+        return review('ASK', 'restarts this terminal and types into it');
       if (tab.command === undefined)
         return review('ASK', 'types in your terminal');
       const judged = this.review('execute', { command: tab.command });
@@ -785,6 +789,12 @@ export class ApprovalPolicy {
       // The first write types into the person's own tab. Listing the tab asks nothing;
       // a read-only line is still that typing, so the card says so instead of "only reads".
       // The execute pattern and prefix stay, and a forced warning (a delete) stays too.
+      // An exited shell is started again and then the line is typed; a delete still warns.
+      if (tab.exited && judged.verdict === 'ASK')
+        return {
+          ...judged,
+          reason: 'restarts this terminal and types this command into it',
+        };
       if (tab.firstUse && judged.verdict === 'ASK')
         return { ...judged, reason: 'types this command into your terminal' };
       return judged;

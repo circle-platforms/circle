@@ -47,6 +47,10 @@ export const common: Record<string, string> = {
   'runs a shell command': '运行 shell 命令',
   'only reads': '只读取',
   'types this command into your terminal': '将把这条命令输入这个终端',
+  'restarts this terminal and types into it':
+    '会先重新启动这个终端，再把文字输入进去',
+  'restarts this terminal and types this command into it':
+    '会先重新启动这个终端，再把这条命令输入进去',
   'run this in terminal {n}': '改在终端 {n} 里运行',
   'the user gave terminal {n} back': '已把终端 {n} 交还',
   'the model in use does not read images; use browser_snapshot':

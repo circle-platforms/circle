@@ -1,4 +1,5 @@
 import type { IPty } from 'node-pty';
+import { nextTerminalTabNumber } from '../terminal-tabs.ts';
 import { hasNativePtyProcessExited, spawnPty } from './native-pty.ts';
 import { ptyEnvironment, withTextLocale } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
@@ -91,6 +92,10 @@ export interface TerminalSnapshot {
   transientEnvironment?: boolean;
   restartOf?: string;
   kind: 'shell' | 'service';
+  /** Closed out of the tab row. It stays in the log and no longer takes a number. */
+  hidden?: boolean;
+  /** The tab's number, kept while the tab stays open. */
+  tabNumber?: number;
   command?: TerminalCommand;
   /** Host-owned command identity. Expanded launch arguments are never retained. */
   managedCommand?: {
@@ -539,6 +544,8 @@ export class TerminalManager {
             } as const)
           : {}),
       };
+      if (!managedLaunch)
+        snapshot.tabNumber = nextTerminalTabNumber(this.listNow(options.owner));
       const entry = makeEntry(snapshot);
       entry.managed = managedLaunch?.managed;
       entry.environment = environment;
@@ -793,6 +800,15 @@ export class TerminalManager {
     return entry.closing;
   }
 
+  /** Takes a terminal out of the tab row. Its log stays; its number is free. */
+  async hide(owner: string, id: string): Promise<TerminalSnapshot> {
+    await this.#ready;
+    const entry = this.#get(owner, id);
+    entry.snapshot.hidden = true;
+    await this.#persist(entry);
+    return clone(entry.snapshot);
+  }
+
   /** Restarts only the shell. Prior user input is deliberately not re-executed. */
   async restart(owner: string, id: string): Promise<TerminalSnapshot> {
     await this.#ready;
@@ -807,6 +823,13 @@ export class TerminalManager {
         'per-launch environment is unavailable after restart; start it again from where it was launched',
       );
     await this.close(owner, id);
+    // The replacement is a new process. The exited shell leaves the tab row so
+    // its number is free, and the new shell takes the lowest number left.
+    if (old.kind === 'shell' && !old.managedCommand) {
+      const closed = this.#get(owner, id);
+      closed.snapshot.hidden = true;
+      await this.#persist(closed);
+    }
     const next = await this.#create(
       {
         owner,

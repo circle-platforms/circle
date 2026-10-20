@@ -10,20 +10,25 @@ export interface TerminalTabSource {
   id: string;
   startedAt: string;
   managedCommand?: unknown;
+  /** Closed out of the tab row: it no longer holds a number. */
+  hidden?: boolean;
+  /** The number this tab was given, kept while it stays open. */
+  tabNumber?: number;
 }
 
 /**
- * Each terminal's number, from 1: its place among the conversation's terminals that are
- * not a background command (`managedCommand`), oldest first. A stopped terminal keeps
- * its place while the list still has it. A shell's tab is named `terminal N` by it; a
- * service keeps its own label.
+ * Each open terminal's number. A background command (`managedCommand`) is not a tab, and
+ * a tab the person closed (`hidden`) does not keep a number. A stored `tabNumber` stays,
+ * so closing another tab does not rename this one. A tab without one takes the lowest
+ * number still free, oldest first. A shell's tab is named `terminal N` by it; a service
+ * keeps its own label.
  */
 export function terminalTabNumbers(
   terminals: readonly TerminalTabSource[],
 ): Map<string, number> {
   const tabs = terminals
     .map((terminal, index) => ({ terminal, index }))
-    .filter(({ terminal }) => !terminal.managedCommand)
+    .filter(({ terminal }) => !terminal.managedCommand && !terminal.hidden)
     .sort(
       (a, b) =>
         (a.terminal.startedAt < b.terminal.startedAt
@@ -32,7 +37,33 @@ export function terminalTabNumbers(
             ? 1
             : 0) || a.index - b.index,
     );
-  return new Map(tabs.map(({ terminal }, place) => [terminal.id, place + 1]));
+  const used = new Set<number>();
+  const numbers = new Map<string, number>();
+  const pending: typeof tabs = [];
+  for (const row of tabs) {
+    const stored = row.terminal.tabNumber;
+    if (stored && stored > 0 && !used.has(stored)) {
+      used.add(stored);
+      numbers.set(row.terminal.id, stored);
+    } else pending.push(row);
+  }
+  for (const row of pending) {
+    let number = 1;
+    while (used.has(number)) number++;
+    used.add(number);
+    numbers.set(row.terminal.id, number);
+  }
+  return numbers;
+}
+
+/** The lowest number no open tab is using. A new shell is named by it. */
+export function nextTerminalTabNumber(
+  terminals: readonly TerminalTabSource[],
+): number {
+  const used = new Set(terminalTabNumbers(terminals).values());
+  let number = 1;
+  while (used.has(number)) number++;
+  return number;
 }
 
 /** The name the model's terminal tools give a terminal tab: `local:` and its id. */

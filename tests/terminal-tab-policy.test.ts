@@ -73,6 +73,23 @@ test('the first command typed into a tab says so, including one that only reads'
     run.pattern,
   );
   // A forced warning, such as a delete, keeps its own reason.
+  const restarted = p.review(
+    'terminal_send',
+    write({ exited: true, command: 'ls -la' }),
+  );
+  assert.equal(restarted.verdict, 'ASK');
+  assert.equal(
+    restarted.reason,
+    'restarts this terminal and types this command into it',
+  );
+  assert.equal(
+    p.review('terminal_send', write({ exited: true })).reason,
+    'restarts this terminal and types into it',
+  );
+  assert.deepEqual(
+    p.review('terminal_send', write({ exited: true, command: 'rm -rf build' })),
+    p.review('terminal_send', write({ command: 'rm -rf build' })),
+  );
   assert.deepEqual(
     p.review(
       'terminal_send',

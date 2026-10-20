@@ -31,6 +31,10 @@ const REASONS: Record<string, () => string> = {
   'types in your terminal': () => t('types in your terminal'),
   'types this command into your terminal': () =>
     t('types this command into your terminal'),
+  'restarts this terminal and types into it': () =>
+    t('restarts this terminal and types into it'),
+  'restarts this terminal and types this command into it': () =>
+    t('restarts this terminal and types this command into it'),
   'runs the line on the screen': () => t('runs the line on the screen'),
 };
 export const requestReason = (reason?: string) =>
