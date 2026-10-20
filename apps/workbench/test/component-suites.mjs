@@ -64,6 +64,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'files-git-marks-ui.mjs',
   'drawer-auto-open-ui.mjs',
   'overview-cards-ui.mjs',
+  'notice-timers-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
