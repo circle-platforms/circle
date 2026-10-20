@@ -11,6 +11,7 @@ import { sshConnector } from '../src/terminal/ssh.js';
 import { telnetConnector } from '../src/terminal/telnet.js';
 import { TrustedHostKeys } from '../src/terminal/hostkeys.js';
 import type { TerminalProfile } from '../src/terminal/profiles.js';
+import type { ConnectEnv } from '../src/terminal/transport.js';
 import { scratch } from './helpers.js';
 
 // Default-imported: ssh2 is CommonJS with loop-copied exports.
@@ -310,6 +311,66 @@ test('a once answer trusts nothing on disk, and the next conversation is asked a
     signal,
   );
   assert.equal(other.approval?.kind, 'hostkey');
+});
+
+test('a quick connect password signs in once through the host key question and is not kept', async (t) => {
+  const device = await startDevice(t);
+  // What the SSH connector was given each time: a one-time secret name and the lookup
+  const read: { name: string; env: ConnectEnv }[] = [];
+  const sessions = new TerminalSessions({
+    connectors: {
+      ssh: (target, env) => {
+        if (target.passwordSecret)
+          read.push({ name: target.passwordSecret, env });
+        return sshConnector(target, env);
+      },
+      telnet: telnetConnector,
+    },
+    profiles: () => [],
+    secret: () => '',
+    keyFile: (path) => path,
+    onChange: () => {},
+  });
+  t.after(() => sessions.close());
+  const target = {
+    transport: 'ssh',
+    host: '127.0.0.1',
+    port: device.port,
+    user: 'operator',
+  };
+  const ask = await sessions.request(
+    'c1',
+    'connect',
+    { ...target, password: PASSWORD },
+    signal,
+  );
+  assert.equal(ask.approval?.kind, 'hostkey');
+  assert.deepEqual(device.authed, []);
+  // The answer carries the password again, as the window's question does
+  const done = await sessions.request(
+    'c1',
+    'connect',
+    {
+      ...target,
+      password: PASSWORD,
+      approval: { token: ask.approval!.token, scope: 'once' },
+    },
+    signal,
+  );
+  assert.match(done.text, /^Connected: /);
+  assert.deepEqual(device.authed, ['operator']);
+  // Each try had its own name, and neither reaches the password once it was read
+  assert.equal(read.length, 2);
+  assert.notEqual(read[0]!.name, read[1]!.name);
+  for (const { name, env } of read) {
+    assert.match(name, /^once:/);
+    assert.equal(env.secret(name), '');
+  }
+  const list = await sessions.request('c1', 'sessions', {}, signal);
+  assert.doesNotMatch(
+    [ask.text, done.text, list.text].join('\n'),
+    new RegExp(PASSWORD),
+  );
 });
 
 test('an absent secret or a refused login is a clear refusal, before anything is typed', async (t) => {
