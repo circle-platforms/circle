@@ -503,22 +503,23 @@ try {
       await page.keyboard.press('End');
       const last = await settle('terminal-10');
       assert.equal(last.label, 'terminal 10');
-      // A shell's × stops it and takes its tab out of the row; the tab in front stays
-      // in front and every other shell keeps its name.
+      // A shell's × stops it and takes its tab out of the row. The owner's decision
+      // (2026-10-20): a closed tab frees its number, so the tabs behind it compact
+      // instead of carrying the gap for the rest of the session.
       await page
         .getByRole('button', { name: 'stop terminal 1', exact: true })
         .click();
-      await page.waitForFunction(
-        () =>
-          ![...document.querySelectorAll('.term-tab-main')].some(
-            (node) => node.textContent.trim() === 'terminal 1',
-          ),
-      );
+      await page.waitForFunction(() => {
+        const names = [...document.querySelectorAll('.term-tab-main')].map(
+          (node) => node.textContent.trim(),
+        );
+        return names.length === 9 && !names.includes('terminal 10');
+      });
       assert.deepEqual(await sent('close'), [{ id: 'terminal-1' }]);
       assert.equal((await geometry()).selected, created.selected);
       assert.deepEqual(
         await names(),
-        Array.from({ length: 9 }, (_, index) => `terminal ${index + 2}`),
+        Array.from({ length: 9 }, (_, index) => `terminal ${index + 1}`),
       );
       assert.deepEqual(
         await page.evaluate(() =>
@@ -572,8 +573,10 @@ try {
       );
       const reordered = await visible();
       assert.equal(reordered.selected, created.selected);
-      // A shell keeps its name whatever order the service lists it in.
-      assert.equal(reordered.label, 'terminal 10');
+      // A shell keeps its place in the row whatever order the service lists it
+      // in; its number is its place among the tabs still open, so after the
+      // closed first tab it reads one lower than when it was created.
+      assert.equal(reordered.label, 'terminal 9');
       assert.equal(
         await strip
           .locator('.term-tab-main')
@@ -652,12 +655,14 @@ try {
       await openTerminalMode(page);
       const reloaded = await visible();
       assert.equal(reloaded.selected, 'terminal-terminal-9');
+      // By id, not by name: with the numbers compacted, the tab that was
+      // terminal 2 now reads terminal 1, and only the id tells them apart.
       assert.equal(
-        (await names()).includes('terminal 1'),
-        false,
+        await page.locator('[aria-controls="terminal-terminal-1"]').count(),
+        0,
         'a closed tab stays closed after a reload',
       );
-      assert.equal(reloaded.label, 'terminal 9');
+      assert.equal(reloaded.label, 'terminal 8');
       assert.deepEqual(errors, []);
       cases.push({
         theme,

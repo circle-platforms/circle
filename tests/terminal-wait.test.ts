@@ -7,7 +7,9 @@ import {
   type TerminalSessionsOptions,
 } from '../src/terminal/sessions.js';
 import type {
+  ConnectEnv,
   Connector,
+  TerminalTarget,
   TerminalTransport,
 } from '../src/terminal/transport.js';
 import type { TerminalProfile } from '../src/terminal/profiles.js';
