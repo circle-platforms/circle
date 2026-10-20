@@ -1,6 +1,12 @@
 // Simplified Chinese for words shared across the window. English is the key.
 export const common: Record<string, string> = {
   'restarting…': '正在重启…',
+  'operation failed; inspect effects before retrying':
+    '操作失败，请先查看影响再重试',
+  'operation outcome needs review; inspect effects before retrying':
+    '操作结果需要核对，请先查看影响再重试',
+  'stored operation result is unavailable; inspect effects before retrying':
+    '已保存的操作结果不可用，请先查看影响再重试',
   // approval modes
   'approval mode': '审批模式',
   manual: '手动',
@@ -46,6 +52,17 @@ export const common: Record<string, string> = {
   'deletes files': '删除文件',
   'runs a shell command': '运行 shell 命令',
   'only reads': '只读取',
+  'types this command into your terminal': '将把这条命令输入这个终端',
+  'restarts this terminal and types into it':
+    '会先重新启动这个终端，再把文字输入进去',
+  'restarts this terminal and types this command into it':
+    '会先重新启动这个终端，再把这条命令输入进去',
+  'run this in terminal {n}': '改在终端 {n} 里运行',
+  'the user gave terminal {n} back': '已把终端 {n} 交还',
+  'the model in use does not read images; use browser_snapshot':
+    '当前模型不能看图片，请改用页面快照',
+  'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.':
+    'browser_screenshot 不可用：当前模型不能看图片。请先调用 browser_snapshot；还没有页面快照。',
   'destructive operation': '破坏性操作',
   'python code deletes files': 'Python 代码会删除文件',
   'encoded command': '经过编码的命令',

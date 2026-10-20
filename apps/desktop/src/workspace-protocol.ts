@@ -51,6 +51,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'resize',
     'signal',
     'close',
+    'hide',
     'list',
     'replay',
   ]),

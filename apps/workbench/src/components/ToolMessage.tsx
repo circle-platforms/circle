@@ -119,6 +119,30 @@ function shownToolOutput(text: string): string {
     .replaceAll('Hook session_start output:', t('Hook session_start output:'))
     .replace(/Hook output \(([^)]+)\):/g, (_match, name: string) =>
       t('Hook output ({name}):', { name }),
+    )
+    .replaceAll(
+      'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.',
+      t(
+        'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.',
+      ),
+    )
+    .replaceAll(
+      'the model in use does not read images; use browser_snapshot',
+      t(
+        'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.',
+      ),
+    )
+    .replaceAll(
+      'the model in use does not read images',
+      t(
+        'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.',
+      ),
+    )
+    .replace(
+      /^[\w./-]+ does not read images$/,
+      t(
+        'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.',
+      ),
     );
 }
 export function ToolMessage({
@@ -226,6 +250,13 @@ export function ToolMessage({
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
       </button>
+      {tool.status === 'error' && /does not read images/.test(tool.output) && (
+        <p className="tool-error-cause" role="alert">
+          {t(
+            'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.',
+          )}
+        </p>
+      )}
       {diff && !open && (
         <div className="tool-diff">
           <DiffBlock diff={diff} compact />

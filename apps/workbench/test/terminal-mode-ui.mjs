@@ -281,6 +281,26 @@ try {
       }),
     );
 
+    // The conversation already shows Circle waiting in the shell, and the row has
+    // not caught up: the dot, the ring and the row's buttons are there anyway.
+    await page.getByRole('tab', { name: 'terminal 1' }).click();
+    await page.evaluate(() => window.terminalModeFixture.working('running'));
+    await shellOne.locator('.term-dot[data-state="run"]').waitFor();
+    assert.equal(
+      await page.locator('.term-frame').getAttribute('data-frame'),
+      'run',
+    );
+    await page
+      .getByRole('button', { name: 'take over', exact: true })
+      .waitFor();
+    await page
+      .getByRole('button', { name: 'stop Circle in terminal 1' })
+      .waitFor();
+    await page.evaluate(() => window.terminalModeFixture.working(''));
+    await page.waitForFunction(
+      () => !document.querySelector('.term-tab.on .term-dot'),
+    );
+
     // Closing a shell stops it and takes its tab out of the row.
     await page.getByRole('tab', { name: 'terminal 2' }).click();
     await page.getByRole('button', { name: 'stop terminal 2' }).click();

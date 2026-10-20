@@ -170,15 +170,15 @@ export interface TerminalToolOptions {
 // What the tools say of the person's terminal tabs, where the host has them.
 const TAB_NOTES: Record<string, string> = {
   terminal_sessions:
-    "\n- In the desktop application it also lists the user's own terminal tabs on this computer, as `local:<id>` and the name their tab has (`terminal 1`). The same tools read, wait on, type in and press keys in them.",
+    '\n- In the desktop application it also lists the user\'s own terminal tabs on this computer, as `local:<id>` and the name their tab has (`terminal 1`). The same tools read, wait on, type in and press keys in them. When the user asks you to use their terminal tab or "my terminal", use these tools only: do not call `execute` for that, because `execute` runs in Circle\'s own shell. Listing and reading a tab ask nothing. An exited tab stays in this list: sending to it restarts that shell and then types. Do not ask for a new terminal.',
   terminal_send:
-    "\n- In one of the user's terminal tabs (`local:…`) the first thing you type asks the user. After that a line you send with Enter, or with a line break, is approved like an `execute` command, by the same rules; typing without Enter does not ask. Text there takes no control characters: press keys with terminal_press. If the user takes the tab over, typing is refused until they hand it back.",
+    "\n- In one of the user's terminal tabs (`local:…`) the first thing you type asks the user, and the card says you will type that command into the tab. After that a line you send with Enter, or with a line break, is approved like an `execute` command, by the same rules; typing without Enter does not ask. Text there takes no control characters: press keys with terminal_press. If the user takes the tab over, typing is refused until they hand it back. Do not run the same command with `execute`. Sending to an exited tab restarts that shell and then types.",
   terminal_press:
     "\n- In one of the user's terminal tabs (`local:…`) the first key asks the user. After that Enter and Ctrl_D run the line at the prompt and are approved like an `execute` command; other keys do not ask.",
   terminal_read:
     "\n- One of the user's terminal tabs reads the same way, without asking. While the user has taken it over, the result says so and shows nothing.",
   terminal_wait:
-    '\n- If the user takes one of their terminal tabs over while you wait on it, the wait ends at once and says so.',
+    '\n- If the user takes one of their terminal tabs over while you wait on it, the wait ends at once and says so. A command that prints nothing, such as sleep, is not finished when the screen is quiet: wait for a pattern the next prompt or its output will match, with a timeout_ms long enough, and do not run it again with `execute`.',
   terminal_disconnect:
     "\n- The user's own terminal tabs (`local:…`) are theirs: they cannot be closed from here.",
   terminal_handoff:

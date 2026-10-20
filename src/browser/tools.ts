@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { loadToolPrompt } from '../system_prompt.js';
+import { BROWSER_SCREENSHOT_UNAVAILABLE } from '../tool_call_compat.js';
 import { fitMedia } from '../media.js';
 import type { Effect, Message, Tool, ToolContext } from '../types.js';
 import type { AgentRuntime } from '../runtime.js';
@@ -432,9 +433,7 @@ export function browserTools(
     async run(args, context) {
       // Nothing is taken for a model that could not look at it
       if (action === 'screenshot' && context.imageInput === false)
-        throw Error(
-          'the model in use does not read images; use browser_snapshot',
-        );
+        throw Error(BROWSER_SCREENSHOT_UNAVAILABLE);
       const result = await perform(action, args, context);
       if (!result.image) return result.text;
       if (!context.emitAttachments)

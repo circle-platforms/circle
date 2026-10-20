@@ -22,7 +22,10 @@ import {
   LocalTerminals,
   type LocalTerminalHost,
 } from '../src/local-terminals.ts';
-import { terminalTabNumbers } from '../src/terminal-tabs.ts';
+import {
+  nextTerminalTabNumber,
+  terminalTabNumbers,
+} from '../src/terminal-tabs.ts';
 import { ApprovalPolicy, ApprovalStore } from '../../../src/approvals.ts';
 import type {
   TerminalEvent,
@@ -106,6 +109,8 @@ class FakeTerminals implements LocalTerminalHost {
       at: parts.at(-1)?.at,
     };
   }
+  /** Set by a test that wants sending to an exited shell to open another. */
+  restart?: (owner: string, id: string) => Promise<TerminalSnapshot>;
   observe(listener: (event: TerminalEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -164,13 +169,21 @@ function devices() {
   return { port, requests };
 }
 
-function tabs(host: FakeTerminals, mode: () => string = () => 'manual') {
+function tabs(
+  host: FakeTerminals,
+  mode: () => string = () => 'manual',
+  handedBack?: (
+    conversation: string,
+    detail: { name: string; resume: boolean },
+  ) => void,
+) {
   const waiting = new Map<string, Set<string>>();
   const local = new LocalTerminals({
     host: () => host,
     changed: () => {},
     mode,
     waiting: (id) => waiting.get(id) ?? new Set(),
+    handedBack,
   });
   return { local, waiting };
 }
@@ -247,7 +260,32 @@ test('terminal tabs are numbered among the conversation terminals that are not b
   });
 });
 
-test('terminal_sessions lists the running shells as local tabs beside the devices, never a background command, a service or a closed shell', async (t) => {
+test('a closed tab frees its number and a new shell takes the lowest one free', () => {
+  const at = (second: number) =>
+    new Date(Date.UTC(2026, 9, 19, 8, 0, second)).toISOString();
+  const hidden = [
+    { id: 'gone', startedAt: at(0), hidden: true, tabNumber: 1 },
+    { id: 'open', startedAt: at(1) },
+  ];
+  assert.deepEqual(Object.fromEntries(terminalTabNumbers(hidden)), {
+    open: 1,
+  });
+  assert.equal(nextTerminalTabNumber(hidden), 2);
+  const kept = [
+    { id: 'second', startedAt: at(1), tabNumber: 2 },
+    { id: 'gone', startedAt: at(0), hidden: true, tabNumber: 1 },
+  ];
+  assert.equal(terminalTabNumbers(kept).get('second'), 2);
+  assert.equal(nextTerminalTabNumber(kept), 1);
+  assert.equal(
+    nextTerminalTabNumber([
+      { id: 'gone', startedAt: at(0), hidden: true, tabNumber: 1 },
+    ]),
+    1,
+  );
+});
+
+test('terminal_sessions lists running and exited shells, never a background command, a service or a hidden tab', async (t) => {
   const host = new FakeTerminals();
   const f = await runtime(
     t,
@@ -278,6 +316,8 @@ test('terminal_sessions lists the running shells as local tabs beside the device
   const closed = host.open(f.id);
   host.close(closed.id);
   const later = host.open(f.id);
+  const hidden = host.open(f.id);
+  hidden.hidden = true;
   host.open(randomUUID()); // another conversation's tab
   await f.agent.harness.run('which terminals are there');
   const text = results(f.model).at(-1)!.content;
@@ -288,9 +328,14 @@ test('terminal_sessions lists the running shells as local tabs beside the device
       `- local:${shell.id} · terminal 1 · local zsh in /work/project · `,
     ),
   );
-  // the service holds place 2 and the closed shell place 3: the later shell is 4
+  // the service holds place 2 and the exited shell place 3: the later shell is 4
   assert.match(text, new RegExp(`- local:${later.id} · terminal 4 · `));
-  assert.equal((text.match(/local:/g) ?? []).length, 2);
+  assert.match(text, new RegExp(`local:${closed.id}`));
+  assert.match(text, /exited\. The shell is gone/);
+  assert.match(text, /Do not ask for a new terminal/);
+  assert.equal(text.includes(hidden.id), false);
+  // The exited line names its id twice: once as the tab, once in "sending to".
+  assert.equal((text.match(/local:/g) ?? []).length, 4);
   assert.match(text, /### Profiles\n- lab/);
   // listing asks nothing and types nothing
   assert.equal(f.asked.length, 0);
@@ -495,9 +540,16 @@ test('a line the user changed after Circle asked is not typed', async (t) => {
 });
 
 /** A direct port on one tab whose first write the person allowed. */
-async function allowedTab(t: TestContext, mode: () => string = () => 'manual') {
+async function allowedTab(
+  t: TestContext,
+  mode: () => string = () => 'manual',
+  handedBack?: (
+    conversation: string,
+    detail: { name: string; resume: boolean },
+  ) => void,
+) {
   const host = new FakeTerminals();
-  const fixture = tabs(host, mode);
+  const fixture = tabs(host, mode, handedBack);
   const id = randomUUID();
   const shell = host.open(id);
   const session = `local:${shell.id}`;
@@ -556,10 +608,50 @@ test('taking a tab over ends Circle’s wait at once, refuses its typing, and ha
   assert.equal(read.text.includes('echo ready'), false);
   assert.equal(f.host.writes.length, before);
   const back = await f.local.control(f.id, f.session, 'return');
-  assert.equal(back[0]!.state, 'idle');
+  assert.equal(back[0]!.state, 'operating');
   const sent = await f.send('ls');
   assert.match(sent.text, /terminal 1: the user gave the terminal back/);
   assert.equal(f.host.typed(f.shell.id), 'echo ready\rls\r');
+});
+
+test('giving a tab back after a cut-short wait puts Circle back to work and says so', async (t) => {
+  const notes: { name: string; resume: boolean }[] = [];
+  const f = await allowedTab(
+    t,
+    () => 'manual',
+    (_conversation, detail) => {
+      notes.push(detail);
+    },
+  );
+  const waiting = f.port.request(
+    f.id,
+    'wait',
+    {
+      session: f.session,
+      pattern: 'NEVER_PRINTED',
+      idle_ms: 30000,
+      timeout_ms: 300000,
+    },
+    f.signal,
+  );
+  await until(
+    () => f.local.rows(f.id)[0]?.state === 'operating',
+    'Circle operates the tab',
+  );
+  await f.local.control(f.id, f.session, 'take');
+  const result = await waiting;
+  assert.match(result.text, /your wait ended there/);
+  const back = await f.local.control(f.id, f.session, 'return');
+  assert.equal(back[0]!.state, 'operating');
+  assert.deepEqual(notes, [{ name: 'terminal 1', resume: true }]);
+  f.local.settleResuming(f.id);
+  assert.equal(f.local.rows(f.id)[0]!.state, 'idle');
+  notes.length = 0;
+  const again = await f.local.control(f.id, f.session, 'return');
+  assert.equal(again[0]!.state, 'operating');
+  assert.deepEqual(notes, [{ name: 'terminal 1', resume: false }]);
+  f.local.settleResuming(f.id);
+  assert.equal(f.local.rows(f.id)[0]!.state, 'idle');
 });
 
 test('typing into a tab Circle is operating takes it over; typing while it is idle is told, never shown', async (t) => {
@@ -630,7 +722,7 @@ test('stop ends Circle’s action on a tab without taking it, and the next actio
   assert.match(read.text, /echo ready/);
 });
 
-test('closing a tab while Circle waits on it fails the wait, drops it from the list and lets go of its screen', async (t) => {
+test('closing a tab while Circle waits on it fails the wait, lists the shell as exited and lets go of its screen', async (t) => {
   const f = await allowedTab(t);
   assert.equal(f.local.adopted, 1);
   const waiting = f.port.request(
@@ -656,19 +748,67 @@ test('closing a tab while Circle waits on it fails the wait, drops it from the l
   assert.equal(f.local.adopted, 0);
   assert.deepEqual(f.local.rows(f.id), []);
   const listed = await f.port.request(f.id, 'sessions', {}, f.signal);
-  assert.equal(listed.text.includes('local:'), false);
+  assert.match(listed.text, new RegExp(`local:${f.shell.id}`));
+  assert.match(listed.text, /has exited|exited\. The shell is gone/);
   await assert.rejects(
     f.port.request(f.id, 'read', { session: f.session }, f.signal),
-    /terminal 1 was closed; it is gone from terminal_sessions/,
+    /terminal 1 has exited/,
   );
   // closing everything lets go of the service's events too
   f.local.close();
   assert.equal(f.host.listening, 0);
 });
 
+test('sending to an exited tab restarts it and types into the new shell', async (t) => {
+  const host = new FakeTerminals();
+  const restarted: string[] = [];
+  host.restart = async (owner, id) => {
+    const old = host.snapshots.find((one) => one.id === id);
+    if (!old) throw Error('terminal not found');
+    old.status = 'exited';
+    old.hidden = true;
+    old.exitCode = 0;
+    const next = host.open(owner);
+    restarted.push(next.id);
+    return next;
+  };
+  const fixture = tabs(host);
+  t.after(() => fixture.local.close());
+  const id = randomUUID();
+  const shell = host.open(id);
+  shell.status = 'exited';
+  shell.exitCode = 0;
+  const session = `local:${shell.id}`;
+  const port = fixture.local.port();
+  const signal = new AbortController().signal;
+  const listed = await port.request(id, 'sessions', {}, signal);
+  assert.match(listed.text, new RegExp(`local:${shell.id}`));
+  assert.match(listed.text, /Do not ask for a new terminal/);
+  assert.match(listed.text, /Do not use execute/);
+  const args = { session, text: 'echo hi', enter: true };
+  const facts = fixture.local.facts(id, 'send', args, args);
+  assert.equal(facts.exited, true);
+  assert.equal(facts.command, 'echo hi');
+  await port.request(id, 'send', { ...args, ...facts }, signal);
+  assert.deepEqual(restarted, [host.writes.at(-1)!.id]);
+  assert.match(host.typed(restarted[0]!), /echo hi\r/);
+  assert.equal(host.typed(shell.id), '');
+  const after = await port.request(id, 'sessions', {}, signal);
+  assert.match(after.text, new RegExp(`local:${restarted[0]}`));
+  assert.equal(after.text.includes(shell.id), false);
+  assert.match(after.text, /terminal 1/);
+});
+
 test('a handed-over tab waits for the person and comes back with its screen; plan mode does not hand it over', async (t) => {
+  const notes: { name: string; resume: boolean }[] = [];
   let mode = 'manual';
-  const f = await allowedTab(t, () => mode);
+  const f = await allowedTab(
+    t,
+    () => mode,
+    (_conversation, detail) => {
+      notes.push(detail);
+    },
+  );
   const handed = f.port.request(
     f.id,
     'handoff',
@@ -688,6 +828,7 @@ test('a handed-over tab waits for the person and comes back with its screen; pla
   const result = await handed;
   assert.match(result.text, /Password accepted/);
   assert.equal(f.local.rows(f.id)[0]!.state, 'idle');
+  assert.deepEqual(notes, []);
   mode = 'plan';
   await assert.rejects(
     f.port.request(
@@ -837,4 +978,96 @@ test('stopping Circle on a tab says that what it typed may have run, and a long 
   assert.ok(f.local.rows(f.id)[0]!.reason!.length <= 2000);
   await f.local.control(f.id, f.session, 'return');
   await handing;
+});
+
+/** The screen shows `text`: the emulator paints what was printed before the read returns. */
+async function screenHas(
+  f: Awaited<ReturnType<typeof allowedTab>>,
+  text: string,
+) {
+  for (let i = 0; i < 30; i++) {
+    const read = await f.port.request(
+      f.id,
+      'read',
+      { session: f.session },
+      f.signal,
+    );
+    if (read.text.includes(text)) return;
+    await delay(20);
+  }
+  throw Error(`the screen never showed ${text}`);
+}
+
+test('a local wait without a pattern holds while the cursor is off the prompt, and typing takes the tab', async (t) => {
+  const f = await allowedTab(t);
+  // Already at a prompt: quiet finishes the wait.
+  const resting = await f.port.request(
+    f.id,
+    'wait',
+    { session: f.session, idle_ms: 100, timeout_ms: 2000 },
+    f.signal,
+  );
+  assert.match(resting.text, /quiet for/);
+  // `sleep` prints a line and leaves the cursor off the prompt. Quiet is not done.
+  f.host.print(f.shell.id, '\r\nsleep 45\r\n');
+  await screenHas(f, 'sleep 45');
+  let settled = false;
+  const waiting = f.port
+    .request(
+      f.id,
+      'wait',
+      { session: f.session, idle_ms: 100, timeout_ms: 30000 },
+      f.signal,
+    )
+    .then((result) => {
+      settled = true;
+      return result;
+    });
+  await delay(400);
+  assert.equal(settled, false, 'quiet is not the prompt coming back');
+  assert.equal(f.local.rows(f.id)[0]?.state, 'operating');
+  f.local.typed(f.id, f.shell.id, 'x');
+  const taken = await waiting;
+  assert.match(taken.text, /your wait ended there/);
+  assert.equal(f.local.rows(f.id)[0]?.held, 'attach');
+});
+
+test('typing during a wait takes the tab when the write names another conversation', async (t) => {
+  const f = await allowedTab(t);
+  f.host.print(f.shell.id, '\r\nsleep 45\r\n');
+  await screenHas(f, 'sleep 45');
+  const waiting = f.port.request(
+    f.id,
+    'wait',
+    { session: f.session, idle_ms: 100, timeout_ms: 30000 },
+    f.signal,
+  );
+  await delay(400);
+  assert.equal(f.local.rows(f.id)[0]?.state, 'operating');
+  f.local.typed('someone-else', f.shell.id, 'x');
+  const taken = await waiting;
+  assert.match(taken.text, /your wait ended there/);
+  assert.equal(f.local.rows(f.id)[0]?.held, 'attach');
+  assert.equal(f.local.rows('someone-else').length, 0);
+});
+
+test('a local wait off the prompt is bounded by its timeout, and the prompt ends it', async (t) => {
+  const f = await allowedTab(t);
+  f.host.print(f.shell.id, '\r\nsleep 45\r\n');
+  await screenHas(f, 'sleep 45');
+  const capped = await f.port.request(
+    f.id,
+    'wait',
+    { session: f.session, idle_ms: 100, timeout_ms: 1200 },
+    f.signal,
+  );
+  assert.match(capped.text, /still going after 1s/);
+  f.host.print(f.shell.id, '\r\n$ ');
+  const back = await f.port.request(
+    f.id,
+    'wait',
+    { session: f.session, idle_ms: 100, timeout_ms: 5000 },
+    f.signal,
+  );
+  assert.match(back.text, /quiet for/);
 });
