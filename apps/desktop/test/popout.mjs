@@ -815,7 +815,7 @@ try {
     .locator('.inspector .browser-address')
     .getByRole('button', { name: 'open in a window', exact: true })
     .click();
-  const liveBrowser = await until(
+  let liveBrowser = await until(
     async () => liveWindows('#/popout/browser/')[0],
     'the browser window',
   );
@@ -860,7 +860,7 @@ try {
     .locator('.inspector .browser-address')
     .getByRole('button', { name: 'open in a window', exact: true })
     .click();
-  const liveBrowser = await until(
+  liveBrowser = await until(
     async () => liveWindows('#/popout/browser/')[0],
     'the browser window',
   );
