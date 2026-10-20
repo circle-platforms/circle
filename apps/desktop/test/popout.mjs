@@ -1106,7 +1106,8 @@ try {
     async () => (await live.locator('.native-terminal-dead').count()) === 0,
     'the local shell is running',
   );
-  await message.click();
+  // Filled without a click: in a narrow window the terminal lies over the
+  // conversation, and its screen is what a click there would hit.
   await message.fill('stays in the composer');
   await localScreen.click({ delay: 0 });
   const localTyping = live.keyboard.type('abc', { delay: 12 });

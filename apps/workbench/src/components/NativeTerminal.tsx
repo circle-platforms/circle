@@ -1170,28 +1170,28 @@ export function NativeTerminal({
           )}
         </div>
       )}
+      {/* An ended terminal says how in a quiet line under its tabs: the exit code,
+          the reason, and where it ran with its process ids in the tooltip. */}
+      {inFront && !['running', 'stopping'].includes(inFront.status) && (
+        <div
+          className="native-terminal-exit"
+          role="status"
+          title={processDetails(inFront)}
+        >
+          {status(inFront)}
+          {extraExitReason(inFront) ? ` · ${extraExitReason(inFront)}` : ''}
+        </div>
+      )}
       {inFront &&
         !inFront.managedCommand &&
         inFront.kind !== 'service' &&
         !['running', 'stopping'].includes(inFront.status) && (
-          <div className="native-terminal-dead" role="status" tabIndex={0}>
+          <div className="native-terminal-dead" tabIndex={0}>
             <p>{t('this terminal has exited')}</p>
             <p>{t('press enter to restart')}</p>
             <Button disabled={busy} onClick={restart}>
               {t('restart')}
             </Button>
-          </div>
-        )}
-      {inFront &&
-        (inFront.managedCommand || inFront.kind === 'service') &&
-        !['running', 'stopping'].includes(inFront.status) && (
-          <div
-            className="native-terminal-exit"
-            role="status"
-            title={processDetails(inFront)}
-          >
-            {status(inFront)}
-            {extraExitReason(inFront) ? ` · ${extraExitReason(inFront)}` : ''}
           </div>
         )}
       {error && !serviceOpen && (
@@ -1213,14 +1213,11 @@ export function NativeTerminal({
           {inFront.readiness.error}
         </div>
       )}
-      {inFront?.error &&
-        (inFront.managedCommand ||
-          inFront.kind === 'service' ||
-          ['running', 'stopping'].includes(inFront.status)) && (
-          <div className="native-terminal-error" role="alert">
-            {inFront.error}
-          </div>
-        )}
+      {inFront?.error && (
+        <div className="native-terminal-error" role="alert">
+          {inFront.error}
+        </div>
+      )}
       {!commandTerminal && (
         <DeviceNotices
           devices={devices}
