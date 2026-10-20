@@ -1,6 +1,7 @@
 // The slash commands of the full-screen interface. SessionApp keeps /models, /login, /reload
 // and /editor, which use its own state, and routes every command through runCommand.
 import { randomUUID } from 'node:crypto';
+import { t, uiText } from '../locale.js';
 import { networkSummary } from '../net.js';
 import {
   mkdirSync,
@@ -128,6 +129,7 @@ const BUSY_OK = new Set([
   'session',
   'themes',
   'mcp',
+  'hooks',
   'copy',
   'export',
   'share',
@@ -762,13 +764,17 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
   if (['enable', 'disable'].includes(verb.toLowerCase())) {
     const enable = verb.toLowerCase() === 'enable';
     if (!name) {
-      host.fail(`Usage: /extensions ${enable ? 'enable' : 'disable'} <name>`);
+      host.fail(
+        t('Usage: /extensions {verb} <name>', {
+          verb: enable ? 'enable' : 'disable',
+        }),
+      );
       return;
     }
     // The list is complete once integrations have loaded at start.
     await runtime.initialize().catch(() => {});
     if (!runtime.extensions.extensions.some((ext) => ext.name === name)) {
-      host.fail(`No extension named ${name}`);
+      host.fail(t('No extension named {name}', { name }));
       return;
     }
     // Saved, so it stays on (or off) in the next session too.
@@ -782,10 +788,14 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
     try {
       await runtime.reloadIntegrations();
     } catch (error) {
-      host.fail(`Extension reload failed: ${reason(error)}`);
+      host.fail(
+        t('Extension reload failed: {error}', { error: reason(error) }),
+      );
       return;
     }
-    host.notice(`${name} ${enable ? 'enabled' : 'disabled'}`);
+    host.notice(
+      enable ? t('{name} enabled', { name }) : t('{name} disabled', { name }),
+    );
     host.notice(runtime.extensions.describe());
     return;
   }
@@ -793,11 +803,15 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
     try {
       await runtime.reloadIntegrations();
     } catch (error) {
-      host.fail(`Extension reload failed: ${reason(error)}`);
+      host.fail(
+        t('Extension reload failed: {error}', { error: reason(error) }),
+      );
       return;
     }
     host.notice(
-      `Extensions reloaded · ${runtime.extensions.tools().length} tools`,
+      t('Extensions reloaded · {n} tools', {
+        n: runtime.extensions.tools().length,
+      }),
     );
   }
   host.notice(runtime.extensions.describe());
@@ -1419,16 +1433,21 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     host.notice(
       skills.length
         ? [
-            'Skills:',
+            t('Skills:'),
             '',
-            ...skills.map(
-              (skill) =>
-                `  ${skill.name.padEnd(20)} ${skill.description.slice(0, 80)}${skill.source_label ? ` (${skill.source_label})` : ''}`,
-            ),
+            ...skills.map((skill) => {
+              const description = uiText(skill.description).slice(0, 80);
+              const source = skill.source_label
+                ? ` (${uiText(skill.source_label)})`
+                : '';
+              return `  ${skill.name.padEnd(20)} ${description}${source}`;
+            }),
             '',
-            'Load with /skill <name>',
+            t('Load with /skill <name>'),
           ].join('\n')
-        : 'No skills found. Install with `npx skills add … -a amp` (writes .agents/skills), or add SKILL.md under ~/.circle/skills / .agent/skills.',
+        : t(
+            'No skills found. Install with `npx skills add … -a amp` (writes .agents/skills), or add SKILL.md under ~/.circle/skills / .agent/skills.',
+          ),
     );
     return;
   }
@@ -1455,7 +1474,8 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     },
   ]);
   host.notice(
-    `Loaded skill \`${name}\`` + (skillArgs ? ` args='${skillArgs}'` : ''),
+    t('Loaded skill `{name}`', { name }) +
+      (skillArgs ? t(" args='{args}'", { args: skillArgs }) : ''),
   );
 }
 
@@ -1996,6 +2016,40 @@ async function clone(host: CommandHost): Promise<void> {
   redrawn(host, `Cloned this branch → ${session.id}`);
 }
 
+function hookSource(label: string): string {
+  if (label === 'user' || label === 'project') return t(label);
+  if (label.startsWith('skill:'))
+    return `${t('skill')}:${label.slice('skill:'.length)}`;
+  return label;
+}
+function hooks(host: CommandHost): void {
+  const { hooks: rows, projectIgnored } = host.runtime.listHooks();
+  const line = (row: (typeof rows)[number], waiting: boolean): string => {
+    const hook = row.hook;
+    const state = waiting
+      ? t('waiting for /skill {name}', { name: hook.skill ?? hook.name })
+      : t('trusted');
+    return `  ${hook.name} · ${hookSource(hook.sourceLabel)} · ${hook.event} · ${hook.command} · ${state}`;
+  };
+  const running = rows.filter((row) => row.active);
+  const waiting = rows.filter((row) => !row.active);
+  const lines: string[] = [];
+  if (projectIgnored) lines.push(t('project hooks need trust'), '');
+  if (!rows.length) {
+    lines.push(t('No hooks configured.'));
+    host.notice(lines.join('\n'));
+    return;
+  }
+  lines.push(t('Hooks:'), '');
+  if (running.length) lines.push(...running.map((row) => line(row, false)));
+  if (waiting.length) {
+    if (running.length) lines.push('');
+    lines.push(t('Skill hooks waiting for load:'), '');
+    lines.push(...waiting.map((row) => line(row, true)));
+  }
+  host.notice(lines.join('\n'));
+}
+
 const HANDLERS: Record<string, Handler> = {
   new: newSession,
   continue: continueSession,
@@ -2016,6 +2070,7 @@ const HANDLERS: Record<string, Handler> = {
   approvals,
   mcp,
   extensions,
+  hooks,
   trust,
   undo,
   redo,

@@ -39,6 +39,7 @@ import { mention } from './mentions.js';
 import { EFFORT_LEVELS } from './model.js';
 import { installExitGuard } from './exit_guard.js';
 import { initializeNetwork } from './network_bootstrap.js';
+import { t } from './locale.js';
 import { networkSummary } from './net.js';
 import { VERSION } from './version.js';
 import { UsageError } from './usage_error.js';
@@ -307,7 +308,43 @@ function conflict(
   return '';
 }
 export function helpText(): string {
-  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --trust              Trust this folder and remember it\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --task [NAME]        Work in a folder of Circle's own for this task, under the task folder\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
+  return (
+    [
+      'usage: circle [options] [folder] [@file ...] [message ...]',
+      '',
+      'A terminal coding agent for your own model endpoint.',
+      '',
+      '  -p, --print [PROMPT]  Print the answer and exit',
+      '  --mode text|json|rpc  Output mode',
+      '  -c, --continue       Continue the last session',
+      '  -r, --resume         Choose a saved session',
+      '  --session ID         Resume by ID',
+      '  --session-id ID      Open or create this ID',
+      '  --fork ID            Copy a saved session',
+      '  --no-session         In-memory conversation',
+      '  -m, --model ID       Model for this run',
+      '  --thinking LEVEL     Thinking depth',
+      '  --list-models [TEXT] List endpoint models',
+      '  --export ID [OUT]    Export a saved session',
+      '  --system-prompt TEXT|FILE',
+      '  --append-system-prompt TEXT|FILE',
+      '  --no-context-files   Skip instruction files',
+      '  --tools LIST         Limit tools',
+      '  --exclude-tools LIST Exclude tools',
+      '  --no-tools           No tools except compaction',
+      '  --yolo               Auto mode for print or line',
+      '  --trust              Trust this folder and remember it',
+      '  --extensions         Load extensions and MCP servers in print, line or rpc mode',
+      '  --line               Plain line mode',
+      '  --init               Model setup',
+      "  --task [NAME]        Work in a folder of Circle's own for this task, under the task folder",
+      '  --print-home         Print the data directory',
+      '  -v, --version        Print version',
+      '  -h, --help           Show help',
+    ]
+      .map((line) => t(line))
+      .join('\n') + '\n'
+  );
 }
 // How long `-p PROMPT` waits for piped input to start before going on without it.
 const STDIN_WAIT_MS = 3000;
@@ -328,7 +365,10 @@ export async function pipedText(
         ? undefined
         : setTimeout(() => {
             warn(
-              `circle: nothing arrived on stdin within ${waitMs / 1000}s; going on without it (use </dev/null to skip the wait)\n`,
+              t(
+                'circle: nothing arrived on stdin within {seconds}s; going on without it (use </dev/null to skip the wait)\n',
+                { seconds: waitMs / 1000 },
+              ),
             );
             done(false);
           }, waitMs);
@@ -470,7 +510,10 @@ async function headlessSettings(
       saveSettings(settings, home);
     } else if (!process.stdin.isTTY)
       throw new UsageError(
-        `This folder is not trusted yet: ${options.workspace}\nRun \`circle\` there once in a terminal and trust it, or pass --trust to trust it and remember it.`,
+        t(
+          'This folder is not trusted yet: {folder}\nRun `circle` there once in a terminal and trust it, or pass --trust to trust it and remember it.',
+          { folder: options.workspace },
+        ),
       );
     else {
       const { runLineTrust } = await import('./line_setup.js');

@@ -364,17 +364,28 @@ export class AgentRuntime {
             !this.runOptions.session_name &&
             !options.sessionId,
         );
-      if (!options.inspect)
-        this.store.claimSession(this.session.id, (error) =>
-          this.ownershipLost(error),
-        );
+      if (!options.inspect) {
+        try {
+          this.store.claimSession(this.session.id, (error) =>
+            this.ownershipLost(error),
+          );
+        } catch (error) {
+          // Print mode still stops. The full-screen interface watches the lock.
+          if (options.headless || !(error instanceof SessionOccupiedError))
+            throw error;
+          this.options.inspect = true;
+        }
+      }
       // A delete may have completed between discovery and acquiring the lease.
       const current = this.store.get(this.session.id);
       if (!current) throw new Error('unknown session');
       this.session = current;
-      this.store.repairStaleTitles();
-      const repaired = this.store.get(this.session.id);
-      if (repaired) this.session = repaired;
+      // A view-only open does not rename another terminal's session.
+      if (!this.options.inspect) {
+        this.store.repairStaleTitles();
+        const repaired = this.store.get(this.session.id);
+        if (repaired) this.session = repaired;
+      }
     } catch (error) {
       this.store.close();
       throw error;
@@ -1280,6 +1291,17 @@ export class AgentRuntime {
       this.refreshSystemPrompt();
     }, 0);
     this.toolsCheck.unref?.();
+  }
+  /** Configured hooks, including skill hooks this session has not loaded. */
+  listHooks(): {
+    hooks: { hook: HookDefinition; active: boolean }[];
+    projectIgnored: boolean;
+  } {
+    const runner = this.ensureHooks();
+    return {
+      hooks: runner.listing(),
+      projectIgnored: runner.loaded.projectIgnored,
+    };
   }
   /** Skills whose hooks are armed for the current session. */
   private armedSkills = new Set<string>();

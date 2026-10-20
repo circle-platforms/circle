@@ -97,6 +97,7 @@ import {
   commandWord,
   knownSlashNames,
   parseSlash,
+  refusedSlash,
 } from './slash_commands.js';
 import {
   cycleThinking,
@@ -1124,6 +1125,10 @@ export class SessionApp {
     } finally {
       this.connecting = false;
     }
+    if (runtime.viewOnly)
+      this.notice(
+        `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`,
+      );
     runtime.repairRecentTitles();
     this.repaint();
   }
@@ -2998,17 +3003,18 @@ export class SessionApp {
               `Unknown command /${word} · turn it on with /extensions enable ${off}`,
               4000,
             );
-          } else {
+          } else if (refusedSlash(raw, shown)) {
+            const token = word ? `/${word}` : shown;
             const close = word
               ? closeMatch(word, [...knownSlashNames(), ...extra])
               : '';
-            this.composer.set(raw);
+            this.composer.set('');
             this.flash(
-              `Unknown command /${word}` +
+              `Unknown command ${token}` +
                 (close ? ` · did you mean /${close}?` : ' · /help lists them'),
               4000,
             );
-          }
+          } else this.composer.set(raw);
         }
       }
     } catch (error) {
@@ -3128,10 +3134,10 @@ export class SessionApp {
         await this.command(slash.name, slash.args);
         return;
       }
-      const word = commandWord(raw);
-      if (word) {
-        const off = this.runtime?.extensions.offCommand(word);
-        if (off) {
+      if (refusedSlash(raw, message)) {
+        const word = commandWord(raw);
+        const off = word ? this.runtime?.extensions.offCommand(word) : '';
+        if (word && off) {
           // The draft was already taken. A turned-off bundled command is not a typo.
           this.flash(
             `Unknown command /${word} · turn it on with /extensions enable ${off}`,
@@ -3139,11 +3145,14 @@ export class SessionApp {
           );
           return;
         }
-        // Not sent: the text comes back to the box to fix.
-        const close = closeMatch(word, [...knownSlashNames(), ...extra]);
-        this.composer.restore(raw, pastes);
+        // Not sent, and not left in the box: the next key would append to it.
+        const token = word ? `/${word}` : message;
+        const close = word
+          ? closeMatch(word, [...knownSlashNames(), ...extra])
+          : '';
+        this.composer.set('');
         this.flash(
-          `Unknown command /${word}` +
+          `Unknown command ${token}` +
             (close ? ` · did you mean /${close}?` : ' · /help lists them'),
           4000,
         );

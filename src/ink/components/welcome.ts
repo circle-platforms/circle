@@ -16,7 +16,7 @@ import {
   type RGB,
 } from '../theme.js';
 import { pad, stringWidth, truncate } from '../string_width.js';
-import { uiText } from '../../locale.js';
+import { uiAge, uiFolderCount, uiText } from '../../locale.js';
 
 export const LOGO_ROWS = 3; // the ring is this tall
 export const LOGO_COLUMNS = 7; // and this wide: a cell is about twice as tall as it is wide
@@ -164,7 +164,7 @@ export function welcomeRows(width: number, info: WelcomeInfo): string[] {
     const host = info.endpoint ? ` · ${info.endpoint}` : '';
     const model = truncate(info.model, room);
     connection = `${p.text}${model}${p.reset}${p.dim}${truncate(host, room - stringWidth(model))}${p.reset}`;
-  } else connection = `${p.faint}not connected yet${p.reset}`;
+  } else connection = `${p.faint}${uiText('not connected yet')}${p.reset}`;
   const branch = info.branch ? ` (${info.branch})` : '';
   const folder = truncate(
     info.folder,
@@ -194,7 +194,7 @@ export function welcomeRows(width: number, info: WelcomeInfo): string[] {
       const lit = item.state !== 'none';
       rows.push(
         ` ${statusLight(item.state)} ${lit ? p.dim : p.faint}${pad(label(item), nameW)}${p.reset}` +
-          `${lit ? p.text : p.faint}${truncate(item.text, valueW)}${p.reset}`,
+          `${lit ? p.text : p.faint}${truncate(uiFolderCount(item.text), valueW)}${p.reset}`,
       );
       if (item.state === 'error')
         for (const error of item.errors ?? [])
@@ -204,20 +204,24 @@ export function welcomeRows(width: number, info: WelcomeInfo): string[] {
     }
   }
   if (info.recent.length) {
-    rows.push('', `   ${p.faint}recent${p.reset}`);
-    const ages = Math.max(...info.recent.map(([, when]) => stringWidth(when)));
+    rows.push('', `   ${p.faint}${uiText('recent')}${p.reset}`);
+    const ages = Math.max(
+      ...info.recent.map(([, when]) => stringWidth(uiAge(when))),
+    );
     const titleRoom = Math.max(8, width - 3 - 3 - ages - 1);
     const titles = info.recent.map(([title]) => truncate(title, titleRoom));
     const titleW = Math.max(...titles.map((title) => stringWidth(title))) + 3;
     titles.forEach((title, index) => {
-      const when = info.recent[index]![1];
+      const when = uiAge(info.recent[index]![1]);
       rows.push(
         `   ${p.text}${title}${p.reset}${' '.repeat(titleW - stringWidth(title))}` +
           `${p.dim}${when.padStart(ages)}${p.reset}`,
       );
     });
     if (info.more > 0)
-      rows.push(`   ${p.dim}… +${info.more} more · /resume${p.reset}`);
+      rows.push(
+        `   ${p.dim}${uiText(`… +${info.more} more · /resume`)}${p.reset}`,
+      );
   }
   rows.push('');
   return rows;

@@ -240,7 +240,7 @@ test('a mistyped command stays in the box with a suggestion; a space or a path s
   ]);
   ui.setDraft('/modles');
   await key('enter');
-  assert.equal(app.state.draft, '/modles');
+  assert.equal(app.state.draft, '');
   assert.equal(
     app.state.flash,
     'Unknown command /modles · did you mean /models?',
@@ -248,7 +248,13 @@ test('a mistyped command stays in the box with a suggestion; a space or a path s
   ui.setDraft('/qqqqqqq');
   await key('enter');
   assert.equal(app.state.flash, 'Unknown command /qqqqqqq · /help lists them');
+  assert.equal(app.state.draft, '');
   assert.equal(model.requests.length, 0);
+  ui.setDraft('/hooks/hotkeys');
+  await key('enter');
+  assert.equal(app.state.draft, '');
+  assert.equal(model.requests.length, 0);
+  assert.match(app.state.flash, /^Unknown command \/hooks\/hotkeys/);
   ui.setDraft(' /modles');
   await key('enter');
   await until(() => model.requests.length === 1);

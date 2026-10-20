@@ -282,7 +282,8 @@ export class Picker {
       const snippet =
         this.query && item.detail ? matchSnippet(item.detail, this.query) : '';
       const meta =
-        (item.meta ? `  ${item.meta}` : '') + (snippet ? `  ${snippet}` : '');
+        (item.meta ? `  ${uiText(item.meta)}` : '') +
+        (snippet ? `  ${snippet}` : '');
       rows.push(
         sgrJoin(marked ? p.sel_bg : p.panel_bg, p.text) +
           pad(truncate(` ${marked ? '>' : ' '} ${body}${meta}`, width), width) +

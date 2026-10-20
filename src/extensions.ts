@@ -24,6 +24,7 @@ import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
 import { ExtensionError } from './extension_error.js';
+import { t, uiText } from './locale.js';
 import {
   SecretPromptError,
   cancelRequest,
@@ -1058,14 +1059,24 @@ export class ExtensionHost {
   }
   describe(): string {
     const counted = (count: number, one: string, many: string): string =>
-      `${count} ${count === 1 ? one : many}`;
+      count === 1
+        ? t(`{n} ${one}`, { n: count })
+        : t(`{n} ${many}`, { n: count });
     if (!this.extensions.length)
-      return 'No extensions. Put an extension.ts or extension.js in each extension folder.';
+      return t(
+        'No extensions. Put an extension.ts or extension.js in each extension folder.',
+      );
     return this.extensions
-      .map(
-        (ext) =>
-          `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${!ext.enabled ? (ext.source === 'bundled' ? `off · /extensions enable ${ext.name}` : 'off') : ext.error ? 'failed to load: ' + ext.error : `${counted(ext.tools.length, 'tool', 'tools')} · ${counted(ext.commands.length, 'command', 'commands')}`}${ext.description ? '\n  ' + ext.description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`,
-      )
+      .map((ext) => {
+        const state = !ext.enabled
+          ? ext.source === 'bundled'
+            ? t('off · /extensions enable {name}', { name: ext.name })
+            : t('off')
+          : ext.error
+            ? t('failed to load: {error}', { error: ext.error })
+            : `${counted(ext.tools.length, 'tool', 'tools')} · ${counted(ext.commands.length, 'command', 'commands')}`;
+        return `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${state}${ext.description ? '\n  ' + uiText(ext.description) : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`;
+      })
       .join('\n');
   }
 }

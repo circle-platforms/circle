@@ -6,6 +6,7 @@ import { basename, sep } from 'node:path';
 import { palette, statusLight, type LampState } from '../ink/theme.js';
 import { stringWidth, truncate } from '../ink/string_width.js';
 import { EFFORT_LEVELS } from '../model.js';
+import { uiText } from '../locale.js';
 import { cacheRateLabel } from '../pricing.js';
 import type { Usage } from '../types.js';
 import type { CompactionProgress } from '../compaction.js';
@@ -77,7 +78,9 @@ export function busyLabel(
   tokens: number,
   detail?: string,
 ): string {
-  return `${verb}… · ${detail ? detail + ' · ' : ''}${formatElapsed(seconds)} · ↓ ${formatTokens(tokens)}`;
+  const word = uiText(verb);
+  const why = detail ? uiText(detail) : '';
+  return `${word}… · ${why ? why + ' · ' : ''}${formatElapsed(seconds)} · ↓ ${formatTokens(tokens)}`;
 }
 
 // A folder as people write it: the home folder is `~`.
@@ -113,7 +116,7 @@ export function headerRows(info: HeaderInfo, width: number): string[] {
   const head = ` circle ${info.version} · `;
   const path =
     displayPath(info.workspace) + (info.branch ? ` (${info.branch})` : '');
-  const hint = '? for shortcuts';
+  const hint = uiText('? for shortcuts');
   let room = width - 1;
   const showHint =
     info.connected !== false &&
@@ -242,7 +245,7 @@ export function footerRow(
   if (flash) {
     // The flash is its own segment. Meters give way on a ` · ` boundary, so a
     // narrow row does not become `cach  cleared`.
-    const shown = fitSegment(flash, Math.max(1, width - 2));
+    const shown = fitSegment(uiText(flash), Math.max(1, width - 2));
     const room = width - 1 - stringWidth(shown) - 3;
     if (room < 12) return p.faint + ' ' + shown + p.reset;
     const left = fitSegment(fitted, room);

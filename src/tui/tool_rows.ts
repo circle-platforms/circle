@@ -154,7 +154,7 @@ export function toolRow(
       text,
     ],
   ];
-  if (waiting) segments.push(['', '  '], [p.blue, 'waiting for you']);
+  if (waiting) segments.push(['', '  '], [p.blue, uiText('waiting for you')]);
   return tintedRow(segments, bg, options.width);
 }
 
@@ -261,7 +261,9 @@ export function resultRows(
             ['', '   ⎿ '],
             [
               p.faint,
-              `Read ${window.count} line${window.count === 1 ? '' : 's'} · ctrl+o`,
+              uiText(
+                `Read ${window.count} line${window.count === 1 ? '' : 's'} · ctrl+o`,
+              ),
             ],
           ],
           bg,
@@ -500,6 +502,7 @@ export function thinkingRows(
   let header = options.done ? '∴ Thought' : '∴ Thinking';
   if (seconds !== undefined) header += ` ${formatBusyElapsed(seconds)}`;
   if (title) header += ` · ${title}`;
+  header = uiText(header);
   const style = sgrJoin(options.expanded ? p.reason_dim : p.reason, '\x1b[3m');
   const head: [string, string][] = [
     ['', ' '],
