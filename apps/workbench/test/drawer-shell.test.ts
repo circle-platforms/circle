@@ -91,6 +91,37 @@ test(
         .getByRole('button', { name: 'changes panel', exact: true })
         .click();
       assert.equal(await page.locator('.changes-mode').isVisible(), true);
+      // All uncommitted, in an 800px window: the diff fills the drawer, not a short band.
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page
+        .getByRole('button', { name: 'all uncommitted', exact: true })
+        .click();
+      await page.locator('.changes-diff').waitFor();
+      const filled = await page.evaluate(() => {
+        const diff = document.querySelector('.changes-diff');
+        const drawer = document.querySelector('.work-drawer');
+        const pre = diff?.querySelector('pre');
+        if (!(diff instanceof HTMLElement) || !(drawer instanceof HTMLElement))
+          return null;
+        const diffBox = diff.getBoundingClientRect();
+        const drawerBox = drawer.getBoundingClientRect();
+        return {
+          gap: drawerBox.bottom - diffBox.bottom,
+          diffHeight: diffBox.height,
+          maxHeight: pre ? getComputedStyle(pre).maxHeight : 'none',
+        };
+      });
+      assert.ok(filled, 'the changes diff is on screen');
+      assert.ok(
+        filled.gap < 32,
+        `the diff stopped ${filled.gap}px above the drawer`,
+      );
+      assert.ok(
+        filled.diffHeight > 300,
+        `the diff area is only ${filled.diffHeight}px`,
+      );
+      assert.equal(filled.maxHeight, 'none');
+      await page.setViewportSize({ width: 1520, height: 980 });
       await page
         .getByRole('button', { name: 'files panel', exact: true })
         .click();

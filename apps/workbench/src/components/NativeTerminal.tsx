@@ -1880,7 +1880,22 @@ function TerminalSurface({
           </Button>
         </div>
       )}
-      <div className="native-terminal-screen">
+      <div
+        className="native-terminal-screen"
+        onPointerDown={() => {
+          const term = instance.current?.terminal;
+          if (!term) return;
+          // The click is the person's: the shell takes the keyboard, and a render
+          // that focuses the composer in the same frame gives it back.
+          term.focus();
+          requestAnimationFrame(() => {
+            if (instance.current?.terminal !== term) return;
+            const active = document.activeElement;
+            if (active instanceof Element && active.closest('.composer'))
+              term.focus();
+          });
+        }}
+      >
         <div ref={container} className="native-terminal-fit" />
       </div>
     </div>

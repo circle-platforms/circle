@@ -145,6 +145,23 @@ function removeCapture(): void {
   window.removeEventListener('beforeinput', onBeforeInput, true);
 }
 
+/** The keyboard is in a terminal. A later render must not pull it back to the composer. */
+export function keyboardIsInTerminal(): boolean {
+  if (typeof document === 'undefined') return false;
+  const active = document.activeElement;
+  return (
+    active instanceof Element && !!active.closest('.xterm, .device-screen')
+  );
+}
+
+/** Focus the message box unless a terminal already has the keyboard. */
+export function focusMessageComposer(
+  node: HTMLTextAreaElement | null | undefined,
+): void {
+  if (!node || keyboardIsInTerminal()) return;
+  if (document.activeElement !== node) node.focus({ preventScroll: true });
+}
+
 function scheduleRefocus(): void {
   if (typeof requestAnimationFrame !== 'function') return;
   const gen = generation;
@@ -152,7 +169,7 @@ function scheduleRefocus(): void {
   // One frame later, only if the menu or the window took the keyboard back.
   raf = requestAnimationFrame(() => {
     raf = 0;
-    if (gen !== generation) return;
+    if (gen !== generation || keyboardIsInTerminal()) return;
     const node = composerNode();
     if (node && document.activeElement !== node)
       node.focus({ preventScroll: true });

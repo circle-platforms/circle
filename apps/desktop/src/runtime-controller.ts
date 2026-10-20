@@ -372,9 +372,13 @@ export class RuntimeController {
       )?.mode,
     waiting: (conversation) =>
       new Set(this.terminalTabApprovals().get(conversation) ?? []),
+    handedBack: (conversation, detail) =>
+      this.terminalHandedBack(conversation, detail),
   });
   private terminalTabRows = new Map<string, string>();
   private terminalTabWaits = new Map<string, string>();
+  /** Conversations whose give-back turn should clear the resumed terminal state. */
+  private handbackSessions = new Set<string>();
   private workspaceSessions = new Map<string, string>();
   private readonly store: CheckpointStore;
   // The last link an extension asked to open; the window opens each id once.
@@ -1216,6 +1220,51 @@ export class RuntimeController {
     const rows = await this.terminalTabs.control(conversation, session, action);
     this.terminalTabRows.set(conversation, JSON.stringify(rows));
     return rows;
+  }
+  /**
+   * The person gave a terminal tab back. Circle is told in the conversation, and when a
+   * wait was cut short it is asked to wait again. The tab stays in Circle's state until
+   * that turn ends.
+   */
+  private terminalHandedBack(
+    conversation: string,
+    detail: { name: string; resume: boolean },
+  ): void {
+    const runtime =
+      this.runtimes.get(conversation) ??
+      [...this.taskRuntimes.values()].find(
+        (item) => item.session.id === conversation,
+      );
+    if (!runtime || runtime.isClosing || this.closing) {
+      this.terminalTabs.settleResuming(conversation);
+      return;
+    }
+    const ordinal = /^terminal (\d+)$/.exec(detail.name)?.[1];
+    const display = ordinal
+      ? `the user gave terminal ${ordinal} back`
+      : `the user gave ${detail.name} back`;
+    const prompt = detail.resume
+      ? `The user gave ${detail.name} back. It is yours again. You were waiting on it: call terminal_wait on ${detail.name} now, with a pattern and a timeout_ms long enough. Do not use execute.`
+      : `The user gave ${detail.name} back. It is yours again. Continue in that tab with the terminal tools. Do not use execute for it.`;
+    this.handbackSessions.add(conversation);
+    if (runtime.harness.busy) {
+      runtime.harness.queue(prompt, 'followUp', undefined, { display });
+      this.publish();
+      return;
+    }
+    this.track(runtime.harness.run(prompt, display), runtime);
+  }
+  /** A give-back's turn has finished: the tab leaves Circle's resumed state. */
+  private settleHandback(conversation: string): void {
+    if (!this.handbackSessions.has(conversation)) return;
+    const runtime = this.runtimes.get(conversation);
+    if (
+      runtime?.harness.busy ||
+      (runtime?.harness.pendingMessageCount ?? 0) > 0
+    )
+      return;
+    this.handbackSessions.delete(conversation);
+    this.terminalTabs.settleResuming(conversation);
   }
   private externalFiles?: ExternalFileGrants;
   private externalGrantOwners = new Map<string, AgentRuntime>();
@@ -3895,6 +3944,7 @@ export class RuntimeController {
       })
       .finally(() => {
         this.tasks.delete(task);
+        this.settleHandback(sessionId);
         if (!this.closing) this.publish();
       });
   }

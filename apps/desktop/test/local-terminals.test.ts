@@ -164,13 +164,21 @@ function devices() {
   return { port, requests };
 }
 
-function tabs(host: FakeTerminals, mode: () => string = () => 'manual') {
+function tabs(
+  host: FakeTerminals,
+  mode: () => string = () => 'manual',
+  handedBack?: (
+    conversation: string,
+    detail: { name: string; resume: boolean },
+  ) => void,
+) {
   const waiting = new Map<string, Set<string>>();
   const local = new LocalTerminals({
     host: () => host,
     changed: () => {},
     mode,
     waiting: (id) => waiting.get(id) ?? new Set(),
+    handedBack,
   });
   return { local, waiting };
 }
@@ -495,9 +503,16 @@ test('a line the user changed after Circle asked is not typed', async (t) => {
 });
 
 /** A direct port on one tab whose first write the person allowed. */
-async function allowedTab(t: TestContext, mode: () => string = () => 'manual') {
+async function allowedTab(
+  t: TestContext,
+  mode: () => string = () => 'manual',
+  handedBack?: (
+    conversation: string,
+    detail: { name: string; resume: boolean },
+  ) => void,
+) {
   const host = new FakeTerminals();
-  const fixture = tabs(host, mode);
+  const fixture = tabs(host, mode, handedBack);
   const id = randomUUID();
   const shell = host.open(id);
   const session = `local:${shell.id}`;
@@ -556,10 +571,50 @@ test('taking a tab over ends Circle’s wait at once, refuses its typing, and ha
   assert.equal(read.text.includes('echo ready'), false);
   assert.equal(f.host.writes.length, before);
   const back = await f.local.control(f.id, f.session, 'return');
-  assert.equal(back[0]!.state, 'idle');
+  assert.equal(back[0]!.state, 'operating');
   const sent = await f.send('ls');
   assert.match(sent.text, /terminal 1: the user gave the terminal back/);
   assert.equal(f.host.typed(f.shell.id), 'echo ready\rls\r');
+});
+
+test('giving a tab back after a cut-short wait puts Circle back to work and says so', async (t) => {
+  const notes: { name: string; resume: boolean }[] = [];
+  const f = await allowedTab(
+    t,
+    () => 'manual',
+    (_conversation, detail) => {
+      notes.push(detail);
+    },
+  );
+  const waiting = f.port.request(
+    f.id,
+    'wait',
+    {
+      session: f.session,
+      pattern: 'NEVER_PRINTED',
+      idle_ms: 30000,
+      timeout_ms: 300000,
+    },
+    f.signal,
+  );
+  await until(
+    () => f.local.rows(f.id)[0]?.state === 'operating',
+    'Circle operates the tab',
+  );
+  await f.local.control(f.id, f.session, 'take');
+  const result = await waiting;
+  assert.match(result.text, /your wait ended there/);
+  const back = await f.local.control(f.id, f.session, 'return');
+  assert.equal(back[0]!.state, 'operating');
+  assert.deepEqual(notes, [{ name: 'terminal 1', resume: true }]);
+  f.local.settleResuming(f.id);
+  assert.equal(f.local.rows(f.id)[0]!.state, 'idle');
+  notes.length = 0;
+  const again = await f.local.control(f.id, f.session, 'return');
+  assert.equal(again[0]!.state, 'operating');
+  assert.deepEqual(notes, [{ name: 'terminal 1', resume: false }]);
+  f.local.settleResuming(f.id);
+  assert.equal(f.local.rows(f.id)[0]!.state, 'idle');
 });
 
 test('typing into a tab Circle is operating takes it over; typing while it is idle is told, never shown', async (t) => {
@@ -667,8 +722,15 @@ test('closing a tab while Circle waits on it fails the wait, drops it from the l
 });
 
 test('a handed-over tab waits for the person and comes back with its screen; plan mode does not hand it over', async (t) => {
+  const notes: { name: string; resume: boolean }[] = [];
   let mode = 'manual';
-  const f = await allowedTab(t, () => mode);
+  const f = await allowedTab(
+    t,
+    () => mode,
+    (_conversation, detail) => {
+      notes.push(detail);
+    },
+  );
   const handed = f.port.request(
     f.id,
     'handoff',
@@ -688,6 +750,7 @@ test('a handed-over tab waits for the person and comes back with its screen; pla
   const result = await handed;
   assert.match(result.text, /Password accepted/);
   assert.equal(f.local.rows(f.id)[0]!.state, 'idle');
+  assert.deepEqual(notes, []);
   mode = 'plan';
   await assert.rejects(
     f.port.request(

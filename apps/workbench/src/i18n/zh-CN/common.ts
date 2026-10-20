@@ -47,8 +47,12 @@ export const common: Record<string, string> = {
   'runs a shell command': '运行 shell 命令',
   'only reads': '只读取',
   'types this command into your terminal': '将把这条命令输入这个终端',
+  'run this in terminal {n}': '改在终端 {n} 里运行',
+  'the user gave terminal {n} back': '已把终端 {n} 交还',
   'the model in use does not read images; use browser_snapshot':
     '当前模型不能看图片，请改用页面快照',
+  'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.':
+    'browser_screenshot 不可用：当前模型不能看图片。请先调用 browser_snapshot；还没有页面快照。',
   'destructive operation': '破坏性操作',
   'python code deletes files': 'Python 代码会删除文件',
   'encoded command': '经过编码的命令',

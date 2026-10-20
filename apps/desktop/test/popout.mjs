@@ -208,9 +208,23 @@ try {
   assert.ok(title.length <= 200, 'and the title is cut short to fit');
   assert.ok(title.startsWith('browser · a conversation whose title runs on'));
   assert.ok(title.endsWith('…'));
-  // The drawer let go of the mode, and its button is marked.
+  // The drawer let go of the mode, and its button is marked as popped out,
+  // not as the open drawer.
   await main.locator('.work-drawer').waitFor({ state: 'hidden' });
   await main.locator('.drawer-mode-button.popped').waitFor();
+  const browserButton = main.getByRole('button', {
+    name: 'browser panel',
+    exact: true,
+  });
+  assert.equal(await browserButton.getAttribute('aria-pressed'), 'false');
+  assert.equal(
+    await browserButton.evaluate((node) => node.classList.contains('active')),
+    false,
+  );
+  assert.equal(
+    await browserButton.evaluate((node) => node.classList.contains('popped')),
+    true,
+  );
 
   // A page opened in the window is in that window.
   const field = () => popped.getByRole('textbox', { name: 'browser address' });

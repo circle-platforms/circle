@@ -9,6 +9,12 @@ import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { browserApprovalInput, hasToolInput } from '../model/browser';
 import { approvalHeading, requestReason } from '../model/reasons.ts';
+import {
+  commandToTerminalData,
+  executeTerminalRedirect,
+} from '../model/terminal-redirect';
+import { workspaceCall } from '../model/workspace-client';
+import { useTerminalState } from './useTerminalState';
 import './conversation-requests.css';
 
 export { requestReason };
@@ -100,6 +106,23 @@ export function InlineRequest({
         'delete',
       ].includes(item.tool ?? ''));
   const headingId = useId();
+  const terminals = useTerminalState(item.sessionId);
+  const userText =
+    [
+      ...(snapshot.sessions.find((row) => row.id === item.sessionId)
+        ?.messages ?? []),
+    ]
+      .reverse()
+      .find((message) => message.role === 'user')?.text ?? '';
+  const redirect =
+    item.kind === 'approval'
+      ? executeTerminalRedirect({
+          tool: item.tool,
+          command: item.command,
+          userText,
+          tabs: terminals?.local ?? [],
+        })
+      : undefined;
   const sending = useRef(false);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
@@ -286,6 +309,42 @@ export function InlineRequest({
             {item.prefix
               ? t('allow “{prefix}” commands', { prefix: item.prefix })
               : t('allow command prefix')}
+          </Button>
+        )}
+        {redirect && (
+          <Button
+            disabled={sent}
+            onClick={() => {
+              if (!redirect || sending.current) return;
+              sending.current = true;
+              setSent(true);
+              setError('');
+              const moved = redirect;
+              perform(async () => {
+                try {
+                  await workspaceCall(item.sessionId, 'terminal', 'write', {
+                    id: moved.terminal,
+                    data: commandToTerminalData(moved.command),
+                  });
+                  await runtime.answer(
+                    item.id,
+                    item.revision,
+                    'reject: ' + moved.rejection,
+                  );
+                  if (runtime.getSnapshot().activeSessionId === item.sessionId)
+                    onSettled?.();
+                } catch (error) {
+                  sending.current = false;
+                  setSent(false);
+                  setError(
+                    error instanceof Error ? error.message : t('action failed'),
+                  );
+                  throw error;
+                }
+              });
+            }}
+          >
+            {t('run this in terminal {n}', { n: redirect.ordinal })}
           </Button>
         )}
         <Button disabled={sent} onClick={() => finish('reject')}>

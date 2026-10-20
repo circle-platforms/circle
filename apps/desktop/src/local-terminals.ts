@@ -54,6 +54,14 @@ export interface LocalTerminalsOptions {
   mode(conversation: string): string | undefined;
   /** The tabs, as `local:<id>`, that an approval of the conversation waits on. */
   waiting(conversation: string): ReadonlySet<string>;
+  /**
+   * The person handed a tab back and Circle was not already waiting on that handoff.
+   * `resume` is set when a wait had been cut short, so Circle should wait again.
+   */
+  handedBack?(
+    conversation: string,
+    detail: { name: string; resume: boolean },
+  ): void;
 }
 
 export type LocalTerminalControl = 'take' | 'return' | 'stop';
@@ -109,6 +117,10 @@ interface Conversation {
   >;
   /** The line version a running write's approval was asked at. */
   asked: Map<string, number>;
+  /** A wait on this tab ended because the person took it. Give-back should resume it. */
+  paused: Set<string>;
+  /** The person gave the tab back and Circle has not finished the turn that follows. */
+  resuming: Set<string>;
 }
 
 const key = (conversation: string, terminal: string) =>
@@ -317,8 +329,21 @@ export class LocalTerminals implements TerminalTabFacts {
       this.sessions.attach(conversation, tab.session.id);
     } else if (action === 'return') {
       const tab = this.tabs.get(key(conversation, terminal));
+      // A handoff still in flight resumes itself when it resolves. Telling the model
+      // as well would start a second turn beside that result.
+      const handed = own.handoffs.has(terminal);
       if (tab) this.sessions.detach(conversation, tab.session.id);
       own.handoffs.get(terminal)?.resolve();
+      const paused = own.paused.has(terminal);
+      own.paused.delete(terminal);
+      // Held or not, the tab is Circle's again until the turn that hears about it ends.
+      // A handoff still running is already Circle's action, so it is not marked twice.
+      if (!handed) own.resuming.add(terminal);
+      if (!handed)
+        this.options.handedBack?.(conversation, {
+          name: this.name(host, conversation, terminal),
+          resume: paused,
+        });
     } else {
       const reason = Error(
         `the user stopped your action on ${this.name(host, conversation, terminal)}; what you had typed there may already have run, so read the tab before you send again`,
@@ -352,7 +377,7 @@ export class LocalTerminals implements TerminalTabFacts {
           ? 'held'
           : waiting.has(id)
             ? 'waiting'
-            : own?.active.has(snapshot.id)
+            : own?.active.has(snapshot.id) || own?.resuming.has(snapshot.id)
               ? 'operating'
               : 'idle',
         allowed: own?.granted.has(snapshot.id) === true,
@@ -392,6 +417,21 @@ export class LocalTerminals implements TerminalTabFacts {
   get adopted(): number {
     return this.tabs.size;
   }
+  /**
+   * The turn that followed a give-back has ended. A tab Circle is not still using
+   * leaves the resumed state.
+   */
+  settleResuming(conversation: string): void {
+    const own = this.conversations.get(conversation);
+    if (!own?.resuming.size) return;
+    let changed = false;
+    for (const terminal of own.resuming)
+      if (!own.active.has(terminal)) {
+        own.resuming.delete(terminal);
+        changed = true;
+      }
+    if (changed) this.options.changed(conversation);
+  }
   // -- internals --
   private async request(
     conversation: string,
@@ -401,6 +441,7 @@ export class LocalTerminals implements TerminalTabFacts {
   ): Promise<TerminalResult> {
     const { host, snapshot, terminal } = this.find(conversation, args.session);
     const own = this.own(conversation);
+    own.resuming.delete(terminal);
     const writes = action === 'send' || action === 'press';
     if (writes) {
       // The facts asked the person for this tab's first write, and it runs: they allowed it
@@ -447,6 +488,8 @@ export class LocalTerminals implements TerminalTabFacts {
             throw gone();
           throw error;
         });
+      // A wait the person cut short is remembered until they hand the tab back.
+      if (/your wait ended there/.test(result.text)) own.paused.add(terminal);
       // A tab has no host:port; the session alone says which terminal it was
       return { text: result.text, session: tab.session.id };
     } finally {
@@ -597,6 +640,8 @@ export class LocalTerminals implements TerminalTabFacts {
       own?.lines.delete(event.terminalId);
       own?.granted.delete(event.terminalId);
       own?.asked.delete(event.terminalId);
+      own?.paused.delete(event.terminalId);
+      own?.resuming.delete(event.terminalId);
     }
     if (event.snapshot && isShell(event.snapshot))
       this.options.changed(event.owner);
@@ -612,6 +657,9 @@ export class LocalTerminals implements TerminalTabFacts {
       ?.handoffs.get(tab.terminal)
       ?.reject(Error(`${tab.session.name} was closed`));
     this.sessions.drop(tab.conversation, tab.session.id, 'closed');
+    const own = this.conversations.get(tab.conversation);
+    own?.paused.delete(tab.terminal);
+    own?.resuming.delete(tab.terminal);
   }
   private hand(
     conversation: string,
@@ -704,6 +752,8 @@ export class LocalTerminals implements TerminalTabFacts {
         active: new Map(),
         handoffs: new Map(),
         asked: new Map(),
+        paused: new Set(),
+        resuming: new Set(),
       };
       this.conversations.set(conversation, own);
     }
