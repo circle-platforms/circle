@@ -138,6 +138,84 @@ test('wait: quiet resolves what rests, pattern resolves what arrives, timeout bo
   assert.match(capped.text, /still going after 1s/);
 });
 
+test('wait: absent fails fast, retries outlive a timeout, changed diffs the screen', async (t) => {
+  const h = harness();
+  t.after(() => h.sessions.close());
+  await h.open();
+  // A negative assertion beats a positive one that would never match anyway.
+  setTimeout(() => h.device().emit('% Invalid input detected\r\n'), 60);
+  const bad = await h.sessions.request(
+    'c1',
+    'wait',
+    {
+      session: 't1',
+      pattern: 'NEVER',
+      absent: 'Invalid input',
+      idle_ms: 30000,
+      timeout_ms: 20000,
+    },
+    signal,
+  );
+  assert.match(bad.text, /the absent pattern Invalid input appeared/);
+  assert.match(bad.text, /on the line: % Invalid input detected/);
+  // The answer arrives after the first cap: one retry is enough, and it says so.
+  const h2 = harness();
+  t.after(() => h2.sessions.close());
+  await h2.open('c2');
+  setTimeout(() => h2.device().emit('LATE READY\r\n'), 1500);
+  const retried = await h2.sessions.request(
+    'c2',
+    'wait',
+    {
+      session: 't1',
+      pattern: 'LATE READY',
+      idle_ms: 30000,
+      timeout_ms: 1000,
+      retries: 3,
+    },
+    signal,
+  );
+  assert.match(retried.text, /matched LATE READY/);
+  assert.match(retried.text, /in 2 attempts/);
+  // Without retries the same device is a timeout, as before.
+  const h3 = harness();
+  t.after(() => h3.sessions.close());
+  await h3.open('c3');
+  setTimeout(() => h3.device().emit('TOO LATE\r\n'), 1500);
+  const capped = await h3.sessions.request(
+    'c3',
+    'wait',
+    { session: 't1', pattern: 'TOO LATE', idle_ms: 30000, timeout_ms: 1000 },
+    signal,
+  );
+  assert.match(capped.text, /still going after 1s/);
+  assert.doesNotMatch(capped.text, /attempts/);
+  // changed returns only what the device printed while the wait ran.
+  const h4 = harness();
+  t.after(() => h4.sessions.close());
+  await h4.open('c4');
+  h4.device().emit('before the wait\r\n');
+  const diff = (async () => {
+    setTimeout(
+      () => h4.device().emit('first new line\r\nsecond new line\r\n'),
+      60,
+    );
+    return h4.sessions.request(
+      'c4',
+      'wait',
+      { session: 't1', idle_ms: 200, timeout_ms: 5000, changed: true },
+      signal,
+    );
+  })();
+  const text = (await diff).text;
+  assert.match(text, /### During the wait/);
+  assert.match(text, /second new line/);
+  assert.doesNotMatch(
+    text.split('### During the wait')[1] ?? '',
+    /before the wait/,
+  );
+});
+
 test('wait: an aborted stop is an error, not a result', async (t) => {
   const h = harness();
   t.after(() => h.sessions.close());

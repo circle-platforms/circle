@@ -29,6 +29,7 @@ import {
   type TerminalApproval,
   type TerminalResult,
 } from './protocol.js';
+import { terminalScreenLines } from './tui_screen.js';
 
 // Default-imported: the headless emulator is CommonJS with loop-copied exports.
 const { Terminal } = xterm;
@@ -37,7 +38,8 @@ export type TerminalState = 'connecting' | 'ready' | 'closed' | 'error';
 export type TerminalHeld = 'handoff' | 'attach';
 /** A device's wire, or `local`: one of the person's own terminal tabs in the desktop. */
 export type TerminalKind = 'ssh' | 'telnet' | 'local';
-type WaitOutcome = 'quiet' | 'pattern' | 'capped' | 'closed' | 'held';
+type WaitOutcome =
+  'quiet' | 'pattern' | 'absent' | 'capped' | 'closed' | 'held';
 
 /** What the strip, the page and the list show; read-only for the hosts. */
 export interface TerminalView {
@@ -834,37 +836,65 @@ export class TerminalSessions {
   ): Promise<TerminalResult> {
     const idleMs = clamp(args.idle_ms, 100, 30000, 600);
     const timeoutMs = clamp(args.timeout_ms, 1000, 300000, 30000);
-    const pattern =
-      typeof args.pattern === 'string' && args.pattern
-        ? new RegExp(args.pattern)
-        : undefined;
-    const outcome = await this.waitFor(session, {
-      idleMs,
-      timeoutMs,
-      ...(pattern ? { pattern } : {}),
-      signal,
-    });
+    const retries = clamp(args.retries, 0, 5, 0);
+    const pattern = regexArg(args.pattern);
+    const absent = regexArg(args.absent);
+    // A test reads what the wait itself caused, not the whole scrollback.
+    const startLines = args.changed === true ? terminalScreenLines(session) : 0;
+    let outcome: WaitOutcome = 'capped';
+    let attempts = 0;
+    for (;;) {
+      attempts++;
+      outcome = await this.waitFor(session, {
+        idleMs,
+        timeoutMs,
+        ...(pattern ? { pattern } : {}),
+        ...(absent ? { absent } : {}),
+        signal,
+      });
+      if (outcome !== 'capped' || attempts > retries) break;
+    }
     if (session.local && outcome === 'closed')
       throw Error(
         `${session.name} was closed while you waited; it is gone from terminal_sessions`,
       );
     if (outcome === 'held')
       return this.heldResult(own, session, 'your wait ended there');
+    const screen = session.tail(400).join('\n');
     const why =
       outcome === 'quiet'
         ? `quiet for ${Math.round(idleMs / 100) / 10}s`
         : outcome === 'pattern'
-          ? `matched ${String(args.pattern)}`
-          : outcome === 'closed'
-            ? `the session ended: ${session.detail || 'closed'}`
-            : `still going after ${Math.round(timeoutMs / 1000)}s`;
+          ? `matched ${String(args.pattern)}${lineWith(screen, pattern)}`
+          : outcome === 'absent'
+            ? `the absent pattern ${String(
+                args.absent,
+              )} appeared${lineWith(screen, absent)}`
+            : outcome === 'closed'
+              ? `the session ended: ${session.detail || 'closed'}`
+              : `still going after ${Math.round(
+                  (timeoutMs * attempts) / 1000,
+                )}s`;
+    // A wait that needed more than one attempt says so, whatever it ended on.
+    const attemptNote =
+      retries && attempts > 1 ? ` in ${attempts} attempts` : '';
+    const during =
+      args.changed === true ? this.during(session, startLines) : '';
     return {
-      text: `${this.header(session)} · ${why}\n### Output\n${session
+      text: `${this.header(session)} · ${why}${attemptNote}\n### Output\n${session
         .tail(20)
-        .join('\n')}${this.told(own)}`,
+        .join('\n')}${during}${this.told(own)}`,
       host: session.target,
       session: session.id,
     };
+  }
+  /** The lines the device printed while the wait ran: a screen diff for assertions. */
+  private during(session: TerminalSession, startLines: number): string {
+    const added = Math.max(0, terminalScreenLines(session) - startLines);
+    const rows = added ? session.tail(Math.min(added, 200)) : [];
+    return `\n### During the wait\n${
+      rows.length ? rows.join('\n') : '(nothing new on the screen)'
+    }`;
   }
   private disconnect(
     own: Conversation,
@@ -967,6 +997,7 @@ export class TerminalSessions {
       idleMs: number;
       timeoutMs: number;
       pattern?: RegExp;
+      absent?: RegExp;
       signal: AbortSignal;
     },
   ): Promise<WaitOutcome> {
@@ -995,6 +1026,8 @@ export class TerminalSessions {
           finish('closed');
         // The person took their terminal tab over: it is theirs, the wait is over
         else if (session.local && session.held) finish('held');
+        else if (want.absent && want.absent.test(session.tail(400).join('\n')))
+          finish('absent');
         else if (
           want.pattern &&
           want.pattern.test(session.tail(400).join('\n'))
@@ -1035,6 +1068,18 @@ export function withMoreTerminals(text: string, lines: string[]): string {
     [...listed, ...lines].join('\n') +
     (end < 0 ? '' : rest.slice(end))
   );
+}
+
+/** An assertion's regular expression; a bad one is the caller's error. */
+function regexArg(value: unknown): RegExp | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  return new RegExp(value);
+}
+/** The screen line an assertion hit, so a result names its evidence. */
+function lineWith(screen: string, pattern?: RegExp): string {
+  if (!pattern) return '';
+  const line = screen.split('\n').find((row) => pattern.test(row));
+  return line === undefined ? '' : ` on the line: ${line.trim()}`;
 }
 
 function clamp(
