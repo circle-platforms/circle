@@ -100,6 +100,34 @@ try {
     );
   // The application's windows by what they show: the main one, or a mode's route. A window
   // that is closing stays listed for a moment after its page is gone, so only live ones count.
+  // The open page in a window: its text, and where its view sits. A parked view is
+  // a 1×1 box off the window, which is the blank area a move used to leave.
+  const shownPage = (which) =>
+    app.evaluate(({ BrowserWindow }, which) => {
+      const target = BrowserWindow.getAllWindows()
+        .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
+        .find((one) => {
+          const url = one.webContents.getURL();
+          return which === 'main'
+            ? !url.includes('#/popout/')
+            : url.includes(`#/popout/${which}/`);
+        });
+      if (!target) return { text: '', bounds: null };
+      const view = target.contentView.children.find((child) => {
+        try {
+          return (
+            child.getVisible() && child.webContents.getURL().startsWith('http')
+          );
+        } catch {
+          return false;
+        }
+      });
+      if (!view) return { text: '', bounds: null };
+      const bounds = view.getBounds();
+      return view.webContents
+        .executeJavaScript('document.querySelector("#mark")?.textContent || ""')
+        .then((text) => ({ text, bounds }));
+    }, which);
   const views = () =>
     app.evaluate(({ BrowserWindow }) => {
       const count = { main: 0, browser: 0, terminal: 0 };
@@ -203,6 +231,18 @@ try {
     const state = await browserState();
     return state.title === 'pop' && !state.loading;
   }, 'the page loaded');
+  // The page itself moved: its text is in the window, and the view is on screen.
+  await until(async () => {
+    const page = await shownPage('browser');
+    return (
+      page.text === 'popped page' &&
+      page.bounds &&
+      page.bounds.width > 80 &&
+      page.bounds.height > 80 &&
+      page.bounds.x >= 0 &&
+      page.bounds.y >= 0
+    );
+  }, 'the open page is painted in the window');
 
   // ---- the window shows its notices, on its bar where the page cannot cover them
   await field().fill('http://exa mple');
@@ -421,9 +461,21 @@ try {
     'the window closes',
   );
   await until(async () => (await views()).main >= 1, 'the page is back');
+  await main.locator('.work-drawer').waitFor({ state: 'visible' });
   await main
     .locator('.drawer-mode-button.popped')
     .waitFor({ state: 'detached' });
+  assert.equal(
+    await main
+      .getByRole('button', { name: 'browser panel', exact: true })
+      .getAttribute('aria-pressed'),
+    'true',
+    'put back opens the drawer',
+  );
+  await until(
+    async () => (await shownPage('main')).text === 'popped page',
+    'the page is painted in the drawer',
+  );
   const tabsBack = (
     await main.evaluate(
       (id) => window.circleDesktop.browserState(id),
@@ -444,6 +496,39 @@ try {
       )
     ).tabs.length,
     tabsBack,
+  );
+
+  // A page that is already open in the drawer moves into the window with it.
+  await main
+    .locator('.inspector .browser-address')
+    .getByRole('button', { name: 'open in a window', exact: true })
+    .click();
+  popped = await until(
+    async () => (await windowsOf('#/popout/browser/'))[0],
+    'the browser window again',
+  );
+  await until(async () => {
+    const page = await shownPage('browser');
+    return (
+      page.text === 'popped page' &&
+      page.bounds &&
+      page.bounds.width > 80 &&
+      page.bounds.height > 80 &&
+      page.bounds.x >= 0 &&
+      page.bounds.y >= 0
+    );
+  }, 'the page that was open moved into the window');
+  assert.equal((await shownPage('main')).text, '');
+  await popped.getByRole('button', { name: 'put back in the drawer' }).click();
+  await until(
+    async () => (await windowsOf('#/popout/browser/')).length === 0,
+    'the window closes again',
+  );
+  await main.locator('.work-drawer').waitFor({ state: 'visible' });
+  assert.equal(await main.locator('.drawer-mode-button.popped').count(), 0);
+  await until(
+    async () => (await shownPage('main')).text === 'popped page',
+    'the page is back in the drawer again',
   );
 
   // ---- the terminal, and a conversation switch that brings it back

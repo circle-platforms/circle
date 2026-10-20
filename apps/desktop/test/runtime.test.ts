@@ -1401,6 +1401,14 @@ test('a text-only model cannot capture a browser screenshot', async (t) => {
   );
   assert.equal(browser.requests.length, 0);
   assert.equal(f.controller.snapshot().interactions.length, 0);
+  assert.equal(
+    f.model.requests[0]!.tools.some(
+      (tool) =>
+        tool.name === 'browser_screenshot' || tool.name === 'screenshot',
+    ),
+    false,
+    'a text-only model is not offered a screenshot',
+  );
   const result = f.model.requests[1]!.messages.find(
     (message) => message.tool_call_id === 'screenshot',
   )!;

@@ -48,6 +48,7 @@ import {
 } from '../model/command-terminal-client';
 import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal } from './common';
+import type { LocalTerminalRow } from '../../../desktop/src/contracts';
 import { terminalTabNumbers } from '../../../desktop/src/terminal-tabs';
 import { TerminalTabs, type TerminalTab } from './TerminalTabs';
 import {
@@ -159,6 +160,64 @@ function status(snapshot: TerminalSnapshot): string {
     case 'interrupted':
       return t('interrupted');
   }
+}
+
+/**
+ * A terminal tool the conversation is running or asking about, by the shell's id.
+ * The tab's own state is what the runtime says; this covers the moment a tool is
+ * already on screen and that state has not arrived.
+ */
+function toolActivity(
+  messages: {
+    tool?: { name: string; status: string; input: Record<string, unknown> };
+  }[],
+): Map<string, 'run' | 'wait'> {
+  const activity = new Map<string, 'run' | 'wait'>();
+  for (const message of messages) {
+    const tool = message.tool;
+    if (!tool?.name.startsWith('terminal_')) continue;
+    if (tool.status !== 'running' && tool.status !== 'waiting') continue;
+    const named = [tool.input.session, tool.input.terminal].find(
+      (value): value is string =>
+        typeof value === 'string' && value.startsWith('local:'),
+    );
+    if (!named) continue;
+    const id = named.slice('local:'.length);
+    if (activity.get(id) === 'wait') continue;
+    activity.set(id, tool.status === 'waiting' ? 'wait' : 'run');
+  }
+  return activity;
+}
+
+/**
+ * The shell's row as the window shows it. The runtime's row wins when you hold the
+ * shell; a terminal tool the conversation is already running or asking about fills in
+ * until that row arrives, so the dot and the ring are not late.
+ */
+function circleRow(
+  id: string,
+  known: Map<string, LocalTerminalRow>,
+  activity: Map<string, 'run' | 'wait'>,
+  numbers: Map<string, number>,
+): LocalTerminalRow | undefined {
+  const circle = known.get(id);
+  if (circle?.held || circle?.state === 'held') return circle;
+  const doing = activity.get(id);
+  const state =
+    circle?.state === 'waiting' || doing === 'wait'
+      ? 'waiting'
+      : circle?.state === 'operating' || doing === 'run'
+        ? 'operating'
+        : circle?.state;
+  if (!state) return undefined;
+  if (circle) return state === circle.state ? circle : { ...circle, state };
+  return {
+    id: `local:${id}`,
+    terminal: id,
+    ordinal: numbers.get(id) ?? 0,
+    state,
+    allowed: false,
+  };
 }
 
 /** The exit reason adds nothing when it only restates the status line. */
@@ -676,8 +735,19 @@ export function NativeTerminal({
   const numbers = terminalTabNumbers(
     terminals.filter((item) => item.sessionId === sessionId),
   );
-  // What Circle is doing in each of your shells, by the terminal's id.
-  const circleIn = new Map(devices.local.map((row) => [row.terminal, row]));
+  // What Circle is doing in each of your shells, by every id the row or a tool call uses.
+  const circleKnown = new Map<string, LocalTerminalRow>();
+  for (const row of devices.local) {
+    circleKnown.set(row.terminal, row);
+    circleKnown.set(row.id, row);
+    if (row.id.startsWith('local:'))
+      circleKnown.set(row.id.slice('local:'.length), row);
+  }
+  const activity = toolActivity(
+    appSnapshot.sessions.find((item) => item.id === sessionId)?.messages ?? [],
+  );
+  const circleIn = (id: string) =>
+    circleRow(id, circleKnown, activity, numbers);
   const tabs: TerminalTab[] = [
     ...visible.map((item): TerminalTab => {
       const command = !!item.managedCommand;
@@ -693,7 +763,7 @@ export function NativeTerminal({
         : named
           ? item.label
           : t('terminal {n}', { n: numbers.get(item.id) ?? 0 });
-      const circle = circleIn.get(item.id);
+      const circle = circleIn(item.id);
       return {
         key: `local:${item.id}`,
         label,
@@ -748,7 +818,7 @@ export function NativeTerminal({
     !!inFront?.managedCommand &&
     ['running', 'stopping'].includes(inFront.status);
   // What Circle is doing in the shell in front: it asks about it, works in it, or you hold it.
-  const circleInFront = inFront ? circleIn.get(inFront.id) : undefined;
+  const circleInFront = inFront ? circleIn(inFront.id) : undefined;
   // Ringed orange while Circle waits for your answer about this shell, blue while it
   // works in it or a command it started runs here.
   const frame =

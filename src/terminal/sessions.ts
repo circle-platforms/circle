@@ -842,6 +842,9 @@ export class TerminalSessions {
       idleMs,
       timeoutMs,
       ...(pattern ? { pattern } : {}),
+      // A terminal tab that prints nothing, such as sleep, is quiet while it
+      // still runs. Quiet only finishes the wait once the cursor sits on a prompt.
+      holdUntilPrompt: session.local && !pattern,
       signal,
     });
     if (session.local && outcome === 'closed')
@@ -967,6 +970,8 @@ export class TerminalSessions {
       idleMs: number;
       timeoutMs: number;
       pattern?: RegExp;
+      /** A local tab: quiet counts only while the cursor sits on a prompt. */
+      holdUntilPrompt?: boolean;
       signal: AbortSignal;
     },
   ): Promise<WaitOutcome> {
@@ -1000,7 +1005,13 @@ export class TerminalSessions {
           want.pattern.test(session.tail(400).join('\n'))
         )
           finish('pattern');
-        else if (session.quiet >= want.idleMs) finish('quiet');
+        else if (
+          session.quiet >= want.idleMs &&
+          // `sleep` and its like print nothing, so the screen is quiet the whole
+          // time. That is not the prompt coming back, and the timeout still bounds it.
+          (!want.holdUntilPrompt || atPrompt(session.cursorLine()))
+        )
+          finish('quiet');
         else if (Date.now() - started >= want.timeoutMs) finish('capped');
       };
       const parsed = session.screen.onWriteParsed(() => check());
@@ -1035,6 +1046,11 @@ export function withMoreTerminals(text: string, lines: string[]): string {
     [...listed, ...lines].join('\n') +
     (end < 0 ? '' : rest.slice(end))
   );
+}
+
+/** The cursor sits on a shell prompt: the line ends in a prompt character. */
+function atPrompt(line: string): boolean {
+  return /[$#>%]\s*$/.test(line);
 }
 
 function clamp(

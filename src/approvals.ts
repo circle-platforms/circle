@@ -776,10 +776,18 @@ export class ApprovalPolicy {
       const judged = this.review('execute', { command: tab.command });
       // A line that may carry its prompt: refused if it reads as refused, otherwise shown
       // to the person as it is, with no rule to keep from it
-      if (!tab.uncertain || judged.verdict === 'DENY') return judged;
-      return review('ASK_FORCED', 'runs the line on the screen', {
-        warn_delete: judged.warn_delete,
-      });
+      if (tab.uncertain) {
+        if (judged.verdict === 'DENY') return judged;
+        return review('ASK_FORCED', 'runs the line on the screen', {
+          warn_delete: judged.warn_delete,
+        });
+      }
+      // The first write types into the person's own tab. Listing the tab asks nothing;
+      // a read-only line is still that typing, so the card says so instead of "only reads".
+      // The execute pattern and prefix stay, and a forced warning (a delete) stays too.
+      if (tab.firstUse && judged.verdict === 'ASK')
+        return { ...judged, reason: 'types this command into your terminal' };
+      return judged;
     }
     if (tool === 'execute') {
       let command = String(args.command || '');

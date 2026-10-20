@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { gitChangeRows, type ChangeRow } from './changes';
-import { workspaceCall } from './workspace-client';
+import { subscribeWorkspace, workspaceCall } from './workspace-client';
 
 /** How often a visible list asks again. */
 const REFRESH_MS = 30_000;
 const AFTER_TURN_MS = 600;
+/** While a turn is writing files, ask again: those writes may not announce themselves. */
+const BUSY_MS = 1_200;
 
 interface GitChanges {
   revision: string;
@@ -66,6 +68,22 @@ export function useGitChanges({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  // A file written in this conversation shows up without waiting for the quiet
+  // refresh, and without the person opening that file first.
+  useEffect(() => {
+    if (!live || !active) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = subscribeWorkspace((event) => {
+      if (event.sessionId !== sessionId) return;
+      if (event.service !== 'documents' && event.service !== 'git') return;
+      clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), 400);
+    });
+    return () => {
+      clearTimeout(timer);
+      stop();
+    };
+  }, [live, active, sessionId, refresh]);
   useEffect(() => {
     if (!active) return;
     const onFocus = () => void refresh();
@@ -86,6 +104,11 @@ export function useGitChanges({
     const timer = setTimeout(() => void refresh(), AFTER_TURN_MS);
     return () => clearTimeout(timer);
   }, [busy, refresh]);
+  useEffect(() => {
+    if (!live || !active || !busy) return;
+    const timer = setInterval(() => void refresh(), BUSY_MS);
+    return () => clearInterval(timer);
+  }, [live, active, busy, refresh]);
 
   return { files: bySession.get(sessionId), error, refresh };
 }

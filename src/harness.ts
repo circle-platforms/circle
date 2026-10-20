@@ -606,6 +606,17 @@ export class Harness {
       throw error;
     }
   }
+  /**
+   * Tools this request offers. A model that does not read images is not offered a
+   * screenshot: calling one would fail, and the picture would never be seen.
+   */
+  private offeredTools(): Tool[] {
+    if (this.model.imageInput !== false) return this.tools;
+    return this.tools.filter(
+      (tool) =>
+        tool.name !== 'browser_screenshot' && tool.name !== 'screenshot',
+    );
+  }
   // A prompt with the files it mentions and the ones given with it (the desktop's). A model
   // known not to read images gets their paths only, and the screen says so. A file that
   // cannot go is left out: the model and the screen are told which and why.
@@ -1072,7 +1083,7 @@ export class Harness {
                 ? await this.options.prepareMessages(signal)
                 : this.options.store.projectedMessages(this.sessionId),
             ),
-            tools: this.tools,
+            tools: this.offeredTools(),
             signal: stepSignal,
             notice: (event) =>
               this.bus.emit('info', { payload: { model_notice: event } }),

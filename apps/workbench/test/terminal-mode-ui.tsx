@@ -353,6 +353,34 @@ Object.assign(window, {
       );
       pushState();
     },
+    /**
+     * A terminal tool the conversation is running or asking about, before the
+     * runtime's row has said so. An empty status clears it.
+     */
+    working: (status: 'running' | 'waiting' | '') => {
+      runtime.change((draft) => {
+        const session = draft.sessions.find((item) => item.id === 'A');
+        if (!session) return;
+        session.messages = status
+          ? [
+              {
+                id: 'tool-wait',
+                parentId: null,
+                role: 'tool',
+                text: '',
+                at: '2026-10-20T00:00:00.000Z',
+                tool: {
+                  id: 'call-wait',
+                  name: 'terminal_wait',
+                  input: { session: 'local:terminal-1' },
+                  output: '',
+                  status,
+                },
+              },
+            ]
+          : [];
+      });
+    },
     /** The running command ends, with an exit code. */
     endCommand: (exitCode: number) => {
       const item = items.find((one) => one.id === 'terminal-3')!;

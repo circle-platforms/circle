@@ -26,12 +26,14 @@
   font-weight: 400;
 }
 
-/* Changes: one list of files, and the selected file's difference below it. */
+/* Changes: the file list beside the difference when the drawer is wide enough,
+   and the difference fills the height that is left. */
 .changes-mode {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  container-type: inline-size;
 }
 .changes-mode > .panel-note {
   margin: 4px 16px;
@@ -125,6 +127,31 @@
   min-height: 0;
   overflow: auto;
 }
+.changes-diff .diff-block {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.changes-diff .diff-block pre,
+.changes-diff .diff-block.compact pre {
+  flex: 1;
+  max-height: none;
+}
+@container (min-width: 560px) {
+  .changes-mode {
+    flex-direction: row;
+  }
+  .changes-list {
+    width: min(240px, 38%);
+    max-height: none;
+    border-bottom: 0;
+    border-right: 1px solid var(--border);
+  }
+  .changes-file {
+    min-width: 0;
+  }
+}
 
 /* Subagents: working and finished, then the one that was opened beside the list. */
 .agents-mode {
@@ -134,7 +161,7 @@
 }
 .agent-list {
   display: flex;
-  flex: none;
+  flex: 1;
   flex-direction: column;
   width: 100%;
   min-height: 0;
@@ -155,8 +182,17 @@
     display: none;
   }
 }
-.agent-list > .panel-note {
-  margin: 10px 8px;
+.agent-list > .empty-state {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+}
+.agent-list > .empty-state h3 {
+  padding: 0;
+  color: var(--secondary);
+  font-size: var(--ui-large);
+  font-weight: 500;
 }
 .agent-list h3 {
   margin: 0;

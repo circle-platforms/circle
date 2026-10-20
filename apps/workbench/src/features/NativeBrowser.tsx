@@ -147,6 +147,13 @@ export function NativeBrowser({
   const address = useRef<HTMLInputElement>(null);
   const findField = useRef<HTMLInputElement>(null);
   const active = useRef(false);
+  // True once this panel has placed the page. The first frames must not hide it:
+  // a hide that lands after the show leaves a blank area where the page was.
+  const placed = useRef(false);
+  // A window of its own puts the page back as it closes. Hiding on the way out
+  // parks that page after it has already moved, and the drawer then draws blank.
+  const releaseOnUnmount = useRef(true);
+  releaseOnUnmount.current = !chrome?.onDock;
   const wasOpened = useRef(false);
   const editingAddress = useRef(false);
   const selectOnMouseUp = useRef(false);
@@ -180,6 +187,7 @@ export function NativeBrowser({
   };
   useEffect(() => {
     active.current = false;
+    placed.current = false;
     wasOpened.current = false;
     editingAddress.current = false;
     addressTab.current = undefined;
@@ -189,7 +197,19 @@ export function NativeBrowser({
     let froze = false;
     let freezing = false;
     let disposed = false;
+    // One placement at a time, and only the latest: an earlier hide must not
+    // arrive after a show and leave the page off-screen.
+    let generation = 0;
+    let chain = Promise.resolve();
     const update = () => {
+      const mine = ++generation;
+      const run = () => {
+        if (mine !== generation || disposed) return;
+        return place();
+      };
+      chain = chain.then(run, run);
+    };
+    const place = () => {
       // Whoever has the page places it: another window, while it is popped out.
       if (elsewhereRef.current) return;
       const node = viewport.current;
@@ -198,8 +218,10 @@ export function NativeBrowser({
       // native view must leave the window. Returning here used to keep the last
       // WebContentsView painted on top. Native surfaces do not inherit DOM
       // visibility, so also release the page's keyboard ownership while
-      // retaining its tab and session.
+      // retaining its tab and session. A panel that has not placed the page yet
+      // does not hide it: that hide is what left a moved page blank.
       if (disposed || !node || !rect) {
+        if (!placed.current) return;
         void host.browserHide(id).catch(() => {});
         void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
           () => {},
@@ -234,13 +256,16 @@ export function NativeBrowser({
         return;
       }
       if (visible) froze = false;
-      void host
+      // Not placed yet, and not showing: do not park an open page off-screen.
+      if (!visible && !placed.current) return;
+      return host
         .browserBounds(
           id,
           { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
           visible,
         )
         .then(() => {
+          if (visible) placed.current = true;
           // The page is back: its picture goes once the page has drawn
           if (visible && frozenRef.current)
             requestAnimationFrame(() => {
@@ -281,8 +306,14 @@ export function NativeBrowser({
     addEventListener('resize', schedule);
     addEventListener('scroll', schedule, true);
     update();
+    // The window may not have a size on the first frame, and a page that just
+    // moved is measured again once it does. A failed placement is retried.
+    const soon = setTimeout(update, 50);
+    const later = setTimeout(update, 400);
     return () => {
       disposed = true;
+      clearTimeout(soon);
+      clearTimeout(later);
       if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
       dialogs.disconnect();
@@ -290,7 +321,7 @@ export function NativeBrowser({
       removeEventListener('resize', schedule);
       removeEventListener('scroll', schedule, true);
       captureGeneration.current++;
-      if (!elsewhereRef.current) {
+      if (!elsewhereRef.current && releaseOnUnmount.current) {
         void host.browserHide(id);
         void Promise.resolve(host.browserPage?.(id, 'keys', false)).catch(
           () => {},
@@ -298,12 +329,21 @@ export function NativeBrowser({
       }
     };
   }, [id]);
-  // The page comes back from its window: place it again.
+  // The page comes back from its window, or this window has just opened: the box
+  // often has no size on the first frames. Measure until the page is on screen.
   useEffect(() => {
     if (elsewhere) return;
+    let ticks = 0;
+    const timer = setInterval(() => {
+      if (active.current) updateBounds.current();
+      if (placed.current || ++ticks > 50) clearInterval(timer);
+    }, 100);
     const frame = requestAnimationFrame(() => updateBounds.current());
-    return () => cancelAnimationFrame(frame);
-  }, [elsewhere]);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearInterval(timer);
+    };
+  }, [elsewhere, id]);
   // Full view moves the same panel to another box. Measure after that move.
   useEffect(() => {
     const frame = requestAnimationFrame(() => updateBounds.current());

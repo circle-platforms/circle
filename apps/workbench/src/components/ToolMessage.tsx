@@ -119,6 +119,18 @@ function shownToolOutput(text: string): string {
     .replaceAll('Hook session_start output:', t('Hook session_start output:'))
     .replace(/Hook output \(([^)]+)\):/g, (_match, name: string) =>
       t('Hook output ({name}):', { name }),
+    )
+    .replaceAll(
+      'the model in use does not read images; use browser_snapshot',
+      t('the model in use does not read images; use browser_snapshot'),
+    )
+    .replaceAll(
+      'the model in use does not read images',
+      t('the model in use does not read images; use browser_snapshot'),
+    )
+    .replace(
+      /^[\w./-]+ does not read images$/,
+      t('the model in use does not read images; use browser_snapshot'),
     );
 }
 export function ToolMessage({
@@ -226,6 +238,11 @@ export function ToolMessage({
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
       </button>
+      {tool.status === 'error' && /does not read images/.test(tool.output) && (
+        <p className="tool-error-cause" role="alert">
+          {t('the model in use does not read images; use browser_snapshot')}
+        </p>
+      )}
       {diff && !open && (
         <div className="tool-diff">
           <DiffBlock diff={diff} compact />

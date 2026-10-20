@@ -561,6 +561,9 @@ async function createPopoutWindow(
   // The title is the mode and the conversation, not the page's.
   popout.on('page-title-updated', (event) => event.preventDefault());
   installWindowChrome(popout);
+  // The pages move before the window's page loads, so that page is the one that places
+  // them. They are attached again once the window is on screen, which is what makes a
+  // page that was already open come with the window instead of leaving a blank area.
   if (kind === 'browser') browsers?.moveToWindow(sessionId, popout);
   // Before it is gone, so its pages are not lost with it. From here the window is gone for
   // the application: pressing its mode again makes a new one.
@@ -573,10 +576,14 @@ async function createPopoutWindow(
     popoutAddresses.delete(popout);
     hooks.closed();
   });
-  popout.once('ready-to-show', () => popout.show());
+  popout.once('ready-to-show', () => {
+    popout.show();
+    if (kind === 'browser') browsers?.repaint(sessionId);
+  });
   await popout.loadURL(
     `circle://workbench/index.html#/popout/${kind}/${sessionId}`,
   );
+  if (kind === 'browser' && !popout.isDestroyed()) browsers?.repaint(sessionId);
   return popout;
 }
 async function createWindow() {

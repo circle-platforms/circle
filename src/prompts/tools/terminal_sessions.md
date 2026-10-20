@@ -2,4 +2,5 @@ List this conversation's device terminals and the user's saved connection profil
 
 Usage:
 - Call it before your first connect, and whenever a session name is unclear: it gives each terminal's id (`t1`), its device and state, and the profile names `terminal_connect` takes.
+- When the user asks you to use their terminal tab, their shell tab, or "my terminal", this list is where that tab is. Type there with `terminal_send` and wait with `terminal_wait`. Do not also call `execute`: that runs in Circle's own shell, not in their tab. Reading or listing a tab asks nothing.
 - A terminal the user holds is listed as held; your actions wait until they give it back.

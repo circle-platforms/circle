@@ -219,7 +219,9 @@ test(
     assert.equal(first.kind, 'approval');
     assert.equal(first.tool, 'terminal_send');
     assert.equal(first.command, 'printf CIRCLE_RAN > ran.txt');
-    assert.equal(first.reason, 'runs a shell command');
+    // The first time Circle would type, the card says so. A later line is judged
+    // as the command it is.
+    assert.equal(first.reason, 'types this command into your terminal');
     assert.equal(first.input?.terminal, tab.session);
     assert.equal(first.input?.ordinal, 1);
     assert.equal(first.input?.first_use, true);
@@ -257,6 +259,7 @@ test(
       'the next card',
     );
     assert.equal(f.cards()[0]!.input?.first_use, false);
+    assert.equal(f.cards()[0]!.reason, 'runs a shell command');
     await f.answer('approve');
     await until(
       async () => (await written(join(f.workspace, 'again.txt'))) === 'AGAIN',

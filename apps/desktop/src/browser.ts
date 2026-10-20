@@ -246,6 +246,11 @@ interface Conversation {
   nextDialog: number;
   nextChoice: number;
   wantedVisible: boolean;
+  /**
+   * The pages just joined this window and have not been shown in it yet. The first time
+   * they are shown they are attached again, so a view that moved paints on Linux.
+   */
+  freshHost: boolean;
   bounds: Rectangle;
   // What happened since the model last looked, told once in its next result.
   events: string[];
@@ -434,9 +439,21 @@ export class BrowserSessions {
       settle(() => next.contentView.addChildView(view));
     }
     // The new window's panel measures its own page: until it does, nothing shows.
+    // Attached again on the first show, so the move paints instead of a blank area.
+    conversation.freshHost = true;
     conversation.wantedVisible = false;
     this.visibility(conversation);
     this.publish(id);
+  }
+  /**
+   * Show the pages again in the window that has them. A window that has just opened, or
+   * just received the pages, asks for this once its own page has loaded.
+   */
+  repaint(idValue: unknown) {
+    const conversation = this.conversations.get(this.validId(idValue));
+    if (!conversation) return;
+    conversation.freshHost = true;
+    this.visibility(conversation);
   }
   /** The window a conversation's pages are in, for who may place them. */
   windowOf(idValue: unknown): BrowserWindow {
@@ -458,6 +475,7 @@ export class BrowserSessions {
         nextDialog: 0,
         nextChoice: 0,
         wantedVisible: false,
+        freshHost: false,
         // A tool can open a page before the panel has measured a viewport.
         bounds: { x: 0, y: 0, width: 1000, height: 700 },
         events: [],
@@ -498,6 +516,34 @@ export class BrowserSessions {
     // Off the window as well as invisible: a native view that only flips its
     // flag can stay composited over the conversation on Linux.
     const away = { x: windowWidth, y: windowHeight, width: 1, height: 1 };
+    // Re-attach on the first show in this window, once that window is on screen.
+    // A view added before the window had painted, or moved across windows, otherwise
+    // stays a blank area on Linux. Doing it while the window is still hidden uses up
+    // the one re-attach, and the page that was already open then never appears.
+    if (
+      conversation.freshHost &&
+      conversation.wantedVisible &&
+      !host.isDestroyed() &&
+      host.isVisible()
+    ) {
+      conversation.freshHost = false;
+      const views = [
+        ...[...conversation.tabs.values()].map((tab) => tab.view),
+        ...(conversation.mask ? [conversation.mask] : []),
+      ];
+      for (const view of views) {
+        try {
+          host.contentView.removeChildView(view);
+        } catch {
+          /* The window or the view may be gone. */
+        }
+        try {
+          host.contentView.addChildView(view);
+        } catch {
+          /* The window or the view may be gone. */
+        }
+      }
+    }
     for (const tab of conversation.tabs.values()) {
       const shown =
         conversation.wantedVisible &&
@@ -1720,27 +1766,48 @@ export class BrowserSessions {
     if (!value || typeof value !== 'object')
       throw Error('invalid browser bounds');
     const bounds = value as BrowserBounds;
-    const [width, height] = this.windowOf(id).getContentSize();
     if (
       !['x', 'y', 'width', 'height'].every((key) =>
         Number.isFinite(bounds[key as keyof BrowserBounds]),
       ) ||
-      bounds.x < 0 ||
-      bounds.y < 0 ||
       bounds.width < 1 ||
-      bounds.height < 1 ||
-      bounds.x + bounds.width > width + 2 ||
-      bounds.y + bounds.height > height + 2
+      bounds.height < 1
     )
-      throw Error('browser bounds exceed the window');
-    const conversation = this.conversation(id);
-    this.activeTab(conversation);
-    conversation.bounds = {
+      throw Error('invalid browser bounds');
+    const [width, height] = this.windowOf(id).getContentSize();
+    // A box that fits keeps the rounded measurement, so a capture can see the
+    // same rectangle the page reported. One that would fall outside — a
+    // fractional scale, a scrollbar, a layout viewport a few pixels larger
+    // than the window — used to be rejected whole, and the page stayed the
+    // 1×1 sliver parked off-screen. Keep the part that lies on the window.
+    const rounded = {
       x: Math.round(bounds.x),
       y: Math.round(bounds.y),
       width: Math.round(bounds.width),
       height: Math.round(bounds.height),
     };
+    const fits =
+      rounded.x >= 0 &&
+      rounded.y >= 0 &&
+      rounded.x + rounded.width <= width + 2 &&
+      rounded.y + rounded.height <= height + 2;
+    const box = fits
+      ? rounded
+      : {
+          x: Math.max(0, Math.floor(bounds.x)),
+          y: Math.max(0, Math.floor(bounds.y)),
+          width:
+            Math.min(width, Math.ceil(bounds.x + bounds.width)) -
+            Math.max(0, Math.floor(bounds.x)),
+          height:
+            Math.min(height, Math.ceil(bounds.y + bounds.height)) -
+            Math.max(0, Math.floor(bounds.y)),
+        };
+    if (box.width < 1 || box.height < 1)
+      throw Error('browser bounds exceed the window');
+    const conversation = this.conversation(id);
+    this.activeTab(conversation);
+    conversation.bounds = box;
     for (const tab of conversation.tabs.values())
       tab.view.setBounds(conversation.bounds);
     conversation.mask?.setBounds(conversation.bounds);

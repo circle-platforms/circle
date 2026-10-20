@@ -838,3 +838,76 @@ test('stopping Circle on a tab says that what it typed may have run, and a long 
   await f.local.control(f.id, f.session, 'return');
   await handing;
 });
+
+/** The screen shows `text`: the emulator paints what was printed before the read returns. */
+async function screenHas(
+  f: Awaited<ReturnType<typeof allowedTab>>,
+  text: string,
+) {
+  for (let i = 0; i < 30; i++) {
+    const read = await f.port.request(
+      f.id,
+      'read',
+      { session: f.session },
+      f.signal,
+    );
+    if (read.text.includes(text)) return;
+    await delay(20);
+  }
+  throw Error(`the screen never showed ${text}`);
+}
+
+test('a local wait without a pattern holds while the cursor is off the prompt, and typing takes the tab', async (t) => {
+  const f = await allowedTab(t);
+  // Already at a prompt: quiet finishes the wait.
+  const resting = await f.port.request(
+    f.id,
+    'wait',
+    { session: f.session, idle_ms: 100, timeout_ms: 2000 },
+    f.signal,
+  );
+  assert.match(resting.text, /quiet for/);
+  // `sleep` prints a line and leaves the cursor off the prompt. Quiet is not done.
+  f.host.print(f.shell.id, '\r\nsleep 45\r\n');
+  await screenHas(f, 'sleep 45');
+  let settled = false;
+  const waiting = f.port
+    .request(
+      f.id,
+      'wait',
+      { session: f.session, idle_ms: 100, timeout_ms: 30000 },
+      f.signal,
+    )
+    .then((result) => {
+      settled = true;
+      return result;
+    });
+  await delay(400);
+  assert.equal(settled, false, 'quiet is not the prompt coming back');
+  assert.equal(f.local.rows(f.id)[0]?.state, 'operating');
+  f.local.typed(f.id, f.shell.id, 'x');
+  const taken = await waiting;
+  assert.match(taken.text, /your wait ended there/);
+  assert.equal(f.local.rows(f.id)[0]?.held, 'attach');
+});
+
+test('a local wait off the prompt is bounded by its timeout, and the prompt ends it', async (t) => {
+  const f = await allowedTab(t);
+  f.host.print(f.shell.id, '\r\nsleep 45\r\n');
+  await screenHas(f, 'sleep 45');
+  const capped = await f.port.request(
+    f.id,
+    'wait',
+    { session: f.session, idle_ms: 100, timeout_ms: 1200 },
+    f.signal,
+  );
+  assert.match(capped.text, /still going after 1s/);
+  f.host.print(f.shell.id, '\r\n$ ');
+  const back = await f.port.request(
+    f.id,
+    'wait',
+    { session: f.session, idle_ms: 100, timeout_ms: 5000 },
+    f.signal,
+  );
+  assert.match(back.text, /quiet for/);
+});

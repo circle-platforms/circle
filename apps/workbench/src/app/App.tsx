@@ -257,6 +257,23 @@ export function App() {
       ?.popoutDockAll?.()
       .catch(() => {});
   }, [session.id]);
+  // Put back, or closing the window by hand: that mode is in the drawer again. Another
+  // conversation's windows close on the switch and must not open this conversation's drawer.
+  const onPageRef = useRef(false);
+  onPageRef.current = location.pathname.startsWith('/page/');
+  useEffect(() => {
+    const host = desktopHost();
+    if (!host?.onPopoutEvent) return;
+    return host.onPopoutEvent((event) => {
+      if (event.open || event.sessionId !== session.id || onPageRef.current)
+        return;
+      if (event.kind !== 'browser' && event.kind !== 'terminal') return;
+      setPanel(event.kind);
+      setSelection({ panel: event.kind, value: '' });
+      setOverviewOverlay(false);
+      setInspectorOpen(true);
+    });
+  }, [session.id]);
   // The overview sits beside the conversation. The person's wish is kept; whether it
   // fits beside a drawer is decided as the window and the drawer change.
   const [overviewWanted, setOverviewWanted] = useState(
