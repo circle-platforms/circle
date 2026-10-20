@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { t, uiAside, uiText } from '../locale.js';
 import { networkSummary } from '../net.js';
+import { hookFileShown } from '../hooks.js';
 import {
   mkdirSync,
   readFileSync,
@@ -2082,14 +2083,23 @@ function hooks(host: CommandHost): void {
   const lines: string[] = [];
   if (projectIgnored) lines.push(t('project hooks need trust'), '');
   if (projectChanged.length) {
-    lines.push(t('project hooks changed'), '');
+    lines.push(t('project hooks need approval'), '');
     for (const change of projectChanged)
       lines.push(
-        wrapHang(`  ${change.file} · ${t('needs approval')}`, width, 2).join(
-          '\n',
-        ),
+        wrapHang(
+          `  ${hookFileShown(change.file, host.workspace)} · ${t('needs approval')}`,
+          width,
+          2,
+        ).join('\n'),
       );
-    lines.push('');
+    lines.push(
+      wrapHang(
+        `  ${t('Circle asks when a turn starts. After skip, /reload asks again.')}`,
+        width,
+        2,
+      ).join('\n'),
+      '',
+    );
   }
   if (!rows.length && !projectChanged.length) {
     lines.push(t('No hooks configured.'));

@@ -1299,6 +1299,8 @@ export class LiveRuntime implements RuntimePort {
       themes: 'settings',
       variables: 'settings',
       secrets: 'settings',
+      // Settings lists each hook and the files that wait for approval.
+      hooks: 'settings',
       mcp: 'mcp',
       extensions: 'extensions',
       approvals: 'approvals',

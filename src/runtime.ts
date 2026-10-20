@@ -80,6 +80,8 @@ import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
 import {
   HookRunner,
+  approveHookFile,
+  approvedHookDigest,
   loadHooks,
   type HookChange,
   type HookDefinition,
@@ -192,6 +194,13 @@ export interface RuntimeOptions {
     signal: AbortSignal,
     origin?: InteractionContext,
   ) => Promise<void>;
+  /**
+   * Ask the person whether a project hooks file that was never approved, or changed
+   * since, may run: true approves exactly the bytes in `change`. Asked once per file
+   * version when a turn starts, and again after a reload or in a new session. Without
+   * it (print, line and rpc mode) such a file does not run and the turn says so.
+   */
+  approveHooks?: (change: HookChange, signal: AbortSignal) => Promise<boolean>;
   /**
    * The terminal's `circle -c`: a session another terminal holds opens view only
    * instead of failing. Nothing else gets this; the desktop starts a session of its own.
@@ -898,6 +907,7 @@ export class AgentRuntime {
       headless: this.options.headless,
       approve: this.options.approve,
       hooks: this.ensureHooks(),
+      reviewHooks: (signal) => this.reviewHooks(signal),
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
       beforeRun: async (signal) => {
@@ -1314,11 +1324,66 @@ export class AgentRuntime {
     projectChanged: HookChange[];
   } {
     const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
     return {
       hooks: runner.listing(),
       projectIgnored: runner.loaded.projectIgnored,
-      projectChanged: runner.loaded.projectChanged,
+      projectChanged: [...runner.loaded.projectChanged],
     };
+  }
+  /** Project hooks files this session is not running because they wait for approval. */
+  pendingHooks(): HookChange[] {
+    const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
+    return [...runner.loaded.projectChanged];
+  }
+  /**
+   * Approve a file that waits in this session: the digest, and the hooks that load,
+   * are those of `change`, the read the person was shown. False when this session is
+   * not waiting for exactly that version (the file was read again since).
+   */
+  approveHooks(change: HookChange): boolean {
+    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
+    const runner = this.ensureHooks();
+    const waiting = runner.loaded.projectChanged.find(
+      (item) => item.file === change.file && item.digest === change.digest,
+    );
+    if (!waiting) return false;
+    approveHookFile(this.options.home, waiting);
+    return runner.approve(waiting);
+  }
+  /** A file approved elsewhere (another session, another Circle) loads here too. */
+  private syncHookApprovals(runner: HookRunner): void {
+    for (const change of [...runner.loaded.projectChanged])
+      if (approvedHookDigest(this.options.home, change.file) === change.digest)
+        runner.approve(change);
+  }
+  /** Files this session asked about and the person left off. A reload asks again. */
+  private hooksAsked = new Set<string>();
+  /**
+   * When a turn starts: load files approved elsewhere (another session, another
+   * Circle), then ask the person about each version not asked about yet.
+   */
+  private async reviewHooks(signal: AbortSignal): Promise<void> {
+    const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
+    if (this.viewOnly || !runner.loaded.projectChanged.length) return;
+    const ask = this.options.approveHooks;
+    if (!ask) return;
+    for (const change of [...runner.loaded.projectChanged]) {
+      const key = `${change.file}\0${change.digest}`;
+      if (this.hooksAsked.has(key)) continue;
+      let approved: boolean;
+      try {
+        approved = await ask(change, signal);
+      } catch (error) {
+        // An interrupted turn did not answer; the next turn asks again.
+        if (signal.aborted) throw error;
+        approved = false;
+      }
+      this.hooksAsked.add(key);
+      if (approved) this.approveHooks(change);
+    }
   }
   /** Skills whose hooks are armed for the current session. */
   private armedSkills = new Set<string>();
@@ -1338,6 +1403,8 @@ export class AgentRuntime {
         { workspace: this.options.workspace, home: this.options.home },
       );
       for (const name of this.armedSkills) this.hookRunner.activateSkill(name);
+      // A fresh read asks again about every file still waiting.
+      this.hooksAsked.clear();
     }
     return this.hookRunner;
   }

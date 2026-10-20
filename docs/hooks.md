@@ -6,7 +6,7 @@ nav_order: 12.5
 
 A hook is a shell command Circle runs at a fixed point in a turn. The model decides what to try; a hook decides whether that attempt is allowed. A deny from a hook stands in every approval mode, including accept-edits and auto.
 
-Hooks are code execution. Circle shows which ones are active, runs a project's hooks only after you trust the folder, and appends one JSON line per run to `hooks.log` in the data folder.
+Hooks are code execution. Circle shows which ones are active, runs a project's hooks only after you trust the folder and approve that version of the file, and appends one JSON line per run to `hooks.log` in the data folder.
 
 ## Where hooks live
 
@@ -18,11 +18,23 @@ Hooks are code execution. Circle shows which ones are active, runs a project's h
 
 Hooks are not a key in `settings.json`. A project settings file has a closed list of keys, and a bad `settings.json` stops Circle; a hooks file is separate so a mistake there does not.
 
-Trusting the folder is not enough for a project hooks file. Circle stores a SHA-256 digest of each project hooks file you approve, and the name, event and command of each hook in that version, in `hook-trust.json` in the data folder. The first time that file is seen, and again whenever its bytes change, those hooks are not loaded. The full-screen interface asks you to approve them and lists each hook's name, event and command, marked new, changed or removed. Unchanged hooks share one line. An approval saved before those per-hook details existed does not call every hook changed; each one is marked as not yet compared. Until you do, `/hooks` lists the file as needing approval and the commands do not run. Approving writes the new digest. Skipping leaves them unloaded, and the next session asks again. Your own `hooks.json` in the data folder, and a `hooks.json` next to a skill that is not the project's, are not asked again. `/reload` reads the files again and asks when the digest does not match.
+Trusting the folder is not enough for a project hooks file. See [Approving a project hooks file](#approving-a-project-hooks-file).
 
 Circle reads the files when a session starts, on `/new`, when you switch or import a session, and on `/reload`. `/reload` applies the new files to later events in the same session. It does not run `session_start` again, and it resets each `before_stop` hook's block count.
 
 A file whose `version` is present and is not `1` is skipped. A file can hold at most 100 hooks; further entries are left out and named in a notice. An entry without a command, an unknown event, or JSON that cannot be read is reported the same way, and the valid hooks in that file still load.
+
+## Approving a project hooks file
+
+A project hooks file (`.circle/hooks.json`, or a `hooks.json` next to a project skill) runs only in a version you approved. `hook-trust.json` in the data folder keeps, for each approved file by its real path, the SHA-256 digest of its bytes and the name, event and command of each hook in that version. A file that has never been approved, or whose bytes changed since, does not load. Circle reads the file once for the digest, for what it shows you and for the hooks that load, so what runs is the version you were shown. A file with no hooks in it has nothing to approve. Your own `hooks.json` in the data folder, and a `hooks.json` next to a skill that is not the project's, are never asked about.
+
+**In the terminal**, when a turn starts and such a file waits, a card asks first: the file, then each hook in that version with its event and command, marked new, changed or removed against the version you approved last; unchanged hooks share one line. Like every card, it waits while you are typing. The choices are `skip` and `approve these hooks`, and the focus starts on `skip`: enter, `1` and esc leave the hooks off, and letters do nothing. `2`, or down and enter, approves. The hooks then run from that turn on, `session_start` included, and the transcript says `project hooks approved`. After a skip they stay off for the session: the transcript says `project hooks need approval · <file>`, `/hooks` lists the file as needing approval, and the card comes back after `/reload` or in a new session. `circle --approve-hooks` approves the waiting files when the session opens, without the card.
+
+**In the desktop**, the same card appears in the conversation when a turn starts, with `approve these hooks` and `skip`. After a skip the transcript says the hooks need approval, and a new conversation asks again. Settings names each file that waits.
+
+**In print, line and rpc mode** nobody can answer a card. A file that waits does not run. Standard error says so once for the run, naming the file and how to approve it: with `circle` in a terminal in that folder, or with `--approve-hooks`, which approves the waiting files as they are now and lists each hook it approved. The transcript keeps the same notice, so a later session shows it.
+
+Releases up to 1.9.1 ran a trusted folder's hooks without this approval and kept no `hook-trust.json`. After an upgrade, such a file waits as a new one: the terminal and the desktop ask on the next turn, and print mode says so on standard error until it is approved once, for example with `--approve-hooks`.
 
 ## The file
 
@@ -134,7 +146,7 @@ Matching is case-sensitive, except on Windows, where `\` and `/` are the same an
 
 The terminal keeps hook lines in the transcript as notices. With a Chinese locale the labels are Chinese; the hook's own reason, the command and the tool name stay as written. The welcome inventory names `.circle/hooks.json` when that file is present. The approval card adds `hook · <reason>` when a hook asked.
 
-The desktop transcript uses the same notices. In 简体中文 the labels are fully Chinese, and the reason stays as the hook wrote it. Settings lists each hook's name, whether it came from you, the project or a skill (and which skill), the event, the tools when they are not `*`, and the command. A skill hook that this session has not loaded is listed as waiting and does not run. An untrusted project file is named there and is not run.
+The desktop transcript uses the same notices. In 简体中文 the labels are fully Chinese, and the reason stays as the hook wrote it. Settings lists each hook's name, whether it came from you, the project or a skill (and which skill), the event, the tools when they are not `*`, and the command. A skill hook that this session has not loaded is listed as waiting and does not run. An untrusted project file is named there and is not run, and so is a project file that waits for approval.
 
 The active-hook notice lists names, events and sources. It does not list commands, unless a hook has no name, in which case the name is the command.
 

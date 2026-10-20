@@ -57,6 +57,8 @@ export interface CliOptions {
   yolo: boolean;
   /** Trust this folder for this run and remember it, including when nobody is at a terminal. */
   trust: boolean;
+  /** Approve the folder's project hooks files as they are now, without a card. */
+  approveHooks: boolean;
   extensions: boolean;
   verbose: boolean;
   continue: boolean;
@@ -93,6 +95,7 @@ const FLAGS: Record<
   '--init': 'init',
   '--yolo': 'yolo',
   '--trust': 'trust',
+  '--approve-hooks': 'approveHooks',
   '--extensions': 'extensions',
   '--verbose': 'verbose',
   '--no-session': 'no-session',
@@ -130,6 +133,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): CliOptions {
     mode: 'text',
     yolo: false,
     trust: false,
+    approveHooks: false,
     extensions: false,
     verbose: false,
     continue: false,
@@ -329,6 +333,7 @@ const HELP_ROWS: [string, string][] = [
   ['--no-tools', 'No tools except compaction'],
   ['--yolo', 'Auto mode for print or line'],
   ['--trust', 'Trust this folder and remember it'],
+  ['--approve-hooks', "Approve this folder's hooks files as they are now"],
   [
     '--extensions',
     'Load extensions and MCP servers in print, line or rpc mode',
@@ -540,6 +545,34 @@ async function headlessSettings(
   if (options.model) settings.auth.model = options.model;
   return settings;
 }
+/**
+ * Print, line and rpc mode cannot show the hooks card. `--approve-hooks` approves
+ * the waiting files and lists what it approved; otherwise those hooks do not run,
+ * and standard error says so once, naming each file and how to approve it.
+ */
+export function reportProjectHooks(
+  runtime: import('./runtime.js').AgentRuntime,
+  approve: boolean,
+  write: (text: string) => void = (text) => process.stderr.write(text),
+): void {
+  if (approve)
+    for (const change of runtime.pendingHooks()) {
+      if (!runtime.approveHooks(change)) continue;
+      write(
+        t('circle: approved the hooks in {file}', { file: change.file }) + '\n',
+      );
+      for (const hook of change.hooks)
+        if (hook.mark !== 'removed')
+          write(`  ${hook.name} · ${hook.event} · ${hook.command}\n`);
+    }
+  for (const change of runtime.pendingHooks())
+    write(
+      t(
+        'circle: the hooks in {file} were not run: this version of the file is not approved. Approve it with circle in a terminal in this folder, or pass --approve-hooks.',
+        { file: change.file },
+      ) + '\n',
+    );
+}
 let networkConfigured = false;
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   let runtime: import('./runtime.js').AgentRuntime | undefined;
@@ -697,6 +730,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         settings,
         init: options.init,
         trust: options.trust,
+        approveProjectHooks: options.approveHooks,
         pickSession: options.resume,
         prompts,
         shown,
@@ -714,6 +748,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // full-screen interface; their tools reach the model from the first turn.
     if (options.extensions) await runtime.initialize();
     offSignals = installExitGuard(runtime);
+    reportProjectHooks(runtime, options.approveHooks);
     // Only --yolo turns auto on here; without it a saved default_mode stays.
     if (options.yolo) runtime.policy.setYolo(runtime.session.id, true);
     if (options.mode === 'rpc') {

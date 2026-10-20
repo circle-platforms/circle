@@ -9,6 +9,8 @@ export type CardTone =
 export interface CardLine {
   text: string;
   tone?: CardTone;
+  /** Content, such as a command: drawn as written, never translated. */
+  verbatim?: boolean;
   /** A status row of parts in their own tones (`for ` dim, a URL as text): one row, cut
    * with "…" when it does not fit, never wrapped. `text` is then not drawn. */
   segments?: [string, CardTone][];
@@ -209,7 +211,7 @@ export function cardRows(
       return;
     }
     const bodyText =
-      line.tone === 'added' || line.tone === 'removed'
+      line.verbatim || line.tone === 'added' || line.tone === 'removed'
         ? line.text
         : uiText(line.text);
     for (const part of wrapWords(terminalText(bodyText), width - 4))

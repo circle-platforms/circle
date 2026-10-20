@@ -132,6 +132,9 @@ export const TUI_ZH: Record<string, string> = {
   'cache {rate}': '缓存 {rate}',
   'ctx {used}/N/A': '上下文 {used}/不可用',
   'ctx {used}/{window} ({percent}%)': '上下文 {used}/{window}（{percent}%）',
+  'circle: approved the hooks in {file}': 'circle：已批准 {file} 里的钩子',
+  'circle: the hooks in {file} were not run: this version of the file is not approved. Approve it with circle in a terminal in this folder, or pass --approve-hooks.':
+    'circle：{file} 里的钩子没有运行，因为这个版本的文件还没有批准。在这个文件夹里用终端运行 circle 批准它，或者加上 --approve-hooks。',
   'circle: nothing arrived on stdin within {seconds}s; going on without it (use </dev/null to skip the wait)\n':
     'circle：标准输入在 {seconds} 秒内没有内容，将不使用它继续（用 </dev/null 可跳过等待）\n',
 
@@ -259,13 +262,14 @@ export const TUI_ZH: Record<string, string> = {
   'not trusted': '未信任',
   active: '运行中',
   'project hooks need trust': '项目钩子需要先信任文件夹',
-  'project hooks changed': '项目钩子已更改，尚未加载',
-  'needs approval': '需要重新批准',
+  'project hooks need approval': '项目钩子需要批准',
+  'needs approval': '需要批准',
+  'Circle asks when a turn starts. After skip, /reload asks again.':
+    'Circle 会在回合开始时询问。跳过之后，/reload 会再问一次。',
   'approve these hooks': '批准这些钩子',
   skip: '跳过',
-  "This project's hooks file changed.": '这个项目的钩子文件变了。',
-  'These hooks run shell commands and stay off until you approve them.':
-    '这些钩子会执行 shell 命令，批准之前不会运行。',
+  'These hooks run shell commands. They stay off until you approve this version of the file.':
+    '这些钩子会执行 shell 命令。批准这个版本的文件之前，它们不会运行。',
   bundled: '内置',
 
   // circle --help
@@ -293,6 +297,8 @@ export const TUI_ZH: Record<string, string> = {
   'No tools except compaction': '不使用工具，压缩除外',
   'Auto mode for print or line': '在打印模式和逐行模式里使用自动模式',
   'Trust this folder and remember it': '信任这个文件夹并记住',
+  "Approve this folder's hooks files as they are now":
+    '按现在的内容批准这个文件夹的钩子文件',
   'Load extensions and MCP servers in print, line or rpc mode':
     '在打印、逐行或 rpc 模式里加载扩展和 MCP 服务器',
   'Plain line mode': '普通逐行模式',
@@ -443,7 +449,6 @@ export const TUI_ZH: Record<string, string> = {
   'changed hook': '已更改',
   'unchanged hook': '未变',
   'removed hook': '已删除',
-  'pending hook': '待确认',
   'enter confirms · esc cancels': '回车确认 · esc 取消',
   'enter saves · esc cancels': '回车保存 · esc 取消',
   Rename: '重命名',

@@ -54,6 +54,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `-nt`, `--no-tools` | The model gets no tools. |
 | `--yolo` | With `-p`, `--line` or `--mode`: run commands and file changes without asking. See [Print mode](#print-mode). |
 | `--trust` | Trust the folder for this run and remember it in `trusted_folders`, including when nothing is at a terminal. A folder already trusted, or sitting inside one, does not need it. See [Print mode](#print-mode). |
+| `--approve-hooks` | Approve the folder's project hooks files as they are now, without a card, and remember that version. Standard error lists each hook it approved in print, line and rpc mode. See [Hooks](hooks.md#approving-a-project-hooks-file). |
 | `--extensions` | With `-p`, `--line` or `--mode`: load MCP servers and enabled extensions, which print, line and rpc modes otherwise leave out. See [Print mode](#print-mode). |
 | `--verbose` | With `-p` or `--line`: show each tool call, calls not run, failed results, retries and the tokens used on standard error. |
 | `-v`, `--version` | Print the version and exit. |
@@ -95,6 +96,8 @@ A question from the model comes back to it as text, and it asks the question in 
 Print mode does not load MCP servers, extensions or custom commands, unless you add `--extensions`: then MCP servers and enabled extensions load before the first prompt, as in the full-screen interface, and their tools are there from the first turn. Custom commands still are not. It does apply `credential_files` and a project's `.circle/settings.json`. The conversation is saved, so `circle -c` (with or without `-p`) can go on with it.
 
 Print mode, line mode and RPC mode need Circle set up and the folder trusted. When standard input is a terminal, they ask the setup and trust questions line by line first; otherwise they stop with exit code `2`, unless you pass `--trust`, which trusts this folder and remembers it for later runs. A trusted parent covers the folders inside it.
+
+A project hooks file runs only in a version you approved, and these modes cannot show the card that asks. A file that waits does not run; standard error names it once for the run and says how to approve it: with `circle` in a terminal in that folder, or with `--approve-hooks`. See [Hooks](hooks.md#approving-a-project-hooks-file).
 
 | Exit code | When |
 |---|---|

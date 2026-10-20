@@ -20,6 +20,11 @@ test('a hook notice in zh-CN is Chinese and keeps the hook reason and tool name'
       formatHookNotice({ kind: 'untrusted' }),
       '项目钩子需要先信任文件夹',
     );
+    // The files stay as written; the words say how to be asked again.
+    assert.equal(
+      formatHookNotice({ kind: 'changed', name: '.circle/hooks.json' }),
+      '项目钩子需要批准 · .circle/hooks.json · 新对话会再问一次',
+    );
     assert.equal(
       formatHookNotice({
         kind: 'active',

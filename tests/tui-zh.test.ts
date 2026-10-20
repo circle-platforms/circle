@@ -21,7 +21,7 @@ import {
   uiMeta,
   uiText,
 } from '../src/locale.js';
-import { describeHookChange } from '../src/hooks.js';
+import { HookApprovalCard } from '../src/ink/components/hook_card.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { SessionOccupiedError } from '../src/session_lock.js';
 import {
@@ -192,40 +192,49 @@ test('the phrases on the screen change under zh-CN and keep commands and ids', (
   delete process.env.LANGUAGE;
   try {
     assert.equal(interfaceLocale(), 'zh-CN');
-    const hooksCard = describeHookChange({
-      file: 'hooks.json',
-      digest: 'abc',
-      hooks: [
-        {
-          name: 'lint',
-          event: 'before_tool',
-          command: 'npm test',
-          mark: 'pending',
-        },
-        {
-          name: 'kept',
-          event: 'before_tool',
-          command: 'true',
-          mark: 'unchanged',
-        },
-        {
-          name: 'also',
-          event: 'before_tool',
-          command: 'true',
-          mark: 'unchanged',
-        },
-        {
-          name: 'gone',
-          event: 'before_tool',
-          command: 'old',
-          mark: 'removed',
-        },
-      ],
-    });
-    assert.match(hooksCard, /lint · before_tool · npm test · 待确认/);
-    assert.match(hooksCard, /gone · before_tool · old · 已删除/);
+    const hooksCard = cardRows(
+      new HookApprovalCard({
+        file: '/w/.circle/hooks.json',
+        digest: 'abc',
+        definitions: [],
+        hooks: [
+          {
+            name: 'lint',
+            event: 'before_tool',
+            command: 'npm test',
+            mark: 'changed',
+          },
+          {
+            name: 'kept',
+            event: 'before_tool',
+            command: 'true',
+            mark: 'unchanged',
+          },
+          {
+            name: 'also',
+            event: 'before_tool',
+            command: 'true',
+            mark: 'unchanged',
+          },
+          {
+            name: 'gone',
+            event: 'before_tool',
+            command: 'old',
+            mark: 'removed',
+          },
+        ],
+      }).state(),
+      100,
+    )
+      .map(stripAnsi)
+      .join('\n');
+    assert.match(hooksCard, /项目钩子需要批准/);
+    assert.match(hooksCard, /已更改 · lint · before_tool · npm test/);
+    assert.match(hooksCard, /已删除 · gone · before_tool · old/);
     assert.match(hooksCard, /未变 · kept, also/);
     assert.equal(hooksCard.includes('kept · before_tool'), false);
+    assert.match(hooksCard, /1 跳过/);
+    assert.match(hooksCard, /2 批准这些钩子/);
     assert.equal(busyLabel('Considering', 2, 10), '思考… · 2s · ↓ 10');
     const card = cardRows(
       {

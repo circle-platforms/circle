@@ -397,7 +397,7 @@ export function Overview({
                     <Dot state={agentDot(agent, !!asked)} />
                     <EndText title={request}>
                       {asked
-                        ? asked.kind === 'approval'
+                        ? asked.kind === 'approval' || asked.kind === 'hooks'
                           ? t('needs approval')
                           : t('waiting for you')
                         : agentActivityText(agent)}

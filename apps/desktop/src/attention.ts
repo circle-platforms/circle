@@ -29,17 +29,17 @@ export function attention(
     if (seen.has(item.id)) continue;
     seen.add(item.id);
     const detail = item.command ?? item.target ?? '';
+    // A hooks file waiting for approval names the file, as an approval names its tool.
+    const approval = item.kind === 'approval' || item.kind === 'hooks';
     notices.push({
-      title:
-        item.kind === 'approval'
-          ? text('Circle needs your approval')
-          : item.kind === 'secret'
-            ? text('Circle needs a secret')
-            : text('Circle has a question'),
-      body:
-        item.kind === 'approval'
-          ? [item.tool, detail].filter(Boolean).join(' · ')
-          : item.title,
+      title: approval
+        ? text('Circle needs your approval')
+        : item.kind === 'secret'
+          ? text('Circle needs a secret')
+          : text('Circle has a question'),
+      body: approval
+        ? [item.tool, detail].filter(Boolean).join(' · ')
+        : item.title,
       sessionId: item.sessionId,
     });
   }
