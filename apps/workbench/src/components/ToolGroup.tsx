@@ -86,7 +86,7 @@ export function ToolGroup({
         ) : runningTool || turn ? (
           <LoaderCircle size={13} className="spin" />
         ) : null}
-        <span>{summary.text}</span>
+        <span className="tool-summary-text">{summary.text}</span>
         {(summary.added > 0 || summary.removed > 0) && (
           <span className="diff-count">
             <span className="added">+{summary.added}</span>

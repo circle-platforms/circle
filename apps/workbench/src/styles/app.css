@@ -4258,6 +4258,23 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The summary and the running command give way first: a weight this large leaves the rest
+   of the row its whole width, not a fraction of a pixel less. The counts keep their words;
+   the turn's clock is cut short, not wrapped, once nothing else can give way. */
+.tool-summary-text,
+.tool-summary .tool-running {
+  flex-shrink: 1000000;
+}
+.tool-summary > span:not(:first-of-type) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.tool-summary > span.turn-clock {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tool-group[data-busy] .tool-summary {
   color: var(--secondary);
 }
