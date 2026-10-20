@@ -62,7 +62,7 @@ const site = createServer((request, response) => {
         ? pageBody('again page')
         : path.startsWith('/after')
           ? pageBody('after page')
-          : pageBody('popped page'),
+          : '<!doctype html><title>pop</title><body style="margin:0;background:#00aa44"><h1 id="mark" style="color:#fff">popped page</h1></body>',
   );
 });
 await new Promise((done) => site.listen(0, '127.0.0.1', done));
@@ -416,9 +416,9 @@ try {
     );
     await window.circleDesktop.browserBounds(sessionId, fitting, true, 0);
   }, browserSession);
-  const kept = (await shownPage('browser')).bounds;
+  const keptBox = (await shownPage('browser')).bounds;
   assert.ok(
-    kept && kept.x < 80 && kept.width > 400,
+    keptBox && keptBox.x < 80 && keptBox.width > 400,
     'a measurement from the drawer is not applied in the pop-out',
   );
   await until(

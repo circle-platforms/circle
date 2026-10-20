@@ -236,6 +236,8 @@ interface Tab {
   stopped?: number;
   // The view is being replaced by a new one in another window: its close is not the tab's
   replacing?: boolean;
+  // The page to open once this window is actually showing the new view
+  pending?: PageRestore;
   // What the person seeks in the page with find, and what the page last answered
   find?: { text: string; active: number; matches: number };
 }
@@ -452,20 +454,12 @@ export class BrowserSessions {
     for (const { tab } of held) this.retireView(previous, tab);
     this.retireMask(previous, conversation);
     conversation.held = held;
-    const mount = () => {
-      this.mountWaits.delete(id);
-      if (this.conversations.get(id) !== conversation) return;
+    // Putting the pages back: that window has been on screen, so the new view
+    // is created now, as a page Circle opens is. A window that is just opening
+    // is not. A view added in its `show` event, before it has painted, stays
+    // blank. Its panel places the pages once it has a box (`bounds`).
+    if (!host.isDestroyed() && host.isVisible())
       this.ensureMounted(conversation);
-    };
-    // A view added while the window is still hidden is marked shown without a
-    // surface, and stays blank after the window appears. Open the pages once
-    // the window is actually up, which is how a page opened in that window paints.
-    if (!host.isDestroyed() && host.isVisible()) mount();
-    else if (!host.isDestroyed()) {
-      const listen = () => mount();
-      this.mountWaits.set(id, { host, listen });
-      host.once('show', listen);
-    }
     this.visibility(conversation);
     this.publish(id);
   }
@@ -623,11 +617,14 @@ export class BrowserSessions {
   /** The address and history a new view should open. */
   private pageSnapshot(tab: Tab): PageRestore {
     const contents = tab.contents;
+    const live = contents.isDestroyed() ? '' : contents.getURL();
+    // The address actually showing wins. `requestedUrl` can still be the
+    // previous navigation when this page has already committed.
     const url =
+      (safeExternalUrl(live) ? live : '') ||
       tab.warning?.certificate.url ||
       tab.failure?.url ||
       tab.requestedUrl ||
-      (!contents.isDestroyed() ? contents.getURL() : '') ||
       '';
     let entries: NavigationEntry[] = [];
     let index = 0;
@@ -661,8 +658,18 @@ export class BrowserSessions {
       : current && safeExternalUrl(current.url)
         ? current.url
         : '';
-    if (entries.length) {
-      // The active entry's place among the ones that can be opened again.
+    const open = () => {
+      if (
+        url &&
+        !tab.closed &&
+        !contents.isDestroyed() &&
+        !safeExternalUrl(contents.getURL())
+      )
+        void contents.loadURL(url).catch(() => {});
+    };
+    // One address loads as the address bar would. Restoring a longer history
+    // can sit forever on a new view; the address is loaded if that happens.
+    if (entries.length > 1 && url) {
       let index = entries.length - 1;
       let seen = -1;
       for (let i = 0; i < page.entries.length; i++) {
@@ -673,12 +680,21 @@ export class BrowserSessions {
           break;
         }
       }
-      void contents.navigationHistory.restore({ entries, index }).catch(() => {
-        if (url) void contents.loadURL(url).catch(() => {});
-      });
+      const timer = setTimeout(open, 1000);
+      void contents.navigationHistory.restore({ entries, index }).then(
+        () => {
+          clearTimeout(timer);
+          open();
+        },
+        () => {
+          clearTimeout(timer);
+          open();
+        },
+      );
       return;
     }
-    if (url) void contents.loadURL(url).catch(() => {});
+    if (url && !tab.closed && !contents.isDestroyed())
+      void contents.loadURL(url).catch(() => {});
   }
   /** The preferences of a page Circle opens and of a page opened again in another window. */
   private tabPreferences(conversation: Conversation) {
@@ -709,6 +725,7 @@ export class BrowserSessions {
     tab.contents = contents;
     tab.replacing = false;
     tab.screenshot = undefined;
+    tab.failure = undefined;
     const [width, height] = host.isDestroyed() ? [0, 0] : host.getContentSize();
     // Parked until the panel of this window measures. The previous window's box
     // would put the page off this one.
@@ -718,12 +735,10 @@ export class BrowserSessions {
     this.prepareSession(conversation, contents.session);
     this.handle(conversation, tab);
     const enable = this.watchTab(conversation, tab);
-    tab.ready = enable
-      .catch(() => {})
-      .then(() => {
-        if (!tab.closed && !tab.contents.isDestroyed())
-          this.restorePage(tab, page);
-      });
+    // Open the page only once this window is showing the view. Loading while
+    // the view is parked, or while the window has not painted, leaves no surface.
+    tab.pending = page;
+    tab.ready = enable.catch(() => {});
     void tab.ready.catch(() => {});
   }
   /** The debugger and the developer-tools watch a tab's current page. */
@@ -858,6 +873,11 @@ export class BrowserSessions {
         tab.view.setVisible(shown);
       } catch {
         /* The view may be gone. */
+      }
+      if (shown && tab.pending) {
+        const page = tab.pending;
+        tab.pending = undefined;
+        this.restorePage(tab, page);
       }
     }
     // The person chooses a certificate in the panel while Circle's action waits for it
@@ -2719,7 +2739,14 @@ export class BrowserSessions {
     await delay(60, undefined, { signal });
     while (Date.now() < end) {
       signal?.throwIfAborted();
-      if (tab.closed || tab.failure || tab.dialogs.length || tab.choice) return;
+      if (
+        tab.closed ||
+        tab.contents.isDestroyed() ||
+        tab.failure ||
+        tab.dialogs.length ||
+        tab.choice
+      )
+        return;
       if (
         !tab.contents.isLoading() &&
         !tab.network.size &&

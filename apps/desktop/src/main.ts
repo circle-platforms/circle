@@ -578,7 +578,6 @@ async function createPopoutWindow(
   });
   popout.once('ready-to-show', () => {
     popout.show();
-    if (kind === 'browser') browsers?.repaint(sessionId);
   });
   await popout.loadURL(
     `circle://workbench/index.html#/popout/${kind}/${sessionId}`,
