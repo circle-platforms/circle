@@ -114,6 +114,7 @@ import {
 import { LocalTerminals, type LocalTerminalControl } from './local-terminals';
 import type { LocalTerminalRow } from './contracts';
 import {
+  expandVariables,
   loadSecrets,
   removeSecret,
   saveSecret,
@@ -1253,6 +1254,54 @@ export class RuntimeController {
       return;
     }
     this.track(runtime.harness.run(prompt, display), runtime);
+  }
+  /**
+   * The person moved the command of an `execute` card into one of their terminal tabs.
+   * It is typed there only where it runs as the card shows it, with the values of the
+   * secrets the card names (LocalTerminals checks the tab and its line), and the card is
+   * then answered for them: Circle's own shell does not run it, and the model is told
+   * where it went.
+   */
+  private async runInTerminalTab(
+    sessionId: string | undefined,
+    p: Record<string, unknown>,
+  ): Promise<Record<string, never>> {
+    const id = text(p.id, 'interaction', 200);
+    const pending = this.pending.get(id);
+    if (
+      !pending ||
+      pending.signal.aborted ||
+      pending.row.revision !== p.revision ||
+      pending.row.sessionId !== sessionId
+    )
+      throw Error('stale interaction');
+    const row = pending.row;
+    const shown =
+      row.kind === 'approval' &&
+      row.tool === 'execute' &&
+      typeof row.command === 'string'
+        ? row.command.trim()
+        : '';
+    if (!shown) throw Error('only a command can move into a terminal tab');
+    const session = text(p.terminal, 'terminal', 200);
+    if (!isLocalTerminal(session))
+      throw Error("that is not one of the user's terminal tabs");
+    const still = () =>
+      this.pending.get(id) === pending && !pending.signal.aborted;
+    const name = await this.terminalTabs.typeForPerson(
+      row.sessionId,
+      session,
+      // What execute would run: the card shows each secret by its name
+      expandVariables(shown, loadSecrets(this.home)),
+      still,
+    );
+    if (!still()) return {};
+    const answer = `reject: the user moved this command into ${name}; it was typed there. Do not call execute. Use terminal_wait on ${session} if you still need the result.`;
+    this.pending.delete(id);
+    this.history.push({ ...row, status: 'recorded', decision: answer });
+    this.history = this.history.slice(-100);
+    pending.resolve(answer);
+    return {};
   }
   /** A give-back's turn has finished: the tab leaves Circle's resumed state. */
   private settleHandback(conversation: string): void {
@@ -3986,6 +4035,7 @@ export class RuntimeController {
             'rename-session',
             'archive-session',
             'answer',
+            'terminal-tab-run',
             'stop-job',
             'workspace-service',
             'list-external-file-grants',
@@ -4021,6 +4071,7 @@ export class RuntimeController {
     // Answers and interrupts must remain available while an asynchronous action is running.
     const immediate = [
       'answer',
+      'terminal-tab-run',
       'abort',
       'state',
       'close',
@@ -4312,6 +4363,9 @@ export class RuntimeController {
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
+    // An answer to a card: it addresses the card's own conversation
+    if (command.name === 'terminal-tab-run')
+      return this.runInTerminalTab(command.sessionId, p);
     // These capability operations address their explicit owner and must never
     // open or acquire the unrelated session currently being inspected.
     if (command.name === 'revoke-external-file-grant')

@@ -1089,7 +1089,7 @@ export function withMoreTerminals(text: string, lines: string[]): string {
  * The line at the cursor ends like a prompt: a shell's `$`, `#`, `%` or `>`, a REPL's
  * `>>>`, or the `❯` of starship, pure and powerlevel10k.
  */
-function looksLikePrompt(line: string): boolean {
+export function looksLikePrompt(line: string): boolean {
   return /[$#>%❯]\s*$/.test(line);
 }
 

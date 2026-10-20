@@ -58,6 +58,11 @@ export const common: Record<string, string> = {
   'restarts this terminal and types this command into it':
     '会先重新启动这个终端，再把这条命令输入进去',
   'run this in terminal {n}': '改在终端 {n} 里运行',
+  'terminal {n} has text at its prompt: clear it and try again':
+    '终端 {n} 的提示符后已有文字：请先清空再试',
+  'a command is still running in terminal {n}': '终端 {n} 里还有命令在运行',
+  'terminal {n} is not at its prompt': '终端 {n} 不在提示符处',
+  'Circle is using terminal {n}': 'Circle 正在使用终端 {n}',
   'the user gave terminal {n} back': '已把终端 {n} 交还',
   'destructive operation': '破坏性操作',
   'python code deletes files': 'Python 代码会删除文件',

@@ -1,7 +1,10 @@
+import { t } from '../i18n';
+
 /**
  * An `execute` approval the person can move into a terminal tab. Prompting the model
  * to prefer the terminal tools is not enough: when their message names their own tab
- * and one is open, the card offers to type the command there instead.
+ * and one is open, the card offers to type the command there instead. The main process
+ * types it, and only where the line that runs is the card's.
  */
 const OWN_TERMINAL =
   /我的终端|终端标签|终端页|my terminal|terminal tab|shell tab|own terminal/i;
@@ -12,13 +15,8 @@ export function asksForOwnTerminal(text: string): boolean {
 
 export interface TerminalRedirect {
   ordinal: number;
-  /** The terminal service id the write goes to. */
-  terminal: string;
   /** `local:<id>`, as the model's terminal tools name the tab. */
   session: string;
-  command: string;
-  /** English the model reads when the card rejects `execute`. */
-  rejection: string;
 }
 
 /** The first open tab, when this approval is `execute` and the person asked for their tab. */
@@ -29,25 +27,28 @@ export function executeTerminalRedirect(input: {
   tabs: { id: string; terminal: string; ordinal: number }[];
 }): TerminalRedirect | undefined {
   if (input.tool !== 'execute') return;
-  const command = input.command?.trim();
-  if (!command || !asksForOwnTerminal(input.userText)) return;
+  if (!input.command?.trim() || !asksForOwnTerminal(input.userText)) return;
   const tab = [...input.tabs]
     .filter((row) => row.ordinal > 0 && row.terminal)
     .sort((a, b) => a.ordinal - b.ordinal)[0];
   if (!tab) return;
-  return {
-    ordinal: tab.ordinal,
-    terminal: tab.terminal,
-    session: tab.id,
-    command,
-    rejection: `the user moved this command into terminal ${tab.ordinal}; it was typed there. Do not call execute. Use terminal_wait on ${tab.id} if you still need the result.`,
-  };
+  return { ordinal: tab.ordinal, session: tab.id };
 }
 
-/** Bytes that run the card's command in the shell, one Enter per line. */
-export function commandToTerminalData(command: string): string {
-  const lines = command.replace(/\r\n?/g, '\n');
-  return lines.endsWith('\n')
-    ? lines.replace(/\n/g, '\r')
-    : `${lines.replace(/\n/g, '\r')}\r`;
+/**
+ * Why the main process typed nothing, in the interface language when it is one of the
+ * reasons it gives for a tab.
+ */
+export function redirectRefusal(message: string, ordinal: number): string {
+  if (message.includes('there is text at the prompt'))
+    return t('terminal {n} has text at its prompt: clear it and try again', {
+      n: ordinal,
+    });
+  if (message.includes('a command is still running there'))
+    return t('a command is still running in terminal {n}', { n: ordinal });
+  if (message.includes('the tab is not at its prompt'))
+    return t('terminal {n} is not at its prompt', { n: ordinal });
+  if (message.includes('Circle is using the tab'))
+    return t('Circle is using terminal {n}', { n: ordinal });
+  return message;
 }

@@ -22,6 +22,7 @@ import {
 } from '../src/workspace/terminal.ts';
 import type { TerminalPort } from '../../../src/terminal/tools.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
+import { saveSecret } from '../../../src/secrets.ts';
 import {
   defaultSettings,
   saveSettings,
@@ -576,5 +577,87 @@ test(
       await manager.write(owner, shell.id, '\x03');
       assert.match((await wait(20_000)).text, /quiet for 0\.3s/, prompt);
     }
+  },
+);
+
+test(
+  'run this in terminal: the card’s command is typed in the tab with its secret’s value, never after what sits on the line',
+  { skip: !unix, timeout: patience(120_000) },
+  async (t) => {
+    const tab = { id: '', session: '' };
+    const opened = gate();
+    const f = await setup(t, [
+      // Circle types without Enter: the text stays on the line
+      step(
+        'terminal_send',
+        () => ({ session: tab.session, text: 'printf PART' }),
+        opened.opened,
+      ),
+      step('execute', () => ({ command: 'printf %TOKEN% > moved.txt' })),
+      done,
+    ]);
+    saveSecret(join(f.root, 'home'), 'TOKEN', 'token-value-1234');
+    await f.call('prompt', { text: 'run it in my terminal' });
+    const shell = await f.terminal<TerminalSnapshot>('create', {
+      shell: '/bin/sh',
+    });
+    tab.id = shell.id;
+    tab.session = `local:${shell.id}`;
+    await until(
+      async () => (await f.screen(shell.id)).includes(PROMPT),
+      'the shell prompt',
+    );
+    opened.open();
+    await until(() => f.cards()[0]?.tool === 'terminal_send', 'the first use');
+    await f.answer('approve');
+    await until(
+      async () => (await f.screen(shell.id)).includes('printf PART'),
+      'the typed text on the line',
+    );
+    await until(() => f.cards()[0]?.tool === 'execute', 'the execute card');
+    const card = f.cards()[0]!;
+    assert.equal(card.command, 'printf %TOKEN% > moved.txt');
+    const move = () =>
+      f.controller.dispatch({
+        id: randomUUID(),
+        name: 'terminal-tab-run',
+        sessionId: card.sessionId,
+        payload: {
+          id: card.id,
+          revision: card.revision,
+          terminal: tab.session,
+        },
+      });
+    // What Circle left on the line would run first: nothing is typed
+    const refused = await move();
+    assert.equal(refused.ok, false);
+    assert.match(
+      refused.error ?? '',
+      /there is text at the prompt: clear it and try again; nothing was typed in terminal 1/,
+    );
+    assert.equal(f.cards()[0]?.id, card.id, 'the card still waits');
+    // The person clears the line; then the card's command runs there
+    await f.terminal('write', { id: shell.id, data: '\x03' });
+    const moved = await move();
+    assert.equal(moved.ok, true, moved.error);
+    await until(
+      async () =>
+        (await written(join(f.workspace, 'moved.txt'))) === 'token-value-1234',
+      'the command ran in the tab with the secret’s value',
+    );
+    assert.equal(
+      (await f.screen(shell.id)).includes('PARTprintf'),
+      false,
+      'the earlier text did not prefix the command',
+    );
+    await until(() => f.model.requests.length === 3, 'the end of the turn');
+    const result = toolResults(f.model).at(-1)!;
+    assert.match(result.content, /The user rejected this tool call/);
+    assert.match(
+      result.content,
+      /the user moved this command into terminal 1; it was typed there\. Do not call execute\. Use terminal_wait on local:/,
+    );
+    assert.equal(result.content.includes('token-value-1234'), false);
+    assert.equal(f.cards().length, 0);
   },
 );

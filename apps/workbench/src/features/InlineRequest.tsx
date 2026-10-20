@@ -10,10 +10,9 @@ import { relativePath } from '../model/format';
 import { browserApprovalInput, hasToolInput } from '../model/browser';
 import { approvalHeading, requestReason } from '../model/reasons.ts';
 import {
-  commandToTerminalData,
   executeTerminalRedirect,
+  redirectRefusal,
 } from '../model/terminal-redirect';
-import { workspaceCall } from '../model/workspace-client';
 import { useTerminalState } from './useTerminalState';
 import './conversation-requests.css';
 
@@ -322,14 +321,16 @@ export function InlineRequest({
               const moved = redirect;
               perform(async () => {
                 try {
-                  await workspaceCall(item.sessionId, 'terminal', 'write', {
-                    id: moved.terminal,
-                    data: commandToTerminalData(moved.command),
-                  });
-                  await runtime.answer(
-                    item.id,
-                    item.revision,
-                    'reject: ' + moved.rejection,
+                  // The main process types the card's command in the tab, only where
+                  // the line that runs is the card's, and answers the card.
+                  await runtime.request(
+                    'run-in-terminal',
+                    {
+                      id: item.id,
+                      revision: item.revision,
+                      terminal: moved.session,
+                    },
+                    item.sessionId,
                   );
                   if (runtime.getSnapshot().activeSessionId === item.sessionId)
                     onSettled?.();
@@ -337,7 +338,9 @@ export function InlineRequest({
                   sending.current = false;
                   setSent(false);
                   setError(
-                    error instanceof Error ? error.message : t('action failed'),
+                    error instanceof Error
+                      ? redirectRefusal(error.message, moved.ordinal)
+                      : t('action failed'),
                   );
                   throw error;
                 }
