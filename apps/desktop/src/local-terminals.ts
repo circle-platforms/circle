@@ -306,8 +306,19 @@ export class LocalTerminals implements TerminalTabFacts {
    */
   typed(conversation: string, terminal: string, data: string): void {
     if (!terminal || !data || AUTOMATIC_REPLY.test(data)) return;
-    const line = this.line(this.own(conversation), terminal);
-    const tab = this.tabs.get(key(conversation, terminal));
+    // The write may name a conversation that did not adopt the tab. The tab Circle
+    // is driving is the one that has it, whichever conversation that is.
+    let owner = conversation;
+    let tab = this.tabs.get(key(conversation, terminal));
+    if (!tab) {
+      for (const found of this.tabs.values()) {
+        if (found.terminal !== terminal) continue;
+        tab = found;
+        owner = found.conversation;
+        break;
+      }
+    }
+    const line = this.line(this.own(owner), terminal);
     // Where the person starts a line is where the prompt ends: the keys have not reached
     // the shell yet, so the cursor is still there
     if (tab && !line.text && line.clean && !line.start) {
@@ -316,10 +327,13 @@ export class LocalTerminals implements TerminalTabFacts {
     }
     personTyped(line, data);
     if (!tab || tab.session.held) return;
-    if (this.conversations.get(conversation)?.active.has(terminal))
-      this.sessions.attach(conversation, tab.session.id);
-    else
-      this.sessions.tell(conversation, `${tab.session.name}: the user typed`);
+    // A wait still running has watchers even when this write's conversation did not
+    // record the action. Either one means the person is typing into Circle's turn.
+    const driving =
+      !!this.conversations.get(owner)?.active.has(terminal) ||
+      tab.session.watchers.size > 0;
+    if (driving) this.sessions.attach(owner, tab.session.id);
+    else this.sessions.tell(owner, `${tab.session.name}: the user typed`);
   }
   /** The person takes a tab, hands it back, or stops Circle's action on it. */
   async control(

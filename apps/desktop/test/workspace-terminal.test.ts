@@ -16,6 +16,7 @@ import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { terminalInputChunks } from '../../workbench/src/model/terminal-stream.ts';
+import { terminalTabNumbers } from '../src/terminal-tabs.ts';
 import {
   TerminalManager,
   type TerminalEvent,
@@ -425,6 +426,45 @@ async function portAvailable(port: number): Promise<boolean> {
     server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
   });
 }
+
+test(
+  'restarting a shell in place keeps its tab number',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const only = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(only.tabNumber, 1);
+    await manager.signal(owner, only.id, 'SIGKILL');
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((item) => item.id === only.id)
+          ?.status === 'exited',
+      'the only shell exited',
+    );
+    const restarted = await manager.restart(owner, only.id);
+    assert.equal(restarted.tabNumber, 1);
+    assert.equal(restarted.restartOf, only.id);
+    const afterOnly = await manager.list(owner);
+    assert.equal(terminalTabNumbers(afterOnly).get(restarted.id), 1);
+    assert.equal(terminalTabNumbers(afterOnly).has(only.id), false);
+    assert.equal(afterOnly.find((item) => item.id === only.id)?.hidden, true);
+    const second = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(second.tabNumber, 2);
+    await manager.signal(owner, second.id, 'SIGKILL');
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((item) => item.id === second.id)
+          ?.status === 'exited',
+      'the second shell exited',
+    );
+    const kept = await manager.restart(owner, second.id);
+    assert.equal(kept.tabNumber, 2);
+    const numbers = terminalTabNumbers(await manager.list(owner));
+    assert.equal(numbers.get(restarted.id), 1);
+    assert.equal(numbers.get(kept.id), 2);
+    assert.equal(numbers.has(second.id), false);
+  },
+);
 
 test(
   'service readiness, stopping and restart are proven by the real port lifecycle',

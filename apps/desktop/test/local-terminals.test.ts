@@ -1032,6 +1032,25 @@ test('a local wait without a pattern holds while the cursor is off the prompt, a
   assert.equal(f.local.rows(f.id)[0]?.held, 'attach');
 });
 
+test('typing during a wait takes the tab when the write names another conversation', async (t) => {
+  const f = await allowedTab(t);
+  f.host.print(f.shell.id, '\r\nsleep 45\r\n');
+  await screenHas(f, 'sleep 45');
+  const waiting = f.port.request(
+    f.id,
+    'wait',
+    { session: f.session, idle_ms: 100, timeout_ms: 30000 },
+    f.signal,
+  );
+  await delay(400);
+  assert.equal(f.local.rows(f.id)[0]?.state, 'operating');
+  f.local.typed('someone-else', f.shell.id, 'x');
+  const taken = await waiting;
+  assert.match(taken.text, /your wait ended there/);
+  assert.equal(f.local.rows(f.id)[0]?.held, 'attach');
+  assert.equal(f.local.rows('someone-else').length, 0);
+});
+
 test('a local wait off the prompt is bounded by its timeout, and the prompt ends it', async (t) => {
   const f = await allowedTab(t);
   f.host.print(f.shell.id, '\r\nsleep 45\r\n');

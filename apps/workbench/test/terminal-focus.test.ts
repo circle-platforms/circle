@@ -43,6 +43,9 @@ test(
         .click();
       const screen = page.locator('.native-terminal-screen').first();
       await screen.locator('.xterm-screen').waitFor();
+      await page
+        .getByRole('button', { name: 'take over', exact: true })
+        .waitFor();
       await composer.focus();
       await composer.fill('stays in the composer');
       // A key within about 50ms of the click, and a composer focus forced just
@@ -67,13 +70,15 @@ test(
       );
       await typing;
       assert.equal(await composer.inputValue(), 'stays in the composer');
-      await page.waitForFunction(() =>
-        ['a', 'b', 'c'].every((char) =>
-          window.__terminalKeys.written.some((data: string) =>
-            data.includes(char),
-          ),
-        ),
-      );
+      await page.waitForFunction(() => {
+        const letters = window.__terminalKeys.written.join('');
+        return (
+          letters.split('a').length - 1 === 1 &&
+          letters.split('b').length - 1 === 1 &&
+          letters.split('c').length - 1 === 1 &&
+          window.__terminalKeys.taken.includes('local:A-terminal')
+        );
+      });
       await page.evaluate(
         () =>
           new Promise((resolve) =>
@@ -98,6 +103,6 @@ test(
 
 declare global {
   interface Window {
-    __terminalKeys: { written: string[]; typed: string[] };
+    __terminalKeys: { written: string[]; typed: string[]; taken: string[] };
   }
 }

@@ -1,5 +1,5 @@
 import type { IPty } from 'node-pty';
-import { nextTerminalTabNumber } from '../terminal-tabs.ts';
+import { nextTerminalTabNumber, terminalTabNumbers } from '../terminal-tabs.ts';
 import { hasNativePtyProcessExited, spawnPty } from './native-pty.ts';
 import { ptyEnvironment, withTextLocale } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
@@ -441,7 +441,7 @@ export class TerminalManager {
 
   async #create(
     options: TerminalCreateOptions,
-    restart?: { serviceId?: string },
+    restart?: { serviceId?: string; tabNumber?: number },
     managedLaunch?: { managed: ManagedCommand; launch: TerminalCommand },
   ): Promise<TerminalSnapshot> {
     await this.#ready;
@@ -545,7 +545,10 @@ export class TerminalManager {
           : {}),
       };
       if (!managedLaunch)
-        snapshot.tabNumber = nextTerminalTabNumber(this.listNow(options.owner));
+        snapshot.tabNumber =
+          restart?.tabNumber && restart.tabNumber > 0
+            ? restart.tabNumber
+            : nextTerminalTabNumber(this.listNow(options.owner));
       const entry = makeEntry(snapshot);
       entry.managed = managedLaunch?.managed;
       entry.environment = environment;
@@ -823,11 +826,16 @@ export class TerminalManager {
         'per-launch environment is unavailable after restart; start it again from where it was launched',
       );
     await this.close(owner, id);
-    // The replacement is a new process. The exited shell leaves the tab row so
-    // its number is free, and the new shell takes the lowest number left.
+    // Restarting a shell in place keeps the number the person was looking at.
+    // The exited process leaves the row; it does not take the next number.
+    const kept =
+      old.kind === 'shell' && !old.managedCommand
+        ? terminalTabNumbers(this.listNow(old.owner)).get(old.id)
+        : undefined;
     if (old.kind === 'shell' && !old.managedCommand) {
       const closed = this.#get(owner, id);
       closed.snapshot.hidden = true;
+      delete closed.snapshot.tabNumber;
       await this.#persist(closed);
     }
     const next = await this.#create(
@@ -853,7 +861,7 @@ export class TerminalManager {
         label: old.label,
         env: previous.environment,
       },
-      { serviceId: old.serviceId },
+      { serviceId: old.serviceId, tabNumber: kept },
     );
     const entry = this.#get(owner, next.id);
     entry.snapshot.restartOf = id;

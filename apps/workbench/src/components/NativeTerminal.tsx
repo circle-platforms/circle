@@ -1257,6 +1257,19 @@ export function NativeTerminal({
                     ? undefined
                     : restart
                 }
+                onUserKey={() => {
+                  // Typing takes the tab whichever way the key arrives, including
+                  // the short claim that sends it on before xterm has focus.
+                  const circle = circleIn(item.id);
+                  if (
+                    !circle ||
+                    circle.held ||
+                    circle.state === 'held' ||
+                    (circle.state !== 'operating' && circle.state !== 'waiting')
+                  )
+                    return;
+                  devices.takeTab(circle);
+                }}
                 onSelectionChange={(selected) => {
                   setHasSelection((current) =>
                     current[item.id] === selected
@@ -1490,6 +1503,7 @@ function TerminalSurface({
   onSelectionChange,
   onFind,
   onRestart,
+  onUserKey,
 }: {
   snapshot: TerminalSnapshot;
   request?: TerminalRequest;
@@ -1501,12 +1515,17 @@ function TerminalSurface({
   onSelectionChange: (selected: boolean) => void;
   onFind: () => void;
   onRestart?: () => void;
+  /** A key the person typed into this shell, before it is written. */
+  onUserKey?: () => void;
 }) {
   const language = useLocale();
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
   const onRestartRef = useRef(onRestart);
   onRestartRef.current = onRestart;
+  const onUserKeyRef = useRef(onUserKey);
+  onUserKeyRef.current = onUserKey;
+  const deliverRef = useRef<(text: string) => void>(() => {});
   const container = useRef<HTMLDivElement>(null);
   const screenReaderMode = useTerminalScreenReader();
   const instance = useRef<{ terminal: Terminal; fit: FitAddon } | null>(null);
@@ -1777,11 +1796,37 @@ function TerminalSurface({
       for (const part of terminalInputChunks(data))
         await call('write', { id: snapshot.id, data: part });
     };
+    const noteUserKey = () => onUserKeyRef.current?.();
+    // Keys the claim already wrote. The same character can also arrive from xterm
+    // once focus lands in it; that copy is not a second keystroke.
+    let claimed = '';
+    let claimTimer: ReturnType<typeof setTimeout> | undefined;
+    const deliver = (data: string, fromClaim: boolean) => {
+      if (statusRef.current !== 'running' || !inputAllowedRef.current) return;
+      noteUserKey();
+      if (fromClaim) {
+        claimed += data;
+        if (claimTimer) clearTimeout(claimTimer);
+        claimTimer = setTimeout(() => {
+          claimed = '';
+        }, 50);
+      }
+      sendInput = sendInput.then(() => writeInput(data)).catch(showError);
+    };
+    deliverRef.current = (text) => deliver(text, true);
     let pastedData: string[] | undefined;
     const input = terminal.onData((data) => {
       if (statusRef.current !== 'running' || !inputAllowedRef.current) return;
-      if (pastedData) pastedData.push(data);
-      else sendInput = sendInput.then(() => writeInput(data)).catch(showError);
+      if (pastedData) {
+        pastedData.push(data);
+        return;
+      }
+      if (claimed && claimed.startsWith(data)) {
+        claimed = claimed.slice(data.length);
+        return;
+      }
+      claimed = '';
+      deliver(data, false);
     });
     const paste = (event: ClipboardEvent) => {
       if (
@@ -1793,6 +1838,7 @@ function TerminalSurface({
       const text = event.clipboardData.getData('text/plain');
       event.preventDefault();
       event.stopPropagation();
+      noteUserKey();
       sendInput = sendInput
         .then(async () => {
           // Replay terminal modes before encoding paste, including after reopening.
@@ -1906,6 +1952,8 @@ function TerminalSurface({
       notifySearches();
       unsubscribe();
       input.dispose();
+      if (claimTimer) clearTimeout(claimTimer);
+      deliverRef.current = () => {};
       pasteTarget.removeEventListener('paste', paste, true);
       selection.dispose();
       selectionChange.current(false);
@@ -1976,7 +2024,9 @@ function TerminalSurface({
               if (instance.current?.terminal === term) term.focus();
             },
             (text) => {
-              if (instance.current?.terminal === term) term.input(text, true);
+              // Straight to the shell. term.input would also emit onData, and the
+              // key would be written twice.
+              if (instance.current?.terminal === term) deliverRef.current(text);
             },
           );
         }}

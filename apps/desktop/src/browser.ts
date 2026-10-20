@@ -416,6 +416,7 @@ export class BrowserSessions {
         : undefined);
     if (!conversation) return;
     const previous = this.hostOf(conversation);
+    this.cancelPaint(id);
     conversation.window = next === this.window ? undefined : next;
     if (previous === next) return;
     // The panel the pages left had the keyboard for them; the new window's says for itself.
@@ -508,7 +509,89 @@ export class BrowserSessions {
       : undefined;
     return tab ?? this.createTab(conversation, { activate: true });
   }
-  private visibility(conversation: Conversation) {
+  private paintTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private paintShows = new Map<
+    string,
+    { host: BrowserWindow; listen: () => void }
+  >();
+  private viewsOf(conversation: Conversation): WebContentsView[] {
+    return [
+      ...[...conversation.tabs.values()].map((tab) => tab.view),
+      ...(conversation.mask ? [conversation.mask] : []),
+    ];
+  }
+  /** Drop a view and add it again, so Linux composites a page that moved windows. */
+  private reattachViews(conversation: Conversation) {
+    const host = this.hostOf(conversation);
+    if (host.isDestroyed()) return;
+    for (const view of this.viewsOf(conversation)) {
+      try {
+        host.contentView.removeChildView(view);
+      } catch {
+        /* The window or the view may be gone. */
+      }
+      try {
+        host.contentView.addChildView(view);
+      } catch {
+        /* The window or the view may be gone. */
+      }
+    }
+  }
+  private viewsDetached(conversation: Conversation): boolean {
+    const host = this.hostOf(conversation);
+    if (host.isDestroyed()) return false;
+    const children = host.contentView.children;
+    return this.viewsOf(conversation).some((view) => !children.includes(view));
+  }
+  private cancelPaint(id: string) {
+    const timer = this.paintTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.paintTimers.delete(id);
+    const show = this.paintShows.get(id);
+    if (!show) return;
+    this.paintShows.delete(id);
+    try {
+      show.host.removeListener('show', show.listen);
+    } catch {
+      /* The window may already be gone. */
+    }
+  }
+  /**
+   * Attach the pages again shortly after they are shown. The attach in the same
+   * turn as the window becoming visible still leaves a blank area on Linux, and
+   * reloading the document does not build a new surface.
+   */
+  private schedulePaint(conversation: Conversation) {
+    const host = this.hostOf(conversation);
+    this.cancelPaint(conversation.id);
+    if (host.isDestroyed()) return;
+    const run = () => {
+      this.paintTimers.delete(conversation.id);
+      if (this.conversations.get(conversation.id) !== conversation) return;
+      if (
+        !conversation.wantedVisible ||
+        conversation.bounds.width < 2 ||
+        conversation.bounds.height < 2
+      )
+        return;
+      const current = this.hostOf(conversation);
+      if (current.isDestroyed() || !current.isVisible()) return;
+      this.reattachViews(conversation);
+      this.visibility(conversation, true);
+    };
+    if (!host.isVisible()) {
+      const listen = () => {
+        this.paintShows.delete(conversation.id);
+        if (this.conversations.get(conversation.id) !== conversation) return;
+        this.schedulePaint(conversation);
+      };
+      this.paintShows.set(conversation.id, { host, listen });
+      host.once('show', listen);
+      return;
+    }
+    this.paintTimers.set(conversation.id, setTimeout(run, 50));
+  }
+  private visibility(conversation: Conversation, nested = false) {
     const host = this.hostOf(conversation);
     const [windowWidth, windowHeight] = host.isDestroyed()
       ? [0, 0]
@@ -516,34 +599,32 @@ export class BrowserSessions {
     // Off the window as well as invisible: a native view that only flips its
     // flag can stay composited over the conversation on Linux.
     const away = { x: windowWidth, y: windowHeight, width: 1, height: 1 };
-    // Re-attach on the first show in this window, once that window is on screen.
-    // A view added before the window had painted, or moved across windows, otherwise
-    // stays a blank area on Linux. Doing it while the window is still hidden uses up
-    // the one re-attach, and the page that was already open then never appears.
-    if (
-      conversation.freshHost &&
+    // Re-attach on the first show in this window, once that window is on screen
+    // and the page has a real box. A view added before the window had painted, or
+    // moved across windows, otherwise stays a blank area on Linux. Doing it while
+    // the window is still hidden uses up the one re-attach, and the page that was
+    // already open then never appears. A second attach a moment later is what
+    // paints a page the person had already opened in the other window.
+    const showing =
       conversation.wantedVisible &&
+      conversation.bounds.width > 1 &&
+      conversation.bounds.height > 1 &&
       !host.isDestroyed() &&
-      host.isVisible()
-    ) {
+      host.isVisible();
+    let attached = false;
+    if (conversation.freshHost && showing) {
       conversation.freshHost = false;
-      const views = [
-        ...[...conversation.tabs.values()].map((tab) => tab.view),
-        ...(conversation.mask ? [conversation.mask] : []),
-      ];
-      for (const view of views) {
-        try {
-          host.contentView.removeChildView(view);
-        } catch {
-          /* The window or the view may be gone. */
-        }
-        try {
-          host.contentView.addChildView(view);
-        } catch {
-          /* The window or the view may be gone. */
-        }
-      }
+      this.reattachViews(conversation);
+      attached = true;
+    } else if (!nested && showing && this.viewsDetached(conversation)) {
+      this.reattachViews(conversation);
+      attached = true;
     }
+    if (
+      !nested &&
+      (attached || (conversation.freshHost && conversation.wantedVisible))
+    )
+      this.schedulePaint(conversation);
     for (const tab of conversation.tabs.values()) {
       const shown =
         conversation.wantedVisible &&
@@ -2394,7 +2475,18 @@ export class BrowserSessions {
         const target = tab.warning.certificate.url;
         tab.warning = undefined;
         void this.load(conversation, tab, target).catch(() => {});
-      } else contents.reload();
+      } else {
+        // Reload does not build a new surface. Attach the view again, and once
+        // more when the document has loaded, or the page stays a blank area.
+        conversation.freshHost = true;
+        this.visibility(conversation);
+        contents.once('did-finish-load', () => {
+          if (tab.closed || contents.isDestroyed()) return;
+          conversation.freshHost = true;
+          this.visibility(conversation);
+        });
+        contents.reload();
+      }
     };
     if (which === 'back' && !history.canGoBack())
       throw Error('no previous page');
@@ -3617,6 +3709,7 @@ export class BrowserSessions {
   /** Retire only this conversation; other sessions keep their pages and approvals. */
   async deleteSession(id: string): Promise<void> {
     this.deletedSessions.add(id);
+    this.cancelPaint(id);
     this.panelKeys.forgetConversation(id);
     const conversation = this.conversations.get(id);
     if (!conversation) return;
@@ -3662,6 +3755,7 @@ export class BrowserSessions {
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
+    for (const id of this.conversations.keys()) this.cancelPaint(id);
     for (const conversation of this.conversations.values())
       clearInterval(conversation.autoReturn);
     // Downloads no one kept go with Circle

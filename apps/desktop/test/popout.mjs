@@ -177,6 +177,63 @@ try {
   await rename.press('Enter');
   await rename.waitFor({ state: 'detached' });
 
+  // A page the person opened in the empty drawer stays painted when it pops
+  // out, is reloaded, comes back, and is reloaded again.
+  const painted = async (which) => {
+    const page = await shownPage(which);
+    return (
+      page.text === 'popped page' &&
+      page.bounds &&
+      page.bounds.width > 80 &&
+      page.bounds.height > 80 &&
+      page.bounds.x >= 0 &&
+      page.bounds.y >= 0
+    );
+  };
+  await main
+    .getByRole('button', { name: 'browser panel', exact: true })
+    .click();
+  await main.locator('.native-browser').waitFor();
+  await main.getByText('browse the web', { exact: true }).waitFor();
+  const drawerAddress = main.getByRole('textbox', { name: 'browser address' });
+  await drawerAddress.fill(pageUrl);
+  await drawerAddress.press('Enter');
+  await until(() => painted('main'), 'the page the person opened is painted');
+  await main
+    .locator('.inspector .browser-address')
+    .getByRole('button', { name: 'open in a window', exact: true })
+    .click();
+  let userPopped = await until(
+    async () => (await windowsOf('#/popout/browser/'))[0],
+    'the browser window for a page opened in the drawer',
+  );
+  await until(() => painted('browser'), 'that page is painted in the window');
+  await userPopped
+    .getByRole('button', { name: 'reload page', exact: true })
+    .click();
+  await until(
+    () => painted('browser'),
+    'reloading the popped page still paints it',
+  );
+  await userPopped
+    .getByRole('button', { name: 'put back in the drawer' })
+    .click();
+  await until(
+    async () => (await windowsOf('#/popout/browser/')).length === 0,
+    'the window of the page opened in the drawer closes',
+  );
+  await main.locator('.work-drawer').waitFor({ state: 'visible' });
+  await until(() => painted('main'), 'the page is painted back in the drawer');
+  await main.getByRole('button', { name: 'reload page', exact: true }).click();
+  await until(
+    () => painted('main'),
+    'reloading the page in the drawer still paints it',
+  );
+  await main
+    .getByRole('button', { name: 'browser panel', exact: true })
+    .click();
+  await main.locator('.work-drawer').waitFor({ state: 'hidden' });
+
   // ---- the browser leaves the drawer
   await main
     .getByRole('button', { name: 'browser panel', exact: true })
@@ -807,6 +864,24 @@ try {
   assert.equal(
     await live.getByRole('tab', { name: 'terminal 2', exact: true }).count(),
     0,
+  );
+  assert.deepEqual(
+    await live.evaluate(async (sessionId) => {
+      const listed = await window.circleDesktop.runtimeCommand({
+        id: crypto.randomUUID(),
+        name: 'workspace-service',
+        sessionId,
+        payload: { service: 'terminal', method: 'list', params: {} },
+      });
+      if (!listed.ok) throw Error(listed.error || 'terminal list failed');
+      return listed.data
+        .filter(
+          (item) =>
+            item.kind === 'shell' && !item.hidden && !item.managedCommand,
+        )
+        .map((item) => item.tabNumber);
+    }, liveSession),
+    [1],
   );
   await live
     .getByRole('button', { name: 'stop terminal 1', exact: true })
