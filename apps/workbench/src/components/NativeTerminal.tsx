@@ -673,9 +673,8 @@ export function NativeTerminal({
     });
   // A shell keeps its number while others close around it, and the model's terminal tools
   // and the cards in the conversation name it the same way: terminalTabNumbers is the rule.
-  const numbers = terminalTabNumbers(
-    terminals.filter((item) => item.sessionId === sessionId),
-  );
+  // Numbered among the tabs on screen, so closing one frees its number.
+  const numbers = terminalTabNumbers(visible);
   // What Circle is doing in each of your shells, by the terminal's id.
   const circleIn = new Map(devices.local.map((row) => [row.terminal, row]));
   const tabs: TerminalTab[] = [

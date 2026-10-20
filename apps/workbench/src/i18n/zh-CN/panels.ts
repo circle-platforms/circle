@@ -202,8 +202,8 @@ export const panels: Record<string, string> = {
   'new connection': '新建连接',
   port: '端口',
   user: '用户',
-  'SSH signs in from a saved device; a Telnet console asks for its own login':
-    'SSH 从已保存设备登录；Telnet 控制台会自己要求登录',
+  'SSH signs in with the password typed here, used for this connection and never saved; a Telnet console asks for its own login':
+    'SSH 用这里输入的密码登录，仅本次连接使用、不保存；Telnet 控制台会自己要求登录',
   'no saved profiles yet; a new connection reaches a device by address':
     '还没有保存的配置文件；用“新建连接”按地址连接设备。',
   'disconnect {name}': '断开 {name}',

@@ -14,9 +14,10 @@ export interface TerminalTabSource {
 
 /**
  * Each terminal's number, from 1: its place among the conversation's terminals that are
- * not a background command (`managedCommand`), oldest first. A stopped terminal keeps
- * its place while the list still has it. A shell's tab is named `terminal N` by it; a
- * service keeps its own label.
+ * still open as tabs - not a background command (`managedCommand`), not closed - oldest
+ * first. The caller passes exactly the terminals it shows, so a tab that closes frees
+ * its number instead of leaving every later tab one higher. A shell's tab is named
+ * `terminal N` by it; a service keeps its own label.
  */
 export function terminalTabNumbers(
   terminals: readonly TerminalTabSource[],

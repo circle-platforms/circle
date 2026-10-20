@@ -333,7 +333,8 @@ export class LocalTerminals implements TerminalTabFacts {
     const host = this.options.host(conversation);
     if (!host) return [];
     const list = host.listNow(conversation);
-    const numbers = terminalTabNumbers(list);
+    // Numbered among the tabs the window still shows: a closed shell frees its number.
+    const numbers = terminalTabNumbers(list.filter(running));
     const own = this.conversations.get(conversation);
     const waiting = this.options.waiting(conversation);
     return list.filter(running).map((snapshot) => {
@@ -685,7 +686,13 @@ export class LocalTerminals implements TerminalTabFacts {
     conversation: string,
     terminal: string,
   ): number {
-    return terminalTabNumbers(host.listNow(conversation)).get(terminal) ?? 0;
+    const list = host.listNow(conversation);
+    return (
+      terminalTabNumbers(list.filter(running)).get(terminal) ??
+      // A tab that is gone keeps the number it had, for the message that says so
+      terminalTabNumbers(list).get(terminal) ??
+      0
+    );
   }
   /** The tab's name for the model: "terminal N", as the person's tab reads in English. */
   private name(

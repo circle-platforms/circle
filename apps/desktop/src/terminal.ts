@@ -94,11 +94,17 @@ const validTarget = (value: unknown): TerminalTargetArgs => {
     row.user === undefined || row.user === ''
       ? undefined
       : String(row.user).slice(0, 100);
+  // A one-time password for SSH: carried to the connect, held in memory only.
+  const password =
+    row.password === undefined || row.password === ''
+      ? undefined
+      : String(row.password).slice(0, 4096);
   return {
     transport: row.transport as 'ssh' | 'telnet',
     host,
     ...(port !== undefined ? { port } : {}),
     ...(user ? { user } : {}),
+    ...(password ? { password } : {}),
   };
 };
 const validText = (value: unknown): string => {

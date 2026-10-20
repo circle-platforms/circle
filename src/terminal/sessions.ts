@@ -244,6 +244,14 @@ interface Conversation {
 
 /** The terminals of every conversation, behind the shape of a TerminalPort. */
 export class TerminalSessions {
+  /**
+   * One-time passwords a quick connect carried: a secret name to its value and
+   * conversation, in memory only, gone with the conversation or when the cap fills.
+   */
+  private onceSecrets = new Map<
+    string,
+    { conversation: string; value: string }
+  >();
   private conversations = new Map<string, Conversation>();
   private options: TerminalSessionsOptions;
   private maxSessions: number;
@@ -388,6 +396,8 @@ export class TerminalSessions {
     const own = this.conversations.get(conversation);
     if (!own) return;
     this.conversations.delete(conversation);
+    for (const [name, entry] of this.onceSecrets)
+      if (entry.conversation === conversation) this.onceSecrets.delete(name);
     for (const session of own.sessions.values()) {
       session.close();
       session.dispose();
@@ -400,6 +410,7 @@ export class TerminalSessions {
         session.dispose();
       }
     this.conversations.clear();
+    this.onceSecrets.clear();
   }
   // -- the actions --
   private async perform(
@@ -619,7 +630,11 @@ export class TerminalSessions {
       throw Error(
         `connect takes a saved profile, or a plain host${
           host ? ` (${host} is not one)` : ''
-        }${transport === 'ssh' ? ', and SSH sign-in comes from a profile' : ''}`,
+        }${
+          transport === 'ssh'
+            ? ', and SSH sign-in comes from a profile or the password given with it'
+            : ''
+        }`,
       );
     return {
       challenge: {
@@ -659,6 +674,23 @@ export class TerminalSessions {
           `this conversation already has ${own.sessions.size} terminals; disconnect one first`,
         );
     }
+    // A password typed into a quick connect becomes a one-time secret: the wire
+    // level only ever sees a secret name, exactly as a saved profile's does.
+    let once: string | undefined;
+    if (
+      !profile &&
+      transport === 'ssh' &&
+      typeof args.password === 'string' &&
+      args.password
+    ) {
+      once = `once:${randomUUID()}`;
+      this.onceSecrets.set(once, {
+        conversation,
+        value: args.password,
+      });
+      while (this.onceSecrets.size > 64)
+        this.onceSecrets.delete(this.onceSecrets.keys().next().value!);
+    }
     const target: TerminalTarget = {
       transport,
       host: explicit.host,
@@ -667,7 +699,9 @@ export class TerminalSessions {
       ...(explicit.user ? { user: explicit.user } : {}),
       ...(profile?.passwordSecret
         ? { passwordSecret: profile.passwordSecret }
-        : {}),
+        : once
+          ? { passwordSecret: once }
+          : {}),
       ...(profile?.keyPath ? { keyPath: profile.keyPath } : {}),
       ...(profile?.passphraseSecret
         ? { passphraseSecret: profile.passphraseSecret }
@@ -676,7 +710,8 @@ export class TerminalSessions {
       rows: profile?.rows ?? DEFAULT_ROWS,
     };
     const env: ConnectEnv = {
-      secret: (name) => this.options.secret(name),
+      secret: (name) =>
+        this.onceSecrets.get(name)?.value ?? this.options.secret(name),
       keyFile: (path) => this.options.keyFile(path),
       trusted: (host, fingerprint) =>
         !!this.options.hostkeys?.has(host, fingerprint),
