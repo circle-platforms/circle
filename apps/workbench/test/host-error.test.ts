@@ -7,9 +7,10 @@ import {
 } from '../src/model/host-error.ts';
 
 test('the operation-failure text is said in the interface language', () => {
+  const store = new Map<string, string>();
   const storage = {
-    getItem: () => null,
-    setItem: () => undefined,
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
   } as Storage;
   const english = 'operation failed; inspect effects before retrying';
   setLanguage('en', storage);
