@@ -25,6 +25,7 @@ import {
   type Certificate,
   type ContextMenuParams,
   type Input,
+  type NavigationEntry,
   type Rectangle,
   type Session,
   webContents as allContents,
@@ -233,8 +234,17 @@ interface Tab {
   favicon?: string;
   // When the person stopped the page loading: what that cut short is no failure
   stopped?: number;
+  // The view is being replaced by a new one in another window: its close is not the tab's
+  replacing?: boolean;
   // What the person seeks in the page with find, and what the page last answered
   find?: { text: string; active: number; matches: number };
+}
+/** Where a tab was, so a new view in another window can open that page again. */
+interface PageRestore {
+  url: string;
+  entries: NavigationEntry[];
+  index: number;
+  zoom: number;
 }
 interface Conversation {
   id: string;
@@ -247,11 +257,15 @@ interface Conversation {
   nextChoice: number;
   wantedVisible: boolean;
   /**
-   * The pages just joined this window and have not been shown in it yet. The first time
-   * they are shown they are attached again, so a view that moved paints on Linux.
+   * Bumped each time the pages move to another window. A bounds update names the value
+   * it measured against, and one from an older move is dropped.
    */
-  freshHost: boolean;
+  hostToken: number;
+  /** The window id `bounds` was measured for. Any other window keeps the view parked. */
+  boundsHost?: number;
   bounds: Rectangle;
+  /** Pages removed from the last window and not yet opened in the next one. */
+  held?: { tab: Tab; page: PageRestore }[];
   // What happened since the model last looked, told once in its next result.
   events: string[];
   tabsChanged: boolean;
@@ -402,8 +416,13 @@ export class BrowserSessions {
   }
   /**
    * A conversation's pages move to another window, as when its browser pops out of the
-   * drawer, or back to the main one. Its views, and the layer over them while Circle acts,
-   * leave the old window and join the new; the new window's panel then places them.
+   * drawer, or back to the main one. The same native view is not carried across. On
+   * Linux, reparenting a live WebContentsView leaves the compositor without a surface
+   * (CreateCommandBuffer fails) and the page stays blank, including after later
+   * navigations. Each tab keeps its id. A new view is created in the window that will
+   * show it — the same way a page Circle opens is created — and that tab's history is
+   * loaded there. The new window's panel places the view. A measurement from the window
+   * the pages left is dropped.
    */
   moveToWindow(idValue: unknown, target: BrowserWindow | null) {
     const id = this.validId(idValue);
@@ -416,40 +435,37 @@ export class BrowserSessions {
         : undefined);
     if (!conversation) return;
     const previous = this.hostOf(conversation);
-    this.cancelPaint(id);
-    conversation.window = next === this.window ? undefined : next;
     if (previous === next) return;
+    this.cancelMount(id);
     // The panel the pages left had the keyboard for them; the new window's says for itself.
     this.panelKeys.forgetConversation(id);
-    const views = [
-      ...[...conversation.tabs.values()].map((tab) => tab.view),
-      ...(conversation.mask ? [conversation.mask] : []),
-    ];
-    // A view the old window has already let go of, or a window that is closing, is no
-    // reason to leave the rest behind.
-    const settle = (action: () => void) => {
-      try {
-        action();
-      } catch {
-        /* The window or the view may be gone. */
-      }
-    };
-    // A view added to a window that is not on screen, while it is set to keep
-    // painting in the background, is marked shown without a surface. It then
-    // stays blank after the window appears, and reloading the document does
-    // not build one. Hold painting until this window is actually up.
-    const deferPaint = next.isDestroyed() || !next.isVisible();
-    for (const view of views) {
-      if (deferPaint) this.holdPaint(view);
-      if (!previous.isDestroyed())
-        settle(() => previous.contentView.removeChildView(view));
-      settle(() => next.contentView.addChildView(view));
-    }
-    this.logAttachment(conversation, 'moved');
-    // The new window's panel measures its own page: until it does, nothing shows.
-    // Attached again on the first show, so the move paints instead of a blank area.
-    conversation.freshHost = true;
+    conversation.window = next === this.window ? undefined : next;
+    conversation.hostToken += 1;
+    // The box was measured in the window the pages just left.
+    conversation.boundsHost = undefined;
     conversation.wantedVisible = false;
+    const host = this.hostOf(conversation);
+    this.logAttachment(conversation, 'moved');
+    const held = [...conversation.tabs.values()]
+      .filter((tab) => !tab.closed)
+      .map((tab) => ({ tab, page: this.pageSnapshot(tab) }));
+    for (const { tab } of held) this.retireView(previous, tab);
+    this.retireMask(previous, conversation);
+    conversation.held = held;
+    const mount = () => {
+      this.mountWaits.delete(id);
+      if (this.conversations.get(id) !== conversation) return;
+      this.ensureMounted(conversation);
+    };
+    // A view added while the window is still hidden is marked shown without a
+    // surface, and stays blank after the window appears. Open the pages once
+    // the window is actually up, which is how a page opened in that window paints.
+    if (!host.isDestroyed() && host.isVisible()) mount();
+    else if (!host.isDestroyed()) {
+      const listen = () => mount();
+      this.mountWaits.set(id, { host, listen });
+      host.once('show', listen);
+    }
     this.visibility(conversation);
     this.publish(id);
   }
@@ -460,7 +476,7 @@ export class BrowserSessions {
   repaint(idValue: unknown) {
     const conversation = this.conversations.get(this.validId(idValue));
     if (!conversation) return;
-    conversation.freshHost = true;
+    this.ensureMounted(conversation);
     this.visibility(conversation);
   }
   /** The window a conversation's pages are in, for who may place them. */
@@ -471,6 +487,10 @@ export class BrowserSessions {
   // ---- conversations and tabs
   private deletedSessions = new Set<string>();
   private retiringContents = new Map<string, Set<WebContents>>();
+  private mountWaits = new Map<
+    string,
+    { host: BrowserWindow; listen: () => void }
+  >();
   private conversation(id: string): Conversation {
     if (this.deletedSessions.has(id)) throw Error('this session was deleted');
     if (this.closed) throw Error('the browser is closed');
@@ -483,7 +503,7 @@ export class BrowserSessions {
         nextDialog: 0,
         nextChoice: 0,
         wantedVisible: false,
-        freshHost: false,
+        hostToken: 1,
         // A tool can open a page before the panel has measured a viewport.
         bounds: { x: 0, y: 0, width: 1000, height: 700 },
         events: [],
@@ -516,74 +536,15 @@ export class BrowserSessions {
       : undefined;
     return tab ?? this.createTab(conversation, { activate: true });
   }
-  private paintTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private paintShows = new Map<
-    string,
-    { host: BrowserWindow; listen: () => void }
-  >();
   private viewsOf(conversation: Conversation): WebContentsView[] {
     return [
-      ...[...conversation.tabs.values()].map((tab) => tab.view),
-      ...(conversation.mask ? [conversation.mask] : []),
+      ...[...conversation.tabs.values()]
+        .filter((tab) => !tab.contents.isDestroyed())
+        .map((tab) => tab.view),
+      ...(conversation.mask && !conversation.mask.webContents.isDestroyed()
+        ? [conversation.mask]
+        : []),
     ];
-  }
-  /**
-   * Drop a view and add it again, so Linux composites a page that moved windows.
-   * A page that had already painted needs its surface embedded again once the
-   * window is visible: a reload leaves the blank area in place.
-   */
-  private reattachViews(conversation: Conversation) {
-    const host = this.hostOf(conversation);
-    if (host.isDestroyed()) return;
-    const visible = host.isVisible();
-    for (const view of this.viewsOf(conversation)) {
-      try {
-        host.contentView.removeChildView(view);
-      } catch {
-        /* The window or the view may be gone. */
-      }
-      try {
-        host.contentView.addChildView(view);
-      } catch {
-        /* The window or the view may be gone. */
-      }
-      if (visible) this.wakeSurface(view);
-    }
-    if (visible) this.logAttachment(conversation, 'shown');
-  }
-  /** Stop a view painting while its window is still hidden. */
-  private holdPaint(view: WebContentsView) {
-    try {
-      if (!view.webContents.isDestroyed())
-        view.webContents.setBackgroundThrottling(true);
-    } catch {
-      /* The view may be gone. */
-    }
-  }
-  /**
-   * Embed a view's surface in the window that is now showing it. Nudging the
-   * box counts as a resize, which is what paints a page whose surface was left
-   * behind by the move. `reload` does not.
-   */
-  private wakeSurface(view: WebContentsView) {
-    try {
-      const bounds = view.getBounds();
-      if (bounds.width > 2 && bounds.height > 2) {
-        view.setBounds({
-          x: bounds.x,
-          y: bounds.y,
-          width: bounds.width - 1,
-          height: bounds.height,
-        });
-        view.setBounds(bounds);
-      }
-      const contents = view.webContents;
-      if (contents.isDestroyed()) return;
-      contents.setBackgroundThrottling(false);
-      contents.invalidate();
-    } catch {
-      /* The window or the view may be gone. */
-    }
   }
   /** Which page is in which window, and the box it was given. */
   private logAttachment(conversation: Conversation, reason: string) {
@@ -609,64 +570,269 @@ export class BrowserSessions {
       return { id, url, visible, bounds };
     });
     console.info(
-      `circle browser: ${reason} session=${conversation.id} window=${host.id} views=${JSON.stringify(views)}`,
+      `circle browser: ${reason} session=${conversation.id} window=${host.id} token=${conversation.hostToken} views=${JSON.stringify(views)}`,
     );
   }
-  private viewsDetached(conversation: Conversation): boolean {
-    const host = this.hostOf(conversation);
-    if (host.isDestroyed()) return false;
-    const children = host.contentView.children;
-    return this.viewsOf(conversation).some((view) => !children.includes(view));
-  }
-  private cancelPaint(id: string) {
-    const timer = this.paintTimers.get(id);
-    if (timer) clearTimeout(timer);
-    this.paintTimers.delete(id);
-    const show = this.paintShows.get(id);
-    if (!show) return;
-    this.paintShows.delete(id);
+  private logDrop(
+    id: string,
+    from: BrowserWindow | undefined,
+    reason: string,
+    value: unknown,
+  ) {
+    let owner = -1;
+    let size = [0, 0];
+    let token = -1;
     try {
-      show.host.removeListener('show', show.listen);
+      const host = this.windowOf(id);
+      owner = host.id;
+      size = [...host.getContentSize()];
+      token = this.conversations.get(id)?.hostToken ?? -1;
+    } catch {
+      /* The window may already be gone. */
+    }
+    console.info(
+      `circle browser: drop bounds session=${id} reason=${reason} from=${from?.id ?? 'none'} owner=${owner} token=${token} window=${JSON.stringify(size)} rect=${JSON.stringify(value)}`,
+    );
+  }
+  private cancelMount(id: string) {
+    const wait = this.mountWaits.get(id);
+    if (!wait) return;
+    this.mountWaits.delete(id);
+    try {
+      wait.host.removeListener('show', wait.listen);
     } catch {
       /* The window may already be gone. */
     }
   }
-  /**
-   * Attach the pages again shortly after they are shown. The attach in the same
-   * turn as the window becoming visible still leaves a blank area on Linux, and
-   * reloading the document does not build a new surface.
-   */
-  private schedulePaint(conversation: Conversation) {
+  /** Open pages that were taken out of the previous window, once this one is showing. */
+  private ensureMounted(conversation: Conversation) {
+    const held = conversation.held;
+    if (!held?.length) return;
     const host = this.hostOf(conversation);
-    this.cancelPaint(conversation.id);
-    if (host.isDestroyed()) return;
-    const run = () => {
-      this.paintTimers.delete(conversation.id);
-      if (this.conversations.get(conversation.id) !== conversation) return;
-      if (
-        !conversation.wantedVisible ||
-        conversation.bounds.width < 2 ||
-        conversation.bounds.height < 2
-      )
-        return;
-      const current = this.hostOf(conversation);
-      if (current.isDestroyed() || !current.isVisible()) return;
-      this.reattachViews(conversation);
-      this.visibility(conversation, true);
-    };
-    if (!host.isVisible()) {
-      const listen = () => {
-        this.paintShows.delete(conversation.id);
-        if (this.conversations.get(conversation.id) !== conversation) return;
-        this.schedulePaint(conversation);
-      };
-      this.paintShows.set(conversation.id, { host, listen });
-      host.once('show', listen);
+    if (host.isDestroyed() || !host.isVisible()) return;
+    conversation.held = undefined;
+    for (const { tab, page } of held) {
+      if (tab.closed || !conversation.tabs.has(tab.id)) continue;
+      this.installTabView(conversation, tab, host, page);
+    }
+    if (conversation.operating) this.mask(conversation);
+    this.visibility(conversation);
+    this.publish(conversation.id);
+    this.logAttachment(conversation, 'replaced');
+  }
+  /** The address and history a new view should open. */
+  private pageSnapshot(tab: Tab): PageRestore {
+    const contents = tab.contents;
+    const url =
+      tab.warning?.certificate.url ||
+      tab.failure?.url ||
+      tab.requestedUrl ||
+      (!contents.isDestroyed() ? contents.getURL() : '') ||
+      '';
+    let entries: NavigationEntry[] = [];
+    let index = 0;
+    let zoom = 1;
+    if (!contents.isDestroyed()) {
+      try {
+        entries = contents.navigationHistory.getAllEntries();
+        index = contents.navigationHistory.getActiveIndex();
+        zoom = contents.getZoomFactor();
+      } catch {
+        /* The page may already be gone. */
+      }
+    }
+    return { url, entries, index, zoom };
+  }
+  /** Load the page the previous view had, in the view that replaced it. */
+  private restorePage(tab: Tab, page: PageRestore) {
+    const contents = tab.contents;
+    if (tab.closed || contents.isDestroyed()) return;
+    if (page.zoom > 0) {
+      try {
+        contents.setZoomFactor(page.zoom);
+      } catch {
+        /* The page may be gone. */
+      }
+    }
+    const entries = page.entries.filter((entry) => safeExternalUrl(entry.url));
+    const current = page.entries[page.index];
+    const url = safeExternalUrl(page.url)
+      ? page.url
+      : current && safeExternalUrl(current.url)
+        ? current.url
+        : '';
+    if (entries.length) {
+      // The active entry's place among the ones that can be opened again.
+      let index = entries.length - 1;
+      let seen = -1;
+      for (let i = 0; i < page.entries.length; i++) {
+        if (!safeExternalUrl(page.entries[i]?.url ?? '')) continue;
+        seen++;
+        if (i === page.index) {
+          index = seen;
+          break;
+        }
+      }
+      void contents.navigationHistory.restore({ entries, index }).catch(() => {
+        if (url) void contents.loadURL(url).catch(() => {});
+      });
       return;
     }
-    this.paintTimers.set(conversation.id, setTimeout(run, 50));
+    if (url) void contents.loadURL(url).catch(() => {});
   }
-  private visibility(conversation: Conversation, nested = false) {
+  /** The preferences of a page Circle opens and of a page opened again in another window. */
+  private tabPreferences(conversation: Conversation) {
+    return {
+      partition: 'circle-browser-' + conversation.id,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: true,
+      backgroundThrottling: false,
+    };
+  }
+  /**
+   * A new view for a tab that already exists, added to the window that shows it.
+   * The same construction as a tab Circle opens: created here, then navigated.
+   */
+  private installTabView(
+    conversation: Conversation,
+    tab: Tab,
+    host: BrowserWindow,
+    page: PageRestore,
+  ) {
+    const view = new WebContentsView({
+      webPreferences: this.tabPreferences(conversation),
+    });
+    const contents = view.webContents;
+    tab.view = view;
+    tab.contents = contents;
+    tab.replacing = false;
+    tab.screenshot = undefined;
+    const [width, height] = host.isDestroyed() ? [0, 0] : host.getContentSize();
+    // Parked until the panel of this window measures. The previous window's box
+    // would put the page off this one.
+    view.setBounds({ x: width, y: height, width: 1, height: 1 });
+    view.setVisible(false);
+    host.contentView.addChildView(view);
+    this.prepareSession(conversation, contents.session);
+    this.handle(conversation, tab);
+    const enable = this.watchTab(conversation, tab);
+    tab.ready = enable
+      .catch(() => {})
+      .then(() => {
+        if (!tab.closed && !tab.contents.isDestroyed())
+          this.restorePage(tab, page);
+      });
+    void tab.ready.catch(() => {});
+  }
+  /** The debugger and the developer-tools watch a tab's current page. */
+  private watchTab(conversation: Conversation, tab: Tab): Promise<void> {
+    const contents = tab.contents;
+    const id = conversation.id;
+    try {
+      if (!contents.debugger.isAttached()) contents.debugger.attach('1.3');
+    } catch {
+      /* Already attached, or the page is gone. */
+    }
+    contents.on('devtools-opened', () => {
+      tab.devTools = true;
+      tab.screenshot = undefined;
+      this.publish(conversation.id);
+    });
+    contents.on('devtools-closed', () => {
+      tab.devTools = false;
+      void (async () => {
+        if (tab.closed || contents.isDestroyed()) return;
+        await this.attachModelDebugger(tab, false);
+        tab.screenshot = undefined;
+        conversation.events.push(
+          'devtools closed; browser observations must be refreshed',
+        );
+        this.publish(conversation.id);
+      })().catch((error) => {
+        conversation.events.push(
+          'browser could not reconnect after devtools: ' + String(error),
+        );
+        this.publish(id);
+      });
+    });
+    return this.attachModelDebugger(tab, true);
+  }
+  /** Drop a view without closing its tab. The page it showed is opened again elsewhere. */
+  private retireView(host: BrowserWindow, tab: Tab) {
+    tab.replacing = true;
+    const contents = tab.contents;
+    const view = tab.view;
+    if (!host.isDestroyed()) {
+      try {
+        host.contentView.removeChildView(view);
+      } catch {
+        /* The window or the view may be gone. */
+      }
+    }
+    if (!contents.isDestroyed()) {
+      try {
+        if (contents.debugger.isAttached()) contents.debugger.detach();
+      } catch {
+        /* The debugger may already be gone. */
+      }
+      try {
+        contents.removeAllListeners();
+      } catch {
+        /* The page may already be gone. */
+      }
+      try {
+        contents.close();
+      } catch {
+        /* The page may already be gone. */
+      }
+    }
+    const dialogs = tab.dialogs;
+    tab.dialogs = [];
+    for (const dialog of dialogs) {
+      try {
+        dialog.answer(false, '');
+      } catch {
+        /* The dialog may already have been answered. */
+      }
+    }
+    const choice = tab.choice;
+    tab.choice = undefined;
+    if (choice) {
+      try {
+        choice.answer();
+      } catch {
+        /* The choice may already have been answered. */
+      }
+    }
+  }
+  /** The layer over the page is that window's. The next one makes its own. */
+  private retireMask(host: BrowserWindow, conversation: Conversation) {
+    const mask = conversation.mask;
+    if (!mask) return;
+    conversation.mask = undefined;
+    if (!host.isDestroyed()) {
+      try {
+        host.contentView.removeChildView(mask);
+      } catch {
+        /* The window or the view may be gone. */
+      }
+    }
+    if (!mask.webContents.isDestroyed()) {
+      try {
+        mask.webContents.removeAllListeners();
+      } catch {
+        /* The view may be gone. */
+      }
+      try {
+        mask.webContents.close();
+      } catch {
+        /* The view may be gone. */
+      }
+    }
+  }
+  private visibility(conversation: Conversation) {
     const host = this.hostOf(conversation);
     const [windowWidth, windowHeight] = host.isDestroyed()
       ? [0, 0]
@@ -674,41 +840,25 @@ export class BrowserSessions {
     // Off the window as well as invisible: a native view that only flips its
     // flag can stay composited over the conversation on Linux.
     const away = { x: windowWidth, y: windowHeight, width: 1, height: 1 };
-    // Re-attach on the first show in this window, once that window is on screen
-    // and the page has a real box. A view added before the window had painted, or
-    // moved across windows, otherwise stays a blank area on Linux. Doing it while
-    // the window is still hidden uses up the one re-attach, and the page that was
-    // already open then never appears. A second attach a moment later is what
-    // paints a page the person had already opened in the other window.
-    const showing =
-      conversation.wantedVisible &&
-      conversation.bounds.width > 1 &&
-      conversation.bounds.height > 1 &&
-      !host.isDestroyed() &&
-      host.isVisible();
-    let attached = false;
-    if (conversation.freshHost && showing) {
-      conversation.freshHost = false;
-      this.reattachViews(conversation);
-      attached = true;
-    } else if (!nested && showing && this.viewsDetached(conversation)) {
-      this.reattachViews(conversation);
-      attached = true;
-    }
-    if (
-      !nested &&
-      (attached || (conversation.freshHost && conversation.wantedVisible))
-    )
-      this.schedulePaint(conversation);
+    // A box measured in another window must not be applied here. Until this
+    // window's panel measures, the page stays parked.
+    const placedHere =
+      !host.isDestroyed() && conversation.boundsHost === host.id;
     for (const tab of conversation.tabs.values()) {
+      if (tab.closed || tab.contents.isDestroyed()) continue;
       const shown =
         conversation.wantedVisible &&
+        placedHere &&
         tab.id === conversation.active &&
         !tab.failure &&
         !tab.dialogs.length &&
         !tab.choice;
-      tab.view.setBounds(shown ? conversation.bounds : away);
-      tab.view.setVisible(shown);
+      try {
+        tab.view.setBounds(shown ? conversation.bounds : away);
+        tab.view.setVisible(shown);
+      } catch {
+        /* The view may be gone. */
+      }
     }
     // The person chooses a certificate in the panel while Circle's action waits for it
     const shown = conversation.active
@@ -716,10 +866,18 @@ export class BrowserSessions {
       : undefined;
     const maskShown =
       conversation.wantedVisible &&
+      placedHere &&
       conversation.control === 'agent' &&
       !shown?.choice;
-    conversation.mask?.setBounds(maskShown ? conversation.bounds : away);
-    conversation.mask?.setVisible(maskShown);
+    const mask = conversation.mask;
+    if (mask && !mask.webContents.isDestroyed()) {
+      try {
+        mask.setBounds(maskShown ? conversation.bounds : away);
+        mask.setVisible(maskShown);
+      } catch {
+        /* The view may be gone. */
+      }
+    }
   }
   private prepareSession(conversation: Conversation, session: Session) {
     if (this.sessions.has(session)) return;
@@ -937,14 +1095,7 @@ export class BrowserSessions {
     options: { contents?: WebContents; activate: boolean; opener?: string },
   ): Tab {
     if (this.closed) throw Error('the browser is closed');
-    const webPreferences = {
-      partition: 'circle-browser-' + conversation.id,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: true,
-      backgroundThrottling: false,
-    };
+    const webPreferences = this.tabPreferences(conversation);
     const view = new WebContentsView(
       options.contents
         ? { webPreferences, webContents: options.contents }
@@ -978,31 +1129,8 @@ export class BrowserSessions {
     this.prepareSession(conversation, contents.session);
     this.handle(conversation, tab);
     tab.fromPage = !!options.opener;
-    contents.debugger.attach('1.3');
-    contents.on('devtools-opened', () => {
-      tab.devTools = true;
-      tab.screenshot = undefined;
-      this.publish(conversation.id);
-    });
-    contents.on('devtools-closed', () => {
-      tab.devTools = false;
-      void (async () => {
-        if (tab.closed || contents.isDestroyed()) return;
-        await this.attachModelDebugger(tab, false);
-        tab.screenshot = undefined;
-        conversation.events.push(
-          'devtools closed; browser observations must be refreshed',
-        );
-        this.publish(conversation.id);
-      })().catch((error) => {
-        conversation.events.push(
-          'browser could not reconnect after devtools: ' + String(error),
-        );
-        this.publish(conversation.id);
-      });
-    });
     // A page opened by another may not answer until it navigates: do not wait for these
-    const enable = this.attachModelDebugger(tab, true);
+    const enable = this.watchTab(conversation, tab);
     tab.ready = options.contents
       ? (void enable.catch(() => {}), Promise.resolve())
       : this.limit(contents.loadURL(BLANK), undefined, 10000).then(
@@ -1412,7 +1540,8 @@ export class BrowserSessions {
     ] as const)
       contents.on(name as 'did-start-loading', () => this.publish(id));
     contents.on('destroyed', () => {
-      if (!tab.closed) this.closeTab(conversation, tab, 'the page closed it');
+      if (tab.replacing || tab.closed) return;
+      this.closeTab(conversation, tab, 'the page closed it');
     });
     // Electron answers alert and confirm with a native box over the whole window and
     // refuses prompt(). Circle takes the dialog over: it waits in the tab for whoever
@@ -1874,6 +2003,7 @@ export class BrowserSessions {
       downloads: (conversation?.downloads ?? []).map(
         ({ path: _path, ...download }) => ({ ...download }),
       ),
+      host: conversation?.hostToken ?? 1,
     };
   }
   /** The person chooses the files for the file chooser a click of Circle's opened. */
@@ -1917,7 +2047,13 @@ export class BrowserSessions {
     if (!download || download.state !== 'done') throw Error('no such download');
     return download.path;
   }
-  bounds(idValue: unknown, value: unknown, visible: unknown) {
+  bounds(
+    idValue: unknown,
+    value: unknown,
+    visible: unknown,
+    from?: BrowserWindow,
+    hostToken?: unknown,
+  ) {
     const id = this.validId(idValue);
     if (!value || typeof value !== 'object')
       throw Error('invalid browser bounds');
@@ -1930,12 +2066,38 @@ export class BrowserSessions {
       bounds.height < 1
     )
       throw Error('invalid browser bounds');
-    const [width, height] = this.windowOf(id).getContentSize();
+    // A measurement is only the window that has the pages, and only for the
+    // move it was measured after. One still in flight from the window the pages
+    // left is dropped, even when it arrives after the move.
+    const owner = this.windowOf(id);
+    if (from && owner !== from) {
+      this.logDrop(id, from, 'owner', bounds);
+      return this.state(id);
+    }
+    const conversation = this.conversation(id);
+    if (
+      from &&
+      (typeof hostToken !== 'number' || hostToken !== conversation.hostToken)
+    ) {
+      this.logDrop(id, from, 'token', bounds);
+      return this.state(id);
+    }
+    const host = this.hostOf(conversation);
+    if (from && host !== from) {
+      this.logDrop(id, from, 'owner', bounds);
+      return this.state(id);
+    }
+    // A panel measuring before its window is on screen would open the view too
+    // early. A direct call (a test, before the window is shown) may still place it.
+    if (from && (host.isDestroyed() || !host.isVisible())) {
+      this.logDrop(id, from, 'hidden', bounds);
+      return this.state(id);
+    }
+    const [width, height] = host.getContentSize();
     // A box that fits keeps the rounded measurement, so a capture can see the
-    // same rectangle the page reported. One that would fall outside — a
-    // fractional scale, a scrollbar, a layout viewport a few pixels larger
-    // than the window — used to be rejected whole, and the page stayed the
-    // 1×1 sliver parked off-screen. Keep the part that lies on the window.
+    // same rectangle the page reported. One that would fall outside — the other
+    // window's drawer, a layout viewport larger than this window — is dropped
+    // whole. Applying part of it used to park the page off this window.
     const rounded = {
       x: Math.round(bounds.x),
       y: Math.round(bounds.y),
@@ -1943,33 +2105,23 @@ export class BrowserSessions {
       height: Math.round(bounds.height),
     };
     const fits =
+      width >= 2 &&
+      height >= 2 &&
       rounded.x >= 0 &&
       rounded.y >= 0 &&
       rounded.x + rounded.width <= width + 2 &&
       rounded.y + rounded.height <= height + 2;
-    const box = fits
-      ? rounded
-      : {
-          x: Math.max(0, Math.floor(bounds.x)),
-          y: Math.max(0, Math.floor(bounds.y)),
-          width:
-            Math.min(width, Math.ceil(bounds.x + bounds.width)) -
-            Math.max(0, Math.floor(bounds.x)),
-          height:
-            Math.min(height, Math.ceil(bounds.y + bounds.height)) -
-            Math.max(0, Math.floor(bounds.y)),
-        };
-    if (box.width < 1 || box.height < 1)
-      throw Error('browser bounds exceed the window');
-    const conversation = this.conversation(id);
+    if (!fits) {
+      this.logDrop(id, from, 'outside', bounds);
+      return this.state(id);
+    }
+    this.ensureMounted(conversation);
     this.activeTab(conversation);
-    conversation.bounds = box;
-    for (const tab of conversation.tabs.values())
-      tab.view.setBounds(conversation.bounds);
-    conversation.mask?.setBounds(conversation.bounds);
+    conversation.bounds = rounded;
+    conversation.boundsHost = host.id;
     conversation.wantedVisible = visible === true;
     this.visibility(conversation);
-    return this.state(id);
+    return { ...this.state(id), applied: true };
   }
   /** The person stopped this page a moment ago, as Chrome's stop button does. */
   private stoppedNow(tab: Tab) {
@@ -2230,6 +2382,7 @@ export class BrowserSessions {
     if (typeof urlValue !== 'string' || urlValue.length > 4096)
       throw Error('invalid browser URL');
     const conversation = this.conversation(id);
+    this.ensureMounted(conversation);
     const tab = this.activeTab(conversation);
     if (['back', 'forward', 'reload'].includes(urlValue))
       await this.history(conversation, tab, urlValue);
@@ -2550,18 +2703,7 @@ export class BrowserSessions {
         const target = tab.warning.certificate.url;
         tab.warning = undefined;
         void this.load(conversation, tab, target).catch(() => {});
-      } else {
-        // Reload does not build a new surface. Attach the view again, and once
-        // more when the document has loaded, or the page stays a blank area.
-        conversation.freshHost = true;
-        this.visibility(conversation);
-        contents.once('did-finish-load', () => {
-          if (tab.closed || contents.isDestroyed()) return;
-          conversation.freshHost = true;
-          this.visibility(conversation);
-        });
-        contents.reload();
-      }
+      } else contents.reload();
     };
     if (which === 'back' && !history.canGoBack())
       throw Error('no previous page');
@@ -3784,7 +3926,9 @@ export class BrowserSessions {
   /** Retire only this conversation; other sessions keep their pages and approvals. */
   async deleteSession(id: string): Promise<void> {
     this.deletedSessions.add(id);
-    this.cancelPaint(id);
+    this.cancelMount(id);
+    const retiring = this.conversations.get(id);
+    if (retiring) retiring.held = undefined;
     this.panelKeys.forgetConversation(id);
     const conversation = this.conversations.get(id);
     if (!conversation) return;
@@ -3830,7 +3974,7 @@ export class BrowserSessions {
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
-    for (const id of this.conversations.keys()) this.cancelPaint(id);
+    for (const id of this.conversations.keys()) this.cancelMount(id);
     for (const conversation of this.conversations.values())
       clearInterval(conversation.autoReturn);
     // Downloads no one kept go with Circle

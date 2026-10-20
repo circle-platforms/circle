@@ -562,8 +562,8 @@ async function createPopoutWindow(
   popout.on('page-title-updated', (event) => event.preventDefault());
   installWindowChrome(popout);
   // The pages move before the window's page loads, so that page is the one that places
-  // them. They are attached again once the window is on screen, which is what makes a
-  // page that was already open come with the window instead of leaving a blank area.
+  // them. They are opened again once the window is on screen: a view created while the
+  // window is hidden stays blank, and carrying the old view across windows does too.
   if (kind === 'browser') browsers?.moveToWindow(sessionId, popout);
   // Before it is gone, so its pages are not lost with it. From here the window is gone for
   // the application: pressing its mode again makes a new one.
@@ -1138,10 +1138,9 @@ app
     });
     // Only the window that has a conversation's pages places them: the drawer of the main
     // window keeps its hands off while the browser is in a window of its own.
-    handleFrom('circle:browser-bounds', (from, id, bounds, visible) => {
+    handleFrom('circle:browser-bounds', (from, id, bounds, visible, host) => {
       if (!browsers) throw Error('window not ready');
-      if (browsers.windowOf(id) !== from) return browsers.state(id);
-      return browsers.bounds(id, bounds, visible);
+      return browsers.bounds(id, bounds, visible, from, host);
     });
     handleFrom('circle:browser-hide', (from, id) => {
       if (browsers && browsers.windowOf(id) === from) browsers.hide(id);

@@ -24,6 +24,24 @@ if (
   console.log('SKIP popout harness: needs a desktop-capable session');
   process.exit(0);
 }
+// The packaged failure was a compositor that only breaks with the GPU on, and
+// a stale measurement that only shows when the pop-out is a different size
+// from the drawer. Run the same script both ways.
+const gpuMode = process.env.CIRCLE_POPOUT_GPU;
+if (gpuMode !== 'on' && gpuMode !== 'off') {
+  const { spawnSync } = await import('node:child_process');
+  const script = fileURLToPath(import.meta.url);
+  for (const mode of ['on', 'off']) {
+    console.log(`popout harness: gpu ${mode}`);
+    const result = spawnSync(process.execPath, [script], {
+      stdio: 'inherit',
+      env: { ...process.env, CIRCLE_POPOUT_GPU: mode },
+    });
+    if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
+  }
+  process.exit(0);
+}
+console.log(`popout harness: running with gpu ${gpuMode}`);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-popout-'));
@@ -32,12 +50,19 @@ await mkdir(join(dataDir, 'runtime-home'), { recursive: true });
 const workspace = join(temp, 'project');
 await mkdir(workspace, { recursive: true });
 // Pages to show: the browser only reaches http and https.
+const pageBody = (mark) =>
+  `<!doctype html><title>${mark}</title><body style="margin:0;background:#00aa44"><h1 id="mark" style="color:#fff">${mark}</h1></body>`;
 const site = createServer((request, response) => {
   response.writeHead(200, { 'content-type': 'text/html' });
+  const path = request.url ?? '/';
   response.end(
-    request.url.startsWith('/live')
+    path.startsWith('/live')
       ? '<!doctype html><title>extension link fixture</title><h1>opened by an extension</h1>'
-      : '<!doctype html><title>pop</title><body style="margin:0;background:#00aa44"><h1 id="mark" style="color:#fff">popped page</h1></body>',
+      : path.startsWith('/again')
+        ? pageBody('again page')
+        : path.startsWith('/after')
+          ? pageBody('after page')
+          : pageBody('popped page'),
   );
 });
 await new Promise((done) => site.listen(0, '127.0.0.1', done));
@@ -69,13 +94,17 @@ const until = async (check, what, ms = 20000) => {
 const mac = process.platform === 'darwin';
 // The browser's command key: ⌘ on macOS, Ctrl elsewhere.
 const commandKey = mac ? 'meta' : 'control';
+const electronArgs = [
+  ...(gpuMode === 'off' ? ['--disable-gpu'] : []),
+  join(root, 'dist', 'main.cjs'),
+];
 let app;
 let liveApp;
 try {
   app = await electron.launch({
     executablePath: require('electron'),
     chromiumSandbox: true,
-    args: [join(root, 'dist', 'main.cjs')],
+    args: electronArgs,
     env,
     timeout: 60000,
   });
@@ -92,6 +121,14 @@ try {
   });
   await main.locator('.topbar').waitFor({ timeout: 30000 });
   await main.setViewportSize?.({ width: 1500, height: 900 });
+  // Wider than the pop-out (920×640), as a maximized drawer is on a real screen.
+  await app.evaluate(({ BrowserWindow }) => {
+    const own = BrowserWindow.getAllWindows().find(
+      (one) =>
+        !one.isDestroyed() && !one.webContents.getURL().includes('#/popout/'),
+    );
+    own?.setSize(1680, 1040);
+  });
   const titles = () =>
     app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()
@@ -160,6 +197,45 @@ try {
         title: source.name,
         attached,
       };
+    }, which);
+  // The view's box has to lie on its own window, and a pop-out is not the drawer's size.
+  const viewFits = (electronApp, which) =>
+    electronApp.evaluate(({ BrowserWindow }, which) => {
+      const windows = BrowserWindow.getAllWindows().filter(
+        (one) => !one.isDestroyed() && !one.webContents.isDestroyed(),
+      );
+      const target = windows.find((one) => {
+        const url = one.webContents.getURL();
+        return which === 'main'
+          ? !url.includes('#/popout/')
+          : url.includes('#/popout/browser/');
+      });
+      const mainWindow = windows.find(
+        (one) => !one.webContents.getURL().includes('#/popout/'),
+      );
+      if (!target || !mainWindow) return false;
+      const [width, height] = target.getContentSize();
+      const [mainWidth] = mainWindow.getContentSize();
+      if (which === 'browser' && Math.abs(width - mainWidth) < 80) return false;
+      const view = target.contentView.children.find((child) => {
+        try {
+          return (
+            child.getVisible() && child.webContents.getURL().startsWith('http')
+          );
+        } catch {
+          return false;
+        }
+      });
+      if (!view) return false;
+      const box = view.getBounds();
+      return (
+        box.x >= 0 &&
+        box.y >= 0 &&
+        box.width > 80 &&
+        box.height > 80 &&
+        box.x + box.width <= width + 2 &&
+        box.y + box.height <= height + 2
+      );
     }, which);
   const shownPage = (which) =>
     app.evaluate(({ BrowserWindow }, which) => {
@@ -238,18 +314,19 @@ try {
 
   // A page the person opened in the empty drawer stays painted when it pops
   // out, is reloaded, comes back, and is reloaded again.
-  const painted = async (which) => {
+  const painted = async (which, mark = 'popped page') => {
     const page = await shownPage(which);
     const screen = await compositedGreen(app, which);
     const enough = which === 'browser' ? 0.12 : 0.03;
     return (
-      page.text === 'popped page' &&
+      page.text === mark &&
       page.bounds &&
       page.bounds.width > 80 &&
       page.bounds.height > 80 &&
       page.bounds.x >= 0 &&
       page.bounds.y >= 0 &&
       screen.ratio > enough &&
+      (await viewFits(app, which)) &&
       screen.attached?.some(
         (view) =>
           view.visible &&
@@ -276,6 +353,7 @@ try {
     async () => (await windowsOf('#/popout/browser/'))[0],
     'the browser window for a page opened in the drawer',
   );
+  const browserSession = userPopped.url().split('/').at(-1);
   await until(() => painted('browser'), 'that page is painted in the window');
   await userPopped
     .getByRole('button', { name: 'reload page', exact: true })
@@ -297,6 +375,69 @@ try {
   await until(
     () => painted('main'),
     'reloading the page in the drawer still paints it',
+  );
+  // A new address after the page has been out and back, then a second pop-out.
+  // The drawer's late measurement must not be applied inside the smaller window.
+  await drawerAddress.fill(pageUrl + 'again');
+  await drawerAddress.press('Enter');
+  await until(
+    () => painted('main', 'again page'),
+    'a new address paints in the drawer after put-back',
+  );
+  await main
+    .locator('.inspector .browser-address')
+    .getByRole('button', { name: 'open in a window', exact: true })
+    .click();
+  userPopped = await until(
+    async () => (await windowsOf('#/popout/browser/'))[0],
+    'the browser window a second time',
+  );
+  await until(
+    () => painted('browser', 'again page'),
+    'the second pop-out paints the page',
+  );
+  await main.evaluate(async (sessionId) => {
+    const state = await window.circleDesktop.browserState(sessionId);
+    // A box that would fit the pop-out, and the drawer's real box, which does not.
+    // Both come from the main window, which no longer has the page.
+    const fitting = { x: 40, y: 180, width: 220, height: 160 };
+    const drawer = { x: 1300, y: 80, width: 400, height: 900 };
+    await window.circleDesktop.browserBounds(
+      sessionId,
+      fitting,
+      true,
+      state.host,
+    );
+    await window.circleDesktop.browserBounds(
+      sessionId,
+      drawer,
+      true,
+      state.host,
+    );
+    await window.circleDesktop.browserBounds(sessionId, fitting, true, 0);
+  }, browserSession);
+  const kept = (await shownPage('browser')).bounds;
+  assert.ok(
+    kept && kept.x < 80 && kept.width > 400,
+    'a measurement from the drawer is not applied in the pop-out',
+  );
+  await until(
+    () => painted('browser', 'again page'),
+    'the second pop-out still paints after a stale measurement',
+  );
+  await userPopped
+    .getByRole('button', { name: 'put back in the drawer' })
+    .click();
+  await until(
+    async () => (await windowsOf('#/popout/browser/')).length === 0,
+    'the second pop-out closes',
+  );
+  await main.locator('.work-drawer').waitFor({ state: 'visible' });
+  await drawerAddress.fill(pageUrl + 'after');
+  await drawerAddress.press('Enter');
+  await until(
+    () => painted('main', 'after page'),
+    'navigating in the drawer after the second put-back paints',
   );
   await main
     .getByRole('button', { name: 'browser panel', exact: true })
@@ -735,7 +876,7 @@ try {
   liveApp = await electron.launch({
     executablePath: require('electron'),
     chromiumSandbox: true,
-    args: [join(root, 'dist', 'main.cjs')],
+    args: electronArgs,
     env: {
       ...env,
       CIRCLE_HOME: join(temp, 'live-home'),
@@ -801,8 +942,15 @@ try {
   const livePainted = async (which) => {
     const screen = await compositedGreen(liveApp, which);
     const enough = which === 'browser' ? 0.12 : 0.03;
-    return screen.ratio > enough;
+    return screen.ratio > enough && (await viewFits(liveApp, which));
   };
+  await liveApp.evaluate(({ BrowserWindow }) => {
+    const own = BrowserWindow.getAllWindows().find(
+      (one) =>
+        !one.isDestroyed() && !one.webContents.getURL().includes('#/popout/'),
+    );
+    own?.setSize(1680, 1040);
+  });
   await until(
     () => livePainted('main'),
     'the page typed in the drawer is on screen',
@@ -811,6 +959,10 @@ try {
     (view) => view.url.startsWith('http'),
   );
   assert.ok(typedBefore, 'the typed page has a view in the drawer');
+  const tabBefore = await live.evaluate(
+    (id) => window.circleDesktop.browserState(id).then((state) => state.tab),
+    liveSession,
+  );
   await live
     .locator('.inspector .browser-address')
     .getByRole('button', { name: 'open in a window', exact: true })
@@ -827,11 +979,16 @@ try {
   const typedAfter = (await compositedGreen(liveApp, 'browser')).attached?.find(
     (view) => view.url.startsWith('http'),
   );
-  assert.equal(
-    typedAfter?.id,
-    typedBefore.id,
-    'pop-out attaches the view the address bar opened',
+  const tabAfter = await liveBrowser.evaluate(
+    (id) => window.circleDesktop.browserState(id).then((state) => state.tab),
+    liveSession,
   );
+  assert.equal(
+    tabAfter,
+    tabBefore,
+    'pop-out keeps the tab and shows it in the new window',
+  );
+  assert.ok(typedAfter?.id, 'the popped page has a view');
   await liveBrowser
     .getByRole('button', { name: 'reload page', exact: true })
     .click();
@@ -856,6 +1013,12 @@ try {
     () => livePainted('main'),
     'reloading the typed page in the drawer still paints it',
   );
+  await typed.fill(pageUrl + 'after');
+  await typed.press('Enter');
+  await until(
+    () => livePainted('main'),
+    'a new address paints in the drawer after put-back',
+  );
   await live
     .locator('.inspector .browser-address')
     .getByRole('button', { name: 'open in a window', exact: true })
@@ -865,6 +1028,10 @@ try {
     'the browser window',
   );
   await liveBrowser.locator('.native-browser').waitFor();
+  await until(
+    () => livePainted('browser'),
+    'the second pop-out paints the typed page',
+  );
   await live.locator('.work-drawer').waitFor({ state: 'hidden' });
   const workspaceId = (await state()).sessions.find(
     (session) => session.id === liveSession,

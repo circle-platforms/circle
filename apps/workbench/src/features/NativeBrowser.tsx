@@ -173,6 +173,9 @@ export function NativeBrowser({
     captureGeneration.current++;
   currentIdentity.current = { session: id, tab: state?.tab, url: state?.url };
   const updateBounds = useRef<() => void>(() => {});
+  // The move the measurement belongs to. One taken before the pages changed
+  // windows is not this window's, and must not be sent as if it were.
+  const hostToken = useRef<number | undefined>(undefined);
   const host = desktopHost()!;
   const opened = browserOpened(state);
   const dialog = shownDialog(state);
@@ -212,6 +215,8 @@ export function NativeBrowser({
     const place = () => {
       // Whoever has the page places it: another window, while it is popped out.
       if (elsewhereRef.current) return;
+      const token = hostToken.current;
+      if (token === undefined) return;
       const node = viewport.current;
       const rect = node ? laidOutBrowserViewport(node) : null;
       // Hidden, collapsed, zero-size, or a drawer mode that folds the page: the
@@ -263,8 +268,12 @@ export function NativeBrowser({
           id,
           { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
           visible,
+          token,
         )
-        .then(() => {
+        .then((next) => {
+          // A reply for an older move, or one the main process dropped, leaves
+          // the page unplaced so the next measurement is sent.
+          if (next?.applied !== true || next.host !== token) return;
           if (visible) placed.current = true;
           // The page is back: its picture goes once the page has drawn
           if (visible && frozenRef.current)
@@ -344,6 +353,15 @@ export function NativeBrowser({
       clearInterval(timer);
     };
   }, [elsewhere, id]);
+  // The pages moved. Measure this window's own box, and forget a placement that
+  // belonged to the window they left.
+  useEffect(() => {
+    if (typeof state?.host !== 'number') return;
+    if (hostToken.current === state.host) return;
+    hostToken.current = state.host;
+    placed.current = false;
+    updateBounds.current();
+  }, [state?.host]);
   // Full view moves the same panel to another box. Measure after that move.
   useEffect(() => {
     const frame = requestAnimationFrame(() => updateBounds.current());
