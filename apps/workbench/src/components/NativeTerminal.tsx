@@ -696,10 +696,12 @@ export function NativeTerminal({
     const at = chosen.indexOf(key);
     return at === -1 ? Number.MAX_SAFE_INTEGER : at;
   };
-  // A shell's number is its place among the consoles still open, oldest first:
-  // closing one frees its number, while a drag reorders the row without renaming
-  // a console the model's tools and the conversation's cards already call that.
-  const numbers = terminalTabNumbers(visible);
+  // A shell keeps its number while others close around it, and the model's terminal tools
+  // and the cards in the conversation name it the same way: terminalTabNumbers is the rule.
+  // A drag reorders the row without renumbering a tab.
+  const numbers = terminalTabNumbers(
+    terminals.filter((item) => item.sessionId === sessionId),
+  );
   // What Circle is doing in each of your shells, by the terminal's id.
   const circleIn = new Map(devices.local.map((row) => [row.terminal, row]));
   const tabs: TerminalTab[] = [

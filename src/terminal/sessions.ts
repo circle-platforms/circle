@@ -246,7 +246,7 @@ interface Conversation {
 export class TerminalSessions {
   /**
    * One-time passwords a quick connect carried: a secret name to its value and
-   * conversation, in memory only, gone with the conversation or when the cap fills.
+   * conversation, in memory only, for as long as the connector takes to read it.
    */
   private onceSecrets = new Map<
     string,
@@ -630,11 +630,7 @@ export class TerminalSessions {
       throw Error(
         `connect takes a saved profile, or a plain host${
           host ? ` (${host} is not one)` : ''
-        }${
-          transport === 'ssh'
-            ? ', and SSH sign-in comes from a profile or the password given with it'
-            : ''
-        }`,
+        }${transport === 'ssh' ? ', and SSH sign-in comes from a profile' : ''}`,
       );
     return {
       challenge: {
@@ -718,7 +714,14 @@ export class TerminalSessions {
       ...(approval ? { approval } : {}),
       signal,
     };
-    const outcome = await this.options.connectors[transport](target, env);
+    // The connector reads the password as it starts; a one-time one is gone after it,
+    // and a login stopped by a host key gets the password again with the person's answer
+    const outcome = await this.options.connectors[transport](
+      target,
+      env,
+    ).finally(() => {
+      if (once) this.onceSecrets.delete(once);
+    });
     if ('hostkey' in outcome) {
       const token = randomUUID();
       const challenge: TerminalApproval = {

@@ -140,7 +140,7 @@ test('wait: quiet resolves what rests, pattern resolves what arrives, timeout bo
   assert.match(capped.text, /still going after 1s/);
 });
 
-test('a quick connect password reaches SSH as a one-time secret and dies with the conversation', async (t) => {
+test('a quick connect password reaches SSH as a one-time secret, gone once the connector read it', async (t) => {
   const device = new FakeConsole();
   const seen: {
     target?: TerminalTarget;
@@ -174,9 +174,8 @@ test('a quick connect password reaches SSH as a one-time secret and dies with th
   // The password is a secret name on the wire level, never text in a result.
   const list = await sessions.request('c1', 'sessions', {}, signal);
   assert.doesNotMatch(list.text, /pw1/);
-  // The conversation going away takes the one-time password with it.
+  // The connector read it as it started; after that no name reaches it.
   const name = seen.target?.passwordSecret ?? '';
-  sessions.releaseSession('c1');
   assert.equal(seen.env?.secret(name), '');
 });
 

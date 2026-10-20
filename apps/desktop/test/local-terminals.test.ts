@@ -288,8 +288,8 @@ test('terminal_sessions lists the running shells as local tabs beside the device
       `- local:${shell.id} · terminal 1 · local zsh in /work/project · `,
     ),
   );
-  // the closed shell holds no place: the later shell is 2, the service keeps its label
-  assert.match(text, new RegExp(`- local:${later.id} · terminal 2 · `));
+  // the service holds place 2 and the closed shell place 3: the later shell is 4
+  assert.match(text, new RegExp(`- local:${later.id} · terminal 4 · `));
   assert.equal((text.match(/local:/g) ?? []).length, 2);
   assert.match(text, /### Profiles\n- lab/);
   // listing asks nothing and types nothing
@@ -299,7 +299,7 @@ test('terminal_sessions lists the running shells as local tabs beside the device
     f.local.rows(f.id).map((row) => [row.terminal, row.ordinal, row.state]),
     [
       [shell.id, 1, 'idle'],
-      [later.id, 2, 'idle'],
+      [later.id, 4, 'idle'],
     ],
   );
 });

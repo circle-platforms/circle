@@ -175,6 +175,10 @@ export class TerminalPanelHost {
   }
   state(conversation: unknown): TerminalState {
     const own = validConversation(conversation);
+    // The connect's arguments stay here for the retry: a quick connect's password
+    // must not travel to the windows with the question
+    const pending = this.pendingKey.get(own);
+    const ask = pending && (({ args: _args, ...rest }) => rest)(pending);
     return {
       sessionId: `terminal:${own}`,
       conversation: own,
@@ -187,9 +191,7 @@ export class TerminalPanelHost {
         ),
       profiles: this.profiles(),
       local: this.tabs.get(own) ?? [],
-      ...(this.pendingKey.get(own)
-        ? { pendingKey: this.pendingKey.get(own) }
-        : {}),
+      ...(ask ? { pendingKey: ask } : {}),
       ...(this.handoffs.get(own)
         ? {
             handoff: {

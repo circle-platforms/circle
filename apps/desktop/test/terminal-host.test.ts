@@ -3,6 +3,7 @@
 // renderer is not in the room: what is tested is what it would see and may ask for.
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
 import { createServer, type Socket } from 'node:net';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,10 @@ import {
   type TerminalProfile,
 } from '../../../src/terminal/profiles.ts';
 import type { TerminalEvent } from '../src/contracts.ts';
+import ssh2 from 'ssh2';
+
+// Default-imported: ssh2 is CommonJS with loop-copied exports.
+const { Server: SshServer } = ssh2;
 
 async function until(check: () => boolean, description: string) {
   const end = Date.now() + 8000;
@@ -105,6 +110,57 @@ async function consoleServer(t: TestContext) {
       banner = text;
     },
   };
+}
+
+const SSH_PASSWORD = 'quick-connect-pass-never-in-a-window';
+
+/** One SSH device on 127.0.0.1 with a key nobody trusts yet: a password login, a prompt. */
+async function sshDevice(t: TestContext) {
+  const authed: string[] = [];
+  // ssh2 reads PKCS#1 and OpenSSH keys; PKCS#8 RSA is refused
+  const hostKey = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  }).privateKey;
+  const server = new SshServer({ hostKeys: [hostKey] }, (client) => {
+    client.on('error', () => {});
+    client.on('authentication', (ctx) => {
+      if (ctx.method === 'password' && ctx.password === SSH_PASSWORD) {
+        authed.push(ctx.username);
+        return ctx.accept();
+      }
+      ctx.reject(['password']);
+    });
+    client.on('session', (accept) => {
+      const session = accept();
+      session.on('pty', (acceptPty) => acceptPty());
+      session.on('window-change', (acceptChange) => {
+        if (typeof acceptChange === 'function') acceptChange();
+      });
+      session.on('shell', (acceptShell) => acceptShell().write('sh> '));
+    });
+  });
+  // ssh2's Server keeps its net.Server inside _srv: close its sockets so the run ends
+  const sockets = new Set<Socket>();
+  (
+    server as unknown as {
+      _srv: { on(e: 'connection', l: (s: Socket) => void): void };
+    }
+  )._srv.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('error', () => {});
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const address = server.address();
+  if (!address || typeof address !== 'object')
+    throw Error('no fixture address');
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+  return { port: address.port, authed };
 }
 
 async function makeHost(
@@ -310,4 +366,30 @@ test('the bridge refuses strangers: ids are gated before anything reads or write
   );
   panel.resize('c1', 't1', 0, 9999); // out-of-bounds sizes are dropped, not thrown
   assert.equal(panel.snapshot('c1', 't9'), '');
+});
+
+test('a quick connect password signs in through the host key question and never reaches a window', async (t) => {
+  const device = await sshDevice(t);
+  const { panel, events } = await makeHost(t, []);
+  const asked = await panel.connectTarget('c1', {
+    transport: 'ssh',
+    host: '127.0.0.1',
+    port: device.port,
+    user: 'operator',
+    password: SSH_PASSWORD,
+  });
+  // the login stopped at the key: the window is asked, nothing was sent yet
+  assert.equal(asked.pendingKey?.host, `127.0.0.1:${device.port}`);
+  assert.deepEqual(device.authed, []);
+  // connect once: the password held here for the retry signs in
+  const done = await panel.hostKey('c1', 'once');
+  assert.equal(done.pendingKey, undefined);
+  assert.equal(done.sessions.length, 1);
+  assert.deepEqual(device.authed, ['operator']);
+  // what the windows got, the question and every state push, never carries it
+  assert(events.some((event) => event.kind === 'state'));
+  assert.doesNotMatch(
+    JSON.stringify([asked, done, events]),
+    new RegExp(SSH_PASSWORD),
+  );
 });
