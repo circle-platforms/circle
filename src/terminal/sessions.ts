@@ -29,7 +29,6 @@ import {
   type TerminalApproval,
   type TerminalResult,
 } from './protocol.js';
-import { terminalScreenLines } from './tui_screen.js';
 
 // Default-imported: the headless emulator is CommonJS with loop-copied exports.
 const { Terminal } = xterm;
@@ -95,6 +94,10 @@ const DEFAULT_MAX_SESSIONS = 6;
 const SEND_SETTLE_QUIET_MS = 400;
 const SEND_SETTLE_MAX_MS = 2000;
 const WAIT_TICK_MS = 150;
+// A wait's record of the device's output keeps this many lines beyond its screen, and
+// `changed` shows the last CHANGED_LINES of them.
+const RECORD_SCROLLBACK = 1000;
+const CHANGED_LINES = 200;
 
 /**
  * One device console and its emulated screen. A `local` session is one of the person's
@@ -118,6 +121,8 @@ export class TerminalSession {
   // them to its own emulator: a panel never waits for the device to speak again.
   private ring: Buffer[] = [];
   private ringSize = 0;
+  // The waits keeping what the device prints while they run
+  private readonly records = new Set<OutputRecord>();
   private disposed = false;
   private static readonly RING_MAX = 256_000;
   constructor(
@@ -145,6 +150,7 @@ export class TerminalSession {
     handle.onData((bytes) => {
       this.lastOutputAt = Date.now();
       this.screen.write(bytes);
+      for (const record of this.records) record.write(bytes);
       this.remember(bytes);
       this.onOutput(bytes);
       this.onChange();
@@ -161,6 +167,14 @@ export class TerminalSession {
   }
   recentBytes(): Buffer {
     return Buffer.concat(this.ring);
+  }
+  /** Keeps what the device prints from now on, on a screen of its own, until disposed. */
+  record(): OutputRecord {
+    const record = new OutputRecord(this.cols, this.rows, () =>
+      this.records.delete(record),
+    );
+    this.records.add(record);
+    return record;
   }
   private remember(bytes: Buffer): void {
     this.ring.push(Buffer.from(bytes));
@@ -223,6 +237,81 @@ export class TerminalSession {
         ?.translateToString(true)
         .trimEnd() ?? ''
     );
+  }
+}
+
+/**
+ * What a device prints from the moment a wait begins, on an emulated screen of its own:
+ * `absent` and `changed` read this, never the scrollback from before. Counting the
+ * session's buffer lines instead went wrong on a screen that had not scrolled yet, at
+ * the scrollback's cap, after a clear and on leaving a full-screen program. A clear
+ * during the wait keeps what it erased here, as scrollback.
+ */
+export class OutputRecord {
+  private readonly screen: InstanceType<typeof Terminal>;
+  constructor(
+    cols: number,
+    rows: number,
+    private readonly stop: () => void,
+  ) {
+    this.screen = new Terminal({
+      cols,
+      rows,
+      scrollback: RECORD_SCROLLBACK,
+      scrollOnEraseInDisplay: true,
+      allowProposedApi: true,
+    });
+    // Erasing the scrollback, which `clear` asks for too, would take printed lines with it
+    this.screen.parser.registerCsiHandler(
+      { final: 'J' },
+      (params) => params[0] === 3,
+    );
+  }
+  write(bytes: Uint8Array): void {
+    this.screen.write(bytes);
+  }
+  /** Runs `listener` each time this screen has taken in more output. */
+  onParsed(listener: () => void): { dispose(): void } {
+    return this.screen.onWriteParsed(listener);
+  }
+  /** Resolves once every byte received so far is on this screen. */
+  settled(): Promise<void> {
+    // The emulator parses later: an empty write's callback comes after the output's
+    return new Promise((resolve) => this.screen.write('', resolve));
+  }
+  /** The lines printed so far, oldest first; a line the screen wrapped is one line. */
+  lines(): string[] {
+    const read = (
+      buffer: InstanceType<typeof Terminal>['buffer']['active'],
+    ) => {
+      const out: string[] = [];
+      for (let at = 0; at < buffer.length; at++) {
+        const line = buffer.getLine(at);
+        if (!line) continue;
+        const text = line.translateToString(false);
+        if (line.isWrapped && out.length) out[out.length - 1] += text;
+        else out.push(text);
+      }
+      const trimmed = out.map((text) => text.trimEnd());
+      const first = trimmed.findIndex((text) => text);
+      const last = trimmed.findLastIndex((text) => text);
+      return first < 0 ? [] : trimmed.slice(first, last + 1);
+    };
+    const { active, normal } = this.screen.buffer;
+    // A full-screen program still running shows its screen after what came before it
+    return active.type === 'alternate'
+      ? [...read(normal), ...read(active)]
+      : read(normal);
+  }
+  /** Full: the device may have printed more than this record keeps. */
+  get overflowed(): boolean {
+    return (
+      this.screen.buffer.normal.length >= this.screen.rows + RECORD_SCROLLBACK
+    );
+  }
+  dispose(): void {
+    this.stop();
+    this.screen.dispose();
   }
 }
 
@@ -839,62 +928,70 @@ export class TerminalSessions {
     const retries = clamp(args.retries, 0, 5, 0);
     const pattern = regexArg(args.pattern);
     const absent = regexArg(args.absent);
-    // A test reads what the wait itself caused, not the whole scrollback.
-    const startLines = args.changed === true ? terminalScreenLines(session) : 0;
-    let outcome: WaitOutcome = 'capped';
-    let attempts = 0;
-    for (;;) {
-      attempts++;
-      outcome = await this.waitFor(session, {
-        idleMs,
-        timeoutMs,
-        ...(pattern ? { pattern } : {}),
-        ...(absent ? { absent } : {}),
-        signal,
-      });
-      if (outcome !== 'capped' || attempts > retries) break;
-    }
-    if (session.local && outcome === 'closed')
-      throw Error(
-        `${session.name} was closed while you waited; it is gone from terminal_sessions`,
-      );
-    if (outcome === 'held')
-      return this.heldResult(own, session, 'your wait ended there');
-    const screen = session.tail(400).join('\n');
-    const why =
-      outcome === 'quiet'
-        ? `quiet for ${Math.round(idleMs / 100) / 10}s`
-        : outcome === 'pattern'
-          ? `matched ${String(args.pattern)}${lineWith(screen, pattern)}`
+    const changed = args.changed === true;
+    // A test asserts on what the device printed during the wait, never on the
+    // scrollback from before it: absent and changed read a record that starts now.
+    const record = absent || changed ? session.record() : undefined;
+    try {
+      let outcome: WaitOutcome = 'capped';
+      let attempts = 0;
+      for (;;) {
+        attempts++;
+        outcome = await this.waitFor(session, {
+          idleMs,
+          timeoutMs,
+          ...(pattern ? { pattern } : {}),
+          ...(absent && record ? { absent: { pattern: absent, record } } : {}),
+          signal,
+        });
+        if (outcome !== 'capped' || attempts > retries) break;
+      }
+      if (session.local && outcome === 'closed')
+        throw Error(
+          `${session.name} was closed while you waited; it is gone from terminal_sessions`,
+        );
+      if (outcome === 'held')
+        return this.heldResult(own, session, 'your wait ended there');
+      // Everything the device sent so far, on the record: an absent line that came with
+      // the matching one, or just before the quiet or the cap, still fails the check.
+      await record?.settled();
+      const printed = record?.lines() ?? [];
+      if (absent && outcome !== 'closed' && absent.test(printed.join('\n')))
+        outcome = 'absent';
+      const why =
+        outcome === 'quiet'
+          ? `quiet for ${Math.round(idleMs / 100) / 10}s`
+          : outcome === 'pattern'
+            ? `matched ${String(args.pattern)}`
+            : outcome === 'absent'
+              ? `the absent pattern ${String(args.absent)} appeared`
+              : outcome === 'closed'
+                ? `the session ended: ${session.detail || 'closed'}`
+                : `still going after ${Math.round(
+                    (timeoutMs * attempts) / 1000,
+                  )}s`;
+      // A wait that needed more than one attempt says so, whatever it ended on.
+      const attemptNote =
+        retries && attempts > 1 ? ` in ${attempts} attempts` : '';
+      // The line a pattern hit, so a result carries its own evidence: the newest on the
+      // screen for a pattern, the newest the device printed during the wait for absent.
+      const evidence =
+        outcome === 'pattern'
+          ? lineWith(session.tail(400), pattern)
           : outcome === 'absent'
-            ? `the absent pattern ${String(
-                args.absent,
-              )} appeared${lineWith(screen, absent)}`
-            : outcome === 'closed'
-              ? `the session ended: ${session.detail || 'closed'}`
-              : `still going after ${Math.round(
-                  (timeoutMs * attempts) / 1000,
-                )}s`;
-    // A wait that needed more than one attempt says so, whatever it ended on.
-    const attemptNote =
-      retries && attempts > 1 ? ` in ${attempts} attempts` : '';
-    const during =
-      args.changed === true ? this.during(session, startLines) : '';
-    return {
-      text: `${this.header(session)} · ${why}${attemptNote}\n### Output\n${session
-        .tail(20)
-        .join('\n')}${during}${this.told(own)}`,
-      host: session.target,
-      session: session.id,
-    };
-  }
-  /** The lines the device printed while the wait ran: a screen diff for assertions. */
-  private during(session: TerminalSession, startLines: number): string {
-    const added = Math.max(0, terminalScreenLines(session) - startLines);
-    const rows = added ? session.tail(Math.min(added, 200)) : [];
-    return `\n### During the wait\n${
-      rows.length ? rows.join('\n') : '(nothing new on the screen)'
-    }`;
+            ? lineWith(printed, absent)
+            : '';
+      const during = changed ? duringWait(printed, record?.overflowed) : '';
+      return {
+        text: `${this.header(session)} · ${why}${attemptNote}${evidence}\n### Output\n${session
+          .tail(20)
+          .join('\n')}${during}${this.told(own)}`,
+        host: session.target,
+        session: session.id,
+      };
+    } finally {
+      record?.dispose();
+    }
   }
   private disconnect(
     own: Conversation,
@@ -997,7 +1094,8 @@ export class TerminalSessions {
       idleMs: number;
       timeoutMs: number;
       pattern?: RegExp;
-      absent?: RegExp;
+      /** Fails the wait once the record of what the device printed since it began shows it. */
+      absent?: { pattern: RegExp; record: OutputRecord };
       signal: AbortSignal;
     },
   ): Promise<WaitOutcome> {
@@ -1013,6 +1111,7 @@ export class TerminalSessions {
         done = true;
         clearInterval(ticker);
         parsed.dispose();
+        recorded?.dispose();
         session.watchers.delete(check);
         want.signal.removeEventListener('abort', abort);
       };
@@ -1026,7 +1125,10 @@ export class TerminalSessions {
           finish('closed');
         // The person took their terminal tab over: it is theirs, the wait is over
         else if (session.local && session.held) finish('held');
-        else if (want.absent && want.absent.test(session.tail(400).join('\n')))
+        else if (
+          want.absent &&
+          want.absent.pattern.test(want.absent.record.lines().join('\n'))
+        )
           finish('absent');
         else if (
           want.pattern &&
@@ -1037,6 +1139,7 @@ export class TerminalSessions {
         else if (Date.now() - started >= want.timeoutMs) finish('capped');
       };
       const parsed = session.screen.onWriteParsed(() => check());
+      const recorded = want.absent?.record.onParsed(() => check());
       const ticker = setInterval(check, WAIT_TICK_MS);
       const abort = () => {
         end();
@@ -1075,11 +1178,22 @@ function regexArg(value: unknown): RegExp | undefined {
   if (typeof value !== 'string' || !value) return undefined;
   return new RegExp(value);
 }
-/** The screen line an assertion hit, so a result names its evidence. */
-function lineWith(screen: string, pattern?: RegExp): string {
+/** The newest line an assertion hit, so a result names its evidence. */
+function lineWith(lines: string[], pattern?: RegExp): string {
   if (!pattern) return '';
-  const line = screen.split('\n').find((row) => pattern.test(row));
+  const line = lines.findLast((row) => pattern.test(row));
   return line === undefined ? '' : ` on the line: ${line.trim()}`;
+}
+/** `changed`: what the device printed while the wait ran, its last lines when long. */
+function duringWait(printed: string[], overflowed = false): string {
+  const shown = printed.slice(-CHANGED_LINES);
+  const left = printed.length - shown.length;
+  const note = left
+    ? `(${overflowed ? 'at least ' : ''}${left} earlier lines left out)\n`
+    : '';
+  return `\n### During the wait\n${
+    shown.length ? note + shown.join('\n') : '(the device printed nothing)'
+  }`;
 }
 
 function clamp(

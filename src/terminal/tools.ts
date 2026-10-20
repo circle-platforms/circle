@@ -446,7 +446,7 @@ export function terminalTools(
           type: 'string',
           maxLength: 200,
           description:
-            'A regular expression the screen must NOT show: the wait ends at once, as a failed check, when it appears',
+            'A regular expression the device must not print once the wait begins: the wait ends at once, as a failed check, when it does',
         },
         retries: {
           type: 'number',
@@ -458,7 +458,7 @@ export function terminalTools(
         changed: {
           type: 'boolean',
           description:
-            'Also return the lines the screen gained during the wait, as a diff',
+            'Also return the lines the device printed during the wait, and only those',
         },
         timeout_ms: {
           type: 'number',
