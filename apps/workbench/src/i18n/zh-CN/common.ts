@@ -52,6 +52,7 @@ export const common: Record<string, string> = {
   'nested too deep to read': '嵌套过深，无法解析',
   'command could not be parsed': '无法解析命令',
   'shows the model the whole screen': '向模型展示整个屏幕',
+  'shows the side vision model the whole screen': '向辅助视觉模型展示整个屏幕',
   // diffs
   'new file, {n} line': '新文件，{n} 行',
   'new file, {n} lines': '新文件，{n} 行',
