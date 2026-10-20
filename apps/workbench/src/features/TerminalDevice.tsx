@@ -38,8 +38,10 @@ const bytes = (base64: string): Uint8Array =>
   Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 
 /** A console that is still there to use: connecting, ready, or held by someone. */
+// A console is on the row while it is up. Holding one does not keep a closed
+// one on screen: the tab has to go when its device connection has.
 const isLive = (row: TerminalSessionRow) =>
-  row.state === 'connecting' || row.state === 'ready' || !!row.held;
+  row.state === 'connecting' || row.state === 'ready';
 
 export interface DeviceTerminals {
   /** The desktop application is here to hold device consoles. */

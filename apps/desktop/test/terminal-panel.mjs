@@ -187,14 +187,18 @@ try {
   );
   if (!shown.includes('TELNET panel fixture'))
     failures.push(`the screen snapshot missed the banner: ${shown}`);
-  // The person takes the console: their keys reach the device
-  await page.getByRole('button', { name: 'take over', exact: true }).click();
+  // A console the person opened from the panel is theirs to type in from its
+  // first line: the row already offers to give it back to Circle.
   await page.getByRole('button', { name: 'give back', exact: true }).waitFor();
   const held = await page.evaluate(
     (id) => window.circleDesktop.terminalState(id),
     session,
   );
-  assert.equal(held.sessions[0].held, 'attach');
+  assert.equal(
+    held.sessions[0].held,
+    'attach',
+    'a panel connect starts in the hands of the person who opened it',
+  );
   await page.evaluate(
     ({ id, one }) => window.circleDesktop.terminalInput(id, one, 'show ver\r'),
     { id: session, one: 't1' },
@@ -238,7 +242,8 @@ try {
       'Ctrl+K in the console opened search',
     );
   }
-  // Give it back: the model's actions may run again
+  // Take it back for Circle: the model's actions may run again, and the person's
+  // keys stop reaching the device until they take it again.
   await page.getByRole('button', { name: 'give back', exact: true }).click();
   await page.getByRole('button', { name: 'take over', exact: true }).waitFor();
   const free = await page.evaluate(

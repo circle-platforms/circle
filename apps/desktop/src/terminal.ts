@@ -219,6 +219,18 @@ export class TerminalPanelHost {
         .toString('base64') ?? ''
     );
   }
+  /**
+   * A console the person opened from the panel is theirs to type in from its
+   * first line: Circle reaches it again when they give it back.
+   */
+  private mine(own: string): void {
+    const newest = this.manager
+      .views(own)
+      .filter((view) => view.transport !== 'local')
+      .at(-1);
+    if (newest) this.manager.attach(own, newest.id);
+  }
+
   /** A person connects a saved profile; a new host key asks on the panel, not a card. */
   async connect(
     conversation: unknown,
@@ -248,6 +260,7 @@ export class TerminalPanelHost {
       // The answer comes through hostKey(); until then this connect simply stopped
       return this.state(own);
     }
+    this.mine(own);
     this.pushState(own);
     return this.state(own);
   }
@@ -265,6 +278,7 @@ export class TerminalPanelHost {
       args,
       stop.signal,
     );
+    if (!result.approval) this.mine(own);
     if (result.approval) {
       this.pendingKey.set(own, {
         token: result.approval.token,
@@ -303,6 +317,7 @@ export class TerminalPanelHost {
       },
       stop.signal,
     );
+    this.mine(own);
     this.pushState(own);
     return this.state(own);
   }

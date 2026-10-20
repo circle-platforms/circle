@@ -155,15 +155,17 @@ test('a panel connect opens a real console; bytes arrive batched and only the ho
     Buffer.from(data.bytes, 'base64').toString('utf8'),
     /TELNET banner/,
   );
-  // typing before attaching changes nothing on the wire
-  assert.equal(panel.input('c1', row.id, 'whois'), false);
-  // (a deepEqual with an empty-array literal would narrow typed to never[])
-  assert.equal(device.typed.length, 0);
-  // the person takes it; their keys reach the device
-  const held = panel.attach('c1', row.id);
-  assert.equal(held.sessions[0]!.held, 'attach');
+  // A console the person opened from the panel is theirs from its first line.
+  assert.equal(row.held, 'attach');
   assert.equal(panel.input('c1', row.id, 'show clock\r'), true);
   await until(() => device.typed.includes('show clock'), 'the typed line');
+  // Give it back, and their keys no longer reach the device.
+  panel.detach('c1', row.id);
+  assert.equal(panel.input('c1', row.id, 'whois'), false);
+  assert.equal(device.typed.includes('whois'), false);
+  // Taking it again hands the keys back to them.
+  const held = panel.attach('c1', row.id);
+  assert.equal(held.sessions[0]!.held, 'attach');
   // while the person holds it, the model's next action waits
   let parkedDone = false;
   const parked = panel
@@ -193,6 +195,24 @@ test('a panel connect opens a real console; bytes arrive batched and only the ho
   );
   await panel.releaseSession('c1');
   assert.equal(panel.state('c1').sessions.length, 0);
+});
+
+test('a quick connect by address starts in the hands of the person who opened it', async (t) => {
+  const device = await consoleServer(t);
+  const { panel } = await makeHost(t, []);
+  const state = await panel.connectTarget('c1', {
+    transport: 'telnet',
+    host: '127.0.0.1',
+    port: device.port,
+  });
+  const row = state.sessions.at(-1)!;
+  assert.equal(row.state, 'ready');
+  assert.equal(row.held, 'attach');
+  assert.equal(panel.input('c1', row.id, 'show version\r'), true);
+  await until(() => device.typed.includes('show version'), 'the typed line');
+  // Circle may still be told to read it once they give it back.
+  panel.detach('c1', row.id);
+  assert.equal(panel.input('c1', row.id, 'nope'), false);
 });
 
 test('an agent request from the runtime drives the same host and reports state', async (t) => {
