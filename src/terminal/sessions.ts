@@ -93,6 +93,9 @@ const DEFAULT_MAX_SESSIONS = 6;
 const SEND_SETTLE_QUIET_MS = 400;
 const SEND_SETTLE_MAX_MS = 2000;
 const WAIT_TICK_MS = 150;
+// How often a wait on a terminal tab asks again whether its shell has the terminal back,
+// while the screen stays as it was. New output on the screen asks again at once.
+const PROMPT_PROBE_MS = 500;
 
 /**
  * One device console and its emulated screen. A `local` session is one of the person's
@@ -112,6 +115,12 @@ export class TerminalSession {
   readonly wakers = new Set<() => void>();
   // The checks of the waits under way, run again at once when the holder changes
   readonly watchers = new Set<() => void>();
+  /**
+   * A terminal tab: whether its shell has the terminal back, so no command it started runs
+   * in front of it. That is the shell at its prompt, whatever the prompt looks like.
+   * Undefined where the host cannot tell (Windows), and absent for a device console.
+   */
+  foreground?: () => Promise<boolean | undefined>;
   // The newest raw bytes, so a view opened mid-session can paint the screen by feeding
   // them to its own emulator: a panel never waits for the device to speak again.
   private ring: Buffer[] = [];
@@ -843,7 +852,7 @@ export class TerminalSessions {
       timeoutMs,
       ...(pattern ? { pattern } : {}),
       // A terminal tab that prints nothing, such as sleep, is quiet while it
-      // still runs. Quiet only finishes the wait once the cursor sits on a prompt.
+      // still runs. Quiet only finishes the wait once the shell is at its prompt.
       holdUntilPrompt: session.local && !pattern,
       signal,
     });
@@ -970,7 +979,7 @@ export class TerminalSessions {
       idleMs: number;
       timeoutMs: number;
       pattern?: RegExp;
-      /** A local tab: quiet counts only while the cursor sits on a prompt. */
+      /** A local tab: quiet counts only while the shell is at its prompt. */
       holdUntilPrompt?: boolean;
       signal: AbortSignal;
     },
@@ -983,6 +992,34 @@ export class TerminalSessions {
       }
       const started = Date.now();
       let done = false;
+      // What the host last said of the shell, and the output it was asked after
+      let asked: { output: number; at: number; shell?: boolean } | undefined;
+      let asking = false;
+      // The shell has its terminal back: the host knows that from the process in front of
+      // it, whatever the prompt looks like (❯, ➜ … ✗). Where it cannot tell, or a program
+      // the shell started holds the terminal and waits at a prompt of its own (ssh, a
+      // REPL), the line at the cursor ending like a prompt counts.
+      const atPrompt = (): boolean => {
+        if (looksLikePrompt(session.cursorLine())) return true;
+        if (!session.foreground) return false;
+        const output = session.lastOutputAt;
+        if (asked?.output === output && asked.shell === true) return true;
+        if (
+          !asking &&
+          (!asked ||
+            asked.output !== output ||
+            Date.now() - asked.at >= PROMPT_PROBE_MS)
+        ) {
+          asking = true;
+          const answer = (shell?: boolean) => {
+            asking = false;
+            asked = { output, at: Date.now(), shell };
+            check();
+          };
+          session.foreground().then(answer, () => answer(undefined));
+        }
+        return false;
+      };
       const end = () => {
         done = true;
         clearInterval(ticker);
@@ -1009,7 +1046,7 @@ export class TerminalSessions {
           session.quiet >= want.idleMs &&
           // `sleep` and its like print nothing, so the screen is quiet the whole
           // time. That is not the prompt coming back, and the timeout still bounds it.
-          (!want.holdUntilPrompt || atPrompt(session.cursorLine()))
+          (!want.holdUntilPrompt || atPrompt())
         )
           finish('quiet');
         else if (Date.now() - started >= want.timeoutMs) finish('capped');
@@ -1048,9 +1085,12 @@ export function withMoreTerminals(text: string, lines: string[]): string {
   );
 }
 
-/** The cursor sits on a shell prompt: the line ends in a prompt character. */
-function atPrompt(line: string): boolean {
-  return /[$#>%]\s*$/.test(line);
+/**
+ * The line at the cursor ends like a prompt: a shell's `$`, `#`, `%` or `>`, a REPL's
+ * `>>>`, or the `❯` of starship, pure and powerlevel10k.
+ */
+function looksLikePrompt(line: string): boolean {
+  return /[$#>%❯]\s*$/.test(line);
 }
 
 function clamp(

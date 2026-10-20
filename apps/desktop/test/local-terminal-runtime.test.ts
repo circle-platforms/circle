@@ -476,3 +476,75 @@ test(
     assert.match(read.text, /### Prompt\nCIRCLE_TEST>/);
   },
 );
+
+test(
+  'a wait on a real shell ends when its prompt is back, also a prompt that ends in ❯ or ✗, and holds while sleep runs',
+  { skip: !unix, timeout: patience(90_000) },
+  async (t) => {
+    for (const prompt of ['❯ ', '➜  proj git:(main) ✗ ']) {
+      const root = await realpath(
+        await mkdtemp(join(tmpdir(), 'circle-local-prompt-')),
+      );
+      const workspace = join(root, 'workspace');
+      const shellHome = join(root, 'home');
+      await Promise.all([mkdir(workspace), mkdir(shellHome)]);
+      const manager = new TerminalManager(
+        {
+          workspaceRoot: workspace,
+          logRoot: join(root, 'logs'),
+          shellAllowlist: ['/bin/sh'],
+          env: {
+            HOME: shellHome,
+            PS1: prompt,
+            HISTFILE: '/dev/null',
+            ENV: '/dev/null',
+          },
+          stopGraceMs: 150,
+        },
+        () => {},
+      );
+      const local = new LocalTerminals({
+        host: () => manager,
+        changed: () => {},
+        mode: () => 'manual',
+        waiting: () => new Set(),
+      });
+      t.after(async () => {
+        local.close();
+        await manager.dispose();
+        await rm(root, { recursive: true, force: true });
+      });
+      const owner = 'conversation-prompt';
+      const shell = await manager.create({ owner, sessionId: owner });
+      const screen = async () =>
+        (await manager.replay(owner, shell.id)).events
+          .map((event) => event.data ?? '')
+          .join('');
+      await until(
+        async () => (await screen()).includes(prompt.trim()),
+        'the shell prompt',
+      );
+      const port = local.port();
+      const signal = new AbortController().signal;
+      const wait = (timeout_ms: number) =>
+        port.request(
+          owner,
+          'wait',
+          { session: `local:${shell.id}`, idle_ms: 300, timeout_ms },
+          signal,
+        );
+      // At the prompt
+      assert.match((await wait(20_000)).text, /quiet for 0\.3s/, prompt);
+      // A command that prints nothing: the screen is quiet, the shell is not back
+      await manager.write(owner, shell.id, 'sleep 30\r');
+      await until(
+        async () => (await screen()).includes('sleep 30'),
+        'the command on the screen',
+      );
+      assert.match((await wait(2000)).text, /still going after 2s/, prompt);
+      // Interrupted, the shell takes its terminal back and prompts again
+      await manager.write(owner, shell.id, '\x03');
+      assert.match((await wait(20_000)).text, /quiet for 0\.3s/, prompt);
+    }
+  },
+);

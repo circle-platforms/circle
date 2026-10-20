@@ -45,6 +45,11 @@ export interface LocalTerminalHost {
   write(owner: string, id: string, data: string): Promise<unknown>;
   /** Start the shell again. The exited tab leaves the row; the result is the new one. */
   restart?(owner: string, id: string): Promise<TerminalSnapshot>;
+  /**
+   * Whether the shell has its terminal back: no command it started runs in front of it.
+   * Undefined where the system cannot tell.
+   */
+  foreground?(owner: string, id: string): Promise<boolean | undefined>;
 }
 
 export interface LocalTerminalsOptions {
@@ -646,6 +651,11 @@ export class LocalTerminals implements TerminalTabFacts {
       ready,
       settle,
     };
+    // A wait knows the shell is back at its prompt from the process in front of it, not
+    // from what the prompt looks like
+    const foreground = host.foreground?.bind(host);
+    if (foreground)
+      session.foreground = () => foreground(conversation, snapshot.id);
     this.tabs.set(at, tab);
     this.sessions.adopt(conversation, session);
     const recent = host.recentOutput(conversation, snapshot.id, RECENT_OUTPUT);
