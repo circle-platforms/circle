@@ -281,6 +281,7 @@ function InspectorResources(
                 </DrawerFiles>
               ) : id === 'terminal' ? (
                 <TerminalMode
+                  paused={props.resourcesPaused}
                   commandTerminal={props.commandTerminal}
                   onExitCommandTerminal={props.onExitCommandTerminal}
                   sessionId={props.sessionId}

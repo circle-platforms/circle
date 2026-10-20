@@ -963,3 +963,45 @@ test(
     assert.deepEqual(await manager.activeIds(owner), []);
   },
 );
+
+test('a renamed terminal keeps its shell and log under the new name', async (t) => {
+  const { manager } = await setup(t, {
+    // The shared fixture allowlist names a unix shell; Windows renames a tab
+    // of its own shell just as well.
+    ...(process.platform === 'win32'
+      ? {
+          shellAllowlist: [
+            process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe',
+          ],
+        }
+      : {}),
+  });
+  let terminal;
+  try {
+    terminal = await manager.create({ owner, sessionId: 'session-a' });
+  } catch (error) {
+    // A checkout whose pty backend cannot spawn has no terminal to rename.
+    t.skip(`no pty backend: ${error instanceof Error ? error.message : error}`);
+    return;
+  }
+  const renamed = await manager.rename(owner, terminal.id, '  build logs  ');
+  assert.equal(renamed.label, 'build logs');
+  assert.equal(renamed.id, terminal.id);
+  assert.equal(renamed.status, terminal.status);
+  assert.equal(
+    renamed.named,
+    true,
+    'a named tab shows the name, not its number',
+  );
+  assert.equal((await manager.list(owner))[0]!.label, 'build logs');
+  await assert.rejects(
+    () => manager.rename(owner, terminal.id, '   '),
+    /the terminal name is empty/,
+  );
+  await assert.rejects(
+    () => manager.rename(owner, terminal.id, 'x'.repeat(81)),
+    /the terminal name is too long/,
+  );
+  assert.equal((await manager.list(owner))[0]!.label, 'build logs');
+  await manager.close(owner, terminal.id);
+});

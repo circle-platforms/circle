@@ -84,6 +84,8 @@ export interface TerminalSnapshot {
   exitCode?: number;
   signal?: number;
   requestedSignal?: TerminalSignal;
+  /** The person named this console; its tab says that, not a number. */
+  named?: boolean;
   lastSequence: number;
   logPath: string;
   error?: string;
@@ -834,6 +836,23 @@ export class TerminalManager {
     );
     const entry = this.#get(owner, next.id);
     entry.snapshot.restartOf = id;
+    await this.#persist(entry);
+    return clone(entry.snapshot);
+  }
+
+  /** A person's own name for the tab. The shell, its log and its history are untouched. */
+  async rename(
+    owner: string,
+    id: string,
+    label: string,
+  ): Promise<TerminalSnapshot> {
+    await this.#ready;
+    const entry = this.#get(owner, id);
+    const name = String(label ?? '').trim();
+    if (!name) throw Error('the terminal name is empty');
+    if (name.length > 80) throw Error('the terminal name is too long');
+    entry.snapshot.label = name;
+    entry.snapshot.named = true;
     await this.#persist(entry);
     return clone(entry.snapshot);
   }
