@@ -316,6 +316,19 @@ test('circle -c on a session open elsewhere watches it, and print mode still exi
       }),
     SessionOccupiedError,
   );
+  // A runtime with a screen of its own (the desktop) is told it is taken too:
+  // only the terminal's `circle -c` asks to watch.
+  assert.throws(
+    () =>
+      new AgentRuntime({
+        workspace,
+        home,
+        session: owner.session.id,
+        settings,
+        model: new ScriptedModel(),
+      }),
+    SessionOccupiedError,
+  );
   owner.yieldLease();
   const again = new AgentRuntime({
     workspace,
@@ -477,7 +490,7 @@ test('enter while view-only keeps the draft and sends it only on the next enter'
   assert.ok(users().includes('later please'));
 });
 
-test('a startup card ignores letter shortcuts and does not send the typed keys', async (t) => {
+test('a card takes its letter at once, and the rest of that burst is not typed into the box', async (t) => {
   const home = scratch(t);
   const workspace = scratch(t);
   const app = new SessionApp(workspace, home, defaultSettings());
@@ -487,13 +500,8 @@ test('a startup card ignores letter shortcuts and does not send the typed keys',
       title: string,
       body: string,
       options: string[],
-      signal?: AbortSignal,
-      startup?: boolean,
     ) => Promise<string>;
     dataListener: (data: string) => void;
-    handle: (event: { type: 'key'; key: string; char: string }) => void;
-    dialogOpenedAt: number;
-    dialogLettersLocked: boolean;
     input: { close: () => void };
     theme: { close: () => void };
   };
@@ -502,29 +510,17 @@ test('a startup card ignores letter shortcuts and does not send the typed keys',
     ui.theme.close();
     ui.input.close();
   });
-  const pending = ui.askChoice(
-    'hooks',
-    "hooks.json\nThis project's hooks file changed.",
-    ['approve these hooks', 'skip'],
-    undefined,
-    true,
-  );
-  assert.equal(app.state.dialog?.title, 'hooks');
-  ui.dataListener('/hotkeys');
-  assert.equal(app.state.dialog?.title, 'hooks');
-  assert.equal(app.state.draft, '');
-  ui.dialogOpenedAt = 0;
-  ui.handle({ type: 'key', key: 'y', char: 'y' });
-  assert.equal(app.state.dialog?.title, 'hooks');
-  assert.equal(app.state.draft, '');
-  ui.handle({ type: 'key', key: '2', char: '2' });
-  assert.equal(await pending, 'skip');
+  // The trust card at startup answers y as soon as it is shown.
+  const trust = ui.askChoice('trust', 'folder', ['trust this folder', 'quit']);
+  ui.dataListener('y');
+  assert.equal(await trust, 'trust this folder');
+  // Keys that arrived with the answer were typed at the card: they are dropped.
   const later = ui.askChoice('q', 'body', ['yes', 'no']);
-  ui.dialogOpenedAt = 0;
-  ui.dialogLettersLocked = false;
   ui.dataListener('ys');
   assert.equal(await later, 'yes');
   assert.equal(app.state.draft, '');
+  ui.dataListener('s');
+  assert.equal(app.state.draft, 's');
 });
 
 test('--trust remembers the folder without a card', async (t) => {

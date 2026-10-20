@@ -193,6 +193,11 @@ export interface RuntimeOptions {
     origin?: InteractionContext,
   ) => Promise<void>;
   /**
+   * The terminal's `circle -c`: a session another terminal holds opens view only
+   * instead of failing. Nothing else gets this; the desktop starts a session of its own.
+   */
+  viewOccupied?: boolean;
+  /**
    * Keep a new session out of the database until its first message. The terminal uses this
    * so startup and /new do not leave an empty row.
    */
@@ -375,8 +380,13 @@ export class AgentRuntime {
             this.ownershipLost(error),
           );
         } catch (error) {
-          // Print mode still stops. The full-screen interface watches the lock.
-          if (options.headless || !(error instanceof SessionOccupiedError))
+          // Only the terminal's `circle -c` watches a held session. Everyone else
+          // (print mode, the desktop) is told it is taken.
+          if (
+            !options.viewOccupied ||
+            options.headless ||
+            !(error instanceof SessionOccupiedError)
+          )
             throw error;
           this.options.inspect = true;
         }

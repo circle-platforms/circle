@@ -1035,8 +1035,6 @@ export class SessionApp {
           'trust',
           `${this.workspace}\nThis folder can supply instructions, skills, commands, extensions and hooks. Extensions and hooks execute code.`,
           ['trust this folder', 'quit'],
-          undefined,
-          true,
         );
         if (answer !== 'trust this folder') return false;
         this.trustWorkspace();
@@ -1113,7 +1111,12 @@ export class SessionApp {
         this.makeView(),
       ),
     );
-    const runtime = this.createRuntime(options, this.view);
+    // `circle -c` on a session another terminal holds opens it view only. The other
+    // ways in (`--session`, a new session) still say it is taken.
+    const runtime = this.createRuntime(
+      { ...options, viewOccupied: Boolean(options.continue) },
+      this.view,
+    );
     // Old builds inserted a row on startup and on every /new. Drop the ones
     // nobody is using; a leased empty session stays until that runtime ends.
     runtime.store.purgeEmptySessions();
@@ -1147,7 +1150,7 @@ export class SessionApp {
         `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`,
       );
     runtime.repairRecentTitles();
-    await this.offerHookApproval(true);
+    await this.offerHookApproval();
     this.repaint();
   }
   private createRuntime(
@@ -1487,17 +1490,11 @@ export class SessionApp {
     this.repaint();
   }
   private offeringHooks = false;
-  /** When the current card opened. Letter shortcuts wait a second. */
-  private dialogOpenedAt = 0;
-  /** A card shown at startup never takes y / a / n from whatever is being typed. */
-  private dialogLettersLocked = false;
-  /** A printable landed on this card, so Enter is not a confirmation. */
-  private dialogTyped = false;
   /**
    * A changed project hooks file does not run until these bytes are approved.
    * Headless runs and tests never take the card; the transcript still says so.
    */
-  private async offerHookApproval(startup = false): Promise<void> {
+  private async offerHookApproval(): Promise<void> {
     if (
       this.offeringHooks ||
       this.ended ||
@@ -1517,8 +1514,6 @@ export class SessionApp {
           'hooks',
           describeHookChange(change),
           ['approve these hooks', 'skip'],
-          undefined,
-          startup,
         );
         if (answer === 'approve these hooks')
           rememberHookFile(this.home, change.file, change.digest);
@@ -1790,7 +1785,6 @@ export class SessionApp {
   private async showCard<T>(card: Card<T>, signal?: AbortSignal): Promise<T> {
     const view = this.view;
     view.card = card as Card<unknown>;
-    this.dialogLettersLocked = false;
     try {
       return await this.dialog<T>(card.state(), signal);
     } finally {
@@ -1838,13 +1832,8 @@ export class SessionApp {
     body: string,
     options: string[],
     signal?: AbortSignal,
-    startup = false,
   ): Promise<string> {
-    this.dialogLettersLocked = startup;
     return this.dialog({ title, body, options, focus: 0 }, signal);
-  }
-  private lettersMuted(): boolean {
-    return this.dialogLettersLocked || Date.now() - this.dialogOpenedAt < 1000;
   }
   // A card takes the frame: the draft (text and cursor) is set aside and comes back when
   // the card ends, whatever it was answered with; a list would compete for keys, so it closes.
@@ -1866,8 +1855,6 @@ export class SessionApp {
     screen.dialog = state;
     screen.planFocused = false;
     screen.waiting = true;
-    this.dialogOpenedAt = Date.now();
-    this.dialogTyped = false;
     return new Promise<T>((resolve, reject) => {
       const close = (): void => {
         view.pending = undefined;
@@ -1875,8 +1862,6 @@ export class SessionApp {
         view.suspendedDialog = undefined;
         screen.waiting = false;
         screen.picker ??= list;
-        this.dialogLettersLocked = false;
-        this.dialogTyped = false;
         view.parked.restore(screen);
         this.repaint();
       };
@@ -2656,54 +2641,6 @@ export class SessionApp {
           this.repaint();
           return;
         }
-        // Only a choice card has y / a / n. A card that is taking text (setup,
-        // a secret, a reason) must receive those letters and enter at once.
-        if (this.card instanceof ApprovalCard) {
-          if (
-            ['up', 'down', 'left', 'right', 'tab', 'j', 'k', 'h', 'l'].includes(
-              key,
-            )
-          )
-            this.dialogTyped = false;
-          if (
-            this.lettersMuted() &&
-            ['y', 'n', 'a', 'Y', 'N', 'A'].includes(key)
-          ) {
-            this.dialogTyped = true;
-            this.repaint();
-            return;
-          }
-          if (key === 'enter' && this.dialogTyped) {
-            this.repaint();
-            return;
-          }
-          if (
-            char &&
-            !key.startsWith('ctrl+') &&
-            !key.startsWith('alt+') &&
-            ![
-              'y',
-              'n',
-              'a',
-              'Y',
-              'N',
-              'A',
-              'enter',
-              'escape',
-              'j',
-              'k',
-              'h',
-              'l',
-              'tab',
-              'up',
-              'down',
-              'left',
-              'right',
-            ].includes(key) &&
-            !/^[1-9]$/.test(key)
-          )
-            this.dialogTyped = true;
-        }
         const result = this.card.handle(key, char);
         if (this.card instanceof ApprovalCard && this.card.explaining) {
           this.composer.set(this.card.draft);
@@ -2732,22 +2669,16 @@ export class SessionApp {
           dialog.input = Array.from(dialog.input).slice(0, -1).join('');
         else if (char && !key.startsWith('ctrl+') && !key.startsWith('alt+'))
           dialog.input += char;
-      } else if (key === 'up' || key === 'down') {
-        this.dialogTyped = false;
+      } else if (key === 'up' || key === 'down')
         dialog.focus =
           (dialog.focus + (key === 'up' ? -1 : 1) + dialog.options.length) %
           dialog.options.length;
-      } else if (key === 'enter') {
-        if (!this.dialogTyped)
-          this.pending?.complete(dialog.options[dialog.focus] || '');
-      } else if (/^[1-9]$/.test(key) && dialog.options[Number(key) - 1])
+      else if (key === 'enter')
+        this.pending?.complete(dialog.options[dialog.focus] || '');
+      else if (/^[1-9]$/.test(key) && dialog.options[Number(key) - 1])
         this.pending?.complete(dialog.options[Number(key) - 1]!);
-      else if ((key === 'y' || key === 'n') && !this.lettersMuted())
-        this.pending?.complete(
-          (key === 'y' ? dialog.options[0] : dialog.options.at(-1)) || '',
-        );
-      else if (char && !key.startsWith('ctrl+') && !key.startsWith('alt+'))
-        this.dialogTyped = true;
+      else if (key === 'y') this.pending?.complete(dialog.options[0] || '');
+      else if (key === 'n') this.pending?.complete(dialog.options.at(-1) || '');
       this.repaint();
       return;
     }
