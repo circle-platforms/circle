@@ -76,7 +76,7 @@ Three modes change what Circle is allowed to do. The current one is shown in the
 | Mode | Turn on | What it does |
 |---|---|---|
 | `accept edits` | `/mode accept-edits` | Circle changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask. |
-| `read-only` | `/plan` or `/mode plan` | Circle can read and search, and change only a file named `plan.md`. It cannot run commands or change other files. It writes its plan to `plan.md` for you to review. The model can turn it on itself, and asks you before it turns it off: you can answer that it should then accept edits. |
+| `read-only` | `/plan` or `/mode plan` | Circle can read and search, and write only its plan, a file of the conversation's own in the data folder, not in your project. It cannot run commands or change files. The model can turn it on itself. When the plan is ready it asks what next: implement it in `auto` mode or with manual approval, change it (say what), or save it and change nothing. |
 | `auto` | `/yolo`, `/auto` or `/mode auto` | Circle stops asking. Every command and file change runs without a card. Use `/yolo off` to go back. |
 
 `shift+tab` moves to the next mode: manual, accept edits, read-only, auto, and back to manual. `/mode` with no argument does the same, and works while a turn runs; `/mode manual` goes back to asking. Leaving `read-only` returns to manual. Read [Security](security.md#auto-mode) before you use auto.

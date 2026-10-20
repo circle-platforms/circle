@@ -454,7 +454,16 @@ export function createFixtures(): WorkbenchSnapshot {
         id: 'plan1',
         sessionId: 'session1',
         kind: 'plan-exit',
-        title: 'Ready to implement this plan?',
+        title:
+          'The plan is ready: ~/.circle/projects/preview/session_plans/session1.md\nHow should Circle go on?',
+        target: '/session_plans/session1.md',
+        choices: [
+          'implement in auto mode',
+          'implement with manual approval',
+          'change the plan',
+          'save the plan only',
+        ],
+        multiple: false,
         status: 'pending',
         revision: 1,
       },
