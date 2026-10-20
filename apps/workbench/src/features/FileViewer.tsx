@@ -123,9 +123,7 @@ export function FileViewer({
   );
   const readOnly = resourceOwner
     ? resourceOwner.readOnly
-    : readOnlyTask ||
-      (session.readOnly &&
-        !['plan', 'plan.md'].includes(path.split('/').at(-1)!));
+    : readOnlyTask || session.readOnly;
   const sourceWorkspace = snapshot.workspaces.find(
     (item) => item.id === workspaceId,
   );
