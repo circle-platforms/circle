@@ -284,10 +284,11 @@ try {
     // Closing a shell stops it and takes its tab out of the row.
     await page.getByRole('tab', { name: 'terminal 2' }).click();
     await page.getByRole('button', { name: 'stop terminal 2' }).click();
-    // By id: with the numbers compacted, another shell takes the name
-    // "terminal 2" as soon as this one leaves the row.
     await page.waitForFunction(
-      () => !document.querySelector('[aria-controls="terminal-terminal-2"]'),
+      () =>
+        ![...document.querySelectorAll('.term-tab-main')].some(
+          (node) => node.textContent.trim() === 'terminal 2',
+        ),
     );
     assert.equal((await calls(page, 'terminal.close')).length, 1);
 
