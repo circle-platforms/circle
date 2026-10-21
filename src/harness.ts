@@ -1386,6 +1386,7 @@ export class Harness {
     event: 'before_tool' | 'permission_request',
     call: ToolCall,
     args: Record<string, unknown>,
+    paths: string[],
     signal: AbortSignal,
     permissionReason?: string,
   ): Promise<HookBatch | undefined> {
@@ -1396,7 +1397,7 @@ export class Harness {
       cwd: this.options.session.workspace,
       toolName: call.name,
       toolInput: args,
-      paths: hookToolPaths(call.name, args),
+      paths,
       permissionReason,
       secrets: this.hookSecrets(),
       signal,
@@ -1506,9 +1507,22 @@ export class Harness {
         };
         resolved = { ...resolved, ...facts };
       }
+      const usedSecrets = [...used].filter((name) =>
+        Object.hasOwn(secrets, name),
+      );
+      // What this call does, which can be more than what the tool does: a read that sends
+      // a local file or a secret's value elsewhere asks, and read-only mode refuses it
+      const effect = tool.callEffect?.(resolved, usedSecrets) ?? tool.effect;
+      // The paths the hooks match: those Circle's own tools name, and the tool's own
+      const paths = [
+        ...new Set([
+          ...hookToolPaths(call.name, resolved),
+          ...(tool.paths?.(resolved) ?? []),
+        ]),
+      ];
       if (
         this.readOnly &&
-        tool.effect !== 'read' &&
+        effect !== 'read' &&
         !this.options.planFileMutation?.(call)
       )
         throw new Error('read-only mode: this tool cannot run');
@@ -1519,7 +1533,13 @@ export class Harness {
       // Hooks see the arguments with secret values put back to %NAME%. A deny
       // stands in every approval mode. A hard denial above is not reconsidered.
       // An allow can skip an ordinary card only: an always-ask stays a card.
-      const before = await this.gateTool('before_tool', call, resolved, signal);
+      const before = await this.gateTool(
+        'before_tool',
+        call,
+        resolved,
+        paths,
+        signal,
+      );
       if (before?.decision === 'deny')
         throw new Error(hookDeniedMessage(before.reason || 'hook denied'));
       if (before?.decision === 'ask' && before.reason)
@@ -1559,7 +1579,7 @@ export class Harness {
       const wouldAsk =
         !settingsAllowed &&
         !this.options.planFileMutation?.(call) &&
-        tool.effect !== 'read' &&
+        effect !== 'read' &&
         tool.approval !== false &&
         (this.options.policy.needsApproval(
           call.name,
@@ -1572,6 +1592,7 @@ export class Harness {
           'permission_request',
           call,
           resolved,
+          paths,
           signal,
           found.reason,
         );
@@ -1617,15 +1638,12 @@ export class Harness {
       signal.throwIfAborted();
       if (
         this.readOnly &&
-        tool.effect !== 'read' &&
+        effect !== 'read' &&
         !this.options.planFileMutation?.(call)
       )
         throw new Error('read-only mode: this tool cannot run');
       this.bus.emit('tool_start', { payload: { ...call } });
       const args = resolved;
-      const usedSecrets = [...used].filter((name) =>
-        Object.hasOwn(secrets, name),
-      );
       const context: ToolContext = {
         signal,
         sessionId: this.sessionId,
@@ -1671,7 +1689,7 @@ export class Harness {
             signal.throwIfAborted();
             if (
               this.readOnly &&
-              tool.effect !== 'read' &&
+              effect !== 'read' &&
               !this.options.planFileMutation?.(call)
             )
               throw new Error('read-only mode: this tool cannot run');
@@ -1695,7 +1713,7 @@ export class Harness {
             cwd: this.options.session.workspace,
             toolName: call.name,
             toolInput: args,
-            paths: hookToolPaths(call.name, args),
+            paths,
             toolOutput: content,
             toolStatus: 'success',
             secrets: this.hookSecrets(),

@@ -128,6 +128,22 @@ export interface Tool {
     shown?: Record<string, unknown>,
     imageInput?: boolean,
   ) => Record<string, unknown> | undefined;
+  /**
+   * The local files a call names in arguments other than the ones Circle's own file tools use
+   * (`file_path`, `path`, `file`, `paths`, a patch's files), such as an MCP tool's file
+   * parameters: hook path globs match these too.
+   */
+  paths?: (args: Record<string, unknown>) => string[];
+  /**
+   * The effect of one call where it is more than the tool's, from the arguments it runs with
+   * and the names of the secrets whose values went into them: a call of an MCP tool its server
+   * says only reads is no read when it sends the server a local file or a secret's value. A
+   * call that is no read asks as other calls do, and read-only mode refuses it.
+   */
+  callEffect?: (
+    args: Record<string, unknown>,
+    secrets: readonly string[],
+  ) => Effect;
   /** Snapshot authorized inputs before waiting for approval; never perform writes here. */
   prepare?: (
     args: Record<string, unknown>,

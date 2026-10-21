@@ -692,11 +692,17 @@ const ruleToolFor = (tool: string, args: Record<string, unknown>): string =>
   terminalTabWrite(tool, args)?.command !== undefined
     ? 'execute'
     : ruleTool(tool);
+/**
+ * What a tool's server says of it: `destructive`, it can delete or overwrite data;
+ * `read-only`, it only reads.
+ */
+export type ToolHint = 'destructive' | 'read-only';
 export class ApprovalPolicy {
   private modes = new Map<string, ApprovalMode>();
-  // Tools that say of themselves that they can destroy data, such as an MCP tool its server
-  // marks destructive: every call asks, and no "allow for this session" covers one
-  private destroys: (tool: string) => boolean = () => false;
+  // What tools say of themselves, such as an MCP tool its server marks destructive (every
+  // call asks, and no "allow for this session" covers one) or read-only (it asks only when a
+  // call sends the server a local file or a secret, and the card says so)
+  private hints: (tool: string) => ToolHint | undefined = () => undefined;
   constructor(
     readonly store: ApprovalStore,
     readonly workspace: string,
@@ -707,9 +713,9 @@ export class ApprovalPolicy {
   get allowedCommands(): readonly string[] {
     return this.allowed;
   }
-  /** Which tools say they can destroy data; read for every call. */
-  declareDestructive(test: (tool: string) => boolean): void {
-    this.destroys = test;
+  /** What tools say of themselves; read for every call. */
+  declareHints(hints: (tool: string) => ToolHint | undefined): void {
+    this.hints = hints;
   }
   setAllowedCommands(patterns: readonly string[]): void {
     this.allowed = patterns;
@@ -781,11 +787,19 @@ export class ApprovalPolicy {
     // Always asks, as Circle's own deletes do: no rule is kept or covers it, a hook's allow
     // does not skip the card, and a run that cannot show one does not run it. The card is
     // headed with the tool's name, so the reason is the same words for every tool.
-    if (this.destroys(tool))
+    const hint = this.hints(tool);
+    if (hint === 'destructive')
       return review(
         'ASK_FORCED',
         'its MCP server says it can delete or overwrite data',
         { warn_delete: true },
+      );
+    // The harness asks for such a tool only when a call sends it a local file or a secret
+    if (hint === 'read-only')
+      return review(
+        'ASK',
+        'its MCP server says it only reads; the call sends it a local file or a secret',
+        { pattern: '*', scope: `every ${tool} call` },
       );
     const tab = terminalTabWrite(tool, args);
     if (tab) {

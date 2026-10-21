@@ -9,6 +9,7 @@ import type {
   FetchLike,
   Transport,
 } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { ToolHint } from './approvals.js';
 import type {
   Tool,
   ToolContext,
@@ -622,8 +623,8 @@ export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
   private servers: Connected[] = [];
-  // The tools whose server says they can destroy data
-  private destructive = new Set<string>();
+  // What each tool's server says of it, when trusted with it: destructive or read-only
+  private hinted = new Map<string, ToolHint>();
   private results = new SentResults();
   // For file parameters when the runtime gives no reader: the workspace, as the terminal reads
   private files?: Sandbox;
@@ -807,13 +808,31 @@ export class McpManager {
         );
       return run;
     };
+    // The paths the call's file parameters name, which hook path globs match
+    const named = (args: Record<string, unknown>): string[] =>
+      files.flatMap((parameter) => {
+        const path = args[parameter];
+        return typeof path === 'string' && path.trim() ? [path] : [];
+      });
     return {
       name,
       description: hide(spec.description || name),
       parameters: modelSchema(spec.inputSchema, files),
       effect: hints.readOnly ? 'read' : 'unknown',
+      // What the server says of its tool covers what the tool does there, not what a call
+      // sends it: a local file's bytes or a secret's value leave this machine with the call
+      ...(hints.readOnly
+        ? {
+            callEffect: (args, secrets) =>
+              secrets.length ||
+              files.some((parameter) => args[parameter] !== undefined)
+                ? 'unknown'
+                : 'read',
+          }
+        : {}),
       ...(files.length
         ? {
+            paths: named,
             prepare,
             run: async (args, context) =>
               (await prepare(args, context))(args, context),
@@ -829,7 +848,7 @@ export class McpManager {
     const connected: Connected[] = [];
     const tools: Tool[] = [];
     const status: McpStatus[] = [];
-    const destructive = new Set<string>();
+    const hinted = new Map<string, ToolHint>();
     try {
       const { connections, skipped } = buildMcpConnections(servers);
       status.push(...skipped);
@@ -882,7 +901,7 @@ export class McpManager {
             combined,
           );
           const registered: Tool[] = [];
-          const destroys = new Set<string>();
+          const said = new Map<string, ToolHint>();
           let cursor: string | undefined;
           const cursors = new Set<string>();
           do {
@@ -902,7 +921,8 @@ export class McpManager {
                 spec.annotations,
                 connection.trustAnnotations !== false,
               );
-              if (hints.destructive) destroys.add(name);
+              if (hints.destructive) said.set(name, 'destructive');
+              else if (hints.readOnly) said.set(name, 'read-only');
               registered.push(
                 this.serverTool(
                   connection,
@@ -939,7 +959,7 @@ export class McpManager {
           };
           connected.push(server);
           tools.push(...registered);
-          for (const name of destroys) destructive.add(name);
+          for (const [name, hint] of said) hinted.set(name, hint);
           state.tools = registered.map((tool) => tool.name);
         } catch (error) {
           state.error = hide(
@@ -957,7 +977,7 @@ export class McpManager {
       this.servers = connected;
       this.tools = tools;
       this.status = status;
-      this.destructive = destructive;
+      this.hinted = hinted;
       // A server reached again may not be the one that answered: no result is kept over it
       this.results.clear();
       await McpManager.disconnect(previous);
@@ -991,14 +1011,14 @@ export class McpManager {
         .join('\n')
     );
   }
-  /** Whether the server of a tool, by its name here, says the tool can destroy data. */
-  isDestructive(tool: string): boolean {
-    return this.destructive.has(tool);
+  /** What the server of a tool, by its name here, says of it, when trusted with it. */
+  hint(tool: string): ToolHint | undefined {
+    return this.hinted.get(tool);
   }
   async close(): Promise<void> {
     const servers = this.servers.splice(0);
     this.tools = [];
-    this.destructive = new Set();
+    this.hinted = new Map();
     this.results.clear();
     await McpManager.disconnect(servers);
   }

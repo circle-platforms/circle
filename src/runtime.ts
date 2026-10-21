@@ -565,7 +565,7 @@ export class AgentRuntime {
         this.scheduleToolRefresh();
       },
     });
-    this.policy.declareDestructive((tool) => this.mcp.isDestructive(tool));
+    this.policy.declareHints((tool) => this.mcp.hint(tool));
     this.lsp = new LspManager(this.sandbox);
     this.context = new ContextManager(this.store, this.sandbox.offloadRoot!, {
       progress: (event) =>

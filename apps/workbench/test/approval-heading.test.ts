@@ -44,6 +44,12 @@ test("an MCP or extension tool's reason is the same words for every tool, shown 
     '它的 MCP 服务器说它可能删除或覆盖数据',
   );
   assert.equal(requestReason('can change state'), '可能改变状态');
+  assert.equal(
+    requestReason(
+      'its MCP server says it only reads; the call sends it a local file or a secret',
+    ),
+    '它的 MCP 服务器说它只读取；这次调用会把本地文件或密钥发给它',
+  );
   setLanguage('en');
   assert.equal(requestReason('can change state'), 'can change state');
 });
