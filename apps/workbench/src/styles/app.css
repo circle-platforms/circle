@@ -952,6 +952,19 @@ pre {
   gap: 5px;
   font-size: inherit;
 }
+/* The runtime has a command and has not answered: say what, and for how long. */
+.runtime-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  margin: 16px 0;
+}
+.runtime-wait button {
+  margin-left: auto;
+  font-size: inherit;
+}
 .transcript-notice {
   font-size: var(--ui-small);
   color: var(--muted);

@@ -112,6 +112,7 @@ test('the component gate preserves prior journeys and includes each native regre
           'notice-timers-ui.mjs',
           'tool-summary-line-ui.mjs',
           'plan-review-ui.mjs',
+          'runtime-wait-ui.mjs',
         ].includes(name),
     ),
     original,
@@ -133,6 +134,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'original-browser-shell-ui.mjs',
     'native-terminal-fit-ui.mjs',
     'runtime-failure-ui.mjs',
+    'runtime-wait-ui.mjs',
     'session-navigation-ui.mjs',
     'response-readability-ui.mjs',
     'workspace-layout-ui.mjs',
@@ -173,7 +175,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'plan-review-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 61);
+  assert.equal(new Set(COMPONENT_SUITES).size, 62);
 });
 
 test('safe file undo remains a required component journey', () => {

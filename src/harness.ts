@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { orderModeToolResults } from './tool_history.js';
 import type {
   ChatModel,
@@ -90,6 +91,16 @@ class InputPresentations extends Map<string, InputPresentation> {
     return super.set(text, presentation);
   }
 }
+/** Whether a title request failed because its own clock ran out. */
+function titleTimedOut(error: unknown): boolean {
+  for (let value = error; value instanceof Error;) {
+    if (/(?:Timeout|Abort)Error/.test(value.name)) return true;
+    if (/timed out|timeout/i.test(value.message)) return true;
+    value = value.cause instanceof Error ? value.cause : undefined;
+  }
+  return false;
+}
+
 function titleTrace(message: string): void {
   if (!process.env.CIRCLE_DEBUG) return;
   console.error(`[circle] title: ${message}`);
@@ -614,9 +625,13 @@ export class Harness {
     }
     if (persistenceError) throw persistenceError;
   }
-  /** Let in-flight titles finish. Closing calls this before the store goes. */
-  async finishTitle(): Promise<void> {
-    await Promise.all([...this.titleTasks]);
+  /** Let in-flight titles finish, up to a moment: closing must not wait on a gateway. */
+  async finishTitle(waitMs = 3_000): Promise<void> {
+    if (!this.titleTasks.size) return;
+    await Promise.race([
+      Promise.all([...this.titleTasks]).catch(() => undefined),
+      delay(waitMs, undefined, { ref: false }),
+    ]);
   }
   private storedSession(sessionId = this.sessionId): Session | undefined {
     try {
@@ -778,6 +793,11 @@ export class Harness {
    * thinking is disabled.
    */
   static readonly titleOutputTokens = TITLE_MAX_TOKENS;
+  /**
+   * How long a title may keep the person waiting for a name. A side request is
+   * never worth holding the channel: a gateway that hangs says nothing useful.
+   */
+  static readonly titleWaitMs = 10_000;
   /** Set when the turn starts. Sent after the turn so it does not share that request. */
   private pendingTitle?: { display: string; fallback: string };
   /** Title requests in flight, so close can let them land before the store goes. */
@@ -842,19 +862,20 @@ export class Harness {
           },
         ],
         tools: [],
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(Harness.titleWaitMs),
         // `''` asks the Anthropic body for `thinking: {type: 'disabled'}`.
         // `minimal` is sent as output_config.effort and glm rejects it.
         effort: '',
         maxTokens: Harness.titleOutputTokens,
         token: () => {},
       });
-    // One retry for a dropped connection. A second failure is reported once.
+    // One retry for a dropped connection. A request the clock stopped is not
+    // sent again: a hanging gateway would spend the wait twice for nothing.
     const call = async (text: string) => {
       try {
         return await ask(text);
       } catch (error) {
-        if (!isNetworkFailure(error)) throw error;
+        if (!isNetworkFailure(error) || titleTimedOut(error)) throw error;
         return await ask(text);
       }
     };

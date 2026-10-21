@@ -103,6 +103,18 @@ Circle restarts the runtime by itself once. If it stops again within ten minutes
 
 Each unexpected exit is written to `logs/runtime.log` in the data folder (`runtime.log.1` keeps the previous megabyte): the exit code and what it means when Circle knows, how long the runtime ran, whether it restarted, and the last 16 KB the runtime wrote to its error output, with values that look like keys or tokens replaced by `[redacted]`. When V8 ran out of heap, that output says `JavaScript heap out of memory` and the notice says the runtime ran out of memory. On Windows a crash without a crash handler reports `4294930435 (0xFFFF7003)`: Chromium's crash reporter was asked for a dump and none was connected, so the code does not say what failed; the log's error output may.
 
+### When the runtime is slow
+
+A command that has gone unanswered for four seconds says so where you were looking for the answer: a line at the end of the conversation reads `Circle is still working on custom-command · 9s`, with **stop waiting** beside it. The line grows as the wait does and goes when the runtime answers.
+
+A command the runtime never answers fails after two minutes. That failure stays in the conversation as a card, not as a toast that passes: `Circle did not answer in 120s · prompt`, the runtime's own words folded under **error details**, and the actions **retry** (for a message still in the box, or a slash command, which is sent again as it was), **stop waiting** (an interrupt the runtime answers whatever else it is holding), **copy error details** and **dismiss**. A timeout is not proof that nothing happened, so the card says to check before sending it again.
+
+The queue gives up on a held command after fifteen seconds: the next command runs when you ask for it instead of waiting behind it, and the log says so (`[circle] runtime queue released`). Answers, interrupts and session switching never waited in the first place.
+
+A title is a side request, not a reason to wait: it gets ten seconds, is not sent again when its own clock stopped it, and closing a session waits for it for at most three seconds.
+
+The runtime's standard output is kept in a 64 KB ring and written to `logs/runtime.log` with the last of its error output when a command times out, so a wait that ends in a failure can be read afterwards. It is not shown in the window.
+
 ## Files, changes and subagents
 
 The desktop application edits, runs and reviews a trusted project while the agent keeps working; you do not need to stop a turn to open or save a file, or to switch sessions.

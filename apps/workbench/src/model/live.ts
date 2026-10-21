@@ -1,4 +1,7 @@
-import type { DesktopBridge } from '../../../desktop/src/contracts';
+import type {
+  DesktopBridge,
+  RuntimeCommandWait,
+} from '../../../desktop/src/contracts';
 import type {
   RuntimeCommandName,
   RuntimeUpdate,
@@ -7,6 +10,7 @@ import type {
 } from '../../../desktop/src/runtime-protocol';
 import { RuntimeTokenBuffer } from '../../../desktop/src/runtime-token-stream';
 import type {
+  ActionFailure,
   Attachment,
   BeginResult,
   CommandResult,
@@ -67,6 +71,56 @@ const localSettings = (value: {
     ),
   );
 
+/** Say what the runtime is holding, without pretending the wait came from its state. */
+function withWaiting(
+  snapshot: WorkbenchSnapshot,
+  waiting: NonNullable<WorkbenchSnapshot['runtime']>['waiting'],
+): WorkbenchSnapshot {
+  if (!snapshot.runtime) return snapshot;
+  const same =
+    (snapshot.runtime.waiting === undefined) === (waiting === undefined) &&
+    equal(snapshot.runtime.waiting, waiting);
+  if (same) return snapshot;
+  return { ...snapshot, runtime: { ...snapshot.runtime, waiting } };
+}
+/**
+ * The main process says a command it kept and never answered, in English, with
+ * the command's name and its wait. That is a runtime word: the window says it
+ * in the interface language, and keeps the name and the seconds to act on.
+ */
+function timedOutCommand(
+  message: string,
+): { command: string; seconds: number } | undefined {
+  const said =
+    /^Error invoking remote method '[^']+':\s*(?:Error:\s*)?(.*)$/s.exec(
+      message,
+    )?.[1] ?? message;
+  const held =
+    /^runtime command timed out; execution state must be checked(?: · ([\w-]+) \((\d+)s\))?/.exec(
+      said,
+    );
+  if (!held) return undefined;
+  return { command: held[1] ?? '', seconds: Number(held[2] ?? 120) };
+}
+/** What the person may safely ask again after this command failed. */
+function retryOf(
+  name: RuntimeCommandName,
+  payload: Record<string, unknown>,
+): ActionFailure['retry'] {
+  if (name === 'prompt') return { kind: 'message' };
+  if (
+    name === 'custom-command' &&
+    typeof payload.name === 'string' &&
+    payload.name
+  )
+    return {
+      kind: 'command',
+      name: payload.name,
+      args: typeof payload.args === 'string' ? payload.args : '',
+    };
+  return undefined;
+}
+
 /** Local drafts/view preferences are separate from core-owned history and execution state. */
 export class LiveRuntime implements RuntimePort {
   readonly mode = 'live' as const;
@@ -81,6 +135,10 @@ export class LiveRuntime implements RuntimePort {
     NonNullable<View['attachments']>
   >();
   private sessionErrors = new Map<string, string>();
+  private sessionFailures = new Map<string, ActionFailure>();
+  // The command the runtime is holding, as the main process last said it
+  private waiting?: NonNullable<WorkbenchSnapshot['runtime']>['waiting'];
+  private unsubscribeWait: () => void = () => {};
   private files: WorkbenchSnapshot['files'] = [];
   // The workspace whose files were last listed, and a listing in flight.
   private listed?: string;
@@ -151,7 +209,19 @@ export class LiveRuntime implements RuntimePort {
     this.unsubscribe = host.onRuntime(this.receive);
     this.unsubscribeDelta =
       host.onRuntimeDelta?.(this.receiveDelta) ?? (() => {});
+    this.unsubscribeWait = host.onRuntimeWait?.(this.receiveWait) ?? (() => {});
   }
+  /** A command the runtime has kept for seconds: the window says it while it lasts. */
+  private receiveWait = (wait: RuntimeCommandWait | null) => {
+    if (this.disposed) return;
+    this.waiting = wait
+      ? { command: wait.name, waitedMs: wait.waitedMs }
+      : undefined;
+    const next = withWaiting(this.snapshot, this.waiting);
+    if (next === this.snapshot) return;
+    this.snapshot = next;
+    for (const listener of this.listeners) listener();
+  };
   private persist(): boolean {
     if (this.disposed) return false;
     try {
@@ -210,11 +280,16 @@ export class LiveRuntime implements RuntimePort {
     }
     if (removedView) this.persist();
     for (const id of this.sessionErrors.keys())
-      if (!existing.has(id)) this.sessionErrors.delete(id);
+      if (!existing.has(id)) {
+        this.sessionErrors.delete(id);
+        this.sessionFailures.delete(id);
+      }
     for (const session of this.snapshot.sessions) {
       Object.assign(session, this.views.get(session.id) ?? {});
       session.actionError = this.sessionErrors.get(session.id);
+      session.actionFailure = this.sessionFailures.get(session.id);
     }
+    this.snapshot = withWaiting(this.snapshot, this.waiting);
     for (const listener of this.listeners) listener();
     // A file tool or a finished turn may have added files: list the folder again.
     const kind = update.event?.kind;
@@ -288,8 +363,10 @@ export class LiveRuntime implements RuntimePort {
           ...session,
           ...(this.views.get(session.id) ?? {}),
           actionError: this.sessionErrors.get(session.id),
+          actionFailure: this.sessionFailures.get(session.id),
         })),
       };
+      this.snapshot = withWaiting(this.snapshot, this.waiting);
       for (const listener of this.listeners) listener();
     }, 16);
   }
@@ -391,35 +468,78 @@ export class LiveRuntime implements RuntimePort {
     });
     return this.listing;
   }
-  private report(error: unknown, sessionId = this.snapshot.activeSessionId) {
+  private report(
+    error: unknown,
+    sessionId = this.snapshot.activeSessionId,
+    retry?: ActionFailure['retry'],
+  ) {
     if (this.disposed) return;
     if (error instanceof SessionActionError) sessionId = error.sessionId;
-    const message =
+    const detail =
       error instanceof Error ? error.message : t('runtime action failed');
-    if (!this.snapshot.sessions.some((session) => session.id === sessionId))
-      return;
-    this.sessionErrors.set(sessionId, message);
+    const held = timedOutCommand(detail);
+    const message = held
+      ? t('Circle did not answer in {seconds}s', { seconds: held.seconds }) +
+        (held.command ? ` · ${held.command}` : '')
+      : detail;
+    // A channel the runtime has kept can hold a new conversation out of the
+    // state it last sent. Say the failure where the person is looking, not
+    // nowhere: dropping it was the reason a wait left no trace at all.
+    const shown = this.snapshot.sessions.some(
+      (session) => session.id === sessionId,
+    )
+      ? sessionId
+      : this.snapshot.activeSessionId;
+    const failure: ActionFailure = {
+      message,
+      kind: held ? 'timeout' : 'failed',
+      at: new Date().toISOString(),
+      detail,
+      ...(retry ? { retry } : {}),
+    };
+    this.sessionErrors.set(shown, message);
+    this.sessionFailures.set(shown, failure);
     this.snapshot = {
       ...this.snapshot,
       sessions: this.snapshot.sessions.map((session) =>
-        session.id === sessionId
-          ? { ...session, actionError: message }
+        session.id === shown
+          ? { ...session, actionError: message, actionFailure: failure }
           : session,
       ),
     };
+    this.snapshot = withWaiting(this.snapshot, this.waiting);
     for (const listener of this.listeners) listener();
   }
   dismissActionError = (sessionId = this.snapshot.activeSessionId) => {
-    if (!this.sessionErrors.delete(sessionId)) return;
+    const dropped = this.sessionErrors.delete(sessionId);
+    const droppedCard = this.sessionFailures.delete(sessionId);
+    if (!dropped && !droppedCard) return;
     this.snapshot = {
       ...this.snapshot,
       sessions: this.snapshot.sessions.map((session) =>
         session.id === sessionId
-          ? { ...session, actionError: undefined }
+          ? { ...session, actionError: undefined, actionFailure: undefined }
           : session,
       ),
     };
     for (const listener of this.listeners) listener();
+  };
+  /** Ask again the message or command the card says failed. */
+  retryActionFailure = async (sessionId = this.snapshot.activeSessionId) => {
+    const retry = this.sessionFailures.get(sessionId)?.retry;
+    this.dismissActionError(sessionId);
+    if (!retry) return;
+    if (retry.kind === 'message') {
+      await this.send('steering', sessionId);
+      return;
+    }
+    if (retry.name) await this.command(retry.name, retry.args, sessionId);
+  };
+  /** End the wait the person can see: stop what the runtime is holding on it. */
+  stopWaiting = async (sessionId = this.snapshot.activeSessionId) => {
+    this.dismissActionError(sessionId);
+    // An interrupt is answered at once, whatever else the runtime is working on.
+    await this.native('abort', {}, sessionId, false).catch(() => undefined);
   };
   restartRuntime = async () => {
     if (!this.host.restartRuntime)
@@ -450,6 +570,7 @@ export class LiveRuntime implements RuntimePort {
     this.disposed = true;
     this.unsubscribe();
     this.unsubscribeDelta();
+    this.unsubscribeWait();
     if (this.tokenTimer) clearTimeout(this.tokenTimer);
     this.tokenPending = [];
     this.listeners.clear();
@@ -467,12 +588,16 @@ export class LiveRuntime implements RuntimePort {
     sessionId = this.snapshot.activeSessionId,
     reportFailure = true,
   ): Promise<unknown> {
-    if (reportFailure && this.sessionErrors.delete(sessionId)) {
+    if (
+      reportFailure &&
+      (this.sessionErrors.delete(sessionId) ||
+        this.sessionFailures.delete(sessionId))
+    ) {
       this.snapshot = {
         ...this.snapshot,
         sessions: this.snapshot.sessions.map((session) =>
           session.id === sessionId
-            ? { ...session, actionError: undefined }
+            ? { ...session, actionError: undefined, actionFailure: undefined }
             : session,
         ),
       };
@@ -506,8 +631,10 @@ export class LiveRuntime implements RuntimePort {
         error,
       );
     });
-    if (reportFailure)
-      void promise.catch((error) => this.report(error, sessionId));
+    if (reportFailure) {
+      const retry = retryOf(name, payload);
+      void promise.catch((error) => this.report(error, sessionId, retry));
+    }
     return promise;
   }
   /**

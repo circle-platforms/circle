@@ -392,6 +392,27 @@ class TitleModel implements ChatModel {
   }
 }
 
+/** A title request the clock stops, as a hanging gateway ends one. */
+class AbortedTitleModel implements ChatModel {
+  model = 'aborted-title-model';
+  sideRequests = true;
+  titleCalls = 0;
+  async complete(request: ModelRequest): Promise<ModelResponse> {
+    if (request.maxTokens === Harness.titleOutputTokens) {
+      this.titleCalls++;
+      throw Object.assign(
+        new Error('The operation was aborted due to timeout'),
+        { name: 'AbortError' },
+      );
+    }
+    request.token('done');
+    return {
+      message: { id: 'reply', role: 'assistant', content: 'done' },
+      usage: emptyUsage(),
+    };
+  }
+}
+
 function harness(root: string, model: ChatModel, holdTitle = false) {
   const store = new CheckpointStore(root);
   const session = store.create(root, model.model);
@@ -1686,5 +1707,43 @@ test('closing waits for a title in flight before the store goes', async (t) => {
   assert.equal(settled, false);
   model.releaseTitle();
   await finished;
+  assert.equal(store.get(session.id)!.title, 'Login bug fix');
+});
+
+test('a title stopped by its own clock is not asked again', async (t) => {
+  // A side request is worth ten seconds and nothing more: a gateway that hangs
+  // must not spend the wait twice before the person sees their own answer.
+  assert.equal(Harness.titleWaitMs, 10_000);
+  const root = scratch(t);
+  const model = new AbortedTitleModel();
+  const { harness: run, store, session } = harness(root, model, true);
+  cleanup(t, () => store.close());
+  const notes = titleFailures(run);
+  await run.run(LONG);
+  await run.finishTitle();
+  assert.equal(
+    model.titleCalls,
+    1,
+    'a request the clock stopped is not sent again',
+  );
+  assert.equal(store.get(session.id)!.title, '');
+  assert.match(notes[0] ?? '', /aborted/i);
+});
+
+test('closing waits a moment for a title, not for the endpoint', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  const { harness: run, store, session } = harness(root, model, true);
+  cleanup(t, () => store.close());
+  await run.run(LONG);
+  const started = Date.now();
+  await run.finishTitle(25);
+  assert.ok(
+    Date.now() - started < 2000,
+    'a title still in flight does not hold the close',
+  );
+  assert.equal(store.get(session.id)!.title, '');
+  model.releaseTitle();
+  await run.finishTitle();
   assert.equal(store.get(session.id)!.title, 'Login bug fix');
 });

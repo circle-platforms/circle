@@ -26,6 +26,12 @@ export interface NativeWorkspace {
   complete?: boolean;
   nextCursor?: string;
 }
+/** One command the runtime is still holding without answering, as the windows are told it. */
+export interface RuntimeCommandWait {
+  id: string;
+  name: string;
+  waitedMs: number;
+}
 export interface DesktopInfo {
   kind: 'desktop';
   name: string;
@@ -88,6 +94,10 @@ export interface DesktopBridge {
   onRuntime: (listener: (update: RuntimeUpdate) => void) => () => void;
   onRuntimeDelta?: (
     listener: (delta: import('./runtime-protocol').RuntimeTokenDelta) => void,
+  ) => () => void;
+  /** A command the runtime has kept for seconds, and nothing once it answers. */
+  onRuntimeWait?: (
+    listener: (wait: RuntimeCommandWait | null) => void,
   ) => () => void;
   onWorkspaceEvent?: (
     listener: (event: WorkspaceServiceEvent) => void,

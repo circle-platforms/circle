@@ -31,6 +31,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'original-browser-shell-ui.mjs',
   'native-terminal-fit-ui.mjs',
   'runtime-failure-ui.mjs',
+  'runtime-wait-ui.mjs',
   'session-navigation-ui.mjs',
   'response-readability-ui.mjs',
   'workspace-layout-ui.mjs',
