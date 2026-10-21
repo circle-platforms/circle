@@ -1467,7 +1467,7 @@ export function App() {
         ...pluginPages.map(({ page }) => ({
           id: 'plugin-' + page.id,
           label: page.title,
-          detail: t('platform plugin'),
+          detail: t('plugin page'),
           run: () => navigate('/page/' + page.id),
         })),
         ...visibleSessions(snapshot.sessions).map((item) => {

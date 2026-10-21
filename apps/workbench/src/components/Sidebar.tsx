@@ -763,9 +763,9 @@ export function Sidebar({
         </NavLink>
       </nav>
       {pluginPages.length > 0 && (
-        <nav className="sidebar-primary" aria-label={t('platform')}>
+        <nav className="sidebar-primary" aria-label={t('pages')}>
           <div className="section-label">
-            <span>{t('platform')}</span>
+            <span>{t('pages')}</span>
           </div>
           {pluginPages.map(({ page }) => (
             <NavLink

@@ -16,7 +16,7 @@ export const app: Record<string, string> = {
   inspector: '检查器',
   'global search': '全局搜索',
   'sessions, files, pages or past messages': '会话、文件、页面或历史消息',
-  'platform plugin': '平台插件',
+  'plugin page': '插件页面',
   'session · {workspace}': '会话 · {workspace}',
   page: '页面',
   file: '文件',
