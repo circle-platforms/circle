@@ -24,6 +24,7 @@ import {
 } from '../src/install_layout.js';
 import { VERSION } from '../src/version.js';
 import { TITLE_MAX_TOKENS } from '../src/session_title.js';
+import { listenReleaseGateway } from './release-gateway.js';
 import { parseFrontmatter } from '../src/skills.js';
 import {
   defaultSettings,
@@ -232,16 +233,14 @@ try {
     );
     response.end();
   });
-  await new Promise<void>((resolveReady) =>
-    server!.listen(0, '127.0.0.1', resolveReady),
-  );
+  const gatewayPort = await listenReleaseGateway(server);
   const settings = defaultSettings();
   settings.initialized = true;
   settings.auth = {
     ...settings.auth,
     protocol: 'openai',
     model: 'smoke',
-    base_url: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
+    base_url: `http://127.0.0.1:${gatewayPort}/v1`,
   };
   saveSettings(trustFolder(settings, workspace), home);
   saveCredentials({ api_key: 'fake-release-smoke-key' }, home);
