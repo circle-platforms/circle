@@ -93,6 +93,12 @@ export interface Message {
   legacy_data?: { type: string; data: Record<string, unknown> };
 }
 export type Effect = 'read' | 'write' | 'execute' | 'unknown';
+/**
+ * What `prepare` returns: the call to run with what it took before the approval. `shown`
+ * says what that is, by argument, in place of what the model wrote, for the approval card
+ * and the call's events: a file's path, size and digest where its bytes go to the tool.
+ */
+export type PreparedRun = Tool['run'] & { shown?: Record<string, unknown> };
 export interface Tool {
   name: string;
   description: string;
@@ -126,7 +132,7 @@ export interface Tool {
   prepare?: (
     args: Record<string, unknown>,
     context: ToolContext,
-  ) => Promise<Tool['run']>;
+  ) => Promise<PreparedRun>;
   run(args: Record<string, unknown>, context: ToolContext): Promise<string>;
 }
 export interface ToolContext {

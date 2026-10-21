@@ -38,6 +38,7 @@ A server reached over the network:
 | `url`, `transport`       | Connect to a server. `transport` is `sse` (the default), `streamable_http` or `websocket`; anything else is treated as `sse`.                                                                                                                                                                                                                          |
 | `headers`                | Headers sent with every request to a `url` server over `sse` or `streamable_http`, such as `{ "Authorization": "Bearer ${secret:DOCS_TOKEN}" }`. A value can name a saved secret or an environment variable; see [Tokens in headers](#tokens-in-headers). A `websocket` server cannot be sent headers.                                                 |
 | `trust_annotations`      | `true` (the default): what the server says of each tool decides how its calls are approved. `false`: it is ignored, and every tool of that server asks. See [Security](#security).                                                                                                                                                                     |
+| `max_file_bytes`         | The largest file a [file parameter](#files-a-tool-takes) of the server's tools sends, in bytes: 33554432 (32 MiB) unless set. A value that is not a whole number of bytes, 1 or more, stops that server, and `/mcp` says why.                                                                                                                          |
 
 An entry with neither `command` nor `url` is skipped. A URL may not carry a user name or password; use `headers` instead.
 
@@ -67,6 +68,16 @@ Each tool is offered to the model as `<name>_<tool>`, for example `memory_create
 A server can tell its clients how to use its tools, in the instructions it sends when Circle connects. Circle adds them to the model's system prompt in a section of their own for each server, headed "Instructions from MCP server <name>", which says they are the server's words and not yours: where they differ from what you ask, from your or the project's instructions, or from the rest of the prompt, those come first. Circle takes the first 8 KiB of each server's instructions and marks where it cut, keeps line breaks and tabs, and takes out other control characters and the bidirectional-text controls. A server that is not connected, or sent none, has no section. They are read again on every connect, so `/mcp reload` brings changed instructions in. When a server's connection ends while Circle runs (a program that exits), its section leaves the prompt from the next turn, and `/mcp` says the connection ended.
 
 A tool call has no time limit, so a tool that waits for a login or a long job can take as long as it needs. `esc` sends the server a cancellation; what the server does with it is up to the server. Images and PDFs a tool returns go to the model as attachments.
+
+## Files a tool takes
+
+A tool can take a file as an argument: a top-level property of its input that is a JSON Schema string with `"contentEncoding": "base64"` (with or without `contentMediaType`). Circle shows the model that tool with the same schema, except that the property's description says it takes a local file path, and its `pattern`, `format`, `minLength` and `maxLength`, which describe the encoded text, are left out. The model gives a path. Circle reads the file and sends its bytes, base64-encoded, as that argument.
+
+- The path is taken as `read_file` takes it, by the same code: relative to the workspace or absolute, a path with `..` refused, a [credential file](security.md#credential-files) refused by name, and in the desktop application a file outside the workspace only with the grant you gave the conversation.
+- Only a regular file of at most `max_file_bytes` is sent. A folder, a missing file, a pipe or a larger file is an error the model reads, with no card, and the server is not called.
+- The file is read before the approval card, and the call sends the bytes read then: a file changed while the card is up is sent as it was. Rejecting the call sends nothing.
+- The approval card shows the path, the size in bytes and the SHA-256 of what is sent, not the bytes, and the result the model reads starts with a line such as `file: sent data/report.pdf (48213 bytes, sha256 9f2c…)`. Where the server's answer or error quotes the encoded file, the model reads that path, size and digest instead. The conversation keeps the path the model gave and that result, never the bytes.
+- A tool its server marks read-only runs without a card (see [Security](#security)), so the files it is given go to the server without asking.
 
 ## Drive a browser
 

@@ -1549,6 +1549,13 @@ export class Harness {
           })
         : undefined;
       signal.throwIfAborted();
+      // What the prepared call took (a file's size and digest) is what the card and the
+      // events show for that argument; the call runs with what was taken
+      if (preparedRun?.shown)
+        call = {
+          ...call,
+          args: { ...call.args, ...namedSecrets(preparedRun.shown, secrets) },
+        };
       const wouldAsk =
         !settingsAllowed &&
         !this.options.planFileMutation?.(call) &&

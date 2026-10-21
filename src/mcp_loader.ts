@@ -5,10 +5,16 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { Tool, ToolContext, MediaAttachment } from './types.js';
+import type {
+  Tool,
+  ToolContext,
+  MediaAttachment,
+  PreparedRun,
+} from './types.js';
 import { attachmentFromBase64 } from './media.js';
 import { isRecord } from './settings.js';
-import { shellEnvironment } from './sandbox.js';
+import { Sandbox, shellEnvironment } from './sandbox.js';
+import { readFileBytes } from './file_access.js';
 import { abortable } from './watch.js';
 
 export interface McpConnection {
@@ -28,7 +34,11 @@ export interface McpConnection {
    * does. Default true.
    */
   trustAnnotations?: boolean;
+  /** The largest file a file parameter of the server's tools takes, in bytes. */
+  maxFileBytes?: number;
 }
+/** The largest file a file parameter takes unless the server's entry says otherwise. */
+export const MAX_FILE_BYTES = 32 * 1024 * 1024;
 export interface McpStatus {
   name: string;
   connection: string;
@@ -43,6 +53,76 @@ export interface McpServices {
   secrets?: () => Record<string, string>;
   /** A server's connection ended on its own: what the model is told of it changed. */
   onChange?: () => void;
+  /**
+   * Reads the file a file parameter names, under read_file's rules; at most `limit` bytes.
+   * Without it, the terminal's rules for the workspace apply.
+   */
+  readFile?: (
+    path: string,
+    context: ToolContext,
+    limit: number,
+  ) => Promise<{ path: string; bytes: Buffer }>;
+}
+/**
+ * A tool's file parameters: its top-level properties that are base64 text
+ * (`contentEncoding: "base64"`), which the model fills with a local file's path.
+ */
+export function fileParameters(schema: unknown): string[] {
+  if (!isRecord(schema) || !isRecord(schema.properties)) return [];
+  return Object.entries(schema.properties)
+    .filter(
+      ([, property]) =>
+        isRecord(property) &&
+        property.type === 'string' &&
+        typeof property.contentEncoding === 'string' &&
+        property.contentEncoding.toLowerCase() === 'base64',
+    )
+    .map(([name]) => name);
+}
+/** What a file parameter's description gains, for the model. */
+export const FILE_PARAMETER_NOTE =
+  "Takes a LOCAL FILE PATH, absolute or relative to the workspace: Circle reads the file and sends its bytes. Give the path, never the file's content or base64.";
+/**
+ * The schema the model is shown: a file parameter's description says it takes a path. Its
+ * limits on the encoded text (`pattern`, `format`, `minLength`, `maxLength`) are left out,
+ * since Circle checks the model's arguments against this schema and a path is no base64.
+ */
+export function modelSchema(
+  schema: Record<string, unknown>,
+  files: string[],
+): Record<string, unknown> {
+  if (!files.length) return schema;
+  const properties = { ...(schema.properties as Record<string, unknown>) };
+  for (const name of files) {
+    const {
+      pattern: _pattern,
+      format: _format,
+      minLength: _minLength,
+      maxLength: _maxLength,
+      ...property
+    } = properties[name] as Record<string, unknown>;
+    const given =
+      typeof property.description === 'string'
+        ? property.description.trim()
+        : '';
+    properties[name] = {
+      ...property,
+      description: given
+        ? `${given} ${FILE_PARAMETER_NOTE}`
+        : FILE_PARAMETER_NOTE,
+    };
+  }
+  return { ...schema, properties };
+}
+/** A file read for a file parameter. */
+interface SentFile {
+  name: string;
+  /** The path as the model gave it. */
+  path: string;
+  bytes: Buffer;
+  sha256: string;
+  /** How the file is shown in place of its bytes. */
+  label: string;
 }
 /** The most of a server's instructions the system prompt takes, in bytes of UTF-8. */
 export const MAX_INSTRUCTIONS = 8 * 1024;
@@ -140,6 +220,23 @@ export function buildMcpConnections(
     // Only true or no value trusts what the server says of its tools
     if (item.trust_annotations !== undefined && item.trust_annotations !== true)
       connection.trustAnnotations = false;
+    // A limit that cannot be read is not replaced by the default: the server does not start
+    const limit = item.max_file_bytes;
+    if (
+      limit !== undefined &&
+      item.enabled !== false &&
+      (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1)
+    ) {
+      connections.delete(name);
+      skipped.push({
+        name,
+        connection: connection.command || connection.url || '',
+        tools: [],
+        error: 'max_file_bytes must be a whole number of bytes, 1 or more',
+      });
+      continue;
+    }
+    if (typeof limit === 'number') connection.maxFileBytes = limit;
     if (item.enabled === false) {
       // A disabled later entry still overrides an earlier server with the same
       // name. Never construct a transport or expose tools for either entry.
@@ -334,12 +431,15 @@ interface Connected {
   /** False once the connection ended, closed by Circle or by the server. */
   open: boolean;
 }
+type ServerTool = Awaited<ReturnType<Client['listTools']>>['tools'][number];
 export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
   private servers: Connected[] = [];
   // The tools whose server says they can destroy data
   private destructive = new Set<string>();
+  // For file parameters when the runtime gives no reader: the workspace, as the terminal reads
+  private files?: Sandbox;
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
   // is given: a tool may wait minutes (a login), and an interrupt cancels it.
   constructor(
@@ -348,6 +448,121 @@ export class McpManager {
     readonly callTimeout?: number,
     private readonly services: McpServices = {},
   ) {}
+  private readFile(
+    path: string,
+    context: ToolContext,
+    limit: number,
+  ): Promise<{ path: string; bytes: Buffer }> {
+    if (this.services.readFile)
+      return this.services.readFile(path, context, limit);
+    this.files ??= new Sandbox(this.workspace);
+    return readFileBytes(this.files, undefined, path, context, limit);
+  }
+  /** One of a server's tools as Circle offers it to the model. */
+  private serverTool(
+    connection: McpConnection,
+    client: Client,
+    spec: ServerTool,
+    name: string,
+    readOnly: boolean,
+    hide: (text: string) => string,
+  ): Tool {
+    const files = fileParameters(spec.inputSchema);
+    const limit = connection.maxFileBytes ?? MAX_FILE_BYTES;
+    // The server is sent each file's bytes; Circle shows the file by path, size and digest
+    const call = async (
+      args: Record<string, unknown>,
+      context: ToolContext,
+      sent: SentFile[] = [],
+    ): Promise<string> => {
+      context.signal.throwIfAborted();
+      const sending = { ...args };
+      const encoded = sent.map((file) => {
+        const base64 = file.bytes.toString('base64');
+        sending[file.name] = base64;
+        return [base64, file.label] as const;
+      });
+      const shown = (text: string): string => {
+        let out = hide(text);
+        for (const [base64, label] of encoded)
+          if (base64) out = out.split(base64).join(label);
+        return out;
+      };
+      let result: Awaited<ReturnType<Client['callTool']>>;
+      try {
+        result = await client.callTool(
+          { name: spec.name, arguments: sending },
+          undefined,
+          {
+            signal: context.signal,
+            timeout: this.callTimeout ?? NO_LIMIT,
+            maxTotalTimeout: this.callTimeout,
+          },
+        );
+      } catch (error) {
+        throw hiddenError(error, shown);
+      }
+      const { text, attachments } = resultText(result, spec.name, context);
+      const header = sent
+        .map((file) => `${file.name}: sent ${file.label}`)
+        .join('\n');
+      const framed = (body: string) => (header ? `${header}\n\n${body}` : body);
+      if (result.isError)
+        throw new Error(framed(shown(text || 'MCP tool failed')));
+      context.signal.throwIfAborted();
+      if (attachments.length) context.emitAttachments!(attachments);
+      return framed(
+        shown(text || JSON.stringify(result.structuredContent ?? {})),
+      );
+    };
+    // Before the approval: each named file is read under read_file's rules, so the card shows
+    // what will be sent, and the call sends those bytes
+    const prepare = async (
+      args: Record<string, unknown>,
+      context: ToolContext,
+    ): Promise<PreparedRun> => {
+      const sent: SentFile[] = [];
+      for (const parameter of files) {
+        const path = args[parameter];
+        if (path === undefined) continue;
+        if (typeof path !== 'string' || !path.trim())
+          throw new Error(`${parameter} takes the path of a local file`);
+        const { bytes } = await this.readFile(path, context, limit);
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
+        sent.push({
+          name: parameter,
+          path,
+          bytes,
+          sha256,
+          label: `${path} (${bytes.length} bytes, sha256 ${sha256})`,
+        });
+      }
+      const run: PreparedRun = (given, runContext) => {
+        for (const file of sent)
+          if (given[file.name] !== file.path)
+            throw new Error(`${file.name} is not the file Circle read`);
+        return call(given, runContext, sent);
+      };
+      if (sent.length)
+        run.shown = Object.fromEntries(
+          sent.map((file) => [file.name, file.label]),
+        );
+      return run;
+    };
+    return {
+      name,
+      description: hide(spec.description || name),
+      parameters: modelSchema(spec.inputSchema, files),
+      effect: readOnly ? 'read' : 'unknown',
+      ...(files.length
+        ? {
+            prepare,
+            run: async (args, context) =>
+              (await prepare(args, context))(args, context),
+          }
+        : { run: (args, context) => call(args, context) }),
+    };
+  }
   async load(
     servers: Record<string, unknown>[],
     reserved = new Set<string>(),
@@ -424,41 +639,16 @@ export class McpManager {
                 connection.trustAnnotations !== false,
               );
               if (hints.destructive) destroys.add(name);
-              registered.push({
-                name,
-                description: hide(spec.description || name),
-                parameters: spec.inputSchema,
-                effect: hints.readOnly ? 'read' : 'unknown',
-                run: async (args, context) => {
-                  context.signal.throwIfAborted();
-                  let result: Awaited<ReturnType<Client['callTool']>>;
-                  try {
-                    result = await client.callTool(
-                      { name: spec.name, arguments: args },
-                      undefined,
-                      {
-                        signal: context.signal,
-                        timeout: this.callTimeout ?? NO_LIMIT,
-                        maxTotalTimeout: this.callTimeout,
-                      },
-                    );
-                  } catch (error) {
-                    throw hiddenError(error, hide);
-                  }
-                  const { text, attachments } = resultText(
-                    result,
-                    spec.name,
-                    context,
-                  );
-                  if (result.isError)
-                    throw new Error(hide(text || 'MCP tool failed'));
-                  context.signal.throwIfAborted();
-                  if (attachments.length) context.emitAttachments!(attachments);
-                  return hide(
-                    text || JSON.stringify(result.structuredContent ?? {}),
-                  );
-                },
-              });
+              registered.push(
+                this.serverTool(
+                  connection,
+                  client,
+                  spec,
+                  name,
+                  hints.readOnly,
+                  hide,
+                ),
+              );
             }
             cursor = listed.nextCursor;
             if (cursor) {

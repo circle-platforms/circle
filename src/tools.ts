@@ -18,6 +18,7 @@ import { QUESTION_SCHEMA } from './questions.js';
 import { JobRegistry, jobLine, jobNotice } from './jobs.js';
 import { readTextWindow, readTextContentWindow } from './file_read.js';
 import { FileMutationTools, type FileMutations } from './file_mutations.js';
+import { authorizeFileRead } from './file_access.js';
 import { mediaType, readMedia } from './media.js';
 import { GREP_SCHEMA, grepSearch } from './grep_tool.js';
 import { takeScreenshot, type ScreenshotOptions } from './screenshot.js';
@@ -97,26 +98,12 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       return false;
     }
   };
-  // A read as the desktop allows it: Circle's own offloaded output (history, large results,
-  // job logs, saved pictures) is read directly, since it is never a workspace or granted
-  // external file; anything else asks the native backend, and an external grant covers an
-  // existing text file only. Without a native backend (the terminal) every read is allowed.
-  const authorizeRead = async (
+  // See authorizeFileRead: the rules MCP file parameters read by too
+  const authorizeRead = (
     path: string,
     context: ToolContext,
-  ): Promise<FileMutationTools | undefined> => {
-    const native = sandbox.isOffloadOutput(path) ? undefined : mutations;
-    if (native) await native.authorize(path, context, 'read');
-    if (
-      native &&
-      !sandbox.isInside(path) &&
-      (statSync(path).isDirectory() || mediaType(path))
-    )
-      throw Error(
-        'native external file grants support existing text files only',
-      );
-    return native;
-  };
+  ): Promise<FileMutationTools | undefined> =>
+    authorizeFileRead(sandbox, mutations, path, context);
   // What these write stays on disk: a %NAME% there is text, never a variable's value.
   const FILE_WRITERS = new Set(['write_file', 'edit_file', 'apply_patch']);
   // What these take becomes a model's input or the conversation's: a secret stays its name

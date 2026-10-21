@@ -76,7 +76,8 @@ import { BUILTIN_SLASH } from './tui/slash_commands.js';
 import { discoverCustomCommands } from './commands.js';
 import { LspManager } from './lsp_tool.js';
 import type { Tool, ToolContext } from './types.js';
-import type { FileMutations } from './file_mutations.js';
+import { FileMutationTools, type FileMutations } from './file_mutations.js';
+import { readFileBytes } from './file_access.js';
 import {
   ContextManager,
   restoredTodos,
@@ -547,8 +548,15 @@ export class AgentRuntime {
         this.releaseIfAway();
       },
     });
+    // A file an MCP tool is given is read as read_file reads: with the desktop's backend, a
+    // file outside the workspace only with the person's grant
+    const fileReads = options.fileMutations
+      ? new FileMutationTools(this.sandbox, options.fileMutations)
+      : undefined;
     this.mcp = new McpManager(options.workspace, undefined, undefined, {
       secrets: () => loadSecrets(this.options.home),
+      readFile: (path, context, limit) =>
+        readFileBytes(this.sandbox, fileReads, path, context, limit),
       // A server that went away leaves the system prompt between turns, as tools do
       onChange: () => {
         if (this.closing) return;
