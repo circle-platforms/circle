@@ -548,8 +548,10 @@ export class ChromeBrowser implements BrowserPort {
   private waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
     if (this.exited(child)) return Promise.resolve(true);
     return new Promise((resolve) => {
+      let observation: ReturnType<typeof setImmediate> | undefined;
       const finish = (exited: boolean): void => {
         clearTimeout(timer);
+        clearImmediate(observation);
         child.off('exit', done);
         child.off('error', done);
         resolve(exited);
@@ -557,7 +559,11 @@ export class ChromeBrowser implements BrowserPort {
       const done = (): void => {
         if (this.exited(child)) finish(true);
       };
-      const timer = setTimeout(() => finish(this.exited(child)), timeout);
+      const timer = setTimeout(() => {
+        // A busy event loop can deliver this timer before a queued process exit.
+        // Let the poll phase deliver that event before judging the unchanged deadline.
+        observation = setImmediate(() => finish(this.exited(child)));
+      }, timeout);
       child.once('exit', done);
       child.on('error', done);
     });
