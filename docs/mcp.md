@@ -79,6 +79,8 @@ A tool can take a file as an argument: a top-level property of its input that is
 - The approval card shows the path, the size in bytes and the SHA-256 of what is sent, not the bytes, and the result the model reads starts with a line such as `file: sent data/report.pdf (48213 bytes, sha256 9f2c…)`. Where the server's answer or error quotes the encoded file, the model reads that path, size and digest instead. The conversation keeps the path the model gave and that result, never the bytes.
 - A tool its server marks read-only runs without a card (see [Security](#security)), so the files it is given go to the server without asking.
 
+A tool its server marks `idempotentHint` is not called again for the same thing: when the conversation calls it with files of the same contents (compared by SHA-256, whatever their paths) and the same other arguments as an earlier call that succeeded, Circle gives the model that earlier result, starting with `cached (same content)`, and the server is not contacted. The call still asks for approval as any other. Circle keeps these results in memory for the conversation and its subagents, at most 64 of them and 16 MiB in all, the least recently used going first; a new session starts with none, and reloading the servers forgets them. A failed call is not kept. Calls that send no file, tools without the hint, and every tool of a server with `trust_annotations: false` always reach the server.
+
 ## Drive a browser
 
 Circle's own `screenshot` tool only looks at the screen. To let the model open a web app you are building, click and type in it, and read its console and network, add a browser server. Two that run with `npx`:

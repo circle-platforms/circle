@@ -53,6 +53,8 @@ export interface McpServices {
   secrets?: () => Record<string, string>;
   /** A server's connection ended on its own: what the model is told of it changed. */
   onChange?: () => void;
+  /** The Circle session the runtime is in now; it can change while the runtime lives. */
+  sessionId?: () => string;
   /**
    * Reads the file a file parameter names, under read_file's rules; at most `limit` bytes.
    * Without it, the terminal's rules for the workspace apply.
@@ -414,15 +416,76 @@ const NO_LIMIT = 2_147_483_647;
  * What a tool's annotations make of it, when its server is trusted with them: read-only
  * (`readOnlyHint`) runs as Circle's own reads do; destructive (`destructiveHint`) asks every
  * time. A tool that says both is destructive. Anything else is unknown, as without them.
+ * Idempotent (`idempotentHint`): a call that sends files may get an earlier result again.
  */
 function toolHints(
   annotations: unknown,
   trusted: boolean,
-): { readOnly: boolean; destructive: boolean } {
+): { readOnly: boolean; destructive: boolean; idempotent: boolean } {
   const hints = trusted && isRecord(annotations) ? annotations : {};
   const destructive = hints.destructiveHint === true;
-  return { readOnly: hints.readOnlyHint === true && !destructive, destructive };
+  return {
+    readOnly: hints.readOnlyHint === true && !destructive,
+    destructive,
+    idempotent: hints.idempotentHint === true,
+  };
 }
+/** JSON with every object's keys in order, so equal arguments read the same. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (isRecord(value))
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(',')}}`;
+  return JSON.stringify(value) ?? 'null';
+}
+type ToolResult = Awaited<ReturnType<Client['callTool']>>;
+/** At most this many results of calls that sent files are kept, and this much of them. */
+export const MAX_CACHED_RESULTS = 64;
+export const MAX_CACHED_BYTES = 16 * 1024 * 1024;
+/**
+ * The results of successful calls to idempotent tools that sent files, by what the call
+ * sent; the oldest used goes first when there are too many.
+ */
+class SentResults {
+  private entries = new Map<string, { result: ToolResult; size: number }>();
+  private size = 0;
+  get(key: string): ToolResult | undefined {
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return structuredClone(entry.result);
+  }
+  set(key: string, result: ToolResult): void {
+    const size = JSON.stringify(result).length;
+    if (size > MAX_CACHED_BYTES) return;
+    const earlier = this.entries.get(key);
+    if (earlier) {
+      this.entries.delete(key);
+      this.size -= earlier.size;
+    }
+    this.entries.set(key, { result: structuredClone(result), size });
+    this.size += size;
+    for (const [oldest, entry] of this.entries) {
+      if (
+        this.entries.size <= MAX_CACHED_RESULTS &&
+        this.size <= MAX_CACHED_BYTES
+      )
+        break;
+      this.entries.delete(oldest);
+      this.size -= entry.size;
+    }
+  }
+  clear(): void {
+    this.entries.clear();
+    this.size = 0;
+  }
+}
+/** What a result taken from the cache says before the files it was for. */
+export const CACHED_RESULT =
+  'cached (same content): an earlier call in this session sent the same files and arguments, so the server was not called again and this is its result';
 /** A server Circle is connected to. */
 interface Connected {
   name: string;
@@ -438,6 +501,7 @@ export class McpManager {
   private servers: Connected[] = [];
   // The tools whose server says they can destroy data
   private destructive = new Set<string>();
+  private results = new SentResults();
   // For file parameters when the runtime gives no reader: the workspace, as the terminal reads
   private files?: Sandbox;
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
@@ -464,11 +528,36 @@ export class McpManager {
     client: Client,
     spec: ServerTool,
     name: string,
-    readOnly: boolean,
+    hints: { readOnly: boolean; idempotent: boolean },
     hide: (text: string) => string,
   ): Tool {
     const files = fileParameters(spec.inputSchema);
     const limit = connection.maxFileBytes ?? MAX_FILE_BYTES;
+    // What a call sent: the session, the server's tool, each file's sha256 and the other
+    // arguments. Only an idempotent tool's calls that send files are looked up by it.
+    const cacheKey = (
+      args: Record<string, unknown>,
+      context: ToolContext,
+      sent: SentFile[],
+    ): string | undefined => {
+      if (!hints.idempotent || !sent.length) return undefined;
+      const others = Object.fromEntries(
+        Object.entries(args).filter(
+          ([key]) => !sent.some((file) => file.name === key),
+        ),
+      );
+      return createHash('sha256')
+        .update(
+          canonicalJson([
+            this.services.sessionId?.() ?? context.sessionId,
+            connection.name,
+            spec.name,
+            Object.fromEntries(sent.map((file) => [file.name, file.sha256])),
+            others,
+          ]),
+        )
+        .digest('hex');
+    };
     // The server is sent each file's bytes; Circle shows the file by path, size and digest
     const call = async (
       args: Record<string, unknown>,
@@ -476,6 +565,7 @@ export class McpManager {
       sent: SentFile[] = [],
     ): Promise<string> => {
       context.signal.throwIfAborted();
+      const key = cacheKey(args, context, sent);
       const sending = { ...args };
       const encoded = sent.map((file) => {
         const base64 = file.bytes.toString('base64');
@@ -488,24 +578,32 @@ export class McpManager {
           if (base64) out = out.split(base64).join(label);
         return out;
       };
-      let result: Awaited<ReturnType<Client['callTool']>>;
-      try {
-        result = await client.callTool(
-          { name: spec.name, arguments: sending },
-          undefined,
-          {
-            signal: context.signal,
-            timeout: this.callTimeout ?? NO_LIMIT,
-            maxTotalTimeout: this.callTimeout,
-          },
-        );
-      } catch (error) {
-        throw hiddenError(error, shown);
+      const cached = key ? this.results.get(key) : undefined;
+      let result: ToolResult;
+      if (cached) result = cached;
+      else {
+        try {
+          result = await client.callTool(
+            { name: spec.name, arguments: sending },
+            undefined,
+            {
+              signal: context.signal,
+              timeout: this.callTimeout ?? NO_LIMIT,
+              maxTotalTimeout: this.callTimeout,
+            },
+          );
+        } catch (error) {
+          throw hiddenError(error, shown);
+        }
+        if (key && !result.isError) this.results.set(key, result);
       }
       const { text, attachments } = resultText(result, spec.name, context);
-      const header = sent
-        .map((file) => `${file.name}: sent ${file.label}`)
-        .join('\n');
+      const header = [
+        ...(cached ? [CACHED_RESULT] : []),
+        ...sent.map(
+          (file) => `${file.name}: ${cached ? '' : 'sent '}${file.label}`,
+        ),
+      ].join('\n');
       const framed = (body: string) => (header ? `${header}\n\n${body}` : body);
       if (result.isError)
         throw new Error(framed(shown(text || 'MCP tool failed')));
@@ -553,7 +651,7 @@ export class McpManager {
       name,
       description: hide(spec.description || name),
       parameters: modelSchema(spec.inputSchema, files),
-      effect: readOnly ? 'read' : 'unknown',
+      effect: hints.readOnly ? 'read' : 'unknown',
       ...(files.length
         ? {
             prepare,
@@ -640,14 +738,7 @@ export class McpManager {
               );
               if (hints.destructive) destroys.add(name);
               registered.push(
-                this.serverTool(
-                  connection,
-                  client,
-                  spec,
-                  name,
-                  hints.readOnly,
-                  hide,
-                ),
+                this.serverTool(connection, client, spec, name, hints, hide),
               );
             }
             cursor = listed.nextCursor;
@@ -694,6 +785,8 @@ export class McpManager {
       this.tools = tools;
       this.status = status;
       this.destructive = destructive;
+      // A server reached again may not be the one that answered: no result is kept over it
+      this.results.clear();
       await McpManager.disconnect(previous);
     } catch (error) {
       await McpManager.disconnect(connected);
@@ -733,6 +826,7 @@ export class McpManager {
     const servers = this.servers.splice(0);
     this.tools = [];
     this.destructive = new Set();
+    this.results.clear();
     await McpManager.disconnect(servers);
   }
 }

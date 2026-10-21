@@ -555,6 +555,7 @@ export class AgentRuntime {
       : undefined;
     this.mcp = new McpManager(options.workspace, undefined, undefined, {
       secrets: () => loadSecrets(this.options.home),
+      sessionId: () => this.session.id,
       readFile: (path, context, limit) =>
         readFileBytes(this.sandbox, fileReads, path, context, limit),
       // A server that went away leaves the system prompt between turns, as tools do
