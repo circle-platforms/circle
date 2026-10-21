@@ -31,12 +31,12 @@ A server reached over the network:
 ]
 ```
 
-| Field | Meaning |
-|---|---|
-| `name` | Prefix for the server's tools. Any name works: characters other than letters, digits, `_` and `-` become `_` in tool names, and a tool name over 64 characters is shortened with a short hash. Falls back to `id`, then `mcp0`, `mcp1`, … When two servers have the same name the later one is used, and `/mcp` lists the earlier one with the reason. |
-| `command`, `args`, `env` | Start the server as a program (stdio), in the workspace. |
-| `url`, `transport` | Connect to a server. `transport` is `sse` (the default), `streamable_http` or `websocket`; anything else is treated as `sse`. |
-| `headers` | Headers sent with every request to a `url` server over `sse` or `streamable_http`, such as `{ "Authorization": "Bearer ${env:DOCS_TOKEN}" }`. `${env:NAME}` is replaced, when Circle connects, by that variable of the environment Circle was started in, so a token need not be written in `settings.json`. A variable that is not set, a header name that is not a valid token, or a value with a line break stops that server, and `/mcp` says which header; values are never shown. A `websocket` server cannot be sent headers. |
+| Field                    | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`                   | Prefix for the server's tools. Any name works: characters other than letters, digits, `_` and `-` become `_` in tool names, and a tool name over 64 characters is shortened with a short hash. Falls back to `id`, then `mcp0`, `mcp1`, … When two servers have the same name the later one is used, and `/mcp` lists the earlier one with the reason.                                                                                                                                                                               |
+| `command`, `args`, `env` | Start the server as a program (stdio), in the workspace.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `url`, `transport`       | Connect to a server. `transport` is `sse` (the default), `streamable_http` or `websocket`; anything else is treated as `sse`.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `headers`                | Headers sent with every request to a `url` server over `sse` or `streamable_http`, such as `{ "Authorization": "Bearer ${env:DOCS_TOKEN}" }`. `${env:NAME}` is replaced, when Circle connects, by that variable of the environment Circle was started in, so a token need not be written in `settings.json`. A variable that is not set, a header name that is not a valid token, or a value with a line break stops that server, and `/mcp` says which header; values are never shown. A `websocket` server cannot be sent headers. |
 
 An entry with neither `command` nor `url` is skipped. A URL may not carry a user name or password; use `headers` instead.
 
@@ -55,7 +55,7 @@ A program started for a server gets your environment without the variables whose
 
 ## What you get
 
-Each tool is offered to the model as `<name>_<tool>`, for example `memory_create_entities`. Circle connects when the full-screen interface starts, and again on `/reload`, `/mcp reload` and `/extensions reload`. It waits up to 30 seconds for each server. A server that fails is listed by `/mcp` with the reason, and the other servers' tools still load.
+Each tool is offered to the model as `<name>_<tool>`, for example `memory_create_entities`. Circle connects when the full-screen interface starts or the desktop application opens a trusted folder, and again on `/reload`, `/mcp reload` and `/extensions reload`. In [print mode, line mode](cli.md#print-mode) and [RPC mode](rpc.md) it connects only with `--extensions`, before the first prompt. It waits up to 30 seconds for each server. A server that fails is listed by `/mcp` with the reason, and the other servers' tools still load.
 
 A tool call has no time limit, so a tool that waits for a login or a long job can take as long as it needs. `esc` sends the server a cancellation; what the server does with it is up to the server. Images and PDFs a tool returns go to the model as attachments.
 
@@ -74,12 +74,12 @@ Circle's own `screenshot` tool only looks at the screen. To let the model open a
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `/mcp` | List the servers, their tools, and why a server failed. |
+| Command       | What it does                                                               |
+| ------------- | -------------------------------------------------------------------------- |
+| `/mcp`        | List the servers, their tools, and why a server failed.                    |
 | `/mcp reload` | Re-read `settings.json` and reconnect every server. Not while a turn runs. |
 
-MCP servers are not loaded in [print mode, line mode](cli.md#print-mode) or [RPC mode](rpc.md). Closing Circle closes the connections and stops the programs it started.
+In print mode, line mode and RPC mode MCP servers load only with `--extensions` (`circle --extensions -p "…"`, `circle --mode rpc --extensions`). Closing Circle closes the connections and stops the programs it started.
 
 ## Security
 
