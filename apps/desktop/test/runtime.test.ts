@@ -8,7 +8,7 @@ import {
   writeFile,
   unlink,
 } from 'node:fs/promises';
-import { existsSync, realpathSync, symlinkSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -2862,7 +2862,7 @@ test('MCP configuration saves preserve private fields and show pending reload ho
   assert.equal(f.controller.snapshot().mcp[0]!.status, 'reload required');
 });
 
-test('attached pictures go as mentioned ones do: a large PNG is scaled down and both sizes named, and a text-only model gets none', async (t) => {
+test('attached pictures go as mentioned ones do: a large PNG is scaled down and both sizes named, and a text-only model gets where the picture was saved', async (t) => {
   const { PNG } = await import('pngjs');
   const picture = (width: number, height: number) => {
     const image = new PNG({ width, height });
@@ -2896,18 +2896,24 @@ test('attached pictures go as mentioned ones do: a large PNG is scaled down and 
     user.content,
     'look at these\n\n[Scaled down to send: wide.png 3000×2000, sent as 1313×875]',
   );
-  // A model known not to read images gets the text only
+  // A model known not to read images gets no picture: it is saved in the project's data,
+  // and the message says where, for the model's tools to read
   Object.assign(f.model, { imageInput: false });
+  const small = picture(40, 30);
   await f.call('prompt', {
     text: 'and this',
-    attachments: [
-      { content: picture(40, 30), mime: 'image/png', name: 'small.png' },
-    ],
+    attachments: [{ content: small, mime: 'image/png', name: 'small.png' }],
   });
   await wait(() => f.model.requests.length === 2, 'second request');
   const second = f.model.requests[1]!.messages.at(-1)!;
-  assert.equal(second.content, 'and this');
   assert.equal(second.attachments, undefined);
+  const saved =
+    /^and this\n\n\[Images this model does not read, saved as files: (.+\.png)\]$/.exec(
+      second.content,
+    )?.[1];
+  assert.ok(saved, second.content);
+  assert.match(saved, /[\\/]images[\\/][0-9a-f]{16}\.png$/);
+  assert.deepEqual(readFileSync(saved), Buffer.from(small, 'base64'));
 });
 
 test('a failed turn stays in the conversation after the message it followed, and a later turn goes below it', async (t) => {
