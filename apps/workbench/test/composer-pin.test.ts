@@ -6,7 +6,10 @@ import { tmpdir } from 'node:os';
 import { chromium } from 'playwright';
 import { testBrowserOptions } from './helpers/test-browser.ts';
 import { previewPort } from './preview-port.ts';
-import { workbenchServer } from './helpers/workbench-server.ts';
+import {
+  workbenchCleanup,
+  workbenchServer,
+} from './helpers/workbench-server.ts';
 
 const browserOptions = testBrowserOptions(chromium.executablePath());
 
@@ -16,15 +19,17 @@ test(
   async (t) => {
     // Each concurrent Vite server owns its optimizer cache. Sharing node_modules/.vite
     // lets another test replace optimized modules while this page imports them.
+    const cleanup = workbenchCleanup(t);
     const scratch = await mkdtemp(join(tmpdir(), 'circle-composer-pin-'));
-    t.after(() => rm(scratch, { recursive: true, force: true }));
+    cleanup(() => rm(scratch, { recursive: true, force: true }));
     const port = await previewPort(process.env.CIRCLE_WORKBENCH_TEST_PORT);
-    const server = await workbenchServer(scratch, port);
+    await workbenchServer(scratch, port, cleanup);
     const browser = await chromium.launch({
       ...browserOptions,
       headless: true,
       args: ['--no-sandbox'],
     });
+    cleanup(() => browser.close());
     const diagnostics: string[] = [];
     try {
       // The preview follows the browser language. These steps use the English names.
@@ -89,9 +94,6 @@ test(
         `${error instanceof Error ? error.message : String(error)}\nBrowser diagnostics:\n${diagnostics.join('\n')}`,
         { cause: error },
       );
-    } finally {
-      await browser.close();
-      await server.close();
     }
   },
 );

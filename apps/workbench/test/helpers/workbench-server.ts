@@ -1,6 +1,27 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { TestContext } from 'node:test';
 import { createServer, type ViteDevServer } from 'vite';
+
+type Cleanup = (close: () => Promise<unknown>) => void;
+
+/** Register ownership before setup can fail, and attempt every close in reverse order. */
+export function workbenchCleanup(t: TestContext): Cleanup {
+  const closes: (() => Promise<unknown>)[] = [];
+  t.after(async () => {
+    const errors: unknown[] = [];
+    for (const close of closes.reverse()) {
+      try {
+        await close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, 'workbench cleanup failed');
+  });
+  return (close) => closes.push(close);
+}
 
 /**
  * Compiles the window's whole module graph, lazy panels included, and waits for it:
@@ -33,6 +54,7 @@ export async function warmModules(
 export async function workbenchServer(
   scratch: string,
   port: number,
+  cleanup: Cleanup,
 ): Promise<ViteDevServer> {
   // vite.config.ts reads this when the server is created: a cache of its own, and
   // dependencies optimized before the server answers.
@@ -46,6 +68,7 @@ export async function workbenchServer(
     server: { host: '127.0.0.1', port, strictPort: true },
     logLevel: 'error',
   });
+  cleanup(() => server.close());
   await server.listen();
   await warmModules(server);
   return server;
