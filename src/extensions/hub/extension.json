@@ -1,5 +1,0 @@
-{
-  "version": "0.1.0",
-  "description": "Sign in to circle-hub 0.2.0 (client API 1.0.0), hand it work, follow it and save what it delivers",
-  "commands": ["hub"]
-}

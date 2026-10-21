@@ -603,7 +603,7 @@ export class ExtensionHost {
   constructor(readonly options: ExtensionHostOptions) {
     // Listed before load, still with nothing registered, once the folder is
     // trusted. The desktop publishes a snapshot before integrations finish;
-    // the bundled hub is on that first frame instead of an empty page that
+    // the bundled extensions are on that first frame instead of a list that
     // fills in later. An untrusted workspace is not scanned. A root that is
     // not a directory fails the same way from load(), which is what
     // initialize() reports.
@@ -1072,7 +1072,7 @@ export class ExtensionHost {
       .join('\n');
   }
 }
-// extension.json is optional: { "version": "1.2.0", "description": "...", "commands": ["hub"] }.
+// extension.json is optional: { "version": "1.2.0", "description": "...", "commands": ["hello"] }.
 function manifest(path: string): {
   version: string;
   description: string;

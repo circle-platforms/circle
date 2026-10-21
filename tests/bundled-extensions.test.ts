@@ -171,6 +171,43 @@ test('an extension reads its own settings entry and gets a private data folder o
     assert.equal(statSync(output.dir).mode & 0o777, 0o700);
 });
 
+test('an extension saves keys into its own settings entry without turning itself off, and a concealed value stays out of its status and view', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const settings = defaultSettings();
+  settings.extensions.probe = { enabled: true, team: 'lab' };
+  saveSettings(settings, home);
+  const path = join(home, 'extensions', 'probe');
+  mkdirSync(path, { recursive: true });
+  writeFileSync(
+    join(path, 'extension.mjs'),
+    `export function register(api){api.registerTool('probe','probe',${schema},()=>{api.saveSettings({url:'http://127.0.0.1:7410'});api.conceal('token-58f1c2');api.setStatus('probe · token-58f1c2','ok');api.setView({token:'token-58f1c2'});return api.settings},{readOnly:true})}`,
+  );
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: false,
+    settings: loadSettings(home).extensions,
+  }).load();
+  cleanup(t, () => host.close());
+  const saved = { enabled: true, team: 'lab', url: 'http://127.0.0.1:7410' };
+  const running = JSON.parse(
+    await host.tools()[0]!.run({}, {
+      signal: new AbortController().signal,
+      sessionId: 'test',
+    } as never),
+  );
+  assert.deepEqual(running, saved);
+  assert.deepEqual(loadSettings(home).extensions.probe, saved);
+  assert.deepEqual(host.statuses(), [
+    { extension: 'probe', text: 'probe · ***', lamp: 'ok' },
+  ]);
+  assert.deepEqual(host.view('probe'), { token: '***' });
+});
+
 test('/extensions enable and disable save the choice and reload the extension', async (t) => {
   const root = scratch(t);
   const home = join(root, 'home');

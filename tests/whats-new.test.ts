@@ -20,7 +20,6 @@ import {
 import {
   circleHasHistory,
   dismissWhatsNew,
-  hadCircleServer,
   notesBaseline,
   pendingWhatsNew,
   seedWhatsNewFrom,
@@ -31,37 +30,33 @@ import { compareVersions, VERSION } from '../src/version.js';
 import { cleanup, scratch } from './helpers.js';
 
 test('notes cover the releases after the one last seen', () => {
-  const hub = { hub: true };
-  assert.equal(notesSince(undefined, VERSION, hub).length, 4);
+  assert.equal(notesSince(undefined, VERSION).length, 3);
   assert.equal(notesSince('1.6.0', '1.7.4').length, 2);
-  assert.equal(notesSince('1.6.0', '1.7.4', hub).length, 3);
   assert.equal(notesSince('1.7.0', '1.7.4').length, 2);
-  assert.equal(notesSince('1.7.4', '1.7.4', hub).length, 0);
-  assert.equal(notesSince('0.5.0', '1.6.0', hub).length, 0);
-  assert.equal(notesSince('1.7.4', '1.8.0', hub).length, 1);
-  assert.equal(notesSince('1.8.0', '1.8.0', hub).length, 0);
+  assert.equal(notesSince('1.7.4', '1.7.4').length, 0);
+  assert.equal(notesSince('0.5.0', '1.6.0').length, 0);
+  assert.equal(notesSince('1.7.4', '1.8.0').length, 1);
+  assert.equal(notesSince('1.8.0', '1.8.0').length, 0);
   // A patch release after the newest item names that release and its notes.
-  const patch = noticeFor('1.8.1', notesSince('1.7.4', '1.8.1', hub));
+  const patch = noticeFor('1.8.1', notesSince('1.7.4', '1.8.1'));
   assert.match(patch!.title.en, /what's new in 1\.8\.0$/);
   assert.equal(patch!.version, '1.8.1');
   assert.equal(patch!.link, releaseNotesUrl('1.8.0'));
-  const notice = noticeFor('1.7.4', notesSince('1.6.0', '1.7.4', hub));
+  const notice = noticeFor('1.7.4', notesSince('1.6.0', '1.7.4'));
   assert.equal(notice?.link, releaseNotesUrl('1.7.4'));
   assert.equal(notice?.link.includes('blob/main'), false);
-  assert.match(notice!.title.en, /1\.7\.0–1\.7\.4/);
-  assert.match(notice!.items[0]!.en, /circle-server/);
-  assert.match(notice!.items[0]!['zh-CN'], /原先的 circle-server/);
-  assert.match(notice!.items[1]!.en, /alt\+l \(L\)/);
-  assert.equal(notice!.items[1]!.en.includes('alt+i'), false);
-  assert.equal(notice!.items[1]!['zh-CN'].includes('alt+L'), false);
-  assert.match(notice!.items[2]!.en, /medium/);
+  assert.match(notice!.title.en, /what's new in 1\.7\.4$/);
+  assert.match(notice!.items[0]!.en, /alt\+l \(L\)/);
+  assert.equal(notice!.items[0]!.en.includes('alt+i'), false);
+  assert.equal(notice!.items[0]!['zh-CN'].includes('alt+L'), false);
+  assert.match(notice!.items[1]!.en, /medium/);
   assert.match(
-    notice!.items[2]!['zh-CN'],
+    notice!.items[1]!['zh-CN'],
     /没有保存过自己的深度时，不再默认使用 xhigh/,
   );
-  assert.equal(notice!.items[2]!['zh-CN'].includes('那个 xhigh'), false);
+  assert.equal(notice!.items[1]!['zh-CN'].includes('那个 xhigh'), false);
   assert.equal(
-    notice!.items[2]!['zh-CN'].includes('没有保存过的深度不再停留'),
+    notice!.items[1]!['zh-CN'].includes('没有保存过的深度不再停留'),
     false,
   );
 });
@@ -85,10 +80,6 @@ test('a later version shows only the releases that were skipped', (t) => {
   const notice = pendingWhatsNew(older, '1.8.0', from16);
   assert.match(notice!.title.en, /what's new in 1\.7\.4–1\.8\.0/);
   assert.match(notice!.items.map((item) => item.en).join('\n'), /alt\+l \(L\)/);
-  assert.equal(
-    notice!.items.some((item) => /circle-server/.test(item.en)),
-    false,
-  );
   const seeded = scratch(t);
   seedWhatsNewFrom(seeded, '1.6.0', '1.8.0');
   assert.equal(
@@ -127,11 +118,6 @@ test('a first run records the version and an upgrade shows the notice once', (t)
     new RegExp(newest.replaceAll('.', '\\.')),
   );
   assert.equal(notice!.link, releaseNotesUrl(newest));
-  assert.equal(hadCircleServer(home), false);
-  assert.equal(
-    notice!.items.some((item) => /circle-server/.test(item.en)),
-    false,
-  );
   // The terminal shows the English; the desktop picks its own language
   const rows = stripAnsi(whatsNewRows(notice!, 72).join('\n'));
   assert.match(rows, /what's new in/);
@@ -225,16 +211,9 @@ test('the terminal shows the notice under the welcome and esc dismisses it', asy
     { id: 'a', role: 'assistant', content: 'there' },
   ]);
   store.close();
-  // Upgraded from 1.6.0, the last release that had circle-server.
+  // Upgraded from 1.6.0: the notes of 1.7.4 and 1.8.0 are waiting.
   seedWhatsNewFrom(home, '1.6.0', VERSION);
-  const { saveSettings, defaultSettings } = await import('../src/settings.js');
-  saveSettings(
-    {
-      ...defaultSettings(),
-      extensions: { 'circle-server': { enabled: true } },
-    },
-    home,
-  );
+  const { defaultSettings } = await import('../src/settings.js');
   const { SessionApp } = await import('../src/tui/session_app.js');
   const { ScriptedModel } = await import('../src/testing.js');
   const app = new SessionApp(workspace, home, defaultSettings());
@@ -271,12 +250,12 @@ test('the terminal shows the notice under the welcome and esc dismisses it', asy
   ui.repaint();
   const welcome = stripAnsi(app.state.welcome.join('\n'));
   const visible = stripAnsi(ui.frameRows.join('\n'));
-  assert.match(welcome, /what's new in/);
-  assert.match(welcome, /circle-server/);
+  assert.match(welcome, /what's new in 1\.7\.4–1\.8\.0/);
+  assert.match(welcome, /Some shortcuts changed/);
   assert.match(welcome, /full release notes/);
   assert.match(welcome, /releases\/tag\/v/);
   assert.equal(welcome.includes('blob/main'), false);
-  assert.match(visible, /circle-server/);
+  assert.match(visible, /Some shortcuts changed/);
   assert.match(visible, /esc · dismiss/);
   const savedLocale = {
     LANG: process.env.LANG,
@@ -291,7 +270,7 @@ test('the terminal shows the notice under the welcome and esc dismisses it', asy
     ui.repaint();
     const shown = stripAnsi(app.state.welcome.join('\n'));
     assert.match(shown, /what's new in/);
-    assert.match(shown, /circle-server/);
+    assert.match(shown, /Some shortcuts changed/);
     assert.equal(/\p{Script=Han}/u.test(shown), false);
   } finally {
     for (const [name, value] of Object.entries(savedLocale)) {
@@ -306,11 +285,11 @@ test('the terminal shows the notice under the welcome and esc dismisses it', asy
   );
   ui.repaint();
   assert.equal(
-    stripAnsi(app.state.welcome.join('\n')).includes('circle-server'),
+    stripAnsi(app.state.welcome.join('\n')).includes('Some shortcuts changed'),
     false,
   );
   assert.equal(
-    stripAnsi(ui.frameRows.join('\n')).includes('circle-server'),
+    stripAnsi(ui.frameRows.join('\n')).includes('Some shortcuts changed'),
     false,
   );
 });

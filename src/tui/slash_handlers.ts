@@ -56,7 +56,6 @@ import { discoverSkills, loadSkillBody } from '../skills.js';
 import { readPrompt } from '../system_prompt.js';
 import { formatHotkeys } from './hotkeys_text.js';
 import { BUILTIN_SLASH, variableCopy } from './slash_commands.js';
-import { hubText } from '../hub_text.js';
 import type { ScreenSnapshot, UndoHistory } from './undo_history.js';
 import {
   conversationTree,
@@ -305,14 +304,7 @@ export async function runCommand(
         },
       });
     } catch (error) {
-      host.fail(
-        name === 'hub'
-          ? hubText('/{name} failed: {message}', {
-              name,
-              message: reason(error),
-            })
-          : `/${name} failed: ${reason(error)}`,
-      );
+      host.fail(`/${name} failed: ${reason(error)}`);
     }
     return true;
   }
