@@ -31,6 +31,7 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **Custom commands can run shell snippets without asking**, and a trusted folder's commands, skills, hooks and instruction files apply at once. Read a repository's `.circle/`, `.opencode/`, `.pi/`, `.claude/` and `.agents/` folders, including `hooks.json`, before you trust it.
 - **The credential-file check reads names, not contents.** File tools and commands refuse the listed names, but `ls` and `glob` show them, and a command that reaches a file without naming it (a script, a variable, a copy under another name) is not refused.
 - **A secret can be written to any path the model names.** Check the file on the card before you enter the value.
+- **An extension that is removed leaves its secrets and data behind.** Its entry in `settings.json`, `extension_secrets/<name>.secrets.json` and `extension_data/<name>/` in the data folder stay, and nothing in Circle lists or deletes them; a token there stays valid until you revoke it at its service. See [Extensions](extensions.md#where-extensions-live).
 
 ## Subagents and tools
 

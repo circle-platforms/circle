@@ -48,6 +48,8 @@ A project extension replaces one of yours with the same name, and yours replaces
 
 Extensions are loaded at start, on `/reload` and on `/extensions reload`. Each load reads `extension.*` again, so an edit takes effect; a file it imports itself is not read again until Circle restarts. In print mode, line mode and RPC mode extensions load only with `--extensions` (`circle --extensions -p "…"`, `circle --mode rpc --extensions`), before the first prompt, together with the [MCP servers](mcp.md).
 
+An extension is gone once its folder is: you deleted it, or a Circle release no longer ships it. What it kept stays, and Circle neither reads, lists nor deletes it: its entry under `extensions` in `settings.json`, its [secrets](#secrets) in `~/.circle/extension_secrets/<name>.secrets.json` and its folder `~/.circle/extension_data/<name>/`. `/extensions` and the desktop application list only the extensions that are there. A token kept that way stays valid at the service that issued it: revoke it there, with the extension's own command for it before you remove the extension when it has one, and delete those files yourself.
+
 To turn one off, set it in `settings.json`, or run `/extensions disable sample`:
 
 ```json
