@@ -234,19 +234,17 @@ for (const kind of ['typed', 'legacy'] as const) {
   });
 }
 
-test('the same failure twice in a row is one line, and it keeps its place in the transcript', async (t) => {
-  const { app, ui } = await appFor(t, []);
+test('a failure line has its place in the transcript as soon as it is shown, and a second one of the same words shows too', async (t) => {
+  const { app, ui } = await appFor(t, [complete('answer-1', 'first answer')]);
+  await app.submit('hello');
+  // It sits after the answer that was on screen when it came, not wherever the end is later
   ui.notice('✖ the endpoint refused the request');
-  ui.notice('✖ the endpoint refused the request');
-  assert.deepEqual(failureNotices(app), ['✖ the endpoint refused the request']);
-  assert.equal(app.state.noticeAnchors?.length, app.state.notices.length);
-  // Another line between them: the failure is a new event and shows again
-  ui.notice('✖ the network is down');
+  assert.deepEqual(failureAnchors(app), ['answer-1']);
+  // The same words again are another failure: it shows, with its own place
   ui.notice('✖ the endpoint refused the request');
   assert.deepEqual(failureNotices(app), [
     '✖ the endpoint refused the request',
-    '✖ the network is down',
     '✖ the endpoint refused the request',
   ]);
-  assert.equal(app.state.noticeAnchors?.length, app.state.notices.length);
+  assert.deepEqual(failureAnchors(app), ['answer-1', 'answer-1']);
 });
