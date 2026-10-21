@@ -79,6 +79,7 @@ async function setup(t: TestContext, trust?: unknown) {
     workspace,
     settings,
     model,
+    userHome: join(root, 'user'),
     approve: async (call) => {
       asked.push(call);
       return answers.shift() ?? 'reject';

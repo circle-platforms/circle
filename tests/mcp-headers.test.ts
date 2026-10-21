@@ -279,7 +279,13 @@ test('a saved secret reaches the server in a header, and what the model reads, t
     },
     { message: assistant('done') },
   ]);
-  const runtime = new AgentRuntime({ home, workspace, settings, model });
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model,
+    userHome: join(root, 'user'),
+  });
   cleanup(t, () => runtime.close());
   runtime.policy.setYolo(runtime.session.id, true);
   await runtime.initialize();
