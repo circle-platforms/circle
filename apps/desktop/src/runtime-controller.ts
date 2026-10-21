@@ -795,6 +795,30 @@ export class RuntimeController {
       throw error;
     }
   }
+  // Saves a folder's trust and applies it to the runtimes open in it: revoking it
+  // takes the folder's code out of their runs too.
+  private async saveFolderTrust(
+    folder: string,
+    enabled: boolean,
+  ): Promise<void> {
+    const settings = saveSettingsChange(this.home, (saved) => {
+      Object.assign(
+        saved,
+        enabled ? trustFolder(saved, folder) : untrustFolder(saved, folder),
+      );
+    });
+    this.synchronizeSharedSettings(settings);
+    const reloads: Promise<void>[] = [];
+    for (const owner of this.runtimes.values())
+      if (
+        owner.options.workspace === folder &&
+        this.pendingTrustReloads.has(owner) &&
+        !owner.isClosing
+      ) {
+        reloads.push(this.reloadTrustedRuntime(owner));
+      }
+    await Promise.all(reloads);
+  }
   /** The saved thinking depth, on every open runtime except one that was just set. */
   private applySharedEffort(saved: string, skip?: AgentRuntime): void {
     const level = saved || 'default';
@@ -2820,13 +2844,7 @@ export class RuntimeController {
     const taskRoot = this.tasksRootFor(savedSettings);
     // The open conversation is listed before its first message.
     const rows = this.store.list(undefined, false, true);
-    const paths = [
-      ...new Set([
-        ...rows.map((row) => row.workspace),
-        runtime.options.workspace,
-        ...this.opened,
-      ]),
-    ];
+    const paths = this.listedFolders(rows);
     const nativeAgents = this.nativeTaskAgents(runtime);
     const sessions: Session[] = rows.map((row) => {
       const owner =
@@ -4136,6 +4154,19 @@ export class RuntimeController {
     }
     for (const row of rows) await this.assertArchivable(row.id, row.workspace);
   }
+  // Sessions that passed prepareArchive: they lose their grants to outside files
+  // and stay archived until restored.
+  private async archiveRows(rows: { id: string }[]): Promise<void> {
+    for (const row of rows) this.externalBlocked.add(row.id);
+    for (const row of rows) {
+      await this.externalFiles?.revokeSession(row.id);
+      this.externalGrantOwners.delete(row.id);
+    }
+    this.metadata.set(
+      rows.map((row) => row.id),
+      true,
+    );
+  }
   private resetPlan(runtime: AgentRuntime): void {
     const tracker = new PlanCompletionTracker();
     tracker.reset(runtime.todos);
@@ -4232,6 +4263,26 @@ export class RuntimeController {
       /* The scratch folder is not there yet. */
     }
     throw Error('workspace not found');
+  }
+  // A folder's root sessions, archived ones and the open one before its first
+  // message included.
+  private workspaceRows(workspaceId: string) {
+    return this.store
+      .list(undefined, false, true)
+      .filter((row) => identity(row.workspace) === workspaceId);
+  }
+  // The folders the workspace list shows: every folder a stored session names,
+  // archived ones included, the open conversation's, and those opened on home.
+  private listedFolders(
+    rows = this.store.list(undefined, false, true),
+  ): string[] {
+    return [
+      ...new Set([
+        ...rows.map((row) => row.workspace),
+        this.active.options.workspace,
+        ...this.opened,
+      ]),
+    ];
   }
   // The home composer chooses these before a session exists. Apply them to the
   // runtime that will run the first message, so the turn uses that choice.
@@ -4397,6 +4448,7 @@ export class RuntimeController {
       'delete-session',
       'archive-session',
       'archive-workspace',
+      'remove-workspace',
       'rename-session',
       'stop-job',
       'save-settings',
@@ -4423,6 +4475,7 @@ export class RuntimeController {
         'delete-session',
         'archive-session',
         'archive-workspace',
+        'remove-workspace',
         'rename-session',
         'answer',
         'stop-job',
@@ -4719,23 +4772,36 @@ export class RuntimeController {
       }
       case 'archive-workspace': {
         const workspaceId = text(p.workspaceId, 'workspace', 200);
-        const rows = this.store
-          .list(undefined, false, true)
-          .filter((row) => identity(row.workspace) === workspaceId);
-        // A folder that only holds archived sessions is still one the settings page
-        // can name, so ask workspaceById before deciding there is nothing to hide.
+        const rows = this.workspaceRows(workspaceId);
+        // A folder that only holds archived sessions is still one Circle can name,
+        // so ask workspaceById before deciding there is nothing to hide.
         this.workspaceById(workspaceId);
         await this.prepareArchive(rows, p.confirmed === true);
-        for (const row of rows) this.externalBlocked.add(row.id);
-        for (const row of rows) {
-          await this.externalFiles?.revokeSession(row.id);
-          this.externalGrantOwners.delete(row.id);
-        }
-        this.metadata.set(
-          rows.map((row) => row.id),
-          true,
-        );
+        await this.archiveRows(rows);
         return { archived: rows.length };
+      }
+      case 'remove-workspace': {
+        // Removing a folder on the settings page is one step: its sessions are
+        // archived, Circle stops trusting it and forgets it was opened. What keeps
+        // a session from being archived refuses the step before any of that, so a
+        // refused remove changes nothing.
+        const workspaceId = text(p.workspaceId, 'workspace', 200);
+        const folder = this.workspaceById(workspaceId);
+        const rows = this.workspaceRows(workspaceId);
+        await this.prepareArchive(rows, p.confirmed === true);
+        await this.archiveRows(rows);
+        await this.saveFolderTrust(folder, false);
+        // An opened folder with no sessions would otherwise stay listed, which
+        // reads as a remove that does nothing.
+        this.opened.delete(folder);
+        // Archived sessions keep their folder listed. The settings page says which
+        // happened from this answer, not from the sessions it counted.
+        return {
+          archived: rows.length,
+          listed: this.listedFolders().some(
+            (path) => identity(path) === workspaceId,
+          ),
+        };
       }
       case 'rename-session':
         if (!this.store.get(String(p.id ?? command.sessionId)))
@@ -4953,23 +5019,7 @@ export class RuntimeController {
           p.workspaceId === undefined
             ? runtime.options.workspace
             : this.workspaceById(text(p.workspaceId, 'workspace', 200));
-        const settings = saveSettingsChange(this.home, (saved) => {
-          Object.assign(
-            saved,
-            enabled ? trustFolder(saved, folder) : untrustFolder(saved, folder),
-          );
-        });
-        this.synchronizeSharedSettings(settings);
-        const reloads: Promise<void>[] = [];
-        for (const owner of this.runtimes.values())
-          if (
-            owner.options.workspace === folder &&
-            this.pendingTrustReloads.has(owner) &&
-            !owner.isClosing
-          ) {
-            reloads.push(this.reloadTrustedRuntime(owner));
-          }
-        await Promise.all(reloads);
+        await this.saveFolderTrust(folder, enabled);
         return { workspaceId: identity(folder), trusted: enabled };
       }
       case 'save-settings': {
