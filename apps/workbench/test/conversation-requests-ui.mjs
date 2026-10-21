@@ -137,6 +137,14 @@ try {
   const card = page.locator('.inline-request[data-kind="hooks"]');
   assert.match(await card.innerText(), /project hooks need approval/);
   assert.match(await card.innerText(), /\/work\/app\/\.circle\/hooks\.json/);
+  // A question in words, as the question card's heading is: the monospace font is a
+  // tool card's, which names a tool
+  const fonts = await card.evaluate((section) => ({
+    heading: getComputedStyle(section.querySelector('header strong'))
+      .fontFamily,
+    card: getComputedStyle(section).fontFamily,
+  }));
+  assert.equal(fonts.heading, fonts.card, 'the heading takes the card font');
   assert.equal(
     await card.locator('.hook-changes li[data-mark="changed"] pre').innerText(),
     'npm run lint',

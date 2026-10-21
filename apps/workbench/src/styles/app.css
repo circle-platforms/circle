@@ -3673,6 +3673,7 @@ pre {
 }
 .inline-request[data-kind='question'] > header strong,
 .inline-request[data-kind='plan-exit'] > header strong,
+.inline-request[data-kind='hooks'] > header strong,
 .inline-request[data-kind='secret'] > header strong,
 .inline-request[data-kind='review'] > header strong {
   font-family: inherit;
