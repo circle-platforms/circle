@@ -12,6 +12,8 @@ import {
 } from 'node:fs';
 import { userInfo } from 'node:os';
 import { delimiter, resolve } from 'node:path';
+import { reportInstalled } from './update.js';
+import { compareVersions } from './version.js';
 import {
   shellProbe,
   shellStartupFile,
@@ -56,6 +58,26 @@ if (process.env.CIRCLE_INSTALL_RESULT)
     JSON.stringify({ version: manifest.version, prefix, binDir }) + '\n',
   );
 say(`installed circle ${manifest.version} in ${prefix}`);
+// The published 1.10.0 updater already reports, but predates the explicit
+// handoff flag. Its launcher identifies the installation it is updating.
+const updaterReports =
+  process.env.CIRCLE_UPDATE_REPORT === '1' ||
+  (previous &&
+    process.env.CIRCLE_INSTALL_PREFIX &&
+    resolve(process.env.CIRCLE_INSTALL_PREFIX) === prefix &&
+    compareVersions(previous, '1.10.0') >= 0);
+if (
+  previous &&
+  compareVersions(manifest.version, previous) > 0 &&
+  !updaterReports
+)
+  await reportInstalled(
+    process.stdout,
+    prefix,
+    previous,
+    manifest.version,
+    repo,
+  );
 if (process.platform !== 'win32') {
   const onPath = (process.env.PATH ?? '')
     .split(delimiter)

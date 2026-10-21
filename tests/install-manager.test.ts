@@ -9,7 +9,12 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { installLocation, pruneVersions } from '../src/install_layout.js';
+import {
+  activateRelease,
+  activeVersion,
+  installLocation,
+  pruneVersions,
+} from '../src/install_layout.js';
 import { scratch } from './helpers.js';
 import { fixture } from './release-fixture.js';
 
@@ -35,6 +40,8 @@ function runManager(
     'CIRCLE_REPO',
     'CIRCLE_INSTALL_RESULT',
     'CIRCLE_SHELL_ROOT',
+    'CIRCLE_UPDATE_REPORT',
+    'CIRCLE_INSTALL_PREFIX',
   ])
     delete env[name];
   // Only fake locations: the installer must never write to the real home or its startup files.
@@ -83,6 +90,93 @@ test('the installer says each step while it takes it, and which old versions it 
     prefix,
     binDir: join(base, 'bin'),
   });
+});
+
+test('an older updater gets release notes and an executable cleanup command from the new installer', (t) => {
+  const base = scratch(t);
+  const prefix = join(base, "circle owner's install");
+  const binDir = join(base, 'circle bin');
+  activateRelease(fixture(base, '1.9.1'), prefix, binDir, 'example/circle');
+  const run = runManager(base, fixture(base, '1.10.0'), [], {
+    CIRCLE_PREFIX: prefix,
+    CIRCLE_BIN_DIR: binDir,
+    CIRCLE_REPO: 'example/circle',
+    CIRCLE_NO_PATH: '1',
+    CIRCLE_INSTALL_PREFIX: prefix,
+  });
+  assert.equal(run.status, 0, run.stderr + run.stdout);
+  assert.equal(activeVersion(prefix), '1.10.0');
+  assert.equal(run.stdout.match(/What's new:/g)?.length, 1);
+  assert.match(
+    run.stdout,
+    /https:\/\/github.com\/example\/circle\/releases\/tag\/v1\.10\.0/,
+  );
+  const command = run.stdout
+    .split('\n')
+    .find((line) =>
+      line.startsWith('Remove one when nothing is running from it: '),
+    )
+    ?.slice('Remove one when nothing is running from it: '.length);
+  assert.ok(command, run.stdout);
+  // The generated command must remove the retained version, including from a
+  // Windows prefix with spaces and an apostrophe, while keeping the new release.
+  const oldRoot = join(prefix, 'versions', '1.9.1');
+  assert.ok(oldRoot.startsWith(base + (windows ? '\\' : '/')));
+  assert.equal(
+    command,
+    windows
+      ? `Remove-Item -Recurse -Force '${oldRoot.replaceAll("'", "''")}'`
+      : `rm -rf '${oldRoot.replaceAll("'", "'\\''")}'`,
+  );
+  const removed = windows
+    ? spawnSync('powershell.exe', ['-NoProfile', '-Command', command], {
+        encoding: 'utf8',
+      })
+    : spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8' });
+  assert.equal(removed.status, 0, removed.stderr + removed.stdout);
+  assert.equal(existsSync(oldRoot), false);
+  assert.ok(existsSync(join(prefix, 'versions', '1.10.0', 'release.json')));
+  assert.equal(activeVersion(prefix), '1.10.0');
+});
+
+test('the installer leaves reporting to an updater that reports the completed upgrade', (t) => {
+  const base = scratch(t);
+  const prefix = join(base, 'install');
+  const binDir = join(base, 'bin');
+  activateRelease(fixture(base, '1.9.1'), prefix, binDir);
+  const run = runManager(base, fixture(base, '1.10.0'), [], {
+    CIRCLE_PREFIX: prefix,
+    CIRCLE_BIN_DIR: binDir,
+    CIRCLE_NO_PATH: '1',
+    CIRCLE_UPDATE_REPORT: '1',
+  });
+  assert.equal(run.status, 0, run.stderr + run.stdout);
+  assert.equal(activeVersion(prefix), '1.10.0');
+  assert.doesNotMatch(
+    run.stdout,
+    /What's new:|Remove one when nothing is running/,
+  );
+  assert.ok(existsSync(join(prefix, 'versions', '1.9.1', 'release.json')));
+});
+
+test('the published 1.10.0 updater reports without the newer handoff flag', (t) => {
+  const base = scratch(t);
+  const prefix = join(base, 'install');
+  const binDir = join(base, 'bin');
+  activateRelease(fixture(base, '1.10.0'), prefix, binDir);
+  const run = runManager(base, fixture(base, '1.11.0'), [], {
+    CIRCLE_PREFIX: prefix,
+    CIRCLE_BIN_DIR: binDir,
+    CIRCLE_INSTALL_PREFIX: prefix,
+    CIRCLE_NO_PATH: '1',
+  });
+  assert.equal(run.status, 0, run.stderr + run.stdout);
+  assert.equal(activeVersion(prefix), '1.11.0');
+  assert.doesNotMatch(
+    run.stdout,
+    /What's new:|Remove one when nothing is running/,
+  );
+  assert.ok(existsSync(join(prefix, 'versions', '1.10.0', 'release.json')));
 });
 
 test('an explicit prefix and bin folder win over the default location', (t) => {

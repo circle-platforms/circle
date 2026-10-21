@@ -265,7 +265,8 @@ function installed(t: Parameters<typeof scratch>[0]) {
     join(root, 'app/install.sh'),
     'mkdir -p "$CIRCLE_TEST_SEEN"\ncp "$CIRCLE_ASSET_DIR"/* "$CIRCLE_TEST_SEEN"/\n' +
       'printf %s "$CIRCLE_ASSET_DIR" > "$CIRCLE_TEST_SEEN/folder"\n' +
-      'printf %s "$CIRCLE_VERSION" > "$CIRCLE_TEST_SEEN/version"\n',
+      'printf %s "$CIRCLE_VERSION" > "$CIRCLE_TEST_SEEN/version"\n' +
+      'printf %s "$CIRCLE_UPDATE_REPORT" > "$CIRCLE_TEST_SEEN/report"\n',
   );
   writeFileSync(
     join(root, 'app/install.ps1'),
@@ -273,7 +274,8 @@ function installed(t: Parameters<typeof scratch>[0]) {
       'New-Item -ItemType Directory -Force -Path $env:CIRCLE_TEST_SEEN | Out-Null\n' +
       "Copy-Item -Path (Join-Path $env:CIRCLE_ASSET_DIR '*') -Destination $env:CIRCLE_TEST_SEEN\n" +
       "Set-Content -NoNewline -LiteralPath (Join-Path $env:CIRCLE_TEST_SEEN 'folder') -Value $env:CIRCLE_ASSET_DIR\n" +
-      "Set-Content -NoNewline -LiteralPath (Join-Path $env:CIRCLE_TEST_SEEN 'version') -Value $env:CIRCLE_VERSION\n",
+      "Set-Content -NoNewline -LiteralPath (Join-Path $env:CIRCLE_TEST_SEEN 'version') -Value $env:CIRCLE_VERSION\n" +
+      "Set-Content -NoNewline -LiteralPath (Join-Path $env:CIRCLE_TEST_SEEN 'report') -Value $env:CIRCLE_UPDATE_REPORT\n",
   );
   const manifest = JSON.parse(readFileSync(join(root, 'release.json'), 'utf8'));
   manifest.files = fileInventory(root);
@@ -384,6 +386,8 @@ test('circle update downloads the release itself, showing how far it got, and ha
     /^a{64} {2}/,
   );
   assert.equal(readFileSync(join(seen, 'version'), 'utf8'), '99.0.0');
+  assert.equal(readFileSync(join(seen, 'report'), 'utf8'), '1');
+  assert.equal(shown.writes.join('').match(/What's new:/g)?.length, 1);
   assert.equal(existsSync(readFileSync(join(seen, 'folder'), 'utf8')), false);
   assert.deepEqual(temp.folders(), []);
 });
