@@ -1,5 +1,10 @@
 import { useId, useRef, useState } from 'react';
-import { KeyRound, MessageCircleQuestion, ShieldAlert } from 'lucide-react';
+import {
+  ClipboardList,
+  KeyRound,
+  MessageCircleQuestion,
+  ShieldAlert,
+} from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { Button } from '../components/common';
 import { DataBlock } from '../components/ui';
@@ -9,6 +14,7 @@ import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { browserApprovalInput, hasToolInput } from '../model/browser';
 import { approvalHeading, requestReason } from '../model/reasons.ts';
+import { PlanChoices, planAnswerReady, planReply } from './PlanChoices';
 import './conversation-requests.css';
 
 export { requestReason };
@@ -120,9 +126,10 @@ export function InlineRequest({
   onSettled?: () => void;
 }) {
   const { runtime, perform, snapshot } = useRuntime();
-  const workspaceId = snapshot.sessions.find(
-    (row) => row.id === item.sessionId,
-  )?.workspaceId;
+  const owner = snapshot.sessions.find((row) => row.id === item.sessionId);
+  const workspaceId = owner?.workspaceId;
+  // The plan a plan card asks about, once Circle has written it
+  const plan = owner?.plan;
   const root = snapshot.workspaces.find(
     (workspace) => workspace.id === workspaceId,
   )?.path;
@@ -185,6 +192,45 @@ export function InlineRequest({
         </div>
       </section>
     );
+  // plan_exit's question: what to do with the plan, which opens beside the card
+  if (item.kind === 'plan-exit')
+    return (
+      <section
+        className="inline-request"
+        data-kind="plan-exit"
+        aria-labelledby={headingId}
+        aria-busy={sent}
+      >
+        <header>
+          <ClipboardList size={14} />
+          <strong id={headingId}>{t('the plan is ready, what next?')}</strong>
+          {item.origin?.name && <small>{item.origin.name}</small>}
+        </header>
+        <PlanChoices
+          name={item.id}
+          choices={item.choices ?? []}
+          choice={selected[0]}
+          words={comment}
+          disabled={sent}
+          labelledBy={headingId}
+          onChoice={(choice) => setSelected([choice])}
+          onWords={setComment}
+        />
+        {failure}
+        <div className="request-actions">
+          <Button
+            className="primary"
+            disabled={sent || !planAnswerReady(selected[0], comment)}
+            onClick={() => finish(planReply(selected[0]!, comment))}
+          >
+            {t('send answer')}
+          </Button>
+          {onFile && plan && (
+            <Button onClick={() => onFile(plan.file)}>{t('open plan')}</Button>
+          )}
+        </div>
+      </section>
+    );
   // A project hooks file that waits for approval: the hooks of the version that was
   // read, marked against the version approved last. Approval is of exactly that version.
   if (item.kind === 'hooks')
@@ -226,7 +272,7 @@ export function InlineRequest({
         </div>
       </section>
     );
-  if (item.kind === 'question' || item.kind === 'plan-exit')
+  if (item.kind === 'question')
     return (
       <section
         className="inline-request"

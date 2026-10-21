@@ -1635,7 +1635,7 @@ test('rejection reaches the next real model request without an effect', async (t
   );
 });
 
-test('question selections and plan exit use the awaited core interaction', async (t) => {
+test('question selections and the plan card use the awaited core interaction, beside the plan Circle wrote', async (t) => {
   const f = await setup(t, [
     {
       message: assistant('', [
@@ -1651,7 +1651,25 @@ test('question selections and plan exit use the awaited core interaction', async
       ]),
     },
     { message: assistant('target received') },
+    // In plan mode the system prompt names the plan file: Circle's own, outside the
+    // workspace, so the desktop's file backend has no part in writing it
+    async (request) => ({
+      message: assistant('', [
+        {
+          id: 'plan-write',
+          name: 'write_file',
+          args: {
+            file_path: /`(\/session_plans\/[\w-]+\.md)`/.exec(
+              request.system,
+            )![1]!,
+            content: '# Plan\n\n1. migrate\n',
+          },
+        },
+      ]),
+      usage: emptyUsage(),
+    }),
     { message: assistant('', [{ id: 'plan-1', name: 'plan_exit', args: {} }]) },
+    { message: assistant('', [{ id: 'plan-2', name: 'plan_exit', args: {} }]) },
     { message: assistant('implementing') },
   ]);
   await f.call('prompt', { text: 'ask' });
@@ -1691,16 +1709,60 @@ test('question selections and plan exit use the awaited core interaction', async
   row = f.controller
     .snapshot()
     .interactions.find((i) => i.status === 'pending')!;
+  const plan = f.controller.snapshot().sessions[0]!.plan!;
+  assert.equal(
+    plan.file,
+    `/session_plans/${f.controller.snapshot().sessions[0]!.id}.md`,
+  );
+  assert.equal(plan.text, '# Plan\n\n1. migrate\n');
+  assert.equal(existsSync(join(f.workspace, 'plan.md')), false);
+  assert.equal(row.kind, 'plan-exit');
+  assert.equal(row.target, plan.file);
+  assert.deepEqual(row.choices, [
+    'implement in auto mode',
+    'implement with manual approval',
+    'change the plan',
+    'save the plan only',
+  ]);
+  // A change goes to the model in the words written, and plan mode stays on
   await f.call('answer', {
     id: row.id,
     revision: 1,
-    answer: JSON.stringify({ choices: ['implement plan'], comment: '' }),
+    answer: JSON.stringify({
+      choices: ['change the plan'],
+      comment: 'migrate after the API',
+    }),
+  });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((i) => i.status === 'pending' && i.id !== row.id),
+    'second plan card',
+  );
+  assert.match(
+    f.model.requests.at(-1)!.messages.find((m) => m.tool_call_id === 'plan-1')!
+      .content,
+    /They said: migrate after the API/,
+  );
+  assert.equal(f.controller.snapshot().sessions[0]!.readOnly, true);
+  row = f.controller
+    .snapshot()
+    .interactions.find((i) => i.status === 'pending')!;
+  await f.call('answer', {
+    id: row.id,
+    revision: 1,
+    answer: JSON.stringify({
+      choices: ['implement with manual approval'],
+      comment: '',
+    }),
   });
   await wait(
     () => f.controller.snapshot().sessions[0]!.state === 'idle',
     'plan finish',
   );
   assert.equal(f.controller.snapshot().sessions[0]!.readOnly, false);
+  assert.equal(f.controller.snapshot().sessions[0]!.mode, 'manual');
 });
 
 test('cancel aborts the model, invalidates the interaction, and preserves raw history', async (t) => {

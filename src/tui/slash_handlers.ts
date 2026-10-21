@@ -382,7 +382,7 @@ function plan(host: CommandHost, args: string): void {
   runtime.setPlanMode(want);
   host.notice(
     want
-      ? 'Read-only on · writes and shell are blocked, /plan.md is allowed'
+      ? 'Read-only on · writes and shell are blocked, except the plan'
       : 'Read-only off',
   );
 }
@@ -402,7 +402,7 @@ const MODE_NOTICES: Record<SessionMode, string> = {
   manual: 'Manual · asking before each change and command',
   'accept-edits':
     'Accept edits · workspace file edits run without asking, commands and deletes still ask',
-  plan: 'Read-only on · writes and shell are blocked, /plan.md is allowed',
+  plan: 'Read-only on · writes and shell are blocked, except the plan',
   // Turning it on says what it lets through
   auto: 'Auto on · nothing asks: commands that delete, certificate warnings and uploads go ahead · use it where that is safe',
 };
@@ -416,7 +416,7 @@ const MODE_WORDS: Record<SessionMode, string> = {
 const MODE_META: Record<SessionMode, string> = {
   manual: 'asking before each change and command',
   'accept-edits': 'workspace edits run without asking',
-  plan: 'writes and shell are blocked · plan.md is allowed',
+  plan: 'writes and shell are blocked · except the plan',
   auto: 'nothing asks · deletes, certificate warnings and uploads included',
 };
 

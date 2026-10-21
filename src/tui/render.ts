@@ -66,6 +66,7 @@ import {
   type DetailBand,
 } from './agent_rows.js';
 import { paletteRev } from '../ink/theme.js';
+import { PLAN_CHOICES } from '../plan_file.js';
 export interface ScreenState {
   messages: Message[];
   notices: string[];
@@ -612,7 +613,7 @@ export function renderScreen(
   if (
     planVisible(
       state.todos,
-      Boolean(state.dialog?.options.includes('implement plan')),
+      Boolean(state.dialog?.options.includes(PLAN_CHOICES.manual)),
     )
   ) {
     bottom.push(

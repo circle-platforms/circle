@@ -89,7 +89,7 @@ A point where a turn stopped on an approval card cannot be gone back to. Choose 
 - `/fork` lists your messages. Pick one and a new session starts with everything before it; the message is put back in the input box. `/fork <words>` opens the list searching for those words.
 - `/clone` starts a new session with the current branch, up to the point you went back to if you did.
 
-A fork or clone takes the branch with what Circle knows about it: an earlier compaction, the plan and the subagents' records. The original session stays in `/resume`. `esc` twice opens `/fork` instead of `/tree`, or nothing, when you set `double_escape` in [settings](settings.md#keys).
+A fork or clone takes the branch with what Circle knows about it: an earlier compaction, the plan and the subagents' records. It starts with a copy of plan mode's plan, which it then changes on its own. The original session stays in `/resume`. `esc` twice opens `/fork` instead of `/tree`, or nothing, when you set `double_escape` in [settings](settings.md#keys).
 
 ## Compaction
 

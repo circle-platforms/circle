@@ -1,6 +1,6 @@
 import { ExternalFileAccessPanel } from './ExternalFileAccess';
 import { desktopHost, saveExport } from '../host';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowUpRight,
@@ -23,6 +23,7 @@ import {
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
+import { PlanChoices, planAnswerReady, planReply } from './PlanChoices';
 import {
   DESKTOP_SEARCH_CHORD,
   DESKTOP_SETTINGS_CHORD,
@@ -1482,6 +1483,7 @@ export function InteractionDialog({
   const [selected, setSelected] = useState<string[]>([]);
   const [comment, setComment] = useState('');
   const [cancelConfirm, setCancelConfirm] = useState(false);
+  const planHeading = useId();
   useEffect(() => {
     setSelected([]);
     setComment('');
@@ -1505,21 +1507,13 @@ export function InteractionDialog({
       onClose();
       return;
     }
-    if (
-      item.kind === 'question' &&
-      (selected.length || comment) &&
-      !cancelConfirm
-    ) {
+    // A question or a plan card closes unanswered; only an approval says no
+    const asks = item.kind === 'question' || item.kind === 'plan-exit';
+    if (asks && (selected.length || comment) && !cancelConfirm) {
       setCancelConfirm(true);
       return;
     }
-    finish(
-      item.kind === 'question'
-        ? 'cancelled'
-        : item.kind === 'hooks'
-          ? 'skip'
-          : 'reject',
-    );
+    finish(asks ? 'cancelled' : item.kind === 'hooks' ? 'skip' : 'reject');
   };
   return (
     <Modal
@@ -1532,9 +1526,11 @@ export function InteractionDialog({
           ? [approvalHeading(item), requestReason(item.reason)]
               .filter(Boolean)
               .join(' · ')
-          : item?.kind === 'hooks'
-            ? t('project hooks need approval')
-            : (item?.title ?? t('request'))
+          : item?.kind === 'plan-exit'
+            ? t('plan')
+            : item?.kind === 'hooks'
+              ? t('project hooks need approval')
+              : (item?.title ?? t('request'))
       }
       wide={!!item?.before || !!item?.diff}
     >
@@ -1658,15 +1654,36 @@ export function InteractionDialog({
             </>
           ) : item.kind === 'plan-exit' ? (
             <>
-              <p className="dialog-paragraph">
-                {t('Leave read-only mode and implement the plan?')}
+              <p id={planHeading} className="dialog-paragraph">
+                {t('the plan is ready, what next?')}
               </p>
+              <PlanChoices
+                name={item.id}
+                choices={item.choices ?? []}
+                choice={selected[0]}
+                words={comment}
+                disabled={false}
+                labelledBy={planHeading}
+                onChoice={(choice) => setSelected([choice])}
+                onWords={setComment}
+              />
+              {cancelConfirm && (
+                <p className="inline-error">
+                  {t(
+                    'Cancel this answer? Press escape again or choose cancel.',
+                  )}
+                </p>
+              )}
               <div className="dialog-actions">
-                <Button onClick={() => finish('stay read-only')}>
-                  {t('stay read-only')}
+                <Button onClick={() => finish('cancelled')}>
+                  {t('cancel')}
                 </Button>
-                <Button onClick={() => finish('implement plan')}>
-                  {t('request implementation')}
+                <Button
+                  className="primary"
+                  disabled={!planAnswerReady(selected[0], comment)}
+                  onClick={() => finish(planReply(selected[0]!, comment))}
+                >
+                  {t('send answer')}
                 </Button>
               </div>
             </>
