@@ -229,12 +229,18 @@ test('a sign-in close to running out is renewed at the server without asking, an
 });
 
 test('an older server without the renewal route is asked once and then left alone', async (t) => {
+  // Keep the token near expiry while real HTTP requests run. Host scheduling must
+  // not turn a renewal-compatibility check into an expired-token check.
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
   const server = await sessionServer(t);
   server.state.ttlMs = 3_000;
   server.state.refreshRoute = false;
   const session = await connect(t);
   await session.run(`login ${server.url} tester`);
+  now += 1_000;
   await session.run('packs');
+  now += 1_000;
   await session.run('packs');
   assert.equal(server.counts.missingRefresh, 1);
   assert.equal(session.prompts.length, 1);
