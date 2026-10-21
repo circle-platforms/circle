@@ -822,6 +822,11 @@ test('a genuinely unwritable original log cannot prevent transport failure from 
     await actual?.stop('fixture cleanup');
     await jobs.close();
   });
+  // Hold only execute's synchronous foreground deadline. Restore real timers
+  // before the asynchronous launcher runs, so readiness and process cleanup
+  // still follow actual OS events. A slow host must not replace the log failure
+  // this test is exercising with an unrelated one-second timeout.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const running = jobs
     .execute(
       command(root, "console.log('READY');setInterval(()=>{},1000);"),
@@ -836,6 +841,7 @@ test('a genuinely unwritable original log cannot prevent transport failure from 
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
+  t.mock.timers.reset();
   await until(
     () =>
       transport.launches.length === 1 &&
@@ -862,9 +868,7 @@ test('a genuinely unwritable original log cannot prevent transport failure from 
   await rm(path);
   await mkdir(path);
   trigger.resolve();
-  // The call has a one-second deadline, which would also stop the process.
-  // What stopped it is recorded, so no wall-clock race is needed to tell the
-  // transport failure from the deadline.
+  // The real failing write is the only event allowed to stop this command.
   const outcome = await running;
   assert.ok(
     'error' in outcome,
