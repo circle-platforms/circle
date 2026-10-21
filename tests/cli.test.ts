@@ -19,7 +19,13 @@ import {
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { pathToFileURL } from 'node:url';
-import { fileBlocks, parseCli, pipedText, UsageError } from '../src/cli.js';
+import {
+  fileBlocks,
+  helpText,
+  parseCli,
+  pipedText,
+  UsageError,
+} from '../src/cli.js';
 import {
   defaultSettings,
   loadCredentials,
@@ -1230,4 +1236,39 @@ test('circle uninstall answers an unknown option with the usage exit code', asyn
   });
   assert.equal(run.code, 2);
   assert.match(run.stderr, /usage: circle uninstall \[--purge\] \[--yes\]/);
+});
+
+test('circle --help in English keeps its descriptions in one column near the options', () => {
+  const saved = {
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LANGUAGE: process.env.LANGUAGE,
+  };
+  process.env.LANG = 'en_US.UTF-8';
+  delete process.env.LC_ALL;
+  delete process.env.LANGUAGE;
+  try {
+    const lines = helpText(80).split('\n');
+    const row = (flag: string) =>
+      lines.findIndex((line) => line.startsWith(`  ${flag}`));
+    // A short option and its description share a line, the description at column 24
+    const print = lines[row('-p, --print [PROMPT]')]!;
+    assert.equal(print.indexOf('Print the answer and exit'), 24);
+    assert.equal(lines[row('--yolo')]!.indexOf('Auto mode'), 24);
+    // A long option has a line of its own, and its description is under the same column
+    const long = row('--append-system-prompt TEXT|FILE');
+    assert.equal(lines[long], '  --append-system-prompt TEXT|FILE');
+    assert.equal(lines[long + 1]!.indexOf('Append to the system prompt'), 24);
+    assert.equal(lines[long + 1]!.slice(0, 24).trim(), '');
+    // Every option says what it does, and nothing runs past the width
+    assert.match(
+      lines[row('--system-prompt TEXT|FILE') + 1]!,
+      /Replace the system prompt/,
+    );
+    for (const line of lines) assert.ok(line.length <= 80, line);
+  } finally {
+    for (const [name, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+  }
 });

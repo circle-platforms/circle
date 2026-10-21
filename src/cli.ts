@@ -348,10 +348,14 @@ const HELP_ROWS: [string, string][] = [
   ['-v, --version', 'Print version'],
   ['-h, --help', 'Show help'],
 ];
+// Options this wide or narrower share the description column. A longer one has a line of
+// its own and its description under that column, so a few long options do not push every
+// description to the right.
+const HELP_FLAG_WIDTH = 20;
 export function helpText(width = process.stdout.columns || 80): string {
   const columns = Math.max(40, width);
-  const flagWidth =
-    Math.max(...HELP_ROWS.map(([flag]) => stringWidth(flag))) + 2;
+  const flagWidth = HELP_FLAG_WIDTH + 2;
+  const indent = ' '.repeat(2 + flagWidth);
   const lines = [
     t('usage: circle [options] [folder] [@file ...] [message ...]'),
     '',
@@ -359,6 +363,10 @@ export function helpText(width = process.stdout.columns || 80): string {
     '',
   ];
   for (const [flag, description] of HELP_ROWS) {
+    if (stringWidth(flag) > HELP_FLAG_WIDTH) {
+      lines.push('  ' + flag, ...hangingWrap(indent, t(description), columns));
+      continue;
+    }
     const prefix = '  ' + pad(flag, flagWidth);
     lines.push(...hangingWrap(prefix, t(description), columns));
   }
