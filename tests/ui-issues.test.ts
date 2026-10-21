@@ -22,7 +22,6 @@ import { cleanup, scratch } from './helpers.js';
 import { PlanCompletionTracker, planVisible } from '../src/plan_state.js';
 import { nextAgentActivity } from '../src/session_activity.js';
 import { loadRemap } from '../src/keybindings.js';
-import { PLAN_CHOICES } from '../src/plan_file.js';
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 500 && !check(); i++) await delay(5);
@@ -116,14 +115,13 @@ test('completing the real plan hides it and anchors one notice, while plan exit 
         .length,
       1,
     );
-    const question = s.ui.askChoice(
-      'plan',
-      'How should Circle go on?',
-      Object.values(PLAN_CHOICES),
-    );
+    const question = s.ui.askChoice('plan', 'Implement the completed plan?', [
+      'implement plan',
+      'continue planning',
+    ]);
     assert.ok(s.rows().some((row) => row.includes('Plan 1/1')));
     s.key('escape');
-    assert.equal(await question, PLAN_CHOICES.keep);
+    assert.equal(await question, 'continue planning');
     assert.ok(!s.rows().some((row) => row.includes('Plan 1/1')));
   }
 });
@@ -271,11 +269,10 @@ test('the real plan_exit question keeps completed steps in view until the decisi
   s.runtime.setPlanMode(true);
   const turn = s.runtime.harness.run('review the plan');
   await until(() =>
-    Boolean(s.app.state.dialog?.options.includes(PLAN_CHOICES.manual)),
+    Boolean(s.app.state.dialog?.options.includes('implement plan')),
   );
   assert.ok(s.rows().some((row) => row.includes('Plan 1/1')));
-  // The fourth choice saves the plan and leaves plan mode on
-  s.key('4', '4');
+  s.key('3', '3');
   await turn;
   assert.equal(s.runtime.harness.planMode, true);
   assert.ok(!s.rows().some((row) => row.includes('Plan 1/1')));

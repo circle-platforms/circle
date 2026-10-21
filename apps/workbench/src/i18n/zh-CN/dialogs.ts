@@ -178,6 +178,10 @@ export const dialogs: Record<string, string> = {
   'Cancel this answer? Press escape again or choose cancel.':
     '要取消这个回答吗？再按一次 escape，或选择“取消”。',
   'save response': '保存答复',
+  'Leave read-only mode and implement the plan?':
+    '要退出只读模式并实施计划吗？',
+  'stay read-only': '保持只读',
+  'request implementation': '请求实施',
   'response sent to Circle': '答复已发送给 Circle',
   'Delete “{title}” and its saved conversation?':
     '删除“{title}”及其保存的对话？',

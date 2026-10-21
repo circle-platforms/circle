@@ -6,7 +6,7 @@ nav_order: 20
 
 The main agent has these twenty-one core tools, and `vision` when a [side vision model](usage.md#images-and-screenshots) is set. The desktop application adds the thirteen [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. The eight [device terminal](#device-terminals) tools come with both. MCP servers and [extensions](extensions.md) add more.
 
-"Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except writing the conversation's plan (see [Read-only mode](security.md#read-only-mode)).
+"Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except changes to a plan file (see [Read-only mode](security.md#read-only-mode)).
 
 ## Reading and searching
 
@@ -222,7 +222,7 @@ In the desktop application the same tools also reach the shells you open as term
 | `write_todos` | Keep the plan shown in the plan box. | no |
 | `question` | Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. A question with a `key` keeps your answer as a variable, a secret question as a secret, both written `%KEY%` afterwards. See [Answer a question](usage.md#answer-a-question) and [Secrets](usage.md#secrets). | no |
 | `plan_enter` | Switch to `read-only` mode, as `/plan` does. | no |
-| `plan_exit` | Ask you what to do with the finished plan: implement it in `auto` mode or with manual approval, which leaves `read-only` mode; change it, and the model gets what you write; or save it and change nothing. Only you can answer, so it fails without the full-screen interface or the desktop application. | no |
+| `plan_exit` | Ask you whether to leave `read-only` mode and implement the plan. Only you can say yes, so it fails without the full-screen interface. | no |
 
 Without the full-screen interface, a `question` call returns the questions as text, and the model asks them in its answer.
 
