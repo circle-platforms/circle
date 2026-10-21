@@ -132,6 +132,11 @@ test('the phrases on the screen change under zh-CN and keep commands and ids', (
   );
   assert.equal(zh('Edit needs your permission'), 'Edit 需要你的批准');
   assert.equal(zh('changes files in the workspace'), '修改工作区内的文件');
+  // The screenshot's card, with a side vision model looking in the model's place
+  assert.equal(
+    zh('shows the side vision model the whole screen'),
+    '向辅助视觉模型展示整个屏幕',
+  );
   assert.equal(
     zh('Allow file changes inside the workspace for this session'),
     '本会话内允许工作区内的文件改动',

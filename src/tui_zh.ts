@@ -52,6 +52,7 @@ export const TUI_ZH: Record<string, string> = {
   'This deletes or overwrites data.': '这会删除或覆盖数据。',
   'empty enter rejects · esc returns': '空回车即拒绝 · esc 返回',
   'shows the model the whole screen': '向模型展示整个屏幕',
+  'shows the side vision model the whole screen': '向辅助视觉模型展示整个屏幕',
   'every screenshot': '每一次截屏',
 
   // turn status
