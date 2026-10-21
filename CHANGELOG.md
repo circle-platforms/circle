@@ -4,6 +4,43 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.10.0 - 2026-10-21
+
+### Added
+
+- **The terminal speaks Chinese when your system does.** With `LANGUAGE`, `LC_ALL` or `LANG` set to Chinese, the screen, `/help`, `/hotkeys`, `circle --help`, `circle update` and the installers' steps are in Simplified Chinese, in the same words as the desktop. What you, the model, a tool or a file wrote stays as written. Columns count a Chinese character as two cells, and a line never starts with a closing mark or ends with an opening one.
+- **Pictures for a model that cannot read them.** Set a side vision model, `vision` in `settings.json` or the `CIRCLE_VISION_*` variables, and `read_file` on a picture returns its description, `screenshot` and `browser_screenshot` save the picture and describe it, and the new `vision` tool asks the side model a question about a picture file. A picture sent with a message reaches such a model as its path, written to the project's data folder when it had none, so the model can have it described. A model no catalog lists is marked text-only when its endpoint says it takes no pictures, until Circle quits. See [Images and screenshots](https://circle-platforms.github.io/circle/usage/#images-and-screenshots).
+- **`terminal_wait` checks what a device printed.** `absent` fails the wait the moment a line you name appears, `retries` waits again after a timeout, and `changed` returns exactly the lines printed during the wait, whatever the screen did meanwhile.
+- **`/hooks`** lists your hooks and the project hooks files that wait for your approval.
+- **A desktop quick connect signs in over SSH with a password.** The password is used for that login only: kept in memory until the login has read it, never saved or shown to the model.
+- **Terminal tabs have a right-click menu, a name and an order of your own.** Rename a shell's tab and Circle's tools and cards call it by that name, also after a restart; close the others or all; drag a tab either way, and the order holds in every window until Circle quits.
+- **`circle --approve-hooks`** approves the project hooks files that wait, for print, line and rpc mode.
+
+### Changed
+
+- **Plan mode keeps its plan in a file and asks what to do with it.** Each conversation has one plan file in the project's data folder; in plan mode it is the only file that changes, and writing it never asks. When the plan is ready, Circle asks: implement in auto mode, implement with manual approval, change the plan, or save the plan only. The desktop opens the plan where a file opens; the terminal asks in the question card, with the plan's path. Deleting a conversation removes its plan, and a fork or clone starts with a copy. A `plan.md` elsewhere is no longer the one file plan mode may write.
+- **A project hooks file runs only in a version you approved.** A new or changed file is asked about when a turn starts, in the terminal and in the desktop, listing each hook as new, changed or removed; focus starts on **skip**. Print, line and rpc mode do not run a waiting file and say so once on standard error. After upgrading from 1.9.1, a project hooks file that ran before waits once as a new one. See [Approving a project hooks file](https://circle-platforms.github.io/circle/hooks/#approving-a-project-hooks-file).
+- **An unknown slash command is cleared with a suggestion** instead of going to the model. A path such as `/usr/bin` still goes to the model as text.
+- **`circle -c` on a session another terminal runs opens it view-only** instead of exiting. Nothing there can change it: renaming, compacting and the like are refused.
+- **Terminal tabs keep their numbers.** A new shell takes the lowest number free; closing a tab does not rename the others, and a restart keeps the tab's number. An exited shell stays in the row with its exit code and **restart**, and the model can restart it by typing to it.
+- **A browser page that moves to a window of its own, or back, stays loaded on macOS and Windows.** On Linux it opens again in the new window, with its history.
+- **The desktop runs on Electron 44.9.1** (Chromium 152.0.7977.167, Node.js 24.22.0), with the 44.x security fixes since 44.7.0.
+- **The overview's changes card lists the files that differ from the last commit**, each with its letter and its lines, and a click opens one in the changes mode. **this session** in the changes mode lists them too, beside the files Circle's file tools changed, so a change made by a command shows in both. Where the changes mode is wide, as in full view, its list stands beside the difference, and a long difference scrolls in the height left.
+- **Removing a workspace in settings is one step**: it archives its conversations, stops trusting the folder and forgets it, or, when a conversation cannot be archived yet, changes nothing and says why. Trusted folders are green and others red.
+- **`circle update` names the releases it skipped**, with their notes, how much disk the kept older versions use, and what to do when the release lookup is refused.
+
+### Fixed
+
+- **A wait on a desktop terminal tab ends when the shell is back at its prompt**, whatever the prompt looks like (`❯`, `➜ … ✗`), instead of running to its timeout.
+- **"run this in terminal N"** types the command only where the line that runs is the card's, with its secrets' values, and never after text already on the prompt.
+- **A click in a terminal keeps the keys that follow** for the terminal, and only those typed in the message box.
+- **Giving the browser back after its developer tools were open across a move works again**, and moving a page while you hold the browser no longer throws in the main process.
+- **The overview and the changes and files modes read Git again after each of Circle's tool calls**, not every 1.2 seconds while a turn runs.
+- **Closing a device console you hold disconnects it at once**, instead of waiting until you give it back; what Circle was waiting to do on it ends, and Circle is told that you disconnected it. Circle's own disconnect still waits while you hold the console.
+- **English words stay whole at apostrophes** when the terminal wraps.
+- **The hub's footer lamp says when the hub cannot be reached or the sign-in expired**, and `/hub help` waits at most three seconds for the hub.
+- **The folded row of a turn's tools stays on one line in the desktop.**
+
 ## 1.9.1 - 2026-10-19
 
 ### Added
