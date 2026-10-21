@@ -30,7 +30,7 @@ import {
   pullRequestAction,
   type PullRequestAction,
 } from '../model/overview';
-import { useGitChanges } from '../model/git-changes';
+import { endedToolCalls, useGitChanges } from '../model/git-changes';
 import { failedRunLog, usePullRequests } from '../model/pull-requests';
 import { currentSession } from '../model/state';
 import type { PanelId } from '../model/types';
@@ -235,6 +235,7 @@ export function Overview({
     live: runtime.mode === 'live',
     active: true,
     busy: session.state !== 'idle',
+    settled: endedToolCalls(session.messages),
   });
   const changed = tree.files ?? [];
   const FILES_SHOWN = 8;
