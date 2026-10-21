@@ -65,7 +65,7 @@ A header value can name a saved [secret](security.md#secrets-by-name) as `${secr
 
 Each tool is offered to the model as `<name>_<tool>`, for example `memory_create_entities`. Circle connects when the full-screen interface starts or the desktop application opens a trusted folder, and again on `/reload`, `/mcp reload` and `/extensions reload`. In [print mode, line mode](cli.md#print-mode) and [RPC mode](rpc.md) it connects only with `--extensions`, before the first prompt. It waits up to 30 seconds for each server. A server that fails is listed by `/mcp` with the reason, and the other servers' tools still load.
 
-A server can tell its clients how to use its tools, in the instructions it sends when Circle connects. Circle adds them to the model's system prompt in a section of their own for each server, headed "Instructions from MCP server <name>", which says they are the server's words and not yours: where they differ from what you ask, from your or the project's instructions, or from the rest of the prompt, those come first. Circle takes the first 8 KiB of each server's instructions and marks where it cut, keeps line breaks and tabs, and takes out other control characters and the bidirectional-text controls. A server that is not connected, or sent none, has no section. They are read again on every connect, so `/mcp reload` brings changed instructions in. When a server's connection ends while Circle runs (a program that exits), its section leaves the prompt from the next turn, and `/mcp` says the connection ended.
+A server can tell its clients how to use its tools, in the instructions it sends when Circle connects. Circle adds them to the model's system prompt in a section of their own for each server, headed "Instructions from MCP server <name>", which says they are the server's words and not yours: where they differ from what you ask, from your or the project's instructions, or from the rest of the prompt, those come first. Circle takes the first 8 KiB of each server's instructions and marks where it cut, keeps line breaks and tabs, and takes out other control characters and the bidirectional-text controls. A server that is not connected, or sent none, has no section. They are read again on every connect, so `/mcp reload` brings changed instructions in. When a program Circle started for a server exits, its section leaves the prompt from the next turn, and `/mcp` says the connection ended. A server reached over the network is not watched between requests: its section stays until the servers are reloaded.
 
 Every request to a `streamable_http` or `sse` server carries a `Circle-Session-Id` header with the id of the Circle session at that moment, which changes when you start or switch sessions (as RPC `new_session` does), and the requests of each tool call carry a W3C `traceparent` header, `00-<trace id>-<parent id>-01`, with a new random trace id for every call. A server can use them to group what one session did and to tell calls apart in its logs. Circle sets both itself: a configured header of either name is not sent. A `websocket` server and a program started for a server get neither.
 
@@ -98,10 +98,10 @@ Circle's own `screenshot` tool only looks at the screen. To let the model open a
 
 ## Commands
 
-| Command       | What it does                                                               |
-| ------------- | -------------------------------------------------------------------------- |
-| `/mcp`        | List the servers, their tools, and why a server failed.                    |
-| `/mcp reload` | Re-read `settings.json` and reconnect every server. Not while a turn runs. |
+| Command       | What it does                                                                                   |
+| ------------- | ---------------------------------------------------------------------------------------------- |
+| `/mcp`        | List the servers, the names of the headers each is sent, their tools, and why a server failed. |
+| `/mcp reload` | Re-read `settings.json` and reconnect every server. Not while a turn runs.                     |
 
 In print mode, line mode and RPC mode MCP servers load only with `--extensions` (`circle --extensions -p "…"`, `circle --mode rpc --extensions`). Closing Circle closes the connections and stops the programs it started.
 
