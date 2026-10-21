@@ -17,11 +17,7 @@ import { TITLE_MAX_TOKENS } from '../src/session_title.js';
 import type { Message } from '../src/types.js';
 
 for (const protocol of ['anthropic', 'openai'] as const)
-  for (const direction of [
-    'enter',
-    'exit-manual',
-    'exit-accept-edits',
-  ] as const)
+  for (const direction of ['enter', 'exit-manual', 'exit-auto'] as const)
     test(`${protocol}: ${direction} keeps all three tool results before the mode boundary on the wire`, async (t) => {
       const root = mkdtempSync(join(tmpdir(), 'circle-mode-pairing-'));
       t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -58,9 +54,9 @@ for (const protocol of ['anthropic', 'openai'] as const)
         question: async () =>
           JSON.stringify([
             [
-              direction === 'exit-accept-edits'
-                ? 'implement plan, accept edits'
-                : 'implement plan',
+              direction === 'exit-auto'
+                ? 'implement in auto mode'
+                : 'implement with manual approval',
             ],
           ]),
       });
@@ -82,8 +78,8 @@ for (const protocol of ['anthropic', 'openai'] as const)
         runtime.mode,
         direction === 'enter'
           ? 'plan'
-          : direction === 'exit-accept-edits'
-            ? 'accept-edits'
+          : direction === 'exit-auto'
+            ? 'auto'
             : 'manual',
       );
       const raw = runtime.store.messages(runtime.session.id);

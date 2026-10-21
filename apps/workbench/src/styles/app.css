@@ -3708,6 +3708,13 @@ pre {
   border-color: var(--accent);
   background: var(--read-bg);
 }
+/* What each of the plan card's choices does, quieter, at the end of its row. */
+.plan-choices label small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  text-align: right;
+}
 .request-input summary {
   cursor: pointer;
   color: var(--muted);
