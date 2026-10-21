@@ -356,6 +356,8 @@ export const pages: Record<string, string> = {
   '{n} conversations': '{n} 个会话',
   '{name} is no longer trusted and its sessions are archived':
     '{name} 已不再受信任，它的会话已归档',
+  '{name} is no longer trusted and no longer listed':
+    '已不再信任 {name}，且不再列出',
   'Circle will not read, copy or change a file whose name matches one of these patterns. * is any run of characters and ? is one character, and only the name counts: write *.key, never secrets/*.key.':
     '名字符合下面任一样式的文件，Circle 不会读取、复制或修改。? 表示一个字符，* 表示任意多个字符，而且只比对文件名：写 *.key，不要写 secrets/*.key。',
   'new file pattern': '新文件样式',

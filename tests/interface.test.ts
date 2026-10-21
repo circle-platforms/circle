@@ -127,6 +127,11 @@ test('palette contrast is readable across panel and all type surfaces in dark an
     ]) {
       assert.ok(contrastRatio(dim, surface) >= 4.5);
       assert.ok(contrastRatio(faint, surface) >= 3);
+      // The green the desktop says trusted in: the plain slot is 3.3:1 on white.
+      assert.ok(
+        contrastRatio(p.write_hex, surface) >= 4.5,
+        `write_hex ${p.write_hex} on ${surface}`,
+      );
     }
   }
   assert.deepEqual(hexToRgb('#fff'), [255, 255, 255]);
