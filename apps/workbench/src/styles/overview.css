@@ -9,6 +9,7 @@
 .work-cluster > .overview-column {
   flex: none;
   width: 380px;
+  min-width: 380px;
   min-height: 0;
   border-left: 1px solid var(--border);
   background: var(--bg);
@@ -362,5 +363,6 @@ button.overview-row:hover .overview-name {
 /* In a narrow window the overview lies over the conversation, as a drawer does. */
 .inspector-overlay .overview-column {
   width: 100%;
+  min-width: 0;
   border-left: 0;
 }

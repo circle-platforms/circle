@@ -15,6 +15,15 @@ import { useSessionDisclosure } from '../model/presentation';
 import { ToolMessage } from './ToolMessage';
 import { formatUsdAmount } from '../../../../src/pricing.ts';
 
+/** A hand-back notice is stored in English and shown in the interface language. */
+function shownMessageText(role: Message['role'], text: string): string {
+  if (role !== 'user') return text;
+  const gave = /^the user gave terminal (\d+) back$/.exec(text);
+  return gave
+    ? t('the user gave terminal {n} back', { n: gave[1] ?? '' })
+    : text;
+}
+
 /**
  * A message as Claude shows one: yours in a bubble on the right, Circle's as plain text
  * with its thinking folded. The time, the usage and a copy button sit on one row under it.
@@ -96,7 +105,7 @@ export function MessageView({
             )}
           </>
         ) : (
-          <Markdown text={message.text} />
+          <Markdown text={shownMessageText(message.role, message.text)} />
         )}
         {message.attachments?.length ? (
           <div className="message-attachments">

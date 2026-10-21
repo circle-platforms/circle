@@ -86,6 +86,8 @@ const shell = (n: number) => ({
   lastSequence: 0,
   logPath: '/synthetic/log',
   kind: 'shell',
+  // The main process stores each shell's tab number as it makes it
+  tabNumber: n as number | undefined,
 });
 let items: any[] = [
   shell(1),
@@ -93,6 +95,7 @@ let items: any[] = [
   {
     ...shell(3),
     label: 'command',
+    tabNumber: undefined,
     startedAt: new Date(3000).toISOString(),
     managedCommand: {
       executionId: 'exec-1',
@@ -115,6 +118,7 @@ let items: any[] = [
   {
     ...shell(4),
     label: 'command',
+    tabNumber: undefined,
     startedAt: new Date(4000).toISOString(),
     managedCommand: {
       executionId: 'exec-2',
@@ -319,13 +323,28 @@ window.circleDesktop = {
         data: command.sessionId === 'A' ? structuredClone(items) : [],
       };
     if (method === 'create') {
-      const item = shell(items.length + 1);
+      // The lowest number no open shell's tab is using
+      const used = new Set(
+        items
+          .filter((one) => !one.hidden && !one.managedCommand)
+          .map((one) => one.tabNumber),
+      );
+      let number = 1;
+      while (used.has(number)) number++;
+      const item = { ...shell(items.length + 1), tabNumber: number };
       items = [...items, item];
       return { ok: true, data: item };
     }
     const item = items.find((one) => one.id === params?.id) ?? items[0];
     if (method === 'close' || method === 'signal') {
       if (method === 'close') item.status = 'exited';
+      publish(item);
+      return { ok: true, data: item };
+    }
+    // A closed tab leaves the row and gives its number back
+    if (method === 'hide') {
+      item.hidden = true;
+      delete item.tabNumber;
       publish(item);
       return { ok: true, data: item };
     }
@@ -352,6 +371,34 @@ Object.assign(window, {
         row.ordinal === n ? { ...row, ...patch } : row,
       );
       pushState();
+    },
+    /**
+     * A terminal tool the conversation is running or asking about, before the
+     * runtime's row has said so. An empty status clears it.
+     */
+    working: (status: 'running' | 'waiting' | '') => {
+      runtime.change((draft) => {
+        const session = draft.sessions.find((item) => item.id === 'A');
+        if (!session) return;
+        session.messages = status
+          ? [
+              {
+                id: 'tool-wait',
+                parentId: null,
+                role: 'tool',
+                text: '',
+                at: '2026-10-20T00:00:00.000Z',
+                tool: {
+                  id: 'call-wait',
+                  name: 'terminal_wait',
+                  input: { session: 'local:terminal-1' },
+                  output: '',
+                  status,
+                },
+              },
+            ]
+          : [];
+      });
     },
     /** The running command ends, with an exit code. */
     endCommand: (exitCode: number) => {

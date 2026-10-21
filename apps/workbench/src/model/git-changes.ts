@@ -1,10 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { gitChangeRows, type ChangeRow } from './changes';
-import { workspaceCall } from './workspace-client';
+import type { Message } from './types';
+import { subscribeWorkspace, workspaceCall } from './workspace-client';
 
 /** How often a visible list asks again. */
 const REFRESH_MS = 30_000;
 const AFTER_TURN_MS = 600;
+/** After a tool call ends: what it wrote may not announce itself, as a command's does not. */
+const AFTER_TOOL_MS = 600;
+
+/** How many of a conversation's tool calls have ended; each may have changed files. */
+export function endedToolCalls(messages: readonly Message[]): number {
+  let ended = 0;
+  for (const message of messages)
+    if (
+      message.tool &&
+      message.tool.status !== 'running' &&
+      message.tool.status !== 'waiting'
+    )
+      ended++;
+  return ended;
+}
 
 interface GitChanges {
   revision: string;
@@ -18,13 +34,16 @@ interface GitChanges {
 
 /**
  * Every file that differs from the last commit, read from Git while the list is on
- * screen: when it opens, when the window gains focus, as a turn ends, and now and then.
+ * screen: when it opens, when the window gains focus, when a file is written through the
+ * workspace, after each tool call of a turn, as a turn ends, and now and then. Never on
+ * a short timer: a large project's status and diffs are not read every second.
  */
 export function useGitChanges({
   sessionId,
   live,
   active,
   busy,
+  settled = 0,
 }: {
   sessionId: string;
   live: boolean;
@@ -32,6 +51,8 @@ export function useGitChanges({
   active: boolean;
   /** A turn is running in this conversation. */
   busy: boolean;
+  /** Grows as the conversation's tool calls end: endedToolCalls. */
+  settled?: number;
 }) {
   const [bySession, setBySession] = useState(
     () => new Map<string, ChangeRow[]>(),
@@ -45,14 +66,16 @@ export function useGitChanges({
     if (!live || !active || inFlight.current === sessionId) return;
     inFlight.current = sessionId;
     try {
-      const result = await workspaceCall<GitChanges>(
+      const result = await workspaceCall<GitChanges | undefined>(
         sessionId,
         'git',
         'changes',
       );
-      setBySession((known) =>
-        new Map(known).set(sessionId, gitChangeRows(result.files)),
-      );
+      // An answer without its list is an error the list shows, not a page that breaks
+      if (!Array.isArray(result?.files))
+        throw Error('git changes answered without a list of files');
+      const rows = gitChangeRows(result.files);
+      setBySession((known) => new Map(known).set(sessionId, rows));
       if (session.current === sessionId) setError('');
     } catch (reason) {
       // Not a repository, or Git is missing: the list says so; what it showed stays.
@@ -66,6 +89,22 @@ export function useGitChanges({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  // A file written in this conversation shows up without waiting for the quiet
+  // refresh, and without the person opening that file first.
+  useEffect(() => {
+    if (!live || !active) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = subscribeWorkspace((event) => {
+      if (event.sessionId !== sessionId) return;
+      if (event.service !== 'documents' && event.service !== 'git') return;
+      clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), 400);
+    });
+    return () => {
+      clearTimeout(timer);
+      stop();
+    };
+  }, [live, active, sessionId, refresh]);
   useEffect(() => {
     if (!active) return;
     const onFocus = () => void refresh();
@@ -86,6 +125,16 @@ export function useGitChanges({
     const timer = setTimeout(() => void refresh(), AFTER_TURN_MS);
     return () => clearTimeout(timer);
   }, [busy, refresh]);
+  // A tool call that ended may have changed files without a word to the workspace, as a
+  // shell command does: the list asks again once, a moment later
+  const lastSettled = useRef(settled);
+  useEffect(() => {
+    if (lastSettled.current === settled) return;
+    lastSettled.current = settled;
+    if (!live || !active) return;
+    const timer = setTimeout(() => void refresh(), AFTER_TOOL_MS);
+    return () => clearTimeout(timer);
+  }, [settled, live, active, refresh]);
 
   return { files: bySession.get(sessionId), error, refresh };
 }

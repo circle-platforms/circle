@@ -30,6 +30,7 @@ import {
   pullRequestAction,
   type PullRequestAction,
 } from '../model/overview';
+import { endedToolCalls, useGitChanges } from '../model/git-changes';
 import { failedRunLog, usePullRequests } from '../model/pull-requests';
 import { currentSession } from '../model/state';
 import type { PanelId } from '../model/types';
@@ -209,6 +210,7 @@ export function Overview({
   );
   const toggle = (id: CardId) => setOpen((old) => ({ ...old, [id]: !old[id] }));
   const [moreOutputs, setMoreOutputs] = useState(false);
+  const [moreFiles, setMoreFiles] = useState(false);
   const [morePulls, setMorePulls] = useState(false);
 
   const usage = contextUsage(session);
@@ -226,6 +228,32 @@ export function Overview({
   });
   const action = pullRequestAction(overview);
   const git = overview?.git;
+  // The files themselves, read while the overview is open. The pull-request
+  // summary is only the project total, and it waits much longer.
+  const tree = useGitChanges({
+    sessionId: session.id,
+    live: runtime.mode === 'live',
+    active: true,
+    busy: session.state !== 'idle',
+    settled: endedToolCalls(session.messages),
+  });
+  const changed = tree.files ?? [];
+  const FILES_SHOWN = 8;
+  // The pull-request summary is a project total and it arrives late. The files
+  // read while this card is open are what the row and the list show.
+  const counted = changed.length
+    ? {
+        files: changed.length,
+        additions: changed.reduce((sum, row) => sum + (row.added ?? 0), 0),
+        deletions: changed.reduce((sum, row) => sum + (row.removed ?? 0), 0),
+      }
+    : git
+      ? {
+          files: git.files,
+          additions: git.additions,
+          deletions: git.deletions,
+        }
+      : undefined;
   const repo = git?.github.split('/')[1] ?? workspace?.name ?? '';
   const pulls = [
     ...(overview?.current ? [overview.current] : []),
@@ -481,7 +509,7 @@ export function Overview({
         </Card>
       )}
 
-      {git?.repository && (
+      {(git?.repository || changed.length > 0) && counted && (
         <Card
           id="changes"
           title={t('changes')}
@@ -490,14 +518,14 @@ export function Overview({
         >
           <Row icon={FileDiff}>
             <span className="overview-name">{repo}</span>
-            {git.files > 0 ? (
+            {counted.files > 0 ? (
               <span className="overview-counts">
-                <span className="add">+{git.additions}</span>
-                <span className="del">−{git.deletions}</span>
+                <span className="add">+{counted.additions}</span>
+                <span className="del">−{counted.deletions}</span>
               </span>
             ) : (
               <small className="overview-detail">
-                {git.ahead > 0 || overview?.current
+                {git && (git.ahead > 0 || overview?.current)
                   ? t('everything is committed')
                   : t('no changes')}
               </small>
@@ -513,6 +541,57 @@ export function Overview({
               </button>
             )}
           </Row>
+          {(moreFiles ? changed : changed.slice(0, FILES_SHOWN)).map((row) => (
+            <Row
+              key={row.path}
+              title={row.path}
+              onClick={() => onPanel('changes', row.path)}
+              end={
+                <>
+                  <span
+                    className="overview-letter"
+                    data-letter={row.letter}
+                    title={
+                      row.letter === 'A'
+                        ? t('added')
+                        : row.letter === 'D'
+                          ? t('deleted')
+                          : t('modified')
+                    }
+                  >
+                    {row.letter}
+                  </span>
+                  {(row.added !== null || row.removed !== null) && (
+                    <span className="overview-counts">
+                      {row.added !== null && (
+                        <span className="add">+{row.added}</span>
+                      )}
+                      {row.removed !== null && (
+                        <span className="del">−{row.removed}</span>
+                      )}
+                    </span>
+                  )}
+                </>
+              }
+            >
+              <FileIcon name={row.name} size={16} />
+              <span className="overview-name">{row.name}</span>
+              {row.folder && (
+                <small className="overview-detail">{row.folder}</small>
+              )}
+            </Row>
+          ))}
+          {changed.length > FILES_SHOWN && (
+            <button
+              type="button"
+              className="overview-more"
+              onClick={() => setMoreFiles((on) => !on)}
+            >
+              {moreFiles
+                ? t('show less')
+                : t('show {n} more', { n: changed.length - FILES_SHOWN })}
+            </button>
+          )}
           {(morePulls ? pulls : pulls.slice(0, PULL_REQUESTS_SHOWN)).map(
             (pull) => (
               <div className="overview-pull" key={pull.number}>

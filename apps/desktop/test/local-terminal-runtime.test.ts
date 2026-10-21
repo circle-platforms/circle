@@ -22,6 +22,7 @@ import {
 } from '../src/workspace/terminal.ts';
 import type { TerminalPort } from '../../../src/terminal/tools.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
+import { saveSecret } from '../../../src/secrets.ts';
 import {
   defaultSettings,
   saveSettings,
@@ -219,7 +220,9 @@ test(
     assert.equal(first.kind, 'approval');
     assert.equal(first.tool, 'terminal_send');
     assert.equal(first.command, 'printf CIRCLE_RAN > ran.txt');
-    assert.equal(first.reason, 'runs a shell command');
+    // The first time Circle would type, the card says so. A later line is judged
+    // as the command it is.
+    assert.equal(first.reason, 'types this command into your terminal');
     assert.equal(first.input?.terminal, tab.session);
     assert.equal(first.input?.ordinal, 1);
     assert.equal(first.input?.first_use, true);
@@ -257,6 +260,7 @@ test(
       'the next card',
     );
     assert.equal(f.cards()[0]!.input?.first_use, false);
+    assert.equal(f.cards()[0]!.reason, 'runs a shell command');
     await f.answer('approve');
     await until(
       async () => (await written(join(f.workspace, 'again.txt'))) === 'AGAIN',
@@ -302,6 +306,8 @@ test(
       wait(returned.opened),
       step('terminal_sessions', () => ({})),
       done,
+      // The give-back comes as a message of its own once that turn is done
+      done,
     ]);
     await f.call('set-mode', { mode: 'plan' });
     await f.call('prompt', { text: 'watch my terminal' });
@@ -338,30 +344,58 @@ test(
     const held = f.rows().find((row) => row.id === tab.session)!;
     assert.equal(held.state, 'held');
     assert.equal(held.held, 'attach');
-    // the person hands it back from the window
-    const back = await f.controller.terminalTabControl(
-      f.controller.snapshot().activeSessionId,
-      tab.session,
-      'return',
+    // the person hands it back from the window: it is Circle's again, to go on with
+    // the wait they cut short
+    let back: LocalTerminalRow[];
+    try {
+      back = await f.controller.terminalTabControl(
+        f.controller.snapshot().activeSessionId,
+        tab.session,
+        'return',
+      );
+    } finally {
+      returned.open();
+    }
+    assert.equal(
+      back.find((row) => row.id === tab.session)?.state,
+      'operating',
     );
-    assert.equal(back.find((row) => row.id === tab.session)?.state, 'idle');
-    returned.open();
-    // the next wait runs until the person closes the tab under it
+    // the next wait runs until the person closes the tab under it. The tab already
+    // reads as Circle's, so the wait is seen in the conversation.
     await until(
       () =>
-        f.rows().find((row) => row.id === tab.session)?.state === 'operating',
+        f.controller
+          .snapshot()
+          .sessions.find(
+            (row) => row.id === f.controller.snapshot().activeSessionId,
+          )!
+          .messages.filter((message) => message.tool?.name === 'terminal_wait')
+          .at(-1)?.tool?.status === 'running' && f.model.requests.length === 3,
       'Circle waits again',
     );
     // closing returns once the shell has exited; the turn may have gone on by then
     await f.terminal('close', { id: shell.id });
-    await until(() => f.model.requests.length === 5, 'the end of the turn');
+    await until(
+      () => f.model.requests.length === 6,
+      'the end of the turn and the give-back message',
+    );
     const [, , closed, listed] = toolResults(f.model);
     assert.equal(closed!.status, 'error');
     assert.match(
       closed!.content,
       /terminal 1 was closed while you waited; it is gone from terminal_sessions/,
     );
-    assert.equal(listed!.content.includes('local:'), false);
+    // An exited shell stays listed until its tab is closed in the row
+    assert.match(
+      listed!.content,
+      new RegExp(`- terminal 1 · local:${shell.id} · exited\\.`),
+    );
+    const told = f.model.requests.at(-1)!.messages.at(-1)!;
+    assert.equal(told.role, 'user');
+    assert.match(
+      told.content,
+      /The user gave terminal 1 back\. It is yours again\. You were waiting on it: call terminal_wait on terminal 1 now/,
+    );
     assert.deepEqual(f.rows(), []);
   },
 );
@@ -471,5 +505,159 @@ test(
       signal,
     );
     assert.match(read.text, /### Prompt\nCIRCLE_TEST>/);
+  },
+);
+
+test(
+  'a wait on a real shell ends when its prompt is back, also a prompt that ends in ❯ or ✗, and holds while sleep runs',
+  { skip: !unix, timeout: patience(90_000) },
+  async (t) => {
+    for (const prompt of ['❯ ', '➜  proj git:(main) ✗ ']) {
+      const root = await realpath(
+        await mkdtemp(join(tmpdir(), 'circle-local-prompt-')),
+      );
+      const workspace = join(root, 'workspace');
+      const shellHome = join(root, 'home');
+      await Promise.all([mkdir(workspace), mkdir(shellHome)]);
+      const manager = new TerminalManager(
+        {
+          workspaceRoot: workspace,
+          logRoot: join(root, 'logs'),
+          shellAllowlist: ['/bin/sh'],
+          env: {
+            HOME: shellHome,
+            PS1: prompt,
+            HISTFILE: '/dev/null',
+            ENV: '/dev/null',
+          },
+          stopGraceMs: 150,
+        },
+        () => {},
+      );
+      const local = new LocalTerminals({
+        host: () => manager,
+        changed: () => {},
+        mode: () => 'manual',
+        waiting: () => new Set(),
+      });
+      t.after(async () => {
+        local.close();
+        await manager.dispose();
+        await rm(root, { recursive: true, force: true });
+      });
+      const owner = 'conversation-prompt';
+      const shell = await manager.create({ owner, sessionId: owner });
+      const screen = async () =>
+        (await manager.replay(owner, shell.id)).events
+          .map((event) => event.data ?? '')
+          .join('');
+      await until(
+        async () => (await screen()).includes(prompt.trim()),
+        'the shell prompt',
+      );
+      const port = local.port();
+      const signal = new AbortController().signal;
+      const wait = (timeout_ms: number) =>
+        port.request(
+          owner,
+          'wait',
+          { session: `local:${shell.id}`, idle_ms: 300, timeout_ms },
+          signal,
+        );
+      // At the prompt
+      assert.match((await wait(20_000)).text, /quiet for 0\.3s/, prompt);
+      // A command that prints nothing: the screen is quiet, the shell is not back
+      await manager.write(owner, shell.id, 'sleep 30\r');
+      await until(
+        async () => (await screen()).includes('sleep 30'),
+        'the command on the screen',
+      );
+      assert.match((await wait(2000)).text, /still going after 2s/, prompt);
+      // Interrupted, the shell takes its terminal back and prompts again
+      await manager.write(owner, shell.id, '\x03');
+      assert.match((await wait(20_000)).text, /quiet for 0\.3s/, prompt);
+    }
+  },
+);
+
+test(
+  'run this in terminal: the card’s command is typed in the tab with its secret’s value, never after what sits on the line',
+  { skip: !unix, timeout: patience(120_000) },
+  async (t) => {
+    const tab = { id: '', session: '' };
+    const opened = gate();
+    const f = await setup(t, [
+      // Circle types without Enter: the text stays on the line
+      step(
+        'terminal_send',
+        () => ({ session: tab.session, text: 'printf PART' }),
+        opened.opened,
+      ),
+      step('execute', () => ({ command: 'printf %TOKEN% > moved.txt' })),
+      done,
+    ]);
+    saveSecret(join(f.root, 'home'), 'TOKEN', 'token-value-1234');
+    await f.call('prompt', { text: 'run it in my terminal' });
+    const shell = await f.terminal<TerminalSnapshot>('create', {
+      shell: '/bin/sh',
+    });
+    tab.id = shell.id;
+    tab.session = `local:${shell.id}`;
+    await until(
+      async () => (await f.screen(shell.id)).includes(PROMPT),
+      'the shell prompt',
+    );
+    opened.open();
+    await until(() => f.cards()[0]?.tool === 'terminal_send', 'the first use');
+    await f.answer('approve');
+    await until(
+      async () => (await f.screen(shell.id)).includes('printf PART'),
+      'the typed text on the line',
+    );
+    await until(() => f.cards()[0]?.tool === 'execute', 'the execute card');
+    const card = f.cards()[0]!;
+    assert.equal(card.command, 'printf %TOKEN% > moved.txt');
+    const move = () =>
+      f.controller.dispatch({
+        id: randomUUID(),
+        name: 'terminal-tab-run',
+        sessionId: card.sessionId,
+        payload: {
+          id: card.id,
+          revision: card.revision,
+          terminal: tab.session,
+        },
+      });
+    // What Circle left on the line would run first: nothing is typed
+    const refused = await move();
+    assert.equal(refused.ok, false);
+    assert.match(
+      refused.error ?? '',
+      /there is text at the prompt: clear it and try again; nothing was typed in terminal 1/,
+    );
+    assert.equal(f.cards()[0]?.id, card.id, 'the card still waits');
+    // The person clears the line; then the card's command runs there
+    await f.terminal('write', { id: shell.id, data: '\x03' });
+    const moved = await move();
+    assert.equal(moved.ok, true, moved.error);
+    await until(
+      async () =>
+        (await written(join(f.workspace, 'moved.txt'))) === 'token-value-1234',
+      'the command ran in the tab with the secret’s value',
+    );
+    assert.equal(
+      (await f.screen(shell.id)).includes('PARTprintf'),
+      false,
+      'the earlier text did not prefix the command',
+    );
+    await until(() => f.model.requests.length === 3, 'the end of the turn');
+    const result = toolResults(f.model).at(-1)!;
+    assert.match(result.content, /The user rejected this tool call/);
+    assert.match(
+      result.content,
+      /the user moved this command into terminal 1; it was typed there\. Do not call execute\. Use terminal_wait on local:/,
+    );
+    assert.equal(result.content.includes('token-value-1234'), false);
+    assert.equal(f.cards().length, 0);
   },
 );
