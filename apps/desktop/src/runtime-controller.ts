@@ -1240,9 +1240,10 @@ export class RuntimeController {
       return;
     }
     const ordinal = /^terminal (\d+)$/.exec(detail.name)?.[1];
+    // A tab the person named is called by that name, in quotes, as the window shows it
     const display = ordinal
       ? `the user gave terminal ${ordinal} back`
-      : `the user gave ${detail.name} back`;
+      : `the user gave “${detail.name}” back`;
     const prompt = detail.resume
       ? `The user gave ${detail.name} back. It is yours again. You were waiting on it: call terminal_wait on ${detail.name} now, with a pattern and a timeout_ms long enough. Do not use execute.`
       : `The user gave ${detail.name} back. It is yours again. Continue in that tab with the terminal tools. Do not use execute for it.`;

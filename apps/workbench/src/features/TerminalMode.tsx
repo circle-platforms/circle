@@ -33,6 +33,9 @@ export function TerminalMode({
   paused?: boolean;
 }) {
   const { runtime } = useRuntime();
+  // In a window of its own, the message box is the main window's. Every hook is called
+  // before home's early return, so the hooks keep their order when home is left.
+  const addToDraft = useAddToDraft();
   if (paused)
     return (
       <div className="terminal-mode">
@@ -41,8 +44,6 @@ export function TerminalMode({
         </p>
       </div>
     );
-  // In a window of its own, the message box is the main window's.
-  const addToDraft = useAddToDraft();
   return (
     <div className="terminal-mode">
       <Suspense fallback={<p role="status">{t('loading terminal…')}</p>}>

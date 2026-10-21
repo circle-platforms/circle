@@ -61,6 +61,11 @@ function tabRows(value: unknown): LocalTerminalRow[] | undefined {
       typeof row.terminal !== 'string' ||
       row.id !== `local:${row.terminal}` ||
       !Number.isSafeInteger(row.ordinal) ||
+      (row.name !== undefined &&
+        (typeof row.name !== 'string' ||
+          !row.name ||
+          row.name.length > 200 ||
+          /[\x00-\x1f\x7f-\x9f]/.test(row.name))) ||
       !TAB_STATES.has(String(row.state)) ||
       typeof row.allowed !== 'boolean' ||
       (row.held !== undefined &&
@@ -74,6 +79,7 @@ function tabRows(value: unknown): LocalTerminalRow[] | undefined {
       id: row.id,
       terminal: row.terminal,
       ordinal: row.ordinal as number,
+      ...(row.name ? { name: row.name as string } : {}),
       state: row.state as LocalTerminalRow['state'],
       allowed: row.allowed,
       ...(row.held ? { held: row.held as 'attach' | 'handoff' } : {}),

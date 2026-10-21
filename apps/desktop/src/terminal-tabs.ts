@@ -14,6 +14,26 @@ export interface TerminalTabSource {
   hidden?: boolean;
   /** The number this tab was given, kept while it stays open. */
   tabNumber?: number;
+  kind?: 'shell' | 'service';
+  label?: string;
+  /** The person named the tab: `label` is its name. */
+  named?: boolean;
+}
+
+/**
+ * The name a person gave a shell's tab. The tab shows it instead of `terminal N`, and the
+ * model's terminal tools and the approval cards call the tab by it too, so a card always
+ * names a tab the person can see. Undefined while the tab is still called by its number.
+ */
+export function terminalTabName(
+  terminal: TerminalTabSource,
+): string | undefined {
+  return terminal.named === true &&
+    (terminal.kind ?? 'shell') === 'shell' &&
+    !terminal.managedCommand &&
+    terminal.label
+    ? terminal.label
+    : undefined;
 }
 
 /**

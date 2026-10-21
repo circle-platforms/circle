@@ -58,7 +58,9 @@ export const common: Record<string, string> = {
   'restarts this terminal and types this command into it':
     '会先重新启动这个终端，再把这条命令输入进去',
   'run this in terminal {n}': '改在终端 {n} 里运行',
+  'run this in {name}': '改在 {name} 里运行',
   'the user gave terminal {n} back': '已把终端 {n} 交还',
+  'the user gave “{name}” back': '已把“{name}”交还',
   'the model in use does not read images; use browser_snapshot':
     '当前模型不能看图片，请改用页面快照',
   'browser_screenshot is not available: this model does not read images. Call browser_snapshot first; no page snapshot has been taken yet.':

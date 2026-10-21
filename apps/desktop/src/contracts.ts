@@ -254,6 +254,14 @@ export interface DesktopBridge {
    * error the model reads. Nothing is typed into the tab by stopping.
    */
   terminalStop?: (sessionId: string, session: string) => Promise<TerminalState>;
+  /**
+   * The person dragged a tab: the tab row's new order, as tab keys (`local:<id>`,
+   * `dev:<id>`), kept for every window of the conversation.
+   */
+  terminalArrange?: (
+    sessionId: string,
+    order: string[],
+  ) => Promise<TerminalState>;
   /** What the person types while they hold the console. */
   terminalInput: (
     sessionId: string,
@@ -524,6 +532,8 @@ export interface LocalTerminalRow {
   terminal: string;
   /** Its tab is named "terminal N" by this, as terminalTabNumbers numbers it. */
   ordinal: number;
+  /** The name the person gave the tab, which the tab shows instead of its number. */
+  name?: string;
   state: LocalTerminalState;
   /** The person allowed Circle's first command here in this conversation. */
   allowed: boolean;
@@ -542,6 +552,13 @@ export interface TerminalState {
   handoff?: { session: string; reason: string };
   /** The conversation's running terminal tabs (shells, no background commands). */
   local?: LocalTerminalRow[];
+  /**
+   * The order the person dragged the tab row into, as its tabs' keys (`local:<id>` for a
+   * terminal, `dev:<id>` for a device console). A tab it does not name goes at the end.
+   */
+  order?: string[];
+  /** In the answer to a person's connect only: the console that connect opened. */
+  opened?: string;
 }
 /** The parts of the drawer that can live in a window of their own. */
 export type PopoutKind = 'browser' | 'terminal';

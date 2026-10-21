@@ -49,7 +49,10 @@ import {
 import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal } from './common';
 import type { LocalTerminalRow } from '../../../desktop/src/contracts';
-import { terminalTabNumbers } from '../../../desktop/src/terminal-tabs';
+import {
+  terminalTabName,
+  terminalTabNumbers,
+} from '../../../desktop/src/terminal-tabs';
 import { presentHostError, quietWhenTerminalExited } from '../model/host-error';
 import { claimTerminalKeyboard } from '../model/terminal-keyboard';
 import { TerminalTabs, type TerminalTab } from './TerminalTabs';
@@ -127,11 +130,6 @@ function recordTerminalTiming(
     // An optional test observer must never affect terminal input or output.
   }
   return true;
-}
-
-/** A shell the person named: its tab says that name instead of its number. */
-function customName(item: TerminalSnapshot): boolean {
-  return item.kind === 'shell' && item.named === true && !!item.label;
 }
 
 function status(snapshot: TerminalSnapshot): string {
@@ -385,9 +383,10 @@ export function NativeTerminal({
   const selectedId = selectedBySession[sessionId];
   const { snapshot: appSnapshot, notify } = useRuntime();
   const [dismissed, setDismissed] = useState(readDismissed);
-  // The row's order, per conversation, as the person dragged it: the numbers
-  // follow the row, so a drag carries a tab's name along with it.
-  const [tabOrder, setTabOrder] = useState<Record<string, string[]>>({});
+  // The row's order as the person dragged it, per conversation, where no main process
+  // keeps it (a page without the desktop application). A tab keeps its number wherever
+  // it is dragged.
+  const [localOrder, setLocalOrder] = useState<Record<string, string[]>>({});
   const [renameFor, setRenameFor] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   // Every command Circle runs has a terminal; only a command that runs in the background,
@@ -442,16 +441,19 @@ export function NativeTerminal({
   }, [sessionId, selected?.id]);
 
   const adopt = useCallback((snapshot: TerminalSnapshot) => {
-    setTerminals((current) => mergeTerminalSnapshot(current, snapshot));
-    // A restart replaces its console's tab: the stopped one must not linger grey.
-    const before = snapshot.restartOf;
-    if (before)
-      setDismissed((previous) => {
-        if (previous.has(before)) return previous;
-        const next = new Set(previous).add(before);
-        rememberDismissed(next);
-        return next;
-      });
+    setTerminals((current) => {
+      const merged = mergeTerminalSnapshot(current, snapshot);
+      // A restart replaces its terminal's tab, in this window and any other: the old
+      // one leaves the row as soon as the new one is here, not after it has stopped.
+      const before = snapshot.restartOf;
+      return before
+        ? merged.map((item) =>
+            item.id === before && !item.hidden
+              ? { ...item, hidden: true }
+              : item,
+          )
+        : merged;
+    });
   }, []);
 
   useEffect(() => {
@@ -775,9 +777,17 @@ export function NativeTerminal({
       rememberDismissed(next);
       return next;
     });
-  const chosen = tabOrder[sessionId] ?? [];
+  // The row in the person's order: the main process keeps it for every window, so a
+  // reload, a visit home and a window of its own show it too. A tab it does not name
+  // goes last, and a restarted terminal stands where the one it replaced stood.
+  const chosen = devices.order ?? localOrder[sessionId] ?? [];
   const rank = (key: string) => {
-    const at = chosen.indexOf(key);
+    let at = chosen.indexOf(key);
+    let id = key.startsWith('local:') ? key.slice('local:'.length) : '';
+    for (let step = 0; at === -1 && id && step < 32; step++) {
+      id = terminals.find((item) => item.id === id)?.restartOf ?? '';
+      if (id) at = chosen.indexOf(`local:${id}`);
+    }
     return at === -1 ? Number.MAX_SAFE_INTEGER : at;
   };
   // A tab keeps a stored number; a closed tab does not. The model's tools use the same rule.
@@ -816,9 +826,10 @@ export function NativeTerminal({
         ? (item.managedCommand?.displayCommand ??
           jobTitles.get(item.id) ??
           item.label)
-        : named || customName(item)
+        : named
           ? item.label
-          : t('terminal {n}', { n: numbers.get(item.id) ?? 0 });
+          : (terminalTabName(item) ??
+            t('terminal {n}', { n: numbers.get(item.id) ?? 0 }));
       const circle = circleIn(item.id);
       return {
         key: `local:${item.id}`,
@@ -881,17 +892,36 @@ export function NativeTerminal({
   const closeExcept = (keep: string) => {
     for (const tab of orderedTabs) if (tab.key !== keep) tab.onClose?.();
   };
+  // A tab dropped on another takes that one's place: to its right when it came from
+  // the left, so a tab can go to the end of the row, and to its left otherwise.
   const moveTab = (from: string, to: string) => {
-    const keys = orderedTabs
-      .map((tab) => tab.key)
-      .filter((key) => key !== from);
-    const at = keys.indexOf(to);
-    keys.splice(at === -1 ? keys.length : at, 0, from);
-    setTabOrder((previous) => ({ ...previous, [sessionId]: keys }));
+    const keys = orderedTabs.map((tab) => tab.key);
+    const at = keys.indexOf(from);
+    const target = keys.indexOf(to);
+    if (at === -1 || target === -1 || at === target) return;
+    keys.splice(at, 1);
+    keys.splice(target, 0, from);
+    if (!devices.arrange(keys))
+      setLocalOrder((previous) => ({ ...previous, [sessionId]: keys }));
   };
+  const clearError = () =>
+    setOperations((previous) => ({
+      ...previous,
+      [sessionId]: { ...previous[sessionId], error: '' },
+    }));
+  // A tab that has a name of its own starts from it; one called by its number starts
+  // empty, so a name is never its number frozen in by accident.
   const openRename = (id: string) => {
-    setRenameValue(terminals.find((item) => item.id === id)?.label ?? '');
+    const item = terminals.find((one) => one.id === id);
+    setRenameValue(
+      item && (item.kind === 'service' || item.named) ? item.label : '',
+    );
+    clearError();
     setRenameFor(id);
+  };
+  const closeRename = () => {
+    clearError();
+    setRenameFor(null);
   };
   const applyRename = () =>
     run(async () => {
@@ -1281,7 +1311,7 @@ export function NativeTerminal({
             {extraExitReason(inFront) ? ` · ${extraExitReason(inFront)}` : ''}
           </div>
         )}
-      {error && !serviceOpen && (
+      {error && !serviceOpen && renameFor === null && (
         <div className="native-terminal-error" role="alert">
           <span>{disconnected ? t('not connected') : error}</span>
           <Button onClick={() => setReload((value) => value + 1)}>
@@ -1594,7 +1624,7 @@ export function NativeTerminal({
       <Modal
         open={renameFor !== null}
         onOpenChange={(open) => {
-          if (!open) setRenameFor(null);
+          if (!open) closeRename();
         }}
         title={t('rename terminal')}
       >
@@ -1611,14 +1641,25 @@ export function NativeTerminal({
               <input
                 value={renameValue}
                 onChange={(event) => setRenameValue(event.target.value)}
+                placeholder={
+                  tabs.find((tab) => tab.key === `local:${renameFor}`)?.label
+                }
                 maxLength={80}
                 required
                 autoFocus
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
               />
             </label>
+            {error && (
+              <p className="native-terminal-error" role="alert">
+                {error}
+              </p>
+            )}
           </div>
           <div className="native-service-actions">
-            <Button type="button" onClick={() => setRenameFor(null)}>
+            <Button type="button" onClick={closeRename}>
               {t('cancel')}
             </Button>
             <Button type="submit" disabled={busy || !renameValue.trim()}>

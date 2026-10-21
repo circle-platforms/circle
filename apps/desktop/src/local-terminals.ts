@@ -28,6 +28,7 @@ import type {
 import type { TerminalEvent, TerminalSnapshot } from './workspace/terminal.ts';
 import {
   terminalTabId,
+  terminalTabName,
   terminalTabNumbers,
   terminalTabSession,
 } from './terminal-tabs.ts';
@@ -248,11 +249,11 @@ export class LocalTerminals implements TerminalTabFacts {
   }
   /**
    * What a write to a tab types and runs, for its approval: `terminal`, its tab number
-   * (`ordinal`), whether this is its `first_use` in the conversation, and the `command`
-   * the shell will run when the write runs a line, with `uncertain` when that line was read
-   * off the screen without knowing where its prompt ends. `typed` is the text it types.
-   * All are read from the values the write runs with; the card shows each secret's value
-   * back as its name.
+   * (`ordinal`) and, for a tab the person named, that name (`tab_name`), whether this is
+   * its `first_use` in the conversation, and the `command` the shell will run when the
+   * write runs a line, with `uncertain` when that line was read off the screen without
+   * knowing where its prompt ends. `typed` is the text it types. All are read from the
+   * values the write runs with; the card shows each secret's value back as its name.
    */
   facts(
     conversation: string,
@@ -272,9 +273,12 @@ export class LocalTerminals implements TerminalTabFacts {
     if (action !== 'send' && action !== 'press') return {};
     const own = this.own(conversation);
     const line = this.line(own, terminal);
+    const named = terminalTabName(snapshot);
     const facts: Record<string, unknown> = {
       terminal: terminalTabSession(terminal),
       ordinal: this.ordinal(host, conversation, terminal),
+      // The card names the tab as the tab reads: a number only while it has no name
+      ...(named ? { tab_name: named } : {}),
       first_use: !own.granted.has(terminal),
       command: undefined,
       typed: undefined,
@@ -392,10 +396,12 @@ export class LocalTerminals implements TerminalTabFacts {
           given && given.length > MAX_REASON
             ? given.slice(0, MAX_REASON - 1) + '…'
             : given;
+        const name = terminalTabName(snapshot);
         return {
           id,
           terminal: snapshot.id,
           ordinal: numbers.get(snapshot.id) ?? 0,
+          ...(name ? { name } : {}),
           state: held
             ? 'held'
             : waiting.has(id)
@@ -673,6 +679,12 @@ export class LocalTerminals implements TerminalTabFacts {
         );
       return;
     }
+    // The person renamed the tab: what Circle is told of it from now on says the name
+    if (tab && event.kind === 'changed') {
+      const host = this.options.host(tab.conversation);
+      if (host)
+        tab.session.name = this.name(host, tab.conversation, tab.terminal);
+    }
     const status = event.snapshot?.status;
     if (status && status !== 'running') {
       if (tab) this.drop(tab);
@@ -795,13 +807,21 @@ export class LocalTerminals implements TerminalTabFacts {
   ): number {
     return terminalTabNumbers(host.listNow(conversation)).get(terminal) ?? 0;
   }
-  /** The tab's name for the model: "terminal N", as the person's tab reads in English. */
+  /**
+   * The tab's name for the model, as the person's tab reads: the name they gave it, or
+   * "terminal N" as the tab reads in English.
+   */
   private name(
     host: LocalTerminalHost,
     conversation: string,
     terminal: string,
   ): string {
-    return `terminal ${this.ordinal(host, conversation, terminal)}`;
+    const list = host.listNow(conversation);
+    const snapshot = list.find((one) => one.id === terminal);
+    return (
+      (snapshot && terminalTabName(snapshot)) ??
+      `terminal ${terminalTabNumbers(list).get(terminal) ?? 0}`
+    );
   }
   private own(conversation: string): Conversation {
     let own = this.conversations.get(conversation);

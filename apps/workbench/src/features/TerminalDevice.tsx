@@ -55,6 +55,13 @@ export interface DeviceTerminals {
   handoff: TerminalState['handoff'];
   /** What Circle is doing in each of the person's own terminal tabs. */
   local: LocalTerminalRow[];
+  /**
+   * The order the person dragged the tab row into, as the main process keeps it for
+   * every window: undefined where the application holds none.
+   */
+  order?: string[];
+  /** Keep the row's new order in the main process; false where it cannot. */
+  arrange: (order: string[]) => boolean;
   /** Reach a saved device; the id of the console that opened. */
   connectProfile: (name: string) => Promise<string>;
   /** Reach a device by its address, without saving it; the id of the console. */
@@ -81,13 +88,21 @@ export function useDeviceTerminals(sessionId: string): DeviceTerminals {
     asking: state?.pendingKey,
     handoff: state?.handoff,
     local: state?.local ?? [],
+    order: state?.order,
+    arrange: (order) => {
+      if (!host?.terminalArrange) return false;
+      void host.terminalArrange(sessionId, order).catch(quiet);
+      return true;
+    },
+    // The console this connect opened, not whichever is newest: the model may have
+    // opened one meanwhile.
     connectProfile: async (name) => {
       const next = await host!.terminalConnect(sessionId, name);
-      return next.sessions.at(-1)?.id ?? '';
+      return next.opened ?? next.sessions.at(-1)?.id ?? '';
     },
     connectTarget: async (target) => {
       const next = await host!.terminalConnectTarget(sessionId, target);
-      return next.sessions.at(-1)?.id ?? '';
+      return next.opened ?? next.sessions.at(-1)?.id ?? '';
     },
     disconnect: (row) =>
       void host?.terminalDisconnect(sessionId, row.id).catch(quiet),
