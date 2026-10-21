@@ -65,6 +65,17 @@ try {
   await page.clock.runFor(1_000);
   await settle();
   assert.equal(await reads(), 3, 'one read as the turn ends');
+  // A host that answers without a list: the list says so, and the page goes on
+  await page.evaluate(() => window.answerNothing());
+  await set({ busy: true, settled: 2 });
+  await settle();
+  await page.clock.runFor(1_000);
+  await settle();
+  assert.equal(await reads(), 4);
+  assert.match(
+    (await page.locator('#list').getAttribute('data-error')) ?? '',
+    /without a list of files/,
+  );
   assert.deepEqual(errors, []);
   console.log('git changes refresh: ok');
 } finally {

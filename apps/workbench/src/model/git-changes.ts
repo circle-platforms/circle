@@ -66,14 +66,16 @@ export function useGitChanges({
     if (!live || !active || inFlight.current === sessionId) return;
     inFlight.current = sessionId;
     try {
-      const result = await workspaceCall<GitChanges>(
+      const result = await workspaceCall<GitChanges | undefined>(
         sessionId,
         'git',
         'changes',
       );
-      setBySession((known) =>
-        new Map(known).set(sessionId, gitChangeRows(result.files)),
-      );
+      // An answer without its list is an error the list shows, not a page that breaks
+      if (!Array.isArray(result?.files))
+        throw Error('git changes answered without a list of files');
+      const rows = gitChangeRows(result.files);
+      setBySession((known) => new Map(known).set(sessionId, rows));
       if (session.current === sessionId) setError('');
     } catch (reason) {
       // Not a repository, or Git is missing: the list says so; what it showed stays.
