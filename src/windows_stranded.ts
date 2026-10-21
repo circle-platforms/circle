@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 /** A Windows shell Circle started: its PID, and when it started and was seen to end (ms). */
 export interface ShellLifetime {
@@ -25,8 +26,8 @@ export interface WindowsJobApi {
   assign(job: bigint, pid: number): boolean;
   /** The PIDs of the processes now in the Job. */
   members(job: bigint): number[];
-  /** Ends the process with this PID only while it is still in the Job, so a reused PID is safe. */
-  terminate(job: bigint, pid: number): boolean;
+  /** Resolves after this Job member has exited; its held process handle prevents PID reuse. */
+  terminate(job: bigint, pid: number): boolean | Promise<boolean>;
   close(job: bigint): void;
 }
 /** The few Windows process calls the sweep needs; tests give their own. */
@@ -192,6 +193,7 @@ export class WindowsCommandTree {
   /** Ends what the shell left running. Returns the PIDs it ended. */
   async end(ended: number): Promise<number[]> {
     const done: number[] = [];
+    const errors: unknown[] = [];
     const names = new Map(
       this.api.processes().map((entry) => [entry.pid, entry.name]),
     );
@@ -203,9 +205,9 @@ export class WindowsCommandTree {
         if (pid === this.shell.pid || name === undefined || consoleHost(name))
           continue;
         try {
-          if (this.api.job!.terminate(this.job, pid)) done.push(pid);
-        } catch {
-          /* Already gone. */
+          if (await this.api.job!.terminate(this.job, pid)) done.push(pid);
+        } catch (error) {
+          errors.push(error);
         }
       }
     // Anything outside the Job, such as a program started before the shell was put in it,
@@ -213,9 +215,18 @@ export class WindowsCommandTree {
     // A terminated process can stay in the list for a moment while it exits.
     for (const pid of this.walk(ended).roots) {
       if (done.includes(pid)) continue;
-      await this.kill(pid);
-      done.push(pid);
+      try {
+        await this.kill(pid);
+        done.push(pid);
+      } catch (error) {
+        errors.push(error);
+      }
     }
+    if (errors.length)
+      throw new AggregateError(
+        errors,
+        'could not end every Windows command tree member',
+      );
     return done;
   }
   dispose(): void {
@@ -353,6 +364,9 @@ function jobApi(
   const terminate = kernel.func(
     'int __stdcall TerminateProcess(void *process, uint32_t code)',
   );
+  const wait = kernel.func(
+    'uint32_t __stdcall WaitForSingleObject(void *handle, uint32_t timeout)',
+  );
   // PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA and PROCESS_TERMINATE.
   const withProcess = <T>(
     pid: number,
@@ -383,14 +397,31 @@ function jobApi(
         Number(data.readBigUInt64LE(8 + index * 8)),
       ).filter((pid) => pid > 0 && pid <= 0xffffffff);
     },
-    terminate: (job, pid) =>
-      withProcess(pid, (handle) => {
+    terminate: async (job, pid) => {
+      // Query, terminate and synchronize on the same process, even if its PID is
+      // reused later. TerminateProcess only initiates termination: pending I/O
+      // can keep the process alive after it returns.
+      const handle: unknown = open(0x1000 | 0x1 | 0x100000, 0, pid);
+      if (!valid(handle)) return false;
+      try {
         const inJob = Buffer.alloc(4);
-        // The handle holds the process, so the PID cannot be reused meanwhile.
         if (!contains(handle, job, inJob) || !inJob.readUInt32LE(0))
           return false;
-        return Boolean(terminate(handle, 1));
-      }) === true,
+        if (!terminate(handle, 1)) return wait(handle, 0) === 0;
+        const deadline = Date.now() + 10_000;
+        for (;;) {
+          const result = wait(handle, 0);
+          if (result === 0) return true;
+          if (result !== 0x102)
+            throw Error(`could not observe Windows process ${pid} exiting`);
+          if (Date.now() >= deadline)
+            throw Error(`Windows process ${pid} did not finish terminating`);
+          await delay(10);
+        }
+      } finally {
+        close(handle);
+      }
+    },
     close: (job) => {
       close(job);
     },

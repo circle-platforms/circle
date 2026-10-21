@@ -215,6 +215,112 @@ test('without a Job, ending the tree still ends what the shell started and what 
   );
 });
 
+test('ending a Windows tree waits for the terminated Job member to exit', async () => {
+  const table: Row[] = [{ pid: 300, parent: 100, started: 10_060 }];
+  const fake = fakeWindows(table, [300]);
+  let finish!: () => void;
+  const exited = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let terminating!: () => void;
+  const requested = new Promise<void>((resolve) => {
+    terminating = resolve;
+  });
+  fake.api.job!.terminate = async (_job, pid) => {
+    assert.equal(pid, 300);
+    terminating();
+    await exited;
+    table.splice(0, 1);
+    return true;
+  };
+  const tree = new WindowsCommandTree(
+    fake.api,
+    { pid: 100, started: 10_000 },
+    fake.kill,
+  );
+  let ended = false;
+  const stopping = tree.end(20_000).then((pids) => {
+    ended = true;
+    return pids;
+  });
+  await requested;
+  await Promise.resolve();
+  assert.equal(
+    ended,
+    false,
+    'a successful termination request is not process exit',
+  );
+  assert.equal(
+    tree.record(20_000),
+    true,
+    'the still-exiting member remains owned',
+  );
+  finish();
+  assert.deepEqual(await stopping, [300]);
+  assert.equal(tree.record(20_000), false);
+  assert.equal(
+    fake.calls.some((call) => call.startsWith('kill ')),
+    false,
+  );
+  tree.dispose();
+});
+
+test('a failed Windows Job member exit observation does not report a finished tree', async () => {
+  const fake = fakeWindows([{ pid: 300, parent: 100, started: 10_060 }], [300]);
+  const failure = Error('exit observation failed');
+  fake.api.job!.terminate = async () => {
+    throw failure;
+  };
+  const tree = new WindowsCommandTree(
+    fake.api,
+    { pid: 100, started: 10_000 },
+    async () => {
+      // The fallback also cannot confirm exit, so the member must stay owned.
+      throw failure;
+    },
+  );
+  await assert.rejects(
+    tree.end(20_000),
+    (error) =>
+      error instanceof AggregateError && error.errors.includes(failure),
+  );
+  assert.equal(tree.record(20_000), true);
+  tree.dispose();
+});
+
+test('an exit observation failure still ends the other Job members and outside trees', async () => {
+  const table: Row[] = [
+    { pid: 300, parent: 100, started: 10_060 },
+    { pid: 301, parent: 100, started: 10_070 },
+    { pid: 400, parent: 100, started: 10_080 },
+  ];
+  const fake = fakeWindows(table, [300, 301]);
+  const observed: number[] = [];
+  const failure = Error('exit observation failed');
+  fake.api.job!.terminate = async (_job, pid) => {
+    observed.push(pid);
+    if (pid === 300) throw failure;
+    table.splice(
+      table.findIndex((row) => row.pid === pid),
+      1,
+    );
+    return true;
+  };
+  const tree = new WindowsCommandTree(
+    fake.api,
+    { pid: 100, started: 10_000 },
+    fake.kill,
+  );
+  await assert.rejects(
+    tree.end(20_000),
+    (error) =>
+      error instanceof AggregateError && error.errors.includes(failure),
+  );
+  assert.deepEqual(observed, [300, 301]);
+  assert.ok(fake.calls.includes('kill 400'));
+  tree.dispose();
+});
+
 /** Records what the registry asks of each shell's tree. */
 function trees(left: boolean) {
   const made: { pid: number; calls: string[] }[] = [];
