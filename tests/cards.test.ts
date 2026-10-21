@@ -700,11 +700,11 @@ test('approval previews: a patch names its files, an edit the file cannot confir
     approvalBody('webfetch', { url: 'https://example.com', limit: 3 }),
     'url="https://example.com"\nlimit=3',
   );
-  const cut = approvalBody('hub_tool_docs_get', { file: 'x'.repeat(900) });
+  const cut = approvalBody('files_get_document', { file: 'x'.repeat(900) });
   assert.match(cut, /^file="x+… \(\d+ more characters\)$/);
   assert.ok(cut.length < 900);
   const title =
-    'hub_source_artifact needs your permission and the rest of this long title stays visible';
+    'files_save_artifact needs your permission and the rest of this long title stays visible';
   const wrapped = cardRows(
     { title, body: '', options: ['Allow once'], focus: 0 },
     36,

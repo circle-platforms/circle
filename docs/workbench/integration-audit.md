@@ -2,7 +2,7 @@
 
 Inspected on 2026-10-11 against Circle 1.0.4 and workbench commit `738ba94ddaf3d53a431b9d5ae06797c9d88127e0`. This page audits the complete application/plugin goal. It does not change the current frontend phase into a completed runtime integration.
 
-Subsequent scope change: the user authorized completing Circle's frontend/backend integration first. [The native runtime record](native-runtime.md) documents the implemented connection and its checks. The findings below remain the historical audit at the stated source. Since then the knowledge, work, execution and methods pages are paired with the bundled hub extension and read B, C, D and E as hub holds them; that was checked against hub's local development stack, and no production service is connected.
+Subsequent scope change: the user authorized completing Circle's frontend/backend integration first. [The native runtime record](native-runtime.md) documents the implemented connection and its checks. The findings below remain the historical audit at the stated source. The knowledge, work, execution and methods pages, and the bundled extension they were later paired with, have since been removed from Circle; no production service was connected to them.
 
 ## What current evidence proves
 

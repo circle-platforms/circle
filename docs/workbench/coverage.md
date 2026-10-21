@@ -1,6 +1,6 @@
 # Frontend coverage and limits
 
-This table records the frontend phase before the user authorized Circle runtime integration. The historical preview checks remain useful for layout and component behavior. The current live Circle implementation and verification are documented in [native-runtime.md](native-runtime.md); production B/C/D/E service integration remains separate work.
+This table records the frontend phase before the user authorized Circle runtime integration. The historical preview checks remain useful for layout and component behavior. The current live Circle implementation and verification are documented in [native-runtime.md](native-runtime.md). The B, C, D and E previews in the table have since been removed from the application.
 
 | Requirement | Frontend evidence | Runtime boundary |
 |---|---|---|
