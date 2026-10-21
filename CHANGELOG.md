@@ -2,11 +2,19 @@
 
 All notable changes to Circle are listed here, newest first. Circle follows [Semantic Versioning](https://semver.org) from 1.0 on.
 
-## Unreleased
+## 1.10.1 - 2026-10-22
 
 ### Changed
 
 - **The terminal is English again, whatever the system language.** 1.10.0 showed the screen, `/help`, `/hotkeys`, `circle --help`, `circle update` and the installers' steps in Simplified Chinese when `LANGUAGE`, `LC_ALL` or `LANG` named Chinese, and earlier releases did so for the session list, `/hub`, hook notices and the upgrade notice. The desktop keeps its Chinese, `/hub`'s replies included. Chinese text that you, the model or a tool wrote still counts as two columns and wraps as before.
+
+### Fixed
+
+- **A Chinese closing mark stays with its text when the message box wraps**, instead of starting the next row, and a wrapped row never grows wider than the box.
+- **Updating from 1.9.1 prints what's new and the cleanup command.** An updater older than 1.10.0 runs the new installer, which now prints the release's notes link, the space the kept versions use and the command that removes one. Updating 1.9.1 to 1.10.0 printed neither.
+- **`circle --mode rpc` ends when its input closes**, also when the stream is destroyed rather than ended.
+- **Leaving the full-screen interface on Windows no longer sometimes ends with a crash status** (`0xC0000409`). Circle now finishes restoring the screen before the console goes back to line input.
+- **On Windows, closing the browser waits for Chrome's exit that is already queued** before saying it did not stop.
 
 ## 1.10.0 - 2026-10-21
 
