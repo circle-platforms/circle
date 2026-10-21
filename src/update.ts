@@ -22,8 +22,14 @@ import {
 import { t } from './locale.js';
 import { VERSION, validVersion, compareVersions } from './version.js';
 
-const releaseNotesUrl = (version: string): string =>
-  `https://github.com/circle-platforms/circle/releases/tag/v${version}`;
+// The release page of the repository this installation updates from
+const releaseNotesUrl = (repo: string, version: string): string =>
+  `https://github.com/${repo}/releases/tag/v${version}`;
+// A path as the shell that runs the removal hint reads it, whatever it holds
+const quotedPath = (path: string): string =>
+  process.platform === 'win32'
+    ? `'${path.replaceAll("'", "''")}'`
+    : `'${path.replaceAll("'", "'\\''")}'`;
 
 // ── the daily reminder ── remembers the last answer in update-check.json.
 const CACHE_FILE = 'update-check.json';
@@ -460,7 +466,7 @@ async function reportInstalled(
   const notes = await versionsSince(repo, from, to, request);
   out.write(t("What's new:") + '\n');
   for (const version of notes)
-    out.write(`  ${version}  ${releaseNotesUrl(version)}\n`);
+    out.write(`  ${version}  ${releaseNotesUrl(repo, version)}\n`);
   const dir = join(prefix, 'versions');
   let bytes = 0;
   let example = '';
@@ -480,8 +486,8 @@ async function reportInstalled(
   const size = (bytes / (1024 * 1024)).toFixed(1);
   const command =
     process.platform === 'win32'
-      ? `Remove-Item -Recurse -Force '${join(dir, example)}'`
-      : `rm -rf ${join(dir, example)}`;
+      ? `Remove-Item -Recurse -Force ${quotedPath(join(dir, example))}`
+      : `rm -rf ${quotedPath(join(dir, example))}`;
   out.write(
     t(
       'Older versions kept so a session can finish use {size} MB under {dir}.',

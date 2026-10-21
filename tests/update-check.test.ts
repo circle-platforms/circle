@@ -367,11 +367,16 @@ test('circle update downloads the release itself, showing how far it got, and ha
     shown.writes.join(''),
     new RegExp(`downloading ${asset.replaceAll('.', '\\.')} {2}100%`),
   );
+  // The release notes of the repository this installation updates from
   assert.match(
     shown.writes.join(''),
-    /https:\/\/github.com\/circle-platforms\/circle\/releases\/tag\/v99\.0\.0/,
+    /https:\/\/github.com\/example\/circle\/releases\/tag\/v99\.0\.0/,
   );
-  assert.match(shown.writes.join(''), /rm -rf|Remove-Item/);
+  // A kept copy's folder is quoted, so the line can be pasted whatever the path holds
+  assert.match(
+    shown.writes.join(''),
+    /rm -rf '[^']+'|Remove-Item -Recurse -Force '[^']+'/,
+  );
   // The installer got both files and the version, and the folder is gone afterwards.
   assert.deepEqual(readFileSync(join(seen, asset)), Buffer.from(archive));
   assert.match(
