@@ -198,8 +198,6 @@ export interface Session {
   showThinking: boolean;
   expandTools: boolean;
   todos: Todo[];
-  /** Plan mode's plan, as Circle last wrote it: the file Circle writes and its text. */
-  plan?: { file: string; text: string; updatedAt: string };
   pinned: boolean;
   shared: boolean;
   updatedAt: string;

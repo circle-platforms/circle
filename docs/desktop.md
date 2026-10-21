@@ -78,16 +78,14 @@ A question from the model appears the same way, with its choices and a box for y
 
 The button under the input box, on the left, shows how this session asks. Click it to choose, or press `shift+tab` in the input box to move to the next one.
 
-| Mode         | What it does                                                                                                                                                                                                                          |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| manual       | Asks before each file change and command. The default.                                                                                                                                                                                |
-| accept edits | Changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask.                                                                                                                     |
-| plan         | Read-only: Circle researches and writes its plan, and changes nothing else. The plan opens where a file opens. When it is ready a card asks what next: implement it in auto mode or with manual approval, change it, or save it only. |
-| auto         | Runs every call without asking, including the ones Circle always asks about. Read [Security](security.md#auto-mode) first.                                                                                                            |
+| Mode         | What it does                                                                                                                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| manual       | Asks before each file change and command. The default.                                                                                                                                   |
+| accept edits | Changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask.                                                                        |
+| plan         | Read-only: Circle researches and writes a plan to `plan.md`, and changes nothing else. When it is done it asks whether to implement the plan, and whether to accept edits while it does. |
+| auto         | Runs every call without asking, including the ones Circle always asks about. Read [Security](security.md#auto-mode) first.                                                               |
 
 The mode belongs to the session, as in the terminal; see [Modes](usage.md#modes).
-
-In plan mode Circle writes its plan to a file of the conversation's own in the data folder, not in your project, and never asks to. When it writes it, the plan opens where a file opens, as a document that follows what Circle writes; closed while Circle works, it stays closed until the card asks about it. That card, at the end of the conversation, asks what next: **implement in auto mode** or **implement with manual approval** end plan mode; **change the plan** asks what should change and sends it to Circle, which revises the plan and asks again; **save the plan only** keeps plan mode on and changes nothing. **open plan** on the card shows the plan again; in a narrow window the plan waits for it.
 
 ## While Circle works
 

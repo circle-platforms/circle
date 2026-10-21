@@ -17,13 +17,6 @@ export function loadToolPrompt(name: string): string {
     .replaceAll('{{year}}', String(new Date().getFullYear()))
     .trim();
 }
-/** What plan mode adds to the system prompt: how to write the plan, and where. */
-export function planModePrompt(planFile: string): string {
-  return readPrompt('session', 'plan-mode.md').replaceAll(
-    '{{PLAN_FILE}}',
-    planFile,
-  );
-}
 export function selectSessionPromptName(model: string): string {
   const name = model.toLowerCase();
   if (name.includes('muse')) return 'meta';

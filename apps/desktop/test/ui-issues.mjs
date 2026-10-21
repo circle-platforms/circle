@@ -53,7 +53,7 @@ await writeFile(
       call('repeat-todos', 'write_todos', { todos: done }),
       answer('completion-answer', 'completion answer'),
       call('exit-plan', 'plan_exit', {}),
-      answer('changed-plan', 'plan retained'),
+      answer('continue-plan', 'plan retained'),
       call('parent-task', 'task', {
         description: 'check activity fixture',
         subagent_type: 'general-purpose',
@@ -259,8 +259,7 @@ try {
   );
   await command('set-plan-mode', { enabled: true });
   await send('review completed plan');
-  const planCard = page.locator('.inline-request[data-kind="plan-exit"]');
-  await planCard.waitFor();
+  await page.locator('.inline-request[data-kind="question"]').waitFor();
   await writeFile(
     join(output, 'plan-exit-state.json'),
     JSON.stringify(
@@ -269,34 +268,29 @@ try {
       2,
     ),
   );
-  await planCard
-    .getByRole('radio', { name: 'change the plan', exact: true })
+  await page
+    .getByRole('radio', { name: 'continue planning', exact: true })
     .check();
-  await planCard
-    .getByRole('textbox', { name: 'what should change?', exact: true })
-    .fill('migrate after the API');
-  await planCard
-    .getByRole('button', { name: 'send answer', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'send answer', exact: true }).click();
   await page.getByText('plan retained', { exact: true }).waitFor();
-  // What was written in the plan card reaches the model, and plan mode stays on.
+  // The answer given in the conversation reaches the model, and plan mode stays on.
   const exitResult = (
     await readModelRequests(requestsPath, { requireComplete: true })
   )
     .at(-1)
     .messages.find((message) => message.tool_call_id === 'exit-plan-tool');
-  assert.match(
-    exitResult?.content ?? '',
-    /^The user wants the plan changed before it is implemented\. They said: migrate after the API\nRevise \/session_plans\/[\w-]+\.md, then call plan_exit again\.$/,
+  assert.equal(
+    exitResult?.content,
+    'The user kept read-only mode active. Continue planning.',
   );
   await until(async () => {
     const current = await state();
     return current.sessions.find((row) => row.id === current.activeSessionId)
       .readOnly;
-  }, 'plan mode stays on after a change is asked for');
+  }, 'plan mode stays on after continue planning');
   await inProgress.waitFor({ state: 'detached' });
   checks.push(
-    'native plan card is answered in the conversation: what should change reaches the model and plan mode stays on',
+    'native plan-exit question is answered in the conversation: continue planning reaches the model and keeps plan mode',
   );
   await command('set-plan-mode', { enabled: false });
   await send('start activity fixture');

@@ -13,7 +13,7 @@ import { glob } from 'glob';
 import type { Tool, ToolContext } from './types.js';
 import { Sandbox } from './sandbox.js';
 import { loadToolPrompt } from './system_prompt.js';
-import { applyPatch, patchFilePaths } from './apply_patch.js';
+import { applyPatch } from './apply_patch.js';
 import { QUESTION_SCHEMA } from './questions.js';
 import { JobRegistry, jobLine, jobNotice } from './jobs.js';
 import { readTextWindow, readTextContentWindow } from './file_read.js';
@@ -72,22 +72,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     ? new FileMutationTools(sandbox, hooks.fileMutations)
     : undefined;
   const tools: Tool[] = [];
-  // Plan mode's plan is Circle's own file in the data folder, as the offloaded output
-  // read_file reads is: it is written directly, and the workspace's file backend, which
-  // knows only granted files, has no part in it.
-  const writesPlan = (tool: string, args: Record<string, unknown>): boolean => {
-    try {
-      const paths =
-        tool === 'apply_patch'
-          ? patchFilePaths(string(args, 'patchText'), sandbox)
-          : [sandbox.resolvePath(string(args, 'file_path', 'path'))];
-      return (
-        paths.length > 0 && paths.every((path) => sandbox.isPlanFile(path))
-      );
-    } catch {
-      return false;
-    }
-  };
   // What these write stays on disk: a %NAME% there is text, never a variable's value.
   const FILE_WRITERS = new Set(['write_file', 'edit_file', 'apply_patch']);
   // What these take becomes a model's input or the conversation's: a secret stays its name
@@ -195,7 +179,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       ['file_path', 'content'],
     ),
     async (args, context) => {
-      if (mutations && !writesPlan('write_file', args))
+      if (mutations)
         return (await mutations.prepareWrite(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
@@ -217,7 +201,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       ['file_path', 'old_string', 'new_string'],
     ),
     async (args, context) => {
-      if (mutations && !writesPlan('edit_file', args))
+      if (mutations)
         return (await mutations.prepareEdit(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
@@ -249,21 +233,18 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       'patchText',
     ]),
     async (args, context) =>
-      mutations && !writesPlan('apply_patch', args)
+      mutations
         ? (await mutations.preparePatch(args, context))(args, context)
         : applyPatch(string(args, 'patchText'), sandbox),
   );
-  if (mutations)
-    for (const [name, prepare] of [
-      ['write_file', mutations.prepareWrite],
-      ['edit_file', mutations.prepareEdit],
-      ['apply_patch', mutations.preparePatch],
-    ] as const) {
-      const tool = tools.find((tool) => tool.name === name)!;
-      // The plan file has nothing to snapshot: the tool writes it when it runs
-      tool.prepare = async (args, context) =>
-        writesPlan(name, args) ? tool.run : prepare(args, context);
-    }
+  if (mutations) {
+    tools.find((tool) => tool.name === 'write_file')!.prepare =
+      mutations.prepareWrite;
+    tools.find((tool) => tool.name === 'edit_file')!.prepare =
+      mutations.prepareEdit;
+    tools.find((tool) => tool.name === 'apply_patch')!.prepare =
+      mutations.preparePatch;
+  }
   add('ls', 'read', schema({ path: text('Directory') }), async (args) => {
     const path = sandbox.resolvePath(String(args.path || '.'));
     return readdirSync(path, { withFileTypes: true })
