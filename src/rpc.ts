@@ -35,6 +35,12 @@ export async function runRpc(
     else if (record) send(record);
   });
   const input = createInterface({ input: io.input, terminal: false });
+  const lines = input[Symbol.asyncIterator]();
+  // A disconnected Readable can close without ending. Readline does not propagate
+  // that event, so its async iterator otherwise waits forever on a destroyed pipe.
+  const inputClosed = () => input.close();
+  io.input.once('close', inputClosed);
+  if (io.input.destroyed) input.close();
   let code = 0;
   const interrupt = (): void => {
     code = 130;
@@ -68,7 +74,7 @@ export async function runRpc(
   }, 1000);
   wake.unref();
   try {
-    for await (const line of input) {
+    for await (const line of lines) {
       if (!line.trim()) continue;
       let command: Record<string, unknown>;
       try {
@@ -291,6 +297,7 @@ export async function runRpc(
   } finally {
     ended = true;
     clearInterval(wake);
+    io.input.off('close', inputClosed);
     input.close();
     process.off('SIGINT', interrupt);
     off();
