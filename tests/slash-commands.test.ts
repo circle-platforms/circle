@@ -239,10 +239,12 @@ test('/hub before the extension is on names the switch and clears the box', asyn
   );
 });
 
-test('a mistyped command stays in the box with a suggestion; a space or a path sends it as text', async (t) => {
+test('a mistyped command is cleared with a suggestion; a space, a sentence or a path goes to the model as text', async (t) => {
   const { app, ui, model, key } = await session(t, [
     answer('one'),
     answer('two'),
+    answer('three'),
+    answer('four'),
   ]);
   ui.setDraft('/modles');
   await key('enter');
@@ -271,6 +273,15 @@ test('a mistyped command stays in the box with a suggestion; a space or a path s
     model.requests[1]!.messages.at(-1)!.content,
     '/usr/bin/env is missing',
   );
+  // A path alone is no command either: it goes to the model as it was typed
+  await until(() => !app.runtime!.busy);
+  await app.submit('/usr/bin');
+  await until(() => model.requests.length === 3);
+  assert.equal(model.requests[2]!.messages.at(-1)!.content, '/usr/bin');
+  await until(() => !app.runtime!.busy);
+  await app.submit('/Users/me/a.md');
+  await until(() => model.requests.length === 4);
+  assert.equal(model.requests[3]!.messages.at(-1)!.content, '/Users/me/a.md');
   assert.equal(closeMatch('hepl', ['help', 'hotkeys']), 'help');
   assert.deepEqual(parseSlash('/tasks'), {
     name: 'jobs',

@@ -199,13 +199,21 @@ export function commandWord(text: string): string {
   return text.match(/^\/([A-Za-z][\w:-]*)(?:\s|$)/)?.[1]?.toLowerCase() ?? '';
 }
 /**
- * A slash token that must not be sent to the model. A leading space, or a
- * sentence such as `/usr/bin/env is missing`, is ordinary text.
+ * A slash token that must not be sent to the model: a command, known or not, or one
+ * that runs into another (`/hooks/hotkeys`). A leading space, a sentence such as
+ * `/usr/bin/env is missing`, or a path such as `/usr/bin` is ordinary text.
  */
-export function refusedSlash(raw: string, message: string): boolean {
+export function refusedSlash(
+  raw: string,
+  message: string,
+  known: Set<string> = knownSlashNames(),
+): boolean {
   if (!message.startsWith('/')) return false;
   if (commandWord(raw)) return true;
-  return !/\s/.test(raw) && /^\/[A-Za-z]/.test(raw);
+  // One token whose first part names a command is that command mistyped; any other
+  // is a path
+  const first = /^\/([A-Za-z][\w:-]*)/.exec(raw)?.[1]?.toLowerCase();
+  return !/\s/.test(raw) && !!first && known.has(first);
 }
 // A built-in command (by name or alias), one of `extra` (custom and extension commands), or
 // pi's `/skill:name [args]`. Anything else is not a command: undefined.

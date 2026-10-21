@@ -3059,7 +3059,9 @@ export class SessionApp {
               `Unknown command /${word} · turn it on with /extensions enable ${off}`,
               4000,
             );
-          } else if (refusedSlash(raw, shown)) {
+          } else if (
+            refusedSlash(raw, shown, new Set([...knownSlashNames(), ...extra]))
+          ) {
             const token = word ? `/${word}` : shown;
             const close = word
               ? closeMatch(word, [...knownSlashNames(), ...extra])
@@ -3190,7 +3192,9 @@ export class SessionApp {
         await this.command(slash.name, slash.args);
         return;
       }
-      if (refusedSlash(raw, message)) {
+      if (
+        refusedSlash(raw, message, new Set([...knownSlashNames(), ...extra]))
+      ) {
         const word = commandWord(raw);
         const off = word ? this.runtime?.extensions.offCommand(word) : '';
         if (word && off) {
