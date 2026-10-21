@@ -98,6 +98,16 @@ try {
       await card.locator('header strong').innerText(),
       '计划写好了，接下来怎么做？',
     );
+    // A question in words, as the question card's heading is: the monospace font is a
+    // tool card's, which names a tool
+    const fonts = await card.evaluate((section) => {
+      const heading = section.querySelector('header strong');
+      return {
+        heading: getComputedStyle(heading).fontFamily,
+        card: getComputedStyle(section).fontFamily,
+      };
+    });
+    assert.equal(fonts.heading, fonts.card, 'the heading takes the card font');
     assert.deepEqual(
       await card
         .getByRole('radio')
