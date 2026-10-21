@@ -99,7 +99,7 @@ function completion(response: ServerResponse, message: unknown, usage = {}) {
 }
 
 test('the vision service asks an OpenAI-compatible endpoint, carries the picture as a data URL and the question as the focus, and reports usage', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const picture = join(root, 'a.png');
   writeFileSync(picture, png());
   const server = await visionServer(t, (request, body, response) => {
@@ -145,7 +145,7 @@ test('the vision service asks an OpenAI-compatible endpoint, carries the picture
 });
 
 test('the same picture and question are described once; a new question or picture asks again', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const a = join(root, 'a.png');
   const b = join(root, 'b.png');
   writeFileSync(a, png());
@@ -164,7 +164,7 @@ test('the same picture and question are described once; a new question or pictur
 });
 
 test('a reply that carries its words in reasoning_content still counts; one with no words at all is an error', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const picture = join(root, 'a.png');
   writeFileSync(picture, png());
   let empty = false;
@@ -202,7 +202,7 @@ test('a reply that carries its words in reasoning_content still counts; one with
 });
 
 test('failures come back readable: an endpoint error page never reaches the model whole, and the key is never echoed', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const picture = join(root, 'a.png');
   writeFileSync(picture, png());
   let mode: 'json' | 'html' | 'redact' = 'json';
@@ -248,7 +248,7 @@ test('failures come back readable: an endpoint error page never reaches the mode
 });
 
 test('a stopped signal stops the description call before anything is sent', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const picture = join(root, 'a.png');
   writeFileSync(picture, png());
   const server = await visionServer(t, (_request, _body, response) =>
@@ -331,7 +331,7 @@ function visionRuntime(
 }
 
 test('a model that cannot read images has read_file describe the picture, and the vision tool answers only its question', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   writeFileSync(join(root, 'shot.png'), png());
   const questions: string[] = [];
   const server = await visionServer(t, (_request, body, response) => {
@@ -384,7 +384,7 @@ test('a model that cannot read images has read_file describe the picture, and th
 });
 
 test('the vision tool refuses credential files and non-pictures', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   writeFileSync(join(root, '.env'), 'TOKEN=x');
   writeFileSync(join(root, 'notes.txt'), 'words');
   const server = await visionServer(t, (_request, _body, response) =>
@@ -514,7 +514,7 @@ test('in the desktop the vision tool reads only what read_file may: a picture ou
 });
 
 test('read_file gives a model that cannot read images a PDF as it is, never to the side vision model', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   writeFileSync(join(root, 'spec.pdf'), '%PDF-1.4\n% a small spec\n%%EOF\n');
   const server = await visionServer(t, (_request, _body, response) =>
     completion(response, { role: 'assistant', content: 'unused' }),
@@ -544,7 +544,7 @@ test('read_file gives a model that cannot read images a PDF as it is, never to t
 });
 
 test('a model that cannot read images is offered screenshot, browser_screenshot and vision when a side vision model is set', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const server = await visionServer(t, (_request, _body, response) =>
     completion(response, { role: 'assistant', content: 'unused' }),
   );
@@ -575,7 +575,7 @@ test('a model that cannot read images is offered screenshot, browser_screenshot 
 });
 
 test('with a side vision model, the screenshot tool takes the picture for a model that cannot read it, saves it and describes it', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const calls: string[][] = [];
   const desktop = async (
     command: string,
@@ -648,7 +648,7 @@ test('with a side vision model, the screenshot tool takes the picture for a mode
 });
 
 test('without a side vision model the screenshot tool still takes nothing, and its error says why', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const calls: string[][] = [];
   const model = Object.assign(
     new ScriptedModel([
@@ -683,7 +683,7 @@ test('without a side vision model the screenshot tool still takes nothing, and i
 });
 
 test('a browser screenshot for such a model is saved under the run data and described', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const server = await visionServer(t, (_request, body, response) => {
     const text = (
       (body.messages as Array<{ content: Array<{ text?: string }> }>)[0]
@@ -729,7 +729,7 @@ test('a browser screenshot for such a model is saved under the run data and desc
 });
 
 test('a picture given with the prompt is saved under the run data and its path stays in the message', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const picture = png(5, 4);
   const model = Object.assign(
     new ScriptedModel([reply('done', [], 'ok'), reply('again', [], 'ok')]),
@@ -785,7 +785,7 @@ test('a picture given with the prompt is saved under the run data and its path s
 });
 
 test('an unknown model whose endpoint refuses pictures is marked text-only, and the next request carries the paths only', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   writeFileSync(join(root, 'shot.png'), png());
   const withImage: unknown[] = [];
   const bodies: Record<string, unknown>[] = [];
@@ -888,7 +888,7 @@ test('an unknown model whose endpoint refuses pictures is marked text-only, and 
 });
 
 test('a 400 about something else keeps its own error and does not mark the model', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   writeFileSync(join(root, 'shot.png'), png());
   const instance = createServer(async (request, response) => {
     let text = '';
@@ -1003,7 +1003,7 @@ for (const [kind, message] of [
   ],
 ] as [string, string][])
   test(`a 400 about ${kind} keeps its own error and leaves image input on`, async (t) => {
-    const root = realpathSync(scratch(t, 'circle-vision-'));
+    const root = realpathSync.native(scratch(t, 'circle-vision-'));
     writeFileSync(join(root, 'shot.png'), png());
     const endpoint = await pictureRefusingEndpoint(t, message);
     const settings = defaultSettings();
@@ -1118,7 +1118,7 @@ test('a saved picture is whole: a cut-off file under its name is replaced, a cop
 });
 
 test('a picture from the history that was never saved is left out for a model that cannot read it without a path it does not have', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const bodies: Record<string, unknown>[] = [];
   const instance = createServer(async (request, response) => {
     let text = '';
@@ -1232,7 +1232,7 @@ const answerAfterStop: typeof fetch = async (input, init) => {
 };
 
 test('a stop while the side vision model works ends its call at once, before its answer starts and while it arrives', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const picture = join(root, 'a.png');
   writeFileSync(picture, png());
   for (const mode of ['silent', 'headers'] as const) {
@@ -1251,7 +1251,7 @@ test('a stop while the side vision model works ends its call at once, before its
 });
 
 test('a side vision model that does not answer in time fails with how long it waited, before its answer starts and while it arrives', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const picture = join(root, 'a.png');
   writeFileSync(picture, png());
   for (const mode of ['silent', 'headers'] as const) {
@@ -1283,7 +1283,7 @@ test('CIRCLE_VISION_TIMEOUT_MS sets the side vision deadline in whole millisecon
 });
 
 test('esc while read_file waits on the side vision model stops the turn: the call is given up and the model is not asked again', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   writeFileSync(join(root, 'shot.png'), png());
   const server = await hangingVisionServer(t, 'silent');
   const model = Object.assign(
@@ -1307,7 +1307,7 @@ test('esc while read_file waits on the side vision model stops the turn: the cal
 });
 
 test('the screenshot card says who sees the picture: the side vision model for a model that cannot read images, the model otherwise', async (t) => {
-  const root = realpathSync(scratch(t, 'circle-vision-'));
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
   const server = await visionServer(t, (_request, _body, response) =>
     completion(response, { role: 'assistant', content: 'unused' }),
   );
