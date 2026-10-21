@@ -268,7 +268,11 @@ export class TerminalSessions {
   ): Promise<TerminalResult> {
     const own = this.conversation(conversation);
     const run = () => this.perform(own, conversation, action, args, signal);
-    // One action's failure must not sink the ones after it
+    // One action's failure must not sink the ones after it.
+    // Closing a console waits in no queue: the person may close it while one of
+    // Circle's own actions is parked on their hold of it.
+    if (action === 'disconnect')
+      return this.perform(own, conversation, action, args, signal);
     own.queue = own.queue.then(run, run);
     return own.queue as Promise<TerminalResult>;
   }
@@ -433,8 +437,11 @@ export class TerminalSessions {
         args,
         signal,
       );
-    // The person holds the console: nothing runs until they give it back
-    if (session.held) await this.handedBack(session, signal);
+    // The person holds the console: nothing runs until they give it back.
+    // Closing it is not "running" on it: it is their own act, and it waits for
+    // nobody - otherwise the tab's × would do nothing while they hold it.
+    if (session.held && action !== 'disconnect')
+      await this.handedBack(session, signal);
     switch (action) {
       case 'send':
         return this.send(own, session, args, signal);
@@ -908,6 +915,8 @@ export class TerminalSessions {
   ): TerminalResult {
     const was = session.state;
     session.close();
+    // Anything parked on their hold stops waiting now and sees the closed console.
+    session.wake();
     own.events.push(`${session.name}: disconnected`);
     this.options.onChange(conversation);
     return {

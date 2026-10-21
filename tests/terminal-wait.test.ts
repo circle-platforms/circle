@@ -180,6 +180,44 @@ test('a quick connect password reaches SSH as a one-time secret and dies with th
   assert.equal(seen.env?.secret(name), '');
 });
 
+test('closing a console the person holds goes through at once and frees what waited on it', async (t) => {
+  const h = harness();
+  t.after(() => h.sessions.close());
+  await h.open();
+  assert.equal(h.sessions.attach('c1', 't1'), true);
+  let outcome: unknown = false;
+  const parked = h.sessions.request(
+    'c1',
+    'send',
+    { session: 't1', text: 'later', enter: true },
+    signal,
+  );
+  parked.then(
+    () => (outcome = 'sent'),
+    (error) =>
+      (outcome = error instanceof Error ? error.message : String(error)),
+  );
+  await new Promise((done) => setTimeout(done, 150));
+  assert.equal(
+    outcome,
+    false,
+    'a send waits while the person holds the console',
+  );
+  // Closing it is their own act: it does not queue behind their own hold.
+  const closed = await h.sessions.request(
+    'c1',
+    'disconnect',
+    { session: 't1' },
+    signal,
+  );
+  assert.match(closed.text, /was cut off/);
+  const deadline = Date.now() + 4000;
+  while (outcome === false && Date.now() < deadline)
+    await new Promise((done) => setTimeout(done, 20));
+  assert.notEqual(outcome, false, 'the parked send stopped waiting');
+  assert.match(String(outcome), /is closed/);
+});
+
 test('wait: an aborted stop is an error, not a result', async (t) => {
   const h = harness();
   t.after(() => h.sessions.close());
