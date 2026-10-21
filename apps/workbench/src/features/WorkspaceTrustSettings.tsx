@@ -3,6 +3,7 @@ import { useRuntime } from '../app/context';
 import { Button, Modal, Status } from '../components/common';
 import {
   archiveStopsWork,
+  removeWorkspace,
   workspaceSessions,
 } from '../model/session-management';
 import { currentSession } from '../model/state';
@@ -13,7 +14,8 @@ import { t, tn } from '../i18n';
 /**
  * The folders this application has worked in. Trust decides whether Circle may
  * read a folder's own instructions, skills, commands and extensions. Removing one
- * takes that away and hides its sessions from the list; nothing on disk changes.
+ * takes that away and archives its sessions in one runtime step; nothing on disk
+ * changes.
  */
 export function WorkspaceTrustSettings({
   onReview,
@@ -27,32 +29,11 @@ export function WorkspaceTrustSettings({
   const [removing, setRemoving] = useState<Workspace | null>(null);
   const activeId = currentSession(snapshot).workspaceId;
   const remove = async (workspace: Workspace) => {
-    const sessions = workspaceSessions(snapshot, workspace.id);
-    if (runtime.mode === 'live') {
-      // This dialog is the confirmation: tabs and tasks still running stop.
-      if (sessions.length)
-        await runtime.request('archive-workspace', {
-          workspaceId: workspace.id,
-          confirmed: true,
-        });
-      await runtime.request('trust-workspace', {
-        enabled: false,
-        workspaceId: workspace.id,
-      });
-    } else
-      runtime.change((state) => {
-        state.workspaces = state.workspaces.filter(
-          (row) => row.id !== workspace.id,
-        );
-      });
+    // A refusal, such as a session waiting on an approval, changes nothing: the
+    // dialog stays open and the error says why.
+    const notice = await removeWorkspace(runtime, workspace);
     setRemoving(null);
-    notify(
-      runtime.mode === 'live'
-        ? t('{name} is no longer trusted and its sessions are archived', {
-            name: workspaceLabel(workspace),
-          })
-        : 'sample workspace removed from this preview',
-    );
+    notify(notice);
   };
   const sessions = removing
     ? workspaceSessions(snapshot, removing.id).length

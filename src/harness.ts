@@ -143,6 +143,17 @@ export interface HarnessOptions {
     numResults: number,
     context: ToolContext,
   ) => Promise<string>;
+  /**
+   * Describes image files with the run's configured side vision model, for tools whose
+   * pictures the model in use cannot read; undefined when none is configured.
+   */
+  vision?: (
+    paths: string[],
+    question: string,
+    context: ToolContext,
+  ) => Promise<{ model: string; text: string }>;
+  /** Writes a picture the model cannot read under the run's project data, returning its path. */
+  saveImageAttachment?: (item: MediaAttachment) => string;
   toolBoundary?: (
     tool: Tool,
     args: Record<string, unknown>,
@@ -621,13 +632,14 @@ export class Harness {
     signal: AbortSignal,
     given?: MediaAttachment[],
   ): Promise<Pick<Message, 'content' | 'attachments'>> {
-    const { message, leftOut, problems } = await attachPrompt(
+    const { message, leftOut, saved, problems } = await attachPrompt(
       prompt,
       workspace,
       signal,
       (path) => this.promptFileAllowed(path),
       this.model.imageInput !== false,
       given,
+      this.options.saveImageAttachment,
     );
     if (leftOut)
       this.bus.emit('info', {
@@ -636,6 +648,8 @@ export class Harness {
             event: 'images_left_out',
             model: this.model.model,
             count: leftOut,
+            // Some were written as files, their paths given to the model
+            ...(saved ? { saved: true } : {}),
           },
         },
       });
@@ -1474,7 +1488,12 @@ export class Harness {
       // After the arguments were checked, from the values: the model cannot give these itself.
       // The rules judge them as they are; the card and the hooks see each secret's value
       // back as its name, as they see the arguments.
-      const facts = tool.approvalFacts?.(resolved, this.sessionId, call.args);
+      const facts = tool.approvalFacts?.(
+        resolved,
+        this.sessionId,
+        call.args,
+        callModel.imageInput,
+      );
       if (facts) {
         call = {
           ...call,
@@ -1605,6 +1624,12 @@ export class Harness {
           ? {
               webSearch: (query: string, numResults: number) =>
                 this.options.webSearch!(callModel, query, numResults, context),
+            }
+          : {}),
+        ...(this.options.vision
+          ? {
+              vision: (paths: string[], question: string) =>
+                this.options.vision!(paths, question, context),
             }
           : {}),
         recordModelCall: (record) => {
