@@ -549,6 +549,12 @@ export class AgentRuntime {
     });
     this.mcp = new McpManager(options.workspace, undefined, undefined, {
       secrets: () => loadSecrets(this.options.home),
+      // A server that went away leaves the system prompt between turns, as tools do
+      onChange: () => {
+        if (this.closing) return;
+        this.toolsStale = true;
+        this.scheduleToolRefresh();
+      },
     });
     this.policy.declareDestructive((tool) => this.mcp.isDestructive(tool));
     this.lsp = new LspManager(this.sandbox);
@@ -1172,6 +1178,7 @@ export class AgentRuntime {
         localContext: this.options.localContext,
         variables: this.options.settings.variables,
         secrets: secretNames(this.options.home),
+        mcpInstructions: this.mcp.instructions(),
       },
     );
   }

@@ -41,6 +41,35 @@ export interface McpStatus {
 export interface McpServices {
   /** The saved secrets, read on each connect for `${secret:NAME}` in headers. */
   secrets?: () => Record<string, string>;
+  /** A server's connection ended on its own: what the model is told of it changed. */
+  onChange?: () => void;
+}
+/** The most of a server's instructions the system prompt takes, in bytes of UTF-8. */
+export const MAX_INSTRUCTIONS = 8 * 1024;
+/**
+ * A server's instructions as the system prompt takes them: line breaks and tabs kept, every
+ * other control character and the bidirectional controls taken out, and the first 8 KiB
+ * kept with a mark where the rest was cut. Nothing for a server that gave none.
+ */
+export function serverInstructions(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const text = raw
+    .replace(/\r\n?/g, '\n')
+    .replace(
+      /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g,
+      '',
+    )
+    .trim();
+  if (!text) return undefined;
+  if (Buffer.byteLength(text) <= MAX_INSTRUCTIONS) return text;
+  let size = 0;
+  let end = 0;
+  for (const char of text) {
+    size += Buffer.byteLength(char);
+    if (size > MAX_INSTRUCTIONS) break;
+    end += char.length;
+  }
+  return `${text.slice(0, end).trimEnd()}\n[cut by Circle: the server's instructions are longer than 8 KiB]`;
 }
 // Model APIs take tool names of letters, digits, `_` and `-`, at most 64 characters. A tool
 // is offered as `<server>_<tool>` for any server name, with every other character turned
@@ -297,10 +326,18 @@ function toolHints(
   const destructive = hints.destructiveHint === true;
   return { readOnly: hints.readOnlyHint === true && !destructive, destructive };
 }
+/** A server Circle is connected to. */
+interface Connected {
+  name: string;
+  client: Client;
+  instructions?: string;
+  /** False once the connection ended, closed by Circle or by the server. */
+  open: boolean;
+}
 export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
-  private clients: Client[] = [];
+  private servers: Connected[] = [];
   // The tools whose server says they can destroy data
   private destructive = new Set<string>();
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
@@ -316,7 +353,7 @@ export class McpManager {
     reserved = new Set<string>(),
     signal?: AbortSignal,
   ): Promise<void> {
-    const clients: Client[] = [];
+    const connected: Connected[] = [];
     const tools: Tool[] = [];
     const status: McpStatus[] = [];
     const destructive = new Set<string>();
@@ -431,7 +468,22 @@ export class McpManager {
             }
           } while (cursor);
           combined.throwIfAborted();
-          clients.push(client);
+          const server: Connected = {
+            name: connection.name,
+            client,
+            instructions: serverInstructions(
+              hide(client.getInstructions() ?? ''),
+            ),
+            open: true,
+          };
+          // The server went away: its instructions leave the prompt, and /mcp says so
+          client.onclose = () => {
+            if (!server.open) return;
+            server.open = false;
+            state.error = 'the connection ended; reload to connect again';
+            this.services.onChange?.();
+          };
+          connected.push(server);
           tools.push(...registered);
           for (const name of destroys) destructive.add(name);
           state.tools = registered.map((tool) => tool.name);
@@ -447,20 +499,28 @@ export class McpManager {
         }
       }
       signal?.throwIfAborted();
-      const previous = this.clients;
-      this.clients = clients;
+      const previous = this.servers;
+      this.servers = connected;
       this.tools = tools;
       this.status = status;
       this.destructive = destructive;
-      await Promise.all(
-        previous.map((client) => client.close().catch(() => {})),
-      );
+      await McpManager.disconnect(previous);
     } catch (error) {
-      await Promise.all(
-        clients.map((client) => client.close().catch(() => {})),
-      );
+      await McpManager.disconnect(connected);
       throw error;
     }
+  }
+  private static async disconnect(servers: Connected[]): Promise<void> {
+    for (const server of servers) server.open = false;
+    await Promise.all(
+      servers.map((server) => server.client.close().catch(() => {})),
+    );
+  }
+  /** What each server still connected said of using it, when it said anything. */
+  instructions(): { server: string; text: string }[] {
+    return this.servers
+      .filter((server) => server.open && server.instructions)
+      .map((server) => ({ server: server.name, text: server.instructions! }));
   }
   describe(): string {
     if (!this.status.length)
@@ -480,9 +540,9 @@ export class McpManager {
     return this.destructive.has(tool);
   }
   async close(): Promise<void> {
-    const clients = this.clients.splice(0);
+    const servers = this.servers.splice(0);
     this.tools = [];
     this.destructive = new Set();
-    await Promise.all(clients.map((client) => client.close().catch(() => {})));
+    await McpManager.disconnect(servers);
   }
 }
