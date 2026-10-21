@@ -547,7 +547,9 @@ export class AgentRuntime {
         this.releaseIfAway();
       },
     });
-    this.mcp = new McpManager(options.workspace);
+    this.mcp = new McpManager(options.workspace, undefined, undefined, {
+      secrets: () => loadSecrets(this.options.home),
+    });
     this.lsp = new LspManager(this.sandbox);
     this.context = new ContextManager(this.store, this.sandbox.offloadRoot!, {
       progress: (event) =>

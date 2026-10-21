@@ -31,12 +31,12 @@ A server reached over the network:
 ]
 ```
 
-| Field                    | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `name`                   | Prefix for the server's tools. Any name works: characters other than letters, digits, `_` and `-` become `_` in tool names, and a tool name over 64 characters is shortened with a short hash. Falls back to `id`, then `mcp0`, `mcp1`, … When two servers have the same name the later one is used, and `/mcp` lists the earlier one with the reason.                                                                                                                                                                               |
-| `command`, `args`, `env` | Start the server as a program (stdio), in the workspace.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `url`, `transport`       | Connect to a server. `transport` is `sse` (the default), `streamable_http` or `websocket`; anything else is treated as `sse`.                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `headers`                | Headers sent with every request to a `url` server over `sse` or `streamable_http`, such as `{ "Authorization": "Bearer ${env:DOCS_TOKEN}" }`. `${env:NAME}` is replaced, when Circle connects, by that variable of the environment Circle was started in, so a token need not be written in `settings.json`. A variable that is not set, a header name that is not a valid token, or a value with a line break stops that server, and `/mcp` says which header; values are never shown. A `websocket` server cannot be sent headers. |
+| Field                    | Meaning                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`                   | Prefix for the server's tools. Any name works: characters other than letters, digits, `_` and `-` become `_` in tool names, and a tool name over 64 characters is shortened with a short hash. Falls back to `id`, then `mcp0`, `mcp1`, … When two servers have the same name the later one is used, and `/mcp` lists the earlier one with the reason. |
+| `command`, `args`, `env` | Start the server as a program (stdio), in the workspace.                                                                                                                                                                                                                                                                                               |
+| `url`, `transport`       | Connect to a server. `transport` is `sse` (the default), `streamable_http` or `websocket`; anything else is treated as `sse`.                                                                                                                                                                                                                          |
+| `headers`                | Headers sent with every request to a `url` server over `sse` or `streamable_http`, such as `{ "Authorization": "Bearer ${secret:DOCS_TOKEN}" }`. A value can name a saved secret or an environment variable; see [Tokens in headers](#tokens-in-headers). A `websocket` server cannot be sent headers.                                                 |
 
 An entry with neither `command` nor `url` is skipped. A URL may not carry a user name or password; use `headers` instead.
 
@@ -46,12 +46,18 @@ An entry with neither `command` nor `url` is skipped. A URL may not carry a user
     "name": "docs",
     "url": "https://example.com/mcp",
     "transport": "streamable_http",
-    "headers": { "Authorization": "Bearer ${env:DOCS_TOKEN}" }
+    "headers": { "Authorization": "Bearer ${secret:DOCS_TOKEN}" }
   }
 ]
 ```
 
 A program started for a server gets your environment without the variables whose names look secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD` and the like; see [The shell environment](security.md#the-shell-environment)), plus the `env` you give it. Put a key the server needs in `env`.
+
+### Tokens in headers
+
+A header value can name a saved [secret](security.md#secrets-by-name) as `${secret:NAME}` (save one with `/secrets NAME`, or in the desktop settings under **variables** → **secrets**), and a variable of the environment Circle was started in as `${env:NAME}`, so a token need not be written in `settings.json`. Circle puts the values in when it connects: a secret saved or changed later is used from the next `/mcp reload`. A secret that is not saved, a variable that is not set, a header name that is not a valid token, or a value with a line break stops that server before any request, and `/mcp` names the header and the secret or variable, never a value.
+
+`/mcp` lists the names of the headers a server is sent, not their values. Where a server's answer, error or tool description quotes a value Circle put in, Circle shows `%NAME%` in its place for a secret and `${env:NAME}` for an environment variable: in what the model reads, in the conversation, and in the server's status that `/mcp` and the desktop show. A value written into `settings.json` as it is, without a reference, is not hidden this way.
 
 ## What you get
 

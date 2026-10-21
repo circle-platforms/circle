@@ -5,7 +5,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { Tool, MediaAttachment } from './types.js';
+import type { Tool, ToolContext, MediaAttachment } from './types.js';
 import { attachmentFromBase64 } from './media.js';
 import { isRecord } from './settings.js';
 import { shellEnvironment } from './sandbox.js';
@@ -18,7 +18,10 @@ export interface McpConnection {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
-  /** Sent with every request to a server reached by URL; `${env:NAME}` is filled in on connect. */
+  /**
+   * Sent with every request to a server reached by URL; `${env:NAME}` and `${secret:NAME}`
+   * are filled in on connect.
+   */
   headers?: Record<string, string>;
 }
 export interface McpStatus {
@@ -26,6 +29,13 @@ export interface McpStatus {
   connection: string;
   tools: string[];
   error: string;
+  /** The names of the headers a server is sent; their values are never listed. */
+  headers?: string[];
+}
+/** What the manager needs from the runtime it serves. */
+export interface McpServices {
+  /** The saved secrets, read on each connect for `${secret:NAME}` in headers. */
+  secrets?: () => Record<string, string>;
 }
 // Model APIs take tool names of letters, digits, `_` and `-`, at most 64 characters. A tool
 // is offered as `<server>_<tool>` for any server name, with every other character turned
@@ -121,24 +131,43 @@ export function buildMcpConnections(
   return { connections: [...connections.values()], skipped };
 }
 // Header values as sent: each `${env:NAME}` replaced by that variable of Circle's own
-// environment, so a token need not be written into settings.json. An error names the header
-// and the variable, never a value.
+// environment and each `${secret:NAME}` by that saved secret, so a token need not be written
+// into settings.json. An error names the header and the variable or secret, never a value.
 export function resolveHeaders(
   headers: Record<string, string> = {},
   env: NodeJS.ProcessEnv = process.env,
+  secrets: Record<string, string> = {},
 ): Record<string, string> {
+  return fillHeaders(headers, env, secrets).headers;
+}
+function fillHeaders(
+  headers: Record<string, string> = {},
+  env: NodeJS.ProcessEnv,
+  secrets: Record<string, string>,
+): { headers: Record<string, string>; filled: Map<string, string> } {
   const resolved: Record<string, string> = {};
+  // Each value put in, with what is shown in its place: `%NAME%` for a secret, as everywhere a
+  // secret's value is hidden, and the reference as written for an environment variable
+  const filled = new Map<string, string>();
   for (const [name, template] of Object.entries(headers)) {
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
       throw new Error(`invalid header name '${name}'`);
     const value = template.replace(
-      /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g,
-      (_, variable: string) => {
-        const found = env[variable];
+      /\$\{(env|secret):([A-Za-z_][A-Za-z0-9_]*)\}/g,
+      (reference: string, kind: string, variable: string) => {
+        const found =
+          kind === 'env'
+            ? env[variable]
+            : Object.hasOwn(secrets, variable)
+              ? secrets[variable]
+              : undefined;
         if (!found)
           throw new Error(
-            `header ${name} needs the environment variable ${variable}, which is not set`,
+            kind === 'env'
+              ? `header ${name} needs the environment variable ${variable}, which is not set`
+              : `header ${name} needs the secret ${variable}, which is not saved; save it with /secrets ${variable}`,
           );
+        filled.set(found, kind === 'env' ? reference : `%${variable}%`);
         return found;
       },
     );
@@ -146,9 +175,32 @@ export function resolveHeaders(
       throw new Error(`header ${name} has a line break or NUL in its value`);
     resolved[name] = value;
   }
-  return resolved;
+  return { headers: resolved, filled };
 }
-function transportFor(connection: McpConnection, workspace: string): Transport {
+/**
+ * Shows the name in place of each value Circle filled into a header, longest first: what a
+ * server answers can quote the request it got.
+ */
+function hideFilled(filled: Map<string, string>): (text: string) => string {
+  const values = [...filled].sort(([a], [b]) => b.length - a.length);
+  return (text) => {
+    let shown = text;
+    for (const [value, reference] of values)
+      shown = shown.split(value).join(reference);
+    return shown;
+  };
+}
+/** An error whose message says no filled-in value. */
+function hiddenError(error: unknown, hide: (text: string) => string): unknown {
+  if (!(error instanceof Error)) return error;
+  const message = hide(error.message);
+  return message === error.message ? error : new Error(message);
+}
+function transportFor(
+  connection: McpConnection,
+  workspace: string,
+  headers: Record<string, string>,
+): Transport {
   if (connection.transport === 'stdio')
     return new StdioClientTransport({
       command: connection.command!,
@@ -167,7 +219,6 @@ function transportFor(connection: McpConnection, workspace: string): Transport {
       : ['http:', 'https:'];
   if (!protocols.includes(url.protocol) || url.username || url.password)
     throw new Error('invalid MCP server URL');
-  const headers = resolveHeaders(connection.headers);
   const requestInit = Object.keys(headers).length ? { headers } : undefined;
   if (connection.transport === 'streamable_http')
     return new StreamableHTTPClientTransport(url, { requestInit });
@@ -177,6 +228,51 @@ function transportFor(connection: McpConnection, workspace: string): Transport {
     return new WebSocketClientTransport(url);
   }
   return new SSEClientTransport(url, { requestInit });
+}
+/** A tool result as the model reads it: its text, and the pictures and PDFs it carries. */
+function resultText(
+  result: Awaited<ReturnType<Client['callTool']>>,
+  tool: string,
+  context: ToolContext,
+): { text: string; attachments: MediaAttachment[] } {
+  const content = Array.isArray(result.content) ? result.content : [];
+  const attachments: MediaAttachment[] = [];
+  const text = content
+    .map((block) => {
+      if (!isRecord(block)) return JSON.stringify(block);
+      if (block.type === 'text') return String(block.text || '');
+      const resource =
+        block.type === 'resource' && isRecord(block.resource)
+          ? block.resource
+          : undefined;
+      const data = block.type === 'image' ? block.data : resource?.blob;
+      const mime = block.type === 'image' ? block.mimeType : resource?.mimeType;
+      if (
+        context.emitAttachments &&
+        typeof data === 'string' &&
+        typeof mime === 'string' &&
+        [
+          'image/png',
+          'image/jpeg',
+          'image/gif',
+          'image/webp',
+          'application/pdf',
+        ].includes(mime)
+      ) {
+        const filename = `${tool}-${attachments.length + 1}.${mime.split('/')[1]}`;
+        attachments.push(
+          attachmentFromBase64(
+            data,
+            mime as MediaAttachment['mime_type'],
+            filename,
+          ),
+        );
+        return `Attachment: ${filename} (${mime})`;
+      }
+      return JSON.stringify(block);
+    })
+    .join('\n');
+  return { text, attachments };
 }
 // The longest a timer can wait; the MCP SDK stops a request after 60 seconds unless told.
 const NO_LIMIT = 2_147_483_647;
@@ -190,6 +286,7 @@ export class McpManager {
     readonly workspace: string,
     readonly timeout = 30000,
     readonly callTimeout?: number,
+    private readonly services: McpServices = {},
   ) {}
   async load(
     servers: Record<string, unknown>[],
@@ -204,11 +301,13 @@ export class McpManager {
       status.push(...skipped);
       for (const connection of connections) {
         signal?.throwIfAborted();
+        const headerNames = Object.keys(connection.headers ?? {});
         const state: McpStatus = {
           name: connection.name,
           connection: connection.command || connection.url || '',
           tools: [],
           error: '',
+          ...(headerNames.length ? { headers: headerNames } : {}),
         };
         status.push(state);
         const client = new Client({
@@ -223,8 +322,16 @@ export class McpManager {
           void transport?.close().catch(() => {});
         };
         combined.addEventListener('abort', stop, { once: true });
+        // What the server sends back names a header's secret or variable, never its value
+        let hide = (text: string): string => text;
         try {
-          transport = transportFor(connection, this.workspace);
+          const filled = fillHeaders(
+            connection.headers,
+            process.env,
+            this.services.secrets?.() ?? {},
+          );
+          hide = hideFilled(filled.filled);
+          transport = transportFor(connection, this.workspace, filled.headers);
           if (transport instanceof StdioClientTransport)
             transport.stderr?.on('data', () => {});
           await abortable(
@@ -252,69 +359,37 @@ export class McpManager {
                 throw new Error(`tool '${name}' already exists`);
               registered.push({
                 name,
-                description: spec.description || name,
+                description: hide(spec.description || name),
                 parameters: spec.inputSchema,
                 effect: 'unknown',
                 run: async (args, context) => {
                   context.signal.throwIfAborted();
-                  const result = await client.callTool(
-                    { name: spec.name, arguments: args },
-                    undefined,
-                    {
-                      signal: context.signal,
-                      timeout: this.callTimeout ?? NO_LIMIT,
-                      maxTotalTimeout: this.callTimeout,
-                    },
+                  let result: Awaited<ReturnType<Client['callTool']>>;
+                  try {
+                    result = await client.callTool(
+                      { name: spec.name, arguments: args },
+                      undefined,
+                      {
+                        signal: context.signal,
+                        timeout: this.callTimeout ?? NO_LIMIT,
+                        maxTotalTimeout: this.callTimeout,
+                      },
+                    );
+                  } catch (error) {
+                    throw hiddenError(error, hide);
+                  }
+                  const { text, attachments } = resultText(
+                    result,
+                    spec.name,
+                    context,
                   );
-                  const content = Array.isArray(result.content)
-                    ? result.content
-                    : [];
-                  const attachments: MediaAttachment[] = [];
-                  const text = content
-                    .map((block) => {
-                      if (!isRecord(block)) return JSON.stringify(block);
-                      if (block.type === 'text')
-                        return String(block.text || '');
-                      const resource =
-                        block.type === 'resource' && isRecord(block.resource)
-                          ? block.resource
-                          : undefined;
-                      const data =
-                        block.type === 'image' ? block.data : resource?.blob;
-                      const mime =
-                        block.type === 'image'
-                          ? block.mimeType
-                          : resource?.mimeType;
-                      if (
-                        context.emitAttachments &&
-                        typeof data === 'string' &&
-                        typeof mime === 'string' &&
-                        [
-                          'image/png',
-                          'image/jpeg',
-                          'image/gif',
-                          'image/webp',
-                          'application/pdf',
-                        ].includes(mime)
-                      ) {
-                        const filename = `${spec.name}-${attachments.length + 1}.${mime.split('/')[1]}`;
-                        attachments.push(
-                          attachmentFromBase64(
-                            data,
-                            mime as MediaAttachment['mime_type'],
-                            filename,
-                          ),
-                        );
-                        return `Attachment: ${filename} (${mime})`;
-                      }
-                      return JSON.stringify(block);
-                    })
-                    .join('\n');
                   if (result.isError)
-                    throw new Error(text || 'MCP tool failed');
+                    throw new Error(hide(text || 'MCP tool failed'));
                   context.signal.throwIfAborted();
                   if (attachments.length) context.emitAttachments!(attachments);
-                  return text || JSON.stringify(result.structuredContent ?? {});
+                  return hide(
+                    text || JSON.stringify(result.structuredContent ?? {}),
+                  );
                 },
               });
             }
@@ -330,7 +405,9 @@ export class McpManager {
           tools.push(...registered);
           state.tools = registered.map((tool) => tool.name);
         } catch (error) {
-          state.error = error instanceof Error ? error.message : String(error);
+          state.error = hide(
+            error instanceof Error ? error.message : String(error),
+          );
           await client.close().catch(() => {});
           await transport?.close().catch(() => {});
           if (signal?.aborted) throw signal.reason;
@@ -361,7 +438,7 @@ export class McpManager {
       this.status
         .map(
           (server) =>
-            `  · ${server.name}  ${server.connection}${server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
+            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
         )
         .join('\n')
     );
