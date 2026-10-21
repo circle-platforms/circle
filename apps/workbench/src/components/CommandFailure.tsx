@@ -1,8 +1,30 @@
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
+// The row shares the conversation's words for a wait: both say what is held.
 import { copyText } from '../host';
 import type { ActionFailure } from '../model/types';
 import { Button } from './common';
+
+/** What the runtime is holding right now, said where the person asked for it. */
+export function RuntimeWaitRow({ sessionId }: { sessionId: string }) {
+  const { snapshot, runtime } = useRuntime();
+  const waiting = snapshot.runtime?.waiting;
+  if (!waiting) return null;
+  return (
+    <div className="runtime-wait" role="status" data-testid="runtime-wait">
+      <i className="attention-dot" />
+      <span>
+        {t('Circle is still working on {command} · {seconds}s', {
+          command: waiting.command,
+          seconds: Math.ceil(waiting.waitedMs / 1000),
+        })}
+      </span>
+      <button onClick={() => void runtime.stopWaiting?.(sessionId)}>
+        {t('stop waiting')}
+      </button>
+    </div>
+  );
+}
 
 /**
  * The card for a command the window asked and never got: what failed, whether it

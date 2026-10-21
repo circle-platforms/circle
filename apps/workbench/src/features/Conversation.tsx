@@ -39,7 +39,10 @@ import { RecoveredInputs } from './RecoveredInputs';
 import { WindowedList } from '../components/WindowedList';
 import type { ReactNode, RefObject } from 'react';
 import { MessageView, RuntimeNotice } from '../components/MessageView';
-import { CommandFailureCard } from '../components/CommandFailure';
+import {
+  CommandFailureCard,
+  RuntimeWaitRow,
+} from '../components/CommandFailure';
 import {
   BrowserDialogRequest,
   BrowserHandoffRequest,
@@ -937,24 +940,7 @@ export function Conversation({
               {t('local conversation paused · remote state unverified')}
             </div>
           )}
-          {snapshot.runtime?.waiting && (
-            <div
-              className="runtime-wait"
-              role="status"
-              data-testid="runtime-wait"
-            >
-              <i className="attention-dot" />
-              <span>
-                {t('Circle is still working on {command} · {seconds}s', {
-                  command: snapshot.runtime.waiting.command,
-                  seconds: Math.ceil(snapshot.runtime.waiting.waitedMs / 1000),
-                })}
-              </span>
-              <button onClick={() => void runtime.stopWaiting?.(session.id)}>
-                {t('stop waiting')}
-              </button>
-            </div>
-          )}
+          <RuntimeWaitRow sessionId={session.id} />
           {session.actionFailure && (
             <CommandFailureCard
               sessionId={session.id}

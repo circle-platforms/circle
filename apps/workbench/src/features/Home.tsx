@@ -20,7 +20,7 @@ import type {
   Session,
   SessionMode,
 } from '../model/types';
-import { sessionMode } from '../model/state';
+import { currentSession, sessionMode } from '../model/state';
 import {
   claimComposerFocus,
   composerFocusPending,
@@ -31,6 +31,10 @@ import { t, useLocale } from '../i18n';
 import { Button, FileChip, IconButton } from '../components/common';
 import type { WhatsNewNotice } from '../../../../src/whats_new';
 import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
+import {
+  CommandFailureCard,
+  RuntimeWaitRow,
+} from '../components/CommandFailure';
 import { commandCompletions, ownsHomeSubmission } from './composer-interaction';
 import {
   forgetHomeComposer,
@@ -55,6 +59,9 @@ export function Home({
   onAttach: (accept: (attachment: Attachment) => void) => void;
 }) {
   const { snapshot, runtime, perform, notify, act } = useRuntime();
+  // The conversation this page's first message starts, and where a command that
+  // never answered leaves its card.
+  const homeSession = currentSession(snapshot);
   const navigate = useNavigate();
   const location = useLocation();
   const message = useRef<HTMLTextAreaElement>(null);
@@ -548,6 +555,15 @@ export function Home({
           </div>
         </div>
       </div>
+      {/* The first message of a conversation is asked from here: a runtime that
+          holds it, or never answers it, must be said on this page too. (#216) */}
+      <RuntimeWaitRow sessionId={homeSession.id} />
+      {homeSession.actionFailure && (
+        <CommandFailureCard
+          sessionId={homeSession.id}
+          failure={homeSession.actionFailure}
+        />
+      )}
       {snapshot.whatsNew && (
         <WhatsNew
           notice={snapshot.whatsNew}

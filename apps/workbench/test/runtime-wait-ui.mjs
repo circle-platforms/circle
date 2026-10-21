@@ -114,6 +114,30 @@ try {
           2,
           'the wait row is its own escape hatch',
         );
+        // The first message of a conversation is asked from the home page: a
+        // frozen channel must be said there too, not only in a conversation.
+        await page.evaluate(() => {
+          const fixture = window.waitFixture;
+          fixture.runtime.change((state) => {
+            const row = state.sessions.find(
+              (item) => item.id === state.activeSessionId,
+            );
+            if (row) row.actionFailure = fixture.failure;
+          });
+        });
+        await page.goto(
+          `${server.resolvedUrls.local[0]}test/runtime-wait-ui.html?language=${language}&theme=${theme}#/home`,
+        );
+        assert.equal(
+          await page.locator('[data-testid="runtime-wait"]').count(),
+          1,
+          'the home page says the wait as well',
+        );
+        assert.equal(
+          await page.locator('[data-testid="command-failure"]').count(),
+          1,
+          'and shows the card under its own composer',
+        );
         assert.equal(
           await page.evaluate(
             () => document.documentElement.scrollWidth <= innerWidth,
