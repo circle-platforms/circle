@@ -680,9 +680,9 @@ export class ExtensionHost {
           !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(directory.name)
         )
           continue;
-        // 1.9.1 removed the bundled developer extension. A leftover folder
-        // from an older install is not an extension of that name.
-        if (directory.name === 'developer') continue;
+        // 1.9.1 removed the bundled developer extension. A leftover folder of it
+        // among Circle's own is not an extension; one of yours of that name is yours.
+        if (source === 'bundled' && directory.name === 'developer') continue;
         const entry = ['extension.ts', 'extension.mjs', 'extension.js']
           .map((file) => join(root, directory.name, file))
           .find((path) => existsSync(path));
