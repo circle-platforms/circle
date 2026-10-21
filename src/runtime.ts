@@ -94,6 +94,12 @@ import {
   type CostSummary,
 } from './pricing.js';
 import { addUsage, emptyUsage } from './types.js';
+import {
+  VisionService,
+  visionConnection,
+  type VisionConnection,
+} from './vision.js';
+import { saveMediaAttachment } from './media.js';
 import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
@@ -231,6 +237,7 @@ export interface RuntimeOptions {
 }
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
+  private readonly vision = new VisionService();
   private readonly searchConnections = new WeakMap<
     ChatModel,
     NativeSearchConnection
@@ -272,6 +279,53 @@ export class AgentRuntime {
           ...(record.searchRequests !== undefined
             ? { search_requests: record.searchRequests }
             : {}),
+        }),
+    );
+  }
+  /** The side vision model this run describes pictures with, when one is configured. */
+  private visionForRun(): VisionConnection | undefined {
+    return visionConnection(
+      this.options.settings,
+      loadCredentials(this.options.home),
+    );
+  }
+  /** Where a picture the model cannot read is written, once, named by its bytes. */
+  private offloadImages(): string {
+    return (
+      this.sandbox.offloadRoot ??
+      projectDataDir(this.options.workspace, this.options.home)
+    );
+  }
+  private describeImages(
+    connection: VisionConnection,
+    paths: string[],
+    question: string,
+    context: ToolContext,
+  ): Promise<{ model: string; text: string }> {
+    return this.vision.describe(
+      connection,
+      paths,
+      question,
+      context.signal,
+      (call) =>
+        context.recordModelCall?.({
+          model: call.model,
+          usage: {
+            ...emptyUsage(),
+            input_tokens: call.usage.input_tokens,
+            output_tokens: call.usage.output_tokens,
+          },
+          cost: {
+            ...priceCall(
+              this.catalog.facts(call.model, this.options.settings),
+              {
+                ...emptyUsage(),
+                input_tokens: call.usage.input_tokens,
+                output_tokens: call.usage.output_tokens,
+              },
+            ),
+            tool_fee_unknown: true,
+          },
         }),
     );
   }
@@ -534,9 +588,16 @@ export class AgentRuntime {
       this.authFingerprint = this.savedConnectionFingerprint();
     this.baseModel = model;
     const system = this.systemPrompt(model.model);
+    const vision = this.visionForRun();
     let tools = buildTools(this.sandbox, {
       fileMutations: this.options.fileMutations,
       jobs: this.jobs,
+      ...(vision
+        ? {
+            vision: (paths: string[], question: string, context: ToolContext) =>
+              this.describeImages(vision, paths, question, context),
+          }
+        : {}),
       displayCommand: (raw, context) =>
         this.redact(raw, {}, () =>
           written(this.store.messages(context.sessionId)),
@@ -713,6 +774,15 @@ export class AgentRuntime {
         const jobTools = buildTools(this.sandbox, {
           fileMutations: this.options.fileMutations,
           jobs: this.jobs,
+          ...(vision
+            ? {
+                vision: (
+                  paths: string[],
+                  question: string,
+                  context: ToolContext,
+                ) => this.describeImages(vision, paths, question, context),
+              }
+            : {}),
           displayCommand: (raw, context) =>
             this.redact(raw, {}, () =>
               written(this.store.messages(context.sessionId)),
@@ -811,6 +881,17 @@ export class AgentRuntime {
           toolBoundary: (tool, args, context) =>
             this.extensionToolBoundary(tool, args, context),
           executeTool: this.options.executeTool,
+          ...(vision
+            ? {
+                vision: (
+                  paths: string[],
+                  question: string,
+                  context: ToolContext,
+                ) => this.describeImages(vision, paths, question, context),
+              }
+            : {}),
+          saveImageAttachment: (item) =>
+            saveMediaAttachment(this.offloadImages(), item),
           webSearch: (model, query, count, context) =>
             this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
@@ -916,6 +997,14 @@ export class AgentRuntime {
       toolBoundary: (tool, args, context) =>
         this.extensionToolBoundary(tool, args, context),
       executeTool: this.options.executeTool,
+      ...(vision
+        ? {
+            vision: (paths: string[], question: string, context: ToolContext) =>
+              this.describeImages(vision, paths, question, context),
+          }
+        : {}),
+      saveImageAttachment: (item) =>
+        saveMediaAttachment(this.offloadImages(), item),
       webSearch: (model, query, count, context) =>
         this.searchFromModel(model, query, count, context),
       prepareMessages: (signal) =>

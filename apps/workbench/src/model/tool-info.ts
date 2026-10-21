@@ -28,6 +28,18 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'read',
   },
   {
+    name: 'vision',
+    get description() {
+      return t('Have the side vision model describe a picture file');
+    },
+    get detail() {
+      return t(
+        'Have the side vision model describe a picture file, answering `question`. Offered only when a side vision model is set.',
+      );
+    },
+    kind: 'read',
+  },
+  {
     name: 'glob',
     get description() {
       return t('Find files by pattern.');
@@ -142,7 +154,7 @@ export const BUILTIN_TOOL_INFO = [
     },
     get detail() {
       return t(
-        'Take a screenshot of the main screen, or of the front window of the application named in `app`, and send it to the model as an image. It asks each time unless allowed for the session, and is refused in read-only mode.',
+        'Take a screenshot of the main screen, or of the front window of the application named in `app`, and send it to the model as an image; for a model that does not read images, the side vision model gets it and the model gets its description. It asks each time unless allowed for the session, and is refused in read-only mode.',
       );
     },
     kind: 'read',
@@ -236,7 +248,7 @@ export const BUILTIN_TOOL_INFO = [
     },
     get detail() {
       return t(
-        'Send the browser viewport as an image to the model. The operation overlay is hidden during capture.',
+        'Send the browser viewport as an image to the model; for a model that does not read images, the picture is saved and the side vision model describes it. The operation overlay is hidden during capture.',
       );
     },
     kind: 'read',

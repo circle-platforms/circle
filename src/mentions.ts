@@ -93,15 +93,19 @@ export async function attachPrompt(
   allowed: (path: string) => boolean,
   images = true,
   given: MediaAttachment[] = [],
+  save?: (item: MediaAttachment) => string,
 ): Promise<{
   message: { content: string; attachments?: MediaAttachment[] };
   leftOut: number;
+  /** How many of the pictures left out were written by `save`, their paths in the text. */
+  saved: number;
   problems: string[];
 }> {
   root = realpathSync(root);
   const attachments: MediaAttachment[] = [];
   const problems: string[] = [];
   const scaled: string[] = [];
+  const savedImages: string[] = [];
   const seen = new Set<string>();
   let leftOut = 0;
   for (const raw of mentions(text)) {
@@ -137,8 +141,17 @@ export async function attachPrompt(
       }
   }
   for (const item of given) {
-    if (!images && item.kind === 'image') leftOut++;
-    else if (attachments.length >= MAX_ATTACHMENTS)
+    if (!images && item.kind === 'image') {
+      leftOut++;
+      // A file sent with the prompt has no path of its own: write one so the model can
+      // still be told where it is. One that cannot be written stays only counted.
+      if (save)
+        try {
+          savedImages.push(save(item));
+        } catch {
+          /* The notice below still says the picture was left out. */
+        }
+    } else if (attachments.length >= MAX_ATTACHMENTS)
       problems.push(
         `${item.filename} (only ${MAX_ATTACHMENTS} images or PDFs go with one message)`,
       );
@@ -164,14 +177,21 @@ export async function attachPrompt(
     root,
     (path) => allowed(path) && !mediaType(path),
   );
+  const notes = [
+    ...(scaled.length ? [`[Scaled down to send: ${scaled.join('; ')}]`] : []),
+    ...(savedImages.length
+      ? [
+          `[Images this model does not read, saved as files: ${savedImages.join('; ')}]`,
+        ]
+      : []),
+  ];
   return {
     message: {
-      content: scaled.length
-        ? `${content}\n\n[Scaled down to send: ${scaled.join('; ')}]`
-        : content,
+      content: notes.length ? `${content}\n\n${notes.join('\n')}` : content,
       ...(attachments.length ? { attachments } : {}),
     },
     leftOut,
+    saved: savedImages.length,
     problems,
   };
 }

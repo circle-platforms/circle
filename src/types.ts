@@ -114,11 +114,13 @@ export interface Tool {
    * the card go by it, and checked again by the tool when it runs. `args` hold the values
    * as the call will run, secrets included; `shown` hold them as the card shows them,
    * with each secret still `%NAME%`, for a fact that quotes what the model wrote.
+   * `imageInput` is whether the model the call is for reads images, as in ToolContext.
    */
   approvalFacts?: (
     args: Record<string, unknown>,
     sessionId: string,
     shown?: Record<string, unknown>,
+    imageInput?: boolean,
   ) => Record<string, unknown> | undefined;
   /** Snapshot authorized inputs before waiting for approval; never perform writes here. */
   prepare?: (
@@ -139,6 +141,14 @@ export interface ToolContext {
   emitAttachments?: (attachments: MediaAttachment[]) => void;
   /** Whether the model in use reads images: false when it is known not to. */
   imageInput?: boolean;
+  /**
+   * Describes image files with the run's configured side vision model; undefined when
+   * none is configured.
+   */
+  vision?: (
+    paths: string[],
+    question: string,
+  ) => Promise<{ model: string; text: string }>;
   /** Bound to this harness's model and connection, including child harnesses. */
   webSearch?: (query: string, numResults: number) => Promise<string>;
   recordModelCall?: (call: ToolModelCall) => void;

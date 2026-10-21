@@ -45,6 +45,11 @@ export interface CircleSettings {
   default_thinking: string;
   enabled_models: string[];
   models: Record<string, Record<string, unknown>>;
+  /**
+   * A side vision model that describes pictures for a model that cannot read them. The key
+   * itself lives in credentials.json, under `api_key_ref`.
+   */
+  vision: { base_url: string; model: string; api_key_ref: string };
   double_escape: 'tree' | 'fork' | 'none';
   hide_thinking: boolean;
   /**
@@ -88,6 +93,7 @@ export const defaultSettings = (): CircleSettings => ({
   default_thinking: '',
   enabled_models: [],
   models: {},
+  vision: { base_url: '', model: '', api_key_ref: 'vision_key' },
   double_escape: 'tree',
   hide_thinking: false,
   workspace_folder: '',
@@ -153,6 +159,19 @@ export function loadSettingsFromDict(
         isRecord(entry) ? [[name, structuredClone(entry)]] : [],
     ),
   );
+  const vision = isRecord(raw.vision) ? raw.vision : {};
+  settings.vision = {
+    base_url: String(vision.base_url || '')
+      .trim()
+      .slice(0, 4096),
+    model: String(vision.model || '')
+      .trim()
+      .slice(0, 200),
+    api_key_ref:
+      String(vision.api_key_ref || 'vision_key')
+        .trim()
+        .slice(0, 200) || 'vision_key',
+  };
   settings.update_check =
     raw.update_check === undefined ? true : Boolean(raw.update_check);
   settings.default_thinking = String(raw.default_thinking || '')

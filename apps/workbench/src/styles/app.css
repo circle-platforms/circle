@@ -1196,6 +1196,19 @@ pre {
 .status-error i {
   background: var(--negative);
 }
+/* Trust is a yes/no the person must read at a glance: green for yes, red for no. */
+.status-trusted {
+  color: var(--positive);
+}
+.status-trusted i {
+  background: var(--positive);
+}
+.status-not-trusted {
+  color: var(--negative);
+}
+.status-not-trusted i {
+  background: var(--negative);
+}
 .badge,
 .label {
   display: inline-flex;
