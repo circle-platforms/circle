@@ -19,7 +19,6 @@ import { desktopHost } from '../host';
 import { useTerminalState } from './useTerminalState';
 import { Button } from '../components/ui';
 import { t } from '../i18n';
-import { claimTerminalKeyboard } from '../model/terminal-keyboard';
 
 // The emulator's colours come from Circle's own palette, so the screen sits on the
 // window: background, text and the sixteen ANSI slots alike, refreshed on a theme switch.
@@ -245,18 +244,6 @@ export function DeviceSurface({
       id={activeId ? `device-${activeId}` : undefined}
       hidden={!visible}
       ref={screenRef}
-      onPointerDown={() => {
-        const term = termRef.current;
-        if (!term) return;
-        claimTerminalKeyboard(
-          () => {
-            if (termRef.current === term) term.focus();
-          },
-          (text) => {
-            if (termRef.current === term) term.input(text, true);
-          },
-        );
-      }}
     />
   );
 }

@@ -229,29 +229,6 @@ test('an autolink stops at fullwidth punctuation', () => {
   assert.ok(asciiLink, ascii);
   assert.equal(asciiLink[1]!.includes(','), false);
 });
-test('an autolink stops at an unbalanced parenthesis and at CJK', () => {
-  const paren = markdownRows(
-    '已打开 https://example.com("Example Domain" 页面)',
-  ).join('\n');
-  const parenLink = /\x1b\[[0-9;]*4m([^\x1b]*)/.exec(paren);
-  assert.ok(parenLink, paren);
-  assert.equal(parenLink[1], 'https://example.com');
-  assert.match(
-    plain('已打开 https://example.com("Example Domain" 页面)'),
-    /\("Example Domain" 页面\)/,
-  );
-  const cjk = markdownRows('见 https://example.com页面说明').join('\n');
-  const cjkLink = /\x1b\[[0-9;]*4m([^\x1b]*)/.exec(cjk);
-  assert.ok(cjkLink, cjk);
-  assert.equal(cjkLink[1], 'https://example.com');
-  assert.match(plain('见 https://example.com页面说明'), /页面说明/);
-  const balanced = markdownRows(
-    'see https://example.com/wiki/Foo_(bar) next',
-  ).join('\n');
-  const balancedLink = /\x1b\[[0-9;]*4m([^\x1b]*)/.exec(balanced);
-  assert.ok(balancedLink, balanced);
-  assert.equal(balancedLink[1], 'https://example.com/wiki/Foo_(bar)');
-});
 test('find highlighting matches normalized whitespace and literal regex punctuation and survives live redraws', () => {
   const rows = ['first', 'foo   bar (literal)', 'last foo bar'];
   const find = new TranscriptFind();

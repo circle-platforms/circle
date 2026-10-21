@@ -93,27 +93,6 @@ export function gitChangeRows(
 }
 
 /**
- * This session's list, agreed with the overview's changes card. File tools keep their
- * own diff; uncommitted files Git reports and the session did not record are included
- * too, so a shell edit shows in both places.
- */
-export function sessionScopeRows(
-  sessionRows: ChangeRow[],
-  gitRows: ChangeRow[] | undefined,
-): ChangeRow[] {
-  if (!gitRows) return sessionRows;
-  const sessionByPath = new Map(sessionRows.map((row) => [row.path, row]));
-  const seen = new Set<string>();
-  const merged: ChangeRow[] = [];
-  for (const row of gitRows) {
-    seen.add(row.path);
-    merged.push(sessionByPath.get(row.path) ?? row);
-  }
-  for (const row of sessionRows) if (!seen.has(row.path)) merged.push(row);
-  return merged.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-/**
  * A unified patch, as rows the diff block draws: added and removed lines carry their tone.
  * What comes before a file's first hunk is Git's header (names, modes, hashes) and is left
  * out; inside a hunk every line is the file's own, even one that starts with `---`.

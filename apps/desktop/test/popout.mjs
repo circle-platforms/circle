@@ -24,24 +24,6 @@ if (
   console.log('SKIP popout harness: needs a desktop-capable session');
   process.exit(0);
 }
-// The packaged failure was a compositor that only breaks with the GPU on, and
-// a stale measurement that only shows when the pop-out is a different size
-// from the drawer. Run the same script both ways.
-const gpuMode = process.env.CIRCLE_POPOUT_GPU;
-if (gpuMode !== 'on' && gpuMode !== 'off') {
-  const { spawnSync } = await import('node:child_process');
-  const script = fileURLToPath(import.meta.url);
-  for (const mode of ['on', 'off']) {
-    console.log(`popout harness: gpu ${mode}`);
-    const result = spawnSync(process.execPath, [script], {
-      stdio: 'inherit',
-      env: { ...process.env, CIRCLE_POPOUT_GPU: mode },
-    });
-    if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
-  }
-  process.exit(0);
-}
-console.log(`popout harness: running with gpu ${gpuMode}`);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-popout-'));
@@ -50,19 +32,12 @@ await mkdir(join(dataDir, 'runtime-home'), { recursive: true });
 const workspace = join(temp, 'project');
 await mkdir(workspace, { recursive: true });
 // Pages to show: the browser only reaches http and https.
-const pageBody = (mark) =>
-  `<!doctype html><title>${mark}</title><body style="margin:0;background:#00aa44"><h1 id="mark" style="color:#fff">${mark}</h1></body>`;
 const site = createServer((request, response) => {
   response.writeHead(200, { 'content-type': 'text/html' });
-  const path = request.url ?? '/';
   response.end(
-    path.startsWith('/live')
+    request.url.startsWith('/live')
       ? '<!doctype html><title>extension link fixture</title><h1>opened by an extension</h1>'
-      : path.startsWith('/again')
-        ? pageBody('again page')
-        : path.startsWith('/after')
-          ? pageBody('after page')
-          : '<!doctype html><title>pop</title><body style="margin:0;background:#00aa44"><h1 id="mark" style="color:#fff">popped page</h1></body>',
+      : '<!doctype html><title>pop</title><body style="background:#00aa44"><h1 id="mark">popped page</h1>',
   );
 });
 await new Promise((done) => site.listen(0, '127.0.0.1', done));
@@ -94,17 +69,13 @@ const until = async (check, what, ms = 20000) => {
 const mac = process.platform === 'darwin';
 // The browser's command key: ⌘ on macOS, Ctrl elsewhere.
 const commandKey = mac ? 'meta' : 'control';
-const electronArgs = [
-  ...(gpuMode === 'off' ? ['--disable-gpu'] : []),
-  join(root, 'dist', 'main.cjs'),
-];
 let app;
 let liveApp;
 try {
   app = await electron.launch({
     executablePath: require('electron'),
     chromiumSandbox: true,
-    args: electronArgs,
+    args: [join(root, 'dist', 'main.cjs')],
     env,
     timeout: 60000,
   });
@@ -120,16 +91,7 @@ try {
     timeout: 30000,
   });
   await main.locator('.topbar').waitFor({ timeout: 30000 });
-  // Wider than the pop-out (920×640), as a maximized drawer is on a real screen. The
-  // window itself is resized, not the page's viewport: a viewport larger than the window
-  // a small screen allows would measure boxes the window does not have.
-  await app.evaluate(({ BrowserWindow }) => {
-    const own = BrowserWindow.getAllWindows().find(
-      (one) =>
-        !one.isDestroyed() && !one.webContents.getURL().includes('#/popout/'),
-    );
-    own?.setSize(1680, 1040);
-  });
+  await main.setViewportSize?.({ width: 1500, height: 900 });
   const titles = () =>
     app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()
@@ -138,190 +100,6 @@ try {
     );
   // The application's windows by what they show: the main one, or a mode's route. A window
   // that is closing stays listed for a moment after its page is gone, so only live ones count.
-  // The open page in a window: its text, and where its view sits. A parked view is
-  // a 1×1 box off the window, which is the blank area a move used to leave.
-  // The window as the compositor drew it. executeJavaScript still reads a
-  // page whose view is blank, so the green of the fixture has to be on screen.
-  const compositedGreen = (electronApp, which) =>
-    electronApp.evaluate(
-      async ({ BrowserWindow, desktopCapturer, screen }, which) => {
-        const target = BrowserWindow.getAllWindows()
-          .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
-          .find((one) => {
-            const url = one.webContents.getURL();
-            return which === 'main'
-              ? !url.includes('#/popout/')
-              : url.includes('#/popout/browser/');
-          });
-        if (!target) return { ratio: 0, reason: 'no window' };
-        const attached = target.contentView.children.flatMap((child) => {
-          try {
-            return [
-              {
-                id: child.webContents.id,
-                url: child.webContents.getURL(),
-                bounds: child.getBounds(),
-                visible: child.getVisible(),
-              },
-            ];
-          } catch {
-            return [];
-          }
-        });
-        // macOS keeps its views in order its own way, and a capture of a window there
-        // needs the screen recording permission: the view's place is checked instead.
-        if (process.platform === 'darwin') return { skipped: true, attached };
-        // The share of an area of an image in the fixture's #00aa44, in BGRA
-        const share = (image, area) => {
-          const { width, height } = image.getSize();
-          const bitmap = image.toBitmap();
-          let green = 0;
-          let seen = 0;
-          const right = Math.min(width, area.x + area.width);
-          const bottom = Math.min(height, area.y + area.height);
-          for (let y = Math.max(0, area.y); y < bottom; y += 6)
-            for (let x = Math.max(0, area.x); x < right; x += 6) {
-              const index = (y * width + x) * 4;
-              seen++;
-              if (
-                bitmap[index + 2] < 50 &&
-                bitmap[index + 1] > 110 &&
-                bitmap[index] < 110
-              )
-                green++;
-            }
-          return seen ? green / seen : 0;
-        };
-        const sources = await desktopCapturer.getSources({
-          types: ['window'],
-          thumbnailSize: { width: 900, height: 700 },
-        });
-        const source = sources.find(
-          (one) => one.id === target.getMediaSourceId(),
-        );
-        if (source)
-          return {
-            ratio: share(source.thumbnail, {
-              x: 0,
-              y: 0,
-              ...source.thumbnail.getSize(),
-            }),
-            of: 'window',
-            title: source.name,
-            attached,
-          };
-        // An X server without a window manager lists no windows: the page's box on the
-        // screen instead
-        const view = target.contentView.children.find((child) => {
-          try {
-            return (
-              child.getVisible() &&
-              child.webContents.getURL().startsWith('http')
-            );
-          } catch {
-            return false;
-          }
-        });
-        if (!view) return { ratio: 0, reason: 'no page view', attached };
-        const box = view.getBounds();
-        const display = screen.getDisplayMatching(target.getBounds());
-        const scale = display.scaleFactor;
-        const screens = await desktopCapturer.getSources({
-          types: ['screen'],
-          thumbnailSize: {
-            width: Math.round(display.size.width * scale),
-            height: Math.round(display.size.height * scale),
-          },
-        });
-        const shown =
-          screens.find((one) => one.display_id === String(display.id)) ??
-          (screens.length === 1 ? screens[0] : undefined);
-        if (!shown) return { ratio: 0, reason: 'no capture', attached };
-        const content = target.getContentBounds();
-        return {
-          ratio: share(shown.thumbnail, {
-            x: Math.round((content.x - display.bounds.x + box.x) * scale),
-            y: Math.round((content.y - display.bounds.y + box.y) * scale),
-            width: Math.round(box.width * scale),
-            height: Math.round(box.height * scale),
-          }),
-          of: 'box',
-          attached,
-        };
-      },
-      which,
-    );
-  // Whether a capture shows the page: a window shows some of its green, the page's own
-  // box on the screen mostly green. macOS is not captured.
-  const showsPage = (screen, which) =>
-    screen.skipped === true ||
-    screen.ratio >
-      (screen.of === 'box' ? 0.5 : which === 'browser' ? 0.12 : 0.03);
-  // The view's box has to lie on its own window, and a pop-out is not the drawer's size.
-  const viewFits = (electronApp, which) =>
-    electronApp.evaluate(({ BrowserWindow }, which) => {
-      const windows = BrowserWindow.getAllWindows().filter(
-        (one) => !one.isDestroyed() && !one.webContents.isDestroyed(),
-      );
-      const target = windows.find((one) => {
-        const url = one.webContents.getURL();
-        return which === 'main'
-          ? !url.includes('#/popout/')
-          : url.includes('#/popout/browser/');
-      });
-      const mainWindow = windows.find(
-        (one) => !one.webContents.getURL().includes('#/popout/'),
-      );
-      if (!target || !mainWindow) return false;
-      const [width, height] = target.getContentSize();
-      const [mainWidth] = mainWindow.getContentSize();
-      if (which === 'browser' && Math.abs(width - mainWidth) < 80) return false;
-      const view = target.contentView.children.find((child) => {
-        try {
-          return (
-            child.getVisible() && child.webContents.getURL().startsWith('http')
-          );
-        } catch {
-          return false;
-        }
-      });
-      if (!view) return false;
-      const box = view.getBounds();
-      return (
-        box.x >= 0 &&
-        box.y >= 0 &&
-        box.width > 80 &&
-        box.height > 80 &&
-        box.x + box.width <= width + 2 &&
-        box.y + box.height <= height + 2
-      );
-    }, which);
-  const shownPage = (which) =>
-    app.evaluate(({ BrowserWindow }, which) => {
-      const target = BrowserWindow.getAllWindows()
-        .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
-        .find((one) => {
-          const url = one.webContents.getURL();
-          return which === 'main'
-            ? !url.includes('#/popout/')
-            : url.includes(`#/popout/${which}/`);
-        });
-      if (!target) return { text: '', bounds: null };
-      const view = target.contentView.children.find((child) => {
-        try {
-          return (
-            child.getVisible() && child.webContents.getURL().startsWith('http')
-          );
-        } catch {
-          return false;
-        }
-      });
-      if (!view) return { text: '', bounds: null };
-      const bounds = view.getBounds();
-      return view.webContents
-        .executeJavaScript('document.querySelector("#mark")?.textContent || ""')
-        .then((text) => ({ text, bounds }));
-    }, which);
   const views = () =>
     app.evaluate(({ BrowserWindow }) => {
       const count = { main: 0, browser: 0, terminal: 0 };
@@ -478,137 +256,6 @@ try {
   await rename.press('Enter');
   await rename.waitFor({ state: 'detached' });
 
-  // A page the person opened in the empty drawer stays painted when it pops
-  // out, is reloaded, comes back, and is reloaded again.
-  const painted = async (which, mark = 'popped page') => {
-    const page = await shownPage(which);
-    const screen = await compositedGreen(app, which);
-    return (
-      page.text === mark &&
-      page.bounds &&
-      page.bounds.width > 80 &&
-      page.bounds.height > 80 &&
-      page.bounds.x >= 0 &&
-      page.bounds.y >= 0 &&
-      showsPage(screen, which) &&
-      (await viewFits(app, which)) &&
-      screen.attached?.some(
-        (view) =>
-          view.visible &&
-          view.url.startsWith('http') &&
-          view.bounds.width > 80 &&
-          view.bounds.height > 80,
-      )
-    );
-  };
-  await main
-    .getByRole('button', { name: 'browser panel', exact: true })
-    .click();
-  await main.locator('.native-browser').waitFor();
-  await main.getByText('browse the web', { exact: true }).waitFor();
-  const drawerAddress = main.getByRole('textbox', { name: 'browser address' });
-  await drawerAddress.fill(pageUrl);
-  await drawerAddress.press('Enter');
-  await until(() => painted('main'), 'the page the person opened is painted');
-  await main
-    .locator('.inspector .browser-address')
-    .getByRole('button', { name: 'open in a window', exact: true })
-    .click();
-  let userPopped = await until(
-    async () => (await windowsOf('#/popout/browser/'))[0],
-    'the browser window for a page opened in the drawer',
-  );
-  const browserSession = userPopped.url().split('/').at(-1);
-  await until(() => painted('browser'), 'that page is painted in the window');
-  await userPopped
-    .getByRole('button', { name: 'reload page', exact: true })
-    .click();
-  await until(
-    () => painted('browser'),
-    'reloading the popped page still paints it',
-  );
-  await userPopped
-    .getByRole('button', { name: 'put back in the drawer' })
-    .click();
-  await until(
-    async () => (await windowsOf('#/popout/browser/')).length === 0,
-    'the window of the page opened in the drawer closes',
-  );
-  await main.locator('.work-drawer').waitFor({ state: 'visible' });
-  await until(() => painted('main'), 'the page is painted back in the drawer');
-  await main.getByRole('button', { name: 'reload page', exact: true }).click();
-  await until(
-    () => painted('main'),
-    'reloading the page in the drawer still paints it',
-  );
-  // A new address after the page has been out and back, then a second pop-out.
-  // The drawer's late measurement must not be applied inside the smaller window.
-  await drawerAddress.fill(pageUrl + 'again');
-  await drawerAddress.press('Enter');
-  await until(
-    () => painted('main', 'again page'),
-    'a new address paints in the drawer after put-back',
-  );
-  await main
-    .locator('.inspector .browser-address')
-    .getByRole('button', { name: 'open in a window', exact: true })
-    .click();
-  userPopped = await until(
-    async () => (await windowsOf('#/popout/browser/'))[0],
-    'the browser window a second time',
-  );
-  await until(
-    () => painted('browser', 'again page'),
-    'the second pop-out paints the page',
-  );
-  await main.evaluate(async (sessionId) => {
-    const state = await window.circleDesktop.browserState(sessionId);
-    // A box that would fit the pop-out, and the drawer's real box, which does not.
-    // Both come from the main window, which no longer has the page.
-    const fitting = { x: 40, y: 180, width: 220, height: 160 };
-    const drawer = { x: 1300, y: 80, width: 400, height: 900 };
-    await window.circleDesktop.browserBounds(
-      sessionId,
-      fitting,
-      true,
-      state.host,
-    );
-    await window.circleDesktop.browserBounds(
-      sessionId,
-      drawer,
-      true,
-      state.host,
-    );
-    await window.circleDesktop.browserBounds(sessionId, fitting, true, 0);
-  }, browserSession);
-  const keptBox = (await shownPage('browser')).bounds;
-  assert.ok(
-    keptBox && keptBox.x < 80 && keptBox.width > 400,
-    'a measurement from the drawer is not applied in the pop-out',
-  );
-  await until(
-    () => painted('browser', 'again page'),
-    'the second pop-out still paints after a stale measurement',
-  );
-  await userPopped
-    .getByRole('button', { name: 'put back in the drawer' })
-    .click();
-  await until(
-    async () => (await windowsOf('#/popout/browser/')).length === 0,
-    'the second pop-out closes',
-  );
-  await main.locator('.work-drawer').waitFor({ state: 'visible' });
-  await drawerAddress.fill(pageUrl + 'after');
-  await drawerAddress.press('Enter');
-  await until(
-    () => painted('main', 'after page'),
-    'navigating in the drawer after the second put-back paints',
-  );
-  await main
-    .getByRole('button', { name: 'browser panel', exact: true })
-    .click();
-  await main.locator('.work-drawer').waitFor({ state: 'hidden' });
-
   // ---- the browser leaves the drawer
   await main
     .getByRole('button', { name: 'browser panel', exact: true })
@@ -640,23 +287,9 @@ try {
   assert.ok(title.length <= 200, 'and the title is cut short to fit');
   assert.ok(title.startsWith('browser · a conversation whose title runs on'));
   assert.ok(title.endsWith('…'));
-  // The drawer let go of the mode, and its button is marked as popped out,
-  // not as the open drawer.
+  // The drawer let go of the mode, and its button is marked.
   await main.locator('.work-drawer').waitFor({ state: 'hidden' });
   await main.locator('.drawer-mode-button.popped').waitFor();
-  const browserButton = main.getByRole('button', {
-    name: 'browser panel',
-    exact: true,
-  });
-  assert.equal(await browserButton.getAttribute('aria-pressed'), 'false');
-  assert.equal(
-    await browserButton.evaluate((node) => node.classList.contains('active')),
-    false,
-  );
-  assert.equal(
-    await browserButton.evaluate((node) => node.classList.contains('popped')),
-    true,
-  );
 
   // A page opened in the window is in that window.
   const field = () => popped.getByRole('textbox', { name: 'browser address' });
@@ -677,18 +310,6 @@ try {
     const state = await browserState();
     return state.title === 'pop' && !state.loading;
   }, 'the page loaded');
-  // The page itself moved: its text is in the window, and the view is on screen.
-  await until(async () => {
-    const page = await shownPage('browser');
-    return (
-      page.text === 'popped page' &&
-      page.bounds &&
-      page.bounds.width > 80 &&
-      page.bounds.height > 80 &&
-      page.bounds.x >= 0 &&
-      page.bounds.y >= 0
-    );
-  }, 'the open page is painted in the window');
   // A page that opens in the window it shows in, before any move.
   await pageOnScreen('#/popout/browser/');
 
@@ -910,21 +531,9 @@ try {
     'the window closes',
   );
   await until(async () => (await views()).main >= 1, 'the page is back');
-  await main.locator('.work-drawer').waitFor({ state: 'visible' });
   await main
     .locator('.drawer-mode-button.popped')
     .waitFor({ state: 'detached' });
-  assert.equal(
-    await main
-      .getByRole('button', { name: 'browser panel', exact: true })
-      .getAttribute('aria-pressed'),
-    'true',
-    'put back opens the drawer',
-  );
-  await until(
-    async () => (await shownPage('main')).text === 'popped page',
-    'the page is painted in the drawer',
-  );
   const tabsBack = (
     await main.evaluate(
       (id) => window.circleDesktop.browserState(id),
@@ -945,39 +554,6 @@ try {
       )
     ).tabs.length,
     tabsBack,
-  );
-
-  // A page that is already open in the drawer moves into the window with it.
-  await main
-    .locator('.inspector .browser-address')
-    .getByRole('button', { name: 'open in a window', exact: true })
-    .click();
-  popped = await until(
-    async () => (await windowsOf('#/popout/browser/'))[0],
-    'the browser window again',
-  );
-  await until(async () => {
-    const page = await shownPage('browser');
-    return (
-      page.text === 'popped page' &&
-      page.bounds &&
-      page.bounds.width > 80 &&
-      page.bounds.height > 80 &&
-      page.bounds.x >= 0 &&
-      page.bounds.y >= 0
-    );
-  }, 'the page that was open moved into the window');
-  assert.equal((await shownPage('main')).text, '');
-  await popped.getByRole('button', { name: 'put back in the drawer' }).click();
-  await until(
-    async () => (await windowsOf('#/popout/browser/')).length === 0,
-    'the window closes again',
-  );
-  await main.locator('.work-drawer').waitFor({ state: 'visible' });
-  assert.equal(await main.locator('.drawer-mode-button.popped').count(), 0);
-  await until(
-    async () => (await shownPage('main')).text === 'popped page',
-    'the page is back in the drawer again',
   );
 
   // ---- the terminal, and a conversation switch that brings it back
@@ -1044,7 +620,7 @@ try {
   liveApp = await electron.launch({
     executablePath: require('electron'),
     chromiumSandbox: true,
-    args: electronArgs,
+    args: [join(root, 'dist', 'main.cjs')],
     env: {
       ...env,
       CIRCLE_HOME: join(temp, 'live-home'),
@@ -1100,105 +676,15 @@ try {
     .getByRole('button', { name: 'browser panel', exact: true })
     .click();
   await live.locator('.native-browser').waitFor();
-  // The packaged path: the address is typed in the drawer's field, which
-  // navigates through the renderer, and the page has to stay painted when it
-  // moves. A direct navigate in the main process is a different path.
-  await live.getByText('browse the web', { exact: true }).waitFor();
-  const typed = live.getByRole('textbox', { name: 'browser address' });
-  await typed.fill(pageUrl);
-  await typed.press('Enter');
-  const livePainted = async (which) => {
-    const screen = await compositedGreen(liveApp, which);
-    return showsPage(screen, which) && (await viewFits(liveApp, which));
-  };
-  await liveApp.evaluate(({ BrowserWindow }) => {
-    const own = BrowserWindow.getAllWindows().find(
-      (one) =>
-        !one.isDestroyed() && !one.webContents.getURL().includes('#/popout/'),
-    );
-    own?.setSize(1680, 1040);
-  });
-  await until(
-    () => livePainted('main'),
-    'the page typed in the drawer is on screen',
-  );
-  const typedBefore = (await compositedGreen(liveApp, 'main')).attached?.find(
-    (view) => view.url.startsWith('http'),
-  );
-  assert.ok(typedBefore, 'the typed page has a view in the drawer');
-  const tabBefore = await live.evaluate(
-    (id) => window.circleDesktop.browserState(id).then((state) => state.tab),
-    liveSession,
-  );
   await live
     .locator('.inspector .browser-address')
     .getByRole('button', { name: 'open in a window', exact: true })
     .click();
-  let liveBrowser = await until(
+  const liveBrowser = await until(
     async () => liveWindows('#/popout/browser/')[0],
     'the browser window',
   );
   await liveBrowser.locator('.native-browser').waitFor();
-  await until(
-    () => livePainted('browser'),
-    'the typed page is on screen in the window',
-  );
-  const typedAfter = (await compositedGreen(liveApp, 'browser')).attached?.find(
-    (view) => view.url.startsWith('http'),
-  );
-  const tabAfter = await liveBrowser.evaluate(
-    (id) => window.circleDesktop.browserState(id).then((state) => state.tab),
-    liveSession,
-  );
-  assert.equal(
-    tabAfter,
-    tabBefore,
-    'pop-out keeps the tab and shows it in the new window',
-  );
-  assert.ok(typedAfter?.id, 'the popped page has a view');
-  await liveBrowser
-    .getByRole('button', { name: 'reload page', exact: true })
-    .click();
-  await until(
-    () => livePainted('browser'),
-    'reloading the typed page still paints it',
-  );
-  await liveBrowser
-    .getByRole('button', { name: 'put back in the drawer' })
-    .click();
-  await until(
-    async () => (await liveWindows('#/popout/browser/')).length === 0,
-    'the typed page returns to the drawer',
-  );
-  await live.locator('.work-drawer').waitFor({ state: 'visible' });
-  await until(
-    () => livePainted('main'),
-    'the typed page is on screen back in the drawer',
-  );
-  await live.getByRole('button', { name: 'reload page', exact: true }).click();
-  await until(
-    () => livePainted('main'),
-    'reloading the typed page in the drawer still paints it',
-  );
-  await typed.fill(pageUrl + 'after');
-  await typed.press('Enter');
-  await until(
-    () => livePainted('main'),
-    'a new address paints in the drawer after put-back',
-  );
-  await live
-    .locator('.inspector .browser-address')
-    .getByRole('button', { name: 'open in a window', exact: true })
-    .click();
-  liveBrowser = await until(
-    async () => liveWindows('#/popout/browser/')[0],
-    'the browser window',
-  );
-  await liveBrowser.locator('.native-browser').waitFor();
-  await until(
-    () => livePainted('browser'),
-    'the second pop-out paints the typed page',
-  );
   await live.locator('.work-drawer').waitFor({ state: 'hidden' });
   const workspaceId = (await state()).sessions.find(
     (session) => session.id === liveSession,
@@ -1257,108 +743,8 @@ try {
     .getByRole('button', { name: 'terminal panel', exact: true })
     .click();
   await live.locator('.term-tabbar').waitFor();
-  // A local shell in this window. A key goes out within about 50ms of the
-  // click, and a composer focus is forced just after, so the first character
-  // cannot stay in the draft. An exited shell then shows restart, and the
-  // replacement keeps the lowest free number.
-  const terminalPane = live.locator('[data-inspector-resource="terminal"]');
-  await terminalPane
-    .getByRole('button', { name: 'new terminal', exact: true })
-    .click();
-  const localScreen = live.locator('.native-terminal-screen').first();
-  await localScreen
-    .locator('.xterm-screen')
-    .waitFor({ timeout: patience(20000) });
-  await until(
-    async () => (await live.locator('.native-terminal-dead').count()) === 0,
-    'the local shell is running',
-  );
-  // Filled without a click: in a narrow window the terminal lies over the
-  // conversation, and its screen is what a click there would hit.
-  await message.fill('stays in the composer');
-  await localScreen.click({ delay: 0 });
-  const localTyping = live.keyboard.type('abc', { delay: 12 });
-  await live.evaluate(() => {
-    setTimeout(() => {
-      document.querySelector('.composer textarea')?.focus();
-    }, 25);
-  });
-  await localTyping;
-  await until(
-    () =>
-      live
-        .locator('.native-terminal-surface:not([hidden]) .xterm-rows')
-        .innerText()
-        .then((text) => text.includes('abc')),
-    'the keys after the click reached the shell',
-  );
-  assert.equal(await message.inputValue(), 'stays in the composer');
-  await live.evaluate(async (sessionId) => {
-    const listed = await window.circleDesktop.runtimeCommand({
-      id: crypto.randomUUID(),
-      name: 'workspace-service',
-      sessionId,
-      payload: { service: 'terminal', method: 'list', params: {} },
-    });
-    if (!listed.ok) throw Error(listed.error || 'terminal list failed');
-    const shell = listed.data.find(
-      (item) =>
-        item.kind === 'shell' && !item.hidden && item.status === 'running',
-    );
-    if (!shell) throw Error('no running local shell');
-    const signalled = await window.circleDesktop.runtimeCommand({
-      id: crypto.randomUUID(),
-      name: 'workspace-service',
-      sessionId,
-      payload: {
-        service: 'terminal',
-        method: 'signal',
-        params: { id: shell.id, signal: 'SIGKILL' },
-      },
-    });
-    if (!signalled.ok) throw Error(signalled.error || 'terminal signal failed');
-  }, liveSession);
-  await live.getByText('this terminal has exited', { exact: true }).waitFor({
-    timeout: patience(15000),
-  });
-  await live.getByText('press enter to restart', { exact: true }).waitFor();
-  await live.getByRole('button', { name: 'restart', exact: true }).waitFor();
-  await live.locator('.native-terminal-dead p').first().click();
-  await live.keyboard.press('Enter');
-  await until(
-    async () => (await live.locator('.native-terminal-dead').count()) === 0,
-    'the shell restarted',
-  );
-  await live.getByRole('tab', { name: 'terminal 1', exact: true }).waitFor();
-  assert.equal(
-    await live.getByRole('tab', { name: 'terminal 2', exact: true }).count(),
-    0,
-  );
-  assert.deepEqual(
-    await live.evaluate(async (sessionId) => {
-      const listed = await window.circleDesktop.runtimeCommand({
-        id: crypto.randomUUID(),
-        name: 'workspace-service',
-        sessionId,
-        payload: { service: 'terminal', method: 'list', params: {} },
-      });
-      if (!listed.ok) throw Error(listed.error || 'terminal list failed');
-      return listed.data
-        .filter(
-          (item) =>
-            item.kind === 'shell' && !item.hidden && !item.managedCommand,
-        )
-        .map((item) => item.tabNumber);
-    }, liveSession),
-    [1],
-  );
   await live
-    .getByRole('button', { name: 'stop terminal 1', exact: true })
-    .click();
-  await terminalPane
-    .getByRole('button', { name: 'new terminal', exact: true })
-    .waitFor();
-  await terminalPane
+    .locator('[data-inspector-resource="terminal"]')
     .getByRole('button', { name: 'open in a window', exact: true })
     .click();
   const liveTerminal = await until(

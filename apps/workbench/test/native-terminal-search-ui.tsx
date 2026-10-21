@@ -43,15 +43,10 @@ const snapshot = (sessionId: string) => ({
   label: 'fixture terminal',
   cols: 120,
   rows: 24,
-  status: options.get('error')
-    ? 'failed'
-    : options.get('status') === 'exited'
-      ? 'exited'
-      : 'running',
-  ...(options.get('status') === 'exited' || options.get('error')
+  status: options.get('status') === 'exited' ? 'exited' : 'running',
+  ...(options.get('status') === 'exited'
     ? { exitCode: 1, exitReason: options.get('reason') ?? '' }
     : {}),
-  ...(options.get('error') ? { error: options.get('error') } : {}),
   startedAt: new Date(0).toISOString(),
   lastSequence: 1,
   logPath: '/fixture/log',

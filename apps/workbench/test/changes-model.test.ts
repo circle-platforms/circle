@@ -5,7 +5,6 @@ import {
   diffViewFromPatch,
   gitChangeRows,
   sessionChangeRows,
-  sessionScopeRows,
 } from '../src/model/changes.ts';
 
 test('a diff summary says how many lines were added and removed, in any of the core words', () => {
@@ -98,35 +97,6 @@ test('Git rows take their letter from the status and keep null counts for a bina
       ['mode.sh', 'M', null, null],
       ['z.ts', 'M', 1, 1],
     ],
-  );
-});
-
-test('this session lists the overview’s uncommitted files as well as its own', () => {
-  const own = sessionChangeRows(
-    [
-      {
-        path: '/w/README.md',
-        kind: 'modified',
-        at: '',
-        diff: { summary: '+1 -0', rows: [{ text: '+hi', tone: 'added' }] },
-      },
-    ],
-    '/w',
-  );
-  const git = gitChangeRows([
-    { path: 'stats.js', status: 'M', added: 4, removed: 1 },
-    { path: 'README.md', status: 'M', added: 2, removed: 0 },
-  ]);
-  const rows = sessionScopeRows(own, git);
-  assert.deepEqual(
-    rows.map((item) => item.path),
-    ['README.md', 'stats.js'],
-  );
-  assert.equal(rows.find((item) => item.path === 'README.md')!.added, 1);
-  assert.equal(sessionScopeRows(own, undefined)[0]!.path, 'README.md');
-  assert.deepEqual(
-    sessionScopeRows([], git).map((item) => item.path),
-    ['README.md', 'stats.js'],
   );
 });
 

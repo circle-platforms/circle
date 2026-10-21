@@ -293,31 +293,12 @@ try {
     );
     // Its tooltip says where it ran and, when known, its process ids.
     assert.equal(await footer.getAttribute('title'), '/fixture');
-    // A shell that ended can be started again from its screen as well.
-    await page.getByText('press enter to restart', { exact: true }).waitFor();
     checks.push({
       profile: 'footer',
       scenario: 'exit reason ' + reason,
       status: 'passed',
     });
   }
-  // A shell whose terminal failed keeps the failure in view, beside the restart.
-  await page.goto(
-    server.resolvedUrls.local[0] +
-      'test/native-terminal-search-ui.html?' +
-      new URLSearchParams({
-        error: 'terminal transport failed (EIO): read EIO',
-        reason: 'terminal transport failed (EIO): read EIO',
-        timing: 'off',
-      }),
-  );
-  await page.locator('.native-terminal-exit[role="status"]').waitFor();
-  assert.equal(
-    await page.locator('.native-terminal-error[role="alert"]').textContent(),
-    'terminal transport failed (EIO): read EIO',
-  );
-  await page.getByRole('button', { name: 'restart', exact: true }).waitFor();
-  checks.push({ profile: 'footer', scenario: 'failure', status: 'passed' });
   await page.goto(
     server.resolvedUrls.local[0] +
       'test/native-terminal-search-ui.html?embedded=true&timing=record',

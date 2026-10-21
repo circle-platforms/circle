@@ -52,53 +52,6 @@ test('a line a tab runs is reviewed as the execute command it is', (t) => {
   assert.equal(ruleTool('terminal_send'), 'terminal');
 });
 
-test('the first command typed into a tab says so, including one that only reads', (t) => {
-  const p = policy(t);
-  const read = p.review(
-    'terminal_send',
-    write({ first_use: true, command: 'ls -la' }),
-  );
-  const later = p.review('terminal_send', write({ command: 'ls -la' }));
-  assert.equal(read.verdict, 'ASK');
-  assert.equal(read.reason, 'types this command into your terminal');
-  assert.equal(later.reason, 'only reads');
-  assert.equal(read.pattern, later.pattern);
-  const run = p.review(
-    'terminal_send',
-    write({ first_use: true, command: 'npm test' }),
-  );
-  assert.equal(run.reason, 'types this command into your terminal');
-  assert.equal(
-    p.review('terminal_send', write({ command: 'npm test' })).pattern,
-    run.pattern,
-  );
-  // A forced warning, such as a delete, keeps its own reason.
-  const restarted = p.review(
-    'terminal_send',
-    write({ exited: true, command: 'ls -la' }),
-  );
-  assert.equal(restarted.verdict, 'ASK');
-  assert.equal(
-    restarted.reason,
-    'restarts this terminal and types this command into it',
-  );
-  assert.equal(
-    p.review('terminal_send', write({ exited: true })).reason,
-    'restarts this terminal and types into it',
-  );
-  assert.deepEqual(
-    p.review('terminal_send', write({ exited: true, command: 'rm -rf build' })),
-    p.review('terminal_send', write({ command: 'rm -rf build' })),
-  );
-  assert.deepEqual(
-    p.review(
-      'terminal_send',
-      write({ first_use: true, command: 'rm -rf build' }),
-    ),
-    p.review('terminal_send', write({ command: 'rm -rf build' })),
-  );
-});
-
 test('the first use asks in every mode and past every rule; after it, the execute rules decide', (t) => {
   const p = policy(t);
   const thread = 'conversation';

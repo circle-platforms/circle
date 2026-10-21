@@ -3,7 +3,7 @@ import { VirtualFileTree } from '../components/VirtualFileTree';
 import { buildFileTreeRows } from '../model/virtual-file-tree';
 import { changedFiles } from '../model/changed-files';
 import { sessionChangeRows, type ChangeRow } from '../model/changes';
-import { endedToolCalls, useGitChanges } from '../model/git-changes';
+import { useGitChanges } from '../model/git-changes';
 import { useOwnerState } from '../model/owner-state';
 import type { CommandTerminalView } from '../model/command-terminal-client';
 import { TerminalMode } from './TerminalMode';
@@ -158,32 +158,32 @@ export function PanelButtons({
         role="separator"
         aria-orientation="vertical"
       />
-      {modes.map((item) => {
-        const away = popped.has(item.id);
-        const inDrawer = open && panel === item.id && !away;
-        return (
-          <button
-            key={item.id}
-            className={`drawer-mode-button${inDrawer ? ' active' : ''}${away ? ' popped' : ''}`}
-            aria-label={t('{title} panel', { title: item.title })}
-            title={
-              away
-                ? t('{title} is in its own window', { title: item.title })
-                : item.title
-            }
-            aria-pressed={inDrawer}
-            onClick={() => (inDrawer ? onClose() : onPanel(item.id))}
-            onPointerUp={blurAfterPress}
-          >
-            <item.icon size={15} aria-hidden />
-            {item.badge > 0 && (
-              <i className="drawer-mode-badge" aria-label={String(item.badge)}>
-                {item.badge}
-              </i>
-            )}
-          </button>
-        );
-      })}
+      {modes.map((item) => (
+        <button
+          key={item.id}
+          className={`drawer-mode-button ${open && panel === item.id ? 'active' : ''}${popped.has(item.id) ? ' popped' : ''}`}
+          aria-label={t('{title} panel', { title: item.title })}
+          title={
+            popped.has(item.id)
+              ? t('{title} is in its own window', { title: item.title })
+              : item.title
+          }
+          aria-pressed={open && panel === item.id}
+          onClick={() =>
+            open && panel === item.id && !popped.has(item.id)
+              ? onClose()
+              : onPanel(item.id)
+          }
+          onPointerUp={blurAfterPress}
+        >
+          <item.icon size={15} aria-hidden />
+          {item.badge > 0 && (
+            <i className="drawer-mode-badge" aria-label={String(item.badge)}>
+              {item.badge}
+            </i>
+          )}
+        </button>
+      ))}
     </nav>
   );
 }
@@ -366,7 +366,6 @@ export function FilesPanel({
     live,
     active: !!visible,
     busy: session.state !== 'idle',
-    settled: endedToolCalls(session.messages),
   });
   const workspacePath = snapshot.workspaces.find(
     (workspace) => workspace.id === session.workspaceId,

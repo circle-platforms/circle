@@ -59,19 +59,7 @@ let items = Array.from({ length: 9 }, (_, index) => ({
   lastSequence: 0,
   logPath: '/synthetic/log',
   kind: 'shell',
-  // The main process stores each tab's number as it makes the terminal
-  tabNumber: (index + 1) as number | undefined,
-  hidden: undefined as boolean | undefined,
 }));
-// The lowest number no open tab is using, as the main process gives a new shell
-const freeNumber = () => {
-  const used = new Set(
-    items.filter((item) => !item.hidden).map((item) => item.tabNumber),
-  );
-  let number = 1;
-  while (used.has(number)) number++;
-  return number;
-};
 const publish = (item: (typeof items)[number]) => {
   const event = {
     workspaceId,
@@ -133,8 +121,6 @@ window.circleDesktop = {
         pid: 41001 + items.length,
         startedAt: new Date((items.length + 1) * 1000).toISOString(),
         lastSequence: 0,
-        tabNumber: freeNumber(),
-        hidden: undefined,
       };
       items = [...items, item];
       return { ok: true, data: item };
@@ -143,13 +129,6 @@ window.circleDesktop = {
     const item = items.find((item) => item.id === params?.id) ?? items[0];
     if (method === 'close') {
       item.status = 'exited';
-      publish(item);
-      return { ok: true, data: item };
-    }
-    // A closed tab leaves the row and gives its number back
-    if (method === 'hide') {
-      item.hidden = true;
-      delete item.tabNumber;
       publish(item);
       return { ok: true, data: item };
     }

@@ -80,8 +80,8 @@ const bridge: DesktopBridge = {
     ipcRenderer
       .invoke('circle:browser-navigate', id, url)
       .catch(raiseBrowserError),
-  browserBounds: (id, bounds, visible, host) =>
-    ipcRenderer.invoke('circle:browser-bounds', id, bounds, visible, host),
+  browserBounds: (id, bounds, visible) =>
+    ipcRenderer.invoke('circle:browser-bounds', id, bounds, visible),
   browserHide: (id) => ipcRenderer.invoke('circle:browser-hide', id),
   browserCapture: (id) => ipcRenderer.invoke('circle:browser-capture', id),
   setTheme: (dark) => ipcRenderer.invoke('circle:set-theme', dark),

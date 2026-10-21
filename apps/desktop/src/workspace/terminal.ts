@@ -1,7 +1,5 @@
 import type { IPty } from 'node-pty';
-import { nextTerminalTabNumber, terminalTabNumbers } from '../terminal-tabs.ts';
 import { hasNativePtyProcessExited, spawnPty } from './native-pty.ts';
-import { shellInForeground } from './foreground.ts';
 import { ptyEnvironment, withTextLocale } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
 import {
@@ -93,10 +91,6 @@ export interface TerminalSnapshot {
   transientEnvironment?: boolean;
   restartOf?: string;
   kind: 'shell' | 'service';
-  /** Closed out of the tab row. It stays in the log and no longer takes a number. */
-  hidden?: boolean;
-  /** The tab's number, kept while the tab stays open. */
-  tabNumber?: number;
   command?: TerminalCommand;
   /** Host-owned command identity. Expanded launch arguments are never retained. */
   managedCommand?: {
@@ -324,24 +318,6 @@ export class TerminalManager {
     return { data: parts.join(''), sequence: entry.snapshot.lastSequence, at };
   }
 
-  /**
-   * Trusted host only: whether a running shell has its terminal back, with no command it
-   * started in front of it. Undefined for a service, a stopped terminal, or where the
-   * system cannot tell.
-   */
-  async foreground(owner: string, id: string): Promise<boolean | undefined> {
-    const entry = this.#entries.get(id);
-    if (!this.#settled || !entry || entry.snapshot.owner !== owner) return;
-    const pid = entry.pty?.pid;
-    if (
-      !pid ||
-      entry.snapshot.kind !== 'shell' ||
-      entry.snapshot.status !== 'running'
-    )
-      return;
-    return shellInForeground(pid);
-  }
-
   async create(options: TerminalCreateOptions): Promise<TerminalSnapshot> {
     return this.#create(options);
   }
@@ -460,7 +436,7 @@ export class TerminalManager {
 
   async #create(
     options: TerminalCreateOptions,
-    restart?: { serviceId?: string; tabNumber?: number },
+    restart?: { serviceId?: string },
     managedLaunch?: { managed: ManagedCommand; launch: TerminalCommand },
   ): Promise<TerminalSnapshot> {
     await this.#ready;
@@ -563,11 +539,6 @@ export class TerminalManager {
             } as const)
           : {}),
       };
-      if (!managedLaunch)
-        snapshot.tabNumber =
-          restart?.tabNumber && restart.tabNumber > 0
-            ? restart.tabNumber
-            : nextTerminalTabNumber(this.listNow(options.owner));
       const entry = makeEntry(snapshot);
       entry.managed = managedLaunch?.managed;
       entry.environment = environment;
@@ -736,14 +707,10 @@ export class TerminalManager {
     rows: number,
   ): Promise<TerminalSnapshot> {
     await this.#ready;
-    const entry = this.#get(owner, id);
+    const entry = this.#get(owner, id, true);
     cols = dimension(cols);
     rows = dimension(rows);
-    // The shell has gone. Fitting the screen to the exited state is not a
-    // failed operation, and it must not be reported as one.
-    if (!entry.pty || entry.snapshot.status !== 'running')
-      return clone(entry.snapshot);
-    entry.pty.resize(cols, rows);
+    entry.pty!.resize(cols, rows);
     entry.snapshot.cols = cols;
     entry.snapshot.rows = rows;
     this.#append(entry, 'resized', undefined, true);
@@ -826,18 +793,6 @@ export class TerminalManager {
     return entry.closing;
   }
 
-  /** Takes a terminal out of the tab row. Its log stays; its number is free. */
-  async hide(owner: string, id: string): Promise<TerminalSnapshot> {
-    await this.#ready;
-    const entry = this.#get(owner, id);
-    entry.snapshot.hidden = true;
-    // A closed tab does not keep a number. Leaving it stored made the next
-    // shell reuse that number when the closed tab was still the one counted.
-    delete entry.snapshot.tabNumber;
-    await this.#persist(entry);
-    return clone(entry.snapshot);
-  }
-
   /** Restarts only the shell. Prior user input is deliberately not re-executed. */
   async restart(owner: string, id: string): Promise<TerminalSnapshot> {
     await this.#ready;
@@ -852,18 +807,6 @@ export class TerminalManager {
         'per-launch environment is unavailable after restart; start it again from where it was launched',
       );
     await this.close(owner, id);
-    // Restarting a shell in place keeps the number the person was looking at.
-    // The exited process leaves the row; it does not take the next number.
-    const kept =
-      old.kind === 'shell' && !old.managedCommand
-        ? terminalTabNumbers(this.listNow(old.owner)).get(old.id)
-        : undefined;
-    if (old.kind === 'shell' && !old.managedCommand) {
-      const closed = this.#get(owner, id);
-      closed.snapshot.hidden = true;
-      delete closed.snapshot.tabNumber;
-      await this.#persist(closed);
-    }
     const next = await this.#create(
       {
         owner,
@@ -887,7 +830,7 @@ export class TerminalManager {
         label: old.label,
         env: previous.environment,
       },
-      { serviceId: old.serviceId, tabNumber: kept },
+      { serviceId: old.serviceId },
     );
     const entry = this.#get(owner, next.id);
     entry.snapshot.restartOf = id;
