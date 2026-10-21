@@ -851,12 +851,6 @@ pre {
 .tool-head code {
   font-size: var(--ui-small);
 }
-.tool-error-cause {
-  margin: 0;
-  padding: 0 12px 10px 36px;
-  color: var(--fg);
-  font-size: var(--ui-small);
-}
 .tool-target {
   min-width: 0;
   overflow: hidden;
@@ -1200,6 +1194,19 @@ pre {
 }
 .status-failed i,
 .status-error i {
+  background: var(--negative);
+}
+/* Trust is a yes/no the person must read at a glance: green for yes, red for no. */
+.status-trusted {
+  color: var(--positive);
+}
+.status-trusted i {
+  background: var(--positive);
+}
+.status-not-trusted {
+  color: var(--negative);
+}
+.status-not-trusted i {
   background: var(--negative);
 }
 .badge,
@@ -4263,6 +4270,23 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The summary and the running command give way first: a weight this large leaves the rest
+   of the row its whole width, not a fraction of a pixel less. The counts keep their words;
+   the turn's clock is cut short, not wrapped, once nothing else can give way. */
+.tool-summary-text,
+.tool-summary .tool-running {
+  flex-shrink: 1000000;
+}
+.tool-summary > span:not(:first-of-type) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.tool-summary > span.turn-clock {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tool-group[data-busy] .tool-summary {
   color: var(--secondary);

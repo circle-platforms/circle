@@ -8,6 +8,7 @@
 // runtime runs in a terminal of their own are not tabs, and are never listed here.
 import { basename } from 'node:path';
 import {
+  looksLikePrompt,
   TerminalSession,
   TerminalSessions,
   withMoreTerminals,
@@ -46,6 +47,11 @@ export interface LocalTerminalHost {
   write(owner: string, id: string, data: string): Promise<unknown>;
   /** Start the shell again. The exited tab leaves the row; the result is the new one. */
   restart?(owner: string, id: string): Promise<TerminalSnapshot>;
+  /**
+   * Whether the shell has its terminal back: no command it started runs in front of it.
+   * Undefined where the system cannot tell.
+   */
+  foreground?(owner: string, id: string): Promise<boolean | undefined>;
 }
 
 export interface LocalTerminalsOptions {
@@ -447,6 +453,58 @@ export class LocalTerminals implements TerminalTabFacts {
     return this.tabs.size;
   }
   /**
+   * The person moves a command from its `execute` card into one of their tabs: it is
+   * typed there and run, as their own typing. It is typed only where the line that runs
+   * is the card's: the shell is at its prompt with nothing on that line, nothing Circle
+   * typed or the person started, and Circle is not typing there. `command` is what runs,
+   * with the values of the secrets the card shows by name; `pending` says the card
+   * still waits, checked just before the keys go. The answer is the tab's name.
+   */
+  async typeForPerson(
+    conversation: string,
+    session: string,
+    command: string,
+    pending: () => boolean = () => true,
+  ): Promise<string> {
+    const { host, snapshot, terminal } = this.find(conversation, session);
+    const name = this.name(host, conversation, terminal);
+    const lines = command
+      .replace(/\r\n?/g, '\n')
+      .replace(/\n+$/, '')
+      .split('\n');
+    for (const line of lines) checkText(line);
+    const own = this.own(conversation);
+    const line = this.line(own, terminal);
+    const refused = (why: string) =>
+      Error(`${why}; nothing was typed in ${name}`);
+    const check = () => {
+      if (own.active.has(terminal)) throw refused('Circle is using the tab');
+      // Whatever is on the line would run before the command
+      if (!line.clean || line.text)
+        throw refused('there is text at the prompt: clear it and try again');
+    };
+    check();
+    // The keys go to whatever holds the terminal: it must be the shell. Where the system
+    // cannot tell, the line at the cursor has to read as a prompt.
+    const front = await host.foreground?.(conversation, terminal);
+    if (front === false) throw refused('a command is still running there');
+    if (front === undefined) {
+      const tab = this.adopt(conversation, host, snapshot);
+      await tab.ready;
+      // The emulator parses later: an empty write's callback comes after the output's
+      await new Promise<void>((done) => tab.session.screen.write('', done));
+      if (!looksLikePrompt(tab.session.cursorLine()))
+        throw refused('the tab is not at its prompt');
+    }
+    check();
+    if (!pending()) throw Error('the request was already answered');
+    const data = lines.join('\r') + '\r';
+    // As the person's own typing: the line it leaves, and Circle told that they typed
+    this.typed(conversation, terminal, data);
+    await host.write(conversation, terminal, data);
+    return name;
+  }
+  /**
    * The turn that followed a give-back has ended. A tab Circle is not still using
    * leaves the resumed state.
    */
@@ -652,6 +710,11 @@ export class LocalTerminals implements TerminalTabFacts {
       ready,
       settle,
     };
+    // A wait knows the shell is back at its prompt from the process in front of it, not
+    // from what the prompt looks like
+    const foreground = host.foreground?.bind(host);
+    if (foreground)
+      session.foreground = () => foreground(conversation, snapshot.id);
     this.tabs.set(at, tab);
     this.sessions.adopt(conversation, session);
     const recent = host.recentOutput(conversation, snapshot.id, RECENT_OUTPUT);

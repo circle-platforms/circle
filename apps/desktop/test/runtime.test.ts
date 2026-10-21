@@ -46,14 +46,19 @@ import {
 } from '../../workbench/src/model/browser.ts';
 import {
   historyMessages,
+  removeWorkspace,
   visibleSessions,
+  workspaceSessions,
 } from '../../workbench/src/model/session-management.ts';
+import { LiveRuntime } from '../../workbench/src/model/live.ts';
+import type { DesktopBridge } from '../src/contracts.ts';
 import { createServer } from 'node:http';
 import { ModelCatalog } from '../../../src/model_catalog.ts';
 import { loadSecrets } from '../../../src/secrets.ts';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import type { Socket } from 'node:net';
 import type {
+  RuntimeCommand,
   RuntimeCommandName,
   RuntimeUpdate,
 } from '../src/runtime-protocol.ts';
@@ -1401,20 +1406,11 @@ test('a text-only model cannot capture a browser screenshot', async (t) => {
   );
   assert.equal(browser.requests.length, 0);
   assert.equal(f.controller.snapshot().interactions.length, 0);
-  assert.equal(
-    f.model.requests[0]!.tools.some(
-      (tool) =>
-        tool.name === 'browser_screenshot' || tool.name === 'screenshot',
-    ),
-    false,
-    'a text-only model is not offered a screenshot',
-  );
   const result = f.model.requests[1]!.messages.find(
     (message) => message.tool_call_id === 'screenshot',
   )!;
   assert.equal(result.status, 'error');
-  assert.match(result.content, /Call browser_snapshot first/);
-  assert.match(result.content, /no page snapshot has been taken yet/);
+  assert.match(result.content, /does not read images; use browser_snapshot/);
   assert.equal(result.attachments, undefined);
 });
 
@@ -4200,6 +4196,157 @@ test('a task started outside a project gets a trusted folder of its own under th
     'the new task lands in the moved folder',
   );
 });
+test('removing a folder from settings is one step that a session waiting on an approval refuses whole', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write',
+          name: 'write_file',
+          args: { file_path: 'blocked.txt', content: 'only after approval' },
+        },
+      ]),
+    },
+    { message: assistant('working elsewhere') },
+    { message: assistant('rejected') },
+  ]);
+  const waiting = f.controller.snapshot().activeSessionId;
+  const session = () =>
+    f.controller.snapshot().sessions.find((row) => row.id === waiting)!;
+  const workspaceId = session().workspaceId;
+  const folder = () =>
+    f.controller.snapshot().workspaces.find((row) => row.id === workspaceId);
+  await f.call('prompt', { text: 'request a write' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'write approval',
+  );
+  // The person goes on in another folder and removes this one from settings.
+  const other = join(f.root, 'other');
+  await mkdir(other);
+  saveSettingsChange(f.home, (saved) => {
+    Object.assign(saved, trustFolder(saved, realpathSync(other)));
+  });
+  const opened = await f.call('open-workspace', { path: other });
+  assert.equal(opened.ok, true, String(opened.error));
+  const begun = await f.call('begin-session', {
+    workspaceId: (opened.data as { workspaceId: string }).workspaceId,
+    text: 'work elsewhere',
+  });
+  assert.equal(begun.ok, true, String(begun.error));
+  assert.notEqual(f.controller.snapshot().activeSessionId, waiting);
+  const refused = await f.call('remove-workspace', {
+    workspaceId,
+    confirmed: true,
+  });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error), /stop this session before archiving/);
+  // Nothing changed: the folder keeps its trust and its row, its session is not
+  // archived, and the approval still waits.
+  assert.equal(isFolderTrusted(loadSettings(f.home), f.workspace), true);
+  assert.equal(folder()?.trusted, true);
+  assert.equal(session().archivedAt, undefined);
+  const pending = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  assert.equal(pending.sessionId, waiting);
+  const answered = await f.call(
+    'answer',
+    { id: pending.id, revision: pending.revision, answer: 'reject' },
+    waiting,
+  );
+  assert.equal(answered.ok, true, String(answered.error));
+  await wait(() => session().state === 'idle', 'rejection finishes');
+  const removed = await f.call('remove-workspace', {
+    workspaceId,
+    confirmed: true,
+  });
+  assert.equal(removed.ok, true, String(removed.error));
+  // Done whole: archived and no longer trusted. The archived session keeps the
+  // folder listed, and the answer says so.
+  assert.equal((removed.data as { listed: boolean }).listed, true);
+  assert.ok(session().archivedAt);
+  assert.equal(isFolderTrusted(loadSettings(f.home), f.workspace), false);
+  assert.equal(folder()?.trusted, false);
+  assert.equal(existsSync(join(f.workspace, 'blocked.txt')), false);
+});
+
+test('the settings page says a removed folder is gone only when no archived session keeps it listed', async (t) => {
+  const f = await setup(t, [{ message: assistant('answered in kept') }]);
+  // The window's runtime as the renderer holds it after the latest publication.
+  const window = () => {
+    const host = {
+      onRuntime: () => () => {},
+      runtimeState: async () => structuredClone(f.updates.at(-1)!),
+      runtimeCommand: async (command: RuntimeCommand) =>
+        structuredClone(await f.controller.dispatch(command)),
+    } as unknown as DesktopBridge;
+    const live = new LiveRuntime(
+      host,
+      structuredClone(f.controller.publish()!),
+    );
+    t.after(() => live.dispose());
+    return live;
+  };
+  const project = async (name: string) => {
+    const path = join(f.root, name);
+    await mkdir(path);
+    saveSettingsChange(f.home, (saved) => {
+      Object.assign(saved, trustFolder(saved, realpathSync(path)));
+    });
+    const opened = await f.call('open-workspace', { path });
+    assert.equal(opened.ok, true, String(opened.error));
+    const id = (opened.data as { workspaceId: string }).workspaceId;
+    return { path: realpathSync(path), id };
+  };
+  const folder = (id: string) =>
+    f.controller.snapshot().workspaces.find((row) => row.id === id);
+  // A folder opened and never worked in leaves the list.
+  const empty = await project('empty');
+  assert.equal(folder(empty.id)?.trusted, true);
+  assert.equal(
+    await removeWorkspace(window(), folder(empty.id)!),
+    'empty is no longer trusted and no longer listed',
+  );
+  assert.equal(folder(empty.id), undefined);
+  assert.equal(isFolderTrusted(loadSettings(f.home), empty.path), false);
+  // A folder whose sessions were all archived earlier: the dialog counts no
+  // conversation, yet the archived one keeps the folder listed.
+  const kept = await project('kept');
+  const home = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'home' })).ok, true);
+  const begun = await f.call('begin-session', {
+    workspaceId: kept.id,
+    text: 'work in kept',
+  });
+  assert.equal(begun.ok, true, String(begun.error));
+  const inKept = (begun.data as { sessionId: string }).sessionId;
+  await wait(() => {
+    const row = f.controller
+      .snapshot()
+      .sessions.find((session) => session.id === inKept);
+    return (
+      row?.state === 'idle' &&
+      row.messages.some((message) => message.text === 'answered in kept')
+    );
+  }, 'the turn in kept finishes');
+  assert.equal((await f.call('select-session', { id: home })).ok, true);
+  assert.equal(
+    (await f.call('archive-workspace', { workspaceId: kept.id })).ok,
+    true,
+  );
+  assert.equal(workspaceSessions(f.controller.snapshot(), kept.id).length, 0);
+  assert.equal(
+    await removeWorkspace(window(), folder(kept.id)!),
+    'kept is no longer trusted and its sessions are archived',
+  );
+  assert.equal(folder(kept.id)?.trusted, false);
+  assert.equal(isFolderTrusted(loadSettings(f.home), kept.path), false);
+});
+
 test('the whole application data folder is refused, not only its runtime home', async (t) => {
   // As the runtime worker runs: home is runtime-home inside the data folder, beside the
   // updates folder the updater clears

@@ -901,6 +901,7 @@ export class LiveRuntime implements RuntimePort {
         'configure-connection': 'configure',
         'probe-connection': 'probe-connection',
         'cancel-interaction': 'answer',
+        'run-in-terminal': 'terminal-tab-run',
         'import-native-session': 'import',
         'export-session': 'export',
         'mcp.reload': 'reload',
@@ -918,6 +919,7 @@ export class LiveRuntime implements RuntimePort {
         'open-workspace': 'open-workspace',
         'archive-session': 'archive-session',
         'archive-workspace': 'archive-workspace',
+        'remove-workspace': 'remove-workspace',
         'set-default-workspace': 'set-default-workspace',
         reload: 'reload',
         'clear-queue': 'clear-queue',
@@ -968,6 +970,8 @@ export class LiveRuntime implements RuntimePort {
         'extension.enabled',
         'list-external-file-grants',
         'revoke-external-file-grant',
+        // The card says why its command was not typed.
+        'run-in-terminal',
       ].includes(kind)
     )
       void result.catch((error) => this.report(error, sessionId));

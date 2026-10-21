@@ -1,6 +1,7 @@
 import type { IPty } from 'node-pty';
 import { nextTerminalTabNumber, terminalTabNumbers } from '../terminal-tabs.ts';
 import { hasNativePtyProcessExited, spawnPty } from './native-pty.ts';
+import { shellInForeground } from './foreground.ts';
 import { ptyEnvironment, withTextLocale } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
 import {
@@ -326,6 +327,24 @@ export class TerminalManager {
       parts.unshift(event.data);
     }
     return { data: parts.join(''), sequence: entry.snapshot.lastSequence, at };
+  }
+
+  /**
+   * Trusted host only: whether a running shell has its terminal back, with no command it
+   * started in front of it. Undefined for a service, a stopped terminal, or where the
+   * system cannot tell.
+   */
+  async foreground(owner: string, id: string): Promise<boolean | undefined> {
+    const entry = this.#entries.get(id);
+    if (!this.#settled || !entry || entry.snapshot.owner !== owner) return;
+    const pid = entry.pty?.pid;
+    if (
+      !pid ||
+      entry.snapshot.kind !== 'shell' ||
+      entry.snapshot.status !== 'running'
+    )
+      return;
+    return shellInForeground(pid);
   }
 
   async create(options: TerminalCreateOptions): Promise<TerminalSnapshot> {

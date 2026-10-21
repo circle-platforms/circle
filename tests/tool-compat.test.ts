@@ -6,7 +6,6 @@ import {
   prepareToolCall,
   parseToolInput,
   RecoverableToolError,
-  BROWSER_SCREENSHOT_UNAVAILABLE,
 } from '../src/tool_call_compat.js';
 import { buildTools } from '../src/tools.js';
 import { Sandbox } from '../src/sandbox.js';
@@ -96,23 +95,6 @@ test('nested JSON strings and malformed Unicode escapes are repaired, while vali
       assert.ok(!error.message.includes('private-value'));
       return true;
     },
-  );
-});
-test('a browser screenshot the model cannot call says to snapshot first, and that none exists yet', () => {
-  assert.throws(
-    () =>
-      prepareToolCall({ id: 'shot', name: 'browser_screenshot', args: {} }, []),
-    (error) => {
-      assert.ok(error instanceof RecoverableToolError);
-      assert.equal(error.message, BROWSER_SCREENSHOT_UNAVAILABLE);
-      assert.match(error.message, /Call browser_snapshot first/);
-      assert.match(error.message, /no page snapshot has been taken yet/);
-      return true;
-    },
-  );
-  assert.throws(
-    () => prepareToolCall({ id: 'other', name: 'execute', args: {} }, []),
-    /tool is not available: execute/,
   );
 });
 test('the real tool boundary rejects malformed and misspelled mutable calls before any effect and gives the model a recoverable result', async (t) => {

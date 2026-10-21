@@ -10,7 +10,11 @@ import {
   sessionScopeRows,
   type ChangeRow,
 } from '../model/changes';
-import { gitFilePatch, useGitChanges } from '../model/git-changes';
+import {
+  endedToolCalls,
+  gitFilePatch,
+  useGitChanges,
+} from '../model/git-changes';
 import { useOwnerState } from '../model/owner-state';
 import { currentSession } from '../model/state';
 import type { DiffView } from '../model/types';
@@ -67,6 +71,7 @@ export function ChangesMode({
     live,
     active: active && live,
     busy: session.state !== 'idle',
+    settled: endedToolCalls(session.messages),
   });
   // In the preview there is no repository; its sample files with a status stand in.
   const previewRows: ChangeRow[] = useMemo(

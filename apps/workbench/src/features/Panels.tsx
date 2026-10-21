@@ -3,7 +3,7 @@ import { VirtualFileTree } from '../components/VirtualFileTree';
 import { buildFileTreeRows } from '../model/virtual-file-tree';
 import { changedFiles } from '../model/changed-files';
 import { sessionChangeRows, type ChangeRow } from '../model/changes';
-import { useGitChanges } from '../model/git-changes';
+import { endedToolCalls, useGitChanges } from '../model/git-changes';
 import { useOwnerState } from '../model/owner-state';
 import type { CommandTerminalView } from '../model/command-terminal-client';
 import { TerminalMode } from './TerminalMode';
@@ -367,6 +367,7 @@ export function FilesPanel({
     live,
     active: !!visible,
     busy: session.state !== 'idle',
+    settled: endedToolCalls(session.messages),
   });
   const workspacePath = snapshot.workspaces.find(
     (workspace) => workspace.id === session.workspaceId,

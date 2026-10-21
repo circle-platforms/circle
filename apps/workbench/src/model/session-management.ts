@@ -6,12 +6,14 @@ import { t } from '../i18n/index.ts';
 import type {
   AgentRecord,
   Message,
+  RuntimePort,
   Session,
   WorkbenchSnapshot,
   Workspace,
 } from './types.ts';
 import { sessionTitle } from './state.ts';
 import { fullTime } from './time.ts';
+import { workspaceLabel } from './workspace-label.ts';
 
 /** User and assistant text the global search indexes. Tools and notices are not history. */
 export function historyMessages(session: Session): Message[] {
@@ -461,4 +463,33 @@ export function workspaceSessions(
       session.workspaceId === workspaceId &&
       Boolean(session.archivedAt) === archived,
   );
+}
+
+/**
+ * Removes a folder from the settings page and says what happened. The runtime does
+ * it in one step or refuses before changing anything: it archives the folder's
+ * sessions, stops trusting it and forgets it was opened. Its answer says whether
+ * archived sessions keep the folder listed.
+ */
+export async function removeWorkspace(
+  runtime: Pick<RuntimePort, 'mode' | 'request' | 'change'>,
+  workspace: Workspace,
+): Promise<string> {
+  if (runtime.mode !== 'live') {
+    runtime.change((state) => {
+      state.workspaces = state.workspaces.filter(
+        (row) => row.id !== workspace.id,
+      );
+    });
+    return 'sample workspace removed from this preview';
+  }
+  // The dialog is the confirmation: tabs and tasks still running stop.
+  const answer = (await runtime.request('remove-workspace', {
+    workspaceId: workspace.id,
+    confirmed: true,
+  })) as { listed?: boolean } | undefined;
+  const name = workspaceLabel(workspace);
+  return answer?.listed === false
+    ? t('{name} is no longer trusted and no longer listed', { name })
+    : t('{name} is no longer trusted and its sessions are archived', { name });
 }

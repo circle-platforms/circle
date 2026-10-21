@@ -1,7 +1,8 @@
 // Clicking a terminal must take the keyboard before the next key, including a key
 // that arrives while a click's render is still moving focus back to the composer.
 // The claim lasts long enough for that render and no longer: a later click outside
-// the terminal releases it.
+// the terminal releases it, and so does the keyboard going to any other field (find,
+// a dialog, a secret's field). Only keys that land in the composer are taken.
 
 const CLAIM_MS = 600;
 let until = 0;
@@ -41,24 +42,36 @@ function onPointer(event: PointerEvent): void {
   release();
 }
 
+/** The message box, where a render may put the keyboard back after the click. */
+function inComposer(target: EventTarget | null): target is Element {
+  return (
+    target instanceof Element &&
+    !target.closest('.xterm, .device-screen, .native-terminal-screen') &&
+    !!target.closest('.composer')
+  );
+}
+
 function onFocusIn(event: FocusEvent): void {
   if (!terminalKeyboardClaimed()) return;
   const target = event.target;
   if (!(target instanceof Element)) return;
   if (target.closest('.xterm, .device-screen, .native-terminal-screen')) return;
-  if (!target.closest('.composer')) return;
+  // Another field took the keyboard on purpose: its keys are its own.
+  if (!inComposer(target)) {
+    release();
+    return;
+  }
   reclaim();
 }
 
 /**
- * A plain key during the claim is typed into the terminal. The composer is the
- * usual place it would otherwise land, including the first key after the click.
+ * A plain key that lands in the composer during the claim is typed into the terminal:
+ * the composer is where a render puts the keyboard back, including for the first key
+ * after the click. A key for any other field stays there.
  */
 function onKey(event: KeyboardEvent): void {
   if (!terminalKeyboardClaimed() || event.isComposing) return;
-  const target = event.target;
-  if (!(target instanceof Element)) return;
-  if (target.closest('.xterm, .device-screen, .native-terminal-screen')) return;
+  if (!inComposer(event.target)) return;
   if (
     event.ctrlKey ||
     event.metaKey ||
@@ -76,9 +89,7 @@ function onKey(event: KeyboardEvent): void {
 
 function onBefore(event: InputEvent): void {
   if (!terminalKeyboardClaimed()) return;
-  const target = event.target;
-  if (!(target instanceof Element)) return;
-  if (target.closest('.xterm, .device-screen, .native-terminal-screen')) return;
+  if (!inComposer(event.target)) return;
   if (
     event.inputType !== 'insertText' &&
     event.inputType !== 'insertCompositionText'

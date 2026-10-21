@@ -205,7 +205,8 @@ try {
   // pulls focus back to the composer. Waiting for the xterm to be focused
   // first would miss that race. The character must not stay in the draft.
   const composer = page.getByRole('textbox', { name: 'message', exact: true });
-  await composer.click();
+  // Filled without a click: in a narrow window the terminal lies over the
+  // conversation, and its screen is what a click there would hit.
   await composer.fill('stays in the composer');
   const deviceScreen = page.locator('.device-screen:not([hidden])');
   await deviceScreen.locator('.xterm-screen').click({ delay: 0 });

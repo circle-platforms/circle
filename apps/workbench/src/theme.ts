@@ -41,6 +41,7 @@ export function applyTheme(choice: Theme, size: TextSize = 'default') {
     subtle: mix(p.bg_hex, p.fg_hex, 0.025),
     'read-bg': p.read_bg_hex,
     'write-bg': p.write_bg_hex,
+    positive: p.write_hex,
     'think-bg': p.think_bg_hex,
     'agent-bg': p.agent_bg_hex,
   };
