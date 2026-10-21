@@ -694,6 +694,9 @@ const ruleToolFor = (tool: string, args: Record<string, unknown>): string =>
     : ruleTool(tool);
 export class ApprovalPolicy {
   private modes = new Map<string, ApprovalMode>();
+  // Tools that say of themselves that they can destroy data, such as an MCP tool its server
+  // marks destructive: every call asks, and no "allow for this session" covers one
+  private destroys: (tool: string) => boolean = () => false;
   constructor(
     readonly store: ApprovalStore,
     readonly workspace: string,
@@ -703,6 +706,10 @@ export class ApprovalPolicy {
   ) {}
   get allowedCommands(): readonly string[] {
     return this.allowed;
+  }
+  /** Which tools say they can destroy data; read for every call. */
+  declareDestructive(test: (tool: string) => boolean): void {
+    this.destroys = test;
   }
   setAllowedCommands(patterns: readonly string[]): void {
     this.allowed = patterns;
@@ -771,6 +778,14 @@ export class ApprovalPolicy {
     );
   }
   review(tool: string, args: Record<string, unknown>): Review {
+    // Asked like any call, with no rule to keep: an earlier "allow for this session" for the
+    // tool covers none of its calls either
+    if (this.destroys(tool))
+      return review(
+        'ASK',
+        `${tool}: its MCP server says it can delete or overwrite data`,
+        { warn_delete: true },
+      );
     const tab = terminalTabWrite(tool, args);
     if (tab) {
       if (tab.exited && tab.command === undefined)

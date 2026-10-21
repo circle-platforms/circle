@@ -550,6 +550,7 @@ export class AgentRuntime {
     this.mcp = new McpManager(options.workspace, undefined, undefined, {
       secrets: () => loadSecrets(this.options.home),
     });
+    this.policy.declareDestructive((tool) => this.mcp.isDestructive(tool));
     this.lsp = new LspManager(this.sandbox);
     this.context = new ContextManager(this.store, this.sandbox.offloadRoot!, {
       progress: (event) =>

@@ -23,6 +23,11 @@ export interface McpConnection {
    * are filled in on connect.
    */
   headers?: Record<string, string>;
+  /**
+   * False: the server's tool annotations are not read, and every tool asks as an unknown one
+   * does. Default true.
+   */
+  trustAnnotations?: boolean;
 }
 export interface McpStatus {
   name: string;
@@ -103,6 +108,9 @@ export function buildMcpConnections(
         );
     }
     if (!connection) continue;
+    // Only true or no value trusts what the server says of its tools
+    if (item.trust_annotations !== undefined && item.trust_annotations !== true)
+      connection.trustAnnotations = false;
     if (item.enabled === false) {
       // A disabled later entry still overrides an earlier server with the same
       // name. Never construct a transport or expose tools for either entry.
@@ -276,10 +284,25 @@ function resultText(
 }
 // The longest a timer can wait; the MCP SDK stops a request after 60 seconds unless told.
 const NO_LIMIT = 2_147_483_647;
+/**
+ * What a tool's annotations make of it, when its server is trusted with them: read-only
+ * (`readOnlyHint`) runs as Circle's own reads do; destructive (`destructiveHint`) asks every
+ * time. A tool that says both is destructive. Anything else is unknown, as without them.
+ */
+function toolHints(
+  annotations: unknown,
+  trusted: boolean,
+): { readOnly: boolean; destructive: boolean } {
+  const hints = trusted && isRecord(annotations) ? annotations : {};
+  const destructive = hints.destructiveHint === true;
+  return { readOnly: hints.readOnlyHint === true && !destructive, destructive };
+}
 export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
   private clients: Client[] = [];
+  // The tools whose server says they can destroy data
+  private destructive = new Set<string>();
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
   // is given: a tool may wait minutes (a login), and an interrupt cancels it.
   constructor(
@@ -296,6 +319,7 @@ export class McpManager {
     const clients: Client[] = [];
     const tools: Tool[] = [];
     const status: McpStatus[] = [];
+    const destructive = new Set<string>();
     try {
       const { connections, skipped } = buildMcpConnections(servers);
       status.push(...skipped);
@@ -342,6 +366,7 @@ export class McpManager {
             combined,
           );
           const registered: Tool[] = [];
+          const destroys = new Set<string>();
           let cursor: string | undefined;
           const cursors = new Set<string>();
           do {
@@ -357,11 +382,16 @@ export class McpManager {
                 registered.some((tool) => tool.name === name)
               )
                 throw new Error(`tool '${name}' already exists`);
+              const hints = toolHints(
+                spec.annotations,
+                connection.trustAnnotations !== false,
+              );
+              if (hints.destructive) destroys.add(name);
               registered.push({
                 name,
                 description: hide(spec.description || name),
                 parameters: spec.inputSchema,
-                effect: 'unknown',
+                effect: hints.readOnly ? 'read' : 'unknown',
                 run: async (args, context) => {
                   context.signal.throwIfAborted();
                   let result: Awaited<ReturnType<Client['callTool']>>;
@@ -403,6 +433,7 @@ export class McpManager {
           combined.throwIfAborted();
           clients.push(client);
           tools.push(...registered);
+          for (const name of destroys) destructive.add(name);
           state.tools = registered.map((tool) => tool.name);
         } catch (error) {
           state.error = hide(
@@ -420,6 +451,7 @@ export class McpManager {
       this.clients = clients;
       this.tools = tools;
       this.status = status;
+      this.destructive = destructive;
       await Promise.all(
         previous.map((client) => client.close().catch(() => {})),
       );
@@ -443,9 +475,14 @@ export class McpManager {
         .join('\n')
     );
   }
+  /** Whether the server of a tool, by its name here, says the tool can destroy data. */
+  isDestructive(tool: string): boolean {
+    return this.destructive.has(tool);
+  }
   async close(): Promise<void> {
     const clients = this.clients.splice(0);
     this.tools = [];
+    this.destructive = new Set();
     await Promise.all(clients.map((client) => client.close().catch(() => {})));
   }
 }

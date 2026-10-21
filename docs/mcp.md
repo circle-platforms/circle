@@ -37,6 +37,7 @@ A server reached over the network:
 | `command`, `args`, `env` | Start the server as a program (stdio), in the workspace.                                                                                                                                                                                                                                                                                               |
 | `url`, `transport`       | Connect to a server. `transport` is `sse` (the default), `streamable_http` or `websocket`; anything else is treated as `sse`.                                                                                                                                                                                                                          |
 | `headers`                | Headers sent with every request to a `url` server over `sse` or `streamable_http`, such as `{ "Authorization": "Bearer ${secret:DOCS_TOKEN}" }`. A value can name a saved secret or an environment variable; see [Tokens in headers](#tokens-in-headers). A `websocket` server cannot be sent headers.                                                 |
+| `trust_annotations`      | `true` (the default): what the server says of each tool decides how its calls are approved. `false`: it is ignored, and every tool of that server asks. See [Security](#security).                                                                                                                                                                     |
 
 An entry with neither `command` nor `url` is skipped. A URL may not carry a user name or password; use `headers` instead.
 
@@ -76,7 +77,7 @@ Circle's own `screenshot` tool only looks at the screen. To let the model open a
 ]
 ```
 
-[Playwright MCP](https://github.com/microsoft/playwright-mcp) gives the model the page's elements to click and type into, and screenshots of the page. [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) adds the console, network requests and performance traces of a Chrome it starts. Each call asks for approval like any MCP tool, and the pictures they return go to the model as attachments.
+[Playwright MCP](https://github.com/microsoft/playwright-mcp) gives the model the page's elements to click and type into, and screenshots of the page. [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) adds the console, network requests and performance traces of a Chrome it starts. Their calls are approved as any MCP tool's (see [Security](#security)), and the pictures they return go to the model as attachments.
 
 ## Commands
 
@@ -89,4 +90,10 @@ In print mode, line mode and RPC mode MCP servers load only with `--extensions` 
 
 ## Security
 
-An MCP server can be a program that runs with your rights, and its tools can do whatever it does. Circle cannot know what a tool changes, so every MCP tool call **asks for approval**, and `read-only` mode refuses them. "Allow for this session" on the card covers every call to that tool. Only add servers you trust. See [Security](security.md).
+An MCP server can be a program that runs with your rights, and its tools can do whatever it does. Circle cannot see what a tool changes. It goes by what the server says of each tool in the tool's annotations: hints from the server you configured, which Circle does not check. Only a value of `true` counts.
+
+- A tool marked `readOnlyHint` is treated as Circle's own reads are: it does not ask, and it keeps working in `read-only` and plan mode.
+- A tool marked `destructiveHint` asks on every call, and its card warns that it can delete or overwrite data. "Allow for this session" is not offered for it, and a rule kept for it before covers none of its calls. In `auto` mode it runs without asking, as every call does there. A tool marked both ways counts as destructive.
+- Any other tool asks for approval, and `read-only` mode refuses it. "Allow for this session" on the card covers every call to that tool.
+
+With `"trust_annotations": false` a server's annotations are ignored: every one of its tools asks, `read-only` mode refuses them all, and "Allow for this session" covers each. Only add servers you trust. See [Security](security.md).
