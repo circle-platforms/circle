@@ -123,15 +123,19 @@ export function visualLines(
       // Keep the original indexes for cursor movement and submission. Moving the
       // break back, rather than adding punctuation past the width, keeps the box
       // inside its frame even on a narrow console.
+      // It never crosses a space, where a row may start with a mark.
       let boundary = cut;
       while (
         boundary > start &&
+        chars[boundary - 1] !== ' ' &&
         (NO_LINE_START.has(chars[boundary]!) ||
           NO_LINE_END.has(chars[boundary - 1]!))
       )
         boundary--;
-      // A mark that cannot fit with any preceding text must still make progress.
-      if (boundary > start) cut = boundary;
+      // A mark that cannot fit with any preceding text must still make progress, and
+      // the row it moves to must still fit.
+      if (boundary > start && widthOf(chars, boundary, at) + count <= width)
+        cut = boundary;
       rows.push([start, cut]);
       start = cut;
       space = -1;

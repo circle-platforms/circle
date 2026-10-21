@@ -272,6 +272,28 @@ test('draft wrapping keeps CJK punctuation with its text and preserves cursor in
     [0, 1],
     [1, 2],
   ]);
+  // Moving the break back never makes the next row wider than the box, and never
+  // crosses a space, where a mark may start the row
+  for (const [text, width] of [
+    ['ok' + '！'.repeat(30), 44],
+    ['a中，，', 5],
+    ['ab！」）', 6],
+    ['ab 。中', 3],
+  ] as const) {
+    const chars = Array.from(text);
+    for (const [start, end] of visualLines(chars, width))
+      assert.ok(
+        stringWidth(chars.slice(start, end).join('')) <= width,
+        `${text} at ${width}`,
+      );
+  }
+  const spaced = Array.from('ab 。中');
+  assert.deepEqual(
+    visualLines(spaced, 3).map(([start, end]) =>
+      spaced.slice(start, end).join(''),
+    ),
+    ['ab ', '。', '中'],
+  );
 });
 
 test('typed and pasted Chinese wrap inside a narrow draft on both palettes and reach the model unchanged', async (t) => {
