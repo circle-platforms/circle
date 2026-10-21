@@ -5411,7 +5411,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const config = readConfig();
         if (await currentToken()) {
           try {
-            await request('GET', '/v1/status');
+            // A server that takes longer than this counts as one that cannot be
+            // reached: the help is not held for the request's full minute
+            await request('GET', '/v1/status', { timeoutMs: 3_000 });
           } catch {
             /* Expiry and reachability are recorded before this returns. */
           }

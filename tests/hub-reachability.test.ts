@@ -158,3 +158,63 @@ test('the hub footer and /hub follow a server that is down or a sign-in that exp
   assert.match(lines.at(-1)!, /^● /);
   assert.match(lines.at(-1)!, /sign-in expired/);
 });
+
+test('/hub help waits at most a few seconds for a server that does not answer', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  let hang = false;
+  const held: import('node:http').ServerResponse[] = [];
+  const server = createServer((request, response) => {
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    const url = new URL(request.url ?? '/', 'http://x');
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: { token: 'tok-hub', tokenType: 'Bearer', scopes: ['scp_lab'] },
+      });
+    // Taken, and then never answered
+    if (hang) return void held.push(response);
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    send(200, { data: [] });
+  });
+  const port = await listen(server);
+  cleanup(
+    t,
+    () =>
+      new Promise<void>((resolve) => {
+        for (const response of held) response.destroy();
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  );
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+    secret: 'pw',
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port} tester`, context);
+  hang = true;
+  const started = Date.now();
+  await command.handler('help', context);
+  const took = Date.now() - started;
+  assert.ok(took < 15_000, `/hub help took ${took} ms`);
+  assert.ok(held.length > 0, 'the status was asked');
+  assert.match(lines.at(-1)!, /cannot reach/);
+});
