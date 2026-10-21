@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   McpManager,
   buildMcpConnections,
+  replaceLongest,
   resolveHeaders,
 } from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -237,9 +238,9 @@ test('a saved secret reaches the server in a header, and what the model reads, t
   mkdirSync(workspace);
   mkdirSync(home);
   saveSecret(home, 'FILES_TOKEN', TOKEN);
-  process.env.CIRCLE_TEST_FILES_TEAM = TEAM;
+  process.env.CIRCLE_TEST_FILES_TEAM_TOKEN = TEAM;
   cleanup(t, () => {
-    delete process.env.CIRCLE_TEST_FILES_TEAM;
+    delete process.env.CIRCLE_TEST_FILES_TEAM_TOKEN;
   });
   const stub = await mcpStub(t, {
     tools: [
@@ -273,7 +274,7 @@ test('a saved secret reaches the server in a header, and what the model reads, t
       transport: 'streamable_http',
       headers: {
         Authorization: 'Bearer ${secret:FILES_TOKEN}',
-        'X-Team': '${env:CIRCLE_TEST_FILES_TEAM}',
+        'X-Team': '${env:CIRCLE_TEST_FILES_TEAM_TOKEN}',
       },
     },
   ];
@@ -311,7 +312,7 @@ test('a saved secret reaches the server in a header, and what the model reads, t
   );
   assert.equal(
     results.find((message) => message.tool_call_id === 'who')!.content,
-    'you sent %FILES_TOKEN% for ${env:CIRCLE_TEST_FILES_TEAM}',
+    'you sent %FILES_TOKEN% for ${env:CIRCLE_TEST_FILES_TEAM_TOKEN}',
   );
   assert.match(
     results.find((message) => message.tool_call_id === 'no')!.content,
@@ -326,6 +327,106 @@ test('a saved secret reaches the server in a header, and what the model reads, t
     assert.ok(!shown.includes(TEAM));
   }
   assert.match(runtime.mcp.describe(), /headers: Authorization, X-Team/);
+});
+
+test('values are replaced longest first, never inside a longer one or inside what replaced it', () => {
+  assert.equal(
+    replaceLongest('a ab abc', [
+      ['ab', 'X'],
+      ['abc', 'Y'],
+      ['a', 'Z'],
+    ]),
+    'Z X Y',
+  );
+  // A secret that holds a file's base64 is hidden whole, and a label is not searched again
+  assert.equal(
+    replaceLongest('token xyzQUJDabc', [
+      ['QUJD', 'f.bin (3 bytes)'],
+      ['xyzQUJDabc', '%FILES_TOKEN%'],
+    ]),
+    'token %FILES_TOKEN%',
+  );
+  assert.equal(
+    replaceLongest('12', [
+      ['12', 'one2'],
+      ['2', 'two'],
+    ]),
+    'one2',
+  );
+  assert.equal(replaceLongest('text', []), 'text');
+  assert.equal(replaceLongest('text', [['', 'x']]), 'text');
+});
+
+test('only a secret, or a variable whose own or header name looks secret, is hidden where a server quotes it; other values stay as written', async (t) => {
+  const values: Record<string, string> = {
+    CIRCLE_TEST_API_VERSION: '2',
+    CIRCLE_TEST_REGION: 'us',
+    CIRCLE_TEST_FILES_KEY: 'key-value-31c8e0',
+    CIRCLE_TEST_FILES_PAT: 'pat-value-9b2d47',
+  };
+  Object.assign(process.env, values);
+  cleanup(t, () => {
+    for (const name of Object.keys(values)) delete process.env[name];
+  });
+  const description =
+    'List the users of a project and their status. Found 12 files in 2026.';
+  const stub = await mcpStub(t, {
+    instructions: () =>
+      // A value cut by a control character is whole again once that is taken out
+      'Use version 2 in region us. Send session-value-c4a1\u0007f2 with each call.',
+    tools: [
+      {
+        name: 'list_users',
+        description,
+        inputSchema: { type: 'object', properties: {} },
+      },
+    ],
+    call: (request) => ({
+      content: [
+        {
+          type: 'text',
+          text: `Found 12 files and 2 folders in 2026 for the users of us-east; key ${String(request.headers['x-files-key'])}, ${String(request.headers.authorization)}, session ${String(request.headers['x-session'])}`,
+        },
+      ],
+    }),
+  });
+  const manager = new McpManager(scratch(t), 30_000, undefined, {
+    secrets: () => ({ FILES_SESSION: 'session-value-c4a1f2' }),
+  });
+  cleanup(t, () => manager.close());
+  await manager.load([
+    {
+      name: 'files-server',
+      url: stub.url,
+      transport: 'streamable_http',
+      headers: {
+        'X-Api-Version': '${env:CIRCLE_TEST_API_VERSION}',
+        'X-Region': '${env:CIRCLE_TEST_REGION}',
+        // KEY in the variable's name, a header of credentials, a saved secret
+        'X-Files-Key': '${env:CIRCLE_TEST_FILES_KEY}',
+        Authorization: 'Bearer ${env:CIRCLE_TEST_FILES_PAT}',
+        'X-Session': '${secret:FILES_SESSION}',
+      },
+    },
+  ]);
+  assert.equal(manager.status[0]!.error, '', manager.describe());
+  assert.equal(stub.requests[0]!.headers['x-api-version'], '2');
+  assert.equal(stub.requests[0]!.headers['x-region'], 'us');
+  const tool = manager.tools[0]!;
+  assert.equal(tool.description, description);
+  assert.equal(
+    await tool.run(
+      {},
+      { sessionId: 'one', signal: new AbortController().signal },
+    ),
+    'Found 12 files and 2 folders in 2026 for the users of us-east; key ${env:CIRCLE_TEST_FILES_KEY}, Bearer ${env:CIRCLE_TEST_FILES_PAT}, session %FILES_SESSION%',
+  );
+  assert.deepEqual(manager.instructions(), [
+    {
+      server: 'files-server',
+      text: 'Use version 2 in region us. Send %FILES_SESSION% with each call.',
+    },
+  ]);
 });
 
 test('a missing secret stops that server before any request, and an error the server quotes back shows the reference', async (t) => {

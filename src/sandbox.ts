@@ -20,22 +20,28 @@ export function isHostAbsolutePath(
   if (path.startsWith('~')) return true;
   return (platform === 'win32' ? win32 : posix).isAbsolute(path);
 }
+/**
+ * Whether a name looks like it holds a secret: one of its words is KEY, TOKEN, SECRET, PASS,
+ * PASSWORD, PASSPHRASE, CREDENTIAL, COOKIE, PRIVATE or the like, or ends in PASS, TOKEN,
+ * SECRET or APIKEY. `OPENAI_API_KEY`, `X-Auth-Token` and `DBPASSWORD` do; `REGION` does not.
+ */
+export function secretLookingName(name: string): boolean {
+  return name
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .some(
+      (part) =>
+        /^(KEYS?|TOKENS?|SECRETS?|PASS|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|COOKIES?|PRIVATE)$/.test(
+          part,
+        ) || /(PASS|PASSWORD|PASSWD|TOKEN|SECRET|APIKEY)$/.test(part),
+    );
+}
 export function shellEnvironment(
   source: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(source).filter(
-      ([name, value]) =>
-        value !== undefined &&
-        !name
-          .toUpperCase()
-          .split(/[^A-Z0-9]+/)
-          .some(
-            (part) =>
-              /^(KEYS?|TOKENS?|SECRETS?|PASS|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|COOKIES?|PRIVATE)$/.test(
-                part,
-              ) || /(PASS|PASSWORD|PASSWD|TOKEN|SECRET|APIKEY)$/.test(part),
-          ),
+      ([name, value]) => value !== undefined && !secretLookingName(name),
     ),
   );
 }

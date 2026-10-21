@@ -17,7 +17,7 @@ import type {
 } from './types.js';
 import { attachmentFromBase64 } from './media.js';
 import { isRecord } from './settings.js';
-import { Sandbox, shellEnvironment } from './sandbox.js';
+import { Sandbox, secretLookingName, shellEnvironment } from './sandbox.js';
 import { readFileBytes } from './file_access.js';
 import { abortable } from './watch.js';
 
@@ -143,18 +143,24 @@ interface SentFile {
 export const MAX_INSTRUCTIONS = 8 * 1024;
 /**
  * A server's instructions as the system prompt takes them: line breaks and tabs kept, every
- * other control character and the bidirectional controls taken out, and the first 8 KiB
- * kept with a mark where the rest was cut. Nothing for a server that gave none.
+ * other control character and the bidirectional controls taken out, then `hide` applied (a
+ * value cut by a control character is whole by then, and one at the cut is hidden before it),
+ * and the first 8 KiB kept with a mark where the rest was cut. Nothing for a server that gave
+ * none.
  */
-export function serverInstructions(raw: unknown): string | undefined {
+export function serverInstructions(
+  raw: unknown,
+  hide: (text: string) => string = (text) => text,
+): string | undefined {
   if (typeof raw !== 'string') return undefined;
-  const text = raw
-    .replace(/\r\n?/g, '\n')
-    .replace(
-      /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g,
-      '',
-    )
-    .trim();
+  const text = hide(
+    raw
+      .replace(/\r\n?/g, '\n')
+      .replace(
+        /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g,
+        '',
+      ),
+  ).trim();
   if (!text) return undefined;
   if (Buffer.byteLength(text) <= MAX_INSTRUCTIONS) return text;
   let size = 0;
@@ -293,14 +299,22 @@ export function resolveHeaders(
 ): Record<string, string> {
   return fillHeaders(headers, env, secrets).headers;
 }
+/**
+ * A header that carries credentials by its name: `Authorization`, `Proxy-Authorization`, or a
+ * name that looks secret, such as `X-Api-Key` or `Cookie`.
+ */
+const credentialHeader = (name: string): boolean =>
+  /^(?:proxy-)?authorization$/i.test(name) || secretLookingName(name);
 function fillHeaders(
   headers: Record<string, string> = {},
   env: NodeJS.ProcessEnv,
   secrets: Record<string, string>,
 ): { headers: Record<string, string>; filled: Map<string, string> } {
   const resolved: Record<string, string> = {};
-  // Each value put in, with what is shown in its place: `%NAME%` for a secret, as everywhere a
-  // secret's value is hidden, and the reference as written for an environment variable
+  // Each secret value put in, with what is shown in its place: `%NAME%` for a saved secret, as
+  // everywhere a secret's value is hidden, and the reference as written for an environment
+  // variable whose name, or whose header's, looks secret. Any other value is no secret, and
+  // hiding it would only change what the server says wherever the same text stands.
   const filled = new Map<string, string>();
   for (const [name, template] of Object.entries(headers)) {
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
@@ -323,7 +337,9 @@ function fillHeaders(
               ? `header ${name} needs the environment variable ${variable}, which is not set`
               : `header ${name} needs the secret ${variable}, which is not saved; save it with /secrets ${variable}`,
           );
-        filled.set(found, kind === 'env' ? reference : `%${variable}%`);
+        if (kind === 'secret') filled.set(found, `%${variable}%`);
+        else if (secretLookingName(variable) || credentialHeader(name))
+          filled.set(found, reference);
         return found;
       },
     );
@@ -334,17 +350,47 @@ function fillHeaders(
   return { headers: resolved, filled };
 }
 /**
- * Shows the name in place of each value Circle filled into a header, longest first: what a
- * server answers can quote the request it got.
+ * Each occurrence of a needle in `text` replaced, the longest needles first, and none looked
+ * for inside the occurrence of a longer one or in what replaced it: a file's base64 that holds
+ * a hidden value is swapped whole for its label, and of two files whose encodings start alike
+ * each is shown as itself.
+ */
+export function replaceLongest(
+  text: string,
+  pairs: Iterable<readonly [string, string]>,
+): string {
+  const needles = [...pairs]
+    .filter(([needle]) => needle && text.includes(needle))
+    .sort(([a], [b]) => b.length - a.length);
+  if (!needles.length) return text;
+  const taken = new Uint8Array(text.length);
+  const found: [number, number, string][] = [];
+  for (const [needle, replacement] of needles)
+    for (let at = text.indexOf(needle); at !== -1;) {
+      const end = at + needle.length;
+      if (taken.subarray(at, end).includes(1)) {
+        at = text.indexOf(needle, at + 1);
+        continue;
+      }
+      taken.fill(1, at, end);
+      found.push([at, end, replacement]);
+      at = text.indexOf(needle, end);
+    }
+  found.sort(([a], [b]) => a - b);
+  let shown = '';
+  let from = 0;
+  for (const [start, end, replacement] of found) {
+    shown += text.slice(from, start) + replacement;
+    from = end;
+  }
+  return shown + text.slice(from);
+}
+/**
+ * Shows the name in place of each secret value Circle filled into a header: what a server
+ * answers can quote the request it got.
  */
 function hideFilled(filled: Map<string, string>): (text: string) => string {
-  const values = [...filled].sort(([a], [b]) => b.length - a.length);
-  return (text) => {
-    let shown = text;
-    for (const [value, reference] of values)
-      shown = shown.split(value).join(reference);
-    return shown;
-  };
+  return (text) => replaceLongest(text, filled);
 }
 /** An error whose message says no filled-in value. */
 function hiddenError(error: unknown, hide: (text: string) => string): unknown {
@@ -585,8 +631,9 @@ export class McpManager {
     spec: ServerTool,
     name: string,
     hints: { readOnly: boolean; idempotent: boolean },
-    hide: (text: string) => string,
+    filled: Map<string, string>,
   ): Tool {
+    const hide = hideFilled(filled);
     const files = fileParameters(spec.inputSchema);
     const limit = connection.maxFileBytes ?? MAX_FILE_BYTES;
     // What a call sent: the session, the server's tool, each file's sha256 and the other
@@ -628,12 +675,10 @@ export class McpManager {
         sending[file.name] = base64;
         return [base64, file.label] as const;
       });
-      const shown = (text: string): string => {
-        let out = hide(text);
-        for (const [base64, label] of encoded)
-          if (base64) out = out.split(base64).join(label);
-        return out;
-      };
+      // What the server says back: each sent file's base64 as its label and each secret value
+      // as its name, in one pass, so neither breaks the other
+      const shown = (text: string): string =>
+        replaceLongest(text, [...encoded, ...filled]);
       const cached = key ? this.results.get(key) : undefined;
       let result: ToolResult;
       if (cached) result = cached;
@@ -756,7 +801,7 @@ export class McpManager {
           void transport?.close().catch(() => {});
         };
         combined.addEventListener('abort', stop, { once: true });
-        // What the server sends back names a header's secret or variable, never its value
+        // What the server sends back names a header's secret, never its value
         let hide = (text: string): string => text;
         try {
           const filled = fillHeaders(
@@ -803,7 +848,14 @@ export class McpManager {
               );
               if (hints.destructive) destroys.add(name);
               registered.push(
-                this.serverTool(connection, client, spec, name, hints, hide),
+                this.serverTool(
+                  connection,
+                  client,
+                  spec,
+                  name,
+                  hints,
+                  filled.filled,
+                ),
               );
             }
             cursor = listed.nextCursor;
@@ -817,9 +869,7 @@ export class McpManager {
           const server: Connected = {
             name: connection.name,
             client,
-            instructions: serverInstructions(
-              hide(client.getInstructions() ?? ''),
-            ),
+            instructions: serverInstructions(client.getInstructions(), hide),
             open: true,
           };
           // The server went away: its instructions leave the prompt, and /mcp says so

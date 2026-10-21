@@ -7,6 +7,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import {
   FILE_PARAMETER_NOTE,
   MAX_FILE_BYTES,
+  McpManager,
   buildMcpConnections,
   fileParameters,
   modelSchema,
@@ -326,6 +327,74 @@ test('a path that is not a readable regular file under read_file rules is an err
   assert.deepEqual(
     Buffer.from(stub.calls()[0]!.message!.params!.arguments.file, 'base64'),
     Buffer.alloc(16, 7),
+  );
+});
+
+test('an echoed file is shown by its label even when a hidden header value is inside its base64, and of two files the longer is swapped first', async (t) => {
+  const root = realpathSync.native(scratch(t));
+  const full = randomBytes(9000);
+  // The first 4800 bytes encode to the first 6400 characters of the whole file's base64
+  const head = full.subarray(0, 4800);
+  writeFileSync(join(root, 'full.log'), full);
+  writeFileSync(join(root, 'head.log'), head);
+  // A saved secret that happens to be part of the encoded file
+  const token = full.toString('base64').slice(7000, 7016);
+  const stub = await mcpStub(t, {
+    tools: [
+      { name: 'upload', inputSchema: SCHEMA },
+      {
+        name: 'compare',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            before: { type: 'string', contentEncoding: 'base64' },
+            after: { type: 'string', contentEncoding: 'base64' },
+          },
+        },
+      },
+    ],
+    call: (request) => {
+      const args = request.message!.params!.arguments as Record<string, string>;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: Object.entries(args)
+              .map(([name, value]) => `${name}=${value}`)
+              .join(' '),
+          },
+        ],
+      };
+    },
+  });
+  const manager = new McpManager(root, 30_000, undefined, {
+    secrets: () => ({ FILES_TOKEN: token }),
+  });
+  cleanup(t, () => manager.close());
+  await manager.load([
+    {
+      name: 'files-server',
+      url: stub.url,
+      transport: 'streamable_http',
+      headers: { Authorization: 'Bearer ${secret:FILES_TOKEN}' },
+    },
+  ]);
+  assert.equal(manager.status[0]!.error, '', manager.describe());
+  const context = { sessionId: 'one', signal: new AbortController().signal };
+  const tool = (name: string) =>
+    manager.tools.find((item) => item.name === `files-server_${name}`)!;
+  const label = (path: string, bytes: Buffer) =>
+    `${path} (${bytes.length} bytes, sha256 ${sha256(bytes)})`;
+  assert.equal(
+    await tool('upload').run({ file: 'full.log' }, context),
+    `file: sent ${label('full.log', full)}\n\nfile=${label('full.log', full)}`,
+  );
+  assert.equal(
+    await tool('compare').run(
+      { before: 'head.log', after: 'full.log' },
+      context,
+    ),
+    `before: sent ${label('head.log', head)}\nafter: sent ${label('full.log', full)}\n\nbefore=${label('head.log', head)} after=${label('full.log', full)}`,
   );
 });
 
