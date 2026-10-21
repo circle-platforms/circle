@@ -1488,10 +1488,17 @@ try {
             iteration,
         );
         await (await taskRow(sessionId, record.runtimeSessionId)).click();
-        await page
+        const allow = page
           .getByRole('button', { name: 'allow once', exact: true })
-          .first()
-          .click();
+          .first();
+        // Which card the click lands on, so a failure below says whether it was this
+        // task's (#228)
+        const clicked = await allow.evaluate((button) => ({
+          hash: location.hash,
+          buttons: document.querySelectorAll('.inline-request button').length,
+          card: button.closest('.inline-request')?.textContent ?? null,
+        }));
+        await allow.click();
         await page
           .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
           .first()
@@ -1502,7 +1509,42 @@ try {
               (i) => i.id === pending.id && i.status === 'pending',
             ),
           'approval consumed exactly once',
-        );
+        ).catch(async (error) => {
+          // Record what the task's own conversation shows: an error under its card
+          // means the runtime refused the answer; a card still waiting means the
+          // click never answered it
+          await (await taskRow(sessionId, record.runtimeSessionId)).click();
+          const shown = await page.evaluate(() => ({
+            hash: location.hash,
+            cards: [...document.querySelectorAll('.inline-request')].map(
+              (card) => card.textContent,
+            ),
+            failures: [...document.querySelectorAll('.request-failure')].map(
+              (failure) => failure.textContent,
+            ),
+          }));
+          const snapshot = await state();
+          await writeFile(
+            join(output, `08b-unanswered-${writer.spec.id}.json`),
+            JSON.stringify(
+              {
+                pending,
+                clicked,
+                shown,
+                interaction: snapshot.interactions.find(
+                  (i) => i.id === pending.id,
+                ),
+                activeSessionId: snapshot.activeSessionId,
+              },
+              null,
+              2,
+            ) + '\n',
+          );
+          await page.screenshot({
+            path: join(output, `08b-unanswered-${writer.spec.id}.png`),
+          });
+          throw error;
+        });
       }
     }
     await until(
