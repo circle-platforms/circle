@@ -99,6 +99,22 @@ function translatePatterns(
   const dropped =
     /^Endpoint does not support (\S+); continuing without it$/.exec(text);
   if (dropped) return `端点不支持 ${dropped[1]}，已去掉后继续`;
+  // The model's question card: who asks, and which of several questions this is
+  const question =
+    /^(?:(.*?) · )?The model has a question(?: · (\d+\/\d+))?$/.exec(text);
+  if (question)
+    return `${question[1] ? question[1] + ' · ' : ''}模型有一个问题${
+      question[2] ? ' · ' + question[2] : ''
+    }`;
+  const unanswered =
+    /^(\d+) unanswered\. Press enter again to send them as empty\.$/.exec(text);
+  if (unanswered)
+    return `${unanswered[1]} 个问题没有回答。再按 enter 以空回答发送。`;
+  const folded = /^… \+(\d+) lines · ctrl\+o$/.exec(text);
+  if (folded) return `… 还有 ${folded[1]} 行 · ctrl+o`;
+  // The path is the plan's, and stays as written
+  const planReady = /^The plan is ready: (.+)$/.exec(text);
+  if (planReady) return `计划写好了：${planReady[1]}`;
   const above = /^↑ (\d+) more above$/.exec(text);
   if (above) return `↑ 上方还有 ${above[1]} 个`;
   if (text.startsWith('search: '))
