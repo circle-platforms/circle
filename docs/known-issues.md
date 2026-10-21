@@ -48,7 +48,7 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **A picture sent earlier in the desktop application is lost to a model that does not read images.** One pasted, dropped or attached while a model that reads images was in use was never written to a file, so after a switch to a model that does not, that model gets only its name, and the side vision model cannot describe it. Send it again.
 - **Only PNG files are scaled down.** JPEG, GIF and WebP pictures, and pictures an MCP server returns, are sent at the size they are; an endpoint may refuse one that is very large.
 - **After upgrading from 1.0.4, which models read images is known once models.dev is fetched again**, within a day unless `CIRCLE_NO_MODELS_REFRESH` is set. Until then pictures go to every model, as in 1.0.4.
-- **A model models.dev does not list is assumed to read images.** If its endpoint refuses them, the request fails; set `"images": false` for the model under `models` in the settings.
+- **A model models.dev does not list is assumed to read images until its endpoint refuses one.** That request fails with the endpoint's words; until Circle quits, the conversation then gives the model the pictures' paths instead, so send the message again. `"images": false` for the model under `models` in the settings avoids the failed request. See [Images and screenshots](usage.md#images-and-screenshots).
 
 ## Background jobs
 
