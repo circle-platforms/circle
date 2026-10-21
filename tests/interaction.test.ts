@@ -64,7 +64,9 @@ async function session(
   ui.screen = new ScreenRenderer((text) => log.push(['screen', text]));
   app.terminal = {
     platform: 'darwin',
-    write: (text) => log.push(['write', text]),
+    write: (text) => {
+      log.push(['write', text]);
+    },
     input: (on) => log.push(['input', on]),
     kill: (signal) => log.push(['kill', signal]),
   };
