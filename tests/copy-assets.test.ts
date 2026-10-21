@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scratch } from './helpers.js';
@@ -32,4 +32,29 @@ test('the build replaces the shipped extensions, so one Circle no longer ships d
     existsSync(join(out, 'extensions', 'github', 'extension.ts')),
     true,
   );
+});
+
+test('the build starts from an empty output folder, so what a removed source compiled to does not stay in it', (t) => {
+  const scripts = (
+    JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    }
+  ).scripts;
+  assert.match(scripts.build!, /^tsx scripts\/clean-build\.ts && tsc /);
+  const out = join(scratch(t), 'dist');
+  // What an earlier build left: the output of a source that is gone
+  mkdirSync(join(out, 'extensions', 'old'), { recursive: true });
+  writeFileSync(join(out, 'removed_module.js'), 'export {};');
+  writeFileSync(join(out, 'removed_module.d.ts'), 'export {};');
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(repo, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+      join('scripts', 'clean-build.ts'),
+      out,
+    ],
+    { cwd: repo, encoding: 'utf8' },
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(out), false);
 });
