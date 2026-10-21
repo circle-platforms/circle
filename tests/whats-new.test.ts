@@ -13,7 +13,6 @@ import { CheckpointStore } from '../src/checkpoint_store.js';
 import { acquireSessionLease } from '../src/session_lock.js';
 import {
   noticeFor,
-  noticeLocale,
   notesSince,
   releaseNotesUrl,
   WHATS_NEW_ITEMS,
@@ -65,10 +64,6 @@ test('notes cover the releases after the one last seen', () => {
     notice!.items[2]!['zh-CN'].includes('没有保存过的深度不再停留'),
     false,
   );
-  assert.equal(noticeLocale({ LANG: 'zh_CN.UTF-8' }), 'zh-CN');
-  assert.equal(noticeLocale({ LANGUAGE: 'zh_CN:en' }), 'zh-CN');
-  assert.equal(noticeLocale({ LANG: 'en_US.UTF-8' }), 'en');
-  assert.equal(noticeLocale({ LC_ALL: 'C' }), 'en');
 });
 
 test('a later version shows only the releases that were skipped', (t) => {
@@ -137,9 +132,13 @@ test('a first run records the version and an upgrade shows the notice once', (t)
     notice!.items.some((item) => /circle-server/.test(item.en)),
     false,
   );
-  const rows = stripAnsi(whatsNewRows(notice!, 'zh-CN', 72).join('\n'));
-  assert.match(rows, /开发工作台/);
-  assert.match(rows, /完整的发布说明/);
+  // The terminal shows the English; the desktop picks its own language
+  const rows = stripAnsi(whatsNewRows(notice!, 72).join('\n'));
+  assert.match(rows, /what's new in/);
+  assert.match(rows, /The desktop app is now a workbench/);
+  assert.match(rows, /full release notes/);
+  assert.match(rows, /esc · dismiss/);
+  assert.equal(/\p{Script=Han}/u.test(rows), false);
   assert.match(rows, /releases\/tag\/v/);
   assert.match(rows, /esc/);
   assert.equal(rows.includes('\x1b'), false);
@@ -288,10 +287,12 @@ test('the terminal shows the notice under the welcome and esc dismisses it', asy
   delete process.env.LANGUAGE;
   process.env.LANG = 'zh_CN.UTF-8';
   try {
+    // On a Chinese system the terminal still shows the notice in English
     ui.repaint();
-    const chinese = stripAnsi(app.state.welcome.join('\n'));
-    assert.match(chinese, /的变化/);
-    assert.match(chinese, /原先的 circle-server/);
+    const shown = stripAnsi(app.state.welcome.join('\n'));
+    assert.match(shown, /what's new in/);
+    assert.match(shown, /circle-server/);
+    assert.equal(/\p{Script=Han}/u.test(shown), false);
   } finally {
     for (const [name, value] of Object.entries(savedLocale)) {
       if (value === undefined) delete process.env[name];

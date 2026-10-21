@@ -24,7 +24,6 @@ import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
 import { ExtensionError } from './extension_error.js';
-import { interfaceLocale, t, uiAside } from './locale.js';
 import {
   SecretPromptError,
   cancelRequest,
@@ -102,8 +101,6 @@ export interface Extension {
   /** From an optional extension.json beside the entry file. */
   version: string;
   description: string;
-  /** Simplified Chinese description from extension.json, when the manifest has one. */
-  descriptionZh: string;
   /** Slash commands named in extension.json, even while the extension is off. */
   declaredCommands: string[];
   enabled: boolean;
@@ -638,13 +635,7 @@ export class ExtensionHost {
   }
   discover(): Pick<
     Extension,
-    | 'name'
-    | 'source'
-    | 'path'
-    | 'version'
-    | 'description'
-    | 'descriptionZh'
-    | 'declaredCommands'
+    'name' | 'source' | 'path' | 'version' | 'description' | 'declaredCommands'
   >[] {
     const found = new Map<
       string,
@@ -655,7 +646,6 @@ export class ExtensionHost {
         | 'path'
         | 'version'
         | 'description'
-        | 'descriptionZh'
         | 'declaredCommands'
       >
     >();
@@ -1071,28 +1061,14 @@ export class ExtensionHost {
   }
   describe(): string {
     const counted = (count: number, one: string, many: string): string =>
-      count === 1
-        ? t(`{n} ${one}`, { n: count })
-        : t(`{n} ${many}`, { n: count });
+      `${count} ${count === 1 ? one : many}`;
     if (!this.extensions.length)
-      return t(
-        'No extensions. Put an extension.ts or extension.js in each extension folder.',
-      );
+      return 'No extensions. Put an extension.ts or extension.js in each extension folder.';
     return this.extensions
-      .map((ext) => {
-        const state = !ext.enabled
-          ? ext.source === 'bundled'
-            ? t('off · /extensions enable {name}', { name: ext.name })
-            : t('off')
-          : ext.error
-            ? t('failed to load: {error}', { error: ext.error })
-            : `${counted(ext.tools.length, 'tool', 'tools')} · ${counted(ext.commands.length, 'command', 'commands')}`;
-        const description =
-          interfaceLocale() === 'zh-CN' && ext.descriptionZh
-            ? ext.descriptionZh
-            : ext.description;
-        return `${ext.name}${ext.version ? ' ' + ext.version : ''}${uiAside(t(ext.source))} · ${state}${description ? '\n  ' + description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`;
-      })
+      .map(
+        (ext) =>
+          `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${!ext.enabled ? (ext.source === 'bundled' ? `off · /extensions enable ${ext.name}` : 'off') : ext.error ? 'failed to load: ' + ext.error : `${counted(ext.tools.length, 'tool', 'tools')} · ${counted(ext.commands.length, 'command', 'commands')}`}${ext.description ? '\n  ' + ext.description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`,
+      )
       .join('\n');
   }
 }
@@ -1100,7 +1076,6 @@ export class ExtensionHost {
 function manifest(path: string): {
   version: string;
   description: string;
-  descriptionZh: string;
   declaredCommands: string[];
 } {
   try {
@@ -1112,10 +1087,6 @@ function manifest(path: string): {
         description:
           typeof value.description === 'string'
             ? value.description.slice(0, 200)
-            : '',
-        descriptionZh:
-          typeof value.descriptionZh === 'string'
-            ? value.descriptionZh.slice(0, 200)
             : '',
         declaredCommands: Array.isArray(value.commands)
           ? value.commands
@@ -1130,10 +1101,5 @@ function manifest(path: string): {
   } catch {
     /* No manifest, or one that cannot be read: the extension still loads. */
   }
-  return {
-    version: '',
-    description: '',
-    descriptionZh: '',
-    declaredCommands: [],
-  };
+  return { version: '', description: '', declaredCommands: [] };
 }

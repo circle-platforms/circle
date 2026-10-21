@@ -5,38 +5,8 @@ repo="${CIRCLE_REPO:-circle-platforms/circle}"
 temporary=""
 cleanup() { [[ -z "$temporary" ]] || rm -rf -- "$temporary"; }
 trap cleanup EXIT
-circle_zh() {
-  case "${LC_ALL:-${LANG:-}}" in
-    zh*|zh_*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-circle_line() {
-  local text=$1
-  if ! circle_zh; then printf '%s' "$text"; return; fi
-  case "$text" in
-    'verifying the download') printf '%s' '正在校验下载' ;;
-    unpacking) printf '%s' '正在解压' ;;
-    downloading\ *) printf '%s' "正在下载 ${text#downloading }" ;;
-    'Missing command: '*) printf '%s' "缺少命令：${text#Missing command: }" ;;
-    'Invalid repository') printf '%s' '仓库名无效' ;;
-    'Run install.ps1 from PowerShell') printf '%s' '请在 PowerShell 里运行 install.ps1' ;;
-    'Unsupported operating system') printf '%s' '不支持的操作系统' ;;
-    'Unsupported architecture') printf '%s' '不支持的处理器架构' ;;
-    'No release has been published yet') printf '%s' '还没有发布' ;;
-    'Invalid semantic version') printf '%s' '版本号不是合法的语义化版本' ;;
-    'Invalid checksum receipt') printf '%s' '校验和文件无效' ;;
-    'sha256sum or shasum is required') printf '%s' '需要 sha256sum 或 shasum' ;;
-    'Archive checksum mismatch') printf '%s' '压缩包校验和不匹配' ;;
-    'Unexpected archive root') printf '%s' '压缩包的根目录不对' ;;
-    'Unsafe archive entry') printf '%s' '压缩包里有不安全的路径' ;;
-    'Archive links and special files are not allowed') printf '%s' '不允许压缩包里有链接或特殊文件' ;;
-    'Incomplete release') printf '%s' '发布不完整' ;;
-    *) printf '%s' "$text" ;;
-  esac
-}
-fail() { printf '[circle-install] %s\n' "$(circle_line "$*")" >&2; exit 1; }
-say() { printf '[circle-install] %s\n' "$(circle_line "$*")"; }
+fail() { printf '[circle-install] %s\n' "$*" >&2; exit 1; }
+say() { printf '[circle-install] %s\n' "$*"; }
 for command in curl tar; do command -v "$command" >/dev/null || fail "Missing command: $command"; done
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail 'Invalid repository'
 

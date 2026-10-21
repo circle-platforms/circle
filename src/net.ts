@@ -10,7 +10,6 @@
 // replaces the store instead of adding to it.
 import http from 'node:http';
 import tls from 'node:tls';
-import { interfaceLocale, t, uiAside } from './locale.js';
 import { createHash, X509Certificate } from 'node:crypto';
 import {
   existsSync,
@@ -69,13 +68,10 @@ export const currentNetworkStatus = (): NetworkStatus =>
   structuredClone(status);
 export function networkSummary(value = currentNetworkStatus()): string {
   const sources = value.sources
-    .map((source) => {
-      const name = t(source.name);
-      const path = source.path ? uiAside(source.path) : '';
-      return interfaceLocale() === 'zh-CN'
-        ? `${name}${path} ${source.certificates}`
-        : `${name}${path}: ${source.certificates}`;
-    })
+    .map(
+      (source) =>
+        `${source.name}${source.path ? ` (${source.path})` : ''}: ${source.certificates}`,
+    )
     .join(', ');
   const proxyWhere = value.proxyFrom
     ? value.proxyHost
@@ -85,20 +81,7 @@ export function networkSummary(value = currentNetworkStatus()): string {
   const proxy = value.proxy
     ? `on${proxyWhere ? ` (${proxyWhere})` : ''}`
     : 'off';
-  const state =
-    proxy === 'on' || proxy === 'off'
-      ? t(proxy)
-      : proxy.replace(/^on/, t('on'));
-  return t(
-    'network: proxy {state}; trust {count} authorities ({sources}){bundle}{problems}',
-    {
-      state,
-      count: value.authorities,
-      sources,
-      bundle: value.bundle ? t('; bundle {path}', { path: value.bundle }) : '',
-      problems: value.problems.length ? `; ${value.problems.join('; ')}` : '',
-    },
-  );
+  return `network: proxy ${proxy}; trust ${value.authorities} authorities (${sources})${value.bundle ? `; bundle ${value.bundle}` : ''}${value.problems.length ? `; ${value.problems.join('; ')}` : ''}`;
 }
 export function networkProblem(problem: string): void {
   status.problems.push(safeNetworkText(problem));

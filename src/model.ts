@@ -30,7 +30,7 @@ import {
 } from './model_guard.js';
 import { parseToolInput } from './tool_call_compat.js';
 import { isRecord } from './settings.js';
-import { t } from './locale.js';
+import { desktopText } from './locale.js';
 import { circleHome } from './paths.js';
 import { ModelCatalog, type ModelFacts } from './model_catalog.js';
 import {
@@ -146,7 +146,8 @@ export class GatewayModel implements ChatModel {
     const credentials = loadCredentials(home);
     const apiKey =
       credentials[settings.auth.api_key_ref] || credentials.api_key;
-    if (!apiKey) throw new Error(t('missing API key; re-run circle --init'));
+    if (!apiKey)
+      throw new Error(desktopText('missing API key; re-run circle --init'));
     this.searchConnection = Object.freeze({
       baseUrl: settings.auth.base_url,
       protocol: settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',

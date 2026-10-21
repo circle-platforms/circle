@@ -2070,12 +2070,22 @@ test('a governance request, single sign-on, manifest errors and a knowledge snap
   );
   await command.handler('audit --format csv', context);
   assert.match(lines.at(-1)!, /governance\.decision/);
-  const savedLanguage = process.env.LANGUAGE;
+  const savedLocale = {
+    LANGUAGE: process.env.LANGUAGE,
+    CIRCLE_DESKTOP_RUNTIME_HOME: process.env.CIRCLE_DESKTOP_RUNTIME_HOME,
+  };
   t.after(() => {
-    if (savedLanguage === undefined) delete process.env.LANGUAGE;
-    else process.env.LANGUAGE = savedLanguage;
+    for (const [name, value] of Object.entries(savedLocale))
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
   });
   process.env.LANGUAGE = 'zh_CN.UTF-8';
+  delete process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
+  // The terminal on a Chinese system keeps the English title
+  await command.handler('packs', context);
+  assert.match(lines.at(-1)!, /Create a governed task/);
+  // The desktop's runtime shows the Chinese one
+  process.env.CIRCLE_DESKTOP_RUNTIME_HOME = scratch(t);
   await command.handler('packs', context);
   assert.match(lines.at(-1)!, /创建受治理的任务/);
   assert.equal(lines.at(-1)!.includes('Create a governed task'), false);
@@ -2091,6 +2101,7 @@ test('a governance request, single sign-on, manifest errors and a knowledge snap
     },
   );
   delete process.env.LANGUAGE;
+  delete process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
   await command.handler('logout', context);
   ssoPaste = true;
   await command.handler(`login --sso http://127.0.0.1:${port}`, context);

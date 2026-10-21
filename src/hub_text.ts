@@ -1,6 +1,7 @@
-// Interface words for /hub. English is the key; Simplified Chinese is used when the
-// process language is Chinese. Read the language when the line is made, not when
-// this module loads, so a test can switch it without leaking into another file.
+// Interface words for /hub. English is the key; Simplified Chinese is used in the
+// desktop's runtime when its language is Chinese. The terminal is English. Read the
+// language when the line is made, not when this module loads, so a test can switch
+// it without leaking into another file.
 // Commands, ids, paths and words the server chose stay in the placeholders.
 
 export const HUB_ZH: Record<string, string> = {
@@ -534,9 +535,11 @@ export const HUB_ZH: Record<string, string> = {
 
 const C_LOCALE = /^(c|posix)(\.|$)/i;
 
-// LANGUAGE, then LC_ALL, then LC_MESSAGES, then LANG. Skip C and POSIX.
-// The first real tag decides: zh* is Simplified Chinese, anything else English.
+// Only in the desktop's runtime, which the desktop starts with CIRCLE_DESKTOP_RUNTIME_HOME.
+// There LANGUAGE, then LC_ALL, then LC_MESSAGES, then LANG, skipping C and POSIX: the
+// first real tag decides, zh* is Simplified Chinese and anything else English.
 export function hubLocaleChinese(): boolean {
+  if (!process.env.CIRCLE_DESKTOP_RUNTIME_HOME) return false;
   const ordered = [
     process.env.LANGUAGE?.split(':')[0],
     process.env.LC_ALL,

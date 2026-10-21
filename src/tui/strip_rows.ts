@@ -3,7 +3,6 @@
 // column 1, the name, what it is doing (the column that gives way first) and a meter that
 // ends one column short of the edge.
 import { lampSgr, palette, sgrJoin, type LampState } from '../ink/theme.js';
-import { uiText } from '../locale.js';
 import { stringWidth } from '../ink/string_width.js';
 import {
   elapsed,
@@ -104,7 +103,7 @@ export function agentName(agent: Pick<SubagentView, 'id' | 'name'>): string {
 }
 // What it is doing now; old/restored records without activity keep their task label.
 export function agentActivity(agent: SubagentView): string {
-  if (agent.state === 'waiting') return uiText('waiting for you');
+  if (agent.state === 'waiting') return 'waiting for you';
   if (agent.activity) return agent.activity;
   const prefix = `${agent.name}: `;
   const task = agent.description.startsWith(prefix)
@@ -190,7 +189,7 @@ export function agentRows(
 
 // What a job is doing: waiting on you, an agent's step, a command's last line.
 export function jobActivity(job: Job): string {
-  if (job.detail === 'waiting for you') return uiText('waiting for you');
+  if (job.detail === 'waiting for you') return 'waiting for you';
   if (job.kind === 'agent' || job.kind === 'watch') return job.detail || '—';
   try {
     return plainJobOutput(outputTail(job.outputPath, 2048, 1)).trim() || '—';
@@ -287,7 +286,7 @@ export function terminalRows(
   const names = shown.map((one) => `${one.id} ${one.name}`);
   const doings = shown.map((one) =>
     one.held
-      ? uiText('waiting for you')
+      ? 'waiting for you'
       : one.state === 'connecting'
         ? 'connecting'
         : one.state !== 'ready'
@@ -344,7 +343,7 @@ export function terminalBand(
   const w = Math.max(20, width);
   const lamp = terminalLamp(session);
   const state = session.held
-    ? uiText('waiting for you')
+    ? 'waiting for you'
     : session.state === 'ready'
       ? session.quiet < 1500
         ? 'output'

@@ -19,7 +19,6 @@ import {
   assetName,
   validateRelease,
 } from './install_layout.js';
-import { t } from './locale.js';
 import { VERSION, validVersion, compareVersions } from './version.js';
 
 // The release page of the repository this installation updates from
@@ -242,9 +241,7 @@ export async function updateInstalled(
         '  circle update 1.2.3     that version',
         '  circle update --check   print the installed and available versions',
         '',
-      ]
-        .map((line) => t(line))
-        .join('\n'),
+      ].join('\n'),
     );
     return 0;
   }
@@ -258,7 +255,7 @@ export async function updateInstalled(
         : ['-'],
   );
   if (versions.length > 1 || versions[0] === '-' || args.at(-1) === '--version')
-    throw new Error(t('usage: circle update [version] [--check]'));
+    throw new Error('usage: circle update [version] [--check]');
   const prefix = process.env.CIRCLE_INSTALL_PREFIX;
   if (!prefix)
     throw new Error('circle update requires an installer-managed installation');
@@ -305,16 +302,11 @@ export async function updateInstalled(
   if (!target || !validVersion(target))
     throw new Error('release has an invalid semantic version');
   if (compareVersions(target, installed) <= 0 && !versions[0]) {
-    out.write(
-      t('circle {version} is up to date', { version: installed }) + '\n',
-    );
+    out.write(`circle ${installed} is up to date\n`);
     return 0;
   }
   if (check) {
-    out.write(
-      t('Installed {installed}; available {target}', { installed, target }) +
-        '\n',
-    );
+    out.write(`Installed ${installed}; available ${target}\n`);
     return 0;
   }
   const command = process.platform === 'win32' ? 'powershell.exe' : 'bash';
@@ -327,9 +319,7 @@ export async function updateInstalled(
     process.platform === 'win32'
       ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script]
       : [script];
-  out.write(
-    t('updating circle {from} to {to}', { from: installed, to: target }) + '\n',
-  );
+  out.write(`updating circle ${installed} to ${target}\n`);
   // The download is here rather than in the installer so that it shows how far it has got on
   // every system; the installer then checks the file as it checks one it downloaded itself.
   const folder = mkdtempSync(join(tmpdir(), 'circle-update-'));
@@ -387,14 +377,11 @@ export async function updateInstalled(
 function releaseLookupError(status?: number, message?: string): Error {
   const head =
     status !== undefined
-      ? t('release lookup failed: HTTP {status}', { status })
-      : t('release lookup failed: {message}', { message: message ?? '' });
+      ? `release lookup failed: HTTP ${status}`
+      : `release lookup failed: ${message ?? ''}`;
   const hint =
     status === undefined || status === 403 || status === 429
-      ? '\n' +
-        t(
-          'GitHub may be rate limiting this machine, or the network blocked the request. Wait a moment and run circle update again.',
-        )
+      ? '\nGitHub may be rate limiting this machine, or the network blocked the request. Wait a moment and run circle update again.'
       : '';
   return new Error(head + hint);
 }
@@ -464,7 +451,7 @@ async function reportInstalled(
   request: typeof fetch,
 ): Promise<void> {
   const notes = await versionsSince(repo, from, to, request);
-  out.write(t("What's new:") + '\n');
+  out.write("What's new:\n");
   for (const version of notes)
     out.write(`  ${version}  ${releaseNotesUrl(repo, version)}\n`);
   const dir = join(prefix, 'versions');
@@ -489,13 +476,7 @@ async function reportInstalled(
       ? `Remove-Item -Recurse -Force ${quotedPath(join(dir, example))}`
       : `rm -rf ${quotedPath(join(dir, example))}`;
   out.write(
-    t(
-      'Older versions kept so a session can finish use {size} MB under {dir}.',
-      { size, dir },
-    ) + '\n',
+    `Older versions kept so a session can finish use ${size} MB under ${dir}.\n`,
   );
-  out.write(
-    t('Remove one when nothing is running from it: {command}', { command }) +
-      '\n',
-  );
+  out.write(`Remove one when nothing is running from it: ${command}\n`);
 }

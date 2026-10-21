@@ -7,7 +7,6 @@ import type { AgentRuntime } from '../runtime.js';
 import type { CircleSettings } from '../settings.js';
 import { isReady } from '../settings.js';
 import { currentBranch } from '../git_info.js';
-import { effortLabel } from '../locale.js';
 import { EFFORT_LEVELS } from '../model.js';
 import type { LampState } from '../ink/theme.js';
 import {
@@ -114,7 +113,7 @@ export class WelcomeState {
       : '';
     const depth = runtime?.thinkingLevel ?? '';
     if (model && (EFFORT_LEVELS as readonly string[]).includes(depth))
-      model += ` • ${effortLabel(depth)}`;
+      model += ` • ${depth}`;
     let endpoint = '';
     try {
       endpoint = new URL(settings.auth.base_url).hostname;

@@ -1,9 +1,8 @@
-// What changed for someone already using Circle, in both interface languages.
-// The desktop home page and the terminal welcome read this same list. Nothing
-// here touches the filesystem: the window's bundle can import it.
+// What changed for someone already using Circle, in both of the desktop's languages.
+// The desktop home page and the terminal welcome, in English, read this same list.
+// Nothing here touches the filesystem: the window's bundle can import it.
 import { compareVersions, validVersion } from './version.js';
 
-export type NoticeLocale = 'en' | 'zh-CN';
 export interface Localized {
   en: string;
   'zh-CN': string;
@@ -73,27 +72,6 @@ export interface WhatsNewNotice {
   linkLabel: Localized;
   link: string;
   dismiss: Localized;
-}
-
-const INTERRUPTED_MARK = {
-  en: '✖ Interrupted',
-  'zh-CN': '✖ 已中断',
-} as const;
-
-/**
- * The stop mark. The terminal keeps the English line in its notice list and
- * translates it when drawing, the same words the desktop uses.
- */
-export function interruptedMark(locale: NoticeLocale = noticeLocale()): string {
-  return INTERRUPTED_MARK[locale];
-}
-
-/** Chinese when LANG, LC_ALL or LANGUAGE says so; otherwise English. */
-export function noticeLocale(
-  env: Record<string, string | undefined> = process.env,
-): NoticeLocale {
-  const raw = env.LANGUAGE || env.LC_ALL || env.LANG || '';
-  return /^zh\b/i.test(raw) || /(^|:)zh(_|-|\b)/i.test(raw) ? 'zh-CN' : 'en';
 }
 
 /**

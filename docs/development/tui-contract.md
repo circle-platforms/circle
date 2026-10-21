@@ -56,7 +56,7 @@ nav_order: 3
 
 ## 4 口吻
 
-- 界面词以英文为准，小写、短，和 pi、Codex、Claude Code 同一个口音。`LANGUAGE`、`LC_ALL` 或 `LANG` 是中文时，界面词显示简体中文：经 `src/locale.ts` 的 `t()`、`uiText()`，译文在 `src/tui_zh.ts`，同一个东西和桌面用同一个词。内容（你的话、模型的话、计划项、子代理自述、工具结果）不翻，保存的历史也是原文。
+- 界面词英文、小写、短，和 pi、Codex、Claude Code 同一个口音；系统语言是中文时也是英文。内容（你的话、模型的话、计划项、子代理自述）不翻。
 - **键位提示只出现在两类地方。** 一是有东西被折起的地方：折叠行 `… +15 lines · ctrl+o`、折起的思考行 `∴ Thought 6.3s · 标题  ctrl+t`、折起的 Read 结果 `Read 31 lines · ctrl+o`、欢迎块 recent 折起的会话 `… +6 more · /resume`。二是进入一个模态时那一行说怎么出去：反向搜索、机密录入、Tab 补全的一闪。另有页眉右侧的 `? for shortcuts`。显而易见的操作不写（esc 中断、y/a/n、enter 确认），没有内容被折起的行不写。
 - `↑ ↓` 自带 tokens 含义，不写单位；裸计数才带单位（`3.1k tokens`）。
 - 折叠一种写法：`… +N lines`。

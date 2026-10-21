@@ -281,7 +281,7 @@ test('the real plan_exit question keeps completed steps in view until the decisi
   assert.ok(!s.rows().some((row) => row.includes('Plan 1/1')));
 });
 
-test("in Chinese the plan question speaks the desktop plan card's words, and a choice still answers with its own label", async (t) => {
+test('on a Chinese system the plan question stays English, and a choice answers with its own label', async (t) => {
   const saved = {
     LANG: process.env.LANG,
     LC_ALL: process.env.LC_ALL,
@@ -306,18 +306,9 @@ test("in Chinese the plan question speaks the desktop plan card's words, and a c
     Boolean(s.app.state.dialog?.options.includes(PLAN_CHOICES.manual)),
   );
   const screen = s.rows().join('\n');
-  for (const words of [
-    '模型有一个问题',
-    '计划写好了：',
-    '接下来怎么做？',
-    '自动模式执行',
-    '手动审批执行 — 退出计划模式，每项改动先问你',
-    '需要修改',
-    '只保存计划，不做修改',
-    '写下你自己的回答',
-  ])
+  for (const words of Object.values(PLAN_CHOICES))
     assert.ok(screen.includes(words), `the card shows ${words}`);
-  assert.doesNotMatch(screen, /The model has a question|manual approval/);
+  assert.equal(/\p{Script=Han}/u.test(screen), false, screen);
   // The card answers with the choice's own label, which plan_exit reads
   s.key('2', '2');
   await turn;

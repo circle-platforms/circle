@@ -1,4 +1,3 @@
-import { t } from '../../locale.js';
 import type { HookChange, HookPreview } from '../../hooks.js';
 import type {
   Card,
@@ -35,9 +34,7 @@ export class HookApprovalCard implements Card<HookAnswer> {
   ];
   constructor(readonly change: HookChange) {}
   state(): DialogState {
-    const lines: CardLine[] = [
-      { text: this.change.file, tone: 'em', verbatim: true },
-    ];
+    const lines: CardLine[] = [{ text: this.change.file, tone: 'em' }];
     const same: string[] = [];
     for (const hook of this.change.hooks) {
       if (hook.mark === 'unchanged') {
@@ -46,16 +43,14 @@ export class HookApprovalCard implements Card<HookAnswer> {
       }
       const [word, tone] = MARKS[hook.mark];
       lines.push({
-        text: `${t(word)} · ${hook.name} · ${hook.event} · ${hook.command}`,
+        text: `${word} · ${hook.name} · ${hook.event} · ${hook.command}`,
         tone,
-        verbatim: true,
       });
     }
     if (same.length)
       lines.push({
-        text: `${t(MARKS.unchanged[0])} · ${same.join(', ')}`,
+        text: `${MARKS.unchanged[0]} · ${same.join(', ')}`,
         tone: 'dim',
-        verbatim: true,
       });
     const anchor = lines.length;
     lines.push({

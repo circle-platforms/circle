@@ -1722,6 +1722,7 @@ test('/help, /hotkeys and /hub help hang continuations under the description col
     LANGUAGE: process.env.LANGUAGE,
   };
   const savedColumns = process.stdout.columns;
+  // On a Chinese system the terminal's words stay English, laid out the same way
   process.env.LANG = 'zh_CN.UTF-8';
   delete process.env.LC_ALL;
   delete process.env.LANGUAGE;
@@ -1741,16 +1742,15 @@ test('/help, /hotkeys and /hub help hang continuations under the description col
     const helpRow = help.find((row) => row.includes('/hooks'));
     assert.ok(helpRow, help.join('\n'));
     assert.match(helpRow, /^ {5}\//);
-    const helpWrap = help.findIndex((row) =>
-      row.includes('登录。不写用户时用已保存的'),
-    );
-    if (helpWrap >= 0) {
-      const column = descriptionColumn(help[helpWrap]!);
-      assert.ok(column && column > 5, help[helpWrap]);
-      const next = help[helpWrap + 1]!;
-      assert.equal(next.slice(0, column), ' '.repeat(column), next);
-      assert.notEqual(next[column], ' ');
-    }
+    const helpWrap = help.findIndex((row) => /^ {5}\/effort /.test(row));
+    assert.ok(helpWrap >= 0, help.join('\n'));
+    const column = descriptionColumn(help[helpWrap]!);
+    assert.ok(column && column > 5, help[helpWrap]);
+    const next = help[helpWrap + 1]!;
+    assert.equal(next.slice(0, column), ' '.repeat(column), next);
+    assert.notEqual(next[column], ' ');
+    assert.ok(help.some((row) => row.includes(' (/connect)')));
+    assert.ok(help.some((row) => row.includes(' (/quit, /q)')));
     const hotkeys = await shown('/hotkeys');
     const labelColumn = (line: string, label: string): number => {
       const at = line.indexOf(label);
@@ -1758,18 +1758,18 @@ test('/help, /hotkeys and /hub help hang continuations under the description col
       const gap = line.slice(at + label.length).match(/^ */)?.[0].length ?? 0;
       return stringWidth(line.slice(0, at + label.length)) + gap;
     };
-    const list = hotkeys.find((row) => row.includes('在列表里'));
-    const drag = hotkeys.find((row) => row.includes('拖动鼠标'));
+    const list = hotkeys.find((row) => row.includes('in a list'));
+    const drag = hotkeys.find((row) => row.includes('mouse drag'));
     assert.ok(list && drag, hotkeys.join('\n'));
-    const hotkeyColumn = labelColumn(list, '在列表里');
-    assert.equal(labelColumn(drag, '拖动鼠标'), hotkeyColumn);
+    const hotkeyColumn = labelColumn(list, 'in a list');
+    assert.equal(labelColumn(drag, 'mouse drag'), hotkeyColumn);
     assert.match(list, /^ {5}/);
     const hung = hotkeys.find(
       (row, index) =>
         index > 0 &&
         row.startsWith(' '.repeat(hotkeyColumn)) &&
         row[hotkeyColumn] !== ' ' &&
-        !row.includes('在列表里'),
+        !row.includes('in a list'),
     );
     assert.ok(hung, hotkeys.join('\n'));
     const hubHost = await new ExtensionHost({
@@ -1799,27 +1799,21 @@ test('/help, /hotkeys and /hub help hang continuations under the description col
       row.includes('/hub login [url] [user]'),
     );
     assert.ok(login >= 0, hub.join('\n'));
-    const column = descriptionColumn(hub[login]!);
-    assert.ok(column && column > 3, hub[login]);
-    const next = hub[login + 1]!;
-    assert.equal(next.slice(0, column), ' '.repeat(column), next);
-    assert.match(next, /密码/);
+    const hubColumn = descriptionColumn(hub[login]!);
+    assert.ok(hubColumn && hubColumn > 3, hub[login]);
+    const after = hub[login + 1]!;
+    assert.equal(after.slice(0, hubColumn), ' '.repeat(hubColumn), after);
+    assert.match(after, /password|masked|asked/);
     const commands = hub.filter(
       (row) =>
-        row.includes('/hub ') && (row.match(/^ */)?.[0].length ?? 0) < column,
+        row.includes('/hub ') &&
+        (row.match(/^ */)?.[0].length ?? 0) < hubColumn,
     );
     assert.ok(commands.length > 1, hub.join('\n'));
     assert.ok(
-      commands.every((row) => descriptionColumn(row) === column),
+      commands.every((row) => descriptionColumn(row) === hubColumn),
       commands.join('\n'),
     );
-    assert.equal(
-      help.some((row) => /\S （/.test(row)),
-      false,
-      help.filter((row) => row.includes('（')).join('\n'),
-    );
-    assert.ok(help.some((row) => row.includes('（/connect）')));
-    assert.ok(help.some((row) => row.includes('（/quit, /q）')));
     const submitAt = hub.findIndex((row) =>
       row.includes('/hub submit <pack> <file>'),
     );
@@ -1828,18 +1822,21 @@ test('/help, /hotkeys and /hub help hang continuations under the description col
     for (let index = submitAt; index < hub.length; index++) {
       const row = hub[index]!;
       const lead = row.match(/^ */)?.[0].length ?? 0;
-      if (index > submitAt && row.trim() && lead < column) break;
+      if (index > submitAt && row.trim() && lead < hubColumn) break;
       submitRows.push(row);
     }
     assert.ok(
       submitRows.some((row) => row.includes('module-execute')),
       submitRows.join('\n'),
     );
-    const broken = submitRows.filter((row) => {
-      const body = row.trimStart();
-      return /^[，。、）」』》〉〗〕｝！？：；]/.test(body) || body === '，不';
-    });
-    assert.deepEqual(broken, [], submitRows.join('\n'));
+    assert.ok(
+      submitRows
+        .slice(1)
+        .every((row) => row.slice(0, hubColumn) === ' '.repeat(hubColumn)),
+      submitRows.join('\n'),
+    );
+    for (const text of [help, hotkeys, hub].flat())
+      assert.equal(/\p{Script=Han}/u.test(text), false, text);
   } finally {
     for (const [name, value] of Object.entries(saved))
       if (value === undefined) delete process.env[name];

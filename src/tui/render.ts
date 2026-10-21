@@ -1,6 +1,5 @@
 import { palette, sgrJoin, statusLight } from '../ink/theme.js';
-import { DATABASE_WAIT_STATUS, uiText } from '../locale.js';
-import { interruptedMark } from '../whats_new.js';
+import { DATABASE_WAIT_STATUS } from '../locale.js';
 import type { LampState } from '../ink/theme.js';
 import { wrap, pad, truncate, truncateStyled } from '../ink/string_width.js';
 import type { Message, Usage } from '../types.js';
@@ -312,12 +311,10 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     else placed.set(anchor, [...(placed.get(anchor) ?? []), note]);
   });
   const noticeBlock = (note: string): void => {
-    const stop = note === '✖ Interrupted' || note === '✖ 已中断';
-    const shown = stop ? interruptedMark() : uiText(note);
-    const failed = shown.startsWith('✖') && !stop;
+    const failed = note.startsWith('✖') && !note.startsWith('✖ Interrupted');
     block(
-      shown.startsWith('✖') ? '✖' : ' ',
-      shown.replace(/^✖\s*/, ''),
+      note.startsWith('✖') ? '✖' : ' ',
+      note.replace(/^✖\s*/, ''),
       '',
       failed ? p.red : p.dim,
     );
@@ -368,7 +365,6 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       message.thinking_seconds ?? state.thinkingSeconds?.[message.id] ?? '',
       state.turnUsage?.[message.id]?.seconds ?? '',
       message.interrupted ? 1 : 0,
-      interruptedMark(),
       inKind,
       lead,
     ].join('|');
@@ -650,17 +646,15 @@ export function renderScreen(
           p.reset,
       );
   }
-  const mode = uiText(
-    state.viewOnly
-      ? 'view only'
-      : state.planMode
-        ? 'read-only'
-        : state.autoMode
-          ? 'auto'
-          : state.acceptEdits
-            ? 'accept edits'
-            : '',
-  );
+  const mode = state.viewOnly
+    ? 'view only'
+    : state.planMode
+      ? 'read-only'
+      : state.autoMode
+        ? 'auto'
+        : state.acceptEdits
+          ? 'accept edits'
+          : '';
   const modeSgr = state.viewOnly
     ? p.yellow
     : state.planMode
@@ -683,7 +677,7 @@ export function renderScreen(
   else {
     // The frame says whose turn it is: the rainbow runs while the model works.
     const seconds = (Date.now() - state.started) / 1000;
-    const waiting = state.storeWait ? uiText(DATABASE_WAIT_STATUS) : '';
+    const waiting = state.storeWait ? DATABASE_WAIT_STATUS : '';
     const label = waiting
       ? ''
       : state.busy
@@ -749,7 +743,7 @@ export function renderScreen(
       p.dim +
         pad(
           truncate(
-            ` ${statusLight(session.waiting ? 'wait' : 'running')} ${session.id.slice(-8)} · ${terminalText(session.title)} · ${uiText(session.waiting ? 'waiting for you' : 'running')}`,
+            ` ${statusLight(session.waiting ? 'wait' : 'running')} ${session.id.slice(-8)} · ${terminalText(session.title)} · ${session.waiting ? 'waiting for you' : 'running'}`,
             width,
           ),
           width,

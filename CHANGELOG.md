@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Changed
+
+- **The terminal is English again, whatever the system language.** 1.10.0 showed the screen, `/help`, `/hotkeys`, `circle --help`, `circle update` and the installers' steps in Simplified Chinese when `LANGUAGE`, `LC_ALL` or `LANG` named Chinese, and earlier releases did so for the session list, `/hub`, hook notices and the upgrade notice. The desktop keeps its Chinese, `/hub`'s replies included. Chinese text that you, the model or a tool wrote still counts as two columns and wraps as before.
+
 ## 1.10.0 - 2026-10-21
 
 ### Added
