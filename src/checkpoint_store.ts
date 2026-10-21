@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { DATABASE_BUSY_MESSAGE, uiText } from './locale.js';
+import { DATABASE_BUSY_MESSAGE, desktopText } from './locale.js';
 import { ensureHome, normalizeWorkspace } from './paths.js';
 import type { Message } from './types.js';
 import {
@@ -103,7 +103,7 @@ function isDatabaseLocked(error: unknown): boolean {
 export function databaseOpenError(error: unknown): Error {
   if (!isDatabaseLocked(error))
     return error instanceof Error ? error : new Error(String(error));
-  const friendly = new Error(uiText(DATABASE_BUSY_MESSAGE));
+  const friendly = new Error(desktopText(DATABASE_BUSY_MESSAGE));
   friendly.cause = error;
   return friendly;
 }

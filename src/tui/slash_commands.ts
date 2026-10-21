@@ -1,10 +1,3 @@
-// No imports: the desktop window evals this file where there is no module
-// loader. locale.ts installs the translator; until then the words stay English.
-let t: (text: string) => string = (text) => text;
-export function setSlashTranslator(fn: (text: string) => string): void {
-  t = fn;
-}
-
 export interface SlashCommand {
   name: string;
   description: string;
@@ -280,21 +273,19 @@ export function closeMatch(name: string, names: Iterable<string>): string {
   return best;
 }
 export function helpText(custom: [string, string][] = []): string {
-  const lines = [t('Available commands:'), ''];
+  const lines = ['Available commands:', ''];
   for (const command of BUILTIN_SLASH) {
     const alias = command.aliases?.length
       ? ' (' + command.aliases.map((alias) => '/' + alias).join(', ') + ')'
       : '';
-    lines.push(
-      `  /${command.name.padEnd(10)} ${t(command.description)}${alias}`,
-    );
+    lines.push(`  /${command.name.padEnd(10)} ${command.description}${alias}`);
   }
   if (custom.length) {
-    lines.push('', t('Custom commands:'));
+    lines.push('', 'Custom commands:');
     for (const [name, description] of custom)
-      lines.push(`  /${name.padEnd(10)} ${t(description)}`);
+      lines.push(`  /${name.padEnd(10)} ${description}`);
   }
-  lines.push('', t('Type text without / to chat. Skills also: /skill:name'));
+  lines.push('', 'Type text without / to chat. Skills also: /skill:name');
   return lines.join('\n');
 }
 /** One shortcut. An empty key continues the previous row at the description column. */
@@ -425,10 +416,9 @@ export const HOTKEY_ROWS: { key: string; text: string }[] = [
 ];
 export function hotkeysText(): string {
   return [
-    t('Keyboard shortcuts:'),
-    ...HOTKEY_ROWS.map((row) => {
-      const text = t(row.text);
-      return row.key ? `  ${t(row.key)}  ${text}` : `  ${text}`;
-    }),
+    'Keyboard shortcuts:',
+    ...HOTKEY_ROWS.map((row) =>
+      row.key ? `  ${row.key}  ${row.text}` : `  ${row.text}`,
+    ),
   ].join('\n');
 }

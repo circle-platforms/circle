@@ -1,4 +1,4 @@
-import { t } from './locale.js';
+import { desktopText } from './locale.js';
 import { isNetworkFailure, networkError } from './net.js';
 export interface ProbeResult {
   protocol: string;
@@ -83,7 +83,7 @@ export async function resolveEndpoint(
       inferred: !options.protocol,
       base_url: base,
       status: 'failed',
-      detail: t('missing API key'),
+      detail: desktopText('missing API key'),
     };
   for (const protocol of options.protocol
     ? [options.protocol]

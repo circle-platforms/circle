@@ -55,10 +55,11 @@ test('a session that ends on a user prompt shows an interrupted marker', () => {
     assert.equal(text.includes('previous turn was interrupted'), false);
     assert.equal(text.split('Interrupted').length - 1, 1);
   });
+  // A Chinese system leaves the mark English
   withLocale('zh_CN.UTF-8', () => {
     const text = transcriptRows(state, 80).map(stripAnsi).join('\n');
-    assert.match(text, /已中断/);
-    assert.equal(text.includes('Interrupted'), false);
+    assert.equal(text.split('Interrupted').length - 1, 1);
+    assert.equal(/\p{Script=Han}/u.test(text), false);
   });
 });
 
@@ -81,9 +82,9 @@ test('a stopped reply is marked from its own flag, and a finished one is not', (
   assert.match(text, /Interrupted/);
   assert.equal(text.split('Interrupted').length - 1, 1);
   withLocale('zh_CN.UTF-8', () => {
-    const chinese = transcriptRows(stopped, 80).map(stripAnsi).join('\n');
-    assert.match(chinese, /已中断/);
-    assert.equal(chinese.split('已中断').length - 1, 1);
+    const shown = transcriptRows(stopped, 80).map(stripAnsi).join('\n');
+    assert.equal(shown.split('Interrupted').length - 1, 1);
+    assert.equal(/\p{Script=Han}/u.test(shown), false);
   });
   const finished = screen();
   finished.messages = [

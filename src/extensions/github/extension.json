@@ -1,5 +1,1 @@
-{
-  "version": "0.1.0",
-  "description": "Connect GitHub from its plugin details and reuse that connection for task PR and CI tools",
-  "descriptionZh": "从插件详情连接 GitHub，并在任务的 PR 和 CI 工具里复用这个连接"
-}
+{"version":"0.1.0","description":"Connect GitHub from its plugin details and reuse that connection for task PR and CI tools"}

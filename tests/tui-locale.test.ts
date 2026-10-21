@@ -1,101 +1,75 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { helpText as cliHelpText } from '../src/cli.js';
+import { connectionModels } from '../src/connection_models.js';
 import { Picker } from '../src/ink/components/picker.js';
 import { stripAnsi } from '../src/ink/string_width.js';
 import {
-  DATABASE_BUSY_MESSAGE,
   DATABASE_WAIT_STATUS,
-  interfaceLocale,
-  uiText,
+  desktopChinese,
+  desktopText,
 } from '../src/locale.js';
+import { resolveEndpoint } from '../src/probe.js';
+import { formatHotkeys } from '../src/tui/hotkeys_text.js';
 import {
   renderScreen,
   transcriptRows,
   type ScreenState,
 } from '../src/tui/render.js';
+import { helpText } from '../src/tui/slash_commands.js';
+import { busyLabel } from '../src/tui/status_rows.js';
 import { resultRows } from '../src/tui/tool_rows.js';
 import { emptyUsage, type Message } from '../src/types.js';
+import { scratch } from './helpers.js';
 
-test('interface locale follows LANG the same way a Chinese system does', () => {
-  assert.equal(interfaceLocale({ LANG: 'zh_CN.UTF-8' }), 'zh-CN');
-  assert.equal(interfaceLocale({ LANGUAGE: 'zh_CN:en' }), 'zh-CN');
-  assert.equal(interfaceLocale({ LANG: 'zh-Hans' }), 'zh-CN');
-  assert.equal(interfaceLocale({ LANG: 'en_US.UTF-8' }), 'en');
-  assert.equal(interfaceLocale({ LC_ALL: 'C' }), 'en');
-  assert.equal(uiText('view only', 'en'), 'view only');
-  assert.equal(
-    uiText('Resumed circle-abc · title', 'en'),
-    'Resumed circle-abc · title',
+const han = (text: string): boolean => /\p{Script=Han}/u.test(text);
+const LOCALE = ['LANG', 'LC_ALL', 'LANGUAGE', 'CIRCLE_DESKTOP_RUNTIME_HOME'];
+function withLocale(values: Record<string, string>, run: () => void): void {
+  const saved = Object.fromEntries(
+    LOCALE.map((name) => [name, process.env[name]]),
   );
-});
-
-test('a Chinese locale translates the session list, resume line, view only and search quota', () => {
-  assert.equal(uiText('view only', 'zh-CN'), '仅查看');
-  // Notices of a turn, their own reasons left as written
-  assert.equal(
-    uiText('Reloaded settings and the model', 'zh-CN'),
-    '已重新加载设置和模型',
-  );
-  assert.equal(
-    uiText('title failed · empty title', 'zh-CN'),
-    '标题生成失败 · empty title',
-  );
-  assert.equal(
-    uiText('Retry 2/10 in 1.5s', 'zh-CN'),
-    '第 2/10 次重试 · 1.5 秒后',
-  );
-  assert.equal(
-    uiText(
-      'Endpoint does not support temperature; continuing without it',
-      'zh-CN',
-    ),
-    '端点不支持 temperature，已去掉后继续',
-  );
-  assert.equal(
-    uiText('Reloaded settings and the model', 'en'),
-    'Reloaded settings and the model',
-  );
-  assert.equal(uiText('Sessions · this folder', 'zh-CN'), '会话 · 此文件夹');
-  assert.equal(uiText('Sessions · every folder', 'zh-CN'), '会话 · 所有文件夹');
-  assert.equal(
-    uiText('Resumed circle-abc · 京都介绍', 'zh-CN'),
-    '已恢复 circle-abc · 京都介绍',
-  );
-  assert.equal(uiText('↑ 6 more above', 'zh-CN'), '↑ 上方还有 6 个');
-  assert.equal(
-    uiText('this session is writable again', 'zh-CN'),
-    '另一端已关闭，可以继续对话了',
-  );
-  assert.equal(
-    uiText(
-      'Open in another terminal · view only · circle --fork circle-abc copies it here',
-      'zh-CN',
-    ),
-    '已在另一终端打开 · 仅查看 · 用 circle --fork circle-abc 复制一份到这里继续',
-  );
-  assert.equal(
-    uiText('Allow "echo …" for this session', 'zh-CN'),
-    '本会话内允许“echo …”',
-  );
-  assert.equal(uiText('Exit code: 0', 'zh-CN'), '退出码 0');
-  assert.equal(
-    uiText('The user rejected this tool call. The user said: no', 'zh-CN'),
-    '已拒绝 · 你说：no',
-  );
-  assert.equal(
-    uiText('Native search unavailable: search quota exceeded', 'zh-CN'),
-    '原生搜索不可用：搜索额度不足',
-  );
-
-  const saved = {
-    LANG: process.env.LANG,
-    LC_ALL: process.env.LC_ALL,
-    LANGUAGE: process.env.LANGUAGE,
-  };
-  process.env.LANG = 'zh_CN.UTF-8';
-  process.env.LC_ALL = 'zh_CN.UTF-8';
-  delete process.env.LANGUAGE;
+  for (const name of LOCALE) delete process.env[name];
+  Object.assign(process.env, values);
   try {
+    run();
+  } finally {
+    for (const [name, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+  }
+}
+function screen(overrides: Partial<ScreenState> = {}): ScreenState {
+  return {
+    welcome: [],
+    messages: [] as Message[],
+    notices: [],
+    hiddenTurns: 0,
+    showThinking: false,
+    showTools: false,
+    streaming: '',
+    thinking: '',
+    draft: '',
+    draftCursor: 0,
+    model: 'test',
+    workspace: '/tmp',
+    version: '0',
+    busy: false,
+    waiting: false,
+    planMode: false,
+    autoMode: false,
+    todos: [],
+    usage: emptyUsage(),
+    flash: '',
+    started: 0,
+    scroll: 0,
+    ...overrides,
+  } as ScreenState;
+}
+
+test('a Chinese system leaves the session list, the transcript and the help English', () => {
+  withLocale({ LANG: 'zh_CN.UTF-8', LC_ALL: 'zh_CN.UTF-8' }, () => {
     const picker = new Picker(
       'Sessions · this folder',
       Array.from({ length: 12 }, (_, index) => ({
@@ -112,19 +86,15 @@ test('a Chinese locale translates the session list, resume line, view only and s
     );
     picker.focus = 11;
     const listed = stripAnsi(picker.rows(60, 6).join('\n'));
-    assert.match(listed, /会话 · 此文件夹/);
-    assert.match(listed, /回车打开 · tab 所有文件夹/);
-    assert.match(listed, /输入以搜索/);
+    assert.match(listed, /Sessions · this folder/);
+    assert.match(listed, /enter opens · tab every folder/);
+    // The count of rows above sits after the hint and the search line
     const lines = listed.split('\n').map((line) => line.trim());
-    const above = lines.findIndex((line) => line.includes('上方还有 6 个'));
-    const search = lines.findIndex((line) => line.includes('输入以搜索'));
-    assert.ok(above > search);
+    const above = lines.findIndex((line) => line === '↑ 6 more above');
+    const search = lines.findIndex((line) => line === 'type to search');
+    assert.ok(search > 0 && above > search);
     assert.match(lines[above + 1] ?? '', /session /);
-    assert.equal(
-      lines.slice(search + 1, above).some((line) => line.includes('session ')),
-      false,
-    );
-    assert.match(listed, /session 11 · 当前/);
+    assert.match(listed, /session 11 · current/);
     const aged = new Picker(
       'Sessions · this folder',
       [
@@ -135,24 +105,20 @@ test('a Chinese locale translates the session list, resume line, view only and s
       () => {},
     );
     const ages = stripAnsi(aged.rows(80, 6).join('\n'));
-    assert.match(ages, /50 分钟前/);
-    assert.match(ages, /1 小时前/);
-    assert.match(ages, /运行中/);
-    assert.equal(ages.includes('50m'), false);
-    assert.equal(ages.includes('1h'), false);
+    assert.match(ages, /50m/);
+    assert.match(ages, /1h · running/);
     aged.confirm('Delete “s” and its messages?', () => {});
-    const confirm = stripAnsi(aged.rows(80, 6).join('\n'));
-    assert.match(confirm, /删除“s”及其消息？/);
-    assert.match(confirm, /回车确认 · esc 取消/);
-    assert.equal(confirm.includes('enter confirms'), false);
-    assert.equal(confirm.includes('Delete'), false);
+    assert.match(
+      stripAnsi(aged.rows(80, 6).join('\n')),
+      /Delete “s” and its messages\? {2}enter confirms · esc cancels/,
+    );
     aged.ask('Rename', 's', () => {}, {
       replace: true,
       keys: 'typing replaces the name · enter saves · esc cancels',
     });
     const rename = stripAnsi(aged.rows(80, 6).join('\n'));
-    assert.match(rename, /重命名: s/);
-    assert.match(rename, /输入会替换名称 · 回车保存 · esc 取消/);
+    assert.match(rename, /Rename: s/);
+    assert.match(rename, /typing replaces the name · enter saves/);
 
     const quota = stripAnsi(
       resultRows(
@@ -167,113 +133,50 @@ test('a Chinese locale translates the session list, resume line, view only and s
         { width: 80, expanded: true },
       ).join('\n'),
     );
-    assert.match(quota, /提供方：DuckDuckGo/);
-    assert.equal(
-      uiText(DATABASE_BUSY_MESSAGE, 'zh-CN'),
-      '数据库正忙 · 另一个 Circle 正在使用此数据文件夹。请稍候再启动',
-    );
-    assert.equal(uiText(DATABASE_WAIT_STATUS, 'zh-CN'), '正在等待数据库…');
-    assert.equal(
-      uiText(DATABASE_WAIT_STATUS, 'en'),
-      'waiting for the database…',
-    );
-    assert.match(quota, /原生搜索不可用：搜索额度不足/);
-    assert.equal(quota.includes('Provider: DuckDuckGo'), false);
-    assert.equal(quota.includes('search quota exceeded'), false);
+    assert.match(quota, /Provider: DuckDuckGo/);
+    assert.match(quota, /Native search unavailable: search quota exceeded/);
 
-    const screen = {
-      welcome: [],
-      messages: [] as Message[],
+    const state = screen({
       notices: [
         'Resumed circle-abc · title',
         'Open in another terminal · view only · circle --fork circle-abc copies it here',
         'this session is writable again',
+        '✖ Interrupted',
       ],
-      hiddenTurns: 0,
-      showThinking: false,
-      showTools: false,
-      streaming: '',
-      thinking: '',
-      draft: '',
-      draftCursor: 0,
-      model: 'test',
-      workspace: '/tmp',
-      version: '0',
-      busy: false,
-      waiting: false,
-      planMode: false,
       viewOnly: true,
-      autoMode: false,
-      todos: [],
-      usage: emptyUsage(),
-      flash: '',
-      started: 0,
-      scroll: 0,
       storeWait: true,
-    } as ScreenState;
-    const transcript = stripAnsi(transcriptRows(screen, 80).join('\n'));
-    assert.match(transcript, /已恢复 circle-abc · title/);
-    assert.match(transcript, /已在另一终端打开 · 仅查看/);
-    assert.match(transcript, /另一端已关闭，可以继续对话了/);
-    assert.equal(transcript.includes('view only'), false);
-    assert.equal(transcript.includes('Resumed'), false);
-    const frame = stripAnsi(renderScreen(screen, 80, 24).join('\n'));
-    assert.match(frame, /仅查看/);
+    });
+    const transcript = stripAnsi(transcriptRows(state, 80).join('\n'));
+    assert.match(transcript, /Resumed circle-abc · title/);
+    assert.match(transcript, /Open in another terminal · view only/);
+    assert.match(transcript, /this session is writable again/);
+    assert.match(transcript, /✖ Interrupted/);
+    assert.equal(han(transcript), false);
+    const frame = stripAnsi(renderScreen(state, 80, 24).join('\n'));
+    assert.match(frame, /view only/);
     assert.equal(
-      frame.split('\n').filter((line) => line.includes('正在等待数据库…'))
+      frame.split('\n').filter((line) => line.includes(DATABASE_WAIT_STATUS))
         .length,
       1,
     );
-    assert.equal(frame.includes('view only'), false);
-    assert.equal(frame.includes('waiting for the database'), false);
-  } finally {
-    process.env.LANG = saved.LANG;
-    process.env.LC_ALL = saved.LC_ALL;
-    if (saved.LANGUAGE === undefined) delete process.env.LANGUAGE;
-    else process.env.LANGUAGE = saved.LANGUAGE;
-  }
+    assert.equal(han(frame), false);
+
+    assert.equal(busyLabel('Considering', 2, 10), 'Considering… · 2s · ↓ 10');
+    const help = helpText();
+    assert.match(help, /\/hooks\s+List hooks/);
+    const keys = formatHotkeys(80);
+    assert.match(keys, /^Keyboard shortcuts:/);
+    assert.match(keys, /ctrl\+q\s+queue a follow-up/);
+    const usage = cliHelpText(80);
+    assert.match(usage, /^usage: circle \[options\]/);
+    for (const text of [help, keys, usage]) assert.equal(han(text), false);
+  });
 });
 
 test('an English screen says it is waiting for the database', () => {
-  const saved = {
-    LANG: process.env.LANG,
-    LC_ALL: process.env.LC_ALL,
-    LANGUAGE: process.env.LANGUAGE,
-  };
-  process.env.LANG = 'en_US.UTF-8';
-  process.env.LC_ALL = 'en_US.UTF-8';
-  delete process.env.LANGUAGE;
-  try {
+  withLocale({ LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' }, () => {
     const frame = stripAnsi(
-      renderScreen(
-        {
-          welcome: [],
-          messages: [],
-          notices: [],
-          hiddenTurns: 0,
-          showThinking: false,
-          showTools: false,
-          streaming: '',
-          thinking: '',
-          draft: '',
-          draftCursor: 0,
-          model: 'test',
-          workspace: '/tmp',
-          version: '0',
-          busy: false,
-          waiting: false,
-          planMode: false,
-          autoMode: false,
-          todos: [],
-          usage: emptyUsage(),
-          flash: '',
-          started: 0,
-          scroll: 0,
-          storeWait: true,
-        } as ScreenState,
-        80,
-        24,
-      ).join('\n'),
+      renderScreen(screen({ storeWait: true }), 80, 24).join('\n'),
     );
     assert.equal(
       frame
@@ -281,11 +184,72 @@ test('an English screen says it is waiting for the database', () => {
         .filter((line) => line.includes('waiting for the database…')).length,
       1,
     );
-    assert.equal(frame.includes('正在等待数据库'), false);
-  } finally {
-    process.env.LANG = saved.LANG;
-    process.env.LC_ALL = saved.LC_ALL;
-    if (saved.LANGUAGE === undefined) delete process.env.LANGUAGE;
-    else process.env.LANGUAGE = saved.LANGUAGE;
-  }
+  });
+});
+
+test('the desktop runtime keeps the Chinese of the messages it shows', async (t) => {
+  const desktop = scratch(t);
+  const zh = { CIRCLE_DESKTOP_RUNTIME_HOME: desktop };
+  assert.equal(desktopChinese({ LANG: 'zh_CN.UTF-8' }), false);
+  assert.equal(desktopChinese({ ...zh, LANG: 'zh_CN.UTF-8' }), true);
+  assert.equal(desktopChinese({ ...zh, LANGUAGE: 'zh_CN:en' }), true);
+  assert.equal(desktopChinese({ ...zh, LANG: 'zh-Hans' }), true);
+  assert.equal(desktopChinese({ ...zh, LANG: 'en_US.UTF-8' }), false);
+  assert.equal(desktopChinese({ ...zh, LC_ALL: 'C' }), false);
+  assert.equal(
+    desktopText('missing API key', { ...zh, LANG: 'zh_CN.UTF-8' }),
+    '缺少 API 密钥',
+  );
+  // Words it has no Chinese for stay as written
+  assert.equal(
+    desktopText('something else', { ...zh, LANG: 'zh_CN.UTF-8' }),
+    'something else',
+  );
+
+  const missingKey = async (): Promise<string[]> => {
+    const probed = await resolveEndpoint('http://127.0.0.1:9/v1', '');
+    const listed = await connectionModels('http://127.0.0.1:9/v1', '').then(
+      () => '',
+      (error: Error) => error.message,
+    );
+    return [probed.detail ?? '', listed];
+  };
+  const saved = Object.fromEntries(
+    LOCALE.map((name) => [name, process.env[name]]),
+  );
+  t.after(() => {
+    for (const [name, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+  });
+  for (const name of LOCALE) delete process.env[name];
+  process.env.LANG = 'zh_CN.UTF-8';
+  assert.deepEqual(await missingKey(), ['missing API key', 'missing API key']);
+  process.env.CIRCLE_DESKTOP_RUNTIME_HOME = desktop;
+  assert.deepEqual(await missingKey(), ['缺少 API 密钥', '缺少 API 密钥']);
+});
+
+test('the terminal and the installers hold no Chinese words', () => {
+  const root = join(import.meta.dirname, '..');
+  const files = (folder: string): string[] =>
+    readdirSync(folder).flatMap((name) => {
+      const path = join(folder, name);
+      return statSync(path).isDirectory() ? files(path) : [path];
+    });
+  const terminal = [
+    ...files(join(root, 'src', 'tui')),
+    ...files(join(root, 'src', 'ink')),
+    ...[
+      'cli.ts',
+      'extensions.ts',
+      'install_manager.ts',
+      'line_setup.ts',
+      'net.ts',
+      'update.ts',
+    ].map((name) => join(root, 'src', name)),
+    join(root, 'install.sh'),
+    join(root, 'install.ps1'),
+  ];
+  const found = terminal.filter((path) => han(readFileSync(path, 'utf8')));
+  assert.deepEqual(found, []);
 });

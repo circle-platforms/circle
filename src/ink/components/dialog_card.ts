@@ -1,4 +1,3 @@
-import { uiText } from '../../locale.js';
 import { palette, statusLight, sgrJoin, type Palette } from '../theme.js';
 import { stringWidth, truncate } from '../string_width.js';
 import { terminalText } from './markdown_renderer.js';
@@ -9,8 +8,6 @@ export type CardTone =
 export interface CardLine {
   text: string;
   tone?: CardTone;
-  /** Content, such as a command: drawn as written, never translated. */
-  verbatim?: boolean;
   /** A status row of parts in their own tones (`for ` dim, a URL as text): one row, cut
    * with "…" when it does not fit, never wrapped. `text` is then not drawn. */
   segments?: [string, CardTone][];
@@ -160,7 +157,7 @@ export function cardRows(
   const lamp = statusLight(dialog.lamp ?? 'wait');
   const lampCode = lamp.slice(0, lamp.indexOf('●'));
   // The title wraps. A single cut would hide the end of a long tool name.
-  const title = terminalText(uiText(dialog.title)).replace(/\n/g, ' ');
+  const title = terminalText(dialog.title).replace(/\n/g, ' ');
   const titleRoom = Math.max(4, width - 4);
   const head = wrapWords(title, titleRoom).map((part, index) =>
     compose(
@@ -198,9 +195,7 @@ export function cardRows(
           [
             ['   ', ''],
             ...line.segments.map(([text, name]): [string, string] => [
-              terminalText(
-                name === 'added' || name === 'removed' ? text : uiText(text),
-              ).replace(/\n/g, ' '),
+              terminalText(text).replace(/\n/g, ' '),
               tone(p, name),
             ]),
           ],
@@ -210,11 +205,7 @@ export function cardRows(
       );
       return;
     }
-    const bodyText =
-      line.verbatim || line.tone === 'added' || line.tone === 'removed'
-        ? line.text
-        : uiText(line.text);
-    for (const part of wrapWords(terminalText(bodyText), width - 4))
+    for (const part of wrapWords(terminalText(line.text), width - 4))
       pushBody(
         compose(
           width,
@@ -237,10 +228,11 @@ export function cardRows(
   (dialog.keyless ? [] : dialog.options).forEach((option, index) => {
     const ticked = dialog.marks?.[index];
     const mark = ticked === undefined ? '' : ticked ? '[x] ' : '[ ] ';
-    const label = terminalText(uiText(option)).replace(/\n/g, ' ');
-    const note = terminalText(
-      uiText(dialog.optionNotes?.[index] ?? ''),
-    ).replace(/\n/g, ' ');
+    const label = terminalText(option).replace(/\n/g, ' ');
+    const note = terminalText(dialog.optionNotes?.[index] ?? '').replace(
+      /\n/g,
+      ' ',
+    );
     // label and note wrap as one text (an option is never cut); the note is dimmed by offset
     const full = label + (note ? ` — ${note}` : '');
     const parts = wrapWords(
@@ -283,14 +275,7 @@ export function cardRows(
     );
   const notes: string[] = [];
   for (const line of dialog.notes ?? [])
-    for (const part of wrapWords(
-      terminalText(
-        line.tone === 'added' || line.tone === 'removed'
-          ? line.text
-          : uiText(line.text),
-      ),
-      width - 4,
-    ))
+    for (const part of wrapWords(terminalText(line.text), width - 4))
       notes.push(
         compose(width, [
           ['   ', ''],
@@ -322,10 +307,7 @@ export function cardRows(
         ['›', p.blue],
         [' ', ''],
         [truncate(shown, width - 4, true), p.text],
-        [
-          glyphs.length ? '' : terminalText(uiText(dialog.placeholder ?? '')),
-          p.dim,
-        ],
+        [glyphs.length ? '' : terminalText(dialog.placeholder ?? ''), p.dim],
       ]),
     );
   }

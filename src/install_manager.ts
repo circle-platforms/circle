@@ -18,7 +18,6 @@ import {
   withoutStrayZshrc,
   zshIsInstalled,
 } from './shell_rc.js';
-import { t } from './locale.js';
 import {
   DEFAULT_REPO,
   activeVersion,
@@ -29,58 +28,8 @@ import {
   validRepo,
 } from './install_layout.js';
 
-function installLine(text: string): string {
-  const copying = /^copying circle (\S+) to (.+)$/.exec(text);
-  if (copying)
-    return t('copying circle {version} to {path}', {
-      version: copying[1]!,
-      path: copying[2]!,
-    });
-  const removed = /^removed circle (\S+)$/.exec(text);
-  if (removed) return t('removed circle {version}', { version: removed[1]! });
-  const installed = /^installed circle (\S+) in (.+)$/.exec(text);
-  if (installed)
-    return t('installed circle {version} in {prefix}', {
-      version: installed[1]!,
-      prefix: installed[2]!,
-    });
-  const add = /^add (.+) to PATH, or run (\S+)$/.exec(text);
-  if (add)
-    return t('add {dir} to PATH, or run {bin}', { dir: add[1]!, bin: add[2]! });
-  const added = /^added (.+) to PATH in (.+)$/.exec(text);
-  if (added)
-    return t('added {dir} to PATH in {file}', {
-      dir: added[1]!,
-      file: added[2]!,
-    });
-  const opened =
-    /^open a new terminal \(or run: source (.+)\), then: cd \/path\/to\/project && circle$/.exec(
-      text,
-    );
-  if (opened)
-    return t(
-      'open a new terminal (or run: source {file}), then: cd /path/to/project && circle',
-      { file: opened[1]! },
-    );
-  const removedFile =
-    /^removed (.+); it only had a circle PATH line and zsh is not installed$/.exec(
-      text,
-    );
-  if (removedFile)
-    return t(
-      'removed {file}; it only had a circle PATH line and zsh is not installed',
-      { file: removedFile[1]! },
-    );
-  const removedLine =
-    /^removed a circle PATH line from (.+); zsh is not installed$/.exec(text);
-  if (removedLine)
-    return t('removed a circle PATH line from {file}; zsh is not installed', {
-      file: removedLine[1]!,
-    });
-  return t(text);
-}
 const say = (text: string): void => {
-  process.stdout.write(`[circle-install] ${installLine(text)}\n`);
+  process.stdout.write(`[circle-install] ${text}\n`);
 };
 const [root, prefixArgument, binArgument, repoArgument] = process.argv.slice(2);
 if (!root)

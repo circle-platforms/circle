@@ -58,7 +58,7 @@ import {
   type PickerOptions,
 } from '../ink/components/picker.js';
 import { welcomeRows } from '../ink/components/welcome.js';
-import { noticeLocale, type WhatsNewNotice } from '../whats_new.js';
+import type { WhatsNewNotice } from '../whats_new.js';
 import { dismissWhatsNew, pendingWhatsNew } from '../whats_new_state.js';
 import { whatsNewRows } from './whats_new_rows.js';
 import {
@@ -863,11 +863,7 @@ export class SessionApp {
       this.whatsNewShown = true;
       const blank = this.state.welcome.pop() ?? '';
       this.state.welcome.push(
-        ...whatsNewRows(
-          this.whatsNew,
-          noticeLocale(process.env),
-          process.stdout.columns || 80,
-        ),
+        ...whatsNewRows(this.whatsNew, process.stdout.columns || 80),
         blank,
       );
     }

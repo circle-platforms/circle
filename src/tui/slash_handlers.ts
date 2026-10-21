@@ -1,7 +1,6 @@
 // The slash commands of the full-screen interface. SessionApp keeps /models, /login, /reload
 // and /editor, which use its own state, and routes every command through runCommand.
 import { randomUUID } from 'node:crypto';
-import { t, uiAside, uiText } from '../locale.js';
 import { networkSummary } from '../net.js';
 import { hookFileShown } from '../hooks.js';
 import {
@@ -340,21 +339,21 @@ function help(host: CommandHost): void {
   ]);
   for (const command of host.runtime.extensions.commands().values())
     custom.push([command.name, command.description]);
-  const lines = [t('Available commands:'), ''];
+  const lines = ['Available commands:', ''];
   for (const command of BUILTIN_SLASH) {
     const alias = command.aliases?.length
-      ? uiAside(command.aliases.map((name) => '/' + name).join(', '))
+      ? ` (${command.aliases.map((name) => '/' + name).join(', ')})`
       : '';
     lines.push(
-      aligned(`  /${command.name.padEnd(10)} `, t(command.description) + alias),
+      aligned(`  /${command.name.padEnd(10)} `, command.description + alias),
     );
   }
   if (custom.length) {
-    lines.push('', t('Custom commands:'));
+    lines.push('', 'Custom commands:');
     for (const [name, description] of custom)
-      lines.push(aligned(`  /${name.padEnd(10)} `, t(description)));
+      lines.push(aligned(`  /${name.padEnd(10)} `, description));
   }
-  lines.push('', t('Type text without / to chat. Skills also: /skill:name'));
+  lines.push('', 'Type text without / to chat. Skills also: /skill:name');
   host.notice(lines.join('\n'));
 }
 
@@ -771,10 +770,9 @@ function approvalsList(host: CommandHost): void {
   });
   host.picker('Session approvals', items, choose, {
     hint: [
-      rules.length ? '' : t('No always-allow rules this session.'),
+      rules.length ? '' : 'No always-allow rules this session.',
       recent.length
-        ? t('recent') +
-          ': ' +
+        ? 'recent: ' +
           recent
             .map(
               (entry) =>
@@ -782,7 +780,7 @@ function approvalsList(host: CommandHost): void {
             )
             .join(' · ')
         : '',
-      t('/approvals add <pattern> allows commands by pattern'),
+      '/approvals add <pattern> allows commands by pattern',
     ]
       .filter(Boolean)
       .join(' · '),
@@ -816,17 +814,13 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
   if (['enable', 'disable'].includes(verb.toLowerCase())) {
     const enable = verb.toLowerCase() === 'enable';
     if (!name) {
-      host.fail(
-        t('Usage: /extensions {verb} <name>', {
-          verb: enable ? 'enable' : 'disable',
-        }),
-      );
+      host.fail(`Usage: /extensions ${enable ? 'enable' : 'disable'} <name>`);
       return;
     }
     // The list is complete once integrations have loaded at start.
     await runtime.initialize().catch(() => {});
     if (!runtime.extensions.extensions.some((ext) => ext.name === name)) {
-      host.fail(t('No extension named {name}', { name }));
+      host.fail(`No extension named ${name}`);
       return;
     }
     // Saved, so it stays on (or off) in the next session too.
@@ -840,14 +834,10 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
     try {
       await runtime.reloadIntegrations();
     } catch (error) {
-      host.fail(
-        t('Extension reload failed: {error}', { error: reason(error) }),
-      );
+      host.fail(`Extension reload failed: ${reason(error)}`);
       return;
     }
-    host.notice(
-      enable ? t('{name} enabled', { name }) : t('{name} disabled', { name }),
-    );
+    host.notice(`${name} ${enable ? 'enabled' : 'disabled'}`);
     host.notice(runtime.extensions.describe());
     return;
   }
@@ -855,15 +845,11 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
     try {
       await runtime.reloadIntegrations();
     } catch (error) {
-      host.fail(
-        t('Extension reload failed: {error}', { error: reason(error) }),
-      );
+      host.fail(`Extension reload failed: ${reason(error)}`);
       return;
     }
     host.notice(
-      t('Extensions reloaded · {n} tools', {
-        n: runtime.extensions.tools().length,
-      }),
+      `Extensions reloaded · ${runtime.extensions.tools().length} tools`,
     );
   }
   host.notice(runtime.extensions.describe());
@@ -1485,24 +1471,21 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     host.notice(
       skills.length
         ? [
-            t('Skills:'),
+            'Skills:',
             '',
             ...skills.map((skill) => {
-              const description = uiText(skill.description);
               const source = skill.source_label
-                ? uiAside(uiText(skill.source_label))
+                ? ` (${skill.source_label})`
                 : '';
               return aligned(
                 `  ${pad(skill.name, 20)} `,
-                `${description}${source}`,
+                `${skill.description}${source}`,
               );
             }),
             '',
-            t('Load with /skill <name>'),
+            'Load with /skill <name>',
           ].join('\n')
-        : t(
-            'No skills found. Install with `npx skills add … -a amp` (writes .agents/skills), or add SKILL.md under ~/.circle/skills / .agent/skills.',
-          ),
+        : 'No skills found. Install with `npx skills add … -a amp` (writes .agents/skills), or add SKILL.md under ~/.circle/skills / .agent/skills.',
     );
     return;
   }
@@ -1529,8 +1512,7 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     },
   ]);
   host.notice(
-    t('Loaded skill `{name}`', { name }) +
-      (skillArgs ? t(" args='{args}'", { args: skillArgs }) : ''),
+    `Loaded skill \`${name}\`` + (skillArgs ? ` args='${skillArgs}'` : ''),
   );
 }
 
@@ -2083,12 +2065,6 @@ async function clone(host: CommandHost): Promise<void> {
   redrawn(host, `Cloned this branch → ${session.id}`);
 }
 
-function hookSource(label: string): string {
-  if (label === 'user' || label === 'project') return t(label);
-  if (label.startsWith('skill:'))
-    return `${t('skill')}:${label.slice('skill:'.length)}`;
-  return label;
-}
 function hooks(host: CommandHost): void {
   const {
     hooks: rows,
@@ -2099,10 +2075,10 @@ function hooks(host: CommandHost): void {
   const line = (row: (typeof rows)[number], waiting: boolean): string => {
     const hook = row.hook;
     const state = waiting
-      ? t('waiting for /skill {name}', { name: hook.skill ?? hook.name })
-      : t('trusted');
+      ? `waiting for /skill ${hook.skill ?? hook.name}`
+      : 'trusted';
     return wrapHang(
-      `  ${hook.name} · ${hookSource(hook.sourceLabel)} · ${hook.event} · ${hook.command} · ${state}`,
+      `  ${hook.name} · ${hook.sourceLabel} · ${hook.event} · ${hook.command} · ${state}`,
       width,
       2,
     ).join('\n');
@@ -2110,20 +2086,20 @@ function hooks(host: CommandHost): void {
   const running = rows.filter((row) => row.active);
   const waiting = rows.filter((row) => !row.active);
   const lines: string[] = [];
-  if (projectIgnored) lines.push(t('project hooks need trust'), '');
+  if (projectIgnored) lines.push('project hooks need trust', '');
   if (projectChanged.length) {
-    lines.push(t('project hooks need approval'), '');
+    lines.push('project hooks need approval', '');
     for (const change of projectChanged)
       lines.push(
         wrapHang(
-          `  ${hookFileShown(change.file, host.workspace)} · ${t('needs approval')}`,
+          `  ${hookFileShown(change.file, host.workspace)} · needs approval`,
           width,
           2,
         ).join('\n'),
       );
     lines.push(
       wrapHang(
-        `  ${t('Circle asks when a turn starts. After skip, /reload asks again.')}`,
+        '  Circle asks when a turn starts. After skip, /reload asks again.',
         width,
         2,
       ).join('\n'),
@@ -2131,16 +2107,16 @@ function hooks(host: CommandHost): void {
     );
   }
   if (!rows.length && !projectChanged.length) {
-    lines.push(t('No hooks configured.'));
+    lines.push('No hooks configured.');
     host.notice(lines.join('\n'));
     return;
   }
   if (rows.length) {
-    lines.push(t('Hooks:'), '');
+    lines.push('Hooks:', '');
     if (running.length) lines.push(...running.map((row) => line(row, false)));
     if (waiting.length) {
       if (running.length) lines.push('');
-      lines.push(t('Skill hooks waiting for load:'), '');
+      lines.push('Skill hooks waiting for load:', '');
       lines.push(...waiting.map((row) => line(row, true)));
     }
   }

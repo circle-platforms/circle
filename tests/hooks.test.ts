@@ -25,7 +25,6 @@ import { Sandbox } from '../src/sandbox.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import { buildTools } from '../src/tools.js';
-import { uiText } from '../src/locale.js';
 import type { Message, ToolCall } from '../src/types.js';
 import { approveProjectHooks, cleanup, scratch } from './helpers.js';
 
@@ -411,18 +410,6 @@ if (input.tool_name === 'delete') {
     hookNoticeText({ kind: 'denied', tool: 'delete', reason: 'no delete' }),
     'hook denied delete · no delete',
   );
-  assert.equal(
-    uiText('hook denied delete · no delete', 'zh-CN'),
-    '钩子拒绝了 delete · no delete',
-  );
-  assert.equal(
-    uiText('project hooks need trust', 'zh-CN'),
-    '项目钩子需要先信任文件夹',
-  );
-  assert.equal(
-    uiText('Hook denied this call: no delete', 'zh-CN'),
-    '钩子拒绝了此次调用： no delete',
-  );
 });
 
 test('a gating hook that times out or exits badly denies, and the secret environment is removed', async (t) => {
@@ -782,10 +769,6 @@ test('gating output that is not JSON denies, and a non-gating failure only notif
   });
   assert.equal(denied.decision, 'deny');
   assert.equal(denied.reason, 'hook output is not JSON');
-  assert.equal(
-    uiText('hook denied write_file · hook output is not JSON', 'zh-CN'),
-    '钩子拒绝了 write_file · 钩子输出不是合法 JSON',
-  );
   const quiet = await runner.run({
     event: 'before_tool',
     sessionId: 's',
@@ -814,13 +797,6 @@ test('gating output that is not JSON denies, and a non-gating failure only notif
   assert.equal(lint.context, '');
   assert.equal(lint.notices[0]?.kind, 'failed');
   assert.match(lint.notices[0]?.reason ?? '', /lint failed/);
-  assert.equal(
-    uiText(
-      `hook failed · lint · ${lint.notices[0]?.reason}`,
-      'zh-CN',
-    ).startsWith('钩子失败'),
-    true,
-  );
   const started = await runner.run({
     event: 'session_start',
     sessionId: 's',

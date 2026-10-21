@@ -40,7 +40,6 @@ import { EFFORT_LEVELS } from './model.js';
 import { installExitGuard } from './exit_guard.js';
 import { initializeNetwork } from './network_bootstrap.js';
 import { hangingWrap, pad, stringWidth } from './ink/string_width.js';
-import { t } from './locale.js';
 import { networkSummary } from './net.js';
 import { VERSION } from './version.js';
 import { UsageError } from './usage_error.js';
@@ -357,18 +356,18 @@ export function helpText(width = process.stdout.columns || 80): string {
   const flagWidth = HELP_FLAG_WIDTH + 2;
   const indent = ' '.repeat(2 + flagWidth);
   const lines = [
-    t('usage: circle [options] [folder] [@file ...] [message ...]'),
+    'usage: circle [options] [folder] [@file ...] [message ...]',
     '',
-    t('A terminal coding agent for your own model endpoint.'),
+    'A terminal coding agent for your own model endpoint.',
     '',
   ];
   for (const [flag, description] of HELP_ROWS) {
     if (stringWidth(flag) > HELP_FLAG_WIDTH) {
-      lines.push('  ' + flag, ...hangingWrap(indent, t(description), columns));
+      lines.push('  ' + flag, ...hangingWrap(indent, description, columns));
       continue;
     }
     const prefix = '  ' + pad(flag, flagWidth);
-    lines.push(...hangingWrap(prefix, t(description), columns));
+    lines.push(...hangingWrap(prefix, description, columns));
   }
   return lines.join('\n') + '\n';
 }
@@ -391,10 +390,7 @@ export async function pipedText(
         ? undefined
         : setTimeout(() => {
             warn(
-              t(
-                'circle: nothing arrived on stdin within {seconds}s; going on without it (use </dev/null to skip the wait)\n',
-                { seconds: waitMs / 1000 },
-              ),
+              `circle: nothing arrived on stdin within ${waitMs / 1000}s; going on without it (use </dev/null to skip the wait)\n`,
             );
             done(false);
           }, waitMs);
@@ -536,10 +532,7 @@ async function headlessSettings(
       saveSettings(settings, home);
     } else if (!process.stdin.isTTY)
       throw new UsageError(
-        t(
-          'This folder is not trusted yet: {folder}\nRun `circle` there once in a terminal and trust it, or pass --trust to trust it and remember it.',
-          { folder: options.workspace },
-        ),
+        `This folder is not trusted yet: ${options.workspace}\nRun \`circle\` there once in a terminal and trust it, or pass --trust to trust it and remember it.`,
       );
     else {
       const { runLineTrust } = await import('./line_setup.js');
@@ -566,19 +559,14 @@ export function reportProjectHooks(
   if (approve)
     for (const change of runtime.pendingHooks()) {
       if (!runtime.approveHooks(change)) continue;
-      write(
-        t('circle: approved the hooks in {file}', { file: change.file }) + '\n',
-      );
+      write(`circle: approved the hooks in ${change.file}\n`);
       for (const hook of change.hooks)
         if (hook.mark !== 'removed')
           write(`  ${hook.name} · ${hook.event} · ${hook.command}\n`);
     }
   for (const change of runtime.pendingHooks())
     write(
-      t(
-        'circle: the hooks in {file} were not run: this version of the file is not approved. Approve it with circle in a terminal in this folder, or pass --approve-hooks.',
-        { file: change.file },
-      ) + '\n',
+      `circle: the hooks in ${change.file} were not run: this version of the file is not approved. Approve it with circle in a terminal in this folder, or pass --approve-hooks.\n`,
     );
 }
 let networkConfigured = false;

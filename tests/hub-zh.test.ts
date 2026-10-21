@@ -13,9 +13,11 @@ const savedLocale = {
   LC_ALL: process.env.LC_ALL,
   LC_MESSAGES: process.env.LC_MESSAGES,
   LANG: process.env.LANG,
+  CIRCLE_DESKTOP_RUNTIME_HOME: process.env.CIRCLE_DESKTOP_RUNTIME_HOME,
 };
 
-test('the signed-in api note is not the English word api', () => {
+test('the signed-in api note is not the English word api', (t) => {
+  process.env.CIRCLE_DESKTOP_RUNTIME_HOME = scratch(t);
   process.env.LANGUAGE = 'zh_CN.UTF-8';
   delete process.env.LC_ALL;
   delete process.env.LC_MESSAGES;
@@ -65,7 +67,7 @@ function hubLiterals(source: string): string[] {
 const placeholders = (text: string): string[] =>
   [...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1]!).sort();
 
-test('hub interface words follow a Chinese process language', async (t) => {
+test('hub interface words follow the Chinese of the desktop runtime, and the terminal stays English', async (t) => {
   t.after(restoreLocale);
   for (const [english, chinese] of Object.entries(HUB_ZH))
     assert.deepEqual(placeholders(chinese), placeholders(english), english);
@@ -81,6 +83,15 @@ test('hub interface words follow a Chinese process language', async (t) => {
       );
   }
 
+  // The terminal on a Chinese system
+  delete process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
+  process.env.LANGUAGE = 'zh_CN.UTF-8';
+  process.env.LANG = 'zh_CN.UTF-8';
+  assert.equal(hubLocaleChinese(), false);
+  assert.equal(hubText('hub · signed out'), 'hub · signed out');
+
+  // The desktop starts its runtime with CIRCLE_DESKTOP_RUNTIME_HOME
+  process.env.CIRCLE_DESKTOP_RUNTIME_HOME = scratch(t);
   process.env.LANGUAGE = 'en_US.UTF-8';
   process.env.LC_ALL = 'zh_CN.UTF-8';
   assert.equal(hubLocaleChinese(), false);
@@ -172,6 +183,14 @@ test('hub interface words follow a Chinese process language', async (t) => {
     secret: 'pw-zh',
   };
   const command = host.commands().get('hub')!;
+  const desktop = process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
+  delete process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
+  await command.handler('help', context);
+  const english = lines.at(-1)!;
+  assert.match(english, /not signed in/);
+  assert.match(english, /where you are signed in/);
+  assert.equal(/\p{Script=Han}/u.test(english), false);
+  process.env.CIRCLE_DESKTOP_RUNTIME_HOME = desktop;
   await command.handler('help', context);
   const help = lines.at(-1)!;
   assert.match(help, /未登录/);
