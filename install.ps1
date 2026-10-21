@@ -2,14 +2,17 @@
 & {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
+    # Chinese built from its code points: the script stays ASCII, so Windows PowerShell
+    # reads it the same whatever the system's code page, from -File as from irm | iex.
+    function Circle-Zh([int[]]$Codes) { -join ($Codes | ForEach-Object { [char]$_ }) }
     function Circle-Line([string]$Text) {
         $lang = if ($env:LC_ALL) { $env:LC_ALL } elseif ($env:LANG) { $env:LANG } else { '' }
         if ($lang -notmatch '^(?i)zh') { return $Text }
         switch -Regex ($Text) {
-            '^downloading (.+)$' { return "正在下载 $($Matches[1])" }
-            '^verifying the download$' { return '正在校验下载' }
-            '^unpacking$' { return '正在解压' }
-            '^Run circle, or (.+)\.$' { return "运行 circle，或 $($Matches[1])。" }
+            '^downloading (.+)$' { return "$(Circle-Zh 0x6B63,0x5728,0x4E0B,0x8F7D) $($Matches[1])" }
+            '^verifying the download$' { return (Circle-Zh 0x6B63,0x5728,0x6821,0x9A8C,0x4E0B,0x8F7D) }
+            '^unpacking$' { return (Circle-Zh 0x6B63,0x5728,0x89E3,0x538B) }
+            '^Run circle, or (.+)\.$' { return "$(Circle-Zh 0x8FD0,0x884C) circle$(Circle-Zh 0xFF0C,0x6216) $($Matches[1])$(Circle-Zh 0x3002)" }
             default { return $Text }
         }
     }
