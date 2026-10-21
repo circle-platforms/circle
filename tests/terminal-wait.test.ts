@@ -7,7 +7,9 @@ import {
   type TerminalSessionsOptions,
 } from '../src/terminal/sessions.js';
 import type {
+  ConnectEnv,
   Connector,
+  TerminalTarget,
   TerminalTransport,
 } from '../src/terminal/transport.js';
 import type { TerminalProfile } from '../src/terminal/profiles.js';
@@ -136,6 +138,45 @@ test('wait: quiet resolves what rests, pattern resolves what arrives, timeout bo
     signal,
   );
   assert.match(capped.text, /still going after 1s/);
+});
+
+test('a quick connect password reaches SSH as a one-time secret, gone once the connector read it', async (t) => {
+  const device = new FakeConsole();
+  const seen: {
+    target?: TerminalTarget;
+    env?: ConnectEnv;
+    secret?: string;
+  } = {};
+  const connector: Connector = async (target, env) => {
+    seen.target = target;
+    seen.env = env;
+    seen.secret = target.passwordSecret
+      ? env.secret(target.passwordSecret)
+      : '';
+    return { transport: device };
+  };
+  const sessions = new TerminalSessions({
+    connectors: { ssh: connector, telnet: connector },
+    profiles: () => [],
+    secret: () => '',
+    keyFile: (path) => path,
+    onChange: () => {},
+  });
+  t.after(() => sessions.close());
+  await sessions.request(
+    'c1',
+    'connect',
+    { host: 'a.lan', transport: 'ssh', user: 'admin', password: 'pw1' },
+    signal,
+  );
+  assert.match(seen.target?.passwordSecret ?? '', /^once:/);
+  assert.equal(seen.secret, 'pw1');
+  // The password is a secret name on the wire level, never text in a result.
+  const list = await sessions.request('c1', 'sessions', {}, signal);
+  assert.doesNotMatch(list.text, /pw1/);
+  // The connector read it as it started; after that no name reaches it.
+  const name = seen.target?.passwordSecret ?? '';
+  assert.equal(seen.env?.secret(name), '');
 });
 
 test('wait: an aborted stop is an error, not a result', async (t) => {

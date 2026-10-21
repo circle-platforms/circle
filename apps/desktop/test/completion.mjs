@@ -508,21 +508,14 @@ try {
   await page.locator('.toast').filter({ hasText: 'skill not found' }).waitFor();
   await send('/unrecognized-fixture-command');
   await page.locator('.toast').filter({ hasText: independentNotice }).waitFor();
-  // An older identically worded action notice must not erase a newer one while
-  // the earlier session-scoped API failure clears on continuation.
-  await new Promise((done) => setTimeout(done, 1800));
-  await send('/unrecognized-fixture-command');
-  await page.locator('.toast').filter({ hasText: independentNotice }).waitFor();
+  // How long a notice stays while older timers fire and the session error clears is
+  // checked on the page's own clock, in apps/workbench/test/notice-timers-ui.mjs. Counted
+  // here, after a model turn, it depended on how long the turn took (#207).
   await send('continue while preserving an independent notice');
   await page
     .getByText('independent notice continuation', { exact: true })
     .waitFor();
   assert.equal((await state()).runtime.error, undefined);
-  assert.equal(
-    await page.locator('.toast').filter({ hasText: independentNotice }).count(),
-    1,
-    'clearing the previous runtime error preserves a newer action toast',
-  );
   await page
     .getByText('independent notice continuation finished', { exact: true })
     .waitFor();
@@ -530,11 +523,6 @@ try {
     kind: 'run_end',
     answer: 'independent notice continuation finished',
   });
-  assert.equal(
-    await page.locator('.toast').filter({ hasText: independentNotice }).count(),
-    1,
-    'the older runtime notice timer cannot erase the newer identically worded action toast',
-  );
   expectedRequests += 1;
   assert.equal(
     (await readFile(requestsPath, 'utf8')).trim().split('\n').length,
@@ -545,7 +533,7 @@ try {
     .filter({ hasText: independentNotice })
     .waitFor({ state: 'hidden' });
   checks.push(
-    'clearing a session action error and older timers leave a newer identically worded independent action toast intact',
+    'a failed native action and an unknown command show as notices, and the turn after them completes with one request',
   );
   await send('trigger hidden assistant response');
   await until(async () => {

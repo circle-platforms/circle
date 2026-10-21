@@ -37,7 +37,7 @@ const site = createServer((request, response) => {
   response.end(
     request.url.startsWith('/live')
       ? '<!doctype html><title>extension link fixture</title><h1>opened by an extension</h1>'
-      : '<!doctype html><title>pop</title><h1 id="mark">popped page</h1>',
+      : '<!doctype html><title>pop</title><body style="background:#00aa44"><h1 id="mark">popped page</h1>',
   );
 });
 await new Promise((done) => site.listen(0, '127.0.0.1', done));
@@ -118,6 +118,113 @@ try {
     });
   const windowsOf = async (hash) =>
     app.windows().filter((one) => one.url().includes(hash));
+  // The page is on screen in a window: what the system shows of the window has the page's
+  // green. The page itself cannot tell: its view never throttles, so it reads as visible
+  // even where nothing shows it. On Linux, Electron 44.0.0 to 44.7.0 stacked a view added to
+  // a window again, as a move does, under its siblings (electron/electron#54626). macOS keeps
+  // its views in order its own way, and a capture of a window there needs the screen
+  // recording permission.
+  const pageOnScreen = async (hash) => {
+    if (mac) return;
+    let seen = 'no window';
+    try {
+      await until(async () => {
+        seen = await app.evaluate(
+          async (
+            { BrowserWindow, desktopCapturer, screen },
+            { hash, pageUrl },
+          ) => {
+            const window = BrowserWindow.getAllWindows()
+              .filter(
+                (one) => !one.isDestroyed() && !one.webContents.isDestroyed(),
+              )
+              .find((one) => one.webContents.getURL().includes(hash));
+            if (!window) return 'no window';
+            const view = window.contentView.children.find(
+              (one) =>
+                one.webContents &&
+                !one.webContents.isDestroyed() &&
+                one.webContents.getURL().startsWith(pageUrl),
+            );
+            if (!view) return 'no page in the window';
+            const box = view.getBounds();
+            if (box.width < 100 || box.height < 100)
+              return 'the page has no place in the window yet';
+            // The share of a box of an image in the fixture's #00aa44, in BGRA
+            const green = (image, area) => {
+              const { width, height } = image.getSize();
+              const pixels = image.toBitmap();
+              let count = 0;
+              let found = 0;
+              const right = Math.min(width, area.x + area.width);
+              const bottom = Math.min(height, area.y + area.height);
+              for (let y = Math.max(0, area.y); y < bottom; y += 4)
+                for (let x = Math.max(0, area.x); x < right; x += 4) {
+                  const at = (y * width + x) * 4;
+                  count++;
+                  if (
+                    pixels[at + 2] < 60 &&
+                    pixels[at + 1] > 120 &&
+                    pixels[at] < 110
+                  )
+                    found++;
+                }
+              return count ? found / count : 0;
+            };
+            // The window as the system lists it, its frame included
+            const windows = await desktopCapturer.getSources({
+              types: ['window'],
+              thumbnailSize: { width: 800, height: 600 },
+            });
+            const own = windows.find(
+              (one) => one.id === window.getMediaSourceId(),
+            );
+            if (own) {
+              const share = green(own.thumbnail, {
+                x: 0,
+                y: 0,
+                ...own.thumbnail.getSize(),
+              });
+              return { share, of: 'the window', enough: share > 0.1 };
+            }
+            // An X server without a window manager lists no windows: the page's box on
+            // the screen instead
+            const display = screen.getDisplayMatching(window.getBounds());
+            const scale = display.scaleFactor;
+            const screens = await desktopCapturer.getSources({
+              types: ['screen'],
+              thumbnailSize: {
+                width: Math.round(display.size.width * scale),
+                height: Math.round(display.size.height * scale),
+              },
+            });
+            const shown =
+              screens.find((one) => one.display_id === String(display.id)) ??
+              (screens.length === 1 ? screens[0] : undefined);
+            if (!shown) return 'no capture of the window or of its screen';
+            const content = window.getContentBounds();
+            const share = green(shown.thumbnail, {
+              x: Math.round((content.x - display.bounds.x + box.x) * scale),
+              y: Math.round((content.y - display.bounds.y + box.y) * scale),
+              width: Math.round(box.width * scale),
+              height: Math.round(box.height * scale),
+            });
+            return {
+              share,
+              of: "the page's box on the screen",
+              enough: share > 0.5,
+            };
+          },
+          { hash, pageUrl },
+        );
+        return typeof seen === 'object' && seen.enough;
+      }, 'the page on screen in its window');
+    } catch (error) {
+      throw Error(
+        `${error.message}: ${typeof seen === 'object' ? `the page's green covers ${seen.share} of ${seen.of}` : seen}`,
+      );
+    }
+  };
   // A key pressed in one window, as the system hands it to that window's page.
   const press = (which, keyCode, modifiers = []) =>
     app.evaluate(
@@ -203,6 +310,8 @@ try {
     const state = await browserState();
     return state.title === 'pop' && !state.loading;
   }, 'the page loaded');
+  // A page that opens in the window it shows in, before any move.
+  await pageOnScreen('#/popout/browser/');
 
   // ---- the window shows its notices, on its bar where the page cannot cover them
   await field().fill('http://exa mple');
@@ -412,6 +521,7 @@ try {
   await main.locator('.drawer-mode-button.popped').waitFor();
   await until(async () => (await views()).browser >= 1, 'the page moved along');
   assert.equal((await views()).main, 0);
+  await pageOnScreen('#/popout/browser/');
 
   // Back into the drawer: the window goes, the page comes along. Its panel had the
   // keyboard, and the main window's keys are its own again.
