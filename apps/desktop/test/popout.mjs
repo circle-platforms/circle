@@ -142,62 +142,120 @@ try {
   // The window as the compositor drew it. executeJavaScript still reads a
   // page whose view is blank, so the green of the fixture has to be on screen.
   const compositedGreen = (electronApp, which) =>
-    electronApp.evaluate(async ({ BrowserWindow, desktopCapturer }, which) => {
-      const target = BrowserWindow.getAllWindows()
-        .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
-        .find((one) => {
-          const url = one.webContents.getURL();
-          return which === 'main'
-            ? !url.includes('#/popout/')
-            : url.includes('#/popout/browser/');
+    electronApp.evaluate(
+      async ({ BrowserWindow, desktopCapturer, screen }, which) => {
+        const target = BrowserWindow.getAllWindows()
+          .filter((one) => !one.isDestroyed() && !one.webContents.isDestroyed())
+          .find((one) => {
+            const url = one.webContents.getURL();
+            return which === 'main'
+              ? !url.includes('#/popout/')
+              : url.includes('#/popout/browser/');
+          });
+        if (!target) return { ratio: 0, reason: 'no window' };
+        const attached = target.contentView.children.flatMap((child) => {
+          try {
+            return [
+              {
+                id: child.webContents.id,
+                url: child.webContents.getURL(),
+                bounds: child.getBounds(),
+                visible: child.getVisible(),
+              },
+            ];
+          } catch {
+            return [];
+          }
         });
-      if (!target) return { ratio: 0, reason: 'no window' };
-      const attached = target.contentView.children.flatMap((child) => {
-        try {
-          return [
-            {
-              id: child.webContents.id,
-              url: child.webContents.getURL(),
-              bounds: child.getBounds(),
-              visible: child.getVisible(),
-            },
-          ];
-        } catch {
-          return [];
-        }
-      });
-      const sources = await desktopCapturer.getSources({
-        types: ['window'],
-        thumbnailSize: { width: 900, height: 700 },
-      });
-      const source = sources.find((one) => one.id.endsWith(':' + target.id));
-      if (!source)
-        return {
-          ratio: 0,
-          reason: 'no capture',
-          attached,
-          titles: sources.map((one) => one.name),
+        // macOS keeps its views in order its own way, and a capture of a window there
+        // needs the screen recording permission: the view's place is checked instead.
+        if (process.platform === 'darwin') return { skipped: true, attached };
+        // The share of an area of an image in the fixture's #00aa44, in BGRA
+        const share = (image, area) => {
+          const { width, height } = image.getSize();
+          const bitmap = image.toBitmap();
+          let green = 0;
+          let seen = 0;
+          const right = Math.min(width, area.x + area.width);
+          const bottom = Math.min(height, area.y + area.height);
+          for (let y = Math.max(0, area.y); y < bottom; y += 6)
+            for (let x = Math.max(0, area.x); x < right; x += 6) {
+              const index = (y * width + x) * 4;
+              seen++;
+              if (
+                bitmap[index + 2] < 50 &&
+                bitmap[index + 1] > 110 &&
+                bitmap[index] < 110
+              )
+                green++;
+            }
+          return seen ? green / seen : 0;
         };
-      const image = source.thumbnail;
-      const { width, height } = image.getSize();
-      const bitmap = image.toBitmap();
-      let green = 0;
-      let seen = 0;
-      for (let y = 0; y < height; y += 6)
-        for (let x = 0; x < width; x += 6) {
-          const index = (y * width + x) * 4;
-          const red = bitmap[index + 2];
-          const mid = bitmap[index + 1];
-          const blue = bitmap[index];
-          seen++;
-          if (red < 50 && mid > 110 && blue < 110) green++;
-        }
-      return {
-        ratio: seen ? green / seen : 0,
-        title: source.name,
-        attached,
-      };
-    }, which);
+        const sources = await desktopCapturer.getSources({
+          types: ['window'],
+          thumbnailSize: { width: 900, height: 700 },
+        });
+        const source = sources.find(
+          (one) => one.id === target.getMediaSourceId(),
+        );
+        if (source)
+          return {
+            ratio: share(source.thumbnail, {
+              x: 0,
+              y: 0,
+              ...source.thumbnail.getSize(),
+            }),
+            of: 'window',
+            title: source.name,
+            attached,
+          };
+        // An X server without a window manager lists no windows: the page's box on the
+        // screen instead
+        const view = target.contentView.children.find((child) => {
+          try {
+            return (
+              child.getVisible() &&
+              child.webContents.getURL().startsWith('http')
+            );
+          } catch {
+            return false;
+          }
+        });
+        if (!view) return { ratio: 0, reason: 'no page view', attached };
+        const box = view.getBounds();
+        const display = screen.getDisplayMatching(target.getBounds());
+        const scale = display.scaleFactor;
+        const screens = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: {
+            width: Math.round(display.size.width * scale),
+            height: Math.round(display.size.height * scale),
+          },
+        });
+        const shown =
+          screens.find((one) => one.display_id === String(display.id)) ??
+          (screens.length === 1 ? screens[0] : undefined);
+        if (!shown) return { ratio: 0, reason: 'no capture', attached };
+        const content = target.getContentBounds();
+        return {
+          ratio: share(shown.thumbnail, {
+            x: Math.round((content.x - display.bounds.x + box.x) * scale),
+            y: Math.round((content.y - display.bounds.y + box.y) * scale),
+            width: Math.round(box.width * scale),
+            height: Math.round(box.height * scale),
+          }),
+          of: 'box',
+          attached,
+        };
+      },
+      which,
+    );
+  // Whether a capture shows the page: a window shows some of its green, the page's own
+  // box on the screen mostly green. macOS is not captured.
+  const showsPage = (screen, which) =>
+    screen.skipped === true ||
+    screen.ratio >
+      (screen.of === 'box' ? 0.5 : which === 'browser' ? 0.12 : 0.03);
   // The view's box has to lie on its own window, and a pop-out is not the drawer's size.
   const viewFits = (electronApp, which) =>
     electronApp.evaluate(({ BrowserWindow }, which) => {
@@ -281,6 +339,113 @@ try {
     });
   const windowsOf = async (hash) =>
     app.windows().filter((one) => one.url().includes(hash));
+  // The page is on screen in a window: what the system shows of the window has the page's
+  // green. The page itself cannot tell: its view never throttles, so it reads as visible
+  // even where nothing shows it. On Linux, Electron 44.0.0 to 44.7.0 stacked a view added to
+  // a window again, as a move does, under its siblings (electron/electron#54626). macOS keeps
+  // its views in order its own way, and a capture of a window there needs the screen
+  // recording permission.
+  const pageOnScreen = async (hash) => {
+    if (mac) return;
+    let seen = 'no window';
+    try {
+      await until(async () => {
+        seen = await app.evaluate(
+          async (
+            { BrowserWindow, desktopCapturer, screen },
+            { hash, pageUrl },
+          ) => {
+            const window = BrowserWindow.getAllWindows()
+              .filter(
+                (one) => !one.isDestroyed() && !one.webContents.isDestroyed(),
+              )
+              .find((one) => one.webContents.getURL().includes(hash));
+            if (!window) return 'no window';
+            const view = window.contentView.children.find(
+              (one) =>
+                one.webContents &&
+                !one.webContents.isDestroyed() &&
+                one.webContents.getURL().startsWith(pageUrl),
+            );
+            if (!view) return 'no page in the window';
+            const box = view.getBounds();
+            if (box.width < 100 || box.height < 100)
+              return 'the page has no place in the window yet';
+            // The share of a box of an image in the fixture's #00aa44, in BGRA
+            const green = (image, area) => {
+              const { width, height } = image.getSize();
+              const pixels = image.toBitmap();
+              let count = 0;
+              let found = 0;
+              const right = Math.min(width, area.x + area.width);
+              const bottom = Math.min(height, area.y + area.height);
+              for (let y = Math.max(0, area.y); y < bottom; y += 4)
+                for (let x = Math.max(0, area.x); x < right; x += 4) {
+                  const at = (y * width + x) * 4;
+                  count++;
+                  if (
+                    pixels[at + 2] < 60 &&
+                    pixels[at + 1] > 120 &&
+                    pixels[at] < 110
+                  )
+                    found++;
+                }
+              return count ? found / count : 0;
+            };
+            // The window as the system lists it, its frame included
+            const windows = await desktopCapturer.getSources({
+              types: ['window'],
+              thumbnailSize: { width: 800, height: 600 },
+            });
+            const own = windows.find(
+              (one) => one.id === window.getMediaSourceId(),
+            );
+            if (own) {
+              const share = green(own.thumbnail, {
+                x: 0,
+                y: 0,
+                ...own.thumbnail.getSize(),
+              });
+              return { share, of: 'the window', enough: share > 0.1 };
+            }
+            // An X server without a window manager lists no windows: the page's box on
+            // the screen instead
+            const display = screen.getDisplayMatching(window.getBounds());
+            const scale = display.scaleFactor;
+            const screens = await desktopCapturer.getSources({
+              types: ['screen'],
+              thumbnailSize: {
+                width: Math.round(display.size.width * scale),
+                height: Math.round(display.size.height * scale),
+              },
+            });
+            const shown =
+              screens.find((one) => one.display_id === String(display.id)) ??
+              (screens.length === 1 ? screens[0] : undefined);
+            if (!shown) return 'no capture of the window or of its screen';
+            const content = window.getContentBounds();
+            const share = green(shown.thumbnail, {
+              x: Math.round((content.x - display.bounds.x + box.x) * scale),
+              y: Math.round((content.y - display.bounds.y + box.y) * scale),
+              width: Math.round(box.width * scale),
+              height: Math.round(box.height * scale),
+            });
+            return {
+              share,
+              of: "the page's box on the screen",
+              enough: share > 0.5,
+            };
+          },
+          { hash, pageUrl },
+        );
+        return typeof seen === 'object' && seen.enough;
+      }, 'the page on screen in its window');
+    } catch (error) {
+      throw Error(
+        `${error.message}: ${typeof seen === 'object' ? `the page's green covers ${seen.share} of ${seen.of}` : seen}`,
+      );
+    }
+  };
   // A key pressed in one window, as the system hands it to that window's page.
   const press = (which, keyCode, modifiers = []) =>
     app.evaluate(
@@ -317,7 +482,6 @@ try {
   const painted = async (which, mark = 'popped page') => {
     const page = await shownPage(which);
     const screen = await compositedGreen(app, which);
-    const enough = which === 'browser' ? 0.12 : 0.03;
     return (
       page.text === mark &&
       page.bounds &&
@@ -325,7 +489,7 @@ try {
       page.bounds.height > 80 &&
       page.bounds.x >= 0 &&
       page.bounds.y >= 0 &&
-      screen.ratio > enough &&
+      showsPage(screen, which) &&
       (await viewFits(app, which)) &&
       screen.attached?.some(
         (view) =>
@@ -524,6 +688,8 @@ try {
       page.bounds.y >= 0
     );
   }, 'the open page is painted in the window');
+  // A page that opens in the window it shows in, before any move.
+  await pageOnScreen('#/popout/browser/');
 
   // ---- the window shows its notices, on its bar where the page cannot cover them
   await field().fill('http://exa mple');
@@ -733,6 +899,7 @@ try {
   await main.locator('.drawer-mode-button.popped').waitFor();
   await until(async () => (await views()).browser >= 1, 'the page moved along');
   assert.equal((await views()).main, 0);
+  await pageOnScreen('#/popout/browser/');
 
   // Back into the drawer: the window goes, the page comes along. Its panel had the
   // keyboard, and the main window's keys are its own again.
@@ -941,8 +1108,7 @@ try {
   await typed.press('Enter');
   const livePainted = async (which) => {
     const screen = await compositedGreen(liveApp, which);
-    const enough = which === 'browser' ? 0.12 : 0.03;
-    return screen.ratio > enough && (await viewFits(liveApp, which));
+    return showsPage(screen, which) && (await viewFits(liveApp, which));
   };
   await liveApp.evaluate(({ BrowserWindow }) => {
     const own = BrowserWindow.getAllWindows().find(

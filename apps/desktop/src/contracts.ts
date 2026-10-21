@@ -493,6 +493,8 @@ export interface TerminalTargetRow {
   host: string;
   port?: number;
   user?: string;
+  /** A one-time SSH password: held in memory for this connection, never saved. */
+  password?: string;
 }
 export interface TerminalProfileRow {
   name: string;

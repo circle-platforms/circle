@@ -20,6 +20,7 @@ export function TerminalConnect({
   const [host, setHost] = useState('');
   const [port, setPort] = useState('');
   const [user, setUser] = useState('');
+  const [password, setPassword] = useState('');
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = (event: FormEvent) => {
@@ -33,8 +34,12 @@ export function TerminalConnect({
       host: host.trim(),
       ...(number ? { port: number } : {}),
       ...(user.trim() ? { user: user.trim() } : {}),
+      ...(transport === 'ssh' && password ? { password } : {}),
     }).then(
-      () => setBusy(false),
+      () => {
+        setBusy(false);
+        setPassword('');
+      },
       (error) => {
         setBusy(false);
         setProblem(error instanceof Error ? error.message : String(error));
@@ -103,9 +108,21 @@ export function TerminalConnect({
           onChange={(event) => setUser(event.target.value)}
         />
       </label>
+      {transport === 'ssh' && (
+        <label className="term-connect-field">
+          <span className="term-connect-label">{t('password')}</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+      )}
       <p className="term-connect-note">
         {t(
-          'SSH signs in from a saved device; a Telnet console asks for its own login',
+          'SSH signs in with the password typed here, used for this connection and never saved; a Telnet console asks for its own login',
         )}
       </p>
       {problem && (
