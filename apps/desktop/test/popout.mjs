@@ -82,12 +82,16 @@ const env = {
   }),
 };
 delete env.ELECTRON_RUN_AS_NODE;
-const until = async (check, what, ms = 20000) => {
+const until = async (check, what, ms = 20000, seen) => {
   const stop = Date.now() + patience(ms);
   for (;;) {
     const value = await check();
     if (value) return value;
-    if (Date.now() >= stop) throw Error(`timed out: ${what}`);
+    if (Date.now() >= stop)
+      throw Error(
+        `timed out: ${what}` +
+          (seen ? ` · last seen ${JSON.stringify(await seen())}` : ''),
+      );
     await new Promise((done) => setTimeout(done, 50));
   }
 };
@@ -921,9 +925,31 @@ try {
     'true',
     'put back opens the drawer',
   );
+  // What the main window holds when it is not the page: no view shown, another
+  // page, or the page loaded again (#266)
   await until(
     async () => (await shownPage('main')).text === 'popped page',
     'the page is painted in the drawer',
+    20000,
+    () =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .filter((one) => !one.isDestroyed())
+          .map((one) => ({
+            url: one.webContents.getURL().replace(/^.*#/, '#'),
+            views: one.contentView.children.map((child) => {
+              try {
+                return {
+                  visible: child.getVisible(),
+                  url: child.webContents.getURL(),
+                  bounds: child.getBounds(),
+                };
+              } catch {
+                return { gone: true };
+              }
+            }),
+          })),
+      ),
   );
   const tabsBack = (
     await main.evaluate(
