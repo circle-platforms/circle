@@ -15,6 +15,8 @@ const REASONS: Record<string, () => string> = {
   'command could not be parsed': () => t('command could not be parsed'),
   'shows the model the whole screen': () =>
     t('shows the model the whole screen'),
+  'shows the side vision model the whole screen': () =>
+    t('shows the side vision model the whole screen'),
   'opens a page in the browser': () => t('opens a page in the browser'),
   'clicks in the browser': () => t('clicks in the browser'),
   'types in the browser': () => t('types in the browser'),

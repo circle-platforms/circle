@@ -7,6 +7,7 @@ import {
   wildcard,
 } from './approvals.js';
 import { decodeOutput } from './output_encoding.js';
+import { PLAN_FOLDER } from './plan_file.js';
 /**
  * A path the operating system already anchors. On POSIX every leading `/` is absolute,
  * including `/workspace`, `/srv`, `/data` and `/code`. On Windows a drive (`C:\`, `C:/`),
@@ -64,6 +65,7 @@ export class Sandbox {
         'conversation_history',
         'large_tool_results',
         'background_jobs',
+        PLAN_FOLDER,
       ].includes(top ?? '')
     )
       full = resolve(this.offloadRoot, virtual);
@@ -97,6 +99,20 @@ export class Sandbox {
     return (
       rel === '' ||
       (rel !== '..' && !rel.startsWith('..' + sep) && !/^[A-Za-z]:/.test(rel))
+    );
+  }
+  /** Whether a resolved path is in the folder of plan mode's plans, one per conversation. */
+  isPlanFile(path: string): boolean {
+    if (!this.offloadRoot) return false;
+    const rel = relative(
+      resolvedTarget(resolve(this.offloadRoot, PLAN_FOLDER)),
+      resolvedTarget(path),
+    );
+    return (
+      rel !== '' &&
+      rel !== '..' &&
+      !rel.startsWith('..' + sep) &&
+      !/^[A-Za-z]:/.test(rel)
     );
   }
   /** Whether a resolved path is in the folder of command and job output. */

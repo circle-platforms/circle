@@ -13,7 +13,7 @@ import { glob } from 'glob';
 import type { Tool, ToolContext } from './types.js';
 import { Sandbox } from './sandbox.js';
 import { loadToolPrompt } from './system_prompt.js';
-import { applyPatch } from './apply_patch.js';
+import { applyPatch, patchFilePaths } from './apply_patch.js';
 import { QUESTION_SCHEMA } from './questions.js';
 import { JobRegistry, jobLine, jobNotice } from './jobs.js';
 import { readTextWindow, readTextContentWindow } from './file_read.js';
@@ -45,6 +45,15 @@ export interface ToolHooks {
   compact?: (hint: string, context: ToolContext) => Promise<string>;
   /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
+  /**
+   * Describes image files with the run's side vision model; adds the `vision` tool and
+   * the picture descriptions of the tools above when set.
+   */
+  vision?: (
+    paths: string[],
+    question: string,
+    context: ToolContext,
+  ) => Promise<{ model: string; text: string }>;
 }
 const string = (args: Record<string, unknown>, ...keys: string[]): string => {
   for (const key of keys)
@@ -72,6 +81,42 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     ? new FileMutationTools(sandbox, hooks.fileMutations)
     : undefined;
   const tools: Tool[] = [];
+  // Plan mode's plan is Circle's own file in the data folder, as the offloaded output
+  // read_file reads is: it is written directly, and the workspace's file backend, which
+  // knows only granted files, has no part in it.
+  const writesPlan = (tool: string, args: Record<string, unknown>): boolean => {
+    try {
+      const paths =
+        tool === 'apply_patch'
+          ? patchFilePaths(string(args, 'patchText'), sandbox)
+          : [sandbox.resolvePath(string(args, 'file_path', 'path'))];
+      return (
+        paths.length > 0 && paths.every((path) => sandbox.isPlanFile(path))
+      );
+    } catch {
+      return false;
+    }
+  };
+  // A read as the desktop allows it: Circle's own offloaded output (history, large results,
+  // job logs, saved pictures) is read directly, since it is never a workspace or granted
+  // external file; anything else asks the native backend, and an external grant covers an
+  // existing text file only. Without a native backend (the terminal) every read is allowed.
+  const authorizeRead = async (
+    path: string,
+    context: ToolContext,
+  ): Promise<FileMutationTools | undefined> => {
+    const native = sandbox.isOffloadOutput(path) ? undefined : mutations;
+    if (native) await native.authorize(path, context, 'read');
+    if (
+      native &&
+      !sandbox.isInside(path) &&
+      (statSync(path).isDirectory() || mediaType(path))
+    )
+      throw Error(
+        'native external file grants support existing text files only',
+      );
+    return native;
+  };
   // What these write stays on disk: a %NAME% there is text, never a variable's value.
   const FILE_WRITERS = new Set(['write_file', 'edit_file', 'apply_patch']);
   // What these take becomes a model's input or the conversation's: a secret stays its name
@@ -89,8 +134,8 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     effect: Tool['effect'],
     parameters: Record<string, unknown>,
     run: Tool['run'],
-  ): void => {
-    tools.push({
+  ): Tool => {
+    const tool: Tool = {
       name,
       effect,
       parameters,
@@ -101,7 +146,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         : MODEL_INPUT.has(name)
           ? { variables: 'plain' as const }
           : {}),
-    });
+    };
+    tools.push(tool);
+    return tool;
   };
   add(
     'read_file',
@@ -128,18 +175,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         string(args, 'file_path', 'filePath', 'path'),
       );
       sandbox.checkCredentialPath(path);
-      // Circle's own offloaded output (history, large results, job logs) is read
-      // directly: it is never a workspace or granted external file.
-      const native = sandbox.isOffloadOutput(path) ? undefined : mutations;
-      if (native) await native.authorize(path, context, 'read');
-      if (
-        native &&
-        !sandbox.isInside(path) &&
-        (statSync(path).isDirectory() || mediaType(path))
-      )
-        throw Error(
-          'native external file grants support existing text files only',
-        );
+      const native = await authorizeRead(path, context);
       if (statSync(path).isDirectory())
         return readdirSync(path, { withFileTypes: true })
           .map((entry) => entry.name + (entry.isDirectory() ? '/' : ''))
@@ -147,6 +183,23 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       if (mediaType(path)) {
         if (!context.emitAttachments)
           throw new Error('this caller does not accept media attachments');
+        // A model that cannot read pictures gets the side vision model's words for one.
+        // A PDF is no picture: it goes as an attachment, as it always did.
+        if (
+          context.imageInput === false &&
+          hooks.vision &&
+          mediaType(path) !== 'application/pdf'
+        ) {
+          try {
+            const described = await hooks.vision([path], '', context);
+            return `${path} as the side vision model ${described.model} describes it:\n\n${described.text}`;
+          } catch (error) {
+            context.signal.throwIfAborted();
+            return `${path} is an image the model in use does not read, and the side vision model could not describe it: ${
+              error instanceof Error ? error.message : String(error)
+            }. The picture stays on disk.`;
+          }
+        }
         const { attachment, size } = await readMedia(path, context.signal);
         context.emitAttachments([attachment]);
         read.add(path);
@@ -179,7 +232,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       ['file_path', 'content'],
     ),
     async (args, context) => {
-      if (mutations)
+      if (mutations && !writesPlan('write_file', args))
         return (await mutations.prepareWrite(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
@@ -201,7 +254,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       ['file_path', 'old_string', 'new_string'],
     ),
     async (args, context) => {
-      if (mutations)
+      if (mutations && !writesPlan('edit_file', args))
         return (await mutations.prepareEdit(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
@@ -233,18 +286,21 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       'patchText',
     ]),
     async (args, context) =>
-      mutations
+      mutations && !writesPlan('apply_patch', args)
         ? (await mutations.preparePatch(args, context))(args, context)
         : applyPatch(string(args, 'patchText'), sandbox),
   );
-  if (mutations) {
-    tools.find((tool) => tool.name === 'write_file')!.prepare =
-      mutations.prepareWrite;
-    tools.find((tool) => tool.name === 'edit_file')!.prepare =
-      mutations.prepareEdit;
-    tools.find((tool) => tool.name === 'apply_patch')!.prepare =
-      mutations.preparePatch;
-  }
+  if (mutations)
+    for (const [name, prepare] of [
+      ['write_file', mutations.prepareWrite],
+      ['edit_file', mutations.prepareEdit],
+      ['apply_patch', mutations.preparePatch],
+    ] as const) {
+      const tool = tools.find((tool) => tool.name === name)!;
+      // The plan file has nothing to snapshot: the tool writes it when it runs
+      tool.prepare = async (args, context) =>
+        writesPlan(name, args) ? tool.run : prepare(args, context);
+    }
   add('ls', 'read', schema({ path: text('Directory') }), async (args) => {
     const path = sandbox.resolvePath(String(args.path || '.'));
     return readdirSync(path, { withFileTypes: true })
@@ -537,8 +593,8 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
             Number(args.num_results) || 5,
           ),
   );
-  if (hooks.screenshot)
-    add(
+  if (hooks.screenshot) {
+    const screenshot = add(
       'screenshot',
       'execute',
       schema({
@@ -551,29 +607,90 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           typeof args.app === 'string' && args.app.trim()
             ? args.app.trim()
             : undefined;
-        if (!context.emitAttachments)
-          throw new Error('this caller does not accept media attachments');
         const folder = join(sandbox.offloadRoot ?? tmpdir(), 'screenshots');
         mkdirSync(folder, { recursive: true, mode: 0o700 });
         const target = join(
           folder,
           new Date().toISOString().replace(/[:.]/g, '-') + '.png',
         );
-        // Nothing is taken for a model that could not look at it
-        if (context.imageInput === false)
-          throw new Error('the model in use does not read images');
+        // Nothing is taken for a model that could not look at it, unless the side vision
+        // model will describe what was taken
+        if (context.imageInput === false && !hooks.vision)
+          throw new Error(
+            'the model in use does not read images; no side vision model is configured (CIRCLE_VISION_BASE_URL, CIRCLE_VISION_KEY, CIRCLE_VISION_MODEL)',
+          );
+        const of = app ? `the front window of ${app}` : 'the main screen';
         const hint = await takeScreenshot({
           ...hooks.screenshot,
           app,
           target,
           signal: context.signal,
         });
+        if (context.imageInput === false) {
+          const saved =
+            `Screenshot of ${of} saved as ${target}.` +
+            (hint ? `\n${hint}` : '');
+          try {
+            const described = await hooks.vision!(
+              [target],
+              `This is a screenshot of ${of}. Describe the applications, windows and text a coding agent would care about.`,
+              context,
+            );
+            return `${saved}\nDescribed by the side vision model ${described.model}:\n${described.text}`;
+          } catch (error) {
+            context.signal.throwIfAborted();
+            return `${saved}\nThe side vision model could not describe it: ${
+              error instanceof Error ? error.message : String(error)
+            }`;
+          }
+        }
+        if (!context.emitAttachments)
+          throw new Error('this caller does not accept media attachments');
         const { attachment, size } = await readMedia(target, context.signal);
         context.emitAttachments([attachment]);
         return (
-          `Screenshot of ${app ? `the front window of ${app}` : 'the main screen'} (${size}), saved as ${target}.` +
+          `Screenshot of ${of} (${size}), saved as ${target}.` +
           (hint ? `\n${hint}` : '')
         );
+      },
+    );
+    // The card says who sees the picture: for a model that cannot read images the side
+    // vision model does, and the model gets its words
+    if (hooks.vision)
+      screenshot.approvalFacts = (_args, _sessionId, _shown, imageInput) =>
+        imageInput === false ? { seen_by: 'side vision model' } : undefined;
+  }
+  if (hooks.vision)
+    add(
+      'vision',
+      'read',
+      schema(
+        {
+          path: text('Path to the picture to describe'),
+          question: text(
+            'What to look for and report; the side vision model answers only this',
+          ),
+        },
+        ['path'],
+      ),
+      async (args, context) => {
+        const path = sandbox.resolvePath(
+          string(args, 'path', 'file_path', 'filePath'),
+        );
+        sandbox.checkCredentialPath(path);
+        const type = mediaType(path);
+        if (!type) throw new Error('not a picture file');
+        if (type === 'application/pdf')
+          throw new Error('the vision model reads pictures, not PDFs');
+        // What read_file may not read does not go to the side vision model either
+        await authorizeRead(path, context);
+        if (!statSync(path).isFile()) throw new Error(`no such file: ${path}`);
+        const described = await hooks.vision!(
+          [path],
+          typeof args.question === 'string' ? args.question : '',
+          context,
+        );
+        return `${path} as the side vision model ${described.model} describes it:\n\n${described.text}`;
       },
     );
   add(

@@ -1288,8 +1288,31 @@ test('/hub alone is a short status, and /hub help lines the descriptions up', as
     column('/hub approve <id> <approval>'),
     column('/hub reconcile <id> [op]'),
   );
-  assert.match(help, /revoke the token at the server, then forget it/);
+  assert.match(help, /revoke the token at the server, then\s+forget it/);
   assert.match(help, /\/hub bot list/);
+  const savedColumns = process.stdout.columns;
+  Object.defineProperty(process.stdout, 'columns', {
+    configurable: true,
+    value: 72,
+  });
+  try {
+    await command.handler('help', context);
+    const wrapped = lines.at(-1)!;
+    const rows = wrapped.split('\n');
+    const header = rows.find((row) =>
+      row.startsWith('/hub login [url] [user] '),
+    )!;
+    const column = header.indexOf('sign in');
+    const next = rows[rows.indexOf(header) + 1]!;
+    assert.equal(next.startsWith(' '.repeat(column)), true, next);
+    assert.notEqual(next[column], ' ');
+    assert.equal(next.trimStart().startsWith('/'), false);
+  } finally {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: savedColumns,
+    });
+  }
 });
 
 test('a password given with the command is not asked for and does not appear in the reply', async (t) => {

@@ -4,13 +4,23 @@
 // are decided before any hook runs, and a hook cannot undo them. A file tool
 // still refuses a credential file when it runs, after the hooks.
 import { spawn, execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join, posix, win32 } from 'node:path';
-import { canonicalPath } from './paths.js';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  sep,
+  win32,
+} from 'node:path';
+import { canonicalPath, ensureHome } from './paths.js';
 import { redactSecrets } from './secrets.js';
 import { isHostAbsolutePath, shellEnvironment } from './sandbox.js';
 import { discoverSkills } from './skills.js';
-import { isRecord } from './settings.js';
+import { isRecord, withPrivateJsonLock, writePrivateJson } from './settings.js';
 
 export const HOOK_EVENTS = [
   'before_tool',
@@ -34,7 +44,8 @@ export interface HookNotice {
     | 'limit'
     | 'failed'
     | 'active'
-    | 'untrusted';
+    | 'untrusted'
+    | 'changed';
   tool?: string;
   name?: string;
   reason?: string;
@@ -69,6 +80,34 @@ export interface LoadedHooks {
   errors: HookLoadError[];
   /** A project hooks file exists and this folder is not trusted, so it did not load. */
   projectIgnored: boolean;
+  /**
+   * Project hook files that did not load because these bytes were never approved:
+   * a new file, or one that changed since you approved it.
+   */
+  projectChanged: HookChange[];
+}
+
+/** A hook as an approval card lists it, against the version approved last. */
+export interface HookPreview {
+  name: string;
+  event: HookEvent;
+  command: string;
+  mark: 'new' | 'changed' | 'unchanged' | 'removed';
+}
+
+/**
+ * A project hooks file waiting for approval. Everything here comes from one read of
+ * the file: the digest that an approval records, the rows a card lists and the
+ * hooks that load once it is approved.
+ */
+export interface HookChange {
+  file: string;
+  /** SHA-256 of the bytes that were read. */
+  digest: string;
+  hooks: HookPreview[];
+  definitions: HookDefinition[];
+  /** A problem in those bytes, reported once they load. */
+  error?: HookLoadError;
 }
 
 export interface HookOutcome {
@@ -145,6 +184,8 @@ export function hookNoticeText(notice: HookNotice): string {
       return `hooks active${notice.count !== undefined ? ` · ${notice.count}` : ''}${tail}`;
     case 'untrusted':
       return 'project hooks need trust';
+    case 'changed':
+      return `project hooks need approval${notice.name ? ` · ${notice.name}` : ''}`;
   }
 }
 
@@ -364,10 +405,12 @@ function readHookFile(
   source: HookSource,
   sourceLabel: string,
   skill?: string,
+  /** The bytes already read, so a digest and the hooks it covers are one read. */
+  bytes?: Buffer,
 ): { hooks: HookDefinition[]; error?: HookLoadError } {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, 'utf8'));
+    raw = JSON.parse((bytes ?? readFileSync(file)).toString('utf8'));
   } catch (error) {
     return {
       hooks: [],
@@ -454,6 +497,129 @@ function fileExists(path: string): boolean {
   }
 }
 
+function hookTrustPath(home: string): string {
+  return join(home, 'hook-trust.json');
+}
+
+interface ApprovedHook {
+  name: string;
+  event: string;
+  command: string;
+}
+
+/** One approved version of a project hooks file: its digest and the hooks it held. */
+interface HookTrustEntry {
+  digest: string;
+  hooks: ApprovedHook[];
+}
+
+function approvedHooks(value: unknown): ApprovedHook[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hooks: ApprovedHook[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      typeof item.name !== 'string' ||
+      typeof item.event !== 'string' ||
+      typeof item.command !== 'string'
+    )
+      return undefined;
+    hooks.push({ name: item.name, event: item.event, command: item.command });
+  }
+  return hooks;
+}
+
+/** Approved versions, keyed by the file's canonical path. Anything else in the file is not an approval. */
+function readHookTrust(home: string): Record<string, HookTrustEntry> {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(hookTrustPath(home), 'utf8'));
+  } catch {
+    return {};
+  }
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.files))
+    return {};
+  const files: Record<string, HookTrustEntry> = {};
+  for (const [path, stored] of Object.entries(value.files)) {
+    if (!isRecord(stored) || typeof stored.digest !== 'string') continue;
+    if (!/^[a-f0-9]{64}$/.test(stored.digest)) continue;
+    const hooks = approvedHooks(stored.hooks);
+    if (hooks) files[path] = { digest: stored.digest, hooks };
+  }
+  return files;
+}
+
+/** The digest approved for this file, if any. */
+export function approvedHookDigest(
+  home: string,
+  file: string,
+): string | undefined {
+  return readHookTrust(home)[canonicalPath(file)]?.digest;
+}
+
+function previewHooks(
+  current: HookDefinition[],
+  previous: HookTrustEntry | undefined,
+): HookPreview[] {
+  const rows = current.map((hook) => ({
+    name: hook.name,
+    event: hook.event,
+    command: hook.command,
+  }));
+  if (!previous) return rows.map((hook) => ({ ...hook, mark: 'new' as const }));
+  const used = new Set<number>();
+  const marked = rows.map((hook): HookPreview => {
+    const exact = previous.hooks.findIndex(
+      (item, index) =>
+        !used.has(index) &&
+        item.event === hook.event &&
+        item.name === hook.name &&
+        item.command === hook.command,
+    );
+    if (exact >= 0) {
+      used.add(exact);
+      return { ...hook, mark: 'unchanged' };
+    }
+    const sameName = previous.hooks.findIndex(
+      (item, index) =>
+        !used.has(index) &&
+        item.event === hook.event &&
+        item.name === hook.name,
+    );
+    if (sameName >= 0) used.add(sameName);
+    return { ...hook, mark: sameName >= 0 ? 'changed' : 'new' };
+  });
+  const removed = previous.hooks
+    .filter((_, index) => !used.has(index))
+    .map((hook): HookPreview => ({
+      name: hook.name,
+      event: hook.event as HookEvent,
+      command: hook.command,
+      mark: 'removed',
+    }));
+  return [...marked, ...removed];
+}
+
+/**
+ * Remember that these bytes of a project hooks file are approved: the digest and the
+ * hooks of the read the person saw, never a second read of the file.
+ */
+export function approveHookFile(home: string, change: HookChange): void {
+  const path = hookTrustPath(ensureHome(home));
+  withPrivateJsonLock(path, () => {
+    const files: Record<string, HookTrustEntry> = readHookTrust(home);
+    files[canonicalPath(change.file)] = {
+      digest: change.digest,
+      hooks: change.definitions.map((hook) => ({
+        name: hook.name,
+        event: hook.event,
+        command: hook.command,
+      })),
+    };
+    writePrivateJson(path, { version: 1, files });
+  });
+}
+
 export function loadHooks(options: {
   workspace: string;
   home: string;
@@ -462,6 +628,9 @@ export function loadHooks(options: {
 }): LoadedHooks {
   const hooks: HookDefinition[] = [];
   const errors: HookLoadError[] = [];
+  const approved = readHookTrust(options.home);
+  const projectChanged: HookChange[] = [];
+  let projectIgnored = false;
   const take = (
     file: string,
     source: HookSource,
@@ -473,11 +642,52 @@ export function loadHooks(options: {
     hooks.push(...read.hooks);
     if (read.error) errors.push(read.error);
   };
+  // A project file runs only when the folder is trusted and these bytes were approved.
+  // The digest, the hooks that load and what an approval card lists are one read.
+  const considerProject = (
+    file: string,
+    source: HookSource,
+    label: string,
+    skill?: string,
+  ) => {
+    if (!fileExists(file)) return;
+    if (!options.trusted) {
+      projectIgnored = true;
+      return;
+    }
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(file);
+    } catch (error) {
+      errors.push({
+        file,
+        message: `hooks could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return;
+    }
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const read = readHookFile(file, source, label, skill, bytes);
+    const previous = approved[canonicalPath(file)];
+    // Nothing in it would run, so there is nothing to approve.
+    if (previous?.digest === digest || !read.hooks.length) {
+      hooks.push(...read.hooks);
+      if (read.error) errors.push(read.error);
+      return;
+    }
+    projectChanged.push({
+      file,
+      digest,
+      hooks: previewHooks(read.hooks, previous),
+      definitions: read.hooks,
+      ...(read.error ? { error: read.error } : {}),
+    });
+  };
   take(join(options.home, 'hooks.json'), 'user', 'user');
-  let projectIgnored = false;
-  const projectFile = join(options.workspace, '.circle', 'hooks.json');
-  if (!options.trusted && fileExists(projectFile)) projectIgnored = true;
-  else if (options.trusted) take(projectFile, 'project', 'project');
+  considerProject(
+    join(options.workspace, '.circle', 'hooks.json'),
+    'project',
+    'project',
+  );
   let skills: ReturnType<typeof discoverSkills> = [];
   try {
     skills = discoverSkills(options.workspace, options.home, options.userHome);
@@ -488,13 +698,11 @@ export function loadHooks(options: {
     const projectSkill = skill.source_label.startsWith('Project');
     const file = join(dirname(skill.path), 'hooks.json');
     if (!fileExists(file)) continue;
-    if (projectSkill && !options.trusted) {
-      projectIgnored = true;
-      continue;
-    }
-    take(file, 'skill', `skill:${skill.name}`, skill.name);
+    if (projectSkill)
+      considerProject(file, 'skill', `skill:${skill.name}`, skill.name);
+    else take(file, 'skill', `skill:${skill.name}`, skill.name);
   }
-  return { hooks, errors, projectIgnored };
+  return { hooks, errors, projectIgnored, projectChanged };
 }
 
 function textField(value: unknown): string {
@@ -842,6 +1050,21 @@ export class HookRunner {
     return this.loaded.hooks.filter((hook) => this.armedHook(hook));
   }
 
+  /**
+   * Load a file that was waiting for approval: the hooks of the read that the
+   * approval was for, not the file as it is now. False when it is not waiting.
+   */
+  approve(change: HookChange): boolean {
+    const index = this.loaded.projectChanged.findIndex(
+      (item) => item.file === change.file && item.digest === change.digest,
+    );
+    if (index < 0) return false;
+    const [waiting] = this.loaded.projectChanged.splice(index, 1);
+    this.loaded.hooks.push(...waiting!.definitions);
+    if (waiting!.error) this.loaded.errors.push(waiting!.error);
+    return true;
+  }
+
   /** Every configured hook, including a skill hook this session has not loaded. */
   listing(): { hook: HookDefinition; active: boolean }[] {
     return this.loaded.hooks.map((hook) => ({
@@ -1039,4 +1262,12 @@ export function activeHookSummary(hooks: HookDefinition[]): string {
 /** Basename for a notice, without turning the whole path into the label. */
 export function hookFileLabel(file: string): string {
   return basename(file);
+}
+
+/** A hooks file as a notice names it: from the workspace when it is inside, else whole. */
+export function hookFileShown(file: string, workspace: string): string {
+  const inside = relative(workspace, file);
+  return inside && !inside.startsWith('..') && !isAbsolute(inside)
+    ? inside.split(sep).join('/')
+    : file;
 }

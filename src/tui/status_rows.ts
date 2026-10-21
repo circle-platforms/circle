@@ -6,6 +6,7 @@ import { basename, sep } from 'node:path';
 import { palette, statusLight, type LampState } from '../ink/theme.js';
 import { stringWidth, truncate } from '../ink/string_width.js';
 import { EFFORT_LEVELS } from '../model.js';
+import { effortLabel, t, uiText } from '../locale.js';
 import { cacheRateLabel } from '../pricing.js';
 import type { Usage } from '../types.js';
 import type { CompactionProgress } from '../compaction.js';
@@ -77,7 +78,9 @@ export function busyLabel(
   tokens: number,
   detail?: string,
 ): string {
-  return `${verb}… · ${detail ? detail + ' · ' : ''}${formatElapsed(seconds)} · ↓ ${formatTokens(tokens)}`;
+  const word = uiText(verb);
+  const why = detail ? uiText(detail) : '';
+  return `${word}… · ${why ? why + ' · ' : ''}${formatElapsed(seconds)} · ↓ ${formatTokens(tokens)}`;
 }
 
 // A folder as people write it: the home folder is `~`.
@@ -106,14 +109,15 @@ export interface HeaderInfo {
 export function headerRows(info: HeaderInfo, width: number): string[] {
   const p = palette();
   if (info.gate) return ['', ''];
-  const model =
+  const depth =
     info.depth && (EFFORT_LEVELS as readonly string[]).includes(info.depth)
-      ? `${info.model} • ${info.depth}`
-      : info.model;
+      ? effortLabel(info.depth)
+      : '';
+  const model = depth ? `${info.model} • ${depth}` : info.model;
   const head = ` circle ${info.version} · `;
   const path =
     displayPath(info.workspace) + (info.branch ? ` (${info.branch})` : '');
-  const hint = '? for shortcuts';
+  const hint = uiText('? for shortcuts');
   let room = width - 1;
   const showHint =
     info.connected !== false &&
@@ -178,16 +182,22 @@ function meterParts(meters: Meters): {
   // Zero tokens before the endpoint answers is not a measured empty call.
   const unknown = meters.unreported === true;
   const tokens = `↑ ${unknown ? 'N/A' : formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`;
-  const cache = `cache ${unknown ? 'N/A' : cacheRateLabel(usage)}`;
+  const cache = unknown
+    ? t('cache N/A')
+    : t('cache {rate}', { rate: cacheRateLabel(usage) });
   const cost = meters.costText ?? '';
   const head = [tokens, ...(cost ? [cost] : []), cache].join(' · ');
   let context = '';
   let percent = 0;
   if (meters.contextInput !== undefined && !meters.contextWindow)
-    context = `ctx ${formatTokens(meters.contextInput)}/N/A`;
+    context = t('ctx {used}/N/A', { used: formatTokens(meters.contextInput) });
   else if (meters.contextInput !== undefined && meters.contextWindow) {
     percent = Math.min(999, (meters.contextInput / meters.contextWindow) * 100);
-    context = `ctx ${formatTokens(meters.contextInput)}/${formatWindow(meters.contextWindow)} (${Math.round(percent)}%)`;
+    context = t('ctx {used}/{window} ({percent}%)', {
+      used: formatTokens(meters.contextInput),
+      window: formatWindow(meters.contextWindow),
+      percent: Math.round(percent),
+    });
   }
   const lines = [
     [tokens, cost, cache, context],
@@ -242,7 +252,7 @@ export function footerRow(
   if (flash) {
     // The flash is its own segment. Meters give way on a ` · ` boundary, so a
     // narrow row does not become `cach  cleared`.
-    const shown = fitSegment(flash, Math.max(1, width - 2));
+    const shown = fitSegment(uiText(flash), Math.max(1, width - 2));
     const room = width - 1 - stringWidth(shown) - 3;
     if (room < 12) return p.faint + ' ' + shown + p.reset;
     const left = fitSegment(fitted, room);

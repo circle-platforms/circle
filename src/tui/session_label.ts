@@ -2,6 +2,8 @@
 // reply is shared too. The recent list and /resume use the same line, including
 // a row that search left on its own.
 
+import { t } from '../locale.js';
+
 export function shortSessionId(id: string): string {
   return id.startsWith('circle-') ? id.slice('circle-'.length) : id.slice(-8);
 }
@@ -57,9 +59,9 @@ export function sessionRowLabel(
     }[];
   },
 ): string {
-  const title = session.title || '(untitled)';
+  const title = session.title || t('(untitled)');
   const duplicates = sessions.filter(
-    (item) => (item.title || '(untitled)') === title,
+    (item) => (item.title || t('(untitled)')) === title,
   );
   if (duplicates.length < 2) return title;
   const hint = (item: { id: string }): string => {

@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { GitHubConnectionBackend } from './github_connection.js';
-import { join, basename } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
@@ -27,7 +34,20 @@ import {
   written,
   type Redactor,
 } from './secrets.js';
-import { buildSystemPrompt, type ContextInstruction } from './system_prompt.js';
+import {
+  buildSystemPrompt,
+  planModePrompt,
+  type ContextInstruction,
+} from './system_prompt.js';
+import {
+  PLAN_CHOICE_NOTES,
+  PLAN_CHOICES,
+  planAnswer,
+  planFile,
+  planSession,
+  shownPath,
+  type PlanChoice,
+} from './plan_file.js';
 import {
   Harness,
   type ApprovalDecision,
@@ -74,11 +94,24 @@ import {
   type CostSummary,
 } from './pricing.js';
 import { addUsage, emptyUsage } from './types.js';
+import {
+  VisionService,
+  visionConnection,
+  type VisionConnection,
+} from './vision.js';
+import { saveMediaAttachment } from './media.js';
 import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
-import { HookRunner, loadHooks, type HookDefinition } from './hooks.js';
+import {
+  HookRunner,
+  approveHookFile,
+  approvedHookDigest,
+  loadHooks,
+  type HookChange,
+  type HookDefinition,
+} from './hooks.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -188,6 +221,18 @@ export interface RuntimeOptions {
     origin?: InteractionContext,
   ) => Promise<void>;
   /**
+   * Ask the person whether a project hooks file that was never approved, or changed
+   * since, may run: true approves exactly the bytes in `change`. Asked once per file
+   * version when a turn starts, and again after a reload or in a new session. Without
+   * it (print, line and rpc mode) such a file does not run and the turn says so.
+   */
+  approveHooks?: (change: HookChange, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * The terminal's `circle -c`: a session another terminal holds opens view only
+   * instead of failing. Nothing else gets this; the desktop starts a session of its own.
+   */
+  viewOccupied?: boolean;
+  /**
    * Keep a new session out of the database until its first message. The terminal uses this
    * so startup and /new do not leave an empty row.
    */
@@ -211,6 +256,7 @@ export interface RuntimeOptions {
 }
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
+  private readonly vision = new VisionService();
   private readonly searchConnections = new WeakMap<
     ChatModel,
     NativeSearchConnection
@@ -252,6 +298,53 @@ export class AgentRuntime {
           ...(record.searchRequests !== undefined
             ? { search_requests: record.searchRequests }
             : {}),
+        }),
+    );
+  }
+  /** The side vision model this run describes pictures with, when one is configured. */
+  private visionForRun(): VisionConnection | undefined {
+    return visionConnection(
+      this.options.settings,
+      loadCredentials(this.options.home),
+    );
+  }
+  /** Where a picture the model cannot read is written, once, named by its bytes. */
+  private offloadImages(): string {
+    return (
+      this.sandbox.offloadRoot ??
+      projectDataDir(this.options.workspace, this.options.home)
+    );
+  }
+  private describeImages(
+    connection: VisionConnection,
+    paths: string[],
+    question: string,
+    context: ToolContext,
+  ): Promise<{ model: string; text: string }> {
+    return this.vision.describe(
+      connection,
+      paths,
+      question,
+      context.signal,
+      (call) =>
+        context.recordModelCall?.({
+          model: call.model,
+          usage: {
+            ...emptyUsage(),
+            input_tokens: call.usage.input_tokens,
+            output_tokens: call.usage.output_tokens,
+          },
+          cost: {
+            ...priceCall(
+              this.catalog.facts(call.model, this.options.settings),
+              {
+                ...emptyUsage(),
+                input_tokens: call.usage.input_tokens,
+                output_tokens: call.usage.output_tokens,
+              },
+            ),
+            tool_fee_unknown: true,
+          },
         }),
     );
   }
@@ -364,17 +457,33 @@ export class AgentRuntime {
             !this.runOptions.session_name &&
             !options.sessionId,
         );
-      if (!options.inspect)
-        this.store.claimSession(this.session.id, (error) =>
-          this.ownershipLost(error),
-        );
+      if (!options.inspect) {
+        try {
+          this.store.claimSession(this.session.id, (error) =>
+            this.ownershipLost(error),
+          );
+        } catch (error) {
+          // Only the terminal's `circle -c` watches a held session. Everyone else
+          // (print mode, the desktop) is told it is taken.
+          if (
+            !options.viewOccupied ||
+            options.headless ||
+            !(error instanceof SessionOccupiedError)
+          )
+            throw error;
+          this.options.inspect = true;
+        }
+      }
       // A delete may have completed between discovery and acquiring the lease.
       const current = this.store.get(this.session.id);
       if (!current) throw new Error('unknown session');
       this.session = current;
-      this.store.repairStaleTitles();
-      const repaired = this.store.get(this.session.id);
-      if (repaired) this.session = repaired;
+      // A view-only open does not rename another terminal's session.
+      if (!this.options.inspect) {
+        this.store.repairStaleTitles();
+        const repaired = this.store.get(this.session.id);
+        if (repaired) this.session = repaired;
+      }
     } catch (error) {
       this.store.close();
       throw error;
@@ -514,9 +623,16 @@ export class AgentRuntime {
       this.authFingerprint = this.savedConnectionFingerprint();
     this.baseModel = model;
     const system = this.systemPrompt(model.model);
+    const vision = this.visionForRun();
     let tools = buildTools(this.sandbox, {
       fileMutations: this.options.fileMutations,
       jobs: this.jobs,
+      ...(vision
+        ? {
+            vision: (paths: string[], question: string, context: ToolContext) =>
+              this.describeImages(vision, paths, question, context),
+          }
+        : {}),
       displayCommand: (raw, context) =>
         this.redact(raw, {}, () =>
           written(this.store.messages(context.sessionId)),
@@ -540,56 +656,54 @@ export class AgentRuntime {
           keep: (name, value) => this.keepVariable(name, value),
         }),
       plan: async (enabled, context) => {
-        if (!enabled && !this.options.question)
-          throw new Error('plan_exit requires an interactive answer');
-        if (!enabled) {
-          const reply = await this.options.question!(
-            {
-              questions: [
-                {
-                  question: 'Implement the completed plan?',
-                  header: 'plan',
-                  options: [
-                    {
-                      label: 'implement plan',
-                      description: 'Leave read-only mode, ask before edits',
-                    },
-                    {
-                      label: 'implement plan, accept edits',
-                      description:
-                        'Leave read-only mode, edit workspace files without asking',
-                    },
-                    {
-                      label: 'continue planning',
-                      description: 'Stay in read-only mode',
-                    },
-                  ],
-                  multiple: false,
-                  custom: false,
-                },
-              ],
-            },
-            context.signal,
-          );
-          context.signal.throwIfAborted();
-          let answers: unknown;
-          try {
-            answers = JSON.parse(reply);
-          } catch {
-            answers = undefined;
-          }
-          const chosen = Array.isArray(answers) ? answers.flat() : [];
-          if (chosen.includes('implement plan, accept edits')) {
-            this.setMode('accept-edits');
-            return 'Read-only mode disabled. File edits inside the workspace are accepted without asking.';
-          }
-          if (!chosen.includes('implement plan'))
-            return 'The user kept read-only mode active. Continue planning.';
-          this.setMode('manual');
-          return 'Read-only mode disabled.';
+        const { file, path } = this.planFile;
+        if (enabled) {
+          this.setPlanMode(true);
+          return `Plan mode is on: research, write the plan to ${file}, then call plan_exit.`;
         }
-        this.setPlanMode(enabled);
-        return enabled ? 'Read-only mode enabled.' : 'Read-only mode disabled.';
+        if (!this.options.question)
+          throw new Error('plan_exit requires an interactive answer');
+        const reply = await this.options.question(
+          {
+            questions: [
+              {
+                question: `The plan is ready: ${shownPath(path)}\nHow should Circle go on?`,
+                header: 'plan',
+                options: (Object.keys(PLAN_CHOICES) as PlanChoice[]).map(
+                  (choice) => ({
+                    label: PLAN_CHOICES[choice],
+                    description: PLAN_CHOICE_NOTES[choice],
+                  }),
+                ),
+                multiple: false,
+                // Written words say what to change
+                custom: true,
+              },
+            ],
+            // The desktop shows its plan card for this question, beside the plan
+            plan: { file },
+          },
+          context.signal,
+        );
+        context.signal.throwIfAborted();
+        const { choice, words } = planAnswer(reply);
+        if (choice === 'auto' || choice === 'manual') {
+          this.setMode(choice);
+          return (
+            (choice === 'auto'
+              ? 'Plan mode is off and auto mode is on: changes run without asking.'
+              : 'Plan mode is off: each change asks the user first.') +
+            ` Implement the plan in ${file} now.` +
+            (words ? ` The user added: ${words}` : '')
+          );
+        }
+        if (choice === 'change')
+          return words
+            ? `The user wants the plan changed before it is implemented. They said: ${words}\nRevise ${file}, then call plan_exit again.`
+            : `The user wants the plan changed but did not say how. Ask what to change with question, revise ${file}, then call plan_exit again.`;
+        if (choice === 'keep')
+          return `The user is keeping the plan in ${file} and does not want it implemented now. Plan mode stays on. Change nothing, and end your turn with one short line.`;
+        return 'The user closed the question without choosing. Plan mode stays on; end your turn.';
       },
       compact: async (hint, context) => this.compact(hint, context.signal),
       task: async (args, context) => {
@@ -695,6 +809,15 @@ export class AgentRuntime {
         const jobTools = buildTools(this.sandbox, {
           fileMutations: this.options.fileMutations,
           jobs: this.jobs,
+          ...(vision
+            ? {
+                vision: (
+                  paths: string[],
+                  question: string,
+                  context: ToolContext,
+                ) => this.describeImages(vision, paths, question, context),
+              }
+            : {}),
           displayCommand: (raw, context) =>
             this.redact(raw, {}, () =>
               written(this.store.messages(context.sessionId)),
@@ -793,6 +916,17 @@ export class AgentRuntime {
           toolBoundary: (tool, args, context) =>
             this.extensionToolBoundary(tool, args, context),
           executeTool: this.options.executeTool,
+          ...(vision
+            ? {
+                vision: (
+                  paths: string[],
+                  question: string,
+                  context: ToolContext,
+                ) => this.describeImages(vision, paths, question, context),
+              }
+            : {}),
+          saveImageAttachment: (item) =>
+            saveMediaAttachment(this.offloadImages(), item),
           webSearch: (model, query, count, context) =>
             this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
@@ -872,6 +1006,7 @@ export class AgentRuntime {
       headless: this.options.headless,
       approve: this.options.approve,
       hooks: this.ensureHooks(),
+      reviewHooks: (signal) => this.reviewHooks(signal),
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
       beforeRun: async (signal) => {
@@ -898,6 +1033,14 @@ export class AgentRuntime {
       toolBoundary: (tool, args, context) =>
         this.extensionToolBoundary(tool, args, context),
       executeTool: this.options.executeTool,
+      ...(vision
+        ? {
+            vision: (paths: string[], question: string, context: ToolContext) =>
+              this.describeImages(vision, paths, question, context),
+          }
+        : {}),
+      saveImageAttachment: (item) =>
+        saveMediaAttachment(this.offloadImages(), item),
       webSearch: (model, query, count, context) =>
         this.searchFromModel(model, query, count, context),
       prepareMessages: (signal) =>
@@ -910,27 +1053,33 @@ export class AgentRuntime {
         ),
       settled: () => this.releaseIfAway(),
       planFileMutation: (call) => {
-        if (['write_file', 'edit_file', 'delete'].includes(call.name)) {
-          const path = this.sandbox.resolvePath(
-            String(call.args.file_path || call.args.path || ''),
+        let paths: string[];
+        if (call.name === 'write_file' || call.name === 'edit_file')
+          paths = [String(call.args.file_path || call.args.path || '')];
+        else if (call.name === 'apply_patch') {
+          const patch = String(call.args.patchText || '');
+          if (/^\*\*\* (?:Delete File|Move to):/m.test(patch)) return false;
+          paths = [
+            ...patch.matchAll(/^\*\*\* (?:Add File|Update File):\s*(.+)$/gm),
+          ].map((match) => match[1]!);
+        } else return false;
+        try {
+          const own = this.planFile.path;
+          return (
+            paths.length > 0 &&
+            paths.every(
+              (path) =>
+                path.trim() !== '' && this.sandbox.resolvePath(path) === own,
+            )
           );
-          return ['plan.md', 'plan'].includes(basename(path).toLowerCase());
+        } catch {
+          return false;
         }
-        if (call.name !== 'apply_patch') return false;
-        const paths = [
-          ...String(call.args.patchText || '').matchAll(
-            /^\*\*\* (?:Add File|Update File|Delete File|Move to):\s*(.+)$/gm,
-          ),
-        ].map((match) => this.sandbox.resolvePath(match[1]!));
-        return (
-          paths.length > 0 &&
-          paths.every((path) =>
-            ['plan.md', 'plan'].includes(basename(path).toLowerCase()),
-          )
-        );
       },
+      planPrompt: () => planModePrompt(this.planFile.file),
     });
     harness.planMode = restoredPlanMode(harness.messages);
+    this.adoptPlan(harness.messages);
     return harness;
   }
   private classifyCoreTools(tools: Tool[]): Tool[] {
@@ -1281,6 +1430,74 @@ export class AgentRuntime {
     }, 0);
     this.toolsCheck.unref?.();
   }
+  /** Configured hooks, including skill hooks this session has not loaded. */
+  listHooks(): {
+    hooks: { hook: HookDefinition; active: boolean }[];
+    projectIgnored: boolean;
+    projectChanged: HookChange[];
+  } {
+    const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
+    return {
+      hooks: runner.listing(),
+      projectIgnored: runner.loaded.projectIgnored,
+      projectChanged: [...runner.loaded.projectChanged],
+    };
+  }
+  /** Project hooks files this session is not running because they wait for approval. */
+  pendingHooks(): HookChange[] {
+    const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
+    return [...runner.loaded.projectChanged];
+  }
+  /**
+   * Approve a file that waits in this session: the digest, and the hooks that load,
+   * are those of `change`, the read the person was shown. False when this session is
+   * not waiting for exactly that version (the file was read again since).
+   */
+  approveHooks(change: HookChange): boolean {
+    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
+    const runner = this.ensureHooks();
+    const waiting = runner.loaded.projectChanged.find(
+      (item) => item.file === change.file && item.digest === change.digest,
+    );
+    if (!waiting) return false;
+    approveHookFile(this.options.home, waiting);
+    return runner.approve(waiting);
+  }
+  /** A file approved elsewhere (another session, another Circle) loads here too. */
+  private syncHookApprovals(runner: HookRunner): void {
+    for (const change of [...runner.loaded.projectChanged])
+      if (approvedHookDigest(this.options.home, change.file) === change.digest)
+        runner.approve(change);
+  }
+  /** Files this session asked about and the person left off. A reload asks again. */
+  private hooksAsked = new Set<string>();
+  /**
+   * When a turn starts: load files approved elsewhere (another session, another
+   * Circle), then ask the person about each version not asked about yet.
+   */
+  private async reviewHooks(signal: AbortSignal): Promise<void> {
+    const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
+    if (this.viewOnly || !runner.loaded.projectChanged.length) return;
+    const ask = this.options.approveHooks;
+    if (!ask) return;
+    for (const change of [...runner.loaded.projectChanged]) {
+      const key = `${change.file}\0${change.digest}`;
+      if (this.hooksAsked.has(key)) continue;
+      let approved: boolean;
+      try {
+        approved = await ask(change, signal);
+      } catch (error) {
+        // An interrupted turn did not answer; the next turn asks again.
+        if (signal.aborted) throw error;
+        approved = false;
+      }
+      this.hooksAsked.add(key);
+      if (approved) this.approveHooks(change);
+    }
+  }
   /** Skills whose hooks are armed for the current session. */
   private armedSkills = new Set<string>();
   private ensureHooks(): HookRunner {
@@ -1299,6 +1516,8 @@ export class AgentRuntime {
         { workspace: this.options.workspace, home: this.options.home },
       );
       for (const name of this.armedSkills) this.hookRunner.activateSkill(name);
+      // A fresh read asks again about every file still waiting.
+      this.hooksAsked.clear();
     }
     return this.hookRunner;
   }
@@ -1335,6 +1554,69 @@ export class AgentRuntime {
     this.integrationsReady = undefined;
     await this.initialize();
   }
+  /** This conversation's plan file: the path the model writes, and where it is kept. */
+  get planFile(): { file: string; path: string } {
+    const file = planFile(this.session.id);
+    let path = this.planPaths.get(file);
+    if (!path)
+      this.planPaths.set(file, (path = this.sandbox.resolvePath(file)));
+    return { file, path };
+  }
+  private planPaths = new Map<string, string>();
+  private planRead?: {
+    path: string;
+    mtime: number;
+    size: number;
+    text: string;
+  };
+  /** The plan as last written, read again only when the file changed. */
+  plan(): { file: string; text: string; updatedAt: string } | undefined {
+    const { file, path } = this.planFile;
+    try {
+      const stat = statSync(path);
+      if (
+        this.planRead?.path !== path ||
+        this.planRead.mtime !== stat.mtimeMs ||
+        this.planRead.size !== stat.size
+      )
+        this.planRead = {
+          path,
+          mtime: stat.mtimeMs,
+          size: stat.size,
+          text: readFileSync(path, 'utf8'),
+        };
+      return {
+        file,
+        text: this.planRead.text,
+        updatedAt: stat.mtime.toISOString(),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  // A fork or a clone has a new id, so its history names the plan of the conversation it
+  // came from. It starts with a copy of that plan, which it then keeps as its own.
+  private adoptPlan(messages: Message[]): void {
+    try {
+      const own = this.planFile.path;
+      if (existsSync(own)) return;
+      for (const message of [...messages].reverse())
+        for (const call of message.tool_calls ?? []) {
+          if (call.name !== 'write_file' && call.name !== 'edit_file') continue;
+          const source = planSession(
+            String(call.args.file_path || call.args.path || ''),
+          );
+          if (!source || source === this.session.id) continue;
+          const from = this.sandbox.resolvePath(planFile(source));
+          if (!existsSync(from)) continue;
+          mkdirSync(dirname(own), { recursive: true });
+          copyFileSync(from, own);
+          return;
+        }
+    } catch {
+      /* The conversation goes on without the plan it came from. */
+    }
+  }
   setPlanMode(enabled: boolean): void {
     if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
     if (this.harness.planMode === enabled) return;
@@ -1348,7 +1630,7 @@ export class AgentRuntime {
         role: 'user',
         internal: 'mode-boundary',
         content: enabled
-          ? '[Circle system] Plan mode is now ON. Do not create/edit/delete project files except plan.md; do not run shell commands. Research and update the plan only.'
+          ? `[Circle system] Plan mode is now ON. Do not change the workspace or run shell commands. Research, write the plan to ${this.planFile.file}, and call plan_exit when it is ready.`
           : '[Circle system] Plan mode is now OFF. Previous plan-mode constraints no longer apply. Implement changes subject to normal approval.',
       },
     ]);
@@ -1429,17 +1711,8 @@ export class AgentRuntime {
       );
   }
   private requireTurnConnection(): void {
-    try {
-      this.requireCurrentConnection();
-    } catch (error) {
-      this.bus.emit('run_error', {
-        payload: {
-          message: error instanceof Error ? error.message : String(error),
-          connection_changed: true,
-        },
-      });
-      throw error;
-    }
+    // The harness reports the failure once. Emitting here as well printed it twice.
+    this.requireCurrentConnection();
   }
   private gatewayModel(
     settings: CircleSettings,
@@ -1604,6 +1877,7 @@ export class AgentRuntime {
   }
   async compact(hint = '', signal?: AbortSignal): Promise<string> {
     if (this.ownershipError) throw this.ownershipError;
+    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
     if (!signal) this.requireCurrentConnection();
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (signal)
@@ -1958,7 +2232,15 @@ export class AgentRuntime {
     if (deleteSession) await this.options.beforeDelete?.();
     if (deleteSession)
       this.store.delete(this.session.id, (ids) => {
-        for (const id of ids) this.policy.store.remove(id);
+        for (const id of ids) {
+          this.policy.store.remove(id);
+          // A plan left behind is harmless; it never keeps a session from going
+          try {
+            rmSync(this.sandbox.resolvePath(planFile(id)), { force: true });
+          } catch {
+            /* kept */
+          }
+        }
       });
     this.store.close();
   }

@@ -97,6 +97,7 @@ import {
   commandWord,
   knownSlashNames,
   parseSlash,
+  refusedSlash,
 } from './slash_commands.js';
 import {
   cycleThinking,
@@ -120,6 +121,8 @@ import {
 import { PlanPanel } from '../ink/components/plan_panel.js';
 import { stripAnsi, truncate } from '../ink/string_width.js';
 import { modelScope, sameModel } from '../model_scope.js';
+import { hookFileShown, type HookChange } from '../hooks.js';
+import { HookApprovalCard } from '../ink/components/hook_card.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
 import { browserTools, runtimeBrowserOptions } from '../browser/tools.js';
@@ -373,7 +376,16 @@ export class SessionApp {
   }
   private dataListener = (data: string): void => {
     if (this.externalEditor) return;
-    for (const event of this.input.feed(data)) this.handle(event);
+    const events = this.input.feed(data);
+    let drop = false;
+    for (const event of events) {
+      if (drop && event.type === 'key') continue;
+      const open = Boolean(this.state.dialog);
+      this.handle(event);
+      // Keys already in this burst were typed at the card. Closing it must
+      // not deliver the rest as a prompt.
+      if (open && !this.state.dialog && event.type === 'key') drop = true;
+    }
   };
   private resizeListener = (): void => this.repaint();
   // The terminal and the process as lending the screen out uses them (ctrl+z to the shell,
@@ -969,7 +981,8 @@ export class SessionApp {
     this.state.notices.push(text);
     const trail =
       /^(?:Resumed|Continued|Forked|Open in another terminal) /.test(text) ||
-      text === 'this session is writable again';
+      text === 'this session is writable again' ||
+      text === 'view only, the draft stays';
     anchors.push(
       trail
         ? undefined
@@ -996,7 +1009,7 @@ export class SessionApp {
     this.composer.set(text);
     this.state.completion = undefined;
   }
-  async initialize(force = false): Promise<boolean> {
+  async initialize(force = false, trust = false): Promise<boolean> {
     // Set up, but with no URL or model (an older release's OAuth sign-in): ask again, as
     // print mode does
     if (force || !isReady(this.settings)) {
@@ -1016,13 +1029,16 @@ export class SessionApp {
       this.settingUp = false;
     }
     if (!isFolderTrusted(this.settings, this.workspace)) {
-      const answer = await this.askChoice(
-        'trust',
-        `${this.workspace}\nThis folder can supply instructions, skills, commands, extensions and hooks. Extensions and hooks execute code.`,
-        ['trust this folder', 'quit'],
-      );
-      if (answer !== 'trust this folder') return false;
-      this.trustWorkspace();
+      if (trust) this.trustWorkspace();
+      else {
+        const answer = await this.askChoice(
+          'trust',
+          `${this.workspace}\nThis folder can supply instructions, skills, commands, extensions and hooks. Extensions and hooks execute code.`,
+          ['trust this folder', 'quit'],
+        );
+        if (answer !== 'trust this folder') return false;
+        this.trustWorkspace();
+      }
     }
     return !this.ended;
   }
@@ -1095,7 +1111,12 @@ export class SessionApp {
         this.makeView(),
       ),
     );
-    const runtime = this.createRuntime(options, this.view);
+    // `circle -c` on a session another terminal holds opens it view only. The other
+    // ways in (`--session`, a new session) still say it is taken.
+    const runtime = this.createRuntime(
+      { ...options, viewOccupied: Boolean(options.continue) },
+      this.view,
+    );
     // Old builds inserted a row on startup and on every /new. Drop the ones
     // nobody is using; a leased empty session stays until that runtime ends.
     runtime.store.purgeEmptySessions();
@@ -1124,6 +1145,10 @@ export class SessionApp {
     } finally {
       this.connecting = false;
     }
+    if (runtime.viewOnly)
+      this.notice(
+        `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`,
+      );
     runtime.repairRecentTitles();
     this.repaint();
   }
@@ -1399,9 +1424,19 @@ export class SessionApp {
                 `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
               );
             } else if (notice.event === 'title_failed') {
-              const text = `title failed · ${String(notice.message).replace(/\s+/g, ' ').slice(0, 120)}`;
-              this.notice(text);
-              this.flash(text, 5000);
+              const message = String(notice.message)
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 120);
+              const text = `title failed · ${message}`;
+              // The turn already said this, for example a missing key.
+              if (
+                !message ||
+                !this.state.notices.some((note) => note.includes(message))
+              ) {
+                this.notice(text);
+                this.flash(text, 5000);
+              }
             } else if (notice.event === 'param_dropped')
               this.notice(
                 `Endpoint does not support ${notice.param}; continuing without it`,
@@ -1649,7 +1684,7 @@ export class SessionApp {
   // a time, the turn's own before a background agent's, none while you are typing.
   private cardHooks(
     view: SessionView = this.view,
-  ): Pick<RuntimeOptions, 'approve' | 'question' | 'secret'> {
+  ): Pick<RuntimeOptions, 'approve' | 'question' | 'secret' | 'approveHooks'> {
     const asCard = <T>(
       action: () => Promise<T>,
       signal: AbortSignal,
@@ -1709,7 +1744,32 @@ export class SessionApp {
           signal,
           origin,
         ),
+      // A project hooks file waiting for approval, when a turn starts: the card waits,
+      // like the others, until typing pauses.
+      approveHooks: (change, signal) =>
+        asCard(() => this.askHooks(change, signal), signal),
     };
+  }
+  /** `--approve-hooks`: approve the files this session waits for, as they were read. */
+  approveWaitingHooks(): void {
+    const runtime = this.runtime;
+    if (!runtime || runtime.viewOnly) return;
+    for (const change of runtime.pendingHooks())
+      if (runtime.approveHooks(change))
+        this.notice(
+          `project hooks approved · ${hookFileShown(change.file, this.workspace)}`,
+        );
+  }
+  private async askHooks(
+    change: HookChange,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const answer = await this.showCard(new HookApprovalCard(change), signal);
+    if (answer === 'approve')
+      this.notice(
+        `project hooks approved · ${hookFileShown(change.file, this.workspace)}`,
+      );
+    return answer === 'approve';
   }
   private async showCard<T>(card: Card<T>, signal?: AbortSignal): Promise<T> {
     const view = this.view;
@@ -2998,17 +3058,20 @@ export class SessionApp {
               `Unknown command /${word} · turn it on with /extensions enable ${off}`,
               4000,
             );
-          } else {
+          } else if (
+            refusedSlash(raw, shown, new Set([...knownSlashNames(), ...extra]))
+          ) {
+            const token = word ? `/${word}` : shown;
             const close = word
               ? closeMatch(word, [...knownSlashNames(), ...extra])
               : '';
-            this.composer.set(raw);
+            this.composer.set('');
             this.flash(
-              `Unknown command /${word}` +
+              `Unknown command ${token}` +
                 (close ? ` · did you mean /${close}?` : ' · /help lists them'),
               4000,
             );
-          }
+          } else this.composer.set(raw);
         }
       }
     } catch (error) {
@@ -3128,10 +3191,12 @@ export class SessionApp {
         await this.command(slash.name, slash.args);
         return;
       }
-      const word = commandWord(raw);
-      if (word) {
-        const off = this.runtime?.extensions.offCommand(word);
-        if (off) {
+      if (
+        refusedSlash(raw, message, new Set([...knownSlashNames(), ...extra]))
+      ) {
+        const word = commandWord(raw);
+        const off = word ? this.runtime?.extensions.offCommand(word) : '';
+        if (word && off) {
           // The draft was already taken. A turned-off bundled command is not a typo.
           this.flash(
             `Unknown command /${word} · turn it on with /extensions enable ${off}`,
@@ -3139,11 +3204,14 @@ export class SessionApp {
           );
           return;
         }
-        // Not sent: the text comes back to the box to fix.
-        const close = closeMatch(word, [...knownSlashNames(), ...extra]);
-        this.composer.restore(raw, pastes);
+        // Not sent, and not left in the box: the next key would append to it.
+        const token = word ? `/${word}` : message;
+        const close = word
+          ? closeMatch(word, [...knownSlashNames(), ...extra])
+          : '';
+        this.composer.set('');
         this.flash(
-          `Unknown command /${word}` +
+          `Unknown command ${token}` +
             (close ? ` · did you mean /${close}?` : ' · /help lists them'),
           4000,
         );
@@ -3151,7 +3219,6 @@ export class SessionApp {
       }
     }
     const runtime = this.runtime;
-    const view = this.view;
     if (
       !runtime ||
       (this.sessions && this.sessions.lifecycle(runtime.session.id) !== 'open')
@@ -3159,14 +3226,13 @@ export class SessionApp {
       return;
     if (runtime.viewOnly) {
       // The other terminal may have left since this one opened the session.
+      // A draft typed while this side could only watch is not sent on the
+      // enter that discovers the lease is free. The next enter sends it.
       this.watchLease();
-      if (runtime.viewOnly) {
-        // The box already gave the text up. Put it back and say why it was not sent.
-        this.composer.restore(raw, pastes);
-        const text = `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`;
-        if (this.state.notices.at(-1) !== text) this.notice(text);
-        return;
-      }
+      this.composer.restore(raw, pastes);
+      const text = 'view only, the draft stays';
+      if (this.state.notices.at(-1) !== text) this.notice(text);
+      return;
     }
     if (!plain && message.startsWith('!')) {
       try {
@@ -3176,9 +3242,9 @@ export class SessionApp {
         );
       } finally {
         if (!runtime.busy && runtime.harness.pendingMessageCount)
-          void runtime.harness
-            .run()
-            .catch((error) => this.inView(view, () => this.fail(error)));
+          void runtime.harness.run().catch(() => {
+            /* Run error is already displayed by the event bus. */
+          });
         this.repaint();
       }
       return;
@@ -3286,6 +3352,10 @@ export class SessionApp {
       selected: () => owner === this.selectedView,
       refreshConnection: () => this.refreshConnections(),
       watchLease: () => this.watchLease(),
+      heldElsewhere: (id) => {
+        const owned = this.sessions?.get(id);
+        return owned ? owned.viewOnly : sessionOccupied(this.home, id);
+      },
       sessionStatus: (id) => {
         if (this.sessions?.lifecycle(id) === 'deleting') return 'deleting';
         const runtime = this.sessions?.get(id);
@@ -3510,6 +3580,12 @@ export class SessionApp {
   }
   async command(name: string, args: string): Promise<void> {
     const view = this.view;
+    if (view.state.flash) {
+      view.state.flash = '';
+      if (this.flashTimer) clearTimeout(this.flashTimer);
+      this.flashTimer = undefined;
+      this.repaint();
+    }
     if (!this.runtime) return;
     if (['login', 'logout'].includes(name) && this.connectionBusy()) {
       const reason =
@@ -3591,9 +3667,7 @@ export class SessionApp {
                 .join(' · '),
             }));
           this.picker('Model', rows(), (item) => choose(item.key), {
-            hint:
-              'enter uses it in this session · alt+d also makes it the default · ' +
-              'tab adds it to alt+m or takes it out',
+            hint: 'enter uses it in this session · alt+d also makes it the default · tab adds it to alt+m or takes it out',
             empty:
               'No model matches · /models <id> uses an id the endpoint does not list',
             focusKey:
@@ -4071,6 +4145,9 @@ export class SessionApp {
 export async function runTui(
   options: Omit<RuntimeOptions, 'approve' | 'question'> & {
     init?: boolean;
+    trust?: boolean;
+    /** `--approve-hooks`: the waiting project hooks files are approved as they are. */
+    approveProjectHooks?: boolean;
     pickSession?: boolean;
     prompts?: string[];
     // What the conversation shows for each prompt, when it differs (`@file`)
@@ -4080,9 +4157,10 @@ export async function runTui(
   const app = new SessionApp(options.workspace, options.home, options.settings);
   app.start();
   try {
-    if (!(await app.initialize(options.init))) return 0;
+    if (!(await app.initialize(options.init, options.trust))) return 0;
     app.applyRunSettings(options.modelOverride);
     await app.attach(options);
+    if (options.approveProjectHooks) app.approveWaitingHooks();
     void app.checkForUpdate();
     if (options.pickSession) await app.command('resume', '');
     // The first message starts a turn; the others follow it, one turn each.

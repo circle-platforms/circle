@@ -36,6 +36,7 @@ import {
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
+import type { HookChange } from '../../../src/hooks.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
@@ -2363,6 +2364,17 @@ export class RuntimeController {
               ? { ...origin, name: task.spec.id, agent: runtime.session.id }
               : origin,
           ),
+        // A project hooks file that was never approved, or changed since: a card in
+        // the conversation when a turn starts. Until it is approved those hooks do not run.
+        approveHooks: (change, signal) =>
+          this.approveHooks(
+            runtime,
+            change,
+            signal,
+            task
+              ? { name: task.spec.id, agent: runtime.session.id }
+              : undefined,
+          ),
         githubConnection: this.githubBackend(
           workspace,
           () => runtime.session.id,
@@ -2854,6 +2866,7 @@ export class RuntimeController {
           (task) => task.session.id === row.id,
         );
       const selected = owner?.session.id === row.id;
+      const plan = selected ? owner.plan() : undefined;
       const queue = selected
         ? owner.harness.queuedMessages
         : { steering: [], followUp: [] };
@@ -2947,6 +2960,7 @@ export class RuntimeController {
               status: todo.status === 'in_progress' ? 'running' : todo.status,
             }))
           : [],
+        ...(plan ? { plan } : {}),
         pinned: false,
         shared: false,
         updatedAt: new Date(row.updated).toISOString(),
@@ -3257,6 +3271,9 @@ export class RuntimeController {
           active,
         })),
         projectHooksIgnored: runtime.hookCatalog.projectIgnored,
+        projectHooksWaiting: runtime.hookCatalog.projectChanged.map(
+          (change) => change.file,
+        ),
       },
     };
   }
@@ -3933,15 +3950,18 @@ export class RuntimeController {
       options: { label: string; description: string }[];
       multiple: boolean;
     }[];
+    // plan_exit's question: the plan card, beside the plan it is about
+    const plan = (args.plan as { file?: unknown } | undefined)?.file;
     const answers: (string | string[])[] = [];
     for (const question of questions) {
       const answer = await this.wait(
         runtime,
         {
-          kind: 'question',
+          kind: typeof plan === 'string' ? 'plan-exit' : 'question',
           title: question.question,
           choices: question.options.map((option) => option.label),
           multiple: question.multiple,
+          ...(typeof plan === 'string' ? { target: plan } : {}),
         },
         signal,
         origin,
@@ -3957,6 +3977,26 @@ export class RuntimeController {
       }
     }
     return JSON.stringify(answers);
+  }
+  private async approveHooks(
+    runtime: AgentRuntime,
+    change: HookChange,
+    signal: AbortSignal,
+    origin?: InteractionContext,
+  ): Promise<boolean> {
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'hooks',
+        title: 'project hooks need approval',
+        target: change.file,
+        hooks: change.hooks.map((hook) => ({ ...hook })),
+        choices: ['approve', 'skip'],
+      },
+      signal,
+      origin,
+    );
+    return answer === 'approve';
   }
   private async secret(
     runtime: AgentRuntime,
@@ -5193,6 +5233,11 @@ export class RuntimeController {
           !answer.startsWith('reject: ')
         )
           throw Error('invalid approval decision');
+        if (
+          pending.row.kind === 'hooks' &&
+          !pending.row.choices?.includes(answer)
+        )
+          throw Error('invalid hooks decision');
         if (pending.secret)
           await submitAnswer(this.home, pending.secret.id, answer);
         this.pending.delete(id);

@@ -151,3 +151,24 @@ test('update refuses a source checkout before contacting a release endpoint', as
     else process.env.CIRCLE_INSTALL_PREFIX = previous;
   }
 });
+
+test('install.ps1 is ASCII, and its Chinese steps are built from the code points of the words', () => {
+  // Windows PowerShell reads a script without a byte order mark in the system's code
+  // page: only ASCII reads the same everywhere
+  const script = readFileSync(join(process.cwd(), 'install.ps1'));
+  assert.ok(
+    script.every((byte) => byte < 0x80),
+    'install.ps1 holds only ASCII',
+  );
+  const words = [
+    ...script.toString('ascii').matchAll(/Circle-Zh ((?:0x[0-9A-F]{4},?)+)/g),
+  ].map((match) => String.fromCodePoint(...match[1]!.split(',').map(Number)));
+  assert.deepEqual(words, [
+    '正在下载',
+    '正在校验下载',
+    '正在解压',
+    '运行',
+    '，或',
+    '。',
+  ]);
+});

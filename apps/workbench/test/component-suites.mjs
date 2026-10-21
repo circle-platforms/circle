@@ -67,6 +67,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'notice-timers-ui.mjs',
   'tool-summary-line-ui.mjs',
   'git-changes-refresh-ui.mjs',
+  'plan-review-ui.mjs',
   'terminal-tab-menu-ui.mjs',
 ]);
 
