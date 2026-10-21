@@ -3318,7 +3318,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -3388,7 +3388,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -3500,7 +3500,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -3538,7 +3538,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -3622,7 +3622,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,

@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { test } from 'node:test';
-import { cleanup, scratch } from './helpers.js';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import { createConnection, type AddressInfo } from 'node:net';
+import { cleanup, cleanupServer, scratch } from './helpers.js';
 
 function context(): {
   after: (hook: () => void | Promise<void>) => void;
@@ -67,4 +70,43 @@ test('a failed resource cleanup still removes scratch files and reports the orig
   });
   assert.equal(anotherClosed, true);
   assert.equal(existsSync(root), false);
+});
+
+test('a failed browser cleanup still closes its fixture server and connected socket', async () => {
+  const t = context();
+  const root = scratch(t);
+  const server = createServer();
+  cleanupServer(t, server);
+  const listening = once(server, 'listening');
+  server.listen(0, '127.0.0.1');
+  await listening;
+  const connected = once(server, 'connection');
+  const client = createConnection(
+    (server.address() as AddressInfo).port,
+    '127.0.0.1',
+  );
+  client.on('error', () => {});
+  const disconnected = new Promise<void>((resolve) => {
+    client.once('close', resolve);
+  });
+  const failure = new Error('browser did not close');
+  cleanup(t, () => {
+    throw failure;
+  });
+  try {
+    await connected;
+    await assert.rejects(t.finish(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [failure]);
+      return true;
+    });
+    await disconnected;
+    assert.equal(client.destroyed, true);
+    assert.equal(server.listening, false);
+    assert.equal(existsSync(root), false);
+  } finally {
+    client.destroy();
+    server.closeAllConnections();
+    server.close();
+  }
 });
