@@ -353,6 +353,9 @@ export async function updateInstalled(
           CIRCLE_BIN_DIR: metadata.binDir,
           CIRCLE_REPO: metadata.repo,
           CIRCLE_ASSET_DIR: folder,
+          // This updater prints the complete release list after the child exits.
+          // Older updaters omit this, so the new installer reports the target.
+          CIRCLE_UPDATE_REPORT: '1',
         },
       });
       child.once('error', reject);
@@ -442,15 +445,17 @@ function directoryBytes(path: string): number {
   return total;
 }
 
-async function reportInstalled(
+export async function reportInstalled(
   out: { write(text: string): unknown },
   prefix: string,
   from: string,
   to: string,
   repo: string,
-  request: typeof fetch,
+  request?: typeof fetch,
 ): Promise<void> {
-  const notes = await versionsSince(repo, from, to, request);
+  // The downloaded installer can report an upgrade even when the running
+  // updater predates this feature, without making another network request.
+  const notes = request ? await versionsSince(repo, from, to, request) : [to];
   out.write("What's new:\n");
   for (const version of notes)
     out.write(`  ${version}  ${releaseNotesUrl(repo, version)}\n`);
