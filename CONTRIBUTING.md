@@ -46,7 +46,7 @@ Read [The TUI contract](docs/development/tui-contract.md) first. In short:
 
 - Each piece of information belongs to one zone. Do not add a new way to show something that an existing zone already covers.
 - Take colours only from `palette()` in `src/ink/theme.ts`. Never write a colour code or a hex value in a component.
-- Interface words are English, short and lowercase. Content (what you and the model wrote) is never translated.
+- Interface words are English, short and lowercase, with a Simplified Chinese version: the desktop's in its `t('…')` words, the terminal's in `src/tui_zh.ts`, shown when the system language is Chinese. Content (what you and the model wrote) is never translated.
 - Key hints appear only where something is folded. Do not add hints for obvious keys.
 - Check your change on a dark and a light background.
 
