@@ -132,7 +132,7 @@ While you hold a console — attached from its page, or handed over by `terminal
 
 ## Accept-edits mode
 
-`/mode accept-edits` turns on `accept edits`. Changes to files inside the workspace (`write_file`, `edit_file`, and patches that add or change files) then run without a card. An existing skill-run output still asks: a file named in a workspace `skillpack.json` `outputs` list, and any existing file in that file's directory. A declared output at the workspace root protects only that file. Creating a new file beside it does not ask. Everything else still asks: commands, deleting files (`delete`, or a patch that deletes one), changes outside the workspace, MCP and extension tools. It is decided call by call: a patch that touches one file outside the workspace asks. Like `auto`, it applies to the current conversation only.
+`/mode accept-edits` turns on `accept edits`. Changes to files inside the workspace (`write_file`, `edit_file`, and patches that add or change files) then run without a card. Everything else still asks: commands, deleting files (`delete`, or a patch that deletes one), changes outside the workspace, MCP and extension tools. It is decided call by call: a patch that touches one file outside the workspace asks. Like `auto`, it applies to the current conversation only.
 
 ## Auto mode
 

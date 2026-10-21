@@ -47,7 +47,7 @@ Native search failure falls back automatically to DuckDuckGo's lite and HTML end
 
 | Tool | What it does | Asks | Limits |
 |---|---|---|---|
-| `write_file` | Create or overwrite a file. Overwriting an existing skill-run output still asks in `accept edits`. | yes | |
+| `write_file` | Create or overwrite a file. | yes | |
 | `edit_file` | Replace exact text in a file. Arguments: `file_path`, `old_string`, `new_string`, `replace_all`. | yes | The file must have been read with `read_file` first. Text that occurs more than once needs `replace_all`. |
 | `apply_patch` | Apply a multi-file patch in the `*** Begin Patch` format: add, update, move and delete files. | yes, and always when it deletes | Every part is checked before a file changes; if a write fails, the earlier ones are undone. |
 | `delete` | Delete a file or a folder and everything in it. | always | |
