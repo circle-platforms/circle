@@ -295,12 +295,15 @@ function fillHeaders(
     const value = template.replace(
       /\$\{(env|secret):([A-Za-z_][A-Za-z0-9_]*)\}/g,
       (reference: string, kind: string, variable: string) => {
-        const found =
+        // Only a value set as text: `constructor` and the other names every object has are
+        // neither variables nor secrets
+        const value =
           kind === 'env'
             ? env[variable]
             : Object.hasOwn(secrets, variable)
               ? secrets[variable]
               : undefined;
+        const found = typeof value === 'string' ? value : '';
         if (!found)
           throw new Error(
             kind === 'env'

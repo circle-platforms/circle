@@ -221,6 +221,13 @@ test('header values fill in saved secrets, and a missing secret is named without
     () => resolveHeaders({ 'X-A': '${secret:constructor}' }, {}, {}),
     /needs the secret constructor/,
   );
+  // A name of what every object has is no variable of the environment either
+  for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__'])
+    for (const env of [{}, process.env])
+      assert.throws(
+        () => resolveHeaders({ 'X-A': `\${env:${name}}` }, env),
+        new RegExp(`needs the environment variable ${name}, which is not set`),
+      );
 });
 
 test('a saved secret reaches the server in a header, and what the model reads, the transcript and /mcp show its reference only', async (t) => {
