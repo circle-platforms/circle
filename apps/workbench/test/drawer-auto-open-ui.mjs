@@ -166,6 +166,10 @@ try {
   assert.deepEqual(await pressed(), ['files']);
   await send('popout', 'terminal', 'session1', false);
   await settle();
+  // Put back, the terminal is in the drawer again, and open there
+  assert.deepEqual(await pressed(), ['terminal']);
+  await mode('files').click();
+  await page.locator('.files-panel').waitFor();
   await send('consoles', 1);
   await settle();
   assert.deepEqual(
@@ -196,6 +200,10 @@ try {
   await settle();
   await send('popout', 'browser', 'session1', false);
   await settle();
+  // Put back, the browser is open in the drawer again
+  assert.deepEqual(await pressed(), ['browser']);
+  await mode('files').click();
+  await page.locator('.files-panel').waitFor();
   await send('operating', true);
   await settle();
   assert.deepEqual(
