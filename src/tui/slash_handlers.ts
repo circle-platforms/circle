@@ -76,6 +76,8 @@ export interface CommandHost {
   selected?(): boolean;
   refreshConnection?(): void;
   sessionStatus?(id: string): string | undefined;
+  /** Another terminal runs this session: nothing here may change it. */
+  heldElsewhere?(id: string): boolean;
   importSession?(text: string): Promise<void>;
   readonly home: string;
   readonly workspace: string;
@@ -166,6 +168,12 @@ const BUSY_WORDS: Record<string, string> = {
   effort: 'Busy · change the thinking depth when the turn has finished',
   resume: 'Busy · switch sessions when the turn has finished',
 };
+// The view-only screen shows a session another terminal runs, and cannot change it.
+// These would: they write its name, its messages, its approvals or its branch. A list
+// or a copy (/fork, /clone, /export) is still fine.
+const VIEW_ONLY_REFUSED = new Set(['compact', 'import', 'approvals']);
+const VIEW_ONLY_REFUSED_WITH_ARGS = new Set(['name', 'skill']);
+const VIEW_ONLY_WORDS = 'view only · another terminal runs this session';
 const THEMES = ['auto', 'dark', 'light'] as const;
 const DOUBLE_ESCAPE = ['tree', 'fork', 'none'] as const;
 const DEPTH_NOTES: Record<string, string> = {
@@ -277,6 +285,14 @@ export async function runCommand(
     if (!host.state.draft) host.setDraft(`/${name}${args ? ' ' + args : ''}`);
     return true;
   }
+  if (
+    runtime.viewOnly &&
+    (VIEW_ONLY_REFUSED.has(name) ||
+      (VIEW_ONLY_REFUSED_WITH_ARGS.has(name) && args.trim()))
+  ) {
+    host.flash(VIEW_ONLY_WORDS, 4000);
+    return true;
+  }
   const extension = runtime.extensions.commands().get(name);
   if (extension) {
     try {
@@ -372,6 +388,7 @@ function plan(host: CommandHost, args: string): void {
 }
 
 function yolo(host: CommandHost, args: string): void {
+  if (refuseViewOnly(host)) return;
   const enabled = !['off', '0', 'false', 'no'].includes(
     args.trim().toLowerCase(),
   );
@@ -1722,6 +1739,10 @@ function sessionList(
         // Both ask in the list; esc there leaves the session as it was.
         'ctrl+r': (item) => {
           if (!item) return;
+          if (host.heldElsewhere?.(item.key)) {
+            host.flash(VIEW_ONLY_WORDS, 4000);
+            return;
+          }
           const stored = runtime.store.get(item.key)?.title ?? '';
           host.state.picker?.ask(
             'Rename',
@@ -1789,6 +1810,10 @@ async function tree(
         'change this branch after the current turn and background jobs finish',
       );
     const point = user ? checkpoint.parent : checkpoint.id;
+    if (!fork && runtime.viewOnly) {
+      host.flash(VIEW_ONLY_WORDS, 4000);
+      return;
+    }
     if (fork) {
       const session = runtime.store.fork(
         runtime.session.id,
@@ -1891,6 +1916,10 @@ async function tree(
         const message = item && branches.entries.get(item.key)?.message;
         const list = host.state.picker;
         if (!message || !list) return;
+        if (runtime.viewOnly) {
+          host.flash(VIEW_ONLY_WORDS, 4000);
+          return;
+        }
         list.ask(
           'Label (empty removes it)',
           marks[message.id] ?? '',

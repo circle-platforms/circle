@@ -7,6 +7,8 @@ export const TUI_ZH: Record<string, string> = {
   'view only': '仅查看',
   'view only, the draft stays': '仅查看，草稿会保留',
   'view only, the mode stays': '仅查看，不能切换模式',
+  'view only · another terminal runs this session':
+    '仅查看 · 这个会话由另一个终端运行',
   current: '当前',
   'type to search': '输入以搜索',
   'Sessions · this folder': '会话 · 此文件夹',

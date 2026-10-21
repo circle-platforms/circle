@@ -1701,6 +1701,7 @@ export class AgentRuntime {
   }
   async compact(hint = '', signal?: AbortSignal): Promise<string> {
     if (this.ownershipError) throw this.ownershipError;
+    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
     if (!signal) this.requireCurrentConnection();
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (signal)

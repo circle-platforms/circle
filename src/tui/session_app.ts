@@ -3349,6 +3349,10 @@ export class SessionApp {
       selected: () => owner === this.selectedView,
       refreshConnection: () => this.refreshConnections(),
       watchLease: () => this.watchLease(),
+      heldElsewhere: (id) => {
+        const owned = this.sessions?.get(id);
+        return owned ? owned.viewOnly : sessionOccupied(this.home, id);
+      },
       sessionStatus: (id) => {
         if (this.sessions?.lifecycle(id) === 'deleting') return 'deleting';
         const runtime = this.sessions?.get(id);
