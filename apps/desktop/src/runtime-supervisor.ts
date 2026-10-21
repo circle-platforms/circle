@@ -15,7 +15,7 @@ import type {
 } from './runtime-protocol';
 import { RuntimeTokenBuffer } from './runtime-token-stream';
 import type { PrivateExternalFileRequest } from './runtime-external-file-channel';
-import type { LocalTerminalRow } from './contracts';
+import type { LocalTerminalRow, RuntimeCommandWait } from './contracts';
 import {
   describeRuntimeExit,
   redactRuntimeOutput,
@@ -89,13 +89,37 @@ function tabRows(value: unknown): LocalTerminalRow[] | undefined {
   return rows;
 }
 
+/** The failure of a command the runtime kept: its name says what must be checked. */
+function commandTimeout(name: string, waitedMs: number): Error {
+  const error = Error(
+    `runtime command timed out; execution state must be checked · ${name} (${Math.round(
+      waitedMs / 1000,
+    )}s)`,
+  );
+  error.name = 'RuntimeCommandTimeoutError';
+  return error;
+}
+
 const STDERR_TAIL = 16 * 1024;
+// What the runtime wrote on stdout, kept for the one diagnosis stderr cannot give:
+// what a command that never answered was waiting on. It never reaches the window.
+const STDOUT_TAIL = 64 * 1024;
 const LOG_LIMIT = 1024 * 1024;
+/** A command this far from an answer is said to the windows: the runtime is busy. */
+export const RUNTIME_COMMAND_WAIT_MS = 4_000;
+/** How often that wait is restated, so a window can count the seconds. */
+const RUNTIME_COMMAND_WAIT_TICK_MS = 1_000;
+/** How long the runtime may keep a command before it is said to have failed. */
+export const RUNTIME_COMMAND_TIMEOUT_MS = 120_000;
 export interface RuntimeSupervisorOptions {
   /** Where unexpected exits, with the end of the runtime's stderr, are recorded. */
   logFile?: string;
   restartDelayMs?: number;
   version?: string;
+  /** How long a command may go unanswered; a test shortens what a person waits for. */
+  commandTimeoutMs?: number;
+  /** How long a command may be held before the windows are told the runtime is busy. */
+  commandWaitMs?: number;
 }
 
 /** One app-owned core process survives renderer reloads and closes actual jobs on quit. */
@@ -112,8 +136,18 @@ export class RuntimeSupervisor {
       resolve: (reply: RuntimeReply) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
+      /** What the runtime was asked, and when it stopped answering it. */
+      name: string;
+      sessionId?: string;
+      sentAt: number;
     }
   >();
+  // The command the runtime is holding longest, said to the windows while it waits
+  private waitListeners = new Set<(wait: RuntimeCommandWait | null) => void>();
+  private waitTimer?: ReturnType<typeof setInterval>;
+  private waiting?: RuntimeCommandWait;
+  private stdoutTail = '';
+  private stderrTail = '';
   private externalGrantRequests = new Map<string, string>();
   private latest?: RuntimeUpdate;
   private tokenBuffer = new RuntimeTokenBuffer();
@@ -163,6 +197,8 @@ export class RuntimeSupervisor {
   }
   private spawn() {
     let stderr = '';
+    this.stdoutTail = '';
+    this.stderrTail = '';
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(Error('runtime did not start')),
@@ -182,9 +218,12 @@ export class RuntimeSupervisor {
       // Avoid dumping model credentials or workspace contents into app stderr.
       // The end of stderr is kept to say why the runtime died (V8 writes
       // "JavaScript heap out of memory" there) and goes only to the log.
-      child.stdout?.on('data', () => {});
+      child.stdout?.on('data', (chunk: Buffer | string) => {
+        this.stdoutTail = (this.stdoutTail + String(chunk)).slice(-STDOUT_TAIL);
+      });
       child.stderr?.on('data', (chunk: Buffer | string) => {
         stderr = (stderr + String(chunk)).slice(-STDERR_TAIL);
+        this.stderrTail = stderr;
       });
       child.on(
         'message',
@@ -283,6 +322,7 @@ export class RuntimeSupervisor {
             if (pending) {
               clearTimeout(pending.timer);
               this.pending.delete(message.reply.id);
+              this.reportWait();
               pending.resolve(message.reply);
             }
           }
@@ -328,6 +368,7 @@ export class RuntimeSupervisor {
       pending.reject(error);
     }
     this.pending.clear();
+    this.reportWait();
     const restarting = !expected && !!this.latest && this.automaticRestart();
     if (!expected)
       this.log(
@@ -805,6 +846,56 @@ export class RuntimeSupervisor {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  /** A command the runtime has kept for several seconds, or nothing once it answers. */
+  onCommandWait(listener: (wait: RuntimeCommandWait | null) => void) {
+    this.waitListeners.add(listener);
+    return () => this.waitListeners.delete(listener);
+  }
+  /** Say what is still waiting, or that nothing is: a window opened late learns within a tick. */
+  private reportWait() {
+    const now = Date.now();
+    let longest: RuntimeCommandWait | undefined;
+    for (const [id, entry] of this.pending) {
+      const waitedMs = now - entry.sentAt;
+      if (waitedMs < (this.options.commandWaitMs ?? RUNTIME_COMMAND_WAIT_MS))
+        continue;
+      if (!longest || waitedMs > longest.waitedMs)
+        longest = {
+          id,
+          name: entry.name,
+          ...(entry.sessionId === undefined
+            ? {}
+            : { sessionId: entry.sessionId }),
+          waitedMs,
+        };
+    }
+    if (!longest) {
+      // A command still in the queue may cross the line later: go on watching
+      // until nothing is pending, or its wait would never be said.
+      if (!this.pending.size && this.waitTimer) {
+        clearInterval(this.waitTimer);
+        this.waitTimer = undefined;
+      }
+      if (!this.waiting) return;
+      this.waiting = undefined;
+      for (const listener of this.waitListeners) listener(null);
+      return;
+    }
+    this.waiting = longest;
+    for (const listener of this.waitListeners) listener(longest);
+  }
+  private watchWait() {
+    this.reportWait();
+    if (this.waitTimer || this.pending.size === 0) return;
+    // A restated second at a time; a test that waits a moment is watched that often.
+    this.waitTimer = setInterval(
+      () => this.reportWait(),
+      Math.min(
+        RUNTIME_COMMAND_WAIT_TICK_MS,
+        this.options.commandWaitMs ?? RUNTIME_COMMAND_WAIT_MS,
+      ),
+    );
+  }
   /** Called only by the native picker after its active-session checks. */
   async grantExternalFile(
     sessionId: string,
@@ -853,7 +944,13 @@ export class RuntimeSupervisor {
         this.pending.delete(request.id);
         reject(Error('native external file capability request timed out'));
       }, 30_000);
-      this.pending.set(request.id, { resolve, reject, timer });
+      this.pending.set(request.id, {
+        resolve,
+        reject,
+        timer,
+        name: 'external-file-capability',
+        sentAt: Date.now(),
+      });
       this.child!.postMessage(request);
     });
   }
@@ -861,13 +958,36 @@ export class RuntimeSupervisor {
     if (!this.child) throw Error('runtime disconnected');
     if (this.pending.has(command.id)) throw Error('duplicate runtime command');
     return new Promise((resolve, reject) => {
+      const sentAt = Date.now();
       const timer = setTimeout(() => {
         this.pending.delete(command.id);
-        reject(
-          Error('runtime command timed out; execution state must be checked'),
+        this.reportWait();
+        const waited = Date.now() - sentAt;
+        // A command the runtime never answered is the failure the person cannot
+        // see for themselves: the log says what it was and what it last wrote.
+        this.log(
+          [
+            `runtime command timed out: ${command.name} after ` +
+              `${Math.round(waited / 1000)}s`,
+            this.stdoutTail.trim()
+              ? `last stdout:\n${redactRuntimeOutput(this.stdoutTail.trimEnd())}`
+              : 'no stdout',
+            this.stderrTail.trim()
+              ? `last stderr:\n${redactRuntimeOutput(this.stderrTail.trimEnd())}`
+              : 'no stderr',
+          ].join('\n'),
         );
-      }, 120_000);
-      this.pending.set(command.id, { resolve, reject, timer });
+        reject(commandTimeout(command.name, waited));
+      }, this.options.commandTimeoutMs ?? RUNTIME_COMMAND_TIMEOUT_MS);
+      this.pending.set(command.id, {
+        resolve,
+        reject,
+        timer,
+        name: command.name,
+        sessionId: command.sessionId,
+        sentAt,
+      });
+      this.watchWait();
       // Discard extra renderer properties: private message tags may never be
       // smuggled through the public command validator.
       this.child!.postMessage({

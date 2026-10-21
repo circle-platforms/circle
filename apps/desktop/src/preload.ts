@@ -51,6 +51,12 @@ const bridge: DesktopBridge = {
     return () =>
       ipcRenderer.removeListener('circle:runtime-token-delta', handler);
   },
+  onRuntimeWait: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:runtime-wait', handler);
+    return () => ipcRenderer.removeListener('circle:runtime-wait', handler);
+  },
   onWorkspaceEvent: (listener) => {
     const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
       listener(value);

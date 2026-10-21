@@ -40,6 +40,10 @@ import { WindowedList } from '../components/WindowedList';
 import type { ReactNode, RefObject } from 'react';
 import { MessageView, RuntimeNotice } from '../components/MessageView';
 import {
+  CommandFailureCard,
+  RuntimeWaitRow,
+} from '../components/CommandFailure';
+import {
   BrowserDialogRequest,
   BrowserHandoffRequest,
   CertificateChoiceRequest,
@@ -935,6 +939,13 @@ export function Conversation({
             <div className="pending-message">
               {t('local conversation paused · remote state unverified')}
             </div>
+          )}
+          <RuntimeWaitRow sessionId={session.id} />
+          {session.actionFailure && (
+            <CommandFailureCard
+              sessionId={session.id}
+              failure={session.actionFailure}
+            />
           )}
         </div>
       </div>

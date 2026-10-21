@@ -103,6 +103,16 @@ Circle restarts the runtime by itself once. If it stops again within ten minutes
 
 Each unexpected exit is written to `logs/runtime.log` in the data folder (`runtime.log.1` keeps the previous megabyte): the exit code and what it means when Circle knows, how long the runtime ran, whether it restarted, and the last 16 KB the runtime wrote to its error output, with values that look like keys or tokens replaced by `[redacted]`. When V8 ran out of heap, that output says `JavaScript heap out of memory` and the notice says the runtime ran out of memory. On Windows a crash without a crash handler reports `4294930435 (0xFFFF7003)`: Chromium's crash reporter was asked for a dump and none was connected, so the code does not say what failed; the log's error output may.
 
+### When the runtime is slow
+
+A command that has gone unanswered for four seconds says so in the conversation that asked it: a line at its end, or under the composer on the new-session page, reads `Circle is still working on custom-command · 9s`. The line grows as the wait does and goes when the runtime answers. Commands still run one at a time, in the order they were asked, so a command asked meanwhile waits behind the held one.
+
+A command the runtime never answers fails after two minutes. That failure stays in the conversation as a card, not as a toast that passes: `Circle did not answer in 120s · prompt`, the runtime's own words folded under **error details**, and **copy error details** and **dismiss**. A timeout is not proof that nothing happened, and the command may still run, so the card offers no retry and says to check before sending it again. A slash command that failed outright has **retry**, which sends it again by name.
+
+A title is a side request, not a reason to wait: it gets ten seconds, is not sent again when its own clock stopped it, and closing a session waits for it for at most three seconds.
+
+The runtime's standard output is kept in a 64 KB ring and written to `logs/runtime.log` with the last of its error output when a command times out, so a wait that ends in a failure can be read afterwards. It is not shown in the window.
+
 ## Files, changes and subagents
 
 The desktop application edits, runs and reviews a trusted project while the agent keeps working; you do not need to stop a turn to open or save a file, or to switch sessions.

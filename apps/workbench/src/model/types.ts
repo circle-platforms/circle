@@ -119,6 +119,21 @@ export interface Message {
     estimated?: boolean;
   };
 }
+/** A command the window asked for and did not get, shown where it was asked. */
+export interface ActionFailure {
+  /** What Circle said about it, in the interface language where it can be. */
+  message: string;
+  /** `timeout`: the runtime kept the command and never answered it. */
+  kind: 'timeout' | 'failed';
+  at: string;
+  /** What the runtime said, in its own words, for the details and for copying. */
+  detail?: string;
+  /**
+   * How to ask again, when asking again is safe: a slash command that failed is
+   * replayed by name. One that timed out may still run, and is not replayed.
+   */
+  retry?: { kind: 'command'; name: string; args: string };
+}
 export interface Todo {
   id: string;
   text: string;
@@ -140,6 +155,8 @@ export interface Session {
   nativeResourcesActive?: boolean;
   /** The last renderer action failure, kept with its source session for this window. */
   actionError?: string;
+  /** The same failure as a card the person can act on. */
+  actionFailure?: ActionFailure;
   /** Renderer-only state; never changes the core conversation or execution. */
   presentation?: {
     scroll?: {
@@ -474,6 +491,8 @@ export interface WorkbenchSnapshot {
     processId?: number;
     observedAt?: string;
     coreVersion?: string;
+    /** A command the runtime has held unanswered for seconds: what it holds, and how long. */
+    waiting?: { command: string; sessionId?: string; waitedMs: number };
   };
   version: 1;
   activeSessionId: string;
@@ -577,6 +596,8 @@ export interface RuntimePort {
   }) => Promise<void>;
   /** Drop a session error the page is already showing, so it is not also a toast. */
   dismissActionError?: (sessionId?: string) => void;
+  /** Ask again the message or command the failure card says failed. */
+  retryActionFailure?: (sessionId?: string) => void | Promise<void>;
   /** Start the desktop runtime again after it stopped. */
   restartRuntime?: () => Promise<void>;
   /**

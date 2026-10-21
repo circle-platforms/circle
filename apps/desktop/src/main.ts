@@ -768,6 +768,7 @@ app
             : {}),
         }),
       );
+      runtime.onCommandWait((wait) => broadcast('circle:runtime-wait', wait));
       runtime.onWorkspaceEvent((event) =>
         broadcast('circle:workspace-event', event),
       );
