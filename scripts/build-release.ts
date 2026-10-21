@@ -21,6 +21,7 @@ import {
   validateRelease,
   type ReleaseManifest,
 } from '../src/install_layout.js';
+import { downloadRuntime } from './download.js';
 import { verifyWindowsQueryPackage } from './verify-windows-query-package.js';
 const runtimes = JSON.parse(
   readFileSync('scripts/node-runtime.json', 'utf8'),
@@ -54,13 +55,9 @@ function run(command: string, args: string[], cwd = process.cwd()): string {
 try {
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build']);
   const archive = join(temporary, runtime.name);
-  const response = await fetch(
+  const bytes = await downloadRuntime(
     `https://nodejs.org/dist/v${runtimes.version}/${runtime.name}`,
-    { signal: AbortSignal.timeout(120_000) },
   );
-  if (!response.ok)
-    throw new Error(`runtime download failed: ${response.status}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
   if (createHash('sha256').update(bytes).digest('hex') !== runtime.sha256)
     throw new Error('runtime checksum does not match pinned digest');
   writeFileSync(archive, bytes);
