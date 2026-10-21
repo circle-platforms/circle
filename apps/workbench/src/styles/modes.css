@@ -26,8 +26,9 @@
   font-weight: 400;
 }
 
-/* Changes: the file list beside the difference when the drawer is wide enough,
-   and the difference fills the height that is left. */
+/* Changes: the file list beside the difference when the drawer is wide enough.
+   A long difference scrolls in the height that is left; a short one ends with its
+   last line. */
 .changes-mode {
   display: flex;
   flex: 1 1 0;
@@ -135,15 +136,16 @@
 .changes-diff .diff-block,
 .changes-diff .diff-block.compact {
   display: flex;
-  flex: 1 1 0;
+  flex: 0 1 auto;
   flex-direction: column;
   height: auto;
+  max-height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 .changes-diff .diff-block pre,
 .changes-diff .diff-block.compact pre {
-  flex: 1 1 0;
+  flex: 0 1 auto;
   min-height: 0;
   max-height: none;
   overflow: auto;
