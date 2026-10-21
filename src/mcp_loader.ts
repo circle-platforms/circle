@@ -34,6 +34,11 @@ export interface McpConnection {
    */
   headers?: Record<string, string>;
   /**
+   * Configured headers of the names Circle sets itself (`Circle-Session-Id`, `traceparent`),
+   * as written: never sent, and their values never filled in.
+   */
+  notSent?: string[];
+  /**
    * False: the server's tool annotations are not read, and every tool asks as an unknown one
    * does. Default true.
    */
@@ -50,7 +55,11 @@ export interface McpStatus {
   error: string;
   /** The names of the headers a server is sent; their values are never listed. */
   headers?: string[];
+  /** Configured headers that are not sent, since Circle sets them itself. */
+  notSent?: string[];
 }
+/** The headers Circle sends of its own; lowercase, as compared. */
+const OWN_HEADERS = new Set(['circle-session-id', 'traceparent']);
 /** What the manager needs from the runtime it serves. */
 export interface McpServices {
   /** The saved secrets, read on each connect for `${secret:NAME}` in headers. */
@@ -214,13 +223,17 @@ export function buildMcpConnections(
         ? (raw as McpConnection['transport'])
         : 'sse';
       connection = { name, transport, url: String(item.url) };
-      if (isRecord(item.headers))
-        connection.headers = Object.fromEntries(
-          Object.entries(item.headers).map(([key, value]) => [
-            key,
-            String(value),
-          ]),
-        );
+      if (isRecord(item.headers)) {
+        // Circle's own are left out here, before anything is filled in: a secret named in
+        // a header that is not sent is not needed
+        const headers: Record<string, string> = {};
+        const notSent: string[] = [];
+        for (const [key, value] of Object.entries(item.headers))
+          if (OWN_HEADERS.has(key.toLowerCase())) notSent.push(key);
+          else headers[key] = String(value);
+        connection.headers = headers;
+        if (notSent.length) connection.notSent = notSent;
+      }
     }
     if (!connection) continue;
     // Only true or no value trusts what the server says of its tools
@@ -358,7 +371,8 @@ export function traceparent(): string {
  * How a server reached over HTTP is sent each request: with the Circle session of that
  * moment as `Circle-Session-Id`, read again for every request since a runtime can move to
  * another session, and during a tool call with that call's `traceparent`. Both are Circle's
- * own: a configured header of either name is never sent.
+ * own: a configured header of either name is never sent (buildMcpConnections leaves them
+ * out already).
  */
 function requestFetch(sessionId?: () => string | undefined): FetchLike {
   return (url, init) => {
@@ -727,6 +741,7 @@ export class McpManager {
           tools: [],
           error: '',
           ...(headerNames.length ? { headers: headerNames } : {}),
+          ...(connection.notSent ? { notSent: connection.notSent } : {}),
         };
         status.push(state);
         const client = new Client({
@@ -863,7 +878,7 @@ export class McpManager {
       this.status
         .map(
           (server) =>
-            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
+            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
         )
         .join('\n')
     );

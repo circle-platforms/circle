@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildMcpConnections, traceparent } from '../src/mcp_loader.js';
+import {
+  McpManager,
+  buildMcpConnections,
+  traceparent,
+} from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -42,6 +46,64 @@ test('a url server without a transport is reached over SSE', () => {
     connections.map((connection) => connection.transport),
     ['sse', 'sse'],
   );
+});
+
+test("a configured header of Circle's own names is left out before its value is filled in, and /mcp says it is not sent", async (t) => {
+  const { connections } = buildMcpConnections([
+    {
+      name: 'files-server',
+      url: 'http://127.0.0.1:1/mcp',
+      headers: {
+        'CIRCLE-SESSION-ID': '${secret:NOT_SAVED}',
+        TraceParent: '${env:CIRCLE_TEST_NOT_SET}',
+        'X-Team': 'lab',
+      },
+    },
+  ]);
+  assert.deepEqual(connections[0]!.headers, { 'X-Team': 'lab' });
+  assert.deepEqual(connections[0]!.notSent, [
+    'CIRCLE-SESSION-ID',
+    'TraceParent',
+  ]);
+  // A reference in a header that is not sent needs no secret or variable
+  const stub = await mcpStub(t, {
+    tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
+  });
+  const manager = new McpManager(scratch(t));
+  cleanup(t, () => manager.close());
+  await manager.load([
+    {
+      name: 'files-server',
+      url: stub.url,
+      transport: 'streamable_http',
+      headers: {
+        'circle-session-id': '${secret:NOT_SAVED}',
+        traceparent: 'configured',
+        'X-Team': 'lab',
+      },
+    },
+  ]);
+  assert.equal(manager.status[0]!.error, '', manager.describe());
+  assert.ok(stub.requests.length > 0);
+  for (const request of stub.requests) {
+    assert.equal(request.headers['x-team'], 'lab');
+    assert.notEqual(request.headers.traceparent, 'configured');
+  }
+  assert.match(
+    manager.describe(),
+    /\n {4}headers: X-Team\n {4}not sent, Circle sets them: circle-session-id, traceparent\n/,
+  );
+  // Only those names: a server with no other header lists none
+  await manager.load([
+    {
+      name: 'files-server',
+      url: stub.url,
+      transport: 'streamable_http',
+      headers: { traceparent: 'configured' },
+    },
+  ]);
+  assert.doesNotMatch(manager.describe(), /headers:/);
+  assert.match(manager.describe(), /not sent, Circle sets them: traceparent/);
 });
 
 test('every request to an HTTP or SSE server carries the session of that moment, and each tool call its own trace', async (t) => {
