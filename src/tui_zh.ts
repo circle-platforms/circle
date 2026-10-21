@@ -89,9 +89,40 @@ export const TUI_ZH: Record<string, string> = {
     '手动 · 每次修改和执行命令前都询问',
   'Accept edits · workspace file edits run without asking, commands and deletes still ask':
     '自动接受编辑 · 直接编辑工作区内的文件；命令和删除仍会询问',
-  'Read-only on · writes and shell are blocked, /plan.md is allowed':
-    '只读：不能改文件，也不能跑命令。可以写 /plan.md。',
+  'Read-only on · writes and shell are blocked, except the plan':
+    '只读：不能改文件，也不能跑命令。计划除外。',
   'Read-only off': '已关闭只读',
+  // The modes in the default mode list, each part read on its own
+  'asking before each change and command': '每次修改和执行命令前都询问',
+  'workspace edits run without asking': '直接编辑工作区内的文件',
+  'writes and shell are blocked': '不能改文件，也不能跑命令',
+  'except the plan': '计划除外',
+  'nothing asks': '不再询问',
+  'deletes, certificate warnings and uploads included':
+    '删除、证书警告和上传也不问',
+  // The model's question card: its own words stay as written
+  'Type your own': '写下你自己的回答',
+  "An answer can't be empty. Type something or press esc.":
+    '回答不能为空。输入内容，或按 esc。',
+  'Not chosen yet. Press enter to choose, or switch again to skip it.':
+    '还没有选。按 enter 选择，或再切换一次跳过这一题。',
+  'Not chosen yet. Press enter to choose, or esc again to drop the question.':
+    '还没有选。按 enter 选择，或再按 esc 放弃这个问题。',
+  'Nothing ticked yet. Tick with space, or press enter again to go on without.':
+    '还没有勾选。用空格勾选，或再按 enter 不选也继续。',
+  'Nothing chosen. Press enter again to send an empty answer.':
+    '什么也没选。再按 enter 发送空回答。',
+  // plan_exit's question, in the desktop plan card's words
+  'How should Circle go on?': '接下来怎么做？',
+  'implement in auto mode': '自动模式执行',
+  'implement with manual approval': '手动审批执行',
+  'change the plan': '需要修改',
+  'save the plan only': '只保存计划，不做修改',
+  'Leave plan mode; changes run without asking':
+    '退出计划模式，改动直接执行，不再询问',
+  'Leave plan mode; each change asks first': '退出计划模式，每项改动先问你',
+  'Stay in plan mode and revise it': '留在计划模式，修改计划',
+  'Stay in plan mode; nothing is changed': '留在计划模式，什么也不改',
   'Auto on · nothing asks: commands that delete, certificate warnings and uploads go ahead · use it where that is safe':
     '自动 · 不再询问：删除命令、证书警告和文件上传都会直接执行 · 只在安全的地方使用',
   'Auto off · asking for each call again': '已关闭自动 · 每次调用再询问',

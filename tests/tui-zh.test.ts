@@ -132,6 +132,26 @@ test('the phrases on the screen change under zh-CN and keep commands and ids', (
   );
   assert.equal(zh('Edit needs your permission'), 'Edit 需要你的批准');
   assert.equal(zh('changes files in the workspace'), '修改工作区内的文件');
+  // The default mode list's descriptions, a part at a time
+  assert.equal(
+    uiMeta('writes and shell are blocked · except the plan', 'zh-CN'),
+    '不能改文件，也不能跑命令 · 计划除外',
+  );
+  assert.equal(
+    uiMeta('asking before each change and command', 'zh-CN'),
+    '每次修改和执行命令前都询问',
+  );
+  assert.equal(
+    uiMeta(
+      'nothing asks · deletes, certificate warnings and uploads included',
+      'zh-CN',
+    ),
+    '不再询问 · 删除、证书警告和上传也不问',
+  );
+  assert.equal(
+    zh('Read-only on · writes and shell are blocked, except the plan'),
+    '只读：不能改文件，也不能跑命令。计划除外。',
+  );
   // The screenshot's card, with a side vision model looking in the model's place
   assert.equal(
     zh('shows the side vision model the whole screen'),
