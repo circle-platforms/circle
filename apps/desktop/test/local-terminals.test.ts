@@ -349,6 +349,51 @@ test('terminal_sessions lists running and exited shells, never a background comm
   );
 });
 
+test('a tab the person named is called by that name in the listing, on its approval card and in the window', async (t) => {
+  const host = new FakeTerminals();
+  const tab = { session: '' };
+  const f = await runtime(
+    t,
+    [
+      step('terminal_sessions', () => ({})),
+      step('terminal_send', () => ({
+        session: tab.session,
+        text: 'make',
+        enter: true,
+      })),
+      done,
+    ],
+    host,
+    async () => 'approve',
+  );
+  const first = host.open(f.id, {}, '$ ');
+  const named = host.open(f.id, { label: 'build logs', named: true }, '$ ');
+  tab.session = `local:${named.id}`;
+  await f.agent.harness.run('make it in my build logs tab');
+  const [listing] = results(f.model);
+  // The model calls it as the tab reads: its name, not its number
+  assert.match(
+    listing!.content,
+    new RegExp(`- local:${named.id} · build logs · `),
+  );
+  assert.match(
+    listing!.content,
+    new RegExp(`- local:${first.id} · terminal 1 · `),
+  );
+  assert.doesNotMatch(listing!.content, /terminal 2/);
+  // The card is headed by the name, with the number kept for the window
+  assert.equal(f.asked.length, 1);
+  assert.equal(f.asked[0]!.args.tab_name, 'build logs');
+  assert.equal(f.asked[0]!.args.ordinal, 2);
+  // and the window's row carries it
+  const rows = f.local.rows(f.id);
+  assert.equal(
+    rows.find((row) => row.terminal === named.id)?.name,
+    'build logs',
+  );
+  assert.equal(rows.find((row) => row.terminal === first.id)?.name, undefined);
+});
+
 test('the first command in a tab asks even in auto mode: a denial types nothing, allowing it types its bytes, and then auto mode asks no more', async (t) => {
   const host = new FakeTerminals();
   const tab = { session: '' };

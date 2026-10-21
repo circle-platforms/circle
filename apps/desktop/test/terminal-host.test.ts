@@ -271,6 +271,65 @@ test('a quick connect by address starts in the hands of the person who opened it
   assert.equal(panel.input('c1', row.id, 'nope'), false);
 });
 
+test("a person's connect takes the console it opened, by its id, not one the model opened", async (t) => {
+  const modelDevice = await consoleServer(t);
+  const personDevice = await consoleServer(t);
+  const { panel } = await makeHost(t, []);
+  // The model opened a console of its own first
+  await panel.agent(
+    {
+      id: 'm1',
+      sessionId: 'c1',
+      action: 'connect',
+      args: { host: '127.0.0.1', transport: 'telnet', port: modelDevice.port },
+    },
+    new AbortController().signal,
+  );
+  const state = await panel.connectTarget('c1', {
+    transport: 'telnet',
+    host: '127.0.0.1',
+    port: personDevice.port,
+  });
+  const mine = state.sessions.find(
+    (row) => row.target === `127.0.0.1:${personDevice.port}`,
+  )!;
+  const theirs = state.sessions.find(
+    (row) => row.target === `127.0.0.1:${modelDevice.port}`,
+  )!;
+  // The answer names the console this connect opened, and only that one is the person's
+  assert.equal(state.opened, mine.id);
+  assert.equal(mine.held, 'attach');
+  assert.ok(!theirs.held, "the model's console is not the person's");
+});
+
+test('the order a person drags the tab row into is kept for the conversation and sent to every window', async (t) => {
+  const { panel, events } = await makeHost(t, []);
+  const before = events.length;
+  const order = ['local:b2', 'dev:t1', 'local:a1'];
+  // A key named twice counts once
+  const state = panel.arrange('c1', [...order, 'local:b2']);
+  assert.deepEqual(state.order, order);
+  const pushed = events
+    .slice(before)
+    .filter(
+      (event): event is Extract<TerminalEvent, { kind: 'state' }> =>
+        event.kind === 'state',
+    );
+  assert.deepEqual(pushed.at(-1)?.state.order, order);
+  // A window that opens or reloads reads it from the state; another conversation has none
+  assert.deepEqual(panel.state('c1').order, order);
+  assert.equal(panel.state('c2').order, undefined);
+  // What is not a tab's key is refused, and the order stays
+  assert.throws(() => panel.arrange('c1', ['../x']), /invalid terminal order/);
+  assert.throws(
+    () => panel.arrange('c1', 'local:a1' as unknown as string[]),
+    /invalid terminal order/,
+  );
+  assert.deepEqual(panel.state('c1').order, order);
+  // An empty order goes back to the order the tabs were made in
+  assert.equal(panel.arrange('c1', []).order, undefined);
+});
+
 test('an agent request from the runtime drives the same host and reports state', async (t) => {
   const device = await consoleServer(t);
   device.setBanner('press return\r\n');
