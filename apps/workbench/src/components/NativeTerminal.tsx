@@ -48,7 +48,13 @@ import {
 } from '../model/command-terminal-client';
 import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal } from './common';
-import { terminalTabNumbers } from '../../../desktop/src/terminal-tabs';
+import type { LocalTerminalRow } from '../../../desktop/src/contracts';
+import {
+  terminalTabName,
+  terminalTabNumbers,
+} from '../../../desktop/src/terminal-tabs';
+import { presentHostError, quietWhenTerminalExited } from '../model/host-error';
+import { claimTerminalKeyboard } from '../model/terminal-keyboard';
 import { TerminalTabs, type TerminalTab } from './TerminalTabs';
 import {
   DeviceNotices,
@@ -159,6 +165,64 @@ function status(snapshot: TerminalSnapshot): string {
     case 'interrupted':
       return t('interrupted');
   }
+}
+
+/**
+ * A terminal tool the conversation is running or asking about, by the shell's id.
+ * The tab's own state is what the runtime says; this covers the moment a tool is
+ * already on screen and that state has not arrived.
+ */
+function toolActivity(
+  messages: {
+    tool?: { name: string; status: string; input: Record<string, unknown> };
+  }[],
+): Map<string, 'run' | 'wait'> {
+  const activity = new Map<string, 'run' | 'wait'>();
+  for (const message of messages) {
+    const tool = message.tool;
+    if (!tool?.name.startsWith('terminal_')) continue;
+    if (tool.status !== 'running' && tool.status !== 'waiting') continue;
+    const named = [tool.input.session, tool.input.terminal].find(
+      (value): value is string =>
+        typeof value === 'string' && value.startsWith('local:'),
+    );
+    if (!named) continue;
+    const id = named.slice('local:'.length);
+    if (activity.get(id) === 'wait') continue;
+    activity.set(id, tool.status === 'waiting' ? 'wait' : 'run');
+  }
+  return activity;
+}
+
+/**
+ * The shell's row as the window shows it. The runtime's row wins when you hold the
+ * shell; a terminal tool the conversation is already running or asking about fills in
+ * until that row arrives, so the dot and the ring are not late.
+ */
+function circleRow(
+  id: string,
+  known: Map<string, LocalTerminalRow>,
+  activity: Map<string, 'run' | 'wait'>,
+  numbers: Map<string, number>,
+): LocalTerminalRow | undefined {
+  const circle = known.get(id);
+  if (circle?.held || circle?.state === 'held') return circle;
+  const doing = activity.get(id);
+  const state =
+    circle?.state === 'waiting' || doing === 'wait'
+      ? 'waiting'
+      : circle?.state === 'operating' || doing === 'run'
+        ? 'operating'
+        : circle?.state;
+  if (!state) return undefined;
+  if (circle) return state === circle.state ? circle : { ...circle, state };
+  return {
+    id: `local:${id}`,
+    terminal: id,
+    ordinal: numbers.get(id) ?? 0,
+    state,
+    allowed: false,
+  };
 }
 
 /** The exit reason adds nothing when it only restates the status line. */
@@ -319,6 +383,12 @@ export function NativeTerminal({
   const selectedId = selectedBySession[sessionId];
   const { snapshot: appSnapshot, notify } = useRuntime();
   const [dismissed, setDismissed] = useState(readDismissed);
+  // The row's order as the person dragged it, per conversation, where no main process
+  // keeps it (a page without the desktop application). A tab keeps its number wherever
+  // it is dragged.
+  const [localOrder, setLocalOrder] = useState<Record<string, string[]>>({});
+  const [renameFor, setRenameFor] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   // Every command Circle runs has a terminal; only a command that runs in the background,
   // which has a row of its own in the jobs, is a tab. A foreground one is seen from its
   // tool row, and in the view of one command.
@@ -339,6 +409,7 @@ export function NativeTerminal({
   const visible = terminals.filter(
     (item) =>
       item.sessionId === sessionId &&
+      !item.hidden &&
       !dismissed.has(item.id) &&
       (!item.managedCommand ||
         !!commandTerminal ||
@@ -370,7 +441,19 @@ export function NativeTerminal({
   }, [sessionId, selected?.id]);
 
   const adopt = useCallback((snapshot: TerminalSnapshot) => {
-    setTerminals((current) => mergeTerminalSnapshot(current, snapshot));
+    setTerminals((current) => {
+      const merged = mergeTerminalSnapshot(current, snapshot);
+      // A restart replaces its terminal's tab, in this window and any other: the old
+      // one leaves the row as soon as the new one is here, not after it has stopped.
+      const before = snapshot.restartOf;
+      return before
+        ? merged.map((item) =>
+            item.id === before && !item.hidden
+              ? { ...item, hidden: true }
+              : item,
+          )
+        : merged;
+    });
   }, []);
 
   useEffect(() => {
@@ -494,6 +577,21 @@ export function NativeTerminal({
   const create = () =>
     run(async () => {
       const capturedSession = sessionId;
+      // A tab closed in the row still holds its number until hide lands. Wait
+      // for that, so the shell created next takes the lowest number now free.
+      const closing = terminals.filter(
+        (item) =>
+          item.sessionId === capturedSession &&
+          dismissed.has(item.id) &&
+          !item.hidden,
+      );
+      await Promise.all(
+        closing.map((item) =>
+          terminalRequest<TerminalSnapshot>('hide', { id: item.id })
+            .then(adopt)
+            .catch(() => undefined),
+        ),
+      );
       const snapshot = await workspaceCall<TerminalSnapshot>(
         capturedSession,
         'terminal',
@@ -542,11 +640,19 @@ export function NativeTerminal({
   const restart = () =>
     run(async () => {
       if (!selected) return;
+      const previousId = selected.id;
       const snapshot = await terminalRequest<TerminalSnapshot>('restart', {
-        id: selected.id,
+        id: previousId,
       });
       focusTarget.current = snapshot.id;
-      adopt(snapshot);
+      setTerminals((current) =>
+        mergeTerminalSnapshot(
+          current.map((item) =>
+            item.id === previousId ? { ...item, hidden: true } : item,
+          ),
+          snapshot,
+        ),
+      );
       setSelected((previous) => ({
         ...previous,
         [snapshot.sessionId]: snapshot.id,
@@ -671,18 +777,48 @@ export function NativeTerminal({
       rememberDismissed(next);
       return next;
     });
-  // A shell keeps its number while others close around it, and the model's terminal tools
-  // and the cards in the conversation name it the same way: terminalTabNumbers is the rule.
+  // The row in the person's order: the main process keeps it for every window, so a
+  // reload, a visit home and a window of its own show it too. A tab it does not name
+  // goes last, and a restarted terminal stands where the one it replaced stood.
+  const chosen = devices.order ?? localOrder[sessionId] ?? [];
+  const rank = (key: string) => {
+    let at = chosen.indexOf(key);
+    let id = key.startsWith('local:') ? key.slice('local:'.length) : '';
+    for (let step = 0; at === -1 && id && step < 32; step++) {
+      id = terminals.find((item) => item.id === id)?.restartOf ?? '';
+      if (id) at = chosen.indexOf(`local:${id}`);
+    }
+    return at === -1 ? Number.MAX_SAFE_INTEGER : at;
+  };
+  // A tab keeps a stored number; a closed tab does not. The model's tools use the same rule.
+  // A drag reorders the row without renumbering a tab.
   const numbers = terminalTabNumbers(
-    terminals.filter((item) => item.sessionId === sessionId),
+    terminals.filter(
+      (item) =>
+        item.sessionId === sessionId && !item.hidden && !dismissed.has(item.id),
+    ),
   );
-  // What Circle is doing in each of your shells, by the terminal's id.
-  const circleIn = new Map(devices.local.map((row) => [row.terminal, row]));
+  // What Circle is doing in each of your shells, by every id the row or a tool call uses.
+  const circleKnown = new Map<string, LocalTerminalRow>();
+  for (const row of devices.local) {
+    circleKnown.set(row.terminal, row);
+    circleKnown.set(row.id, row);
+    if (row.id.startsWith('local:'))
+      circleKnown.set(row.id.slice('local:'.length), row);
+  }
+  const activity = toolActivity(
+    appSnapshot.sessions.find((item) => item.id === sessionId)?.messages ?? [],
+  );
+  const circleIn = (id: string) =>
+    circleRow(id, circleKnown, activity, numbers);
   const tabs: TerminalTab[] = [
     ...visible.map((item): TerminalTab => {
       const command = !!item.managedCommand;
       const running = ['running', 'stopping'].includes(item.status);
+      const shellDead =
+        !command && item.kind !== 'service' && !running && !item.hidden;
       const failed =
+        shellDead ||
         item.status === 'failed' ||
         (!running && ((item.exitCode ?? 0) !== 0 || !!item.signal));
       const named = command || item.kind === 'service';
@@ -692,8 +828,9 @@ export function NativeTerminal({
           item.label)
         : named
           ? item.label
-          : t('terminal {n}', { n: numbers.get(item.id) ?? 0 });
-      const circle = circleIn.get(item.id);
+          : (terminalTabName(item) ??
+            t('terminal {n}', { n: numbers.get(item.id) ?? 0 }));
+      const circle = circleIn(item.id);
       return {
         key: `local:${item.id}`,
         label,
@@ -725,6 +862,11 @@ export function NativeTerminal({
               onClose: () => {
                 if (running) void stopTerminal(item.id);
                 closeTab(item.id);
+                void terminalRequest<TerminalSnapshot>('hide', {
+                  id: item.id,
+                })
+                  .then(adopt)
+                  .catch(() => {});
               },
             }),
       };
@@ -744,11 +886,92 @@ export function NativeTerminal({
       onClose: () => devices.disconnect(row),
     })),
   ];
+  const orderedTabs = tabs.sort((a, b) => rank(a.key) - rank(b.key));
+  const shellOf = (key: string) =>
+    terminals.find((item) => `local:${item.id}` === key);
+  const closeExcept = (keep: string) => {
+    for (const tab of orderedTabs) if (tab.key !== keep) tab.onClose?.();
+  };
+  // A tab dropped on another takes that one's place: to its right when it came from
+  // the left, so a tab can go to the end of the row, and to its left otherwise.
+  const moveTab = (from: string, to: string) => {
+    const keys = orderedTabs.map((tab) => tab.key);
+    const at = keys.indexOf(from);
+    const target = keys.indexOf(to);
+    if (at === -1 || target === -1 || at === target) return;
+    keys.splice(at, 1);
+    keys.splice(target, 0, from);
+    if (!devices.arrange(keys))
+      setLocalOrder((previous) => ({ ...previous, [sessionId]: keys }));
+  };
+  const clearError = () =>
+    setOperations((previous) => ({
+      ...previous,
+      [sessionId]: { ...previous[sessionId], error: '' },
+    }));
+  // A tab that has a name of its own starts from it; one called by its number starts
+  // empty, so a name is never its number frozen in by accident.
+  const openRename = (id: string) => {
+    const item = terminals.find((one) => one.id === id);
+    setRenameValue(
+      item && (item.kind === 'service' || item.named) ? item.label : '',
+    );
+    clearError();
+    setRenameFor(id);
+  };
+  const closeRename = () => {
+    clearError();
+    setRenameFor(null);
+  };
+  const applyRename = () =>
+    run(async () => {
+      const target = renameFor;
+      if (!target) return;
+      adopt(
+        await terminalRequest<TerminalSnapshot>('rename', {
+          id: target,
+          label: renameValue,
+        }),
+      );
+      setRenameFor(null);
+    });
+  // Right-clicking a tab offers what a person expects of a tab: name it, close
+  // it, close the rest, make another. A device console is named by its profile.
+  const withMenus = commandTerminal
+    ? orderedTabs
+    : orderedTabs.map((tab) => ({
+        ...tab,
+        onMove: moveTab,
+        menu: [
+          ...(shellOf(tab.key) && !shellOf(tab.key)?.managedCommand
+            ? [
+                {
+                  label: t('rename…'),
+                  onSelect: () => openRename(tab.key.slice(6)),
+                },
+              ]
+            : []),
+          ...(tab.onClose
+            ? [{ label: t('close'), onSelect: () => tab.onClose?.() }]
+            : []),
+          {
+            label: t('close others'),
+            disabled: orderedTabs.length < 2,
+            onSelect: () => closeExcept(tab.key),
+          },
+          {
+            label: t('close all'),
+            onSelect: () => closeExcept(''),
+          },
+          { separator: true },
+          { label: t('new terminal'), onSelect: () => void create() },
+        ],
+      }));
   const commandRunning =
     !!inFront?.managedCommand &&
     ['running', 'stopping'].includes(inFront.status);
   // What Circle is doing in the shell in front: it asks about it, works in it, or you hold it.
-  const circleInFront = inFront ? circleIn.get(inFront.id) : undefined;
+  const circleInFront = inFront ? circleIn(inFront.id) : undefined;
   // Ringed orange while Circle waits for your answer about this shell, blue while it
   // works in it or a command it started runs here.
   const frame =
@@ -904,6 +1127,29 @@ export function NativeTerminal({
       aria-label={t('interactive terminal')}
       onKeyDown={(event) => {
         if (
+          event.key === 'Enter' &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.shiftKey &&
+          inFront &&
+          !inFront.managedCommand &&
+          inFront.kind !== 'service' &&
+          !['running', 'stopping'].includes(inFront.status)
+        ) {
+          const target = event.target;
+          // The xterm handler restarts on Enter in the screen. Handling it here
+          // as well would start a second shell.
+          if (
+            target instanceof Element &&
+            target.closest('input, button, textarea, [role="menu"], .xterm')
+          )
+            return;
+          event.preventDefault();
+          restart();
+          return;
+        }
+        if (
           (event.metaKey || event.ctrlKey) &&
           event.key.toLowerCase() === 'f'
         ) {
@@ -924,7 +1170,7 @@ export function NativeTerminal({
             </IconButton>
           ) : undefined
         }
-        tabs={tabs}
+        tabs={withMenus}
         selected={selectedKey}
         active={active}
         onSelect={selectTab}
@@ -1041,6 +1287,8 @@ export function NativeTerminal({
           )}
         </div>
       )}
+      {/* An ended terminal says how in a quiet line under its tabs: the exit code,
+          the reason, and where it ran with its process ids in the tooltip. */}
       {inFront && !['running', 'stopping'].includes(inFront.status) && (
         <div
           className="native-terminal-exit"
@@ -1051,7 +1299,19 @@ export function NativeTerminal({
           {extraExitReason(inFront) ? ` · ${extraExitReason(inFront)}` : ''}
         </div>
       )}
-      {error && !serviceOpen && (
+      {inFront &&
+        !inFront.managedCommand &&
+        inFront.kind !== 'service' &&
+        !['running', 'stopping'].includes(inFront.status) && (
+          <div className="native-terminal-dead" tabIndex={0}>
+            <p>{t('this terminal has exited')}</p>
+            <p>{t('press enter to restart')}</p>
+            <Button disabled={busy} onClick={restart}>
+              {t('restart')}
+            </Button>
+          </div>
+        )}
+      {error && !serviceOpen && renameFor === null && (
         <div className="native-terminal-error" role="alert">
           <span>{disconnected ? t('not connected') : error}</span>
           <Button onClick={() => setReload((value) => value + 1)}>
@@ -1122,6 +1382,24 @@ export function NativeTerminal({
                   item.sessionId === sessionId
                 }
                 adopt={adopt}
+                onRestart={
+                  item.managedCommand || item.kind === 'service'
+                    ? undefined
+                    : restart
+                }
+                onUserKey={() => {
+                  // Typing takes the tab whichever way the key arrives, including
+                  // the short claim that sends it on before xterm has focus.
+                  const circle = circleIn(item.id);
+                  if (
+                    !circle ||
+                    circle.held ||
+                    circle.state === 'held' ||
+                    (circle.state !== 'operating' && circle.state !== 'waiting')
+                  )
+                    return;
+                  devices.takeTab(circle);
+                }}
                 onSelectionChange={(selected) => {
                   setHasSelection((current) =>
                     current[item.id] === selected
@@ -1340,6 +1618,53 @@ export function NativeTerminal({
           </div>
         </form>
       </Modal>
+      <Modal
+        open={renameFor !== null}
+        onOpenChange={(open) => {
+          if (!open) closeRename();
+        }}
+        title={t('rename terminal')}
+      >
+        <form
+          className="native-service-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void applyRename();
+          }}
+        >
+          <div className="native-service-fields form-stack">
+            <label>
+              {t('terminal name')}
+              <input
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+                placeholder={
+                  tabs.find((tab) => tab.key === `local:${renameFor}`)?.label
+                }
+                maxLength={80}
+                required
+                autoFocus
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+            </label>
+            {error && (
+              <p className="native-terminal-error" role="alert">
+                {error}
+              </p>
+            )}
+          </div>
+          <div className="native-service-actions">
+            <Button type="button" onClick={closeRename}>
+              {t('cancel')}
+            </Button>
+            <Button type="submit" disabled={busy || !renameValue.trim()}>
+              {t('rename')}
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </section>
   );
 }
@@ -1354,6 +1679,8 @@ function TerminalSurface({
   register,
   onSelectionChange,
   onFind,
+  onRestart,
+  onUserKey,
 }: {
   snapshot: TerminalSnapshot;
   request?: TerminalRequest;
@@ -1364,10 +1691,18 @@ function TerminalSurface({
   register: (controls?: Controls) => void;
   onSelectionChange: (selected: boolean) => void;
   onFind: () => void;
+  onRestart?: () => void;
+  /** A key the person typed into this shell, before it is written. */
+  onUserKey?: () => void;
 }) {
   const language = useLocale();
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
+  const onRestartRef = useRef(onRestart);
+  onRestartRef.current = onRestart;
+  const onUserKeyRef = useRef(onUserKey);
+  onUserKeyRef.current = onUserKey;
+  const deliverRef = useRef<(text: string) => void>(() => {});
   const container = useRef<HTMLDivElement>(null);
   const screenReaderMode = useTerminalScreenReader();
   const instance = useRef<{ terminal: Terminal; fit: FitAddon } | null>(null);
@@ -1393,6 +1728,12 @@ function TerminalSurface({
   const [retry, setRetry] = useState(0);
   activeRef.current = active;
   statusRef.current = snapshot.status;
+  // The banner can land while the snapshot still says running, then the shell
+  // is exited. Leaving the shell is the exited state, not a failed operation.
+  useEffect(() => {
+    if (snapshot.status === 'running') return;
+    setError((current) => (quietWhenTerminalExited(current) ? '' : current));
+  }, [snapshot.status]);
 
   useLayoutEffect(() => {
     const visibility = timingVisibility.current;
@@ -1468,8 +1809,12 @@ function TerminalSurface({
         : workspaceCall<T>(snapshot.sessionId, 'terminal', method, params);
 
     const showError = (reason: unknown) => {
-      if (!cancelled)
-        setError(reason instanceof Error ? reason.message : String(reason));
+      if (cancelled) return;
+      const message = reason instanceof Error ? reason.message : String(reason);
+      // A resize or a write that races the shell exiting is not a failure.
+      if (statusRef.current !== 'running' && quietWhenTerminalExited(message))
+        return;
+      setError(message);
     };
     const synchronize = (): Promise<void> => {
       dirty = true;
@@ -1638,11 +1983,37 @@ function TerminalSurface({
       for (const part of terminalInputChunks(data))
         await call('write', { id: snapshot.id, data: part });
     };
+    const noteUserKey = () => onUserKeyRef.current?.();
+    // Keys the claim already wrote. The same character can also arrive from xterm
+    // once focus lands in it; that copy is not a second keystroke.
+    let claimed = '';
+    let claimTimer: ReturnType<typeof setTimeout> | undefined;
+    const deliver = (data: string, fromClaim: boolean) => {
+      if (statusRef.current !== 'running' || !inputAllowedRef.current) return;
+      noteUserKey();
+      if (fromClaim) {
+        claimed += data;
+        if (claimTimer) clearTimeout(claimTimer);
+        claimTimer = setTimeout(() => {
+          claimed = '';
+        }, 50);
+      }
+      sendInput = sendInput.then(() => writeInput(data)).catch(showError);
+    };
+    deliverRef.current = (text) => deliver(text, true);
     let pastedData: string[] | undefined;
     const input = terminal.onData((data) => {
       if (statusRef.current !== 'running' || !inputAllowedRef.current) return;
-      if (pastedData) pastedData.push(data);
-      else sendInput = sendInput.then(() => writeInput(data)).catch(showError);
+      if (pastedData) {
+        pastedData.push(data);
+        return;
+      }
+      if (claimed && claimed.startsWith(data)) {
+        claimed = claimed.slice(data.length);
+        return;
+      }
+      claimed = '';
+      deliver(data, false);
     });
     const paste = (event: ClipboardEvent) => {
       if (
@@ -1654,6 +2025,7 @@ function TerminalSurface({
       const text = event.clipboardData.getData('text/plain');
       event.preventDefault();
       event.stopPropagation();
+      noteUserKey();
       sendInput = sendInput
         .then(async () => {
           // Replay terminal modes before encoding paste, including after reopening.
@@ -1686,6 +2058,21 @@ function TerminalSurface({
       }).catch(showError);
     });
     terminal.attachCustomKeyEventHandler((event) => {
+      // A shell that has exited restarts on Enter, as its button does.
+      if (
+        event.type === 'keydown' &&
+        event.key === 'Enter' &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        statusRef.current !== 'running' &&
+        statusRef.current !== 'stopping'
+      ) {
+        event.preventDefault();
+        onRestartRef.current?.();
+        return false;
+      }
       // Ctrl+V and Ctrl+Shift+V paste, as in Windows Terminal: the browser's paste
       // event sends the text once, and no ^V control character goes to the shell.
       if (
@@ -1752,6 +2139,8 @@ function TerminalSurface({
       notifySearches();
       unsubscribe();
       input.dispose();
+      if (claimTimer) clearTimeout(claimTimer);
+      deliverRef.current = () => {};
       pasteTarget.removeEventListener('paste', paste, true);
       selection.dispose();
       selectionChange.current(false);
@@ -1799,7 +2188,7 @@ function TerminalSurface({
     >
       {error && (
         <div className="native-terminal-error" role="alert">
-          <span>{error}</span>
+          <span>{presentHostError(error)}</span>
           <Button
             onClick={() => {
               setError('');
@@ -1810,7 +2199,25 @@ function TerminalSurface({
           </Button>
         </div>
       )}
-      <div className="native-terminal-screen">
+      <div
+        className="native-terminal-screen"
+        onPointerDown={() => {
+          const term = instance.current?.terminal;
+          if (!term) return;
+          // The click is the person's. A render after it can focus the composer
+          // again before the next key; the claim types that key here instead.
+          claimTerminalKeyboard(
+            () => {
+              if (instance.current?.terminal === term) term.focus();
+            },
+            (text) => {
+              // Straight to the shell. term.input would also emit onData, and the
+              // key would be written twice.
+              if (instance.current?.terminal === term) deliverRef.current(text);
+            },
+          );
+        }}
+      >
         <div ref={container} className="native-terminal-fit" />
       </div>
     </div>

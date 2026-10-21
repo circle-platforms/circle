@@ -23,15 +23,27 @@ export function TerminalMode({
   onExitCommandTerminal,
   sessionId,
   visible,
+  paused = false,
 }: {
   commandTerminal?: CommandTerminalView;
   onExitCommandTerminal?: () => void;
   sessionId: string;
   visible: boolean;
+  /** Home: no conversation is open, so there are no terminals to show. */
+  paused?: boolean;
 }) {
   const { runtime } = useRuntime();
-  // In a window of its own, the message box is the main window's.
+  // In a window of its own, the message box is the main window's. Every hook is called
+  // before home's early return, so the hooks keep their order when home is left.
   const addToDraft = useAddToDraft();
+  if (paused)
+    return (
+      <div className="terminal-mode">
+        <p className="panel-note" role="status">
+          {t('terminals belong to a conversation; start one to open them')}
+        </p>
+      </div>
+    );
   return (
     <div className="terminal-mode">
       <Suspense fallback={<p role="status">{t('loading terminal…')}</p>}>

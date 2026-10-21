@@ -19,6 +19,7 @@ import { desktopHost } from '../host';
 import { useTerminalState } from './useTerminalState';
 import { Button } from '../components/ui';
 import { t } from '../i18n';
+import { claimTerminalKeyboard } from '../model/terminal-keyboard';
 
 // The emulator's colours come from Circle's own palette, so the screen sits on the
 // window: background, text and the sixteen ANSI slots alike, refreshed on a theme switch.
@@ -38,8 +39,10 @@ const bytes = (base64: string): Uint8Array =>
   Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 
 /** A console that is still there to use: connecting, ready, or held by someone. */
+// A console is on the row while it is up. Holding one does not keep a closed
+// one on screen: the tab has to go when its device connection has.
 const isLive = (row: TerminalSessionRow) =>
-  row.state === 'connecting' || row.state === 'ready' || !!row.held;
+  row.state === 'connecting' || row.state === 'ready';
 
 export interface DeviceTerminals {
   /** The desktop application is here to hold device consoles. */
@@ -52,6 +55,13 @@ export interface DeviceTerminals {
   handoff: TerminalState['handoff'];
   /** What Circle is doing in each of the person's own terminal tabs. */
   local: LocalTerminalRow[];
+  /**
+   * The order the person dragged the tab row into, as the main process keeps it for
+   * every window: undefined where the application holds none.
+   */
+  order?: string[];
+  /** Keep the row's new order in the main process; false where it cannot. */
+  arrange: (order: string[]) => boolean;
   /** Reach a saved device; the id of the console that opened. */
   connectProfile: (name: string) => Promise<string>;
   /** Reach a device by its address, without saving it; the id of the console. */
@@ -78,13 +88,21 @@ export function useDeviceTerminals(sessionId: string): DeviceTerminals {
     asking: state?.pendingKey,
     handoff: state?.handoff,
     local: state?.local ?? [],
+    order: state?.order,
+    arrange: (order) => {
+      if (!host?.terminalArrange) return false;
+      void host.terminalArrange(sessionId, order).catch(quiet);
+      return true;
+    },
+    // The console this connect opened, not whichever is newest: the model may have
+    // opened one meanwhile.
     connectProfile: async (name) => {
       const next = await host!.terminalConnect(sessionId, name);
-      return next.sessions.at(-1)?.id ?? '';
+      return next.opened ?? next.sessions.at(-1)?.id ?? '';
     },
     connectTarget: async (target) => {
       const next = await host!.terminalConnectTarget(sessionId, target);
-      return next.sessions.at(-1)?.id ?? '';
+      return next.opened ?? next.sessions.at(-1)?.id ?? '';
     },
     disconnect: (row) =>
       void host?.terminalDisconnect(sessionId, row.id).catch(quiet),
@@ -244,6 +262,18 @@ export function DeviceSurface({
       id={activeId ? `device-${activeId}` : undefined}
       hidden={!visible}
       ref={screenRef}
+      onPointerDown={() => {
+        const term = termRef.current;
+        if (!term) return;
+        claimTerminalKeyboard(
+          () => {
+            if (termRef.current === term) term.focus();
+          },
+          (text) => {
+            if (termRef.current === term) term.input(text, true);
+          },
+        );
+      }}
     />
   );
 }

@@ -37,6 +37,7 @@ import {
 import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 import { t } from '../i18n/index.ts';
+import { presentHostError } from './host-error.ts';
 import { SessionActionError } from './action-error';
 import { runtimeStoppedNotice } from './runtime-notice';
 import { armComposerFocus, cancelComposerFocus } from './composer-focus';
@@ -475,8 +476,9 @@ export class LiveRuntime implements RuntimePort {
   ) {
     if (this.disposed) return;
     if (error instanceof SessionActionError) sessionId = error.sessionId;
-    const detail =
-      error instanceof Error ? error.message : t('runtime action failed');
+    const detail = presentHostError(
+      error instanceof Error ? error.message : t('runtime action failed'),
+    );
     const held = timedOutCommand(detail);
     const message = held
       ? t('Circle did not answer in {seconds}s', { seconds: held.seconds }) +
@@ -1026,6 +1028,7 @@ export class LiveRuntime implements RuntimePort {
         'configure-connection': 'configure',
         'probe-connection': 'probe-connection',
         'cancel-interaction': 'answer',
+        'run-in-terminal': 'terminal-tab-run',
         'import-native-session': 'import',
         'export-session': 'export',
         'mcp.reload': 'reload',
@@ -1094,6 +1097,8 @@ export class LiveRuntime implements RuntimePort {
         'extension.enabled',
         'list-external-file-grants',
         'revoke-external-file-grant',
+        // The card says why its command was not typed.
+        'run-in-terminal',
       ].includes(kind)
     )
       void result.catch((error) => this.report(error, sessionId));

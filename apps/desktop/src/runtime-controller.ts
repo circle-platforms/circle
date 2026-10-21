@@ -115,6 +115,7 @@ import {
 import { LocalTerminals, type LocalTerminalControl } from './local-terminals';
 import type { LocalTerminalRow } from './contracts';
 import {
+  expandVariables,
   loadSecrets,
   removeSecret,
   saveSecret,
@@ -377,9 +378,13 @@ export class RuntimeController {
       )?.mode,
     waiting: (conversation) =>
       new Set(this.terminalTabApprovals().get(conversation) ?? []),
+    handedBack: (conversation, detail) =>
+      this.terminalHandedBack(conversation, detail),
   });
   private terminalTabRows = new Map<string, string>();
   private terminalTabWaits = new Map<string, string>();
+  /** Conversations whose give-back turn should clear the resumed terminal state. */
+  private handbackSessions = new Set<string>();
   private workspaceSessions = new Map<string, string>();
   private readonly store: CheckpointStore;
   // The last link an extension asked to open; the window opens each id once.
@@ -1247,6 +1252,100 @@ export class RuntimeController {
     const rows = await this.terminalTabs.control(conversation, session, action);
     this.terminalTabRows.set(conversation, JSON.stringify(rows));
     return rows;
+  }
+  /**
+   * The person gave a terminal tab back. Circle is told in the conversation, and when a
+   * wait was cut short it is asked to wait again. The tab stays in Circle's state until
+   * that turn ends.
+   */
+  private terminalHandedBack(
+    conversation: string,
+    detail: { name: string; resume: boolean },
+  ): void {
+    const runtime =
+      this.runtimes.get(conversation) ??
+      [...this.taskRuntimes.values()].find(
+        (item) => item.session.id === conversation,
+      );
+    if (!runtime || runtime.isClosing || this.closing) {
+      this.terminalTabs.settleResuming(conversation);
+      return;
+    }
+    const ordinal = /^terminal (\d+)$/.exec(detail.name)?.[1];
+    // A tab the person named is called by that name, in quotes, as the window shows it
+    const display = ordinal
+      ? `the user gave terminal ${ordinal} back`
+      : `the user gave “${detail.name}” back`;
+    const prompt = detail.resume
+      ? `The user gave ${detail.name} back. It is yours again. You were waiting on it: call terminal_wait on ${detail.name} now, with a pattern and a timeout_ms long enough. Do not use execute.`
+      : `The user gave ${detail.name} back. It is yours again. Continue in that tab with the terminal tools. Do not use execute for it.`;
+    this.handbackSessions.add(conversation);
+    if (runtime.harness.busy) {
+      runtime.harness.queue(prompt, 'followUp', undefined, { display });
+      this.publish();
+      return;
+    }
+    this.track(runtime.harness.run(prompt, display), runtime);
+  }
+  /**
+   * The person moved the command of an `execute` card into one of their terminal tabs.
+   * It is typed there only where it runs as the card shows it, with the values of the
+   * secrets the card names (LocalTerminals checks the tab and its line), and the card is
+   * then answered for them: Circle's own shell does not run it, and the model is told
+   * where it went.
+   */
+  private async runInTerminalTab(
+    sessionId: string | undefined,
+    p: Record<string, unknown>,
+  ): Promise<Record<string, never>> {
+    const id = text(p.id, 'interaction', 200);
+    const pending = this.pending.get(id);
+    if (
+      !pending ||
+      pending.signal.aborted ||
+      pending.row.revision !== p.revision ||
+      pending.row.sessionId !== sessionId
+    )
+      throw Error('stale interaction');
+    const row = pending.row;
+    const shown =
+      row.kind === 'approval' &&
+      row.tool === 'execute' &&
+      typeof row.command === 'string'
+        ? row.command.trim()
+        : '';
+    if (!shown) throw Error('only a command can move into a terminal tab');
+    const session = text(p.terminal, 'terminal', 200);
+    if (!isLocalTerminal(session))
+      throw Error("that is not one of the user's terminal tabs");
+    const still = () =>
+      this.pending.get(id) === pending && !pending.signal.aborted;
+    const name = await this.terminalTabs.typeForPerson(
+      row.sessionId,
+      session,
+      // What execute would run: the card shows each secret by its name
+      expandVariables(shown, loadSecrets(this.home)),
+      still,
+    );
+    if (!still()) return {};
+    const answer = `reject: the user moved this command into ${name}; it was typed there. Do not call execute. Use terminal_wait on ${session} if you still need the result.`;
+    this.pending.delete(id);
+    this.history.push({ ...row, status: 'recorded', decision: answer });
+    this.history = this.history.slice(-100);
+    pending.resolve(answer);
+    return {};
+  }
+  /** A give-back's turn has finished: the tab leaves Circle's resumed state. */
+  private settleHandback(conversation: string): void {
+    if (!this.handbackSessions.has(conversation)) return;
+    const runtime = this.runtimes.get(conversation);
+    if (
+      runtime?.harness.busy ||
+      (runtime?.harness.pendingMessageCount ?? 0) > 0
+    )
+      return;
+    this.handbackSessions.delete(conversation);
+    this.terminalTabs.settleResuming(conversation);
   }
   private externalFiles?: ExternalFileGrants;
   private externalGrantOwners = new Map<string, AgentRuntime>();
@@ -3959,6 +4058,7 @@ export class RuntimeController {
       })
       .finally(() => {
         this.tasks.delete(task);
+        this.settleHandback(sessionId);
         if (!this.closing) this.publish();
       });
   }
@@ -4000,6 +4100,7 @@ export class RuntimeController {
             'rename-session',
             'archive-session',
             'answer',
+            'terminal-tab-run',
             'stop-job',
             'workspace-service',
             'list-external-file-grants',
@@ -4035,6 +4136,7 @@ export class RuntimeController {
     // Answers and interrupts must remain available while an asynchronous action is running.
     const immediate = [
       'answer',
+      'terminal-tab-run',
       'abort',
       'state',
       'close',
@@ -4388,6 +4490,9 @@ export class RuntimeController {
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
+    // An answer to a card: it addresses the card's own conversation
+    if (command.name === 'terminal-tab-run')
+      return this.runInTerminalTab(command.sessionId, p);
     // These capability operations address their explicit owner and must never
     // open or acquire the unrelated session currently being inspected.
     if (command.name === 'revoke-external-file-grant')

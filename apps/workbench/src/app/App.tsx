@@ -232,16 +232,21 @@ export function App() {
     if (!host?.popoutOpen) return;
     const name = kind === 'browser' ? t('browser') : t('terminal');
     const title = popoutTitle(name, session.title);
+    // The drawer lets go as the window opens, so the top-bar button is not the open drawer.
+    const wasOpen = panel === kind;
+    if (wasOpen) setInspectorOpen(false);
     void (
       address
         ? host.popoutOpen(kind, session.id, title, address)
         : host.popoutOpen(kind, session.id, title)
     )
       .then(() => {
-        // What was in the drawer is in its window now.
-        if (panel === kind) setInspectorOpen(false);
+        if (wasOpen) setInspectorOpen(false);
       })
-      .catch(() => notify(t('the window could not be opened')));
+      .catch(() => {
+        notify(t('the window could not be opened'));
+        if (wasOpen) setInspectorOpen(true);
+      });
   };
   // A window of its own puts a screenshot or a terminal selection into the message box of
   // its conversation, which is kept here.
@@ -260,6 +265,23 @@ export function App() {
     void desktopHost()
       ?.popoutDockAll?.()
       .catch(() => {});
+  }, [session.id]);
+  // Put back, or closing the window by hand: that mode is in the drawer again. Another
+  // conversation's windows close on the switch and must not open this conversation's drawer.
+  const onPageRef = useRef(false);
+  onPageRef.current = location.pathname.startsWith('/page/');
+  useEffect(() => {
+    const host = desktopHost();
+    if (!host?.onPopoutEvent) return;
+    return host.onPopoutEvent((event) => {
+      if (event.open || event.sessionId !== session.id || onPageRef.current)
+        return;
+      if (event.kind !== 'browser' && event.kind !== 'terminal') return;
+      setPanel(event.kind);
+      setSelection({ panel: event.kind, value: '' });
+      setOverviewOverlay(false);
+      setInspectorOpen(true);
+    });
   }, [session.id]);
   // The overview sits beside the conversation. The person's wish is kept; whether it
   // fits beside a drawer is decided as the window and the drawer change.
@@ -442,9 +464,6 @@ export function App() {
     (panel === 'files' && !!file) || (panel === 'agents' && !!agent);
   const modeKey = drawerKey(panel, drawerOpened);
   const clusterActive = !page && !home && !whole;
-  const overviewShown =
-    clusterActive &&
-    (narrow ? overviewOverlay : overviewWanted && !overviewAside);
   const drawerSplit = inspectorVisible && !whole;
   // The overview steps aside when the conversation would be squeezed, and comes back
   // when there is room again. What counts is the width the mode wants, not the one it
@@ -452,6 +471,21 @@ export function App() {
   const wantedDrawer = drawerSplit
     ? (drawerWidths.current.get(modeKey) ?? openingWidth(modeKey))
     : null;
+  // Decided in this render, before the column is sized: the overview steps aside first
+  // so the conversation keeps its minimum. The aside flag lags one effect, for the
+  // margin that keeps it from flickering back.
+  const overviewByRoom =
+    groupWidth > 0 &&
+    overviewFits({
+      group: groupWidth,
+      drawer: wantedDrawer,
+      showing: !overviewAside,
+    });
+  const overviewShown =
+    clusterActive &&
+    (narrow
+      ? overviewOverlay
+      : overviewWanted && (groupWidth > 0 ? overviewByRoom : !overviewAside));
   useEffect(() => {
     if (narrow || !overviewWanted || !clusterActive || groupWidth === 0) return;
     const fits = overviewFits({

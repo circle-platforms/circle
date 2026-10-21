@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { ContextMenu } from 'radix-ui';
 import { X } from 'lucide-react';
 import { t } from '../i18n';
 import '../styles/terminal-tabs.css';
@@ -16,6 +17,18 @@ export interface TerminalTab {
   /** Present when the tab can be closed; its name says what closing does. */
   closeLabel?: string;
   onClose?: () => void;
+  /** What right-clicking the tab offers: rename it, close it, make another. */
+  menu?: TerminalTabMenuItem[];
+  /** This tab was dropped onto another: the row follows the person's order. */
+  onMove?: (from: string, to: string) => void;
+}
+
+/** One entry of a tab's right-click menu; a separator is an entry of its own. */
+export interface TerminalTabMenuItem {
+  label?: string;
+  onSelect?: () => void;
+  disabled?: boolean;
+  separator?: boolean;
 }
 
 /**
@@ -51,6 +64,7 @@ export function TerminalTabs({
   end?: ReactNode;
 }) {
   const strip = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState('');
   const order = tabs.map((tab) => tab.key).join('\n');
   useLayoutEffect(() => {
     const node = strip.current;
@@ -91,10 +105,30 @@ export function TerminalTabs({
       >
         {tabs.map((tab) => {
           const on = tab.key === selected;
-          return (
+          const body = (
             <div
               key={tab.key}
               className={`term-tab${on ? ' on' : ''}${tab.onClose ? ' closable' : ''}`}
+              draggable={!!tab.onMove}
+              onDragStart={(event) => {
+                if (!tab.onMove) return;
+                setDragging(tab.key);
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', tab.key);
+              }}
+              onDragEnd={() => setDragging('')}
+              onDragOver={(event) => {
+                if (!dragging || dragging === tab.key) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+              }}
+              onDrop={(event) => {
+                const from = dragging;
+                setDragging('');
+                if (!from || from === tab.key || !tab.onMove) return;
+                event.preventDefault();
+                tab.onMove(from, tab.key);
+              }}
             >
               <button
                 type="button"
@@ -146,6 +180,32 @@ export function TerminalTabs({
                 </button>
               )}
             </div>
+          );
+          if (!tab.menu?.length) return body;
+          return (
+            <ContextMenu.Root key={tab.key}>
+              <ContextMenu.Trigger asChild>{body}</ContextMenu.Trigger>
+              <ContextMenu.Portal>
+                <ContextMenu.Content className="dropdown session-menu">
+                  {tab.menu.map((item, place) =>
+                    item.separator ? (
+                      <ContextMenu.Separator
+                        key={`sep-${tab.key}-${place}`}
+                        className="dropdown-separator"
+                      />
+                    ) : (
+                      <ContextMenu.Item
+                        key={item.label}
+                        disabled={item.disabled}
+                        onSelect={() => item.onSelect?.()}
+                      >
+                        {item.label}
+                      </ContextMenu.Item>
+                    ),
+                  )}
+                </ContextMenu.Content>
+              </ContextMenu.Portal>
+            </ContextMenu.Root>
           );
         })}
       </div>

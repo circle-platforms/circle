@@ -16,6 +16,7 @@ import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { terminalInputChunks } from '../../workbench/src/model/terminal-stream.ts';
+import { terminalTabNumbers } from '../src/terminal-tabs.ts';
 import {
   TerminalManager,
   type TerminalEvent,
@@ -425,6 +426,99 @@ async function portAvailable(port: number): Promise<boolean> {
     server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
   });
 }
+
+test(
+  'restarting a shell in place keeps its tab number',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const only = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(only.tabNumber, 1);
+    await manager.signal(owner, only.id, 'SIGKILL');
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((item) => item.id === only.id)
+          ?.status === 'exited',
+      'the only shell exited',
+    );
+    const restarted = await manager.restart(owner, only.id);
+    assert.equal(restarted.tabNumber, 1);
+    assert.equal(restarted.restartOf, only.id);
+    const afterOnly = await manager.list(owner);
+    assert.equal(terminalTabNumbers(afterOnly).get(restarted.id), 1);
+    assert.equal(terminalTabNumbers(afterOnly).has(only.id), false);
+    assert.equal(afterOnly.find((item) => item.id === only.id)?.hidden, true);
+    const second = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(second.tabNumber, 2);
+    await manager.signal(owner, second.id, 'SIGKILL');
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((item) => item.id === second.id)
+          ?.status === 'exited',
+      'the second shell exited',
+    );
+    const kept = await manager.restart(owner, second.id);
+    assert.equal(kept.tabNumber, 2);
+    const numbers = terminalTabNumbers(await manager.list(owner));
+    assert.equal(numbers.get(restarted.id), 1);
+    assert.equal(numbers.get(kept.id), 2);
+    assert.equal(numbers.has(second.id), false);
+  },
+);
+
+test(
+  'closing the only shell frees its number for the next one',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const first = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(first.tabNumber, 1);
+    const second = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(second.tabNumber, 2);
+    await manager.hide(owner, first.id);
+    // The shell that is still open keeps 2. Number 1 is free, but this tab
+    // is not renamed.
+    assert.equal(
+      terminalTabNumbers(await manager.list(owner)).get(second.id),
+      2,
+    );
+    await manager.hide(owner, second.id);
+    const hidden = (await manager.list(owner)).find(
+      (item) => item.id === second.id,
+    );
+    assert.equal(hidden?.hidden, true);
+    assert.equal(hidden?.tabNumber, undefined);
+    const created = await manager.create({ owner, sessionId: 'session-a' });
+    assert.equal(created.tabNumber, 1);
+    assert.equal(
+      terminalTabNumbers(await manager.list(owner)).get(created.id),
+      1,
+    );
+  },
+);
+
+test(
+  'resizing a shell that has exited is not a failure',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const shell = await manager.create({ owner, sessionId: 'session-a' });
+    await manager.signal(owner, shell.id, 'SIGKILL');
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((item) => item.id === shell.id)
+          ?.status === 'exited',
+      'the shell exited',
+    );
+    const resized = await manager.resize(owner, shell.id, 100, 40);
+    assert.equal(resized.status, 'exited');
+    assert.equal(resized.cols, shell.cols);
+    await assert.rejects(
+      manager.write(owner, shell.id, 'exit\r'),
+      /terminal is not running/,
+    );
+  },
+);
 
 test(
   'service readiness, stopping and restart are proven by the real port lifecycle',
@@ -961,5 +1055,192 @@ test(
     assert.ok(failed!.pid);
     assert.throws(() => process.kill(failed!.pid!, 0), { code: 'ESRCH' });
     assert.deepEqual(await manager.activeIds(owner), []);
+  },
+);
+
+test('a renamed terminal keeps its shell and log under the new name', async (t) => {
+  const { manager, logRoot, events } = await setup(t, {
+    // The shared fixture allowlist names a unix shell; Windows renames a tab
+    // of its own shell just as well.
+    ...(process.platform === 'win32'
+      ? {
+          shellAllowlist: [
+            process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe',
+          ],
+        }
+      : {}),
+  });
+  let terminal;
+  try {
+    terminal = await manager.create({ owner, sessionId: 'session-a' });
+  } catch (error) {
+    // A checkout whose pty backend cannot spawn has no terminal to rename.
+    t.skip(`no pty backend: ${error instanceof Error ? error.message : error}`);
+    return;
+  }
+  const renamed = await manager.rename(owner, terminal.id, '  build logs  ');
+  assert.equal(renamed.label, 'build logs');
+  assert.equal(renamed.id, terminal.id);
+  assert.equal(renamed.status, terminal.status);
+  assert.equal(
+    renamed.named,
+    true,
+    'a named tab shows the name, not its number',
+  );
+  assert.equal((await manager.list(owner))[0]!.label, 'build logs');
+  // The name is saved with the terminal, and every window is told
+  const saved = async () =>
+    JSON.parse(
+      await readFile(join(logRoot, terminal.id, 'metadata.json'), 'utf8'),
+    ) as TerminalSnapshot;
+  assert.equal((await saved()).label, 'build logs');
+  assert.equal((await saved()).named, true);
+  const told = events.filter(
+    (event) => event.kind === 'changed' && event.terminalId === terminal.id,
+  );
+  assert.equal(told.length, 1);
+  assert.equal(told[0]!.snapshot?.label, 'build logs');
+  await assert.rejects(
+    () => manager.rename(owner, terminal.id, '   '),
+    /the terminal name is empty/,
+  );
+  await assert.rejects(
+    () => manager.rename(owner, terminal.id, 'x'.repeat(81)),
+    /the terminal name is too long/,
+  );
+  // What a new terminal's label refuses, a name refuses: a restart starts one under it.
+  // A text field keeps a pasted tab.
+  for (const name of [
+    'build\tlogs',
+    'build\nlogs',
+    'build\x1b[31mlogs',
+    'build\x7flogs',
+    'build\u0085logs',
+  ])
+    await assert.rejects(
+      () => manager.rename(owner, terminal.id, name),
+      /the terminal name cannot hold tabs or control characters/,
+    );
+  assert.equal((await manager.list(owner))[0]!.label, 'build logs');
+  assert.equal((await saved()).label, 'build logs');
+  await manager.close(owner, terminal.id);
+});
+
+test(
+  'restarting a named tab keeps its name, its number and its saved metadata, and the next run of the application reads the name back',
+  { skip: !unix },
+  async (t) => {
+    const { manager, logRoot, events, options } = await setup(t);
+    const first = await manager.create({ owner, sessionId: 'session-a' });
+    const second = await manager.create({ owner, sessionId: 'session-a' });
+    await manager.rename(owner, second.id, 'build logs');
+    const saved = async (id: string) =>
+      JSON.parse(
+        await readFile(join(logRoot, id, 'metadata.json'), 'utf8'),
+      ) as TerminalSnapshot;
+    const restarted = await manager.restart(owner, second.id);
+    assert.equal(restarted.restartOf, second.id);
+    assert.equal(restarted.label, 'build logs');
+    assert.equal(restarted.named, true);
+    assert.equal(restarted.tabNumber, 2);
+    assert.equal(restarted.status, 'running');
+    const metadata = await saved(restarted.id);
+    assert.equal(metadata.label, 'build logs');
+    assert.equal(metadata.named, true);
+    assert.equal(metadata.restartOf, second.id);
+    // The terminal it replaced has stopped and left the row, for every window
+    const old = (await manager.list(owner)).find(
+      (item) => item.id === second.id,
+    )!;
+    assert.notEqual(old.status, 'running');
+    assert.equal(old.hidden, true);
+    assert.equal((await saved(second.id)).hidden, true);
+    assert.ok(
+      events.some(
+        (event) =>
+          event.kind === 'changed' &&
+          event.terminalId === second.id &&
+          event.snapshot?.hidden === true,
+      ),
+    );
+    // The window hears of the replacement already knowing what it replaces
+    const created = events.find(
+      (event) => event.kind === 'created' && event.terminalId === restarted.id,
+    );
+    assert.equal(created?.snapshot?.restartOf, second.id);
+    assert.equal(created?.snapshot?.label, 'build logs');
+    const numbers = terminalTabNumbers(await manager.list(owner));
+    assert.equal(numbers.get(first.id), 1);
+    assert.equal(numbers.get(restarted.id), 2);
+    // A new run of the application reads the name from the saved metadata
+    await manager.close(owner, restarted.id);
+    const again = new TerminalManager(options, () => undefined);
+    t.after(() => again.dispose());
+    const listed = (await again.list(owner)).find(
+      (item) => item.id === restarted.id,
+    );
+    assert.equal(listed?.label, 'build logs');
+    assert.equal(listed?.named, true);
+  },
+);
+
+test(
+  'a shell whose replacement cannot start keeps running in its tab',
+  { skip: !unix },
+  async (t) => {
+    const { manager, workspace, events } = await setup(t);
+    await mkdir(join(workspace, 'build'));
+    const terminal = await manager.create({
+      owner,
+      sessionId: 'session-a',
+      cwd: 'build',
+    });
+    await manager.rename(owner, terminal.id, 'build logs');
+    // The shell answers before its folder goes: one still starting up when its folder
+    // vanishes ends, which says nothing about the restart
+    await manager.write(owner, terminal.id, "printf 'UP_%s\\n' NOW\r");
+    await wait(
+      () => events.some((event) => event.data?.includes('UP_NOW')),
+      'the shell answers',
+    );
+    // The folder goes while the shell runs in it: a new shell cannot start there
+    await rm(join(workspace, 'build'), { recursive: true });
+    await assert.rejects(() => manager.restart(owner, terminal.id), /ENOENT/);
+    const list = await manager.list(owner);
+    assert.equal(list.length, 1, 'no half-made terminal was left');
+    const still = list[0]!;
+    assert.equal(still.id, terminal.id);
+    assert.equal(still.status, 'running');
+    assert.equal(still.hidden, undefined);
+    assert.equal(still.tabNumber, 1);
+    assert.equal(still.label, 'build logs');
+    await manager.write(owner, terminal.id, "printf 'STILL_%s\\n' HERE\r");
+    await wait(
+      () => events.some((event) => event.data?.includes('STILL_HERE')),
+      'the old shell still answers',
+    );
+  },
+);
+
+test(
+  'a running shell restarts in its tab at the limit of active terminals',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t, { maxActive: 1 });
+    const only = await manager.create({ owner, sessionId: 'session-a' });
+    await assert.rejects(
+      () => manager.create({ owner, sessionId: 'session-a' }),
+      /too many active terminals/,
+    );
+    // The replacement starts while the old shell still runs: the two count as one
+    const restarted = await manager.restart(owner, only.id);
+    assert.equal(restarted.status, 'running');
+    assert.equal(restarted.tabNumber, 1);
+    const old = (await manager.list(owner)).find(
+      (item) => item.id === only.id,
+    )!;
+    assert.notEqual(old.status, 'running');
+    assert.equal(old.hidden, true);
+    assert.deepEqual(await manager.activeIds(owner), [restarted.id]);
   },
 );

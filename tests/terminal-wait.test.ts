@@ -411,6 +411,65 @@ test('a quick connect password reaches SSH as a one-time secret, gone once the c
   assert.equal(seen.env?.secret(name), '');
 });
 
+test('closing a console the person holds goes through at once and frees what waited on it', async (t) => {
+  const h = harness();
+  t.after(() => h.sessions.close());
+  await h.open();
+  assert.equal(h.sessions.attach('c1', 't1'), true);
+  let outcome: unknown = false;
+  const parked = h.sessions.request(
+    'c1',
+    'send',
+    { session: 't1', text: 'later', enter: true },
+    signal,
+  );
+  parked.then(
+    () => (outcome = 'sent'),
+    (error) =>
+      (outcome = error instanceof Error ? error.message : String(error)),
+  );
+  await new Promise((done) => setTimeout(done, 150));
+  assert.equal(
+    outcome,
+    false,
+    'a send waits while the person holds the console',
+  );
+  // Closing it is their own act: it does not queue behind their own hold.
+  h.sessions.disconnectForPerson('c1', 't1');
+  assert.equal(
+    h.sessions.views('c1').find((view) => view.id === 't1')?.state,
+    'closed',
+  );
+  const deadline = Date.now() + 4000;
+  while (outcome === false && Date.now() < deadline)
+    await new Promise((done) => setTimeout(done, 20));
+  assert.notEqual(outcome, false, 'the parked send stopped waiting');
+  assert.match(String(outcome), /is closed/);
+});
+
+test("Circle's own disconnect of a console the person holds waits until they give it back", async (t) => {
+  const h = harness();
+  t.after(() => h.sessions.close());
+  await h.open();
+  assert.equal(h.sessions.attach('c1', 't1'), true);
+  let closed: unknown = false;
+  const asked = h.sessions.request(
+    'c1',
+    'disconnect',
+    { session: 't1' },
+    signal,
+  );
+  asked.then((result) => (closed = result.text));
+  await new Promise((done) => setTimeout(done, 150));
+  assert.equal(closed, false, 'the model cut off a console the person holds');
+  assert.equal(
+    h.sessions.views('c1').find((view) => view.id === 't1')?.state,
+    'ready',
+  );
+  h.sessions.detach('c1', 't1');
+  assert.match((await asked).text, /was cut off/);
+});
+
 test('wait: an aborted stop is an error, not a result', async (t) => {
   const h = harness();
   t.after(() => h.sessions.close());

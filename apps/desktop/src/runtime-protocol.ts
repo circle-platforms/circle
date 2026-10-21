@@ -31,6 +31,7 @@ export type RuntimeCommandName =
   | 'save-settings'
   | 'reload'
   | 'answer'
+  | 'terminal-tab-run'
   | 'compact'
   | 'export'
   | 'import'
@@ -137,6 +138,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'save-settings',
   'reload',
   'answer',
+  'terminal-tab-run',
   'compact',
   'export',
   'import',

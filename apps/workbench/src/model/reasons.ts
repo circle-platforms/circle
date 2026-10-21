@@ -31,10 +31,29 @@ const REASONS: Record<string, () => string> = {
   'keeps a download': () => t('keeps a download'),
   'clicks a coordinate target': () => t('clicks a coordinate target'),
   'types in your terminal': () => t('types in your terminal'),
+  'types this command into your terminal': () =>
+    t('types this command into your terminal'),
+  'restarts this terminal and types into it': () =>
+    t('restarts this terminal and types into it'),
+  'restarts this terminal and types this command into it': () =>
+    t('restarts this terminal and types this command into it'),
   'runs the line on the screen': () => t('runs the line on the screen'),
 };
 export const requestReason = (reason?: string) =>
   reason ? (REASONS[reason]?.() ?? reason) : '';
+
+/** The input of a terminal call for one of your own terminal tabs, when it is one. */
+function tabInput(item: {
+  tool?: string;
+  input?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  const input = item.input;
+  return item.tool?.startsWith('terminal_') &&
+    typeof input?.terminal === 'string' &&
+    input.terminal.startsWith('local:')
+    ? input
+    : undefined;
+}
 
 /**
  * The number of the terminal tab of yours a terminal call is for, when it is one: the
@@ -44,23 +63,33 @@ export function terminalTabNumber(item: {
   tool?: string;
   input?: Record<string, unknown>;
 }): number | undefined {
-  const input = item.input;
-  if (
-    !item.tool?.startsWith('terminal_') ||
-    typeof input?.terminal !== 'string' ||
-    !input.terminal.startsWith('local:') ||
-    typeof input.ordinal !== 'number'
-  )
-    return undefined;
-  return input.ordinal;
+  const ordinal = tabInput(item)?.ordinal;
+  return typeof ordinal === 'number' ? ordinal : undefined;
 }
 
-/** What an approval card is headed with: the tool, or the terminal tab it is for. */
+/**
+ * The name you gave the terminal tab a terminal call is for: the runtime adds it as
+ * `tab_name`, and the tab shows it instead of its number.
+ */
+export function terminalTabName(item: {
+  tool?: string;
+  input?: Record<string, unknown>;
+}): string | undefined {
+  const name = tabInput(item)?.tab_name;
+  return typeof name === 'string' && name ? name : undefined;
+}
+
+/**
+ * What an approval card is headed with: the tool, or the terminal tab it is for, named
+ * as that tab reads.
+ */
 export function approvalHeading(item: {
   title: string;
   tool?: string;
   input?: Record<string, unknown>;
 }): string {
+  const name = terminalTabName(item);
+  if (name) return name;
   const tab = terminalTabNumber(item);
   return tab ? t('terminal {n}', { n: tab }) : (item.tool ?? item.title);
 }

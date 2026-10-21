@@ -94,6 +94,9 @@ const DEFAULT_MAX_SESSIONS = 6;
 const SEND_SETTLE_QUIET_MS = 400;
 const SEND_SETTLE_MAX_MS = 2000;
 const WAIT_TICK_MS = 150;
+// How often a wait on a terminal tab asks again whether its shell has the terminal back,
+// while the screen stays as it was. New output on the screen asks again at once.
+const PROMPT_PROBE_MS = 500;
 // A wait's record of the device's output keeps this many lines beyond its screen, and
 // `changed` shows the last CHANGED_LINES of them.
 const RECORD_SCROLLBACK = 1000;
@@ -117,6 +120,12 @@ export class TerminalSession {
   readonly wakers = new Set<() => void>();
   // The checks of the waits under way, run again at once when the holder changes
   readonly watchers = new Set<() => void>();
+  /**
+   * A terminal tab: whether its shell has the terminal back, so no command it started runs
+   * in front of it. That is the shell at its prompt, whatever the prompt looks like.
+   * Undefined where the host cannot tell (Windows), and absent for a device console.
+   */
+  foreground?: () => Promise<boolean | undefined>;
   // The newest raw bytes, so a view opened mid-session can paint the screen by feeding
   // them to its own emulator: a panel never waits for the device to speak again.
   private ring: Buffer[] = [];
@@ -359,7 +368,8 @@ export class TerminalSessions {
   ): Promise<TerminalResult> {
     const own = this.conversation(conversation);
     const run = () => this.perform(own, conversation, action, args, signal);
-    // One action's failure must not sink the ones after it
+    // One action's failure must not sink the ones after it. The person's own close of a
+    // console does not come this way: see disconnectForPerson.
     own.queue = own.queue.then(run, run);
     return own.queue as Promise<TerminalResult>;
   }
@@ -455,6 +465,24 @@ export class TerminalSessions {
     session.wake();
     this.options.onChange(conversation);
   }
+  /**
+   * The person closes a console from the page or panel. It is theirs to close at any time,
+   * while they hold it too: it waits for nothing, and an action of the model's parked on it
+   * ends as it would if the device had hung up.
+   */
+  disconnectForPerson(conversation: string, id: string): void {
+    const own = this.conversations.get(conversation);
+    const session = own?.sessions.get(id);
+    if (!own || !session || session.local) return;
+    const was = session.state;
+    session.close();
+    session.held = undefined;
+    if (was === 'ready' || was === 'connecting')
+      own.events.push(`${session.name}: the user disconnected the terminal`);
+    session.wake();
+    session.nudge();
+    this.options.onChange(conversation);
+  }
   /** What the person types on a console they hold. Only the holder's keys arrive. */
   input(conversation: string, id: string, text: string): boolean {
     const session = this.session(conversation, id);
@@ -524,7 +552,8 @@ export class TerminalSessions {
         args,
         signal,
       );
-    // The person holds the console: nothing runs until they give it back
+    // The person holds the console: nothing of Circle's runs until they give it back,
+    // its disconnect included. Their own close does not wait: disconnectForPerson.
     if (session.held) await this.handedBack(session, signal);
     switch (action) {
       case 'send':
@@ -980,6 +1009,9 @@ export class TerminalSessions {
           timeoutMs,
           ...(pattern ? { pattern } : {}),
           ...(absent && record ? { absent: { pattern: absent, record } } : {}),
+          // A terminal tab that prints nothing, such as sleep, is quiet while it
+          // still runs. Quiet only finishes the wait once the shell is at its prompt.
+          holdUntilPrompt: session.local && !pattern,
           signal,
         });
         if (outcome !== 'capped' || attempts > retries) break;
@@ -1038,6 +1070,8 @@ export class TerminalSessions {
   ): TerminalResult {
     const was = session.state;
     session.close();
+    // Anything parked on their hold stops waiting now and sees the closed console.
+    session.wake();
     own.events.push(`${session.name}: disconnected`);
     this.options.onChange(conversation);
     return {
@@ -1132,6 +1166,8 @@ export class TerminalSessions {
       idleMs: number;
       timeoutMs: number;
       pattern?: RegExp;
+      /** A local tab: quiet counts only while the shell is at its prompt. */
+      holdUntilPrompt?: boolean;
       /** Fails the wait once the record of what the device printed since it began shows it. */
       absent?: { pattern: RegExp; record: OutputRecord };
       signal: AbortSignal;
@@ -1145,6 +1181,34 @@ export class TerminalSessions {
       }
       const started = Date.now();
       let done = false;
+      // What the host last said of the shell, and the output it was asked after
+      let asked: { output: number; at: number; shell?: boolean } | undefined;
+      let asking = false;
+      // The shell has its terminal back: the host knows that from the process in front of
+      // it, whatever the prompt looks like (❯, ➜ … ✗). Where it cannot tell, or a program
+      // the shell started holds the terminal and waits at a prompt of its own (ssh, a
+      // REPL), the line at the cursor ending like a prompt counts.
+      const atPrompt = (): boolean => {
+        if (looksLikePrompt(session.cursorLine())) return true;
+        if (!session.foreground) return false;
+        const output = session.lastOutputAt;
+        if (asked?.output === output && asked.shell === true) return true;
+        if (
+          !asking &&
+          (!asked ||
+            asked.output !== output ||
+            Date.now() - asked.at >= PROMPT_PROBE_MS)
+        ) {
+          asking = true;
+          const answer = (shell?: boolean) => {
+            asking = false;
+            asked = { output, at: Date.now(), shell };
+            check();
+          };
+          session.foreground().then(answer, () => answer(undefined));
+        }
+        return false;
+      };
       const end = () => {
         done = true;
         clearInterval(ticker);
@@ -1173,7 +1237,13 @@ export class TerminalSessions {
           want.pattern.test(session.tail(400).join('\n'))
         )
           finish('pattern');
-        else if (session.quiet >= want.idleMs) finish('quiet');
+        else if (
+          session.quiet >= want.idleMs &&
+          // `sleep` and its like print nothing, so the screen is quiet the whole
+          // time. That is not the prompt coming back, and the timeout still bounds it.
+          (!want.holdUntilPrompt || atPrompt())
+        )
+          finish('quiet');
         else if (Date.now() - started >= want.timeoutMs) finish('capped');
       };
       const parsed = session.screen.onWriteParsed(() => check());
@@ -1211,6 +1281,13 @@ export function withMoreTerminals(text: string, lines: string[]): string {
   );
 }
 
+/**
+ * The line at the cursor ends like a prompt: a shell's `$`, `#`, `%` or `>`, a REPL's
+ * `>>>`, or the `❯` of starship, pure and powerlevel10k.
+ */
+export function looksLikePrompt(line: string): boolean {
+  return /[$#>%❯]\s*$/.test(line);
+}
 /** An assertion's regular expression; a bad one is the caller's error. */
 function regexArg(value: unknown): RegExp | undefined {
   if (typeof value !== 'string' || !value) return undefined;

@@ -1,5 +1,7 @@
 import type { IPty } from 'node-pty';
+import { nextTerminalTabNumber, terminalTabNumbers } from '../terminal-tabs.ts';
 import { hasNativePtyProcessExited, spawnPty } from './native-pty.ts';
+import { shellInForeground } from './foreground.ts';
 import { ptyEnvironment, withTextLocale } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
 import {
@@ -84,13 +86,20 @@ export interface TerminalSnapshot {
   exitCode?: number;
   signal?: number;
   requestedSignal?: TerminalSignal;
+  /** The person named this shell's tab: `label` is that name, and the tab shows it. */
+  named?: boolean;
   lastSequence: number;
   logPath: string;
   error?: string;
   /** Per-launch environment is kept in memory, never written to terminal history. */
   transientEnvironment?: boolean;
+  /** The terminal this one replaced in its tab when it was restarted. */
   restartOf?: string;
   kind: 'shell' | 'service';
+  /** Closed out of the tab row. It stays in the log and no longer takes a number. */
+  hidden?: boolean;
+  /** The tab's number, kept while the tab stays open. */
+  tabNumber?: number;
   command?: TerminalCommand;
   /** Host-owned command identity. Expanded launch arguments are never retained. */
   managedCommand?: {
@@ -133,7 +142,9 @@ export interface TerminalEvent {
     | 'interrupted'
     | 'readiness'
     | 'ready'
-    | 'commandState';
+    | 'commandState'
+    // What the tab row shows of it changed: its name, or it left the row.
+    | 'changed';
   data?: string;
   snapshot?: TerminalSnapshot;
 }
@@ -318,6 +329,24 @@ export class TerminalManager {
     return { data: parts.join(''), sequence: entry.snapshot.lastSequence, at };
   }
 
+  /**
+   * Trusted host only: whether a running shell has its terminal back, with no command it
+   * started in front of it. Undefined for a service, a stopped terminal, or where the
+   * system cannot tell.
+   */
+  async foreground(owner: string, id: string): Promise<boolean | undefined> {
+    const entry = this.#entries.get(id);
+    if (!this.#settled || !entry || entry.snapshot.owner !== owner) return;
+    const pid = entry.pty?.pid;
+    if (
+      !pid ||
+      entry.snapshot.kind !== 'shell' ||
+      entry.snapshot.status !== 'running'
+    )
+      return;
+    return shellInForeground(pid);
+  }
+
   async create(options: TerminalCreateOptions): Promise<TerminalSnapshot> {
     return this.#create(options);
   }
@@ -436,15 +465,26 @@ export class TerminalManager {
 
   async #create(
     options: TerminalCreateOptions,
-    restart?: { serviceId?: string },
+    restart?: {
+      serviceId?: string;
+      tabNumber?: number;
+      /** The terminal this one replaces in its tab, which keeps its name. */
+      replaces?: string;
+      named?: boolean;
+    },
     managedLaunch?: { managed: ManagedCommand; launch: TerminalCommand },
   ): Promise<TerminalSnapshot> {
     await this.#ready;
     if (this.#disposed) throw Error('terminal manager is closed');
     identity(options.owner, 'owner');
     identity(options.sessionId, 'session');
+    // A shell being restarted still runs until its replacement has started: the two
+    // count as one.
+    const replaced = restart?.replaces
+      ? this.#entries.get(restart.replaces)
+      : undefined;
     const active = [...this.#entries.values()].filter(
-      (entry) => entry.pty,
+      (entry) => entry.pty && entry !== replaced,
     ).length;
     if (active + this.#creating >= (this.#options.maxActive ?? 32))
       throw Error('too many active terminals');
@@ -527,6 +567,8 @@ export class TerminalManager {
           ? { managedCommand: clone(managedLaunch.managed.source) }
           : {}),
         ...(environment ? { transientEnvironment: true } : {}),
+        ...(restart?.replaces ? { restartOf: restart.replaces } : {}),
+        ...(restart?.named ? { named: true } : {}),
         ...(command && !managedLaunch
           ? ({
               command,
@@ -539,6 +581,11 @@ export class TerminalManager {
             } as const)
           : {}),
       };
+      if (!managedLaunch)
+        snapshot.tabNumber =
+          restart?.tabNumber && restart.tabNumber > 0
+            ? restart.tabNumber
+            : nextTerminalTabNumber(this.listNow(options.owner));
       const entry = makeEntry(snapshot);
       entry.managed = managedLaunch?.managed;
       entry.environment = environment;
@@ -707,10 +754,14 @@ export class TerminalManager {
     rows: number,
   ): Promise<TerminalSnapshot> {
     await this.#ready;
-    const entry = this.#get(owner, id, true);
+    const entry = this.#get(owner, id);
     cols = dimension(cols);
     rows = dimension(rows);
-    entry.pty!.resize(cols, rows);
+    // The shell has gone. Fitting the screen to the exited state is not a
+    // failed operation, and it must not be reported as one.
+    if (!entry.pty || entry.snapshot.status !== 'running')
+      return clone(entry.snapshot);
+    entry.pty.resize(cols, rows);
     entry.snapshot.cols = cols;
     entry.snapshot.rows = rows;
     this.#append(entry, 'resized', undefined, true);
@@ -793,7 +844,33 @@ export class TerminalManager {
     return entry.closing;
   }
 
-  /** Restarts only the shell. Prior user input is deliberately not re-executed. */
+  /** Takes a terminal out of the tab row. Its log stays; its number is free. */
+  async hide(owner: string, id: string): Promise<TerminalSnapshot> {
+    await this.#ready;
+    const entry = this.#get(owner, id);
+    await this.#leaveRow(entry);
+    return clone(entry.snapshot);
+  }
+
+  /**
+   * The tab leaves the row, for every window and for the model's terminal tools. A
+   * closed tab does not keep a number. Leaving it stored made the next shell reuse that
+   * number when the closed tab was still the one counted.
+   */
+  async #leaveRow(entry: Entry): Promise<void> {
+    entry.snapshot.hidden = true;
+    delete entry.snapshot.tabNumber;
+    await this.#persist(entry);
+    this.#append(entry, 'changed', undefined, true);
+  }
+
+  /**
+   * Starts a terminal again in its tab: the same folder, shell, size and name, never the
+   * input it was given before. The tab keeps its number, and the old process leaves the
+   * row. A shell's replacement starts before the old shell is stopped, so a shell that
+   * cannot start again (its folder is gone, say) leaves the old one as it was. A service
+   * stops first, since its replacement needs the port the old one holds.
+   */
   async restart(owner: string, id: string): Promise<TerminalSnapshot> {
     await this.#ready;
     const previous = this.#get(owner, id);
@@ -806,13 +883,16 @@ export class TerminalManager {
       throw Error(
         'per-launch environment is unavailable after restart; start it again from where it was launched',
       );
-    await this.close(owner, id);
+    const service = old.kind === 'service';
+    if (service) await this.close(owner, id);
+    // The number the person was looking at stays with the tab.
+    const kept = terminalTabNumbers(this.listNow(old.owner)).get(old.id);
     const next = await this.#create(
       {
         owner,
         sessionId: old.sessionId,
         cwd: old.cwd,
-        ...(old.kind === 'service'
+        ...(service
           ? {
               command: old.command,
               readiness:
@@ -830,11 +910,42 @@ export class TerminalManager {
         label: old.label,
         env: previous.environment,
       },
-      { serviceId: old.serviceId },
+      {
+        serviceId: old.serviceId,
+        tabNumber: kept,
+        replaces: id,
+        named: old.named,
+      },
     );
-    const entry = this.#get(owner, next.id);
-    entry.snapshot.restartOf = id;
+    await this.#leaveRow(previous);
+    if (!service) await this.close(owner, id);
+    return clone(this.#get(owner, next.id).snapshot);
+  }
+
+  /**
+   * A person's own name for a tab. The shell, its log and its history are untouched; the
+   * name is saved with the terminal and kept when it restarts.
+   */
+  async rename(
+    owner: string,
+    id: string,
+    label: string,
+  ): Promise<TerminalSnapshot> {
+    await this.#ready;
+    const entry = this.#get(owner, id);
+    if (entry.snapshot.managedCommand)
+      throw Error('a command Circle runs is named by its command');
+    const name = String(label ?? '').trim();
+    if (!name) throw Error('the terminal name is empty');
+    if (name.length > 80) throw Error('the terminal name is too long');
+    // A restart starts a terminal under this name, and a terminal's name takes no
+    // control characters: a pasted tab would leave the restart with no shell at all.
+    if (/[\x00-\x1f\x7f-\x9f]/.test(name))
+      throw Error('the terminal name cannot hold tabs or control characters');
+    entry.snapshot.label = name;
+    entry.snapshot.named = true;
     await this.#persist(entry);
+    this.#append(entry, 'changed', undefined, true);
     return clone(entry.snapshot);
   }
 

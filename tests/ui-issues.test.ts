@@ -281,6 +281,57 @@ test('the real plan_exit question keeps completed steps in view until the decisi
   assert.ok(!s.rows().some((row) => row.includes('Plan 1/1')));
 });
 
+test("in Chinese the plan question speaks the desktop plan card's words, and a choice still answers with its own label", async (t) => {
+  const saved = {
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LANGUAGE: process.env.LANGUAGE,
+  };
+  process.env.LANG = 'zh_CN.UTF-8';
+  process.env.LC_ALL = 'zh_CN.UTF-8';
+  delete process.env.LANGUAGE;
+  t.after(() => {
+    for (const [name, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+  });
+  const model = new ScriptedModel([
+    reply('plan-exit', '', [{ id: 'exit', name: 'plan_exit', args: {} }]),
+    reply('implementing', 'implementing'),
+  ]);
+  const s = await app(t, model);
+  s.runtime.setPlanMode(true);
+  const turn = s.runtime.harness.run('review the plan');
+  await until(() =>
+    Boolean(s.app.state.dialog?.options.includes(PLAN_CHOICES.manual)),
+  );
+  const screen = s.rows().join('\n');
+  for (const words of [
+    '模型有一个问题',
+    '计划写好了：',
+    '接下来怎么做？',
+    '自动模式执行',
+    '手动审批执行 — 退出计划模式，每项改动先问你',
+    '需要修改',
+    '只保存计划，不做修改',
+    '写下你自己的回答',
+  ])
+    assert.ok(screen.includes(words), `the card shows ${words}`);
+  assert.doesNotMatch(screen, /The model has a question|manual approval/);
+  // The card answers with the choice's own label, which plan_exit reads
+  s.key('2', '2');
+  await turn;
+  assert.equal(s.runtime.harness.planMode, false);
+  assert.match(
+    String(
+      model.requests[1]!.messages.find(
+        (message) => message.tool_call_id === 'exit',
+      )!.content,
+    ),
+    /^Plan mode is off: each change asks the user first\./,
+  );
+});
+
 test('plan focus is remappable and actual steps do not expose raw argument objects', (t) => {
   const root = scratch(t);
   writeFileSync(

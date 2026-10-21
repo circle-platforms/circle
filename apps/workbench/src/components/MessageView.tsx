@@ -16,6 +16,20 @@ import { ToolMessage } from './ToolMessage';
 import { formatUsdAmount } from '../../../../src/pricing.ts';
 
 /**
+ * A hand-back notice is stored in English and shown in the interface language. A tab
+ * the person named is called by that name, which is not translated.
+ */
+function shownMessageText(role: Message['role'], text: string): string {
+  if (role !== 'user') return text;
+  const gave = /^the user gave terminal (\d+) back$/.exec(text);
+  if (gave) return t('the user gave terminal {n} back', { n: gave[1] ?? '' });
+  const named = /^the user gave “(.+)” back$/.exec(text);
+  return named
+    ? t('the user gave “{name}” back', { name: named[1] ?? '' })
+    : text;
+}
+
+/**
  * A message as Claude shows one: yours in a bubble on the right, Circle's as plain text
  * with its thinking folded. The time, the usage and a copy button sit on one row under it.
  */
@@ -96,7 +110,7 @@ export function MessageView({
             )}
           </>
         ) : (
-          <Markdown text={message.text} />
+          <Markdown text={shownMessageText(message.role, message.text)} />
         )}
         {message.attachments?.length ? (
           <div className="message-attachments">

@@ -34,6 +34,7 @@ await mkdir(join(dataDir, 'runtime-home'), { recursive: true });
 // One console server: greets and records the lines it is given, and counts the ^K
 // bytes (Ctrl+K) that reach it.
 const typed = [];
+const received = [];
 let controlK = 0;
 const sockets = new Set();
 const server = createServer((socket) => {
@@ -61,6 +62,7 @@ const server = createServer((socket) => {
       if (byte === 10 || byte === 13 || (byte >= 32 && byte < 127))
         text += String.fromCharCode(byte);
     }
+    if (text) received.push(text);
     input += text;
     let cut = input.search(/[\r\n]/);
     while (cut !== -1) {
@@ -187,14 +189,45 @@ try {
   );
   if (!shown.includes('TELNET panel fixture'))
     failures.push(`the screen snapshot missed the banner: ${shown}`);
-  // The person takes the console: their keys reach the device
-  await page.getByRole('button', { name: 'take over', exact: true }).click();
+  // A console the person opened from the panel is theirs to type in from its
+  // first line: the row already offers to give it back to Circle.
   await page.getByRole('button', { name: 'give back', exact: true }).waitFor();
   const held = await page.evaluate(
     (id) => window.circleDesktop.terminalState(id),
     session,
   );
-  assert.equal(held.sessions[0].held, 'attach');
+  assert.equal(
+    held.sessions[0].held,
+    'attach',
+    'a panel connect starts in the hands of the person who opened it',
+  );
+  // A key typed within about 50ms of a click in the screen, while a render
+  // pulls focus back to the composer. Waiting for the xterm to be focused
+  // first would miss that race. The character must not stay in the draft.
+  const composer = page.getByRole('textbox', { name: 'message', exact: true });
+  // Filled without a click: in a narrow window the terminal lies over the
+  // conversation, and its screen is what a click there would hit.
+  await composer.fill('stays in the composer');
+  const deviceScreen = page.locator('.device-screen:not([hidden])');
+  await deviceScreen.locator('.xterm-screen').click({ delay: 0 });
+  const deviceTyping = page.keyboard.type('abc', { delay: 12 });
+  await page.evaluate(() => {
+    setTimeout(() => {
+      document.querySelector('.composer textarea')?.focus();
+    }, 25);
+  });
+  await deviceTyping;
+  await until(
+    () => received.join('').includes('abc'),
+    'the keys after the click reached the device',
+  );
+  assert.equal(await composer.inputValue(), 'stays in the composer');
+  // Those keys are sitting in the console's line. End it, or the next line joins them.
+  await page.evaluate(
+    ({ id, one }) => window.circleDesktop.terminalInput(id, one, '\r'),
+    { id: session, one: 't1' },
+  );
+  await until(() => typed.includes('abc'), 'the click keys became a line');
   await page.evaluate(
     ({ id, one }) => window.circleDesktop.terminalInput(id, one, 'show ver\r'),
     { id: session, one: 't1' },
@@ -238,7 +271,8 @@ try {
       'Ctrl+K in the console opened search',
     );
   }
-  // Give it back: the model's actions may run again
+  // Take it back for Circle: the model's actions may run again, and the person's
+  // keys stop reaching the device until they take it again.
   await page.getByRole('button', { name: 'give back', exact: true }).click();
   await page.getByRole('button', { name: 'take over', exact: true }).waitFor();
   const free = await page.evaluate(

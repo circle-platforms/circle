@@ -7,6 +7,8 @@ export const terminal: Record<string, string> = {
   'terminal screen reader': '终端屏幕阅读支持',
   'always on': '始终启用',
   'terminal closed': '终端已关闭',
+  'this terminal has exited': '这个终端已退出',
+  'press enter to restart': '按 Enter 重新启动',
 
   'session terminals': '会话终端',
 
@@ -73,4 +75,11 @@ export const terminal: Record<string, string> = {
     '统一查看开发服务的日志、就绪状态，并随时停止或重启',
   'exited (code {code})': '已退出（代码 {code}）',
   'close search': '关闭查找',
+  'rename…': '重命名…',
+  'close others': '关闭其他',
+  'close all': '关闭全部',
+  'rename terminal': '重命名终端',
+  'terminal name': '终端名称',
+  'terminals belong to a conversation; start one to open them':
+    '终端属于某个会话，开始一个会话后才能打开',
 };

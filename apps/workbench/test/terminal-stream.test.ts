@@ -66,6 +66,19 @@ test('metadata does not reorder tabs or regress a newer terminal state', () => {
     mergeTerminalSnapshot(updated, { ...a, lastSequence: 7 }),
     updated,
   );
+  const hidden = mergeTerminalSnapshot(updated, {
+    ...updated[0]!,
+    hidden: true,
+  });
+  assert.equal(hidden[0]!.hidden, true);
+  assert.equal(
+    mergeTerminalSnapshot(hidden, {
+      ...updated[0]!,
+      hidden: undefined,
+      status: 'exited',
+    })[0]!.hidden,
+    true,
+  );
 });
 
 test('reconnection replays each output once and rejects cross-terminal or missing history', () => {

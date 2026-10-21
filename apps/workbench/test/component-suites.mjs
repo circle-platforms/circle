@@ -67,7 +67,9 @@ export const COMPONENT_SUITES = Object.freeze([
   'overview-cards-ui.mjs',
   'notice-timers-ui.mjs',
   'tool-summary-line-ui.mjs',
+  'git-changes-refresh-ui.mjs',
   'plan-review-ui.mjs',
+  'terminal-tab-menu-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */

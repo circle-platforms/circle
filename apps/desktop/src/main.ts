@@ -561,6 +561,9 @@ async function createPopoutWindow(
   // The title is the mode and the conversation, not the page's.
   popout.on('page-title-updated', (event) => event.preventDefault());
   installWindowChrome(popout);
+  // The pages move before the window's page loads, so that page is the one that places
+  // them. They are opened again once the window is on screen: a view created while the
+  // window is hidden stays blank, and carrying the old view across windows does too.
   if (kind === 'browser') browsers?.moveToWindow(sessionId, popout);
   // Before it is gone, so its pages are not lost with it. From here the window is gone for
   // the application: pressing its mode again makes a new one.
@@ -573,10 +576,13 @@ async function createPopoutWindow(
     popoutAddresses.delete(popout);
     hooks.closed();
   });
-  popout.once('ready-to-show', () => popout.show());
+  popout.once('ready-to-show', () => {
+    popout.show();
+  });
   await popout.loadURL(
     `circle://workbench/index.html#/popout/${kind}/${sessionId}`,
   );
+  if (kind === 'browser' && !popout.isDestroyed()) browsers?.repaint(sessionId);
   return popout;
 }
 async function createWindow() {
@@ -1132,10 +1138,9 @@ app
     });
     // Only the window that has a conversation's pages places them: the drawer of the main
     // window keeps its hands off while the browser is in a window of its own.
-    handleFrom('circle:browser-bounds', (from, id, bounds, visible) => {
+    handleFrom('circle:browser-bounds', (from, id, bounds, visible, host) => {
       if (!browsers) throw Error('window not ready');
-      if (browsers.windowOf(id) !== from) return browsers.state(id);
-      return browsers.bounds(id, bounds, visible);
+      return browsers.bounds(id, bounds, visible, from, host);
     });
     handleFrom('circle:browser-hide', (from, id) => {
       if (browsers && browsers.windowOf(id) === from) browsers.hide(id);
@@ -1328,6 +1333,10 @@ app
     handle('circle:terminal-stop', (id, session) => {
       if (!terminals) throw Error('window not ready');
       return terminals.tab(id, session, 'stop');
+    });
+    handle('circle:terminal-arrange', (id, order) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.arrange(id, order);
     });
     handle('circle:terminal-input', (id, session, text) => {
       if (!terminals) throw Error('window not ready');

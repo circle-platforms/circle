@@ -78,6 +78,16 @@
 .native-terminal-screen .xterm {
   height: 100%;
 }
+/* xterm parks its keyboard on a textarea far off the screen. Inside this overflow
+   box that focus does not stick, so the first key falls through to the composer. */
+.native-terminal-screen .xterm .xterm-helper-textarea,
+.device-screen .xterm .xterm-helper-textarea {
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
 .native-terminal-screen .xterm-viewport {
   background: var(--bg);
 }
@@ -205,6 +215,24 @@
 .native-terminal-exit {
   flex: none;
   padding: 2px 14px 4px;
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-terminal-dead {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 16px;
+  color: var(--fg);
+  text-align: center;
+}
+.native-terminal-dead p {
+  margin: 0;
+}
+.native-terminal-dead p + p {
   color: var(--muted);
   font-size: var(--ui-small);
 }
