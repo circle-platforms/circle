@@ -339,12 +339,8 @@ export interface ControllerOptions {
    */
   emitTerminalTabs?: (conversation: string, rows: LocalTerminalRow[]) => void;
   beforeDelete?: (sessionId: string) => Promise<void>;
-  /** How long the queue may hold a command behind one the runtime has kept. */
-  queueStallMs?: number;
 }
 
-/** The queue gives up on a command the runtime has kept longer than this. */
-const RUNTIME_QUEUE_STALL_MS = 15_000;
 /** The IPC adapter delegates execution and persistence to the existing Circle core. */
 export class RuntimeController {
   readonly home: string;
@@ -435,8 +431,6 @@ export class RuntimeController {
   private closing = false;
   private closePromise?: Promise<void>;
   private mutation = Promise.resolve();
-  /** The queued command the runtime is holding, and since when. */
-  private mutationHeld?: { name: string; since: number };
   private workspaceServices = new Map<string, WorkspaceServices>();
   private taskServices = new Map<string, TaskService>();
   private archivedTaskAttempts = new Map<string, readonly TaskRecord[]>();
@@ -4148,43 +4142,14 @@ export class RuntimeController {
       'list-external-file-grants',
       'revoke-external-file-grant',
     ].includes(command.name);
-    // One command the runtime never answers must not cost the person their next
-    // one: after a stall the queue lets a command run as it is asked, and it
-    // starts holding again once the runtime answers what it had kept.
-    const held = this.mutationHeld;
-    const stalled =
-      !immediate &&
-      held !== undefined &&
-      Date.now() - held.since >
-        (this.options.queueStallMs ?? RUNTIME_QUEUE_STALL_MS);
-    if (stalled)
-      console.error(
-        `[circle] runtime queue released: ${command.name} ran while the runtime held ${
-          held.name
-        } for ${Math.round((Date.now() - held.since) / 1000)}s`,
-      );
-    const result =
-      immediate || stalled
-        ? operation()
-        : this.mutation.then(() => this.holdQueue(command.name, operation));
-    if (!immediate && !stalled) this.mutation = result.then(() => {});
+    const result = immediate ? operation() : this.mutation.then(operation);
+    if (!immediate) this.mutation = result.then(() => {});
     if (!['state', 'export'].includes(command.name)) {
       this.accepted.set(command.id, { signature, reply: result });
       if (this.accepted.size > 100)
         this.accepted.delete(this.accepted.keys().next().value!);
     }
     return result;
-  }
-  /** Hold the queue for one command, and let go when the runtime answers it. */
-  private holdQueue(
-    name: string,
-    operation: () => Promise<RuntimeReply>,
-  ): Promise<RuntimeReply> {
-    const held = { name, since: Date.now() };
-    this.mutationHeld = held;
-    return operation().finally(() => {
-      if (this.mutationHeld === held) this.mutationHeld = undefined;
-    });
   }
   private async assertArchivable(
     id: string,

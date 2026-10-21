@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 
 // A command the runtime has kept must be said while it lasts, and one it never
-// answered must leave a card the person can retry, or stop waiting on. (#216)
+// answered must leave a card the person can act on. (#216)
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
@@ -71,15 +71,13 @@ try {
         await page.screenshot({
           path: `${output}/${language}-${theme}-${width}-card.png`,
         });
-        await alert
-          .getByRole('button', { name: word('retry', '重试'), exact: true })
-          .click();
-        await alert
-          .getByRole('button', {
-            name: word('stop waiting', '停止等待'),
-            exact: true,
-          })
-          .click();
+        assert.equal(
+          await alert
+            .getByRole('button', { name: word('retry', '重试'), exact: true })
+            .count(),
+          0,
+          'a command that timed out may still run: the card offers no retry',
+        );
         await alert
           .getByRole('button', {
             name: word('copy error details', '复制错误详情'),
@@ -93,8 +91,6 @@ try {
           .getByRole('button', { name: word('dismiss', '关闭'), exact: true })
           .click();
         assert.deepEqual(await page.evaluate(() => window.waitFixture.calls), [
-          'retry session1',
-          'stop session1',
           'dismiss session1',
         ]);
         assert.equal(
@@ -102,17 +98,10 @@ try {
           0,
           'dismissing takes the card away',
         );
-        await waitRow
-          .getByRole('button', {
-            name: word('stop waiting', '停止等待'),
-            exact: true,
-          })
-          .click();
-        const calls = await page.evaluate(() => window.waitFixture.calls);
         assert.equal(
-          calls.filter((call) => call === 'stop session1').length,
-          2,
-          'the wait row is its own escape hatch',
+          await waitRow.getByRole('button').count(),
+          0,
+          'the wait row only says what is held: nothing can stop it from here',
         );
         // The first message of a conversation is asked from the home page: a
         // frozen channel must be said there too, not only in a conversation.

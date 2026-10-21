@@ -17,14 +17,10 @@ const failure: ActionFailure = {
   at: '2026-10-21T00:00:00Z',
   detail:
     'runtime command timed out; execution state must be checked · prompt (120s)',
-  retry: { kind: 'message' },
 };
 Object.assign(runtime, {
   retryActionFailure: (sessionId?: string) => {
     calls.push('retry ' + sessionId);
-  },
-  stopWaiting: (sessionId?: string) => {
-    calls.push('stop ' + sessionId);
   },
   dismissActionError: (sessionId?: string) => {
     calls.push('dismiss ' + sessionId);

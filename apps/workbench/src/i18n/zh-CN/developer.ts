@@ -12,7 +12,6 @@ export const developer: Record<string, string> = {
     'Circle 仍在处理 {command} · {seconds} 秒',
   'check whether it ran before sending it again':
     '先确认它是否已经执行，再重新发送',
-  'stop waiting': '停止等待',
   retry: '重试',
   'session changes': '会话改动',
   history: '历史',

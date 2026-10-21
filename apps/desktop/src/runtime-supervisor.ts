@@ -138,6 +138,7 @@ export class RuntimeSupervisor {
       timer: ReturnType<typeof setTimeout>;
       /** What the runtime was asked, and when it stopped answering it. */
       name: string;
+      sessionId?: string;
       sentAt: number;
     }
   >();
@@ -859,7 +860,14 @@ export class RuntimeSupervisor {
       if (waitedMs < (this.options.commandWaitMs ?? RUNTIME_COMMAND_WAIT_MS))
         continue;
       if (!longest || waitedMs > longest.waitedMs)
-        longest = { id, name: entry.name, waitedMs };
+        longest = {
+          id,
+          name: entry.name,
+          ...(entry.sessionId === undefined
+            ? {}
+            : { sessionId: entry.sessionId }),
+          waitedMs,
+        };
     }
     if (!longest) {
       // A command still in the queue may cross the line later: go on watching
@@ -976,6 +984,7 @@ export class RuntimeSupervisor {
         reject,
         timer,
         name: command.name,
+        sessionId: command.sessionId,
         sentAt,
       });
       this.watchWait();

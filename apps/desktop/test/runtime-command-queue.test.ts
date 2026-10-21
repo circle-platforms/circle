@@ -31,7 +31,6 @@ async function wait(check: () => boolean, description: string) {
 async function setup(
   t: TestContext,
   replies: ConstructorParameters<typeof ScriptedModel>[0],
-  options: { queueStallMs?: number } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-command-queue-'));
   const home = join(root, 'home');
@@ -48,7 +47,6 @@ async function setup(
     userHome: home,
     model,
     emit: (update) => updates.push(update),
-    ...options,
   });
   const call = (
     name: RuntimeCommandName,
@@ -113,51 +111,17 @@ const cancelPasswordCard = async (
 };
 
 test(
-  'the next command runs when the runtime has been holding one past the stall',
+  'a command the runtime holds keeps its place in front of the next one',
   { timeout: patience(30000) },
   async (t) => {
-    const f = await setup(
-      t,
-      [{ message: { id: 'a', role: 'assistant', content: 'done' } }],
-      { queueStallMs: 100 },
-    );
-    const { held } = await hubLoginWaiting(f);
-    await delay(150);
-    const said: string[] = [];
-    t.mock.method(console, 'error', (...args: unknown[]) => {
-      said.push(args.join(' '));
-    });
-    const next = await Promise.race([
-      f.call('prompt', { text: 'hello' }),
-      delay(patience(4000)).then(() => 'stuck' as const),
-    ]);
-    assert.notEqual(next, 'stuck', 'the command queued behind the held one');
-    assert.equal((next as RuntimeReply).ok, true);
-    assert.ok(
-      said.some((line) =>
-        /\[circle] runtime queue released: prompt .*held custom-command/.test(
-          line,
-        ),
-      ),
-      'the release is said where the log can keep it',
-    );
-    await cancelPasswordCard(f);
-    assert.equal((await held).ok, true);
-  },
-);
-
-test(
-  'a command held for a moment still keeps its place in front of the next one',
-  { timeout: patience(30000) },
-  async (t) => {
-    const f = await setup(t, [], { queueStallMs: patience(5000) });
+    const f = await setup(t, []);
     const { held } = await hubLoginWaiting(f);
     let answered = false;
     const next = f.call('prompt', { text: 'hello' }).then(() => {
       answered = true;
     });
     await delay(patience(200));
-    assert.equal(answered, false, 'the queue holds while the stall is short');
+    assert.equal(answered, false, 'the next command waits behind the held one');
     await cancelPasswordCard(f);
     await held;
     await next;

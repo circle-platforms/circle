@@ -86,9 +86,18 @@ test('a command the runtime keeps is said in the window, and its end takes the w
   const { host, update } = heldBridge();
   const runtime = new LiveRuntime(host, update);
   assert.equal(runtime.getSnapshot().runtime?.waiting, undefined);
-  host.wait({ id: 'one', name: 'custom-command', waitedMs: 4200 });
+  host.wait({
+    id: 'one',
+    name: 'custom-command',
+    sessionId: 'session-a',
+    waitedMs: 4200,
+  });
   const waiting = runtime.getSnapshot().runtime?.waiting;
-  assert.deepEqual(waiting, { command: 'custom-command', waitedMs: 4200 });
+  assert.deepEqual(
+    waiting,
+    { command: 'custom-command', sessionId: 'session-a', waitedMs: 4200 },
+    'the wait names the conversation that asked, so only it shows the line',
+  );
   host.wait({ id: 'one', name: 'custom-command', waitedMs: 9200 });
   assert.equal(
     runtime.getSnapshot().runtime?.waiting?.waitedMs,
@@ -132,11 +141,15 @@ test('a command that timed out leaves a card to act on, even for a conversation 
     /Circle did not answer in 120s · prompt/,
   );
   assert.equal(shown!.actionFailure!.detail, TIMEOUT);
-  assert.deepEqual(shown!.actionFailure!.retry, { kind: 'message' });
+  assert.equal(
+    shown!.actionFailure!.retry,
+    undefined,
+    'a message that timed out may still run: sending it again could send it twice',
+  );
   runtime.dispose();
 });
 
-test('the card retries a slash command by name, and stops waiting with an interrupt', async () => {
+test('a slash command that failed is retried by name, one that timed out is not', async () => {
   setLanguage('en');
   const { host, update } = heldBridge();
   const runtime = new LiveRuntime(host, update);
@@ -154,6 +167,16 @@ test('the card retries a slash command by name, and stops waiting with an interr
   });
   await assert.rejects(() => failed);
   await settle();
+  assert.equal(
+    runtime.getSnapshot().sessions.find((s) => s.id === session)!.actionFailure
+      ?.retry,
+    undefined,
+  );
+  const refused = runtime.command('hello', 'friend', session);
+  await settle();
+  host.hold().answer({ id: 'w', ok: false, error: 'hub is not reachable' });
+  await assert.rejects(() => refused);
+  await settle();
   const row = runtime.getSnapshot().sessions.find((s) => s.id === session)!;
   assert.deepEqual(row.actionFailure?.retry, {
     kind: 'command',
@@ -168,22 +191,6 @@ test('the card retries a slash command by name, and stops waiting with an interr
   assert.deepEqual(
     host.commands.map((command) => [command.name, command.payload]),
     [['custom-command', { name: 'hello', args: 'friend' }]],
-  );
-  host.commands.length = 0;
-  const stopped = runtime.stopWaiting!(session);
-  await settle();
-  // The interrupt is a command of its own: the runtime answers it whatever else
-  // it is holding, which is why the card can offer it.
-  host.hold().answer({ id: 'z', ok: true, data: {} });
-  await stopped;
-  assert.deepEqual(
-    host.commands.map((command) => command.name),
-    ['abort'],
-    'the wait ends with an interrupt the runtime answers at once',
-  );
-  assert.equal(
-    runtime.getSnapshot().sessions.find((s) => s.id === session)!.actionFailure,
-    undefined,
   );
   runtime.dispose();
 });

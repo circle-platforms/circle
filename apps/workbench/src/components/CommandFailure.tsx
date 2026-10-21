@@ -7,9 +7,11 @@ import { Button } from './common';
 
 /** What the runtime is holding right now, said where the person asked for it. */
 export function RuntimeWaitRow({ sessionId }: { sessionId: string }) {
-  const { snapshot, runtime } = useRuntime();
+  const { snapshot } = useRuntime();
   const waiting = snapshot.runtime?.waiting;
-  if (!waiting) return null;
+  // Said in the conversation that asked, or everywhere when no conversation did
+  if (!waiting || (waiting.sessionId && waiting.sessionId !== sessionId))
+    return null;
   return (
     <div className="runtime-wait" role="status" data-testid="runtime-wait">
       <i className="attention-dot" />
@@ -19,16 +21,13 @@ export function RuntimeWaitRow({ sessionId }: { sessionId: string }) {
           seconds: Math.ceil(waiting.waitedMs / 1000),
         })}
       </span>
-      <button onClick={() => void runtime.stopWaiting?.(sessionId)}>
-        {t('stop waiting')}
-      </button>
     </div>
   );
 }
 
 /**
  * The card for a command the window asked and never got: what failed, whether it
- * can be asked again, and how to stop waiting on what the runtime is holding.
+ * can be asked again.
  */
 export function CommandFailureCard({
   sessionId,
@@ -63,14 +62,9 @@ export function CommandFailureCard({
         </details>
       )}
       <div className="runtime-failure-actions">
-        {failure.retry && (
+        {failure.retry && !timedOut && (
           <Button onClick={() => void runtime.retryActionFailure?.(sessionId)}>
             {t('retry')}
-          </Button>
-        )}
-        {timedOut && (
-          <Button onClick={() => void runtime.stopWaiting?.(sessionId)}>
-            {t('stop waiting')}
           </Button>
         )}
         <Button

@@ -30,6 +30,8 @@ export interface NativeWorkspace {
 export interface RuntimeCommandWait {
   id: string;
   name: string;
+  /** The conversation that asked it, when one did. */
+  sessionId?: string;
   waitedMs: number;
 }
 export interface DesktopInfo {

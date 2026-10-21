@@ -108,7 +108,6 @@ function retryOf(
   name: RuntimeCommandName,
   payload: Record<string, unknown>,
 ): ActionFailure['retry'] {
-  if (name === 'prompt') return { kind: 'message' };
   if (
     name === 'custom-command' &&
     typeof payload.name === 'string' &&
@@ -216,7 +215,13 @@ export class LiveRuntime implements RuntimePort {
   private receiveWait = (wait: RuntimeCommandWait | null) => {
     if (this.disposed) return;
     this.waiting = wait
-      ? { command: wait.name, waitedMs: wait.waitedMs }
+      ? {
+          command: wait.name,
+          ...(wait.sessionId === undefined
+            ? {}
+            : { sessionId: wait.sessionId }),
+          waitedMs: wait.waitedMs,
+        }
       : undefined;
     const next = withWaiting(this.snapshot, this.waiting);
     if (next === this.snapshot) return;
@@ -497,7 +502,8 @@ export class LiveRuntime implements RuntimePort {
       kind: held ? 'timeout' : 'failed',
       at: new Date().toISOString(),
       detail,
-      ...(retry ? { retry } : {}),
+      // A command that timed out may still run: sending it again could do it twice
+      ...(retry && !held ? { retry } : {}),
     };
     this.sessionErrors.set(shown, message);
     this.sessionFailures.set(shown, failure);
@@ -530,18 +536,7 @@ export class LiveRuntime implements RuntimePort {
   retryActionFailure = async (sessionId = this.snapshot.activeSessionId) => {
     const retry = this.sessionFailures.get(sessionId)?.retry;
     this.dismissActionError(sessionId);
-    if (!retry) return;
-    if (retry.kind === 'message') {
-      await this.send('steering', sessionId);
-      return;
-    }
-    if (retry.name) await this.command(retry.name, retry.args, sessionId);
-  };
-  /** End the wait the person can see: stop what the runtime is holding on it. */
-  stopWaiting = async (sessionId = this.snapshot.activeSessionId) => {
-    this.dismissActionError(sessionId);
-    // An interrupt is answered at once, whatever else the runtime is working on.
-    await this.native('abort', {}, sessionId, false).catch(() => undefined);
+    if (retry) await this.command(retry.name, retry.args, sessionId);
   };
   restartRuntime = async () => {
     if (!this.host.restartRuntime)

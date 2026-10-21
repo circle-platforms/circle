@@ -129,10 +129,10 @@ export interface ActionFailure {
   /** What the runtime said, in its own words, for the details and for copying. */
   detail?: string;
   /**
-   * How to ask again, when asking again is safe: the draft is still in the box for
-   * a message, and a slash command is replayed by name. Nothing else is replayed.
+   * How to ask again, when asking again is safe: a slash command that failed is
+   * replayed by name. One that timed out may still run, and is not replayed.
    */
-  retry?: { kind: 'message' } | { kind: 'command'; name: string; args: string };
+  retry?: { kind: 'command'; name: string; args: string };
 }
 export interface Todo {
   id: string;
@@ -155,7 +155,7 @@ export interface Session {
   nativeResourcesActive?: boolean;
   /** The last renderer action failure, kept with its source session for this window. */
   actionError?: string;
-  /** The same failure as a card the person can act on: retry it, or stop waiting. */
+  /** The same failure as a card the person can act on. */
   actionFailure?: ActionFailure;
   /** Renderer-only state; never changes the core conversation or execution. */
   presentation?: {
@@ -492,7 +492,7 @@ export interface WorkbenchSnapshot {
     observedAt?: string;
     coreVersion?: string;
     /** A command the runtime has held unanswered for seconds: what it holds, and how long. */
-    waiting?: { command: string; waitedMs: number };
+    waiting?: { command: string; sessionId?: string; waitedMs: number };
   };
   version: 1;
   activeSessionId: string;
@@ -598,8 +598,6 @@ export interface RuntimePort {
   dismissActionError?: (sessionId?: string) => void;
   /** Ask again the message or command the failure card says failed. */
   retryActionFailure?: (sessionId?: string) => void | Promise<void>;
-  /** End the wait: interrupt what the runtime is holding, and clear the card. */
-  stopWaiting?: (sessionId?: string) => void | Promise<void>;
   /** Start the desktop runtime again after it stopped. */
   restartRuntime?: () => Promise<void>;
   /**
