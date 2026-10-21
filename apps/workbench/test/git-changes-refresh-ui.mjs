@@ -24,12 +24,15 @@ try {
   page.setDefaultTimeout(8000);
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
+  // The clock stops before the page loads, so the page's timers start from a known time
+  // however long loading takes. Left running, a slow load passed the time it was to stop
+  // at, or brought the 30-second refresh inside the turn below.
   await page.clock.install({ time: new Date('2026-10-21T00:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-10-21T00:00:01Z'));
   await page.goto(
     `${server.resolvedUrls.local[0]}test/git-changes-refresh-ui.html`,
   );
   await page.locator('#list').waitFor();
-  await page.clock.pauseAt(new Date('2026-10-21T00:00:01Z'));
   const reads = () => page.evaluate(() => window.reads());
   const set = (state) => page.evaluate((next) => window.setList(next), state);
   // React runs an effect in a task of its own: two message round trips give it that task
