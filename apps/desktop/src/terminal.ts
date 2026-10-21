@@ -112,6 +112,22 @@ const validText = (value: unknown): string => {
     throw Error('invalid terminal input');
   return value;
 };
+// The tab row's order as a window sends it: the keys of its tabs, a terminal's
+// `local:<id>` or a console's `dev:<id>`.
+const validOrder = (value: unknown): string[] => {
+  if (!Array.isArray(value) || value.length > 512)
+    throw Error('invalid terminal order');
+  const keys = new Set<string>();
+  for (const key of value) {
+    if (
+      typeof key !== 'string' ||
+      !/^(?:local|dev):[A-Za-z0-9-]{1,100}$/.test(key)
+    )
+      throw Error('invalid terminal order');
+    keys.add(key);
+  }
+  return [...keys];
+};
 
 export class TerminalPanelHost {
   private manager: TerminalSessions;
@@ -131,6 +147,9 @@ export class TerminalPanelHost {
   // The conversation's own terminal tabs as the runtime last told them: they live in
   // the runtime with their shells, not here
   private tabs = new Map<string, LocalTerminalRow[]>();
+  // The order the person dragged each conversation's tab row into. It is kept here, not
+  // in a window, so that every window shows it, and a reload or a visit home keeps it.
+  private order = new Map<string, string[]>();
   constructor(
     private readonly emit: (event: TerminalEvent) => void,
     private readonly home: string,
@@ -191,6 +210,7 @@ export class TerminalPanelHost {
         ),
       profiles: this.profiles(),
       local: this.tabs.get(own) ?? [],
+      ...(this.order.has(own) ? { order: [...this.order.get(own)!] } : {}),
       ...(ask ? { pendingKey: ask } : {}),
       ...(this.handoffs.get(own)
         ? {
@@ -221,6 +241,18 @@ export class TerminalPanelHost {
         .toString('base64') ?? ''
     );
   }
+  /**
+   * A console the person opened from the panel is theirs to type in from its first
+   * line: Circle reaches it again when they give it back. It is the console that
+   * connect opened, by its id: one the model opened meanwhile stays the model's.
+   * The answer names it, so the window shows that one.
+   */
+  private mine(own: string, session: string | undefined): TerminalState {
+    if (session) this.manager.attach(own, session);
+    this.pushState(own);
+    return { ...this.state(own), ...(session ? { opened: session } : {}) };
+  }
+
   /** A person connects a saved profile; a new host key asks on the panel, not a card. */
   async connect(
     conversation: unknown,
@@ -250,8 +282,7 @@ export class TerminalPanelHost {
       // The answer comes through hostKey(); until then this connect simply stopped
       return this.state(own);
     }
-    this.pushState(own);
-    return this.state(own);
+    return this.mine(own, result.session);
   }
   /** A person reaches a device by address, as a quick connect does: no profile. */
   async connectTarget(
@@ -280,8 +311,7 @@ export class TerminalPanelHost {
       this.pushState(own);
       return this.state(own);
     }
-    this.pushState(own);
-    return this.state(own);
+    return this.mine(own, result.session);
   }
   async hostKey(
     conversation: unknown,
@@ -296,7 +326,7 @@ export class TerminalPanelHost {
       return this.state(own);
     }
     const stop = new AbortController();
-    await this.manager.request(
+    const result = await this.manager.request(
       own,
       'connect',
       {
@@ -305,19 +335,15 @@ export class TerminalPanelHost {
       },
       stop.signal,
     );
-    this.pushState(own);
-    return this.state(own);
+    return this.mine(own, result.session);
   }
+  /**
+   * The person closes a console. It is theirs to close, a console they hold too: it does
+   * not wait in line behind Circle's actions or for itself to be handed back.
+   */
   disconnect(conversation: unknown, session: unknown): TerminalState {
     const own = validConversation(conversation);
-    void this.manager
-      .request(
-        own,
-        'disconnect',
-        { session: validSession(session) },
-        AbortSignal.timeout(5000),
-      )
-      .catch(() => {});
+    this.manager.disconnectForPerson(own, validSession(session));
     return this.state(own);
   }
   /** The person takes the console from the panel; the model's actions on it wait. */
@@ -353,6 +379,18 @@ export class TerminalPanelHost {
       throw Error("that is not one of the user's terminal tabs");
     if (!this.tabControl) throw Error('the runtime is not connected');
     this.tabsChanged(own, await this.tabControl(own, name, action));
+    return this.state(own);
+  }
+  /**
+   * The person dragged a tab: the row's new order, the same in every window of the
+   * conversation. A tab the order does not name goes at the end.
+   */
+  arrange(conversation: unknown, order: unknown): TerminalState {
+    const own = validConversation(conversation);
+    const keys = validOrder(order);
+    if (keys.length) this.order.set(own, keys);
+    else this.order.delete(own);
+    this.pushState(own);
     return this.state(own);
   }
   /** What the runtime says Circle is doing with a conversation's terminal tabs. */
@@ -405,12 +443,14 @@ export class TerminalPanelHost {
     this.giveBack(own);
     this.manager.releaseSession(own);
     this.tabs.delete(own);
+    this.order.delete(own);
     this.pushState(own);
   }
   close(): void {
     this.manager.close();
     this.pendingKey.clear();
     this.tabs.clear();
+    this.order.clear();
     for (const batch of this.batches.values()) clearTimeout(batch.timer);
     this.batches.clear();
   }

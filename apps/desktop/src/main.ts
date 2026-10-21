@@ -1333,6 +1333,10 @@ app
       if (!terminals) throw Error('window not ready');
       return terminals.tab(id, session, 'stop');
     });
+    handle('circle:terminal-arrange', (id, order) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.arrange(id, order);
+    });
     handle('circle:terminal-input', (id, session, text) => {
       if (!terminals) throw Error('window not ready');
       return terminals.input(id, session, text);

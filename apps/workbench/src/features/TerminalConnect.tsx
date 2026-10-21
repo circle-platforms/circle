@@ -33,7 +33,8 @@ export function TerminalConnect({
       transport,
       host: host.trim(),
       ...(number ? { port: number } : {}),
-      ...(user.trim() ? { user: user.trim() } : {}),
+      // A Telnet console asks for its own login on the screen.
+      ...(transport === 'ssh' && user.trim() ? { user: user.trim() } : {}),
       ...(transport === 'ssh' && password ? { password } : {}),
     }).then(
       () => {
@@ -80,7 +81,6 @@ export function TerminalConnect({
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
-            placeholder="172.16.6.85"
             value={host}
             onChange={(event) => setHost(event.target.value)}
           />
@@ -98,16 +98,19 @@ export function TerminalConnect({
           />
         </label>
       </div>
-      <label className="term-connect-field">
-        <span className="term-connect-label">{t('user name')}</span>
-        <input
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          value={user}
-          onChange={(event) => setUser(event.target.value)}
-        />
-      </label>
+      {/* A Telnet console asks for its login on its own screen. */}
+      {transport === 'ssh' && (
+        <label className="term-connect-field">
+          <span className="term-connect-label">{t('user name')}</span>
+          <input
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            value={user}
+            onChange={(event) => setUser(event.target.value)}
+          />
+        </label>
+      )}
       {transport === 'ssh' && (
         <label className="term-connect-field">
           <span className="term-connect-label">{t('password')}</span>

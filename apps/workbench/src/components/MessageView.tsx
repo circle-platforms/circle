@@ -15,12 +15,17 @@ import { useSessionDisclosure } from '../model/presentation';
 import { ToolMessage } from './ToolMessage';
 import { formatUsdAmount } from '../../../../src/pricing.ts';
 
-/** A hand-back notice is stored in English and shown in the interface language. */
+/**
+ * A hand-back notice is stored in English and shown in the interface language. A tab
+ * the person named is called by that name, which is not translated.
+ */
 function shownMessageText(role: Message['role'], text: string): string {
   if (role !== 'user') return text;
   const gave = /^the user gave terminal (\d+) back$/.exec(text);
-  return gave
-    ? t('the user gave terminal {n} back', { n: gave[1] ?? '' })
+  if (gave) return t('the user gave terminal {n} back', { n: gave[1] ?? '' });
+  const named = /^the user gave “(.+)” back$/.exec(text);
+  return named
+    ? t('the user gave “{name}” back', { name: named[1] ?? '' })
     : text;
 }
 

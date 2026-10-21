@@ -455,6 +455,12 @@ export class WorkspaceServices {
       if (method === 'close') return this.terminals.close(sessionId, id);
       if (method === 'hide') return this.terminals.hide(sessionId, id);
       if (method === 'restart') return this.terminals.restart(sessionId, id);
+      if (method === 'rename')
+        return this.terminals.rename(
+          sessionId,
+          id,
+          requiredString(params, 'label', true),
+        );
       if (method === 'replay')
         return this.terminals.replay(
           sessionId,

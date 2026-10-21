@@ -464,7 +464,7 @@ export function InlineRequest({
                   setSent(false);
                   setError(
                     error instanceof Error
-                      ? redirectRefusal(error.message, moved.ordinal)
+                      ? redirectRefusal(error.message, moved)
                       : t('action failed'),
                   );
                   throw error;
@@ -472,7 +472,9 @@ export function InlineRequest({
               });
             }}
           >
-            {t('run this in terminal {n}', { n: redirect.ordinal })}
+            {redirect.name
+              ? t('run this in {name}', { name: redirect.name })
+              : t('run this in terminal {n}', { n: redirect.ordinal })}
           </Button>
         )}
         <Button disabled={sent} onClick={() => finish('reject')}>

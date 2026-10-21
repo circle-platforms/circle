@@ -73,24 +73,76 @@ test('why nothing was typed is said in the interface language', () => {
   assert.equal(
     redirectRefusal(
       'there is text at the prompt: clear it and try again; nothing was typed in terminal 2',
-      2,
+      { ordinal: 2 },
     ),
     '终端 2 的提示符后已有文字：请先清空再试',
   );
   assert.equal(
     redirectRefusal(
       'a command is still running there; nothing was typed in terminal 1',
-      1,
+      { ordinal: 1 },
     ),
     '终端 1 里还有命令在运行',
   );
-  assert.equal(redirectRefusal('stale interaction', 1), 'stale interaction');
+  assert.equal(
+    redirectRefusal('stale interaction', { ordinal: 1 }),
+    'stale interaction',
+  );
   setLanguage('en', storage);
   assert.equal(
     redirectRefusal(
       'the tab is not at its prompt; nothing was typed in terminal 3',
-      3,
+      { ordinal: 3 },
     ),
     'terminal 3 is not at its prompt',
+  );
+});
+
+test('a tab the person named is called by its name on the card and in why nothing was typed', () => {
+  const moved = executeTerminalRedirect({
+    tool: 'execute',
+    command: 'npm run build',
+    userText: 'run the build in my terminal tab',
+    tabs: [{ ...tab, name: 'build' }],
+  });
+  assert.deepEqual(moved, {
+    ordinal: 1,
+    name: 'build',
+    session: 'local:shell-1',
+  });
+  const store = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+  } as Storage;
+  setLanguage('zh-CN', storage);
+  assert.equal(
+    redirectRefusal(
+      'there is text at the prompt: clear it and try again; nothing was typed in build',
+      moved!,
+    ),
+    '“build”的提示符后已有文字：请先清空再试',
+  );
+  assert.equal(
+    redirectRefusal(
+      'Circle is using the tab; nothing was typed in build',
+      moved!,
+    ),
+    'Circle 正在使用“build”',
+  );
+  setLanguage('en', storage);
+  assert.equal(
+    redirectRefusal(
+      'a command is still running there; nothing was typed in build',
+      moved!,
+    ),
+    'a command is still running in “build”',
+  );
+  assert.equal(
+    redirectRefusal(
+      'the tab is not at its prompt; nothing was typed in build',
+      moved!,
+    ),
+    '“build” is not at its prompt',
   );
 });

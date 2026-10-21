@@ -145,6 +145,8 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:terminal-detach', id, session),
   terminalStop: (id, session) =>
     ipcRenderer.invoke('circle:terminal-stop', id, session),
+  terminalArrange: (id, order) =>
+    ipcRenderer.invoke('circle:terminal-arrange', id, order),
   terminalInput: (id, session, text) =>
     ipcRenderer.invoke('circle:terminal-input', id, session, text),
   terminalResize: (id, session, cols, rows) =>

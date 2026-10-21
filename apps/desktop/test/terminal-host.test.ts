@@ -211,15 +211,17 @@ test('a panel connect opens a real console; bytes arrive batched and only the ho
     Buffer.from(data.bytes, 'base64').toString('utf8'),
     /TELNET banner/,
   );
-  // typing before attaching changes nothing on the wire
-  assert.equal(panel.input('c1', row.id, 'whois'), false);
-  // (a deepEqual with an empty-array literal would narrow typed to never[])
-  assert.equal(device.typed.length, 0);
-  // the person takes it; their keys reach the device
-  const held = panel.attach('c1', row.id);
-  assert.equal(held.sessions[0]!.held, 'attach');
+  // A console the person opened from the panel is theirs from its first line.
+  assert.equal(row.held, 'attach');
   assert.equal(panel.input('c1', row.id, 'show clock\r'), true);
   await until(() => device.typed.includes('show clock'), 'the typed line');
+  // Give it back, and their keys no longer reach the device.
+  panel.detach('c1', row.id);
+  assert.equal(panel.input('c1', row.id, 'whois'), false);
+  assert.equal(device.typed.includes('whois'), false);
+  // Taking it again hands the keys back to them.
+  const held = panel.attach('c1', row.id);
+  assert.equal(held.sessions[0]!.held, 'attach');
   // while the person holds it, the model's next action waits
   let parkedDone = false;
   const parked = panel
@@ -249,6 +251,123 @@ test('a panel connect opens a real console; bytes arrive batched and only the ho
   );
   await panel.releaseSession('c1');
   assert.equal(panel.state('c1').sessions.length, 0);
+});
+
+test('a quick connect by address starts in the hands of the person who opened it', async (t) => {
+  const device = await consoleServer(t);
+  const { panel } = await makeHost(t, []);
+  const state = await panel.connectTarget('c1', {
+    transport: 'telnet',
+    host: '127.0.0.1',
+    port: device.port,
+  });
+  const row = state.sessions.at(-1)!;
+  assert.equal(row.state, 'ready');
+  assert.equal(row.held, 'attach');
+  assert.equal(panel.input('c1', row.id, 'show version\r'), true);
+  await until(() => device.typed.includes('show version'), 'the typed line');
+  // Circle may still be told to read it once they give it back.
+  panel.detach('c1', row.id);
+  assert.equal(panel.input('c1', row.id, 'nope'), false);
+});
+
+test('a person disconnects a console they hold at once, and the model action parked on it ends', async (t) => {
+  const device = await consoleServer(t);
+  const { panel } = await makeHost(t, []);
+  const state = await panel.connectTarget('c1', {
+    transport: 'telnet',
+    host: '127.0.0.1',
+    port: device.port,
+  });
+  const row = state.sessions.at(-1)!;
+  assert.equal(row.held, 'attach');
+  // The model's typing waits while the person holds the console
+  const parked = panel.agent(
+    {
+      id: 'm1',
+      sessionId: 'c1',
+      action: 'send',
+      args: { session: row.id, text: 'show running-config', enter: true },
+    },
+    new AbortController().signal,
+  );
+  const after = panel.disconnect('c1', row.id);
+  const closed = after.sessions.find((one) => one.id === row.id)!;
+  assert.equal(closed.state, 'closed');
+  assert.ok(!closed.held, 'a closed console is held by no one');
+  await assert.rejects(
+    parked,
+    /is closed; connect again with terminal_connect/,
+  );
+  assert.ok(
+    !device.typed.includes('show running-config'),
+    "the model's line never reached the device",
+  );
+  // The model learns that the person disconnected it, and can still read its last screen
+  const read = await panel.agent(
+    { id: 'm2', sessionId: 'c1', action: 'read', args: { session: row.id } },
+    new AbortController().signal,
+  );
+  assert.match(read.text, /the user disconnected the terminal/);
+});
+
+test("a person's connect takes the console it opened, by its id, not one the model opened", async (t) => {
+  const modelDevice = await consoleServer(t);
+  const personDevice = await consoleServer(t);
+  const { panel } = await makeHost(t, []);
+  // The model opened a console of its own first
+  await panel.agent(
+    {
+      id: 'm1',
+      sessionId: 'c1',
+      action: 'connect',
+      args: { host: '127.0.0.1', transport: 'telnet', port: modelDevice.port },
+    },
+    new AbortController().signal,
+  );
+  const state = await panel.connectTarget('c1', {
+    transport: 'telnet',
+    host: '127.0.0.1',
+    port: personDevice.port,
+  });
+  const mine = state.sessions.find(
+    (row) => row.target === `127.0.0.1:${personDevice.port}`,
+  )!;
+  const theirs = state.sessions.find(
+    (row) => row.target === `127.0.0.1:${modelDevice.port}`,
+  )!;
+  // The answer names the console this connect opened, and only that one is the person's
+  assert.equal(state.opened, mine.id);
+  assert.equal(mine.held, 'attach');
+  assert.ok(!theirs.held, "the model's console is not the person's");
+});
+
+test('the order a person drags the tab row into is kept for the conversation and sent to every window', async (t) => {
+  const { panel, events } = await makeHost(t, []);
+  const before = events.length;
+  const order = ['local:b2', 'dev:t1', 'local:a1'];
+  // A key named twice counts once
+  const state = panel.arrange('c1', [...order, 'local:b2']);
+  assert.deepEqual(state.order, order);
+  const pushed = events
+    .slice(before)
+    .filter(
+      (event): event is Extract<TerminalEvent, { kind: 'state' }> =>
+        event.kind === 'state',
+    );
+  assert.deepEqual(pushed.at(-1)?.state.order, order);
+  // A window that opens or reloads reads it from the state; another conversation has none
+  assert.deepEqual(panel.state('c1').order, order);
+  assert.equal(panel.state('c2').order, undefined);
+  // What is not a tab's key is refused, and the order stays
+  assert.throws(() => panel.arrange('c1', ['../x']), /invalid terminal order/);
+  assert.throws(
+    () => panel.arrange('c1', 'local:a1' as unknown as string[]),
+    /invalid terminal order/,
+  );
+  assert.deepEqual(panel.state('c1').order, order);
+  // An empty order goes back to the order the tabs were made in
+  assert.equal(panel.arrange('c1', []).order, undefined);
 });
 
 test('an agent request from the runtime drives the same host and reports state', async (t) => {

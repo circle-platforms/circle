@@ -15,6 +15,8 @@ export function asksForOwnTerminal(text: string): boolean {
 
 export interface TerminalRedirect {
   ordinal: number;
+  /** The name the person gave the tab, which the tab shows instead of its number. */
+  name?: string;
   /** `local:<id>`, as the model's terminal tools name the tab. */
   session: string;
 }
@@ -24,7 +26,7 @@ export function executeTerminalRedirect(input: {
   tool?: string;
   command?: string;
   userText: string;
-  tabs: { id: string; terminal: string; ordinal: number }[];
+  tabs: { id: string; terminal: string; ordinal: number; name?: string }[];
 }): TerminalRedirect | undefined {
   if (input.tool !== 'execute') return;
   if (!input.command?.trim() || !asksForOwnTerminal(input.userText)) return;
@@ -32,23 +34,37 @@ export function executeTerminalRedirect(input: {
     .filter((row) => row.ordinal > 0 && row.terminal)
     .sort((a, b) => a.ordinal - b.ordinal)[0];
   if (!tab) return;
-  return { ordinal: tab.ordinal, session: tab.id };
+  return {
+    ordinal: tab.ordinal,
+    ...(tab.name ? { name: tab.name } : {}),
+    session: tab.id,
+  };
 }
 
 /**
  * Why the main process typed nothing, in the interface language when it is one of the
- * reasons it gives for a tab.
+ * reasons it gives for a tab. A tab the person named is called by its name.
  */
-export function redirectRefusal(message: string, ordinal: number): string {
+export function redirectRefusal(
+  message: string,
+  tab: Pick<TerminalRedirect, 'ordinal' | 'name'>,
+): string {
+  const { name, ordinal: n } = tab;
   if (message.includes('there is text at the prompt'))
-    return t('terminal {n} has text at its prompt: clear it and try again', {
-      n: ordinal,
-    });
+    return name
+      ? t('“{name}” has text at its prompt: clear it and try again', { name })
+      : t('terminal {n} has text at its prompt: clear it and try again', { n });
   if (message.includes('a command is still running there'))
-    return t('a command is still running in terminal {n}', { n: ordinal });
+    return name
+      ? t('a command is still running in “{name}”', { name })
+      : t('a command is still running in terminal {n}', { n });
   if (message.includes('the tab is not at its prompt'))
-    return t('terminal {n} is not at its prompt', { n: ordinal });
+    return name
+      ? t('“{name}” is not at its prompt', { name })
+      : t('terminal {n} is not at its prompt', { n });
   if (message.includes('Circle is using the tab'))
-    return t('Circle is using terminal {n}', { n: ordinal });
+    return name
+      ? t('Circle is using “{name}”', { name })
+      : t('Circle is using terminal {n}', { n });
   return message;
 }
