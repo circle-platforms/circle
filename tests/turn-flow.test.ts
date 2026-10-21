@@ -106,7 +106,9 @@ async function session(
   const log: [string, unknown][] = [];
   app.terminal = {
     platform: 'darwin',
-    write: (text) => log.push(['write', text]),
+    write: (text) => {
+      log.push(['write', text]);
+    },
     input: (on) => log.push(['input', on]),
     kill: (signal) => log.push(['kill', signal]),
   };
@@ -668,9 +670,11 @@ test('leaving prints the stopped jobs and then the command that reopens the sess
   );
   assert.ok(restore >= 0, 'the screen was given back');
   assert.ok(
-    s.log.findIndex(([kind, on]) => kind === 'input' && on === false) < restore,
+    s.log.findIndex(([kind, on]) => kind === 'input' && on === false) > restore,
+    'cooked input must belong to the restored main screen',
   );
   assert.deepEqual(s.log.slice(restore + 1), [
+    ['input', false],
     ['write', '1 background job stopped\n'],
     [
       'write',

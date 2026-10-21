@@ -1,4 +1,5 @@
 import { QuestionCard } from '../ink/components/question_card.js';
+import { flushTerminalWrite } from './terminal_write.js';
 import { completionFailure } from '../model_completion.js';
 import { ApprovalCard } from '../ink/components/approval_card.js';
 import { SecretCard } from '../ink/components/secret_card.js';
@@ -392,8 +393,12 @@ export class SessionApp {
   // /editor to $EDITOR). Tests put their own in place.
   terminal = {
     platform: process.platform as NodeJS.Platform,
-    write: (text: string): void => {
-      process.stdout.write(text);
+    write: (text: string, flush = false): void | Promise<void> => {
+      if (!flush) {
+        process.stdout.write(text);
+        return;
+      }
+      return flushTerminalWrite(process.stdout, text);
     },
     // on: Circle reads the keys, raw; off: the shell or the editor has them, in line mode.
     input: (on: boolean): void => {
@@ -4117,10 +4122,22 @@ export class SessionApp {
     this.selection.close();
     process.stdout.off('resize', this.resizeListener);
     process.off('SIGINT', this.signalListener);
-    this.terminal.input(false);
-    this.terminal.write(
-      '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[23;0t',
-    );
+    // Windows cooked reads retain the current screen buffer. Finish restoring
+    // the main buffer before enabling line input; Windows TTY writes are async.
+    const terminalErrors: unknown[] = [];
+    try {
+      await this.terminal.write(
+        '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[23;0t',
+        true,
+      );
+    } catch (error) {
+      terminalErrors.push(error);
+    }
+    try {
+      this.terminal.input(false);
+    } catch (error) {
+      terminalErrors.push(error);
+    }
     // Once the screen is gone: the jobs that leaving stopped, then the
     // command that opens this conversation again.
     const runtime = this.runtime;
@@ -4134,6 +4151,8 @@ export class SessionApp {
       ...[...this.browsers.values()].map((browser) => browser.close()),
       ...[...this.terminals.values()].map((terminals) => terminals.close()),
     ]);
+    if (terminalErrors.length)
+      throw new AggregateError(terminalErrors, 'terminal restoration failed');
     for (const line of [stoppedJobsLine(jobs), hint])
       if (line) this.terminal.write(line + '\n');
   }
