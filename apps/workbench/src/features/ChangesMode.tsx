@@ -7,9 +7,14 @@ import { t } from '../i18n';
 import {
   diffViewFromPatch,
   sessionChangeRows,
+  sessionScopeRows,
   type ChangeRow,
 } from '../model/changes';
-import { gitFilePatch, useGitChanges } from '../model/git-changes';
+import {
+  endedToolCalls,
+  gitFilePatch,
+  useGitChanges,
+} from '../model/git-changes';
 import { useOwnerState } from '../model/owner-state';
 import { currentSession } from '../model/state';
 import type { DiffView } from '../model/types';
@@ -64,8 +69,9 @@ export function ChangesMode({
   const git = useGitChanges({
     sessionId: session.id,
     live,
-    active: active && scope === 'all',
+    active: active && live,
     busy: session.state !== 'idle',
+    settled: endedToolCalls(session.messages),
   });
   // In the preview there is no repository; its sample files with a status stand in.
   const previewRows: ChangeRow[] = useMemo(
@@ -87,8 +93,13 @@ export function ChangesMode({
         }),
     [snapshot.files, session.workspaceId],
   );
+  const sessionLive = live
+    ? sessionScopeRows(sessionRows, git.files)
+    : sessionRows;
   const rows: ChangeRow[] =
-    scope === 'session' ? sessionRows : live ? (git.files ?? []) : previewRows;
+    scope === 'session' ? sessionLive : live ? (git.files ?? []) : previewRows;
+  const waitingForGit =
+    live && !git.files && (scope === 'all' || sessionRows.length === 0);
 
   // Sent here for a file: show it, in the list that has it.
   useEffect(() => {
@@ -111,7 +122,7 @@ export function ChangesMode({
       : undefined;
   const key = current ? `${session.id}\n${scope}\n${current.path}` : '';
   useEffect(() => {
-    if (!current || scope !== 'all' || !live) return;
+    if (!current || !live || sessionDiff) return;
     let stale = false;
     gitFilePatch(session.id, current.path).then(
       (result) => {
@@ -128,7 +139,7 @@ export function ChangesMode({
     return () => {
       stale = true;
     };
-  }, [key, scope, live, git.files]);
+  }, [key, live, sessionDiff, git.files]);
   const diff = sessionDiff ?? (patch.key === key ? patch.diff : undefined);
 
   return (
@@ -158,9 +169,9 @@ export function ChangesMode({
       </header>
       {rows.length === 0 ? (
         <p className="panel-note changes-empty" role="status">
-          {scope === 'all' && git.error
+          {(scope === 'all' || sessionRows.length === 0) && git.error
             ? t('could not read the changes')
-            : scope === 'all' && live && !git.files
+            : waitingForGit
               ? t('reading the changes…')
               : t('no files changed')}
         </p>
@@ -215,7 +226,7 @@ export function ChangesMode({
               <div className="changes-diff">
                 {diff ? (
                   <DiffBlock diff={diff} compact />
-                ) : scope === 'all' && live ? (
+                ) : live && !sessionDiff ? (
                   <p className="panel-note" role="status">
                     {patch.key === key && patch.error
                       ? t('could not read the difference')

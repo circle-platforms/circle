@@ -65,9 +65,12 @@ import {
   composerFocusSealed,
   composerHasBuffer,
   composerTextPlaced,
+  focusMessageComposer,
+  keyboardIsInTerminal,
   subscribeComposerFocus,
   takeComposerText,
 } from '../model/composer-focus';
+import { terminalKeyboardClaimed } from '../model/terminal-keyboard';
 interface Props {
   focusComposer?: number;
   onDialog: (dialog: DialogId, selection?: string) => void;
@@ -192,8 +195,7 @@ export function Conversation({
     !session.occupied;
   const input = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
-    if (focusComposer !== undefined)
-      input.current?.focus({ preventScroll: true });
+    if (focusComposer !== undefined) focusMessageComposer(input.current);
   }, [focusComposer, session.id]);
   const scroller = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
@@ -271,7 +273,7 @@ export function Conversation({
       const node = input.current;
       if (!node) return;
       if (!composerFocusSealed()) {
-        node.focus({ preventScroll: true });
+        focusMessageComposer(node);
         if (!composerHasBuffer() && node.value)
           node.setSelectionRange(0, node.value.length);
         return;
@@ -294,7 +296,7 @@ export function Conversation({
       }
       const field = input.current;
       if (!field) return;
-      field.focus({ preventScroll: true });
+      focusMessageComposer(field);
       const end = field.value.length;
       if (text || composerTextPlaced()) field.setSelectionRange(end, end);
       else if (end) field.setSelectionRange(0, end);
@@ -310,6 +312,7 @@ export function Conversation({
     const field = input.current;
     if (!field || (field.value.length === 0 && composerTextPlaced())) return;
     placeCaret.current = false;
+    if (keyboardIsInTerminal() || terminalKeyboardClaimed()) return;
     field.focus({ preventScroll: true });
     field.setSelectionRange(field.value.length, field.value.length);
   }, [session.draft, session.id]);
