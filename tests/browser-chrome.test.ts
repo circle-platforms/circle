@@ -894,6 +894,11 @@ test(
     const fingerprint = new X509Certificate(readFileSync(cert)).fingerprint256;
     const posts: Record<string, string>[] = [];
     const uploads: string[] = [];
+    const downloadBody = 'data'.repeat(2048);
+    const downloadFinishes: (() => void)[] = [];
+    cleanup(t, () => {
+      for (const finish of downloadFinishes) finish();
+    });
     const site = createHttp((req, res) => {
       const url = new URL(req.url ?? '/', 'http://local');
       const page = (body: string) => {
@@ -956,8 +961,13 @@ test(
         res.writeHead(200, {
           'content-type': 'application/octet-stream',
           'content-disposition': 'attachment; filename="report.bin"',
+          'content-length': String(downloadBody.length),
         });
-        return res.end('data');
+        // Keep the real transfer pending until the navigation has returned.
+        // Its bounded completion wait must not decide this test's outcome.
+        res.write(downloadBody.slice(0, 4096));
+        downloadFinishes.push(() => res.end(downloadBody.slice(4096)));
+        return;
       }
       res.writeHead(404);
       res.end();
@@ -1203,6 +1213,45 @@ test(
 
     // ---- a download from a site not allowed yet waits for the person; once kept, it lands
     // in the downloads folder by its own name, and the model is told where
+    const downloading = chrome as unknown as {
+      cdp: CdpPipe;
+      staging: string;
+    };
+    const completedDownload = () => {
+      let guid: string | undefined;
+      let stop = () => {};
+      const completed = new Promise<{ guid: string; size: number }>(
+        (resolve, reject) => {
+          stop = downloading.cdp.on((event) => {
+            if (event.method === 'Circle.closed') {
+              stop();
+              reject(Error('browser closed before the download completed'));
+            }
+            if (
+              event.method === 'Browser.downloadWillBegin' &&
+              event.params.url === `${http}/download`
+            )
+              guid = event.params.guid;
+            if (
+              event.method !== 'Browser.downloadProgress' ||
+              !guid ||
+              event.params.guid !== guid ||
+              event.params.state === 'inProgress'
+            )
+              return;
+            stop();
+            if (event.params.state === 'completed')
+              resolve({ guid, size: event.params.receivedBytes });
+            else reject(Error(`download ${guid} ${event.params.state}`));
+          });
+        },
+      );
+      // Observe failures even if the navigation assertion fails first.
+      void completed.catch(() => {});
+      cleanup(t, stop);
+      return completed;
+    };
+    const firstCompleted = completedDownload();
     const download = await act('navigate', { url: `${http}/download` });
     assert.match(
       download.text,
@@ -1216,8 +1265,17 @@ test(
       kind: 'download',
       token: (download.approval as { token: string }).token,
       site: http,
-      files: [{ name: 'report.bin', size: 4 }],
+      files: [{ name: 'report.bin', size: 0 }],
     });
+    assert.equal(existsSync(join(downloads, 'report.bin')), false);
+    assert.equal(downloadFinishes.length, 1);
+    downloadFinishes.shift()!();
+    const staged = await firstCompleted;
+    assert.equal(staged.size, downloadBody.length);
+    assert.equal(
+      readFileSync(join(downloading.staging, staged.guid), 'utf8'),
+      downloadBody,
+    );
     assert.equal(existsSync(join(downloads, 'report.bin')), false);
     const kept = await act('navigate', {
       url: `${http}/download`,
@@ -1229,17 +1287,31 @@ test(
     assert.equal(kept.approval, undefined);
     assert.equal(
       kept.text,
-      `### Download\nThe download was kept.\n- download dl1 finished: ${join(downloads, 'report.bin')} (4 B)`,
+      `### Download\nThe download was kept.\n- download dl1 finished: ${join(downloads, 'report.bin')} (8.0 KB)`,
     );
-    assert.equal(readFileSync(join(downloads, 'report.bin'), 'utf8'), 'data');
+    assert.equal(
+      readFileSync(join(downloads, 'report.bin'), 'utf8'),
+      downloadBody,
+    );
     // The site is allowed for the conversation now: no question
+    const secondCompleted = completedDownload();
     const twice = await act('navigate', { url: `${http}/download` });
     assert.equal(twice.approval, undefined);
+    assert.match(twice.text, /download dl2 of "report\.bin" .* started/);
+    assert.equal(existsSync(join(downloads, 'report (1).bin')), false);
+    assert.equal(downloadFinishes.length, 1);
+    downloadFinishes.shift()!();
+    assert.equal((await secondCompleted).size, downloadBody.length);
+    assert.equal(
+      readFileSync(join(downloads, 'report (1).bin'), 'utf8'),
+      downloadBody,
+    );
+    const finished = await act('snapshot');
     assert(
-      twice.text.includes(
+      finished.text.includes(
         `download dl2 finished: ${join(downloads, 'report (1).bin')}`,
       ),
-      twice.text,
+      finished.text,
     );
     // ---- an HTTP sign-in Circle's action meets waits for the model, as a dialog
     const auth = await act('navigate', { url: `${http}/auth` });
