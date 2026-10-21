@@ -337,16 +337,13 @@ export class TerminalPanelHost {
     );
     return this.mine(own, result.session);
   }
+  /**
+   * The person closes a console. It is theirs to close, a console they hold too: it does
+   * not wait in line behind Circle's actions or for itself to be handed back.
+   */
   disconnect(conversation: unknown, session: unknown): TerminalState {
     const own = validConversation(conversation);
-    void this.manager
-      .request(
-        own,
-        'disconnect',
-        { session: validSession(session) },
-        AbortSignal.timeout(5000),
-      )
-      .catch(() => {});
+    this.manager.disconnectForPerson(own, validSession(session));
     return this.state(own);
   }
   /** The person takes the console from the panel; the model's actions on it wait. */

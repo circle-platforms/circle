@@ -464,6 +464,24 @@ export class TerminalSessions {
     session.wake();
     this.options.onChange(conversation);
   }
+  /**
+   * The person closes a console from the page or panel. It is theirs to close at any time,
+   * while they hold it too: it waits for nothing, and an action of the model's parked on it
+   * ends as it would if the device had hung up.
+   */
+  disconnectForPerson(conversation: string, id: string): void {
+    const own = this.conversations.get(conversation);
+    const session = own?.sessions.get(id);
+    if (!own || !session || session.local) return;
+    const was = session.state;
+    session.close();
+    session.held = undefined;
+    if (was === 'ready' || was === 'connecting')
+      own.events.push(`${session.name}: the user disconnected the terminal`);
+    session.wake();
+    session.nudge();
+    this.options.onChange(conversation);
+  }
   /** What the person types on a console they hold. Only the holder's keys arrive. */
   input(conversation: string, id: string, text: string): boolean {
     const session = this.session(conversation, id);

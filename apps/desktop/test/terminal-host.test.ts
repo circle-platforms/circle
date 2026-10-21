@@ -271,6 +271,46 @@ test('a quick connect by address starts in the hands of the person who opened it
   assert.equal(panel.input('c1', row.id, 'nope'), false);
 });
 
+test('a person disconnects a console they hold at once, and the model action parked on it ends', async (t) => {
+  const device = await consoleServer(t);
+  const { panel } = await makeHost(t, []);
+  const state = await panel.connectTarget('c1', {
+    transport: 'telnet',
+    host: '127.0.0.1',
+    port: device.port,
+  });
+  const row = state.sessions.at(-1)!;
+  assert.equal(row.held, 'attach');
+  // The model's typing waits while the person holds the console
+  const parked = panel.agent(
+    {
+      id: 'm1',
+      sessionId: 'c1',
+      action: 'send',
+      args: { session: row.id, text: 'show running-config', enter: true },
+    },
+    new AbortController().signal,
+  );
+  const after = panel.disconnect('c1', row.id);
+  const closed = after.sessions.find((one) => one.id === row.id)!;
+  assert.equal(closed.state, 'closed');
+  assert.ok(!closed.held, 'a closed console is held by no one');
+  await assert.rejects(
+    parked,
+    /is closed; connect again with terminal_connect/,
+  );
+  assert.ok(
+    !device.typed.includes('show running-config'),
+    "the model's line never reached the device",
+  );
+  // The model learns that the person disconnected it, and can still read its last screen
+  const read = await panel.agent(
+    { id: 'm2', sessionId: 'c1', action: 'read', args: { session: row.id } },
+    new AbortController().signal,
+  );
+  assert.match(read.text, /the user disconnected the terminal/);
+});
+
 test("a person's connect takes the console it opened, by its id, not one the model opened", async (t) => {
   const modelDevice = await consoleServer(t);
   const personDevice = await consoleServer(t);
