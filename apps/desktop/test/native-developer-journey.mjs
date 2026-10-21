@@ -975,6 +975,15 @@ try {
       try {
         await openMode('changes');
         const mode = page.locator('.changes-mode:visible');
+        // This session's list holds what Circle's file tools changed here: nothing yet.
+        await mode
+          .getByRole('button', { name: 'this session', exact: true })
+          .click();
+        await mode.getByText('no files changed', { exact: true }).waitFor();
+        await mode
+          .getByRole('button', { name: 'all uncommitted', exact: true })
+          .click();
+        // Everything that differs from the last commit, staged or not, new files too.
         const byPath = (rows) =>
           rows.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
         const expected = async () => {
@@ -1015,29 +1024,11 @@ try {
               ),
           );
         let listed, actual;
-        const matchesGit = async () => {
+        await until(async () => {
           actual = await expected();
           listed = await shown();
           return JSON.stringify(listed) === JSON.stringify(actual);
-        };
-        // This session's list is what Circle's file tools changed here, nothing yet,
-        // together with the uncommitted files the overview's changes card lists: work
-        // done outside the window shows in both.
-        await mode
-          .getByRole('button', { name: 'this session', exact: true })
-          .click();
-        await until(
-          matchesGit,
-          "this session's list is the files Git says differ, as the overview's changes card lists them",
-        );
-        await mode
-          .getByRole('button', { name: 'all uncommitted', exact: true })
-          .click();
-        // Everything that differs from the last commit, staged or not, new files too.
-        await until(
-          matchesGit,
-          'the list is every file Git says differs from the last commit',
-        );
+        }, 'the list is every file Git says differs from the last commit');
         for (const [path, letter] of [
           ['git-probe.txt', 'M'],
           ['changes-staged.txt', 'A'],

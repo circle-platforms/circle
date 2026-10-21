@@ -140,21 +140,14 @@
 }
 .inspector-body.flush {
   display: flex;
-  flex: 1 1 0;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
   overflow: hidden;
 }
 .inspector-body.flush > .inspector-resource-view {
   display: flex;
   flex-direction: column;
-  flex: 1 1 0;
+  flex: 1;
   min-height: 0;
-  height: 100%;
-}
-.inspector-resource-view[data-inspector-resource='changes'] {
-  overflow: hidden;
 }
 .inspector-column.inspector-overlay {
   flex: none !important;

@@ -26,16 +26,12 @@
   font-weight: 400;
 }
 
-/* Changes: the file list beside the difference when the drawer is wide enough,
-   and the difference fills the height that is left. */
+/* Changes: one list of files, and the selected file's difference below it. */
 .changes-mode {
   display: flex;
-  flex: 1 1 0;
+  flex: 1;
   flex-direction: column;
-  height: 100%;
   min-height: 0;
-  overflow: hidden;
-  container-type: inline-size;
 }
 .changes-mode > .panel-note {
   margin: 4px 16px;
@@ -104,10 +100,9 @@
 }
 .changes-file {
   display: flex;
-  flex: 1 1 0;
+  flex: 1;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
   padding: 0 16px;
 }
 .changes-file > header {
@@ -126,47 +121,9 @@
   white-space: nowrap;
 }
 .changes-diff {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
+  flex: 1;
   min-height: 0;
-  overflow: hidden;
-}
-.changes-diff .diff-block,
-.changes-diff .diff-block.compact {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  height: auto;
-  min-height: 0;
-  overflow: hidden;
-}
-.changes-diff .diff-block pre,
-.changes-diff .diff-block.compact pre {
-  flex: 1 1 0;
-  min-height: 0;
-  max-height: none;
   overflow: auto;
-}
-@container (min-width: 560px) {
-  .changes-mode {
-    flex-direction: row;
-  }
-  .changes-list {
-    width: min(240px, 38%);
-    max-height: none;
-    border-bottom: 0;
-    border-right: 1px solid var(--border);
-  }
-  .changes-file {
-    flex: 1 1 0;
-    min-width: 0;
-    min-height: 0;
-  }
-  .changes-list {
-    align-self: stretch;
-    min-height: 0;
-  }
 }
 
 /* Subagents: working and finished, then the one that was opened beside the list. */
@@ -177,7 +134,7 @@
 }
 .agent-list {
   display: flex;
-  flex: 1;
+  flex: none;
   flex-direction: column;
   width: 100%;
   min-height: 0;
@@ -198,17 +155,8 @@
     display: none;
   }
 }
-.agent-list > .empty-state {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  margin: 0;
-}
-.agent-list > .empty-state h3 {
-  padding: 0;
-  color: var(--secondary);
-  font-size: var(--ui-large);
-  font-weight: 500;
+.agent-list > .panel-note {
+  margin: 10px 8px;
 }
 .agent-list h3 {
   margin: 0;
@@ -307,17 +255,9 @@
   overflow-wrap: anywhere;
 }
 
-/* A mode in a window of its own: a dot, not the underline of the open drawer. */
-.drawer-mode-button.popped::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: 3px;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--accent);
-  transform: translateX(-50%);
+/* A mode in a window of its own is marked on its button under the bar. */
+.drawer-mode-button.popped {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 /* The terminal mode is as tall as the drawer, so the terminal fills it. */

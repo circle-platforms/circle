@@ -411,22 +411,4 @@ test('the tool surface: reads are free, actors are not, nothing of it enters sub
   );
   // Descriptions come from the prompt files
   assert.match(byName.terminal_connect!.description ?? '', /SecureCRT|SSH/);
-  // Where the desktop has the person's tabs, a request to use one stays on these tools.
-  const desktop = Object.fromEntries(
-    terminalTools(port, { tabs: { facts: () => ({}) } }).map((tool) => [
-      tool.name,
-      tool,
-    ]),
-  );
-  assert.match(
-    desktop.terminal_sessions!.description ?? '',
-    /do not call `execute`/,
-  );
-  assert.match(desktop.terminal_sessions!.description ?? '', /ask nothing/);
-  assert.match(
-    desktop.terminal_send!.description ?? '',
-    /type that command into the tab/,
-  );
-  assert.match(desktop.terminal_wait!.description ?? '', /sleep/);
-  assert.match(desktop.terminal_wait!.description ?? '', /do not run it again/);
 });

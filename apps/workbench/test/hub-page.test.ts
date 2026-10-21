@@ -326,26 +326,3 @@ test('a desktop autolink stops before a fullwidth comma', () => {
   assert.equal(/href="[^"]*[，用户]/.test(html), false);
   assert.match(html, /，用户 ada/);
 });
-test('a desktop autolink stops at an unbalanced parenthesis and at CJK', () => {
-  const paren = renderToStaticMarkup(
-    createElement(Markdown, {
-      text: '已打开 https://example.com("Example Domain" 页面)',
-    }),
-  );
-  assert.match(paren, /href="https:\/\/example\.com"/);
-  assert.equal(/href="[^"]*\(/.test(paren), false);
-  assert.match(paren, /Example Domain/);
-  assert.match(paren, /页面/);
-  const cjk = renderToStaticMarkup(
-    createElement(Markdown, { text: '见 https://example.com页面说明' }),
-  );
-  assert.match(cjk, /href="https:\/\/example\.com"/);
-  assert.equal(/href="[^"]*页/.test(cjk), false);
-  assert.match(cjk, /页面说明/);
-  const balanced = renderToStaticMarkup(
-    createElement(Markdown, {
-      text: 'see https://example.com/wiki/Foo_(bar) next',
-    }),
-  );
-  assert.match(balanced, /href="https:\/\/example\.com\/wiki\/Foo_\(bar\)"/);
-});

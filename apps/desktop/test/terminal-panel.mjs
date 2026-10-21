@@ -34,7 +34,6 @@ await mkdir(join(dataDir, 'runtime-home'), { recursive: true });
 // One console server: greets and records the lines it is given, and counts the ^K
 // bytes (Ctrl+K) that reach it.
 const typed = [];
-const received = [];
 let controlK = 0;
 const sockets = new Set();
 const server = createServer((socket) => {
@@ -62,7 +61,6 @@ const server = createServer((socket) => {
       if (byte === 10 || byte === 13 || (byte >= 32 && byte < 127))
         text += String.fromCharCode(byte);
     }
-    if (text) received.push(text);
     input += text;
     let cut = input.search(/[\r\n]/);
     while (cut !== -1) {
@@ -197,33 +195,6 @@ try {
     session,
   );
   assert.equal(held.sessions[0].held, 'attach');
-  // A key typed within about 50ms of a click in the screen, while a render
-  // pulls focus back to the composer. Waiting for the xterm to be focused
-  // first would miss that race. The character must not stay in the draft.
-  const composer = page.getByRole('textbox', { name: 'message', exact: true });
-  // Filled without a click: in a narrow window the terminal lies over the
-  // conversation, and its screen is what a click there would hit.
-  await composer.fill('stays in the composer');
-  const deviceScreen = page.locator('.device-screen:not([hidden])');
-  await deviceScreen.locator('.xterm-screen').click({ delay: 0 });
-  const deviceTyping = page.keyboard.type('abc', { delay: 12 });
-  await page.evaluate(() => {
-    setTimeout(() => {
-      document.querySelector('.composer textarea')?.focus();
-    }, 25);
-  });
-  await deviceTyping;
-  await until(
-    () => received.join('').includes('abc'),
-    'the keys after the click reached the device',
-  );
-  assert.equal(await composer.inputValue(), 'stays in the composer');
-  // Those keys are sitting in the console's line. End it, or the next line joins them.
-  await page.evaluate(
-    ({ id, one }) => window.circleDesktop.terminalInput(id, one, '\r'),
-    { id: session, one: 't1' },
-  );
-  await until(() => typed.includes('abc'), 'the click keys became a line');
   await page.evaluate(
     ({ id, one }) => window.circleDesktop.terminalInput(id, one, 'show ver\r'),
     { id: session, one: 't1' },

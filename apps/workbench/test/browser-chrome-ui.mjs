@@ -49,8 +49,6 @@ try {
         canGoBack: true,
         canGoForward: false,
         zoom: 100,
-        // The window the pages are in, as the main process counts its moves
-        host: 1,
         tab: 't1',
         tabs: [
           {
@@ -137,11 +135,6 @@ try {
           },
           // No mode of this window is in a window of its own.
           popouts: async () => [],
-          // The main process places the page where the panel measured it, and says so
-          browserBounds: async (id, rect, visible, host) => ({
-            ...JSON.parse(JSON.stringify(state)),
-            applied: host === state.host,
-          }),
           browserPage: async (id, action, value) => {
             calls.push(['page', action, value ?? null]);
             if (action === 'snapshot') return ICON;

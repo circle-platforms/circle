@@ -8,7 +8,6 @@
 // runtime runs in a terminal of their own are not tabs, and are never listed here.
 import { basename } from 'node:path';
 import {
-  looksLikePrompt,
   TerminalSession,
   TerminalSessions,
   withMoreTerminals,
@@ -44,13 +43,6 @@ export interface LocalTerminalHost {
   ): { data: string; sequence: number; at?: string } | undefined;
   observe(listener: (event: TerminalEvent) => void): () => void;
   write(owner: string, id: string, data: string): Promise<unknown>;
-  /** Start the shell again. The exited tab leaves the row; the result is the new one. */
-  restart?(owner: string, id: string): Promise<TerminalSnapshot>;
-  /**
-   * Whether the shell has its terminal back: no command it started runs in front of it.
-   * Undefined where the system cannot tell.
-   */
-  foreground?(owner: string, id: string): Promise<boolean | undefined>;
 }
 
 export interface LocalTerminalsOptions {
@@ -62,14 +54,6 @@ export interface LocalTerminalsOptions {
   mode(conversation: string): string | undefined;
   /** The tabs, as `local:<id>`, that an approval of the conversation waits on. */
   waiting(conversation: string): ReadonlySet<string>;
-  /**
-   * The person handed a tab back and Circle was not already waiting on that handoff.
-   * `resume` is set when a wait had been cut short, so Circle should wait again.
-   */
-  handedBack?(
-    conversation: string,
-    detail: { name: string; resume: boolean },
-  ): void;
 }
 
 export type LocalTerminalControl = 'take' | 'return' | 'stop';
@@ -125,10 +109,6 @@ interface Conversation {
   >;
   /** The line version a running write's approval was asked at. */
   asked: Map<string, number>;
-  /** A wait on this tab ended because the person took it. Give-back should resume it. */
-  paused: Set<string>;
-  /** The person gave the tab back and Circle has not finished the turn that follows. */
-  resuming: Set<string>;
 }
 
 const key = (conversation: string, terminal: string) =>
@@ -266,10 +246,7 @@ export class LocalTerminals implements TerminalTabFacts {
     args: Record<string, unknown>,
     shown: Record<string, unknown>,
   ): Record<string, unknown> {
-    const { host, snapshot, terminal } = this.locate(
-      conversation,
-      args.session,
-    );
+    const { host, terminal } = this.find(conversation, args.session);
     const name = this.name(host, conversation, terminal);
     if (action === 'disconnect')
       throw Error(
@@ -284,7 +261,6 @@ export class LocalTerminals implements TerminalTabFacts {
       first_use: !own.granted.has(terminal),
       command: undefined,
       typed: undefined,
-      ...(snapshot.status === 'running' ? {} : { exited: true }),
     };
     const before = () =>
       line.clean
@@ -312,19 +288,8 @@ export class LocalTerminals implements TerminalTabFacts {
    */
   typed(conversation: string, terminal: string, data: string): void {
     if (!terminal || !data || AUTOMATIC_REPLY.test(data)) return;
-    // The write may name a conversation that did not adopt the tab. The tab Circle
-    // is driving is the one that has it, whichever conversation that is.
-    let owner = conversation;
-    let tab = this.tabs.get(key(conversation, terminal));
-    if (!tab) {
-      for (const found of this.tabs.values()) {
-        if (found.terminal !== terminal) continue;
-        tab = found;
-        owner = found.conversation;
-        break;
-      }
-    }
-    const line = this.line(this.own(owner), terminal);
+    const line = this.line(this.own(conversation), terminal);
+    const tab = this.tabs.get(key(conversation, terminal));
     // Where the person starts a line is where the prompt ends: the keys have not reached
     // the shell yet, so the cursor is still there
     if (tab && !line.text && line.clean && !line.start) {
@@ -333,13 +298,10 @@ export class LocalTerminals implements TerminalTabFacts {
     }
     personTyped(line, data);
     if (!tab || tab.session.held) return;
-    // A wait still running has watchers even when this write's conversation did not
-    // record the action. Either one means the person is typing into Circle's turn.
-    const driving =
-      !!this.conversations.get(owner)?.active.has(terminal) ||
-      tab.session.watchers.size > 0;
-    if (driving) this.sessions.attach(owner, tab.session.id);
-    else this.sessions.tell(owner, `${tab.session.name}: the user typed`);
+    if (this.conversations.get(conversation)?.active.has(terminal))
+      this.sessions.attach(conversation, tab.session.id);
+    else
+      this.sessions.tell(conversation, `${tab.session.name}: the user typed`);
   }
   /** The person takes a tab, hands it back, or stops Circle's action on it. */
   async control(
@@ -355,21 +317,8 @@ export class LocalTerminals implements TerminalTabFacts {
       this.sessions.attach(conversation, tab.session.id);
     } else if (action === 'return') {
       const tab = this.tabs.get(key(conversation, terminal));
-      // A handoff still in flight resumes itself when it resolves. Telling the model
-      // as well would start a second turn beside that result.
-      const handed = own.handoffs.has(terminal);
       if (tab) this.sessions.detach(conversation, tab.session.id);
       own.handoffs.get(terminal)?.resolve();
-      const paused = own.paused.has(terminal);
-      own.paused.delete(terminal);
-      // Held or not, the tab is Circle's again until the turn that hears about it ends.
-      // A handoff still running is already Circle's action, so it is not marked twice.
-      if (!handed) own.resuming.add(terminal);
-      if (!handed)
-        this.options.handedBack?.(conversation, {
-          name: this.name(host, conversation, terminal),
-          resume: paused,
-        });
     } else {
       const reason = Error(
         `the user stopped your action on ${this.name(host, conversation, terminal)}; what you had typed there may already have run, so read the tab before you send again`,
@@ -387,33 +336,30 @@ export class LocalTerminals implements TerminalTabFacts {
     const numbers = terminalTabNumbers(list);
     const own = this.conversations.get(conversation);
     const waiting = this.options.waiting(conversation);
-    return list
-      .filter((snapshot) => running(snapshot) && !snapshot.hidden)
-      .map((snapshot) => {
-        const id = terminalTabSession(snapshot.id);
-        const held = this.tabs.get(key(conversation, snapshot.id))?.session
-          .held;
-        const given = own?.handoffs.get(snapshot.id)?.reason;
-        const reason =
-          given && given.length > MAX_REASON
-            ? given.slice(0, MAX_REASON - 1) + '…'
-            : given;
-        return {
-          id,
-          terminal: snapshot.id,
-          ordinal: numbers.get(snapshot.id) ?? 0,
-          state: held
-            ? 'held'
-            : waiting.has(id)
-              ? 'waiting'
-              : own?.active.has(snapshot.id) || own?.resuming.has(snapshot.id)
-                ? 'operating'
-                : 'idle',
-          allowed: own?.granted.has(snapshot.id) === true,
-          ...(held ? { held } : {}),
-          ...(reason ? { reason } : {}),
-        };
-      });
+    return list.filter(running).map((snapshot) => {
+      const id = terminalTabSession(snapshot.id);
+      const held = this.tabs.get(key(conversation, snapshot.id))?.session.held;
+      const given = own?.handoffs.get(snapshot.id)?.reason;
+      const reason =
+        given && given.length > MAX_REASON
+          ? given.slice(0, MAX_REASON - 1) + '…'
+          : given;
+      return {
+        id,
+        terminal: snapshot.id,
+        ordinal: numbers.get(snapshot.id) ?? 0,
+        state: held
+          ? 'held'
+          : waiting.has(id)
+            ? 'waiting'
+            : own?.active.has(snapshot.id)
+              ? 'operating'
+              : 'idle',
+        allowed: own?.granted.has(snapshot.id) === true,
+        ...(held ? { held } : {}),
+        ...(reason ? { reason } : {}),
+      };
+    });
   }
   /** The conversation is gone: Circle lets go of its tabs; their shells are the window's. */
   release(conversation: string): void {
@@ -446,73 +392,6 @@ export class LocalTerminals implements TerminalTabFacts {
   get adopted(): number {
     return this.tabs.size;
   }
-  /**
-   * The person moves a command from its `execute` card into one of their tabs: it is
-   * typed there and run, as their own typing. It is typed only where the line that runs
-   * is the card's: the shell is at its prompt with nothing on that line, nothing Circle
-   * typed or the person started, and Circle is not typing there. `command` is what runs,
-   * with the values of the secrets the card shows by name; `pending` says the card
-   * still waits, checked just before the keys go. The answer is the tab's name.
-   */
-  async typeForPerson(
-    conversation: string,
-    session: string,
-    command: string,
-    pending: () => boolean = () => true,
-  ): Promise<string> {
-    const { host, snapshot, terminal } = this.find(conversation, session);
-    const name = this.name(host, conversation, terminal);
-    const lines = command
-      .replace(/\r\n?/g, '\n')
-      .replace(/\n+$/, '')
-      .split('\n');
-    for (const line of lines) checkText(line);
-    const own = this.own(conversation);
-    const line = this.line(own, terminal);
-    const refused = (why: string) =>
-      Error(`${why}; nothing was typed in ${name}`);
-    const check = () => {
-      if (own.active.has(terminal)) throw refused('Circle is using the tab');
-      // Whatever is on the line would run before the command
-      if (!line.clean || line.text)
-        throw refused('there is text at the prompt: clear it and try again');
-    };
-    check();
-    // The keys go to whatever holds the terminal: it must be the shell. Where the system
-    // cannot tell, the line at the cursor has to read as a prompt.
-    const front = await host.foreground?.(conversation, terminal);
-    if (front === false) throw refused('a command is still running there');
-    if (front === undefined) {
-      const tab = this.adopt(conversation, host, snapshot);
-      await tab.ready;
-      // The emulator parses later: an empty write's callback comes after the output's
-      await new Promise<void>((done) => tab.session.screen.write('', done));
-      if (!looksLikePrompt(tab.session.cursorLine()))
-        throw refused('the tab is not at its prompt');
-    }
-    check();
-    if (!pending()) throw Error('the request was already answered');
-    const data = lines.join('\r') + '\r';
-    // As the person's own typing: the line it leaves, and Circle told that they typed
-    this.typed(conversation, terminal, data);
-    await host.write(conversation, terminal, data);
-    return name;
-  }
-  /**
-   * The turn that followed a give-back has ended. A tab Circle is not still using
-   * leaves the resumed state.
-   */
-  settleResuming(conversation: string): void {
-    const own = this.conversations.get(conversation);
-    if (!own?.resuming.size) return;
-    let changed = false;
-    for (const terminal of own.resuming)
-      if (!own.active.has(terminal)) {
-        own.resuming.delete(terminal);
-        changed = true;
-      }
-    if (changed) this.options.changed(conversation);
-  }
   // -- internals --
   private async request(
     conversation: string,
@@ -520,26 +399,8 @@ export class LocalTerminals implements TerminalTabFacts {
     args: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<TerminalResult> {
-    const { host, snapshot, terminal } = this.locate(
-      conversation,
-      args.session,
-    );
+    const { host, snapshot, terminal } = this.find(conversation, args.session);
     const own = this.own(conversation);
-    if (snapshot.status !== 'running') {
-      if ((action !== 'send' && action !== 'press') || !host.restart)
-        throw Error(this.exitedMessage(host, conversation, terminal));
-      const next = await host.restart(conversation, terminal);
-      if (args.first_use === true || own.granted.has(terminal))
-        own.granted.add(next.id);
-      if (own.asked.has(terminal)) own.asked.set(next.id, 0);
-      return this.request(
-        conversation,
-        action,
-        { ...args, session: terminalTabSession(next.id) },
-        signal,
-      );
-    }
-    own.resuming.delete(terminal);
     const writes = action === 'send' || action === 'press';
     if (writes) {
       // The facts asked the person for this tab's first write, and it runs: they allowed it
@@ -586,8 +447,6 @@ export class LocalTerminals implements TerminalTabFacts {
             throw gone();
           throw error;
         });
-      // A wait the person cut short is remembered until they hand the tab back.
-      if (/your wait ended there/.test(result.text)) own.paused.add(terminal);
       // A tab has no host:port; the session alone says which terminal it was
       return { text: result.text, session: tab.session.id };
     } finally {
@@ -704,11 +563,6 @@ export class LocalTerminals implements TerminalTabFacts {
       ready,
       settle,
     };
-    // A wait knows the shell is back at its prompt from the process in front of it, not
-    // from what the prompt looks like
-    const foreground = host.foreground?.bind(host);
-    if (foreground)
-      session.foreground = () => foreground(conversation, snapshot.id);
     this.tabs.set(at, tab);
     this.sessions.adopt(conversation, session);
     const recent = host.recentOutput(conversation, snapshot.id, RECENT_OUTPUT);
@@ -743,8 +597,6 @@ export class LocalTerminals implements TerminalTabFacts {
       own?.lines.delete(event.terminalId);
       own?.granted.delete(event.terminalId);
       own?.asked.delete(event.terminalId);
-      own?.paused.delete(event.terminalId);
-      own?.resuming.delete(event.terminalId);
     }
     if (event.snapshot && isShell(event.snapshot))
       this.options.changed(event.owner);
@@ -760,9 +612,6 @@ export class LocalTerminals implements TerminalTabFacts {
       ?.handoffs.get(tab.terminal)
       ?.reject(Error(`${tab.session.name} was closed`));
     this.sessions.drop(tab.conversation, tab.session.id, 'closed');
-    const own = this.conversations.get(tab.conversation);
-    own?.paused.delete(tab.terminal);
-    own?.resuming.delete(tab.terminal);
   }
   private hand(
     conversation: string,
@@ -804,15 +653,7 @@ export class LocalTerminals implements TerminalTabFacts {
     const host = this.options.host(conversation);
     if (!host) return [];
     const lines: string[] = [];
-    for (const snapshot of host
-      .listNow(conversation)
-      .filter((one) => isShell(one) && !one.hidden)) {
-      if (!running(snapshot)) {
-        lines.push(
-          `- ${this.name(host, conversation, snapshot.id)} · ${terminalTabSession(snapshot.id)} · exited. The shell is gone. Sending to ${terminalTabSession(snapshot.id)} restarts it and then types. The tab's restart button and Enter do the same. Do not ask for a new terminal. Do not use execute.`,
-        );
-        continue;
-      }
+    for (const snapshot of host.listNow(conversation).filter(running)) {
       const tab = this.adopt(conversation, host, snapshot);
       await tab.ready;
       const line = this.sessions.describe(conversation, tab.session.id);
@@ -820,7 +661,7 @@ export class LocalTerminals implements TerminalTabFacts {
     }
     return lines;
   }
-  private locate(
+  private find(
     conversation: string,
     session: unknown,
   ): { host: LocalTerminalHost; snapshot: TerminalSnapshot; terminal: string } {
@@ -828,28 +669,16 @@ export class LocalTerminals implements TerminalTabFacts {
     const host = terminal ? this.options.host(conversation) : undefined;
     const snapshot = host
       ?.listNow(conversation)
-      .find((one) => one.id === terminal && isShell(one) && !one.hidden);
+      .find((one) => one.id === terminal && isShell(one));
     if (!terminal || !host || !snapshot)
       throw Error(
         `no terminal ${String(session ?? '') || '(none given)'} in this conversation; see terminal_sessions`,
       );
+    if (snapshot.status !== 'running')
+      throw Error(
+        `${this.name(host, conversation, terminal)} was closed; it is gone from terminal_sessions`,
+      );
     return { host, snapshot, terminal };
-  }
-  private exitedMessage(
-    host: LocalTerminalHost,
-    conversation: string,
-    terminal: string,
-  ): string {
-    return `${this.name(host, conversation, terminal)} has exited. The shell is gone. Restart that tab: its screen has a restart button, and Enter in the tab restarts it. Sending to it restarts it and then types. Do not ask for a new terminal. Do not use execute.`;
-  }
-  private find(
-    conversation: string,
-    session: unknown,
-  ): { host: LocalTerminalHost; snapshot: TerminalSnapshot; terminal: string } {
-    const found = this.locate(conversation, session);
-    if (found.snapshot.status !== 'running')
-      throw Error(this.exitedMessage(found.host, conversation, found.terminal));
-    return found;
   }
   private ordinal(
     host: LocalTerminalHost,
@@ -875,8 +704,6 @@ export class LocalTerminals implements TerminalTabFacts {
         active: new Map(),
         handoffs: new Map(),
         asked: new Map(),
-        paused: new Set(),
-        resuming: new Set(),
       };
       this.conversations.set(conversation, own);
     }

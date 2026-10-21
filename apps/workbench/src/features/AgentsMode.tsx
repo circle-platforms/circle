@@ -81,11 +81,7 @@ export function AgentsMode({
   );
   const list = (
     <div className="agent-list" role="list" aria-label={t('subagents')}>
-      {!agents.length && (
-        <div className="empty-state" role="status">
-          <h3>{t('no subagents yet')}</h3>
-        </div>
-      )}
+      {!agents.length && <p className="panel-note">{t('no subagents yet')}</p>}
       {[
         { title: t('running'), rows: working },
         { title: t('finished'), rows: finished },

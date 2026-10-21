@@ -7,8 +7,6 @@ export const terminal: Record<string, string> = {
   'terminal screen reader': '终端屏幕阅读支持',
   'always on': '始终启用',
   'terminal closed': '终端已关闭',
-  'this terminal has exited': '这个终端已退出',
-  'press enter to restart': '按 Enter 重新启动',
 
   'session terminals': '会话终端',
 

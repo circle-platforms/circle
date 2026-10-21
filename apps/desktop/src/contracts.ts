@@ -138,8 +138,6 @@ export interface DesktopBridge {
     sessionId: string,
     bounds: BrowserBounds,
     visible: boolean,
-    /** The `BrowserState.host` this measurement was taken for. */
-    host?: number,
   ) => Promise<BrowserState>;
   browserHide: (sessionId: string) => Promise<void>;
   browserCapture: (sessionId: string) => Promise<BrowserCapture>;
@@ -382,13 +380,6 @@ export interface BrowserState {
   find?: { text: string; active: number; matches: number };
   /** Chromium's own developer tools are open on the shown tab. */
   devTools?: boolean;
-  /**
-   * Which move of the pages this state belongs to. A bounds update names the
-   * value it measured, and one from an older move is dropped.
-   */
-  host?: number;
-  /** Set on the reply when that bounds update was applied. */
-  applied?: boolean;
 }
 export type BrowserControl = 'shared' | 'agent' | 'user_pending' | 'user';
 /** A site asks for a client certificate: only the person chooses one, or none. */
