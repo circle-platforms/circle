@@ -58,6 +58,37 @@ export function effectivePlugins(
     )
     .map((plugin) => plugin.id);
 }
+/**
+ * A paired page's own switch: the pages chosen after it, and whether its runtime extension
+ * is to be on. Turning a page on turns the extension on and leaves its other pages as they
+ * were; turning one off turns the extension off only when no other page of it stays chosen.
+ */
+export function pairedSwitch(
+  registry: PluginRegistry,
+  chosen: readonly string[],
+  id: string,
+  enabled: boolean,
+): { chosen: string[]; extension: boolean } {
+  const name = registry.plugins.find(
+    (item) => item.id === id,
+  )?.runtimeExtension;
+  const next = registry.change(
+    chosen.filter((item) =>
+      registry.plugins.some((plugin) => plugin.id === item),
+    ),
+    id,
+    enabled,
+  );
+  return {
+    chosen: next,
+    extension:
+      enabled ||
+      registry.plugins.some(
+        (plugin) =>
+          plugin.runtimeExtension === name && next.includes(plugin.id),
+      ),
+  };
+}
 const reservedPages = new Set([
   'sessions',
   'models',

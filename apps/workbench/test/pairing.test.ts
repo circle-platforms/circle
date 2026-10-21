@@ -5,6 +5,7 @@ import { extensionErrorText } from '../src/plugins/labels.ts';
 import {
   PluginRegistry,
   effectivePlugins,
+  pairedSwitch,
   pairing,
 } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
@@ -141,5 +142,33 @@ test('pairing reasons and a missing module use the interface language', () => {
   assert.match(
     pairing(paired, []).reason,
     /runtime extension connector is not installed/,
+  );
+});
+
+test('of two pages of one extension, switching one off keeps the extension on for the other; the last one off turns it off', () => {
+  const reports: WorkbenchPlugin = {
+    ...paired,
+    id: 'reports',
+    pages: [page('reports')],
+  };
+  const registry = new PluginRegistry([plain, paired, reports]);
+  // Turning a page on turns the extension on and leaves the other page as it was
+  assert.deepEqual(pairedSwitch(registry, ['files'], 'connector', true), {
+    chosen: ['files', 'connector'],
+    extension: true,
+  });
+  const both = ['files', 'connector', 'reports'];
+  assert.deepEqual(pairedSwitch(registry, both, 'connector', false), {
+    chosen: ['files', 'reports'],
+    extension: true,
+  });
+  assert.deepEqual(
+    pairedSwitch(registry, ['files', 'reports'], 'reports', false),
+    { chosen: ['files'], extension: false },
+  );
+  // A page an earlier version had is not counted as one of the extension's
+  assert.deepEqual(
+    pairedSwitch(registry, ['developer', 'connector'], 'connector', false),
+    { chosen: [], extension: false },
   );
 });

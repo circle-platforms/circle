@@ -8,7 +8,7 @@ import { recordedDecision, recordedTitle } from '../model/decisions';
 import { KeybindingsEditor } from './KeybindingsEditor';
 import { TaskLimitsSettings } from './TaskLimitsSettings';
 import { usePlugins } from '../plugins/context';
-import { pairing } from '../plugins/registry';
+import { pairedSwitch, pairing } from '../plugins/registry';
 import { extensionErrorText } from '../plugins/labels';
 import {
   phaseAfterExtensionSave,
@@ -1459,17 +1459,21 @@ function ExtensionsPage() {
                     if (!plugin.runtimeExtension)
                       return toggle(plugin.id, value);
                     // The interface's own page comes and goes with this switch; the
-                    // runtime extension follows through its usual save and reload.
+                    // runtime extension follows through its usual save and reload, and
+                    // stays on while another of its pages is still on.
+                    let extension = value;
                     runtime.change((state) => {
-                      state.uiPlugins = registry.change(
-                        state.uiPlugins.filter((id) =>
-                          registry.plugins.some((item) => item.id === id),
-                        ),
+                      const after = pairedSwitch(
+                        registry,
+                        state.uiPlugins,
                         plugin.id,
                         value,
                       );
+                      state.uiPlugins = after.chosen;
+                      extension = after.extension;
                     });
-                    void setExtension(plugin.runtimeExtension, value);
+                    if (value || !extension)
+                      void setExtension(plugin.runtimeExtension, value);
                   }}
                 />
               </div>
