@@ -28,6 +28,7 @@ runtime.change((state) => {
 // What each terminal was sent: the workspace terminal's writes, the console's input.
 const written: string[] = [];
 const typed: string[] = [];
+const taken: string[] = [];
 const terminal = {
   id: 'A-terminal',
   owner: 'A',
@@ -64,6 +65,15 @@ const consoles: TerminalState = {
     },
   ],
   profiles: [],
+  local: [
+    {
+      id: 'local:A-terminal',
+      terminal: 'A-terminal',
+      ordinal: 1,
+      state: 'operating',
+      allowed: true,
+    },
+  ],
 };
 const noop = async () => {};
 window.circleDesktop = new Proxy(
@@ -77,6 +87,9 @@ window.circleDesktop = new Proxy(
     terminalSnapshot: async () => '',
     terminalInput: async (_session: string, _id: string, data: string) => {
       typed.push(data);
+    },
+    terminalAttach: async (_session: string, id: string) => {
+      taken.push(id);
     },
     runtimeCommand: async (command: any) => {
       if (command.name !== 'workspace-service') return { ok: true };
@@ -110,7 +123,7 @@ window.circleDesktop = new Proxy(
           : noop,
   },
 ) as unknown as DesktopBridge;
-(window as any).__terminalKeys = { written, typed };
+(window as any).__terminalKeys = { written, typed, taken };
 createRoot(document.getElementById('root')!).render(
   <CircleWorkbench runtime={runtime} plugins={circlePlugins} />,
 );

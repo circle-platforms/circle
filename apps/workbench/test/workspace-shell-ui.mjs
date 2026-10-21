@@ -257,7 +257,27 @@ async function captureModes(page, locale, theme, width) {
             .count(),
           1,
         );
-      if (kind === 'changes') await page.locator('.changes-list').waitFor();
+      if (kind === 'changes') {
+        await page.locator('.changes-list').waitFor();
+        // The frame of a short difference ends with its last line: the room left below
+        // stays empty, not inside a frame drawn down to the bottom of the drawer
+        await page
+          .locator('.changes-diff .diff-block pre span')
+          .last()
+          .waitFor();
+        const blank = await page.evaluate(() => {
+          const block = document.querySelector('.changes-diff .diff-block');
+          const last = block.querySelector('pre').lastElementChild;
+          return (
+            block.getBoundingClientRect().bottom -
+            last.getBoundingClientRect().bottom
+          );
+        });
+        assert.ok(
+          blank < 16,
+          `changes: the frame runs ${blank}px past its last line at ${width}px`,
+        );
+      }
       if (kind === 'subagents')
         assert.ok(
           (await page.locator('.agent-row').count()) >= 1,
@@ -273,6 +293,33 @@ async function captureModes(page, locale, theme, width) {
       animations: 'disabled',
       path: `${output}/${locale}-${theme}-${width}-${kind}.png`,
     });
+    // After its picture: a long difference fills the height left under the list and
+    // scrolls there, inside its frame
+    if (kind === 'changes') {
+      const long = await page.evaluate(() => {
+        const block = document.querySelector('.changes-diff .diff-block');
+        const pre = block.querySelector('pre');
+        const row = pre.lastElementChild;
+        const added = Array.from({ length: 200 }, () => row.cloneNode(true));
+        pre.append(...added);
+        const area = document
+          .querySelector('.changes-diff')
+          .getBoundingClientRect();
+        const frame = block.getBoundingClientRect();
+        const result = {
+          fills: Math.abs(frame.bottom - area.bottom) < 2,
+          scrolls: pre.scrollHeight > pre.clientHeight,
+        };
+        // The mode stays mounted: the next picture has the difference as it was
+        for (const node of added) node.remove();
+        return result;
+      });
+      assert.deepEqual(
+        long,
+        { fills: true, scrolls: true },
+        `changes: a long difference scrolls in the height left at ${width}px`,
+      );
+    }
     // Pressing the button again closes what it opened; the overview stays, as it does.
     if (kind !== 'overview') await button(page, kind, zh).click();
   }

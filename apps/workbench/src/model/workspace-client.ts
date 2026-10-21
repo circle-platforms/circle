@@ -1,4 +1,5 @@
 import { desktopHost } from '../host';
+import { presentHostError } from './host-error';
 import type {
   WorkspaceService,
   WorkspaceServiceEvent,
@@ -27,7 +28,8 @@ export async function workspaceCall<T>(
     sessionId,
     payload: { service, method, params },
   });
-  if (!reply.ok) throw Error(reply.error ?? 'workspace operation failed');
+  if (!reply.ok)
+    throw Error(presentHostError(reply.error ?? 'workspace operation failed'));
   return reply.data as T;
 }
 const listeners = new Set<(event: WorkspaceServiceEvent) => void>();

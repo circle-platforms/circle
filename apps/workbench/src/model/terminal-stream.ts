@@ -27,9 +27,16 @@ export function mergeTerminalSnapshot(
 ): TerminalSnapshot[] {
   const index = current.findIndex((item) => item.id === incoming.id);
   if (index < 0) return [...current, incoming];
-  if (current[index]!.lastSequence > incoming.lastSequence) return current;
+  const previous = current[index]!;
+  if (previous.lastSequence > incoming.lastSequence) return current;
+  // A closed tab stays closed. An exit snapshot from before the close can arrive
+  // later with the same sequence and would otherwise put the tab back in the row.
+  const incoming_ =
+    previous.hidden && !incoming.hidden
+      ? { ...incoming, hidden: true }
+      : incoming;
   return current.map((item, position) =>
-    position === index ? incoming : item,
+    position === index ? incoming_ : item,
   );
 }
 
