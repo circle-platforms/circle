@@ -1,10 +1,14 @@
-import { createHash } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type {
+  FetchLike,
+  Transport,
+} from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
   Tool,
   ToolContext,
@@ -332,10 +336,44 @@ function hiddenError(error: unknown, hide: (text: string) => string): unknown {
   const message = hide(error.message);
   return message === error.message ? error : new Error(message);
 }
+/** The tool call a request is made for, while the call is under way. */
+const toolCalls = new AsyncLocalStorage<{ traceparent: string }>();
+/**
+ * A W3C trace context for one tool call: version 00, a new random trace id and parent id
+ * (never all zeros), sampled.
+ */
+export function traceparent(): string {
+  const id = (bytes: number): string => {
+    for (;;) {
+      const value = randomBytes(bytes).toString('hex');
+      if (/[^0]/.test(value)) return value;
+    }
+  };
+  return `00-${id(16)}-${id(8)}-01`;
+}
+/**
+ * How a server reached over HTTP is sent each request: with the Circle session of that
+ * moment as `Circle-Session-Id`, read again for every request since a runtime can move to
+ * another session, and during a tool call with that call's `traceparent`. Both are Circle's
+ * own: a configured header of either name is never sent.
+ */
+function requestFetch(sessionId?: () => string | undefined): FetchLike {
+  return (url, init) => {
+    const headers = new Headers(init?.headers);
+    headers.delete('Circle-Session-Id');
+    headers.delete('traceparent');
+    const session = sessionId?.();
+    if (session) headers.set('Circle-Session-Id', session);
+    const call = toolCalls.getStore();
+    if (call) headers.set('traceparent', call.traceparent);
+    return fetch(url, { ...init, headers });
+  };
+}
 function transportFor(
   connection: McpConnection,
   workspace: string,
   headers: Record<string, string>,
+  fetch: FetchLike,
 ): Transport {
   if (connection.transport === 'stdio')
     return new StdioClientTransport({
@@ -357,13 +395,14 @@ function transportFor(
     throw new Error('invalid MCP server URL');
   const requestInit = Object.keys(headers).length ? { headers } : undefined;
   if (connection.transport === 'streamable_http')
-    return new StreamableHTTPClientTransport(url, { requestInit });
+    return new StreamableHTTPClientTransport(url, { requestInit, fetch });
   if (connection.transport === 'websocket') {
     if (requestInit)
       throw new Error('a websocket server cannot be sent headers');
     return new WebSocketClientTransport(url);
   }
-  return new SSEClientTransport(url, { requestInit });
+  // A `url` entry without a known transport is reached over HTTP with server-sent events
+  return new SSEClientTransport(url, { requestInit, fetch });
 }
 /** A tool result as the model reads it: its text, and the pictures and PDFs it carries. */
 function resultText(
@@ -583,14 +622,17 @@ export class McpManager {
       if (cached) result = cached;
       else {
         try {
-          result = await client.callTool(
-            { name: spec.name, arguments: sending },
-            undefined,
-            {
-              signal: context.signal,
-              timeout: this.callTimeout ?? NO_LIMIT,
-              maxTotalTimeout: this.callTimeout,
-            },
+          // A new trace for each call, on the requests made for it
+          result = await toolCalls.run({ traceparent: traceparent() }, () =>
+            client.callTool(
+              { name: spec.name, arguments: sending },
+              undefined,
+              {
+                signal: context.signal,
+                timeout: this.callTimeout ?? NO_LIMIT,
+                maxTotalTimeout: this.callTimeout,
+              },
+            ),
           );
         } catch (error) {
           throw hiddenError(error, shown);
@@ -705,7 +747,12 @@ export class McpManager {
             this.services.secrets?.() ?? {},
           );
           hide = hideFilled(filled.filled);
-          transport = transportFor(connection, this.workspace, filled.headers);
+          transport = transportFor(
+            connection,
+            this.workspace,
+            filled.headers,
+            requestFetch(this.services.sessionId),
+          );
           if (transport instanceof StdioClientTransport)
             transport.stderr?.on('data', () => {});
           await abortable(
