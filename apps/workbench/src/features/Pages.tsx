@@ -9,11 +9,7 @@ import { KeybindingsEditor } from './KeybindingsEditor';
 import { TaskLimitsSettings } from './TaskLimitsSettings';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
-import {
-  extensionErrorText,
-  platformDescription,
-  platformTitle,
-} from '../plugins/labels';
+import { extensionErrorText } from '../plugins/labels';
 import {
   phaseAfterExtensionSave,
   reconcileExtensionAction,
@@ -1368,14 +1364,14 @@ function ExtensionsPage() {
                   <Blocks size={21} />
                 </span>
                 <div>
-                  <h2>{platformTitle(extension.name)}</h2>
+                  <h2>{extension.name}</h2>
                   <p>
                     {scopeLabel(extension.scope)} · {extension.version}
                   </p>
                 </div>
                 <Switch
                   label={t('enable {name}', {
-                    name: platformTitle(extension.name),
+                    name: extension.name,
                   })}
                   checked={checkedExtension(extension.name, extension.enabled)}
                   onChange={(value) => void setExtension(extension.name, value)}
@@ -1444,12 +1440,12 @@ function ExtensionsPage() {
               <div className="detail-title">
                 <Blocks size={20} />
                 <div>
-                  <h2>{platformTitle(plugin.id, plugin.title)}</h2>
-                  <p>{platformDescription(plugin.id) ?? plugin.description}</p>
+                  <h2>{plugin.title}</h2>
+                  <p>{plugin.description}</p>
                 </div>
                 <Switch
                   label={t('enable {name} interface', {
-                    name: platformTitle(plugin.id, plugin.title),
+                    name: plugin.title,
                   })}
                   checked={
                     plugin.runtimeExtension
@@ -2023,12 +2019,12 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             snapshot.extensions.map((extension) => (
               <div className="setting-row" key={extension.id}>
                 <span>
-                  {platformTitle(extension.name)} ·{' '}
-                  {scopeLabel(extension.scope)} · {extension.version}
+                  {extension.name} · {scopeLabel(extension.scope)} ·{' '}
+                  {extension.version}
                 </span>
                 <Switch
                   label={t('enable {name}', {
-                    name: platformTitle(extension.name),
+                    name: extension.name,
                   })}
                   checked={extensionSwitch.checked(
                     extension.name,

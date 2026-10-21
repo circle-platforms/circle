@@ -575,8 +575,6 @@ export interface RuntimePort {
     text: string;
     display: string;
   }) => Promise<void>;
-  /** Drop a session error the page is already showing, so it is not also a toast. */
-  dismissActionError?: (sessionId?: string) => void;
   /** Start the desktop runtime again after it stopped. */
   restartRuntime?: () => Promise<void>;
   /**

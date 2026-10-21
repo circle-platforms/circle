@@ -411,18 +411,6 @@ export class LiveRuntime implements RuntimePort {
     };
     for (const listener of this.listeners) listener();
   }
-  dismissActionError = (sessionId = this.snapshot.activeSessionId) => {
-    if (!this.sessionErrors.delete(sessionId)) return;
-    this.snapshot = {
-      ...this.snapshot,
-      sessions: this.snapshot.sessions.map((session) =>
-        session.id === sessionId
-          ? { ...session, actionError: undefined }
-          : session,
-      ),
-    };
-    for (const listener of this.listeners) listener();
-  };
   restartRuntime = async () => {
     if (!this.host.restartRuntime)
       throw Error(t('Circle runtime disconnected'));
@@ -906,7 +894,6 @@ export class LiveRuntime implements RuntimePort {
         'export-session': 'export',
         'mcp.reload': 'reload',
         'extensions.reload': 'reload',
-        'extension-command': 'custom-command',
         'set-model': 'set-model',
         'set-plan-mode': 'set-plan-mode',
         'set-mode': 'set-mode',
@@ -1278,10 +1265,8 @@ export class LiveRuntime implements RuntimePort {
       };
     }
     if (this.snapshot.commands.some((command) => command.name === name)) {
-      const data = (await native('custom-command', { name, args })) as
-        { notice?: string } | undefined;
-      // What an extension says in passing, such as the hub's sign-in, is a notice.
-      return data?.notice ? { notice: data.notice } : {};
+      await native('custom-command', { name, args });
+      return {};
     }
     const dialogs: Record<string, CommandResult['dialog']> = {
       login: 'connect',

@@ -7,7 +7,6 @@ import {
 import type { ReactNode } from 'react';
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
-import { platformTitle } from './labels';
 import { PluginRegistry, effectivePlugins } from './registry';
 import type { ServiceRegistry, WorkbenchPlugin, PluginService } from './types';
 interface Value {
@@ -50,9 +49,7 @@ export function PluginProvider({
                 throw Error(t('this interface needs the Circle runtime'));
               if (!snapshot.extensions.some((item) => item.name === name))
                 throw Error(
-                  t('runtime extension {name} is not installed', {
-                    name: platformTitle(name),
-                  }),
+                  t('runtime extension {name} is not installed', { name }),
                 );
               let reload = false;
               runtime.change((state) => {

@@ -39,12 +39,6 @@ export interface CommandContext {
   toast(message: string): void;
   append(message: string): void;
   sendUserMessage(message: string): void;
-  /**
-   * A secret the caller already collected, such as a password typed on the hub
-   * page. It is not a slash argument: the transcript, the view and events must
-   * not contain it. Empty means the command asks itself.
-   */
-  secret?: string;
 }
 export interface ExtensionCommand {
   name: string;
@@ -461,14 +455,12 @@ export class ExtensionAPI {
         this.tracked(
           (async () => {
             try {
-              if (context.secret) mask.remember(context.secret);
               await handler(args, {
                 workspace: context.workspace,
                 toast: (message) => context.toast(mask.text(String(message))),
                 append: (message) => context.append(mask.text(String(message))),
                 sendUserMessage: (message) =>
                   context.sendUserMessage(mask.text(String(message))),
-                secret: context.secret,
               });
             } catch (error) {
               throw this.masked(error);

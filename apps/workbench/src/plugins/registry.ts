@@ -1,5 +1,4 @@
 import { t } from '../i18n/index.ts';
-import { platformTitle } from './labels.ts';
 import type { WorkbenchPlugin } from './types.ts';
 export interface PairedExtension {
   name: string;
@@ -13,7 +12,7 @@ export function pairing(
   extensions: readonly PairedExtension[],
 ): { live: boolean; reason: string } {
   if (!plugin.runtimeExtension) return { live: true, reason: '' };
-  const name = platformTitle(plugin.runtimeExtension);
+  const name = plugin.runtimeExtension;
   const row = extensions.find((item) => item.name === plugin.runtimeExtension);
   if (!row)
     return {
