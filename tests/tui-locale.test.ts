@@ -31,6 +31,30 @@ test('interface locale follows LANG the same way a Chinese system does', () => {
 
 test('a Chinese locale translates the session list, resume line, view only and search quota', () => {
   assert.equal(uiText('view only', 'zh-CN'), '仅查看');
+  // Notices of a turn, their own reasons left as written
+  assert.equal(
+    uiText('Reloaded settings and the model', 'zh-CN'),
+    '已重新加载设置和模型',
+  );
+  assert.equal(
+    uiText('title failed · empty title', 'zh-CN'),
+    '标题生成失败 · empty title',
+  );
+  assert.equal(
+    uiText('Retry 2/10 in 1.5s', 'zh-CN'),
+    '第 2/10 次重试 · 1.5 秒后',
+  );
+  assert.equal(
+    uiText(
+      'Endpoint does not support temperature; continuing without it',
+      'zh-CN',
+    ),
+    '端点不支持 temperature，已去掉后继续',
+  );
+  assert.equal(
+    uiText('Reloaded settings and the model', 'en'),
+    'Reloaded settings and the model',
+  );
   assert.equal(uiText('Sessions · this folder', 'zh-CN'), '会话 · 此文件夹');
   assert.equal(uiText('Sessions · every folder', 'zh-CN'), '会话 · 所有文件夹');
   assert.equal(

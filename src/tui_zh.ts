@@ -5,6 +5,7 @@
 export const TUI_ZH: Record<string, string> = {
   // session list and resume
   'view only': '仅查看',
+  'Reloaded settings and the model': '已重新加载设置和模型',
   'view only, the draft stays': '仅查看，草稿会保留',
   'view only, the mode stays': '仅查看，不能切换模式',
   'view only · another terminal runs this session':

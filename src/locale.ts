@@ -91,6 +91,14 @@ function translatePatterns(
           : '已分叉';
     return `${verb} ${resumed[2]}`;
   }
+  // The reason after the dot is the endpoint's or the setting's, and stays as written
+  const titleFailed = /^title failed · ([\s\S]+)$/.exec(text);
+  if (titleFailed) return `标题生成失败 · ${titleFailed[1]}`;
+  const again = /^Retry (\d+)\/(\d+) in ([\d.]+)s$/.exec(text);
+  if (again) return `第 ${again[1]}/${again[2]} 次重试 · ${again[3]} 秒后`;
+  const dropped =
+    /^Endpoint does not support (\S+); continuing without it$/.exec(text);
+  if (dropped) return `端点不支持 ${dropped[1]}，已去掉后继续`;
   const above = /^↑ (\d+) more above$/.exec(text);
   if (above) return `↑ 上方还有 ${above[1]} 个`;
   if (text.startsWith('search: '))
