@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   CACHED_RESULT,
   MAX_CACHED_RESULTS,
   McpManager,
+  NOT_SENT,
 } from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings } from '../src/settings.js';
@@ -39,7 +40,73 @@ const TOOLS: StubTool[] = [
     inputSchema: fileSchema,
     annotations: { idempotentHint: true },
   },
+  {
+    name: 'inspect',
+    inputSchema: fileSchema,
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
 ];
+const FIXTURE = resolve('tests/fixtures/mcp-server.ts');
+// A server that holds documents: what it answers says what it holds now
+const DOCUMENTS: StubTool[] = [
+  {
+    name: 'put_document',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        file: { type: 'string', contentEncoding: 'base64' },
+      },
+    },
+    annotations: { idempotentHint: true },
+  },
+  {
+    name: 'get_document',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'delete_document',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
+    annotations: { destructiveHint: true },
+  },
+];
+async function documents(t: TestContext) {
+  const held = new Map<string, string>();
+  const stub = await mcpStub(t, {
+    tools: DOCUMENTS,
+    call: (request: StubRequest) => {
+      const name = String(request.message?.params?.name);
+      const args = request.message?.params?.arguments as {
+        id: string;
+        file?: string;
+      };
+      const text = (value: string) => ({
+        content: [{ type: 'text', text: value }],
+      });
+      if (name === 'put_document') {
+        const content = Buffer.from(args.file!, 'base64').toString();
+        held.set(args.id, content);
+        return text(`${args.id} is now "${content}"`);
+      }
+      if (name === 'delete_document') {
+        held.delete(args.id);
+        return text(`${args.id} deleted`);
+      }
+      return text(
+        held.has(args.id) ? `"${held.get(args.id)}"` : 'no such document',
+      );
+    },
+  });
+  return { stub, held };
+}
+async function until(check: () => boolean): Promise<void> {
+  const deadline = performance.now() + 10_000;
+  while (!check()) {
+    assert.ok(performance.now() < deadline, 'timed out');
+    await new Promise((done) => setTimeout(done, 5));
+  }
+}
 const reply = (
   text: string,
   calls: Message['tool_calls'] = [],
@@ -139,8 +206,12 @@ test('an idempotent tool given the same file contents and arguments in a session
     /^cached \(same content\)[^\n]*\nfile: copy\.bin \(14 bytes/,
   );
   assert.equal(served(), 1);
-  // It still asks each time: only the server is spared
+  // It still asks each time: only the server is spared, and the card says so
   assert.equal(asked.length, 3);
+  assert.deepEqual(
+    asked.map((call) => String(call.args.file).endsWith(`, ${NOT_SENT}`)),
+    [false, true, true],
+  );
   // Other arguments, other contents: the server again
   assert.match(
     await call('convert', {
@@ -198,12 +269,13 @@ test('the kept results are bounded, the oldest used going first, and trust_annot
   await manager.load([
     { name: 'files-server', url: stub.url, transport: 'streamable_http' },
   ]);
-  const convert = manager.tools.find(
-    (tool) => tool.name === 'files-server_convert',
+  // A tool that only reads: its calls keep what was kept for the server
+  const inspect = manager.tools.find(
+    (tool) => tool.name === 'files-server_inspect',
   )!;
   const context = { sessionId: 'any', signal: new AbortController().signal };
   const run = (mode: number) =>
-    convert.run({ file: 'a.bin', mode: `${mode}` }, context);
+    inspect.run({ file: 'a.bin', mode: `${mode}` }, context);
   for (let mode = 0; mode <= MAX_CACHED_RESULTS; mode++) await run(mode);
   assert.equal(stub.calls().length, MAX_CACHED_RESULTS + 1);
   // The second is still kept, and using it makes the first the oldest, which went
@@ -216,7 +288,7 @@ test('the kept results are bounded, the oldest used going first, and trust_annot
     { name: 'files-server', url: stub.url, transport: 'streamable_http' },
   ]);
   const reloaded = manager.tools.find(
-    (tool) => tool.name === 'files-server_convert',
+    (tool) => tool.name === 'files-server_inspect',
   )!;
   assert.match(
     await reloaded.run({ file: 'a.bin', mode: '1' }, context),
@@ -237,4 +309,134 @@ test('the kept results are bounded, the oldest used going first, and trust_annot
   await untrusted.run({ file: 'a.bin', mode: '1' }, context);
   await untrusted.run({ file: 'a.bin', mode: '1' }, context);
   assert.equal(stub.calls().length, before + 2);
+});
+
+test('a call that may change what a server holds makes what was kept for it untrue: A, B, A and put, delete, put all reach the server', async (t) => {
+  const root = scratch(t);
+  writeFileSync(join(root, 'v1.txt'), 'version one');
+  writeFileSync(join(root, 'v2.txt'), 'version two');
+  const { stub, held } = await documents(t);
+  const manager = new McpManager(root, 30_000, undefined, {
+    sessionId: () => 'session-one',
+  });
+  cleanup(t, () => manager.close());
+  await manager.load([
+    { name: 'files-server', url: stub.url, transport: 'streamable_http' },
+  ]);
+  const context = { sessionId: 'any', signal: new AbortController().signal };
+  const run = (tool: string, args: Record<string, unknown>) =>
+    manager.tools
+      .find((item) => item.name === `files-server_${tool}`)!
+      .run(args, context);
+  const put = (id: string, file: string) => run('put_document', { id, file });
+  const sent = () => stub.calls().length;
+  await put('x', 'v1.txt');
+  await put('x', 'v2.txt');
+  assert.match(
+    await put('x', 'v1.txt'),
+    /^file: sent v1\.txt [^\n]*\n\nx is now "version one"$/,
+  );
+  assert.equal(sent(), 3);
+  assert.equal(await run('get_document', { id: 'x' }), '"version one"');
+  await put('y', 'v1.txt');
+  await run('delete_document', { id: 'y' });
+  assert.match(await put('y', 'v1.txt'), /^file: sent v1\.txt/);
+  assert.equal(held.get('y'), 'version one');
+  // The same call again with nothing between that may change the server: the earlier
+  // result, and a call that only reads, in between, leaves it so
+  const before = sent();
+  assert.match(await put('y', 'v1.txt'), /^cached \(same content\)/);
+  assert.equal(await run('get_document', { id: 'y' }), '"version one"');
+  assert.match(await put('y', 'v1.txt'), /^cached \(same content\)/);
+  assert.equal(sent(), before + 1);
+});
+
+test("nothing kept for a server outlives its connection: once the server's program has exited, a call gets no earlier result", async (t) => {
+  const root = scratch(t);
+  writeFileSync(join(root, 'a.bin'), 'contents');
+  const manager = new McpManager(root, 30_000, undefined, {
+    sessionId: () => 'session-one',
+  });
+  cleanup(t, () => manager.close());
+  await manager.load([
+    { name: 'fixture', command: process.execPath, args: [FIXTURE] },
+  ]);
+  assert.equal(manager.status[0]!.error, '', manager.describe());
+  const checksum = manager.tools.find(
+    (tool) => tool.name === 'fixture_checksum',
+  )!;
+  const context = { sessionId: 'any', signal: new AbortController().signal };
+  const first = await checksum.run({ file: 'a.bin' }, context);
+  const pid = Number(/8 bytes read by (\d+)$/.exec(first)![1]);
+  assert.match(await checksum.run({ file: 'a.bin' }, context), /^cached/);
+  process.kill(pid);
+  await until(() => manager.status[0]!.error !== '');
+  assert.match(manager.status[0]!.error, /the connection ended/);
+  await assert.rejects(checksum.run({ file: 'a.bin' }, context));
+});
+
+test('a call whose card said it would get its earlier result is not run once another call has reached that server', async (t) => {
+  const root = scratch(t);
+  const workspace = join(root, 'workspace');
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, 'v1.txt'), 'version one');
+  const { stub, held } = await documents(t);
+  const settings = defaultSettings();
+  settings.mcp_servers = [
+    { name: 'files-server', url: stub.url, transport: 'streamable_http' },
+  ];
+  const replies: Partial<ModelResponse>[] = [];
+  let between: (() => Promise<unknown>) | undefined;
+  const runtime = new AgentRuntime({
+    home: join(root, 'home'),
+    workspace,
+    settings,
+    model: new ScriptedModel(replies),
+    userHome: join(root, 'user'),
+    approve: async () => {
+      // While the card is up, another conversation's call reaches the same server
+      await between?.();
+      return 'approve';
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  let count = 0;
+  const call = async (tool: string, args: Record<string, unknown>) => {
+    const id = `call-${++count}`;
+    replies.push(
+      reply('', [{ id, name: `files-server_${tool}`, args }]),
+      reply('done'),
+    );
+    await runtime.harness.run(`call ${tool}`);
+    return runtime.harness.messages.find(
+      (message) => message.tool_call_id === id,
+    )!;
+  };
+  await call('put_document', { id: 'x', file: 'v1.txt' });
+  const remove = runtime.mcp.tools.find(
+    (tool) => tool.name === 'files-server_delete_document',
+  )!;
+  between = () =>
+    remove.run(
+      { id: 'x' },
+      { sessionId: 'other', signal: new AbortController().signal },
+    );
+  const stale = await call('put_document', { id: 'x', file: 'v1.txt' });
+  assert.equal(stale.status, 'error');
+  assert.match(stale.content, /^not run: /);
+  assert.match(stale.content, /nothing was sent/);
+  // The put the card offered as an earlier result was not sent, and the delete stands
+  assert.deepEqual(
+    stub.calls().map((request) => request.message?.params?.name),
+    ['put_document', 'delete_document'],
+  );
+  assert.equal(held.has('x'), false);
+  // Called again, it asks to send, and sends
+  between = undefined;
+  assert.match(
+    (await call('put_document', { id: 'x', file: 'v1.txt' })).content,
+    /^file: sent v1\.txt/,
+  );
+  assert.equal(held.get('x'), 'version one');
 });

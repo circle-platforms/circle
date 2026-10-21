@@ -518,7 +518,8 @@ const NO_LIMIT = 2_147_483_647;
  * What a tool's annotations make of it, when its server is trusted with them: read-only
  * (`readOnlyHint`) runs as Circle's own reads do; destructive (`destructiveHint`) asks every
  * time. A tool that says both is destructive. Anything else is unknown, as without them.
- * Idempotent (`idempotentHint`): a call that sends files may get an earlier result again.
+ * Idempotent (`idempotentHint`): a call that sends files may get an earlier result again,
+ * while no call that may change what the server holds has reached it since.
  */
 function toolHints(
   annotations: unknown,
@@ -548,11 +549,20 @@ export const MAX_CACHED_RESULTS = 64;
 export const MAX_CACHED_BYTES = 16 * 1024 * 1024;
 /**
  * The results of successful calls to idempotent tools that sent files, by what the call
- * sent; the oldest used goes first when there are too many.
+ * sent, with the server each came from; the oldest used goes first when there are too many.
+ * An idempotent call repeated has no further effect only while nothing else changed what
+ * the server holds, so a server's results are forgotten whenever another call that may
+ * change it is sent there, and when its connection ends.
  */
 class SentResults {
-  private entries = new Map<string, { result: ToolResult; size: number }>();
+  private entries = new Map<
+    string,
+    { server: string; result: ToolResult; size: number }
+  >();
   private size = 0;
+  has(key: string): boolean {
+    return this.entries.has(key);
+  }
   get(key: string): ToolResult | undefined {
     const entry = this.entries.get(key);
     if (!entry) return undefined;
@@ -560,7 +570,7 @@ class SentResults {
     this.entries.set(key, entry);
     return structuredClone(entry.result);
   }
-  set(key: string, result: ToolResult): void {
+  set(key: string, server: string, result: ToolResult): void {
     const size = JSON.stringify(result).length;
     if (size > MAX_CACHED_BYTES) return;
     const earlier = this.entries.get(key);
@@ -568,7 +578,7 @@ class SentResults {
       this.entries.delete(key);
       this.size -= earlier.size;
     }
-    this.entries.set(key, { result: structuredClone(result), size });
+    this.entries.set(key, { server, result: structuredClone(result), size });
     this.size += size;
     for (const [oldest, entry] of this.entries) {
       if (
@@ -580,6 +590,14 @@ class SentResults {
       this.size -= entry.size;
     }
   }
+  /** Forgets every result kept from one server. */
+  forget(server: string): void {
+    for (const [key, entry] of this.entries)
+      if (entry.server === server) {
+        this.entries.delete(key);
+        this.size -= entry.size;
+      }
+  }
   clear(): void {
     this.entries.clear();
     this.size = 0;
@@ -588,6 +606,9 @@ class SentResults {
 /** What a result taken from the cache says before the files it was for. */
 export const CACHED_RESULT =
   'cached (same content): an earlier call in this session sent the same files and arguments, so the server was not called again and this is its result';
+/** What the card adds to a file the call will not send, since it gets its earlier result. */
+export const NOT_SENT =
+  'not sent: the same call earlier in this session got its result, which is given again';
 /** A server Circle is connected to. */
 interface Connected {
   name: string;
@@ -661,11 +682,13 @@ export class McpManager {
         )
         .digest('hex');
     };
-    // The server is sent each file's bytes; Circle shows the file by path, size and digest
+    // The server is sent each file's bytes; Circle shows the file by path, size and digest.
+    // `reuse` is the kept result the card said this call gets, decided before the card.
     const call = async (
       args: Record<string, unknown>,
       context: ToolContext,
       sent: SentFile[] = [],
+      reuse?: string,
     ): Promise<string> => {
       context.signal.throwIfAborted();
       const key = cacheKey(args, context, sent);
@@ -679,10 +702,18 @@ export class McpManager {
       // as its name, in one pass, so neither breaks the other
       const shown = (text: string): string =>
         replaceLongest(text, [...encoded, ...filled]);
-      const cached = key ? this.results.get(key) : undefined;
+      const cached = reuse === undefined ? undefined : this.results.get(reuse);
+      // Forgotten while the card was up: sending now is not what the card said
+      if (reuse !== undefined && !cached)
+        throw new Error(
+          `not run: another call reached ${connection.name} after the card said this call would get its earlier result, which may no longer hold; nothing was sent. Call it again to send it.`,
+        );
       let result: ToolResult;
       if (cached) result = cached;
       else {
+        // A call that may change what the server holds makes what was kept for it untrue,
+        // whether it then succeeds, fails or is interrupted
+        if (!hints.readOnly) this.results.forget(connection.name);
         try {
           // A new trace for each call, on the requests made for it
           result = await toolCalls.run(
@@ -715,7 +746,8 @@ export class McpManager {
         } catch (error) {
           throw hiddenError(error, shown);
         }
-        if (key && !result.isError) this.results.set(key, result);
+        if (key && !result.isError)
+          this.results.set(key, connection.name, result);
       }
       const { text, attachments } = resultText(result, spec.name, context);
       const header = [
@@ -755,15 +787,23 @@ export class McpManager {
           label: `${path} (${bytes.length} bytes, sha256 ${sha256})`,
         });
       }
+      // Decided now, so the card can say that the call sends nothing and gets its earlier
+      // result; the call keeps to that
+      const key = cacheKey(args, context, sent);
+      const reuse =
+        key !== undefined && this.results.has(key) ? key : undefined;
       const run: PreparedRun = (given, runContext) => {
         for (const file of sent)
           if (given[file.name] !== file.path)
             throw new Error(`${file.name} is not the file Circle read`);
-        return call(given, runContext, sent);
+        return call(given, runContext, sent, reuse);
       };
       if (sent.length)
         run.shown = Object.fromEntries(
-          sent.map((file) => [file.name, file.label]),
+          sent.map((file) => [
+            file.name,
+            reuse ? `${file.label}, ${NOT_SENT}` : file.label,
+          ]),
         );
       return run;
     };
@@ -888,11 +928,13 @@ export class McpManager {
             instructions: serverInstructions(client.getInstructions(), hide),
             open: true,
           };
-          // The server went away: its instructions leave the prompt, and /mcp says so
+          // The server went away: its instructions leave the prompt, /mcp says so, and no
+          // result it gave earlier is given again
           client.onclose = () => {
             if (!server.open) return;
             server.open = false;
             state.error = 'the connection ended; reload to connect again';
+            this.results.forget(connection.name);
             this.services.onChange?.();
           };
           connected.push(server);

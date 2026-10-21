@@ -69,6 +69,16 @@ for await (const line of input) {
             required: ['path'],
           },
         },
+        {
+          name: 'checksum',
+          description: 'Say how long a file is, and which process read it.',
+          inputSchema: {
+            type: 'object',
+            properties: { file: { type: 'string', contentEncoding: 'base64' } },
+            required: ['file'],
+          },
+          annotations: { idempotentHint: true },
+        },
       ],
     });
   else if (request.method === 'tools/call') {
@@ -114,6 +124,15 @@ for await (const line of input) {
       send(request.id, {
         isError: true,
         content: [{ type: 'text', text: 'fixture error' }],
+      });
+    else if (name === 'checksum')
+      send(request.id, {
+        content: [
+          {
+            type: 'text',
+            text: `${Buffer.from(String((args as { file?: string }).file), 'base64').length} bytes read by ${process.pid}`,
+          },
+        ],
       });
     else if (name === 'login.wait') {
       if (args.started) writeFileSync(args.started, '');
