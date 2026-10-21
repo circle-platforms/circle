@@ -25,6 +25,7 @@ import {
 import { VERSION } from '../src/version.js';
 import { TITLE_MAX_TOKENS } from '../src/session_title.js';
 import { listenReleaseGateway } from './release-gateway.js';
+import { runReleaseInstaller } from './release-installer.js';
 import { parseFrontmatter } from '../src/skills.js';
 import {
   defaultSettings,
@@ -291,7 +292,7 @@ try {
     CIRCLE_BIN_DIR: bin,
     CIRCLE_NO_PATH: '1',
   };
-  const steps = sync(
+  const steps = await runReleaseInstaller(
     windows ? 'powershell.exe' : 'bash',
     windows
       ? [
@@ -339,7 +340,7 @@ try {
   manifest.version = upgraded;
   manifest.files = fileInventory(second);
   writeFileSync(join(second, 'release.json'), JSON.stringify(manifest));
-  sync(
+  await runReleaseInstaller(
     join(second, 'runtime', windows ? 'node.exe' : 'node'),
     [join(second, 'app/dist/install_manager.js'), second, prefix, bin],
     env,
@@ -376,7 +377,7 @@ try {
   const defaultBin = windows
     ? join(defaultPrefix, 'bin')
     : join(fakeHome, '.local', 'bin');
-  sync(
+  await runReleaseInstaller(
     windows ? 'powershell.exe' : 'bash',
     windows
       ? [
