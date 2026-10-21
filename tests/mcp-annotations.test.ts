@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildMcpConnections } from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -55,10 +55,21 @@ const calling = (...tools: string[]): Partial<ModelResponse> =>
     })),
   );
 
-async function setup(t: TestContext, trust?: unknown) {
+async function setup(
+  t: TestContext,
+  trust?: unknown,
+  options: { hooks?: unknown; headless?: boolean } = {},
+) {
   const root = scratch(t);
   const workspace = join(root, 'workspace');
   mkdirSync(workspace);
+  if (options.hooks) {
+    mkdirSync(join(root, 'home'));
+    writeFileSync(
+      join(root, 'home', 'hooks.json'),
+      JSON.stringify(options.hooks),
+    );
+  }
   const stub = await mcpStub(t, { tools: TOOLS });
   const settings = defaultSettings();
   settings.mcp_servers = [
@@ -80,10 +91,15 @@ async function setup(t: TestContext, trust?: unknown) {
     settings,
     model,
     userHome: join(root, 'user'),
-    approve: async (call) => {
-      asked.push(call);
-      return answers.shift() ?? 'reject';
-    },
+    // Print, line and RPC mode: no card can be shown, and servers load with --extensions
+    ...(options.headless
+      ? { headless: true, integrations: true }
+      : {
+          approve: async (call: ToolCall) => {
+            asked.push(call);
+            return answers.shift() ?? 'reject';
+          },
+        }),
   });
   cleanup(t, () => runtime.close());
   await runtime.initialize();
@@ -158,10 +174,19 @@ test('a tool its server marks destructive asks on every call, with no session op
   const { runtime, replies, asked, answers, ran } = await setup(t);
   const tool = 'files-server_remove_file';
   const review = runtime.policy.review(tool, {});
-  assert.equal(review.verdict, 'ASK');
+  // As Circle's own deletes: always asks, and the reason is the same words for every tool,
+  // which the card heads with the tool's name
+  assert.equal(review.verdict, 'ASK_FORCED');
   assert.equal(review.pattern, '');
   assert.equal(review.warn_delete, true);
-  assert.match(review.reason, /its MCP server says it can delete/);
+  assert.equal(
+    review.reason,
+    'its MCP server says it can delete or overwrite data',
+  );
+  assert.equal(
+    runtime.policy.review('files-server_save_note', {}).reason,
+    'can change state',
+  );
   // The terminal card offers no "for this session", and warns
   const card = approvalRequest(
     { id: 'c', name: tool, args: {} },
@@ -228,4 +253,40 @@ test('trust_annotations false brings back unknown tools for that server', async 
     ['files-server_list_files'],
   );
   assert.deepEqual(ran(), ['list_files']);
+});
+
+test("a hook's allow does not skip a destructive tool's card, and print mode does not run one even with --yolo, as Circle's own deletes", async (t) => {
+  const root = scratch(t);
+  const script = join(root, 'allow.mjs');
+  writeFileSync(
+    script,
+    "process.stdout.write(JSON.stringify({ decision: 'allow', reason: 'go' }));\n",
+  );
+  const hooks = {
+    hooks: {
+      before_tool: [
+        {
+          name: 'allow all',
+          command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+        },
+      ],
+    },
+  };
+  const allowed = await setup(t, undefined, { hooks });
+  allowed.answers.push('approve');
+  allowed.replies.push(calling('save_note', 'remove_file'), assistant('done'));
+  await allowed.runtime.harness.run('save and remove');
+  // The hook's allow skips the ordinary card; the destructive one is still asked
+  assert.deepEqual(
+    allowed.asked.map((call) => call.name),
+    ['files-server_remove_file'],
+  );
+  assert.deepEqual(allowed.ran(), ['save_note', 'remove_file']);
+  assert.match(allowed.results()[0]!, /^Hook allowed this call\./);
+  const headless = await setup(t, undefined, { headless: true });
+  headless.runtime.policy.setYolo(headless.runtime.session.id, true);
+  headless.replies.push(calling('save_note', 'remove_file'), assistant('done'));
+  await headless.runtime.harness.run('save and remove');
+  assert.deepEqual(headless.ran(), ['save_note']);
+  assert.match(headless.results()[1]!, /not run: this operation always asks/);
 });

@@ -69,6 +69,9 @@ export const common: Record<string, string> = {
   'deletes files': '删除文件',
   'runs a shell command': '运行 shell 命令',
   'only reads': '只读取',
+  'can change state': '可能改变状态',
+  'its MCP server says it can delete or overwrite data':
+    '它的 MCP 服务器说它可能删除或覆盖数据',
   'types this command into your terminal': '将把这条命令输入这个终端',
   'restarts this terminal and types into it':
     '会先重新启动这个终端，再把文字输入进去',

@@ -778,12 +778,13 @@ export class ApprovalPolicy {
     );
   }
   review(tool: string, args: Record<string, unknown>): Review {
-    // Asked like any call, with no rule to keep: an earlier "allow for this session" for the
-    // tool covers none of its calls either
+    // Always asks, as Circle's own deletes do: no rule is kept or covers it, a hook's allow
+    // does not skip the card, and a run that cannot show one does not run it. The card is
+    // headed with the tool's name, so the reason is the same words for every tool.
     if (this.destroys(tool))
       return review(
-        'ASK',
-        `${tool}: its MCP server says it can delete or overwrite data`,
+        'ASK_FORCED',
+        'its MCP server says it can delete or overwrite data',
         { warn_delete: true },
       );
     const tab = terminalTabWrite(tool, args);
@@ -937,7 +938,7 @@ export class ApprovalPolicy {
         covered_by: host ? ['*'] : [],
       });
     }
-    return review('ASK', `${tool} can change state`, {
+    return review('ASK', 'can change state', {
       pattern: '*',
       scope: `every ${tool} call`,
     });

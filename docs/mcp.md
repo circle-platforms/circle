@@ -110,7 +110,7 @@ In print mode, line mode and RPC mode MCP servers load only with `--extensions` 
 An MCP server can be a program that runs with your rights, and its tools can do whatever it does. Circle cannot see what a tool changes. It goes by what the server says of each tool in the tool's annotations: hints from the server you configured, which Circle does not check. Only a value of `true` counts.
 
 - A tool marked `readOnlyHint` is treated as Circle's own reads are: it does not ask, and it keeps working in `read-only` and plan mode.
-- A tool marked `destructiveHint` asks on every call, and its card warns that it can delete or overwrite data. "Allow for this session" is not offered for it, and a rule kept for it before covers none of its calls. In `auto` mode it runs without asking, as every call does there. A tool marked both ways counts as destructive.
+- A tool marked `destructiveHint` always asks, as Circle's own deletes do, and its card warns that it can delete or overwrite data. "Allow for this session" is not offered for it, a rule kept for it before covers none of its calls, a hook's allow does not skip its card, and print, line and RPC mode do not run it, even with `--yolo`. In `auto` mode it runs without asking, as every call does there. A tool marked both ways counts as destructive.
 - Any other tool asks for approval, and `read-only` mode refuses it. "Allow for this session" on the card covers every call to that tool.
 
 With `"trust_annotations": false` a server's annotations are ignored: every one of its tools asks, `read-only` mode refuses them all, and "Allow for this session" covers each. Only add servers you trust. See [Security](security.md).
