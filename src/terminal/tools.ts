@@ -442,6 +442,24 @@ export function terminalTools(
           description:
             'A regular expression the screen must show, for a device that answers',
         },
+        absent: {
+          type: 'string',
+          maxLength: 200,
+          description:
+            'A regular expression the device must not print once the wait begins: the wait ends at once, as a failed check, when it does',
+        },
+        retries: {
+          type: 'number',
+          minimum: 0,
+          maximum: 5,
+          description:
+            'How many times to wait again after a timeout; 0 by default',
+        },
+        changed: {
+          type: 'boolean',
+          description:
+            'Also return the lines the device printed during the wait, and only those',
+        },
         timeout_ms: {
           type: 'number',
           minimum: 1000,

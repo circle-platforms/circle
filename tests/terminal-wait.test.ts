@@ -140,6 +140,238 @@ test('wait: quiet resolves what rests, pattern resolves what arrives, timeout bo
   assert.match(capped.text, /still going after 1s/);
 });
 
+/**
+ * Resolves once a wait on the console has begun, so what the device prints next is
+ * printed during it; given the check of an earlier attempt, once the next one began.
+ * It follows the wait's own state, never the runner's clock.
+ */
+async function waitBegun(
+  h: ReturnType<typeof harness>,
+  conversation: string,
+  earlier?: () => void,
+): Promise<() => void> {
+  const session = h.sessions.session(conversation, 't1')!;
+  for (let turn = 0; turn < 100_000; turn++) {
+    const [check] = session.watchers;
+    if (check && check !== earlier) return check;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw Error('the wait never began');
+}
+/** The lines of a result's During the wait section, and nothing after it. */
+function during(text: string): string[] {
+  const [, section] = text.split('\n### During the wait\n');
+  assert.ok(section !== undefined, `no During the wait section in:\n${text}`);
+  return section.split('\n### ')[0]!.split('\n');
+}
+
+test('wait: changed is exactly what the device printed during the wait', async (t) => {
+  // Each screen is one where counting the session's buffer lines went wrong.
+  const old = (count: number) =>
+    Array.from({ length: count }, (_, n) => `old line ${n}\r\n`).join('');
+  const cases: [string, string, string, string[]][] = [
+    [
+      'a screen that has not scrolled yet',
+      'before the wait\r\n',
+      'first new line\r\nsecond new line\r\nEND\r\n',
+      ['first new line', 'second new line', 'END'],
+    ],
+    [
+      'scrollback at its 2000-line cap',
+      old(2100),
+      'new line\r\nEND\r\n',
+      ['new line', 'END'],
+    ],
+    [
+      'a screen cleared before the wait',
+      old(30) + '\x1b[H\x1b[2J\x1b[3J',
+      'after the clear\r\nEND\r\n',
+      ['after the clear', 'END'],
+    ],
+    [
+      'a full-screen program the wait sees end',
+      old(200) + '\x1b[?1049hpager page\r\n',
+      '\x1b[?1049l$ back at the prompt\r\nEND\r\n',
+      ['$ back at the prompt', 'END'],
+    ],
+    [
+      'a clear during the wait',
+      old(3),
+      'one\r\ntwo\r\n\x1b[H\x1b[2J\x1b[3Jthree\r\nEND\r\n',
+      ['one', 'two', 'three', 'END'],
+    ],
+  ];
+  for (const [name, before, printed, expected] of cases) {
+    const h = harness();
+    t.after(() => h.sessions.close());
+    await h.open(name);
+    h.device().emit(before);
+    const waited = h.sessions.request(
+      name,
+      'wait',
+      {
+        session: 't1',
+        pattern: 'END',
+        changed: true,
+        idle_ms: 30000,
+        timeout_ms: 30000,
+      },
+      signal,
+    );
+    await waitBegun(h, name);
+    h.device().emit(printed);
+    assert.deepEqual(during((await waited).text), expected, name);
+  }
+  // Nothing printed is said as such, not as an empty section.
+  const h = harness();
+  t.after(() => h.sessions.close());
+  await h.open('quiet');
+  h.device().emit('sw1# ');
+  const quiet = await h.sessions.request(
+    'quiet',
+    'wait',
+    { session: 't1', changed: true, idle_ms: 100, timeout_ms: 1000 },
+    signal,
+  );
+  assert.match(quiet.text, /quiet for 0\.1s/);
+  assert.deepEqual(during(quiet.text), ['(the device printed nothing)']);
+});
+
+test('wait: absent looks only at what the device printed since the wait began, and names that line', async (t) => {
+  const h = harness();
+  t.after(() => h.sessions.close());
+  await h.open();
+  // An earlier step's deliberate mistake is still on the screen
+  h.device().emit('% Invalid input detected at the earlier step\r\nsw1# ');
+  const passed = h.sessions.request(
+    'c1',
+    'wait',
+    {
+      session: 't1',
+      pattern: 'READY',
+      absent: 'Invalid input',
+      idle_ms: 30000,
+      timeout_ms: 30000,
+    },
+    signal,
+  );
+  await waitBegun(h, 'c1');
+  h.device().emit('READY\r\nsw1# ');
+  assert.match(
+    (await passed).text,
+    /· matched READY on the line: sw1# READY\n/,
+  );
+  // This step's own mistake ends its wait at once, even with a pattern that would never
+  // match, and the result names the new line rather than the earlier one.
+  const failed = h.sessions.request(
+    'c1',
+    'wait',
+    {
+      session: 't1',
+      pattern: 'NEVER',
+      absent: 'Invalid input',
+      idle_ms: 30000,
+      timeout_ms: 30000,
+    },
+    signal,
+  );
+  await waitBegun(h, 'c1');
+  h.device().emit('% Invalid input detected at step two\r\nsw1# ');
+  assert.match(
+    (await failed).text,
+    /· the absent pattern Invalid input appeared on the line: % Invalid input detected at step two\n/,
+  );
+});
+
+test('wait: an absent line that arrives with the expected one still fails the check', async (t) => {
+  const h = harness();
+  t.after(() => h.sessions.close());
+  await h.open();
+  const waited = h.sessions.request(
+    'c1',
+    'wait',
+    {
+      session: 't1',
+      pattern: 'sw1#',
+      absent: 'Invalid input',
+      idle_ms: 30000,
+      timeout_ms: 30000,
+    },
+    signal,
+  );
+  await waitBegun(h, 'c1');
+  // One burst: the screen shows the prompt the pattern wants as soon as the error
+  h.device().emit('% Invalid input detected\r\nsw1# ');
+  assert.match(
+    (await waited).text,
+    /· the absent pattern Invalid input appeared on the line: % Invalid input detected\n/,
+  );
+});
+
+test('wait: retries wait again after a timeout, on a clock the test drives', async (t) => {
+  const h = harness();
+  t.after(() => h.sessions.close());
+  await h.open();
+  // The wait's clock and ticks are the test's: no timer of the runner races the cap.
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.now() });
+  // The answer comes once the first attempt has run out: the second one sees it.
+  const retried = h.sessions.request(
+    'c1',
+    'wait',
+    {
+      session: 't1',
+      pattern: 'LATE READY',
+      idle_ms: 30000,
+      timeout_ms: 1000,
+      retries: 3,
+    },
+    signal,
+  );
+  const first = await waitBegun(h, 'c1');
+  t.mock.timers.tick(1050);
+  await waitBegun(h, 'c1', first);
+  h.device().emit('LATE READY\r\n');
+  assert.match(
+    (await retried).text,
+    /· matched LATE READY in 2 attempts on the line: LATE READY\n/,
+  );
+  // Without retries the same silence is a timeout, as before.
+  const capped = h.sessions.request(
+    'c1',
+    'wait',
+    { session: 't1', pattern: 'NEVER', idle_ms: 30000, timeout_ms: 1000 },
+    signal,
+  );
+  await waitBegun(h, 'c1');
+  t.mock.timers.tick(1050);
+  const once = (await capped).text;
+  assert.match(once, /· still going after 1s\n/);
+  assert.doesNotMatch(once, /attempts/);
+  // Every attempt used up: the result counts them all.
+  const exhausted = h.sessions.request(
+    'c1',
+    'wait',
+    {
+      session: 't1',
+      pattern: 'NEVER',
+      idle_ms: 30000,
+      timeout_ms: 1000,
+      retries: 2,
+    },
+    signal,
+  );
+  let attempt = await waitBegun(h, 'c1');
+  for (let next = 0; next < 2; next++) {
+    t.mock.timers.tick(1050);
+    attempt = await waitBegun(h, 'c1', attempt);
+  }
+  t.mock.timers.tick(1050);
+  assert.match(
+    (await exhausted).text,
+    /· still going after 3s in 3 attempts\n/,
+  );
+});
+
 test('a quick connect password reaches SSH as a one-time secret, gone once the connector read it', async (t) => {
   const device = new FakeConsole();
   const seen: {
