@@ -34,6 +34,8 @@ on:
       - 'scripts/build-release.ts'
       - 'scripts/smoke-release.ts'
       - 'scripts/release.ts'
+      - 'scripts/release-*.ts'
+      - 'scripts/download.ts'
       - 'scripts/node-runtime.json'
       - 'scripts/copy-assets.ts'
       - 'tsconfig.build.json'
