@@ -20,6 +20,29 @@ export function matchPattern(
 }
 
 /**
+ * Whether one name in a path inside the workspace keeps that path from the desktop
+ * application's file access: `.git`, `.circle` or a credential file name. On macOS and
+ * Windows, whose file systems usually ignore case, case is ignored here too, so `.ENV` is
+ * the credential file `.env` and `.Git` is `.git`. read_file's text reads there and an MCP
+ * tool's file parameter both go by it.
+ */
+export function protectedWorkspaceName(
+  name: string,
+  credentialFiles: readonly string[],
+  platform: string,
+): boolean {
+  const fold = platform === 'darwin' || platform === 'win32';
+  const folded = fold ? name.toLowerCase() : name;
+  return (
+    folded === '.git' ||
+    folded === '.circle' ||
+    credentialFiles.some((pattern) =>
+      matchPattern(fold ? pattern.toLowerCase() : pattern, folded),
+    )
+  );
+}
+
+/**
  * The file names Circle protects whatever `credential_files` says: a command or
  * a file tool may not read, copy or change one of these. `credential_files` adds
  * to this list and can never narrow it. Matched against the file's name, not its

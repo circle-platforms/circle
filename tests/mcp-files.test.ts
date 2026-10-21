@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import {
   FILE_PARAMETER_NOTE,
@@ -13,6 +13,10 @@ import {
   modelSchema,
 } from '../src/mcp_loader.js';
 import type { FileMutations } from '../src/file_mutations.js';
+import {
+  DEFAULT_CREDENTIAL_FILES,
+  protectedWorkspaceName,
+} from '../src/file_patterns.js';
 import type { ApprovalDecision } from '../src/harness.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings } from '../src/settings.js';
@@ -396,6 +400,85 @@ test('an echoed file is shown by its label even when a hidden header value is in
     ),
     `before: sent ${label('head.log', head)}\nafter: sent ${label('full.log', full)}\n\nbefore=${label('head.log', head)} after=${label('full.log', full)}`,
   );
+});
+
+test("with the desktop's file backend a workspace file read_file may not read there is not sent either", async (t) => {
+  const backend: FileMutations = {
+    authorize: () => {},
+    read: async (path) => ({ path, content: null, revision: null }),
+    apply: async () => {},
+  };
+  const { workspace, stub, replies, runtime, result } = await setup(t, {
+    fileMutations: backend,
+  });
+  mkdirSync(join(workspace, '.git'));
+  writeFileSync(join(workspace, '.git', 'config'), 'REMOTE=1');
+  mkdirSync(join(workspace, '.circle'));
+  writeFileSync(join(workspace, '.circle', 'notes.md'), 'project notes');
+  writeFileSync(join(workspace, '.ENV'), 'VALUE=1');
+  writeFileSync(join(workspace, 'data.bin'), 'shared bytes');
+  linkSync(join(workspace, 'data.bin'), join(workspace, 'other-name.bin'));
+  writeFileSync(join(workspace, 'plain.bin'), Buffer.from([7]));
+  // macOS and Windows file systems ignore case: there `.ENV` is the credential file `.env`
+  const folds = process.platform === 'darwin' || process.platform === 'win32';
+  replies.push(
+    reply('', [
+      upload('git', { file: '.git/config' }),
+      upload('circle', { file: '.circle/notes.md' }),
+      upload('env', { file: '.ENV' }),
+      upload('link', { file: 'other-name.bin' }),
+      upload('plain', { file: 'plain.bin' }),
+    ]),
+    reply('done'),
+  );
+  await runtime.harness.run('send them');
+  assert.match(
+    result('git').content,
+    /file is not available in this workspace: \.git/,
+  );
+  assert.match(
+    result('circle').content,
+    /file is not available in this workspace: \.circle/,
+  );
+  if (folds)
+    assert.match(
+      result('env').content,
+      /file is not available in this workspace: \.ENV/,
+    );
+  else assert.match(result('env').content, /^file: sent \.ENV/);
+  assert.match(result('link').content, /hard-linked files were not granted/);
+  assert.match(result('plain').content, /^file: sent plain\.bin/);
+  assert.deepEqual(
+    stub.calls().map((call) => call.message!.params!.arguments.file),
+    [
+      ...(folds ? [] : [Buffer.from('VALUE=1').toString('base64')]),
+      Buffer.from([7]).toString('base64'),
+    ],
+  );
+});
+
+test('a workspace name the desktop keeps from file access is .git, .circle or a credential file, without case where the file system ignores it', () => {
+  for (const [name, platform, kept] of [
+    ['.git', 'linux', true],
+    ['.Git', 'linux', false],
+    ['.Git', 'darwin', true],
+    ['.CIRCLE', 'win32', true],
+    ['.env', 'linux', true],
+    ['.ENV', 'linux', false],
+    ['.ENV', 'darwin', true],
+    ['KEY.PEM', 'win32', true],
+    ['private.custom', 'linux', true],
+    ['notes.txt', 'darwin', false],
+  ] as const)
+    assert.equal(
+      protectedWorkspaceName(
+        name,
+        [...DEFAULT_CREDENTIAL_FILES, 'private.custom'],
+        platform,
+      ),
+      kept,
+      `${name} on ${platform}`,
+    );
 });
 
 test("with the desktop's file backend a file outside the workspace is sent only with the person's grant, as read_file reads it", async (t) => {
