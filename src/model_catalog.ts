@@ -206,6 +206,8 @@ export class ModelCatalog {
   private controller?: AbortController;
   private closed = false;
   private factsCache = new Map<string, ModelFacts>();
+  /** Models whose endpoint itself refused pictures, that no catalog lists. */
+  private imageRejectors = new Set<string>();
   constructor(
     readonly home: string,
     readonly options: CatalogOptions = {},
@@ -359,8 +361,16 @@ export class ModelCatalog {
       );
     if (typeof said === 'boolean') result.imageInput = said;
     else if (reads.length) result.imageInput = reads.includes(true);
+    // The endpoint itself refused pictures for a model no catalog lists
+    if (result.imageInput === undefined && this.imageRejectors.has(model))
+      result.imageInput = false;
     this.factsCache.set(key, result);
     return structuredClone(result);
+  }
+  /** Remember that the endpoint refused pictures for a model no catalog lists. */
+  reportUnknownImage(model: string): void {
+    this.imageRejectors.add(model);
+    this.factsCache.clear();
   }
   refresh(onRefreshed?: () => void): Promise<boolean> {
     if (this.closed) return Promise.resolve(false);
