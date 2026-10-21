@@ -6,7 +6,7 @@ nav_order: 22
 
 Circle reads a small number of environment variables. Most tune retries and guards and never need to be set.
 
-The endpoint key is **not** read from the environment. Circle reads it only from `credentials.json`. See [Models](models.md).
+The model endpoint's key is **not** read from the environment. Circle reads it only from `credentials.json`. See [Models](models.md). Only the [side vision model](#side-vision-model)'s key may come from the environment, as `CIRCLE_VISION_KEY`.
 
 ## Location and mode
 
@@ -57,6 +57,17 @@ This also applies to `websearch`'s native provider request and DuckDuckGo fallba
 | `SSL_CERT_FILE`, `SSL_CERT_DIR`         | A PEM file, or folders of PEM files, of certificate authorities to trust as well as Node.js's own, for all of Circle's HTTPS requests: the model, model lists, models.dev, `webfetch`, `websearch`, the update check and `circle update`. Set one when your network inspects HTTPS. `NODE_EXTRA_CA_CERTS` works too. A file that cannot be read is reported in one line when Circle starts. | the certificates that come with Node.js                     |
 | `CIRCLE_TRUST_CERTS`                    | PEM files of certificate authorities to trust for this run, separated like `PATH`, on top of [`trust_cert_files`](settings.md) and `SSL_CERT_FILE`. Circle's requests and the tools it starts get them, as with `trust_cert_files`.                                                                                                                                                         | unset                                                       |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | The proxy for those requests, and the hosts that skip it.                                                                                                                                                                                                                                                                                                                                   | no proxy                                                    |
+
+## Side vision model
+
+A model that does not read images can have pictures described by a side vision model: see [Images and screenshots](usage.md#images-and-screenshots). Each of the first three wins over its part of `vision` in [`settings.json`](settings.md), for one run, and none is written there. Nothing is sent unless the address, the model and the key are all set.
+
+| Variable                   | Effect                                                                                                                                                             | Default                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| `CIRCLE_VISION_BASE_URL`   | The side vision model's OpenAI-compatible endpoint, with `/v1`; Circle adds `/chat/completions`. `http` or `https`, with no user name, password, query or `#`.     | `vision.base_url`                                           |
+| `CIRCLE_VISION_MODEL`      | The model id sent to it.                                                                                                                                           | `vision.model`                                              |
+| `CIRCLE_VISION_KEY`        | Its key, sent as `Authorization: Bearer`. Commands Circle runs do not see it (see [What commands see](#what-commands-see)).                                        | the key in `credentials.json` named by `vision.api_key_ref` |
+| `CIRCLE_VISION_TIMEOUT_MS` | How long one description may take, from sending the picture to the end of the answer, in whole milliseconds. Less than `1000`, or not a number, means the default. | `60000`                                                     |
 
 ## Agent guards
 

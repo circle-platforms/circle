@@ -12,7 +12,7 @@ import { Harness } from '../src/harness.js';
 import { HookRunner, loadHooks } from '../src/hooks.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message, Tool } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { approveProjectHooks, cleanup, scratch } from './helpers.js';
 
 const tab = 'local:3f2a';
 const write = (extra: Record<string, unknown>) => ({
@@ -227,6 +227,7 @@ test('a hook that allows the call still leaves the tab’s first use to the pers
       },
     }),
   );
+  approveProjectHooks(home, workspace, home);
   const store = new CheckpointStore(home);
   cleanup(t, () => store.close());
   const session = store.create(workspace, 'scripted');

@@ -874,14 +874,20 @@ export class ApprovalPolicy {
           : {},
       );
     }
-    if (tool === 'screenshot')
+    if (tool === 'screenshot') {
+      // The tool says when the side vision model sees the picture in the model's place
+      const viewer =
+        args.seen_by === 'side vision model'
+          ? 'the side vision model'
+          : 'the model';
       return review(
         'ASK',
         typeof args.app === 'string' && args.app.trim()
-          ? `shows the model the window of ${args.app.trim()}`
-          : 'shows the model the whole screen',
+          ? `shows ${viewer} the window of ${args.app.trim()}`
+          : `shows ${viewer} the whole screen`,
         { pattern: '*', scope: 'every screenshot' },
       );
+    }
     if (Object.hasOwn(BROWSER_ACTIONS, tool)) {
       const site = typeof args.site === 'string' ? args.site : '';
       // A click on a control that deletes, clears or resets something, or accepting a dialog

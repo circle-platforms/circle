@@ -9,6 +9,9 @@ export const HUB_ZH: Record<string, string> = {
   '{where} · {task} stopped following': '{where} · 已停止跟随 {task}',
   '{where} · {n} running': '{where} · {n} 个正在运行',
   '{where} · sign-in expired': '{where} · 登录已过期',
+  '{where} · cannot reach': '{where} · 无法连接',
+  ' · sign-in expired': ' · 登录已过期',
+  ' · cannot reach': ' · 无法连接',
   '{where} · {n} bot result(s)': '{where} · {n} 条机器人结果',
   'not a URL: {raw}': '不是网址：{raw}',
   'the address must start with http:// or https://':

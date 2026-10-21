@@ -6,21 +6,35 @@ nav_order: 12.5
 
 A hook is a shell command Circle runs at a fixed point in a turn. The model decides what to try; a hook decides whether that attempt is allowed. A deny from a hook stands in every approval mode, including accept-edits and auto.
 
-Hooks are code execution. Circle shows which ones are active, runs a project's hooks only after you trust the folder, and appends one JSON line per run to `hooks.log` in the data folder.
+Hooks are code execution. Circle shows which ones are active, runs a project's hooks only after you trust the folder and approve that version of the file, and appends one JSON line per run to `hooks.log` in the data folder.
 
 ## Where hooks live
 
-| File                                                            | When it runs                                                                                                                  |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `hooks.json` in the data folder (`~/.circle`, or `CIRCLE_HOME`) | Every session                                                                                                                 |
-| `<workspace>/.circle/hooks.json`                                | Only after the folder is trusted                                                                                              |
-| `hooks.json` next to a skill's `SKILL.md`                       | With that skill. A project skill's hooks run only in a trusted folder. See [A skill can ship hooks](#a-skill-can-ship-hooks). |
+| File                                                            | When it runs                                                                                                                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hooks.json` in the data folder (`~/.circle`, or `CIRCLE_HOME`) | Every session. These are your own hooks.                                                                                                                      |
+| `<workspace>/.circle/hooks.json`                                | After the folder is trusted, and after you approve this version of the file.                                                                                  |
+| `hooks.json` next to a skill's `SKILL.md`                       | With that skill. A project skill's hooks also wait for the folder trust and for approval of that file. See [A skill can ship hooks](#a-skill-can-ship-hooks). |
 
 Hooks are not a key in `settings.json`. A project settings file has a closed list of keys, and a bad `settings.json` stops Circle; a hooks file is separate so a mistake there does not.
+
+Trusting the folder is not enough for a project hooks file. See [Approving a project hooks file](#approving-a-project-hooks-file).
 
 Circle reads the files when a session starts, on `/new`, when you switch or import a session, and on `/reload`. `/reload` applies the new files to later events in the same session. It does not run `session_start` again, and it resets each `before_stop` hook's block count.
 
 A file whose `version` is present and is not `1` is skipped. A file can hold at most 100 hooks; further entries are left out and named in a notice. An entry without a command, an unknown event, or JSON that cannot be read is reported the same way, and the valid hooks in that file still load.
+
+## Approving a project hooks file
+
+A project hooks file (`.circle/hooks.json`, or a `hooks.json` next to a project skill) runs only in a version you approved. `hook-trust.json` in the data folder keeps, for each approved file by its real path, the SHA-256 digest of its bytes and the name, event and command of each hook in that version. A file that has never been approved, or whose bytes changed since, does not load. Circle reads the file once for the digest, for what it shows you and for the hooks that load, so what runs is the version you were shown. A file with no hooks in it has nothing to approve. Your own `hooks.json` in the data folder, and a `hooks.json` next to a skill that is not the project's, are never asked about.
+
+**In the terminal**, when a turn starts and such a file waits, a card asks first: the file, then each hook in that version with its event and command, marked new, changed or removed against the version you approved last; unchanged hooks share one line. Like every card, it waits while you are typing. The choices are `skip` and `approve these hooks`, and the focus starts on `skip`: enter, `1` and esc leave the hooks off, and letters do nothing. `2`, or down and enter, approves. The hooks then run from that turn on, `session_start` included, and the transcript says `project hooks approved`. After a skip they stay off for the session: the transcript says `project hooks need approval · <file>`, `/hooks` lists the file as needing approval, and the card comes back after `/reload` or in a new session. `circle --approve-hooks` approves the waiting files when the session opens, without the card.
+
+**In the desktop**, the same card appears in the conversation when a turn starts, with `approve these hooks` and `skip`. After a skip the transcript says the hooks need approval, and a new conversation asks again. Settings names each file that waits.
+
+**In print, line and rpc mode** nobody can answer a card. A file that waits does not run. Standard error says so once for the run, naming the file and how to approve it: with `circle` in a terminal in that folder, or with `--approve-hooks`, which approves the waiting files as they are now and lists each hook it approved. The transcript keeps the same notice, so a later session shows it.
+
+Releases up to 1.9.1 ran a trusted folder's hooks without this approval and kept no `hook-trust.json`. After an upgrade, such a file waits as a new one: the terminal and the desktop ask on the next turn, and print mode says so on standard error until it is approved once, for example with `--approve-hooks`.
 
 ## The file
 
@@ -45,14 +59,14 @@ A file whose `version` is present and is not `1` is skipped. A file can hold at 
 }
 ```
 
-| Field        | Meaning                                                                                                                                                                                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`    | Required. The shell command, at most 4,000 characters. Circle starts it with `shell: true` in the workspace, so `/bin/sh` runs it on macOS and Linux and `cmd.exe` on Windows (write `node script.mjs` for a hook that runs on every system), with the [filtered environment](security.md#the-shell-environment) used for other commands.                                                                  |
-| `name`       | Optional, at most 80 characters. The transcript and the desktop settings use it. Without one, the command is the name.                                                                                                                                                    |
-| `timeout_ms` | Optional. Default 30 seconds. Clamped between 100 milliseconds and 10 minutes. On timeout the process group is stopped (on Windows, `taskkill /T /F`, the same stop Circle uses for other commands).                                                                      |
-| `loop_limit` | Optional, only for `before_stop`. Default 5, clamped from 1 to 20. After this many blocks the hook is not run again for that session, until `/reload` or a new session.                                                                                                   |
-| `tools`      | Optional. A tool name, a list, or several names separated by `\|` or a comma. `*` or omitting it matches every tool. `matcher` is the same field. There is no regular expression. `session_start` and `before_stop` ignore it, so a copied matcher does not disable them. |
-| `paths`      | Optional globs. Empty matches every call. A call that names no path does not match a hook that has globs. See [Path globs](#path-globs). Ignored for `session_start` and `before_stop`.                                                                                   |
+| Field        | Meaning                                                                                                                                                                                                                                                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`    | Required. The shell command, at most 4,000 characters. Circle starts it with `shell: true` in the workspace, so `/bin/sh` runs it on macOS and Linux and `cmd.exe` on Windows (write `node script.mjs` for a hook that runs on every system), with the [filtered environment](security.md#the-shell-environment) used for other commands. |
+| `name`       | Optional, at most 80 characters. The transcript and the desktop settings use it. Without one, the command is the name.                                                                                                                                                                                                                    |
+| `timeout_ms` | Optional. Default 30 seconds. Clamped between 100 milliseconds and 10 minutes. On timeout the process group is stopped (on Windows, `taskkill /T /F`, the same stop Circle uses for other commands).                                                                                                                                      |
+| `loop_limit` | Optional, only for `before_stop`. Default 5, clamped from 1 to 20. After this many blocks the hook is not run again for that session, until `/reload` or a new session.                                                                                                                                                                   |
+| `tools`      | Optional. A tool name, a list, or several names separated by `\|` or a comma. `*` or omitting it matches every tool. `matcher` is the same field. There is no regular expression. `session_start` and `before_stop` ignore it, so a copied matcher does not disable them.                                                                 |
+| `paths`      | Optional globs. Empty matches every call. A call that names no path does not match a hook that has globs. See [Path globs](#path-globs). Ignored for `session_start` and `before_stop`.                                                                                                                                                   |
 
 ## Events
 
@@ -132,7 +146,7 @@ Matching is case-sensitive, except on Windows, where `\` and `/` are the same an
 
 The terminal keeps hook lines in the transcript as notices. With a Chinese locale the labels are Chinese; the hook's own reason, the command and the tool name stay as written. The welcome inventory names `.circle/hooks.json` when that file is present. The approval card adds `hook · <reason>` when a hook asked.
 
-The desktop transcript uses the same notices. In 简体中文 the labels are fully Chinese, and the reason stays as the hook wrote it. Settings lists each hook's name, whether it came from you, the project or a skill (and which skill), the event, the tools when they are not `*`, and the command. A skill hook that this session has not loaded is listed as waiting and does not run. An untrusted project file is named there and is not run.
+The desktop transcript uses the same notices. In 简体中文 the labels are fully Chinese, and the reason stays as the hook wrote it. Settings lists each hook's name, whether it came from you, the project or a skill (and which skill), the event, the tools when they are not `*`, and the command. A skill hook that this session has not loaded is listed as waiting and does not run. An untrusted project file is named there and is not run, and so is a project file that waits for approval.
 
 The active-hook notice lists names, events and sources. It does not list commands, unless a hook has no name, in which case the name is the command.
 
@@ -142,7 +156,7 @@ Each run appends one JSON line to `hooks.log` in the data folder. The fields are
 
 ## A skill can ship hooks
 
-A skill folder may contain `hooks.json` beside `SKILL.md`. Installing the skill does not run those commands. They run only after this session loads that skill, with `/skill` or with the model's `skill` tool, and they stop applying when you switch, import or start another session. A project skill's hooks still require the folder to be trusted; until then they are not loaded. Settings names the skill and, until it is loaded, that the hook is waiting.
+A skill folder may contain `hooks.json` beside `SKILL.md`. Installing the skill does not run those commands. They run only after this session loads that skill, with `/skill` or with the model's `skill` tool, and they stop applying when you switch, import or start another session. A project skill's hooks still require the folder to be trusted, and approval of that file's bytes, the same way as `.circle/hooks.json`. Until then they are not loaded. Settings names the skill and, until it is loaded, that the hook is waiting.
 
 A `session_start` hook in the skill runs with the session when the skill was loaded first, and runs once when the skill is loaded later. The other events apply to tool calls after that moment.
 

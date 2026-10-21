@@ -204,6 +204,8 @@ const expected = {
   themes: ['heading', 'settings'],
   variables: ['heading', 'settings'],
   secrets: ['heading', 'settings'],
+  // The settings page, where the hooks and the files that wait for approval are listed
+  hooks: ['heading', 'hooks'],
   mcp: ['heading', 'mcp servers'],
   extensions: ['heading', 'extensions'],
   approvals: ['heading', 'approvals'],

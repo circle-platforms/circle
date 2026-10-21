@@ -39,6 +39,8 @@ import { mention } from './mentions.js';
 import { EFFORT_LEVELS } from './model.js';
 import { installExitGuard } from './exit_guard.js';
 import { initializeNetwork } from './network_bootstrap.js';
+import { hangingWrap, pad, stringWidth } from './ink/string_width.js';
+import { t } from './locale.js';
 import { networkSummary } from './net.js';
 import { VERSION } from './version.js';
 import { UsageError } from './usage_error.js';
@@ -55,6 +57,8 @@ export interface CliOptions {
   yolo: boolean;
   /** Trust this folder for this run and remember it, including when nobody is at a terminal. */
   trust: boolean;
+  /** Approve the folder's project hooks files as they are now, without a card. */
+  approveHooks: boolean;
   extensions: boolean;
   verbose: boolean;
   continue: boolean;
@@ -91,6 +95,7 @@ const FLAGS: Record<
   '--init': 'init',
   '--yolo': 'yolo',
   '--trust': 'trust',
+  '--approve-hooks': 'approveHooks',
   '--extensions': 'extensions',
   '--verbose': 'verbose',
   '--no-session': 'no-session',
@@ -128,6 +133,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): CliOptions {
     mode: 'text',
     yolo: false,
     trust: false,
+    approveHooks: false,
     extensions: false,
     verbose: false,
     continue: false,
@@ -306,8 +312,65 @@ function conflict(
     return '-r opens a list to choose from; send the message once the session is open';
   return '';
 }
-export function helpText(): string {
-  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --trust              Trust this folder and remember it\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --task [NAME]        Work in a folder of Circle's own for this task, under the task folder\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
+const HELP_ROWS: [string, string][] = [
+  ['-p, --print [PROMPT]', 'Print the answer and exit'],
+  ['--mode text|json|rpc', 'Output mode'],
+  ['-c, --continue', 'Continue the last session'],
+  ['-r, --resume', 'Choose a saved session'],
+  ['--session ID', 'Resume by ID'],
+  ['--session-id ID', 'Open or create this ID'],
+  ['--fork ID', 'Copy a saved session'],
+  ['--no-session', 'In-memory conversation'],
+  ['-m, --model ID', 'Model for this run'],
+  ['--thinking LEVEL', 'Thinking depth'],
+  ['--list-models [TEXT]', 'List endpoint models'],
+  ['--export ID [OUT]', 'Export a saved session'],
+  ['--system-prompt TEXT|FILE', 'Replace the system prompt'],
+  ['--append-system-prompt TEXT|FILE', 'Append to the system prompt'],
+  ['--no-context-files', 'Skip instruction files'],
+  ['--tools LIST', 'Limit tools'],
+  ['--exclude-tools LIST', 'Exclude tools'],
+  ['--no-tools', 'No tools except compaction'],
+  ['--yolo', 'Auto mode for print or line'],
+  ['--trust', 'Trust this folder and remember it'],
+  ['--approve-hooks', "Approve this folder's hooks files as they are now"],
+  [
+    '--extensions',
+    'Load extensions and MCP servers in print, line or rpc mode',
+  ],
+  ['--line', 'Plain line mode'],
+  ['--init', 'Model setup'],
+  [
+    '--task [NAME]',
+    "Work in a folder of Circle's own for this task, under the task folder",
+  ],
+  ['--print-home', 'Print the data directory'],
+  ['-v, --version', 'Print version'],
+  ['-h, --help', 'Show help'],
+];
+// Options this wide or narrower share the description column. A longer one has a line of
+// its own and its description under that column, so a few long options do not push every
+// description to the right.
+const HELP_FLAG_WIDTH = 20;
+export function helpText(width = process.stdout.columns || 80): string {
+  const columns = Math.max(40, width);
+  const flagWidth = HELP_FLAG_WIDTH + 2;
+  const indent = ' '.repeat(2 + flagWidth);
+  const lines = [
+    t('usage: circle [options] [folder] [@file ...] [message ...]'),
+    '',
+    t('A terminal coding agent for your own model endpoint.'),
+    '',
+  ];
+  for (const [flag, description] of HELP_ROWS) {
+    if (stringWidth(flag) > HELP_FLAG_WIDTH) {
+      lines.push('  ' + flag, ...hangingWrap(indent, t(description), columns));
+      continue;
+    }
+    const prefix = '  ' + pad(flag, flagWidth);
+    lines.push(...hangingWrap(prefix, t(description), columns));
+  }
+  return lines.join('\n') + '\n';
 }
 // How long `-p PROMPT` waits for piped input to start before going on without it.
 const STDIN_WAIT_MS = 3000;
@@ -328,7 +391,10 @@ export async function pipedText(
         ? undefined
         : setTimeout(() => {
             warn(
-              `circle: nothing arrived on stdin within ${waitMs / 1000}s; going on without it (use </dev/null to skip the wait)\n`,
+              t(
+                'circle: nothing arrived on stdin within {seconds}s; going on without it (use </dev/null to skip the wait)\n',
+                { seconds: waitMs / 1000 },
+              ),
             );
             done(false);
           }, waitMs);
@@ -470,7 +536,10 @@ async function headlessSettings(
       saveSettings(settings, home);
     } else if (!process.stdin.isTTY)
       throw new UsageError(
-        `This folder is not trusted yet: ${options.workspace}\nRun \`circle\` there once in a terminal and trust it, or pass --trust to trust it and remember it.`,
+        t(
+          'This folder is not trusted yet: {folder}\nRun `circle` there once in a terminal and trust it, or pass --trust to trust it and remember it.',
+          { folder: options.workspace },
+        ),
       );
     else {
       const { runLineTrust } = await import('./line_setup.js');
@@ -483,6 +552,34 @@ async function headlessSettings(
   for (const problem of problems) process.stderr.write(problem + '\n');
   if (options.model) settings.auth.model = options.model;
   return settings;
+}
+/**
+ * Print, line and rpc mode cannot show the hooks card. `--approve-hooks` approves
+ * the waiting files and lists what it approved; otherwise those hooks do not run,
+ * and standard error says so once, naming each file and how to approve it.
+ */
+export function reportProjectHooks(
+  runtime: import('./runtime.js').AgentRuntime,
+  approve: boolean,
+  write: (text: string) => void = (text) => process.stderr.write(text),
+): void {
+  if (approve)
+    for (const change of runtime.pendingHooks()) {
+      if (!runtime.approveHooks(change)) continue;
+      write(
+        t('circle: approved the hooks in {file}', { file: change.file }) + '\n',
+      );
+      for (const hook of change.hooks)
+        if (hook.mark !== 'removed')
+          write(`  ${hook.name} · ${hook.event} · ${hook.command}\n`);
+    }
+  for (const change of runtime.pendingHooks())
+    write(
+      t(
+        'circle: the hooks in {file} were not run: this version of the file is not approved. Approve it with circle in a terminal in this folder, or pass --approve-hooks.',
+        { file: change.file },
+      ) + '\n',
+    );
 }
 let networkConfigured = false;
 export async function main(argv = process.argv.slice(2)): Promise<number> {
@@ -640,6 +737,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         ...runtimeOptions,
         settings,
         init: options.init,
+        trust: options.trust,
+        approveProjectHooks: options.approveHooks,
         pickSession: options.resume,
         prompts,
         shown,
@@ -657,6 +756,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // full-screen interface; their tools reach the model from the first turn.
     if (options.extensions) await runtime.initialize();
     offSignals = installExitGuard(runtime);
+    reportProjectHooks(runtime, options.approveHooks);
     // Only --yolo turns auto on here; without it a saved default_mode stays.
     if (options.yolo) runtime.policy.setYolo(runtime.session.id, true);
     if (options.mode === 'rpc') {

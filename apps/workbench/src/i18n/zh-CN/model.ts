@@ -53,6 +53,10 @@ export const model: Record<string, string> = {
     '读取带行号的文本文件（12: text）、文件夹的条目，或者图片和 PDF',
   "Read a text file with line numbers (`12: text`), a folder's entries, or an image or a PDF. Arguments: `file_path`, `offset` (lines to skip), `limit`.":
     '读取带行号的文本文件（`12: text`）、文件夹的条目，或者图片和 PDF。参数：`file_path`、`offset`（跳过的行数）、`limit`。',
+  'Have the side vision model describe a picture file':
+    '让辅助视觉模型描述一个图片文件',
+  'Have the side vision model describe a picture file, answering `question`. Offered only when a side vision model is set.':
+    '让辅助视觉模型描述一个图片文件，回答 `question`。仅在设置了辅助视觉模型时提供。',
   'Find files by pattern.': '按模式查找文件。',
   'Search file contents for **literal text**, not a regular expression':
     '在文件内容中搜索**字面文本**，而不是正则表达式',
@@ -80,8 +84,8 @@ export const model: Record<string, string> = {
     '删除文件，或删除文件夹及其中的全部内容。',
   'Take a screenshot of the main screen, or of the front window of one application':
     '截取主屏幕，或某个应用最前面的窗口',
-  'Take a screenshot of the main screen, or of the front window of the application named in `app`, and send it to the model as an image. It asks each time unless allowed for the session, and is refused in read-only mode.':
-    '截取主屏幕，或 `app` 指定的应用最前面的窗口，并作为图片发送给模型。除非本会话内已允许，否则每次都会询问；只读模式下会被拒绝。',
+  'Take a screenshot of the main screen, or of the front window of the application named in `app`, and send it to the model as an image; for a model that does not read images, the side vision model gets it and the model gets its description. It asks each time unless allowed for the session, and is refused in read-only mode.':
+    '截取主屏幕，或 `app` 指定的应用最前面的窗口，并作为图片发送给模型；对不读图片的模型，图片交给辅助视觉模型，模型得到它的描述。除非本会话内已允许，否则每次都会询问；只读模式下会被拒绝。',
   'Run a shell command in the workspace': '在工作区中运行 shell 命令',
   'Open a page in the session browser': '在会话浏览器中打开页面',
   'Read the visible page and its element refs': '读取可见页面及元素编号',
@@ -96,8 +100,8 @@ export const model: Record<string, string> = {
   'Press Enter, Tab, Escape, an arrow key or another supported browser key.':
     '在浏览器中按 Enter、Tab、Escape、方向键或其他支持的按键。',
   'Capture the session browser for the model': '截取会话浏览器画面给模型',
-  'Send the browser viewport as an image to the model. The operation overlay is hidden during capture.':
-    '把浏览器视口作为图片交给模型。截取时会隐藏操作覆盖层。',
+  'Send the browser viewport as an image to the model; for a model that does not read images, the picture is saved and the side vision model describes it. The operation overlay is hidden during capture.':
+    '把浏览器视口作为图片交给模型；对不读图片的模型，图片会被保存，并由辅助视觉模型描述。截取时会隐藏操作覆盖层。',
   'Answer a browser JavaScript dialog': '回答浏览器的 JavaScript 对话框',
   'Run a shell command in the workspace. With `background: true` it runs as a background job and returns at once. Standard output and standard error come back together, in the order they were written.':
     '在工作区中运行 shell 命令。设置 `background: true` 时作为后台任务运行并立即返回。标准输出和标准错误按写入顺序一起返回。',

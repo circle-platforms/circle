@@ -1025,7 +1025,7 @@ async function occupiedPair(
   return { owner, ...opened };
 }
 
-test('enter sends once the other terminal has released a view-only session', async (t) => {
+test('enter while view-only keeps the draft until enter after the session is writable', async (t) => {
   const { app, owner, runtime, ui } = await occupiedPair(t, [
     answer('continued'),
   ]);
@@ -1036,15 +1036,71 @@ test('enter sends once the other terminal has released a view-only session', asy
   owner.yieldLease();
   await app.submit('now it sends');
   assert.equal(runtime.viewOnly, false);
+  assert.equal(app.state.draft, 'now it sends');
   assert.ok(
     app.state.notices.includes('this session is writable again'),
     app.state.notices.join('\n'),
   );
+  assert.ok(app.state.notices.includes('view only, the draft stays'));
+  assert.equal(
+    runtime.harness.messages.some((message) =>
+      (message.content ?? '').includes('now it sends'),
+    ),
+    false,
+  );
+  await app.submit('now it sends');
   assert.ok(
     runtime.harness.messages.some((message) =>
       (message.content ?? '').includes('now it sends'),
     ),
   );
+});
+
+test('the view-only screen refuses /name and the other commands that would change the session', async (t) => {
+  const { app, owner, runtime, ui, key } = await occupiedPair(t);
+  const id = owner.session.id;
+  const title = (): string | undefined => runtime.store.get(id)?.title;
+  const before = title();
+  const messages = (): number => runtime.store.messages(id).length;
+  const stored = messages();
+  for (const command of [
+    '/name hijacked',
+    '/skill review',
+    '/compact',
+    '/approvals add ls',
+    '/import /nowhere.jsonl',
+  ]) {
+    ui.flash('');
+    await app.submit(command);
+    assert.equal(
+      app.state.flash,
+      'view only · another terminal runs this session',
+      command,
+    );
+  }
+  await app.submit('/yolo');
+  assert.equal(app.state.flash, 'view only, the mode stays');
+  assert.equal(title(), before);
+  assert.notEqual(title(), 'hijacked');
+  assert.equal(messages(), stored);
+  assert.equal(runtime.policy.mode(id), 'manual');
+  await assert.rejects(runtime.compact(), /open in another terminal/);
+  // Renaming it from the session list is refused too.
+  await app.submit('/resume');
+  ui.flash('');
+  key('ctrl+r');
+  // The list runs its keys a moment later
+  await until(
+    () => app.state.flash === 'view only · another terminal runs this session',
+  );
+  assert.equal(app.state.picker?.asking, false, 'no rename is asked');
+  assert.equal(title(), before);
+  // A plain /name still says the name, and /fork still copies it.
+  await app.submit('/name');
+  assert.ok(
+    app.state.notices.some((note) => note.startsWith('Session name: ')),
+  );
+  assert.equal(runtime.viewOnly, true);
 });
 
 test('an empty enter and the session list take a released view-only session', async (t) => {

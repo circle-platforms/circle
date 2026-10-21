@@ -19,7 +19,7 @@ This page lists what does not work as you might expect in the current version, w
 - **Going back with `/tree` does not undo file changes.** It changes what the model remembers, not your files.
 - **`/undo` does not make the model forget, and does not revert files.**
 - **`auto` and `accept edits` turn themselves off** on `/new`, `/fork`, `/clone`, `/import` and restart; the session falls back to the `default_mode` saved in the settings, or asks again (`manual`) without one. `read-only` stays with the conversation.
-- **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced, very long tool results, pasted pictures and screenshots, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
+- **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced, very long tool results, pasted pictures, pictures saved for a model that does not read images, and screenshots, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
 - **Every `enter` in the terminal pauses for a second or two when Circle cannot write the input history**, as when `history` in the data folder belongs to another user. Circle tries again for about a second each time, then keeps the history for this run only. Make the file yours again (`sudo chown "$USER" ~/.circle/history`) or delete it.
 
 ## Safety
@@ -45,6 +45,7 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **On macOS a missing Screen Recording permission is guessed** from whether other applications' window titles can be read. When the guess is wrong the picture shows only the desktop. The model is told why that may be when the other windows' titles are hidden, but not when only the terminal's windows are on screen.
 - **Without `app`, `screenshot` takes the main display only on macOS and Windows**; other displays are left out. On Linux the screenshot programs take every display.
 - **On Windows a minimized window cannot be taken.** The model is told to ask you to restore it.
+- **A picture sent earlier in the desktop application is lost to a model that does not read images.** One pasted, dropped or attached while a model that reads images was in use was never written to a file, so after a switch to a model that does not, that model gets only its name, and the side vision model cannot describe it. Send it again.
 - **Only PNG files are scaled down.** JPEG, GIF and WebP pictures, and pictures an MCP server returns, are sent at the size they are; an endpoint may refuse one that is very large.
 - **After upgrading from 1.0.4, which models read images is known once models.dev is fetched again**, within a day unless `CIRCLE_NO_MODELS_REFRESH` is set. Until then pictures go to every model, as in 1.0.4.
 - **A model models.dev does not list is assumed to read images.** If its endpoint refuses them, the request fails; set `"images": false` for the model under `models` in the settings.
@@ -66,10 +67,6 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **A resize reflows the emulated screen, not the device's memory.** When a full-screen program (a `vi`, a menu) is on the device it repaints itself; a line-mode device that wrapped a long line at the old width keeps its old breaks until it prints again, so a `terminal_read` right after attaching may show some lines broken where they were.
 - **`terminal_wait` matches a screen, not a byte stream.** The `pattern` is tested against the last 400 lines joined with newlines, so it sees what is on the screen now: a device that printed the answer and cleared it, or scrolls it past the buffer, is gone before it can be matched. Read or wait soon after the device rests. `absent` and `changed` read what the device printed since the wait began on a screen of their own, where a clear keeps what it erased; still, text a full-screen program draws and draws over in one burst, or more than about a thousand lines arriving at once, can pass `absent` unseen.
 - **A device that prints with a bare line feed can look staggered.** Circle normalises `\r\n`, but a device that emits lone `\n` or lone `\r` at wrap can leave a phantom blank or a short line; `terminal_read` trims trailing blanks to keep the tail clean.
-
-## Read-only mode
-
-Any file whose name is `plan.md` or `plan` can be written, edited or deleted in any folder, with the usual approval. Everything else that changes something is refused.
 
 ## Slow failures
 
@@ -98,7 +95,7 @@ If your endpoint is slow or never answers, a turn can take a long time to give u
 - **Native multi-file saves are not one filesystem transaction.** All versions are checked before writes, but a later conflict, I/O error or cancellation can leave an explicitly reported committed prefix. Recovery must keep those `committedPaths` and retry only the remaining edits after review. External programs do not participate in Circle's in-process queue; the final revision check and filesystem replacement are not a portable compare-and-swap against an unrelated writer.
 - **Developer-loop performance and platform acceptance need evidence from the candidate being shipped.** Durable-stream microbenchmarks exclude native input/rendering and do not establish the full 10,000-message/eight-agent interaction targets. A development journey does not establish Windows/Linux packaged behavior, and scripted GitHub transport tests do not establish hosted repository permissions or real Actions results. Run the corresponding native, packaged and separately authorized live checks before claiming those outcomes.
 - **Windows shows no count of waiting requests on the taskbar,** only a busy bar. macOS shows the count on the Dock icon, and Linux where the desktop supports it. Windows notifications need the Start menu shortcut the installer makes.
-- **Some words come from Circle's core in English** in the Chinese interface: slash command descriptions, the shortcut list, error messages and reasons for an approval other than the common ones. The terminal interface is English only.
+- **Some words come from Circle's core in English** in the Chinese interface: slash command descriptions, the shortcut list, error messages and reasons for an approval other than the common ones.
 - **A failed turn's line lasts only while the application runs.** It is shown in the conversation, but not saved with it.
 - **Browser snapshots cannot read a frame from another site.** Same-origin frames and open shadow roots are included; a cross-origin frame's contents are not. Open the frame's address as the main page when you need Circle to read it.
 - **Coordinate browser clicks require a current screenshot.** Scrolling, changing tabs, resizing, navigation and page changes invalidate it. A target inside a cross-origin frame is refused; open the frame's address as a main page or take over the browser. Coordinate clicks are not included in recorded scripts.

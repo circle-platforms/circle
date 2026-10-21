@@ -66,6 +66,7 @@ import {
   type DetailBand,
 } from './agent_rows.js';
 import { paletteRev } from '../ink/theme.js';
+import { PLAN_CHOICES } from '../plan_file.js';
 export interface ScreenState {
   messages: Message[];
   notices: string[];
@@ -612,7 +613,7 @@ export function renderScreen(
   if (
     planVisible(
       state.todos,
-      Boolean(state.dialog?.options.includes('implement plan')),
+      Boolean(state.dialog?.options.includes(PLAN_CHOICES.manual)),
     )
   ) {
     bottom.push(
@@ -649,15 +650,17 @@ export function renderScreen(
           p.reset,
       );
   }
-  const mode = state.viewOnly
-    ? uiText('view only')
-    : state.planMode
-      ? 'read-only'
-      : state.autoMode
-        ? 'auto'
-        : state.acceptEdits
-          ? 'accept edits'
-          : '';
+  const mode = uiText(
+    state.viewOnly
+      ? 'view only'
+      : state.planMode
+        ? 'read-only'
+        : state.autoMode
+          ? 'auto'
+          : state.acceptEdits
+            ? 'accept edits'
+            : '',
+  );
   const modeSgr = state.viewOnly
     ? p.yellow
     : state.planMode
@@ -746,7 +749,7 @@ export function renderScreen(
       p.dim +
         pad(
           truncate(
-            ` ${statusLight(session.waiting ? 'wait' : 'running')} ${session.id.slice(-8)} · ${terminalText(session.title)} · ${session.waiting ? 'waiting for you' : 'running'}`,
+            ` ${statusLight(session.waiting ? 'wait' : 'running')} ${session.id.slice(-8)} · ${terminalText(session.title)} · ${uiText(session.waiting ? 'waiting for you' : 'running')}`,
             width,
           ),
           width,

@@ -8,7 +8,7 @@ import {
   writeFile,
   unlink,
 } from 'node:fs/promises';
-import { existsSync, realpathSync, symlinkSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1635,7 +1635,7 @@ test('rejection reaches the next real model request without an effect', async (t
   );
 });
 
-test('question selections and plan exit use the awaited core interaction', async (t) => {
+test('question selections and the plan card use the awaited core interaction, beside the plan Circle wrote', async (t) => {
   const f = await setup(t, [
     {
       message: assistant('', [
@@ -1651,7 +1651,25 @@ test('question selections and plan exit use the awaited core interaction', async
       ]),
     },
     { message: assistant('target received') },
+    // In plan mode the system prompt names the plan file: Circle's own, outside the
+    // workspace, so the desktop's file backend has no part in writing it
+    async (request) => ({
+      message: assistant('', [
+        {
+          id: 'plan-write',
+          name: 'write_file',
+          args: {
+            file_path: /`(\/session_plans\/[\w-]+\.md)`/.exec(
+              request.system,
+            )![1]!,
+            content: '# Plan\n\n1. migrate\n',
+          },
+        },
+      ]),
+      usage: emptyUsage(),
+    }),
     { message: assistant('', [{ id: 'plan-1', name: 'plan_exit', args: {} }]) },
+    { message: assistant('', [{ id: 'plan-2', name: 'plan_exit', args: {} }]) },
     { message: assistant('implementing') },
   ]);
   await f.call('prompt', { text: 'ask' });
@@ -1691,16 +1709,60 @@ test('question selections and plan exit use the awaited core interaction', async
   row = f.controller
     .snapshot()
     .interactions.find((i) => i.status === 'pending')!;
+  const plan = f.controller.snapshot().sessions[0]!.plan!;
+  assert.equal(
+    plan.file,
+    `/session_plans/${f.controller.snapshot().sessions[0]!.id}.md`,
+  );
+  assert.equal(plan.text, '# Plan\n\n1. migrate\n');
+  assert.equal(existsSync(join(f.workspace, 'plan.md')), false);
+  assert.equal(row.kind, 'plan-exit');
+  assert.equal(row.target, plan.file);
+  assert.deepEqual(row.choices, [
+    'implement in auto mode',
+    'implement with manual approval',
+    'change the plan',
+    'save the plan only',
+  ]);
+  // A change goes to the model in the words written, and plan mode stays on
   await f.call('answer', {
     id: row.id,
     revision: 1,
-    answer: JSON.stringify({ choices: ['implement plan'], comment: '' }),
+    answer: JSON.stringify({
+      choices: ['change the plan'],
+      comment: 'migrate after the API',
+    }),
+  });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((i) => i.status === 'pending' && i.id !== row.id),
+    'second plan card',
+  );
+  assert.match(
+    f.model.requests.at(-1)!.messages.find((m) => m.tool_call_id === 'plan-1')!
+      .content,
+    /They said: migrate after the API/,
+  );
+  assert.equal(f.controller.snapshot().sessions[0]!.readOnly, true);
+  row = f.controller
+    .snapshot()
+    .interactions.find((i) => i.status === 'pending')!;
+  await f.call('answer', {
+    id: row.id,
+    revision: 1,
+    answer: JSON.stringify({
+      choices: ['implement with manual approval'],
+      comment: '',
+    }),
   });
   await wait(
     () => f.controller.snapshot().sessions[0]!.state === 'idle',
     'plan finish',
   );
   assert.equal(f.controller.snapshot().sessions[0]!.readOnly, false);
+  assert.equal(f.controller.snapshot().sessions[0]!.mode, 'manual');
 });
 
 test('cancel aborts the model, invalidates the interaction, and preserves raw history', async (t) => {
@@ -2867,7 +2929,7 @@ test('MCP configuration saves preserve private fields and show pending reload ho
   assert.equal(f.controller.snapshot().mcp[0]!.status, 'reload required');
 });
 
-test('attached pictures go as mentioned ones do: a large PNG is scaled down and both sizes named, and a text-only model gets none', async (t) => {
+test('attached pictures go as mentioned ones do: a large PNG is scaled down and both sizes named, and a text-only model gets where the picture was saved', async (t) => {
   const { PNG } = await import('pngjs');
   const picture = (width: number, height: number) => {
     const image = new PNG({ width, height });
@@ -2901,18 +2963,24 @@ test('attached pictures go as mentioned ones do: a large PNG is scaled down and 
     user.content,
     'look at these\n\n[Scaled down to send: wide.png 3000×2000, sent as 1313×875]',
   );
-  // A model known not to read images gets the text only
+  // A model known not to read images gets no picture: it is saved in the project's data,
+  // and the message says where, for the model's tools to read
   Object.assign(f.model, { imageInput: false });
+  const small = picture(40, 30);
   await f.call('prompt', {
     text: 'and this',
-    attachments: [
-      { content: picture(40, 30), mime: 'image/png', name: 'small.png' },
-    ],
+    attachments: [{ content: small, mime: 'image/png', name: 'small.png' }],
   });
   await wait(() => f.model.requests.length === 2, 'second request');
   const second = f.model.requests[1]!.messages.at(-1)!;
-  assert.equal(second.content, 'and this');
   assert.equal(second.attachments, undefined);
+  const saved =
+    /^and this\n\n\[Images this model does not read, saved as files: (.+\.png)\]$/.exec(
+      second.content,
+    )?.[1];
+  assert.ok(saved, second.content);
+  assert.match(saved, /[\\/]images[\\/][0-9a-f]{16}\.png$/);
+  assert.deepEqual(readFileSync(saved), Buffer.from(small, 'base64'));
 });
 
 test('a failed turn stays in the conversation after the message it followed, and a later turn goes below it', async (t) => {

@@ -5,6 +5,7 @@
 // top to bottom: a row per call with the first line it returned, each round's reasoning
 // where it happened, and how it ended. Colours come from the palette at every paint.
 import { lampSgr, palette, sgrJoin, type LampState } from '../ink/theme.js';
+import { uiText } from '../locale.js';
 import { stringWidth, truncate, wrap } from '../ink/string_width.js';
 import {
   markdownRows,
@@ -146,7 +147,7 @@ export function taskSummaryRows(
   const bg = p.agent_bg;
   const calls = toolSteps(agent);
   let meta = `${agent.name} · ${calls.length} calls · ${formatElapsed(agentSeconds(agent, now))} · ${formatTokens(agent.tokens)} tokens`;
-  if (agent.state === 'waiting') meta += ' · waiting for you';
+  if (agent.state === 'waiting') meta += ` · ${uiText('waiting for you')}`;
   const rows = [
     tintedRow(
       [
@@ -186,13 +187,15 @@ export function taskSummaryRows(
 
 // `waiting for you` (cyan), `running` (yellow), `done` (green), `failed` / `interrupted` (red).
 function statusWord(agent: SubagentView): string {
-  return agent.state === 'waiting'
-    ? 'waiting for you'
-    : agent.state === 'done'
-      ? 'done'
-      : agent.state === 'error'
-        ? 'failed'
-        : agent.state;
+  return uiText(
+    agent.state === 'waiting'
+      ? 'waiting for you'
+      : agent.state === 'done'
+        ? 'done'
+        : agent.state === 'error'
+          ? 'failed'
+          : agent.state,
+  );
 }
 function statusColour(agent: SubagentView): string {
   const p = palette();
@@ -358,6 +361,7 @@ function thinkingLines(
     header += ` ${formatElapsed(options.seconds)}`;
   if (title) header += ` · ${clip(title, 120)}`;
   header += ` · ${formatChars(Array.from(step.text.trim()).length)}`;
+  header = uiText(header);
   const style = sgrJoin(options.expanded ? p.reason_dim : p.reason, '\x1b[3m');
   const head: [string, string][] = [
     ['', ' '],

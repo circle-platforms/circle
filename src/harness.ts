@@ -54,6 +54,7 @@ import {
   activeHookSummary,
   hookDeniedMessage,
   hookFileLabel,
+  hookFileShown,
   hookNoticeText,
   hookToolPaths,
   HOOK_ALLOWED_LINE,
@@ -142,6 +143,17 @@ export interface HarnessOptions {
     numResults: number,
     context: ToolContext,
   ) => Promise<string>;
+  /**
+   * Describes image files with the run's configured side vision model, for tools whose
+   * pictures the model in use cannot read; undefined when none is configured.
+   */
+  vision?: (
+    paths: string[],
+    question: string,
+    context: ToolContext,
+  ) => Promise<{ model: string; text: string }>;
+  /** Writes a picture the model cannot read under the run's project data, returning its path. */
+  saveImageAttachment?: (item: MediaAttachment) => string;
   toolBoundary?: (
     tool: Tool,
     args: Record<string, unknown>,
@@ -157,7 +169,12 @@ export interface HarnessOptions {
   prepareMessages?: (signal: AbortSignal) => Promise<Message[]>;
   approvalSessionId?: string;
   parentPlanMode?: () => boolean;
+  /** A call that writes only this conversation's plan file: plan mode lets it run, and
+   * it never asks. */
   planFileMutation?: (call: ToolCall) => boolean;
+  /** What plan mode tells the model, with the path of its plan file. Without it, a
+   * read-only harness, such as a subagent's, may change nothing. */
+  planPrompt?: () => string;
   /**
    * Leave a sentence untitled until its generated title arrives, instead of
    * saving the short title first. The desktop shows it as a new session.
@@ -174,6 +191,11 @@ export interface HarnessOptions {
   hooks?: HookRunner;
   /** False for a subagent: tool hooks still run, session start and stop do not. */
   sessionHooks?: boolean;
+  /**
+   * Before a turn's first step: project hooks files waiting for approval are asked
+   * about, or approved elsewhere, before the session's hooks are read.
+   */
+  reviewHooks?: (signal: AbortSignal) => Promise<void>;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -615,13 +637,14 @@ export class Harness {
     signal: AbortSignal,
     given?: MediaAttachment[],
   ): Promise<Pick<Message, 'content' | 'attachments'>> {
-    const { message, leftOut, problems } = await attachPrompt(
+    const { message, leftOut, saved, problems } = await attachPrompt(
       prompt,
       workspace,
       signal,
       (path) => this.promptFileAllowed(path),
       this.model.imageInput !== false,
       given,
+      this.options.saveImageAttachment,
     );
     if (leftOut)
       this.bus.emit('info', {
@@ -630,6 +653,8 @@ export class Harness {
             event: 'images_left_out',
             model: this.model.model,
             count: leftOut,
+            // Some were written as files, their paths given to the model
+            ...(saved ? { saved: true } : {}),
           },
         },
       });
@@ -1026,7 +1051,11 @@ export class Harness {
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
-        if (step === 0) await this.announceHooks(signal);
+        if (step === 0) {
+          if (this.options.sessionHooks !== false)
+            await this.options.reviewHooks?.(signal);
+          await this.announceHooks(signal);
+        }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
         this.step = stepControl;
@@ -1063,8 +1092,8 @@ export class Harness {
               this.system +
               (this.hookPreface ? `\n\n${this.hookPreface}` : '') +
               (this.readOnly
-                ? this.options.planFileMutation
-                  ? '\nRead-only mode: inspect and plan; only plan.md or plan files may be changed, subject to approval. Do not run shell commands.'
+                ? this.options.planPrompt
+                  ? '\n\n' + this.options.planPrompt()
                   : '\nRead-only mode: inspect and plan; do not change files or run commands.'
                 : ''),
             messages: orderModeToolResults(
@@ -1296,6 +1325,15 @@ export class Harness {
     if (!runner) return;
     const loaded = runner.loaded;
     if (loaded.projectIgnored) this.saveHook({ kind: 'untrusted' });
+    if (loaded.projectChanged.length)
+      this.saveHook({
+        kind: 'changed',
+        name: loaded.projectChanged
+          .map((change) =>
+            hookFileShown(change.file, this.options.session.workspace),
+          )
+          .join(', '),
+      });
     for (const error of loaded.errors)
       this.saveHook({
         kind: 'failed',
@@ -1455,7 +1493,12 @@ export class Harness {
       // After the arguments were checked, from the values: the model cannot give these itself.
       // The rules judge them as they are; the card and the hooks see each secret's value
       // back as its name, as they see the arguments.
-      const facts = tool.approvalFacts?.(resolved, this.sessionId, call.args);
+      const facts = tool.approvalFacts?.(
+        resolved,
+        this.sessionId,
+        call.args,
+        callModel.imageInput,
+      );
       if (facts) {
         call = {
           ...call,
@@ -1508,6 +1551,7 @@ export class Harness {
       signal.throwIfAborted();
       const wouldAsk =
         !settingsAllowed &&
+        !this.options.planFileMutation?.(call) &&
         tool.effect !== 'read' &&
         tool.approval !== false &&
         (this.options.policy.needsApproval(
@@ -1586,6 +1630,12 @@ export class Harness {
           ? {
               webSearch: (query: string, numResults: number) =>
                 this.options.webSearch!(callModel, query, numResults, context),
+            }
+          : {}),
+        ...(this.options.vision
+          ? {
+              vision: (paths: string[], question: string) =>
+                this.options.vision!(paths, question, context),
             }
           : {}),
         recordModelCall: (record) => {

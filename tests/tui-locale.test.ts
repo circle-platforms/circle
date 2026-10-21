@@ -30,7 +30,31 @@ test('interface locale follows LANG the same way a Chinese system does', () => {
 });
 
 test('a Chinese locale translates the session list, resume line, view only and search quota', () => {
-  assert.equal(uiText('view only', 'zh-CN'), '只读');
+  assert.equal(uiText('view only', 'zh-CN'), '仅查看');
+  // Notices of a turn, their own reasons left as written
+  assert.equal(
+    uiText('Reloaded settings and the model', 'zh-CN'),
+    '已重新加载设置和模型',
+  );
+  assert.equal(
+    uiText('title failed · empty title', 'zh-CN'),
+    '标题生成失败 · empty title',
+  );
+  assert.equal(
+    uiText('Retry 2/10 in 1.5s', 'zh-CN'),
+    '第 2/10 次重试 · 1.5 秒后',
+  );
+  assert.equal(
+    uiText(
+      'Endpoint does not support temperature; continuing without it',
+      'zh-CN',
+    ),
+    '端点不支持 temperature，已去掉后继续',
+  );
+  assert.equal(
+    uiText('Reloaded settings and the model', 'en'),
+    'Reloaded settings and the model',
+  );
   assert.equal(uiText('Sessions · this folder', 'zh-CN'), '会话 · 此文件夹');
   assert.equal(uiText('Sessions · every folder', 'zh-CN'), '会话 · 所有文件夹');
   assert.equal(
@@ -40,14 +64,23 @@ test('a Chinese locale translates the session list, resume line, view only and s
   assert.equal(uiText('↑ 6 more above', 'zh-CN'), '↑ 上方还有 6 个');
   assert.equal(
     uiText('this session is writable again', 'zh-CN'),
-    '此会话可以继续写入',
+    '另一端已关闭，可以继续对话了',
   );
   assert.equal(
     uiText(
       'Open in another terminal · view only · circle --fork circle-abc copies it here',
       'zh-CN',
     ),
-    '已在另一终端打开 · 只读 · circle --fork circle-abc 可复制到此处',
+    '已在另一终端打开 · 仅查看 · 用 circle --fork circle-abc 复制一份到这里继续',
+  );
+  assert.equal(
+    uiText('Allow "echo …" for this session', 'zh-CN'),
+    '本会话内允许“echo …”',
+  );
+  assert.equal(uiText('Exit code: 0', 'zh-CN'), '退出码 0');
+  assert.equal(
+    uiText('The user rejected this tool call. The user said: no', 'zh-CN'),
+    '已拒绝 · 你说：no',
   );
   assert.equal(
     uiText('Native search unavailable: search quota exceeded', 'zh-CN'),
@@ -92,6 +125,34 @@ test('a Chinese locale translates the session list, resume line, view only and s
       false,
     );
     assert.match(listed, /session 11 · 当前/);
+    const aged = new Picker(
+      'Sessions · this folder',
+      [
+        { key: 's', label: 's', meta: '50m' },
+        { key: 'h', label: 'later', meta: '1h · running' },
+      ],
+      () => {},
+      () => {},
+    );
+    const ages = stripAnsi(aged.rows(80, 6).join('\n'));
+    assert.match(ages, /50 分钟前/);
+    assert.match(ages, /1 小时前/);
+    assert.match(ages, /运行中/);
+    assert.equal(ages.includes('50m'), false);
+    assert.equal(ages.includes('1h'), false);
+    aged.confirm('Delete “s” and its messages?', () => {});
+    const confirm = stripAnsi(aged.rows(80, 6).join('\n'));
+    assert.match(confirm, /删除“s”及其消息？/);
+    assert.match(confirm, /回车确认 · esc 取消/);
+    assert.equal(confirm.includes('enter confirms'), false);
+    assert.equal(confirm.includes('Delete'), false);
+    aged.ask('Rename', 's', () => {}, {
+      replace: true,
+      keys: 'typing replaces the name · enter saves · esc cancels',
+    });
+    const rename = stripAnsi(aged.rows(80, 6).join('\n'));
+    assert.match(rename, /重命名: s/);
+    assert.match(rename, /输入会替换名称 · 回车保存 · esc 取消/);
 
     const quota = stripAnsi(
       resultRows(
@@ -152,12 +213,12 @@ test('a Chinese locale translates the session list, resume line, view only and s
     } as ScreenState;
     const transcript = stripAnsi(transcriptRows(screen, 80).join('\n'));
     assert.match(transcript, /已恢复 circle-abc · title/);
-    assert.match(transcript, /已在另一终端打开 · 只读/);
-    assert.match(transcript, /此会话可以继续写入/);
+    assert.match(transcript, /已在另一终端打开 · 仅查看/);
+    assert.match(transcript, /另一端已关闭，可以继续对话了/);
     assert.equal(transcript.includes('view only'), false);
     assert.equal(transcript.includes('Resumed'), false);
     const frame = stripAnsi(renderScreen(screen, 80, 24).join('\n'));
-    assert.match(frame, /只读/);
+    assert.match(frame, /仅查看/);
     assert.equal(
       frame.split('\n').filter((line) => line.includes('正在等待数据库…'))
         .length,

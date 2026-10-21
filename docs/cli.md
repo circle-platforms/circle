@@ -54,6 +54,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `-nt`, `--no-tools` | The model gets no tools. |
 | `--yolo` | With `-p`, `--line` or `--mode`: run commands and file changes without asking. See [Print mode](#print-mode). |
 | `--trust` | Trust the folder for this run and remember it in `trusted_folders`, including when nothing is at a terminal. A folder already trusted, or sitting inside one, does not need it. See [Print mode](#print-mode). |
+| `--approve-hooks` | Approve the folder's project hooks files as they are now, without a card, and remember that version. Standard error lists each hook it approved in print, line and rpc mode. See [Hooks](hooks.md#approving-a-project-hooks-file). |
 | `--extensions` | With `-p`, `--line` or `--mode`: load MCP servers and enabled extensions, which print, line and rpc modes otherwise leave out. See [Print mode](#print-mode). |
 | `--verbose` | With `-p` or `--line`: show each tool call, calls not run, failed results, retries and the tokens used on standard error. |
 | `-v`, `--version` | Print the version and exit. |
@@ -95,6 +96,8 @@ A question from the model comes back to it as text, and it asks the question in 
 Print mode does not load MCP servers, extensions or custom commands, unless you add `--extensions`: then MCP servers and enabled extensions load before the first prompt, as in the full-screen interface, and their tools are there from the first turn. Custom commands still are not. It does apply `credential_files` and a project's `.circle/settings.json`. The conversation is saved, so `circle -c` (with or without `-p`) can go on with it.
 
 Print mode, line mode and RPC mode need Circle set up and the folder trusted. When standard input is a terminal, they ask the setup and trust questions line by line first; otherwise they stop with exit code `2`, unless you pass `--trust`, which trusts this folder and remembers it for later runs. A trusted parent covers the folders inside it.
+
+A project hooks file runs only in a version you approved, and these modes cannot show the card that asks. A file that waits does not run; standard error names it once for the run and says how to approve it: with `circle` in a terminal in that folder, or with `--approve-hooks`. See [Hooks](hooks.md#approving-a-project-hooks-file).
 
 | Exit code | When |
 |---|---|
@@ -142,7 +145,9 @@ circle update [version] [--check]
 | `--check` | Say whether a newer release exists. Install nothing. |
 | `version`, `--version X.Y.Z` | Install that release instead, including an older one, to go back. |
 
-`circle update` works on a copy that `install.sh` or `install.ps1` put in place. It asks GitHub for the newest release of the repository recorded at install time and downloads the file for your operating system and processor. On a terminal one line shows how far the download has got, `downloading circle-1.1.0-darwin-arm64.tar.gz  45%  23.6/52.4 MB  9.6 MB/s`; elsewhere one line says what it downloads. `ctrl+c` stops the download and changes nothing; a download that gets no data for a minute stops by itself. Then it runs the copy of the installer that came with the running version on that file, with the same folders: the installer checks its sha256, runs the new program once, and only then switches to it, saying each step in a line that starts with `[circle-install]`. See [Installation and updates](installation.md).
+`circle update` works on a copy that `install.sh` or `install.ps1` put in place. It asks GitHub for the newest release of the repository recorded at install time and downloads the file for your operating system and processor. On a terminal one line shows how far the download has got, `downloading circle-1.1.0-darwin-arm64.tar.gz  45%  23.6/52.4 MB  9.6 MB/s`; elsewhere one line says what it downloads. `ctrl+c` stops the download and changes nothing; a download that gets no data for a minute stops by itself. Then it runs the copy of the installer that came with the running version on that file, with the same folders: the installer checks its sha256, runs the new program once, and only then switches to it, saying each step in a line that starts with `[circle-install]`. After it switches, it prints what's new: a link to the release notes of every version after the one you had, up to the one you installed. It also says how much space the kept older copies use under `versions/`, and the command that removes one of them once nothing is still running from it. See [Installation and updates](installation.md).
+
+If the release lookup comes back `HTTP 403` or `HTTP 429`, or the request never gets an answer, the message says GitHub may be rate limiting this machine or the network blocked it, and to run `circle update` again.
 
 A copy that runs from a git checkout is not changed: `circle update` stops with `circle update requires an installer-managed installation`. Update a checkout with `git pull`, `npm ci` and `npm run build`. To open a folder that is called `update`, write `./update`.
 

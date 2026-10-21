@@ -19,7 +19,13 @@ import {
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { pathToFileURL } from 'node:url';
-import { fileBlocks, parseCli, pipedText, UsageError } from '../src/cli.js';
+import {
+  fileBlocks,
+  helpText,
+  parseCli,
+  pipedText,
+  UsageError,
+} from '../src/cli.js';
 import {
   defaultSettings,
   loadCredentials,
@@ -907,6 +913,54 @@ test('a trusted parent covers a subfolder, and --trust remembers a folder for a 
   assert.equal(later.code, 0, later.stderr);
 });
 
+test('print mode leaves a project hooks file nobody approved off, says so once, and --approve-hooks runs that version', async (t) => {
+  const home = scratch(t);
+  const workspace = realpathSync.native(scratch(t));
+  mkdirSync(join(workspace, '.circle'));
+  const script = join(workspace, 'hello.mjs');
+  writeFileSync(script, "process.stdout.write('hook says hi');\n");
+  const file = join(workspace, '.circle', 'hooks.json');
+  writeFileSync(
+    file,
+    JSON.stringify({
+      hooks: {
+        session_start: [
+          {
+            name: 'greet',
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+          },
+        ],
+      },
+    }),
+  );
+  const endpoint = await gateway(t, [{ content: 'ok' }]);
+  setUp(home, endpoint.base, [workspace]);
+  const off = await circle(home, ['-p', 'hello', workspace]);
+  assert.equal(off.code, 0, off.stderr);
+  const said = off.stderr.split('\n').filter((line) => line.includes('hooks'));
+  assert.equal(said.length, 1, off.stderr);
+  assert.match(said[0]!, /were not run/);
+  assert.ok(said[0]!.includes(file), said[0]);
+  assert.match(said[0]!, /--approve-hooks/);
+  assert.doesNotMatch(systemText(endpoint.bodies[0]!), /hook says hi/);
+  assert.equal(existsSync(join(home, 'hook-trust.json')), false);
+  const approved = await circle(home, [
+    '-p',
+    '--approve-hooks',
+    'hello',
+    workspace,
+  ]);
+  assert.equal(approved.code, 0, approved.stderr);
+  assert.match(approved.stderr, /approved the hooks in /);
+  assert.match(approved.stderr, /greet · session_start · /);
+  assert.match(systemText(endpoint.bodies[1]!), /hook says hi/);
+  // The same bytes run later without the flag, and nothing is said.
+  const later = await circle(home, ['-p', 'hello', workspace]);
+  assert.equal(later.code, 0, later.stderr);
+  assert.doesNotMatch(later.stderr, /hooks/);
+  assert.match(systemText(endpoint.bodies[2]!), /hook says hi/);
+});
+
 test('an open stdin survives a slow real CLI startup, waits three seconds and reaches the local gateway', async (t) => {
   const home = scratch(t);
   const workspace = realpathSync(scratch(t));
@@ -1182,4 +1236,39 @@ test('circle uninstall answers an unknown option with the usage exit code', asyn
   });
   assert.equal(run.code, 2);
   assert.match(run.stderr, /usage: circle uninstall \[--purge\] \[--yes\]/);
+});
+
+test('circle --help in English keeps its descriptions in one column near the options', () => {
+  const saved = {
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LANGUAGE: process.env.LANGUAGE,
+  };
+  process.env.LANG = 'en_US.UTF-8';
+  delete process.env.LC_ALL;
+  delete process.env.LANGUAGE;
+  try {
+    const lines = helpText(80).split('\n');
+    const row = (flag: string) =>
+      lines.findIndex((line) => line.startsWith(`  ${flag}`));
+    // A short option and its description share a line, the description at column 24
+    const print = lines[row('-p, --print [PROMPT]')]!;
+    assert.equal(print.indexOf('Print the answer and exit'), 24);
+    assert.equal(lines[row('--yolo')]!.indexOf('Auto mode'), 24);
+    // A long option has a line of its own, and its description is under the same column
+    const long = row('--append-system-prompt TEXT|FILE');
+    assert.equal(lines[long], '  --append-system-prompt TEXT|FILE');
+    assert.equal(lines[long + 1]!.indexOf('Append to the system prompt'), 24);
+    assert.equal(lines[long + 1]!.slice(0, 24).trim(), '');
+    // Every option says what it does, and nothing runs past the width
+    assert.match(
+      lines[row('--system-prompt TEXT|FILE') + 1]!,
+      /Replace the system prompt/,
+    );
+    for (const line of lines) assert.ok(line.length <= 80, line);
+  } finally {
+    for (const [name, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+  }
 });

@@ -5,7 +5,7 @@ nav_order: 7
 
 # Desktop interface language
 
-The desktop application shows its interface in English or Simplified Chinese. The terminal interface stays English, except `/hub`, which follows a Chinese system language. The session list (`/resume` and alt+s), the `Resumed` line, `view only`, `search quota exceeded`, the database-busy exit, and the database wait status follow `LANG`, `LC_ALL` or `LANGUAGE` when that names Chinese.
+The desktop application shows its interface in English or Simplified Chinese. The terminal follows the same Chinese when `LANG`, `LC_ALL` or `LANGUAGE` names Chinese: the screen, `/help`, `/hotkeys`, `circle --help`, `circle update` and the installer lines. English stays the key (`uiText` and `t` in `src/locale.ts`, the sentences in `src/tui_zh.ts`), and the words are the desktop's. `/hub` keeps its own list in `src/hub_text.ts`. What the model, a tool or a file says stays English.
 
 The first start follows the system language: any Chinese system language gives Chinese, everything else English. Settings → appearance → language changes it (follow system, English, 简体中文). The choice is kept in the window's local storage. Menus, system dialogs and notifications follow the window: the renderer tells the main process its language.
 

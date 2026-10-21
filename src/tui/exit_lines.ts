@@ -4,6 +4,7 @@
 // Circle was started from another one.
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { t } from '../locale.js';
 import type { AgentRuntime } from '../runtime.js';
 
 // `text` as one word of a command typed into your shell: cmd or PowerShell on Windows, a
@@ -57,7 +58,7 @@ export function resumeHint(
   let command = `circle --session ${session.id}`;
   if (!samePlace(cwd, workspace))
     command += ' ' + shellWord(workspace, platform);
-  return `To resume this session: ${command}`;
+  return t('To resume this session: {command}', { command });
 }
 
 // The jobs still running are stopped as Circle closes; the count is read before that.
