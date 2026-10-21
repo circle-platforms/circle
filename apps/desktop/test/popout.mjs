@@ -120,8 +120,9 @@ try {
     timeout: 30000,
   });
   await main.locator('.topbar').waitFor({ timeout: 30000 });
-  await main.setViewportSize?.({ width: 1500, height: 900 });
-  // Wider than the pop-out (920×640), as a maximized drawer is on a real screen.
+  // Wider than the pop-out (920×640), as a maximized drawer is on a real screen. The
+  // window itself is resized, not the page's viewport: a viewport larger than the window
+  // a small screen allows would measure boxes the window does not have.
   await app.evaluate(({ BrowserWindow }) => {
     const own = BrowserWindow.getAllWindows().find(
       (one) =>
