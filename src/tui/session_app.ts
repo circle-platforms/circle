@@ -976,10 +976,11 @@ export class SessionApp {
       this.state.notices.at(-1) === text
     )
       return;
+    // The same failure twice in a row is one line
+    if (text.startsWith('✖ ') && this.state.notices.at(-1) === text) return;
     const anchors = (this.state.noticeAnchors ??= []);
     while (anchors.length < this.state.notices.length) anchors.push(undefined);
     this.state.notices.push(text);
-    if (text.startsWith('✖ ') && this.state.notices.at(-1) === text) return;
     const trail =
       /^(?:Resumed|Continued|Forked|Open in another terminal) /.test(text) ||
       text === 'this session is writable again' ||

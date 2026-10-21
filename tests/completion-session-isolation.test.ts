@@ -233,3 +233,20 @@ for (const kind of ['typed', 'legacy'] as const) {
     );
   });
 }
+
+test('the same failure twice in a row is one line, and it keeps its place in the transcript', async (t) => {
+  const { app, ui } = await appFor(t, []);
+  ui.notice('✖ the endpoint refused the request');
+  ui.notice('✖ the endpoint refused the request');
+  assert.deepEqual(failureNotices(app), ['✖ the endpoint refused the request']);
+  assert.equal(app.state.noticeAnchors?.length, app.state.notices.length);
+  // Another line between them: the failure is a new event and shows again
+  ui.notice('✖ the network is down');
+  ui.notice('✖ the endpoint refused the request');
+  assert.deepEqual(failureNotices(app), [
+    '✖ the endpoint refused the request',
+    '✖ the network is down',
+    '✖ the endpoint refused the request',
+  ]);
+  assert.equal(app.state.noticeAnchors?.length, app.state.notices.length);
+});
