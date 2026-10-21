@@ -386,6 +386,11 @@ export class BrowserSessions {
     const conversation = this.conversations.get(id);
     return conversation ? this.hostOf(conversation) : undefined;
   });
+  /**
+   * A move to another window opens each page again in a new view there, rather than
+   * carrying its view across: on Linux only (see moveToWindow).
+   */
+  reopenOnMove = process.platform === 'linux';
   constructor(
     private window: BrowserWindow,
     private emit: (state: BrowserState) => void = () => {},
@@ -418,13 +423,16 @@ export class BrowserSessions {
   }
   /**
    * A conversation's pages move to another window, as when its browser pops out of the
-   * drawer, or back to the main one. The same native view is not carried across. On
-   * Linux, reparenting a live WebContentsView leaves the compositor without a surface
-   * (CreateCommandBuffer fails) and the page stays blank, including after later
-   * navigations. Each tab keeps its id. A new view is created in the window that will
-   * show it — the same way a page Circle opens is created — and that tab's history is
-   * loaded there. The new window's panel places the view. A measurement from the window
-   * the pages left is dropped.
+   * drawer, or back to the main one. On macOS and Windows its views, and the layer over
+   * them while Circle acts, leave the old window and join the new one, so each page stays
+   * loaded as it was. On Linux the same native view is not carried across: a
+   * WebContentsView moved to another window there was seen to stay blank, including
+   * after later navigations. Electron 44.0–44.7.0 stacked a re-added view under its
+   * siblings on Linux (electron/electron#54626, fixed in 44.7.1); until a Linux desktop
+   * shows that the fix is enough, each tab keeps its id and gets a new view in the
+   * window that will show it, where its history is loaded again. Either way the new
+   * window's panel places the pages, and a measurement from the window they left is
+   * dropped.
    */
   moveToWindow(idValue: unknown, target: BrowserWindow | null) {
     const id = this.validId(idValue);
@@ -448,18 +456,36 @@ export class BrowserSessions {
     conversation.wantedVisible = false;
     const host = this.hostOf(conversation);
     this.logAttachment(conversation, 'moved');
-    const held = [...conversation.tabs.values()]
-      .filter((tab) => !tab.closed)
-      .map((tab) => ({ tab, page: this.pageSnapshot(tab) }));
-    for (const { tab } of held) this.retireView(previous, tab);
-    this.retireMask(previous, conversation);
-    conversation.held = held;
-    // Putting the pages back: that window has been on screen, so the new view
-    // is created now, as a page Circle opens is. A window that is just opening
-    // is not. A view added in its `show` event, before it has painted, stays
-    // blank. Its panel places the pages once it has a box (`bounds`).
-    if (!host.isDestroyed() && host.isVisible())
-      this.ensureMounted(conversation);
+    if (this.reopenOnMove) {
+      const held = [...conversation.tabs.values()]
+        .filter((tab) => !tab.closed)
+        .map((tab) => ({ tab, page: this.pageSnapshot(tab) }));
+      for (const { tab } of held) this.retireView(previous, tab);
+      this.retireMask(previous, conversation);
+      conversation.held = held;
+      // Putting the pages back: that window has been on screen, so the new view
+      // is created now, as a page Circle opens is. A window that is just opening
+      // is not. A view added in its `show` event, before it has painted, stays
+      // blank. Its panel places the pages once it has a box (`bounds`).
+      if (!host.isDestroyed() && host.isVisible())
+        this.ensureMounted(conversation);
+    } else {
+      // A view the old window has already let go of, or a window that is closing, is
+      // no reason to leave the rest behind.
+      const settle = (action: () => void) => {
+        try {
+          action();
+        } catch {
+          /* The window or the view may be gone. */
+        }
+      };
+      for (const view of this.viewsOf(conversation)) {
+        if (!previous.isDestroyed())
+          settle(() => previous.contentView.removeChildView(view));
+        if (!host.isDestroyed())
+          settle(() => host.contentView.addChildView(view));
+      }
+    }
     this.visibility(conversation);
     this.publish(id);
   }
@@ -777,6 +803,8 @@ export class BrowserSessions {
   /** Drop a view without closing its tab. The page it showed is opened again elsewhere. */
   private retireView(host: BrowserWindow, tab: Tab) {
     tab.replacing = true;
+    // Its developer tools close with it, and the listener that would say so goes first
+    tab.devTools = false;
     const contents = tab.contents;
     const view = tab.view;
     if (!host.isDestroyed()) {
@@ -2510,7 +2538,9 @@ export class BrowserSessions {
   private giveBack(conversation: Conversation, event: string, auto = false) {
     if (
       [...conversation.tabs.values()].some(
-        (tab) => tab.devTools || tab.contents.isDevToolsOpened(),
+        (tab) =>
+          tab.devTools ||
+          (!tab.contents.isDestroyed() && tab.contents.isDevToolsOpened()),
       )
     )
       return;
@@ -2529,11 +2559,17 @@ export class BrowserSessions {
    */
   private watchReturn(conversation: Conversation) {
     if (conversation.autoReturn) return;
+    // A page being opened again in another window has no live page yet: its address
+    // is the one it is about to load
     const addresses = () =>
       new Map(
         [...conversation.tabs.values()].map((tab) => [
           tab.id,
-          tab.contents.getURL(),
+          tab.contents.isDestroyed()
+            ? (tab.pending?.url ??
+              conversation.held?.find((entry) => entry.tab === tab)?.page.url ??
+              '')
+            : tab.contents.getURL(),
         ]),
       );
     const before = addresses();
@@ -3238,6 +3274,13 @@ export class BrowserSessions {
           ),
         };
       }
+      // Pages between two windows are opened again first; an action never reaches a page
+      // that went with the window it left
+      this.ensureMounted(conversation);
+      if (conversation.held?.length)
+        throw Error(
+          'the browser is moving to another window; try again in a moment',
+        );
       // The person's typing stays in the conversation's input box, wherever Circle clicks
       const composer =
         allContents.getFocusedWebContents() ===
