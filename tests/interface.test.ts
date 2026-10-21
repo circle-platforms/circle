@@ -12,6 +12,7 @@ import {
   rgbToHex,
 } from '../src/ink/theme.js';
 import {
+  hangingWrap,
   stripAnsi,
   stringWidth,
   wrap,
@@ -107,6 +108,85 @@ test('Chinese and graphemes occupy terminal cells, and truncation preserves file
   assert.equal(stringWidth('中文'), 4);
   assert.deepEqual(wrap('中文abc', 4), ['中文', 'abc']);
   assert.equal(stringWidth(truncate('文件/file.ts', 7, true)), 7);
+});
+test('wrap breaks CJK anywhere and keeps ASCII runs and quoted spans whole', () => {
+  assert.deepEqual(wrap('detail page', 8), ['detail', 'page']);
+  // A lone Han glyph is pulled back onto the previous break, so the last line is not one character.
+  assert.deepEqual(wrap('中文中文', 6), ['中文', '中文']);
+  assert.deepEqual(wrap('MCP 服务器', 8), ['MCP 服', '务器']);
+  assert.deepEqual(wrap('甲（乙丙丁', 4), ['甲', '（乙', '丙丁']);
+  assert.ok(!wrap('甲（乙丙丁', 4).some((line) => line.endsWith('（')));
+  assert.deepEqual(wrap('    密码在卡片上', 12), ['    密码在卡', '    片上']);
+  assert.deepEqual(wrap('abc readers', 10), ['abc', 'readers']);
+  assert.deepEqual(wrap('run hook191-command please', 16), [
+    'run',
+    'hook191-command',
+    'please',
+  ]);
+  assert.ok(
+    !wrap('run hook191-command please', 16).some((line) => line === 'hoo'),
+  );
+  assert.deepEqual(wrap('前「好 N」后', 10), ['前「好 N」', '后']);
+  const quoted = wrap('see 「事件 N」 please', 14);
+  assert.ok(quoted.some((line) => line.includes('「事件 N」')));
+  assert.deepEqual(wrap('readers', 4), ['read', 'ers']);
+  const flow =
+    '把这个文件交给它做，跟随，并保存结果（module-execute 要的是流程输入 JSON，不是文件）';
+  const forbidden = /^[，。、）」』》〉〗〕｝！？：；]/;
+  const at = wrap(flow, 39);
+  assert.ok(
+    at.every((line) => !forbidden.test(line)),
+    at.join('\n'),
+  );
+  assert.equal(
+    at.some((line) => line === '，不' || line.startsWith('，')),
+    false,
+  );
+  const prefix = '/hub submit <pack> <file>'.padEnd(38);
+  const shown = wrap(hangingWrap(prefix, flow, 77).join('\n'), 77);
+  assert.ok(shown.some((line) => line.includes('module-execute')));
+  assert.ok(
+    shown.every((line) => !forbidden.test(line.trimStart())),
+    shown.join('\n'),
+  );
+  assert.equal(
+    shown.some((line) => line.trim() === '，不'),
+    false,
+  );
+  // English breaks at spaces only: an apostrophe is part of its word, a quote
+  // that is not closed does not hold the rest of the line, and a quoted span wider
+  // than what is left flows from where the line is.
+  assert.deepEqual(wrap("I don't know what", 12), ["I don't know", 'what']);
+  assert.deepEqual(wrap("Circle's settings live in the data folder", 30), [
+    "Circle's settings live in the",
+    'data folder',
+  ]);
+  assert.deepEqual(wrap("rock 'n' roll and the users' files", 12), [
+    "rock 'n'",
+    'roll and the',
+    "users' files",
+  ]);
+  assert.deepEqual(wrap("abc 'tis the season", 18), ["abc 'tis the", 'season']);
+  assert.deepEqual(wrap('he said "this one is long" and left', 20), [
+    'he said',
+    '"this one is long"',
+    'and left',
+  ]);
+  assert.deepEqual(wrap('he said "this one is long enough" and left', 20), [
+    'he said "this one is',
+    'long enough" and',
+    'left',
+  ]);
+  assert.deepEqual(wrap('it says "hi". then more', 12), [
+    'it says',
+    '"hi". then',
+    'more',
+  ]);
+  const hung = hangingWrap('  /hub  ', 'revoke the token at the server', 24);
+  assert.equal(hung[0]?.startsWith('  /hub  '), true);
+  assert.ok(hung.length > 1);
+  assert.ok(hung.slice(1).every((line) => line.startsWith(' '.repeat(8))));
+  assert.ok(hung.every((line) => stringWidth(line) <= 24));
 });
 test('palette contrast is readable across panel and all type surfaces in dark and light themes', () => {
   for (const defaults of [DEFAULT_DARK, DEFAULT_LIGHT, DESKTOP_LIGHT]) {

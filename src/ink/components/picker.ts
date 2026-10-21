@@ -1,7 +1,7 @@
 import { palette, sgrJoin } from '../theme.js';
 import { pad, stringWidth, truncate } from '../string_width.js';
 import { printable } from './dialog_card.js';
-import { uiText } from '../../locale.js';
+import { uiMeta, uiText } from '../../locale.js';
 export interface PickerItem {
   key: string;
   label: string;
@@ -242,12 +242,15 @@ export class Picker {
         ? '•'.repeat(Array.from(this.asked.text).length)
         : this.asked.text;
       rows.push(
-        info(`   ${this.asked.label}: ${typed}▏  ${this.asked.keys}`, p.dim),
+        info(
+          `   ${uiText(this.asked.label)}: ${typed}▏  ${uiText(this.asked.keys)}`,
+          p.dim,
+        ),
       );
     } else if (this.confirming)
       rows.push(
         info(
-          `   ${this.confirming.question}  enter confirms · esc cancels`,
+          `   ${uiText(this.confirming.question)}  ${uiText('enter confirms · esc cancels')}`,
           p.dim,
         ),
       );
@@ -282,7 +285,8 @@ export class Picker {
       const snippet =
         this.query && item.detail ? matchSnippet(item.detail, this.query) : '';
       const meta =
-        (item.meta ? `  ${item.meta}` : '') + (snippet ? `  ${snippet}` : '');
+        (item.meta ? `  ${uiMeta(item.meta)}` : '') +
+        (snippet ? `  ${snippet}` : '');
       rows.push(
         sgrJoin(marked ? p.sel_bg : p.panel_bg, p.text) +
           pad(truncate(` ${marked ? '>' : ' '} ${body}${meta}`, width), width) +

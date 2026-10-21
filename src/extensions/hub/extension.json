@@ -1,5 +1,6 @@
 {
   "version": "0.1.0",
   "description": "Sign in to circle-hub 0.2.0 (client API 1.0.0), hand it work, follow it and save what it delivers",
+  "descriptionZh": "登录 circle-hub 0.2.0（客户端 API 1.0.0），把工作交给它、跟进进度，并保存它交回的结果",
   "commands": ["hub"]
 }

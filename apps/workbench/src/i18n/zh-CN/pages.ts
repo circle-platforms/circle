@@ -6,6 +6,8 @@ export const pages: Record<string, string> = {
     '钩子会运行你配置的终端命令。拒绝会覆盖所有审批模式，包括自动模式。',
   'Project hooks are not running until this folder is trusted.':
     '在信任此文件夹之前，项目钩子不会运行。',
+  '{file} does not run until you approve this version. Circle asks when a conversation starts its next turn.':
+    '批准这个版本之前，{file} 不会运行。对话开始下一个回合时，Circle 会询问。',
   'A skill hook runs after that skill is loaded in this session.':
     '技能自带的钩子在本次会话加载该技能之后才运行。',
   'waits for the skill': '等待技能加载',

@@ -168,7 +168,7 @@ Instruction files and skills are read from the workspace folder you trusted, not
 
 ## Hooks
 
-A hook is a shell command. Your own hooks, in `hooks.json` in the data folder, run in every session. A project's `.circle/hooks.json`, and a `hooks.json` next to a project skill, run only after you trust that folder. Trusting the folder is the gate; there is no second confirmation when a hook starts.
+A hook is a shell command. Your own hooks, in `hooks.json` in the data folder, run in every session. A project's `.circle/hooks.json`, and a `hooks.json` next to a project skill, run only after you trust that folder and approve that version of the file. Editing the file asks again. See [Hooks](hooks.md).
 
 A hook's deny overrides the approval mode, including accept-edits and auto. An allow skips an ordinary approval card and does not skip a call that always asks, a hard refusal (privilege escalation, a command that names a credential file) or read-only mode. A hook can only make the rule stricter. The command receives the tool arguments on standard input with a saved secret written back as `%NAME%`, including in the tool output and in the hook's environment, and it runs as you, with the [filtered environment](#the-shell-environment). The tool's input is not written to `hooks.log`, and a secret's value is not either. The desktop settings and the session transcript list the hooks. A skill's hooks are listed as waiting until this session loads that skill, and they do not run before then.
 
@@ -198,7 +198,7 @@ Circle makes two kinds of request of its own that have nothing to do with your m
 - A background subagent works while you do other things. Its approvals appear as cards of their own, named after its job; "allow for this session" there applies to its whole conversation.
 - **`!` snippets in custom commands run without asking.** See [Custom commands](custom-commands.md).
 - An MCP server or an extension runs with your rights, outside the approval of any single call: what it does when it starts, or in a tool you allowed for the session, is up to it.
-- A hook is a shell command and runs with your rights. Trusting a folder runs its `.circle/hooks.json` and any `hooks.json` next to a project skill. Your own `hooks.json` runs in every folder. See [Hooks](hooks.md).
+- A hook is a shell command and runs with your rights. Trusting a folder is the first gate for its `.circle/hooks.json` and any `hooks.json` next to a project skill; Circle also asks again when that file's bytes change. Your own `hooks.json` runs in every folder. See [Hooks](hooks.md).
 - `webfetch` refuses local and private addresses only. Any URL can carry data out in its query string.
 - The credential-file check reads names, not contents (see [Credential files](#credential-files)).
 - Text files that Circle loads as instructions (`AGENTS.md`, `CLAUDE.md`, skills) can tell the model what to do. Read them in a repository you do not trust.

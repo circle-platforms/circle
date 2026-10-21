@@ -87,4 +87,4 @@ For a skill only you use, copy it into `~/.circle/skills/<name>/`.
 
 ## A skill can ship hooks
 
-`hooks.json` in the skill folder does not run just because the skill is installed. Those commands run only after this session loads the skill, with `/skill` or the `skill` tool, and only for that session. A project skill's hooks also wait until the folder is trusted. A skill without that file is unchanged. See [Hooks](hooks.md#a-skill-can-ship-hooks).
+`hooks.json` in the skill folder does not run just because the skill is installed. Those commands run only after this session loads the skill, with `/skill` or the `skill` tool, and only for that session. A project skill's hooks also wait until the folder is trusted and that file's bytes are approved. A skill without that file is unchanged. See [Hooks](hooks.md#a-skill-can-ship-hooks).

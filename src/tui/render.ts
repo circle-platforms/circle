@@ -650,15 +650,17 @@ export function renderScreen(
           p.reset,
       );
   }
-  const mode = state.viewOnly
-    ? uiText('view only')
-    : state.planMode
-      ? 'read-only'
-      : state.autoMode
-        ? 'auto'
-        : state.acceptEdits
-          ? 'accept edits'
-          : '';
+  const mode = uiText(
+    state.viewOnly
+      ? 'view only'
+      : state.planMode
+        ? 'read-only'
+        : state.autoMode
+          ? 'auto'
+          : state.acceptEdits
+            ? 'accept edits'
+            : '',
+  );
   const modeSgr = state.viewOnly
     ? p.yellow
     : state.planMode
@@ -747,7 +749,7 @@ export function renderScreen(
       p.dim +
         pad(
           truncate(
-            ` ${statusLight(session.waiting ? 'wait' : 'running')} ${session.id.slice(-8)} · ${terminalText(session.title)} · ${session.waiting ? 'waiting for you' : 'running'}`,
+            ` ${statusLight(session.waiting ? 'wait' : 'running')} ${session.id.slice(-8)} · ${terminalText(session.title)} · ${uiText(session.waiting ? 'waiting for you' : 'running')}`,
             width,
           ),
           width,

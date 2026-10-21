@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { ExtensionError } from '../../extension_error.js';
 import { hubLocaleChinese, hubText } from '../../hub_text.js';
+import { hangingWrap, noticeColumns, pad } from '../../ink/string_width.js';
 import {
   existsSync,
   mkdirSync,
@@ -98,6 +99,8 @@ class ServerError extends Error {
   messageZh = '';
   /** The English sentence, when Accept-Language already made `message` Chinese. */
   messageEn = '';
+  /** No HTTP response: the server could not be reached. */
+  unreachable = false;
 }
 // What a refusal names besides its message (the rows, tools or limits it is about), kept
 // short so a model reads it beside the code instead of a whole response.
@@ -138,8 +141,13 @@ const APPROVAL_ROLES = new Set([
 // Commands share one description column, including the shorter reconcile line.
 function usage(rows: [string, string][]): string {
   const width = Math.max(...rows.map(([command]) => command.length)) + 2;
+  // The transcript wraps a notice at width-3. Pre-wrap here so a long
+  // description continues under its own column instead of at column 0.
+  const room = noticeColumns();
   return rows
-    .map(([command, description]) => command.padEnd(width) + description)
+    .map(([command, description]) =>
+      hangingWrap(pad(command, width), description, room).join('\n'),
+    )
     .join('\n');
 }
 // Built when the line is shown, so a Chinese locale translates the descriptions
@@ -887,6 +895,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // window has not shown yet; and whether the last look found the token expired.
   let botNews: { bot: Asset; run: BotRun }[] = [];
   let expired = false;
+  /** The last request did not get an HTTP response. */
+  let down = false;
   // The four platform objects as the server last reported them (/hub refresh). Reads of
   // them overlap (a refresh, a decision, a followed task ending) and are numbered as they
   // start, so one that started earlier and finished later does not replace a newer one.
@@ -1241,6 +1251,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
           : `${where} · ${failure}`,
         'error',
       );
+    else if (down)
+      api.setStatus(hubText('{where} · cannot reach', { where }), 'error');
     else if (following.size)
       api.setStatus(
         hubText('{where} · {n} running', { where, n: following.size }),
@@ -1329,8 +1341,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ]),
       });
     } catch (error) {
-      throw new ServerError(unreachable(config.url, error));
+      const failed = new ServerError(unreachable(config.url, error));
+      failed.unreachable = true;
+      down = true;
+      await showStatus();
+      throw failed;
     }
+    down = false;
     const bytes = Buffer.from(await response.arrayBuffer());
     // Asked with If-None-Match: nothing changed since the last answer.
     if (response.status === 304)
@@ -5374,14 +5391,33 @@ export async function register(api: ExtensionAPI): Promise<void> {
         signedIn: boolean,
         url: string,
         config: Config | undefined,
-      ): string =>
-        `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${
+      ): string => {
+        const note = !signedIn
+          ? hubText(' · not signed in')
+          : expired
+            ? hubText(' · sign-in expired')
+            : down
+              ? hubText(' · cannot reach')
+              : '';
+        // The footer lamp is a filled ● whenever this window is signed in,
+        // including when the server cannot be reached or the sign-in expired.
+        return `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${
           config?.scopeId
             ? hubText(' · scope {id}', { id: config.scopeId })
             : ''
-        }${signedIn ? '' : hubText(' · not signed in')}`;
+        }${note}`;
+      };
       if (!verb || verb === 'help') {
         const config = readConfig();
+        if (await currentToken()) {
+          try {
+            // A server that takes longer than this counts as one that cannot be
+            // reached: the help is not held for the request's full minute
+            await request('GET', '/v1/status', { timeoutMs: 3_000 });
+          } catch {
+            /* Expiry and reachability are recorded before this returns. */
+          }
+        }
         const signedIn = Boolean(await currentToken());
         const url = config?.url || DEFAULT_HUB_URL;
         if (verb === 'help') {

@@ -70,6 +70,44 @@ export function BrowserApproval({
   );
 }
 
+const HOOK_MARKS: Record<string, () => string> = {
+  new: () => t('new hook'),
+  changed: () => t('changed hook'),
+  removed: () => t('removed hook'),
+  unchanged: () => t('unchanged hook'),
+};
+/** Each hook a waiting file holds: new, changed or removed, the unchanged on one line. */
+export function HookChanges({
+  hooks,
+}: {
+  hooks: NonNullable<Interaction['hooks']>;
+}) {
+  const same = hooks.filter((hook) => hook.mark === 'unchanged');
+  return (
+    <ul className="hook-changes">
+      {hooks
+        .filter((hook) => hook.mark !== 'unchanged')
+        .map((hook, index) => (
+          <li key={index} data-mark={hook.mark}>
+            <span>
+              <strong>{HOOK_MARKS[hook.mark]?.() ?? hook.mark}</strong> ·{' '}
+              {hook.name} · {hook.event}
+            </span>
+            <pre className="approval-command">{hook.command}</pre>
+          </li>
+        ))}
+      {same.length > 0 && (
+        <li data-mark="unchanged">
+          <span>
+            <strong>{HOOK_MARKS.unchanged!()}</strong> ·{' '}
+            {same.map((hook) => hook.name).join(', ')}
+          </span>
+        </li>
+      )}
+    </ul>
+  );
+}
+
 /**
  * A request from Circle where it happens in the conversation: an approval under the tool
  * call that waits for it, a question or a secret after the last message. The answer goes
@@ -190,6 +228,47 @@ export function InlineRequest({
           {onFile && plan && (
             <Button onClick={() => onFile(plan.file)}>{t('open plan')}</Button>
           )}
+        </div>
+      </section>
+    );
+  // A project hooks file that waits for approval: the hooks of the version that was
+  // read, marked against the version approved last. Approval is of exactly that version.
+  if (item.kind === 'hooks')
+    return (
+      <section
+        className="inline-request"
+        data-kind="hooks"
+        aria-labelledby={headingId}
+        aria-busy={sent}
+      >
+        <header>
+          <ShieldAlert size={14} />
+          <strong id={headingId}>{t('project hooks need approval')}</strong>
+          {item.origin?.name && <small>{item.origin.name}</small>}
+        </header>
+        {target && (
+          <div className="request-source">
+            <code title={item.target}>{target}</code>
+          </div>
+        )}
+        <HookChanges hooks={item.hooks ?? []} />
+        <p className="panel-note">
+          {t(
+            'These hooks run shell commands. They stay off until you approve this version of the file.',
+          )}
+        </p>
+        {failure}
+        <div className="request-actions">
+          <Button
+            className="primary"
+            disabled={sent}
+            onClick={() => finish('approve')}
+          >
+            {t('approve these hooks')}
+          </Button>
+          <Button disabled={sent} onClick={() => finish('skip')}>
+            {t('skip')}
+          </Button>
         </div>
       </section>
     );

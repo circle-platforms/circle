@@ -1,3 +1,4 @@
+import { t } from './locale.js';
 import {
   normalizeBaseUrl,
   probeSummary,
@@ -17,7 +18,7 @@ export async function connectionModels(
 ): Promise<ConnectionModels> {
   const provider = providerPreset(providerId);
   const base = normalizeBaseUrl(baseUrl, provider.protocol ?? 'openai');
-  if (!apiKey) throw new Error('missing API key');
+  if (!apiKey) throw new Error(t('missing API key'));
   if (provider.source === 'endpoint')
     return probe(base, apiKey, { protocol: provider.protocol });
   return {

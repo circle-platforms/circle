@@ -54,6 +54,7 @@ import {
   activeHookSummary,
   hookDeniedMessage,
   hookFileLabel,
+  hookFileShown,
   hookNoticeText,
   hookToolPaths,
   HOOK_ALLOWED_LINE,
@@ -190,6 +191,11 @@ export interface HarnessOptions {
   hooks?: HookRunner;
   /** False for a subagent: tool hooks still run, session start and stop do not. */
   sessionHooks?: boolean;
+  /**
+   * Before a turn's first step: project hooks files waiting for approval are asked
+   * about, or approved elsewhere, before the session's hooks are read.
+   */
+  reviewHooks?: (signal: AbortSignal) => Promise<void>;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -1045,7 +1051,11 @@ export class Harness {
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
-        if (step === 0) await this.announceHooks(signal);
+        if (step === 0) {
+          if (this.options.sessionHooks !== false)
+            await this.options.reviewHooks?.(signal);
+          await this.announceHooks(signal);
+        }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
         this.step = stepControl;
@@ -1315,6 +1325,15 @@ export class Harness {
     if (!runner) return;
     const loaded = runner.loaded;
     if (loaded.projectIgnored) this.saveHook({ kind: 'untrusted' });
+    if (loaded.projectChanged.length)
+      this.saveHook({
+        kind: 'changed',
+        name: loaded.projectChanged
+          .map((change) =>
+            hookFileShown(change.file, this.options.session.workspace),
+          )
+          .join(', '),
+      });
     for (const error of loaded.errors)
       this.saveHook({
         kind: 'failed',
