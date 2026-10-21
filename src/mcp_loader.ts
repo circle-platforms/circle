@@ -685,16 +685,32 @@ export class McpManager {
       else {
         try {
           // A new trace for each call, on the requests made for it
-          result = await toolCalls.run({ traceparent: traceparent() }, () =>
-            client.callTool(
-              { name: spec.name, arguments: sending },
-              undefined,
-              {
-                signal: context.signal,
-                timeout: this.callTimeout ?? NO_LIMIT,
-                maxTotalTimeout: this.callTimeout,
-              },
-            ),
+          result = await toolCalls.run(
+            { traceparent: traceparent() },
+            async () => {
+              // The SDK sends the cancellation from a listener on the signal, which runs
+              // where the abort came from, such as a key press: a signal of this call's own,
+              // aborted from within the call, keeps the trace on that request too
+              const own = new AbortController();
+              const forward = AsyncLocalStorage.bind(() =>
+                own.abort(context.signal.reason),
+              );
+              context.signal.addEventListener('abort', forward, { once: true });
+              if (context.signal.aborted) forward();
+              try {
+                return await client.callTool(
+                  { name: spec.name, arguments: sending },
+                  undefined,
+                  {
+                    signal: own.signal,
+                    timeout: this.callTimeout ?? NO_LIMIT,
+                    maxTotalTimeout: this.callTimeout,
+                  },
+                );
+              } finally {
+                context.signal.removeEventListener('abort', forward);
+              }
+            },
           );
         } catch (error) {
           throw hiddenError(error, shown);

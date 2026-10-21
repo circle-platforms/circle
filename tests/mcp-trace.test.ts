@@ -175,3 +175,51 @@ test('every request to an HTTP or SSE server carries the session of that moment,
       traced.some((request) => request.path === '/mcp'),
   );
 });
+
+test("the cancellation sent for an interrupted tool call carries that call's trace, however the interrupt came", async (t) => {
+  let answer: (() => void) | undefined;
+  const stub = await mcpStub(t, {
+    tools: [{ name: 'wait', inputSchema: { type: 'object', properties: {} } }],
+    // Answers only when the test ends, as a tool that waits for a login does
+    call: () =>
+      new Promise((resolve) => {
+        answer = () =>
+          resolve({ content: [{ type: 'text', text: 'too late' }] });
+      }),
+  });
+  cleanup(t, () => answer?.());
+  const manager = new McpManager(scratch(t));
+  cleanup(t, () => manager.close());
+  await manager.load([
+    { name: 'http-server', url: stub.url, transport: 'streamable_http' },
+  ]);
+  const controller = new AbortController();
+  const running = manager.tools[0]!.run(
+    {},
+    { sessionId: 'one', signal: controller.signal },
+  );
+  const until = async (check: () => boolean) => {
+    const deadline = performance.now() + 10_000;
+    while (!check()) {
+      assert.ok(performance.now() < deadline, 'timed out');
+      await new Promise((done) => setTimeout(done, 5));
+    }
+  };
+  await until(() => stub.calls().length === 1);
+  // From outside the call, as a key press is
+  controller.abort(new Error('interrupted'));
+  await assert.rejects(running);
+  const cancelled = () =>
+    stub.requests.find(
+      (request) => request.message?.method === 'notifications/cancelled',
+    );
+  await until(() => cancelled() !== undefined);
+  const call = stub.calls()[0]!;
+  assert.match(String(call.headers.traceparent), TRACE);
+  assert.equal(
+    cancelled()!.message!.params!.requestId,
+    call.message!.id,
+    'the cancellation names the call',
+  );
+  assert.equal(cancelled()!.headers.traceparent, call.headers.traceparent);
+});
