@@ -380,11 +380,16 @@ for (const leaseOwner of ['root', 'child'] as const) {
     }
     const pid = Number(readFileSync(join(workspace, 'background.pid'), 'utf8'));
     let extensionsAborted = false;
+    let closingExtensions!: () => void;
+    const extensionCleanup = new Promise<void>((resolve) => {
+      closingExtensions = resolve;
+    });
     const originalExtensionClose = runtime.extensions.close.bind(
       runtime.extensions,
     );
     runtime.extensions.close = async (...args) => {
       extensionsAborted = true;
+      closingExtensions();
       await originalExtensionClose(...args);
     };
     const lost = new Promise<void>((resolve) =>
@@ -413,14 +418,11 @@ for (const leaseOwner of ['root', 'child'] as const) {
       }),
     ]);
     await running;
-    const stoppedDeadline = Date.now() + 5000;
-    while (
-      runtime.jobs.get(job.id)?.status === 'running' ||
-      !extensionsAborted
-    ) {
-      assert.ok(Date.now() < stoppedDeadline, 'ownership cleanup finished');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    // Observe the next cleanup stage rather than racing native process exit
+    // against a five-second host-speed limit. The actual PID check stays below.
+    await extensionCleanup;
+    assert.equal(extensionsAborted, true);
+    assert.notEqual(runtime.jobs.get(job.id)?.status, 'running');
     assert.throws(() => process.kill(pid, 0));
     writeFileSync(join(workspace, 'trigger'), '');
     await new Promise((resolve) => setTimeout(resolve, 100));
