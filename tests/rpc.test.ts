@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PassThrough } from 'node:stream';
+import { once } from 'node:events';
 import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -166,6 +167,85 @@ test('RPC message DTOs match frozen serialization samples without loading a fram
   ) as { cases: { native: Message; expected: unknown }[] };
   for (const item of fixture.cases)
     assert.deepEqual(rpcMessage(item.native), item.expected);
+});
+
+test('RPC finishes when its input was already destroyed', async (t) => {
+  const root = scratch(t);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  const input = new PassThrough();
+  const closed = once(input, 'close');
+  input.destroy();
+  await closed;
+  const output: any[] = [];
+  assert.equal(
+    await runRpc(runtime, {
+      input,
+      write: (text) => output.push(JSON.parse(text)),
+    }),
+    0,
+  );
+  assert.deepEqual(output.at(-1), { type: 'jobs_stopped', count: 0 });
+  assert.equal(input.listenerCount('close'), 0);
+});
+
+test('destroying RPC input lets an active scripted turn finish and saves its result', async (t) => {
+  const root = scratch(t);
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const model = new ScriptedModel([
+    async () => {
+      enter();
+      await released;
+      return {
+        message: answer('stored after disconnect'),
+        usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 },
+      };
+    },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  const input = new PassThrough();
+  const output: any[] = [];
+  const runner = runRpc(runtime, {
+    input,
+    write: (text) => output.push(JSON.parse(text)),
+  });
+  input.write(
+    JSON.stringify({ type: 'prompt', message: 'finish this turn' }) + '\n',
+  );
+  await entered;
+  const closed = once(input, 'close');
+  input.destroy();
+  await closed;
+  release();
+  assert.equal(await runner, 0);
+  assert.equal(model.requests.length, 1);
+  assert.equal(
+    runtime.store.messages(runtime.session.id).at(-1)!.content,
+    'stored after disconnect',
+  );
+  assert.ok(output.some((record) => record.type === 'agent_settled'));
+  assert.deepEqual(output.at(-1), { type: 'jobs_stopped', count: 0 });
+  assert.equal(input.listenerCount('close'), 0);
 });
 
 test('RPC list_jobs and jobId stop the real process before reporting the settled job', async (t) => {

@@ -64,4 +64,4 @@ Nobody can answer an approval card, so calls are decided as in [print mode](cli.
 
 ## When the input closes
 
-Closing standard input lets the current turn finish. Processes a command left running are stopped. Then Circle waits for the jobs the model started, as print mode does: when one ends the model gets its notice and a turn, up to `CIRCLE_JOB_WAIT` seconds (1800 by default) and ten turns, and not at all after an `abort`. It stops what still runs, writes `jobs_stopped`, and exits with code `0`, or `130` after `ctrl+c`.
+Closing standard input lets the current turn finish and save its answer, including when the input stream closes without an end-of-file event. Processes a command left running are stopped. Then Circle waits for the jobs the model started, as print mode does: when one ends the model gets its notice and a turn, up to `CIRCLE_JOB_WAIT` seconds (1800 by default) and ten turns, and not at all after an `abort`. It stops what still runs, writes `jobs_stopped`, and exits with code `0`, or `130` after `ctrl+c`.
