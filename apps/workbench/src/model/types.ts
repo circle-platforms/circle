@@ -297,7 +297,7 @@ export interface Interaction {
   origin?: { jobId?: string; name?: string; agent?: string };
   id: string;
   sessionId: string;
-  kind: 'approval' | 'question' | 'secret' | 'plan-exit';
+  kind: 'approval' | 'question' | 'secret' | 'plan-exit' | 'hooks';
   title: string;
   tool?: string;
   target?: string;
@@ -311,6 +311,16 @@ export interface Interaction {
   reason?: string;
   /** A hook asked for this approval. The reason is the hook's own words. */
   hookReason?: string;
+  /**
+   * A project hooks file waiting for approval (`hooks`): each hook in the version
+   * that was read, against the one approved last. `target` is the file.
+   */
+  hooks?: {
+    name: string;
+    event: string;
+    command: string;
+    mark: 'new' | 'changed' | 'unchanged' | 'removed';
+  }[];
   choices?: string[];
   multiple?: boolean;
   status: 'pending' | 'recorded';
@@ -420,6 +430,8 @@ export interface Settings {
   hooks?: HookSetting[];
   /** A project hooks file is present and the folder is not trusted. */
   projectHooksIgnored?: boolean;
+  /** Project hooks files that do not run until this version is approved. */
+  projectHooksWaiting?: string[];
 }
 export interface HookSetting {
   source: 'user' | 'project' | 'skill';

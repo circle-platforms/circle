@@ -1,7 +1,9 @@
 // The slash commands of the full-screen interface. SessionApp keeps /models, /login, /reload
 // and /editor, which use its own state, and routes every command through runCommand.
 import { randomUUID } from 'node:crypto';
+import { t, uiAside, uiText } from '../locale.js';
 import { networkSummary } from '../net.js';
+import { hookFileShown } from '../hooks.js';
 import {
   mkdirSync,
   readFileSync,
@@ -32,7 +34,13 @@ import type {
   PickerOptions,
 } from '../ink/components/picker.js';
 import { palette } from '../ink/theme.js';
-import { stripAnsi } from '../ink/string_width.js';
+import {
+  hangingWrap,
+  noticeColumns,
+  pad,
+  stripAnsi,
+  wrapHang,
+} from '../ink/string_width.js';
 import { plainPreview, sessionRowLabel } from './session_label.js';
 import {
   isSessionMode,
@@ -47,7 +55,8 @@ import { exportKind, toHtml } from '../session_export.js';
 import { discoverCustomCommands, expandCommandTemplate } from '../commands.js';
 import { discoverSkills, loadSkillBody } from '../skills.js';
 import { readPrompt } from '../system_prompt.js';
-import { helpText, hotkeysText, variableCopy } from './slash_commands.js';
+import { formatHotkeys } from './hotkeys_text.js';
+import { BUILTIN_SLASH, variableCopy } from './slash_commands.js';
 import { hubText } from '../hub_text.js';
 import type { ScreenSnapshot, UndoHistory } from './undo_history.js';
 import {
@@ -67,6 +76,8 @@ export interface CommandHost {
   selected?(): boolean;
   refreshConnection?(): void;
   sessionStatus?(id: string): string | undefined;
+  /** Another terminal runs this session: nothing here may change it. */
+  heldElsewhere?(id: string): boolean;
   importSession?(text: string): Promise<void>;
   readonly home: string;
   readonly workspace: string;
@@ -128,6 +139,7 @@ const BUSY_OK = new Set([
   'session',
   'themes',
   'mcp',
+  'hooks',
   'copy',
   'export',
   'share',
@@ -156,6 +168,12 @@ const BUSY_WORDS: Record<string, string> = {
   effort: 'Busy · change the thinking depth when the turn has finished',
   resume: 'Busy · switch sessions when the turn has finished',
 };
+// The view-only screen shows a session another terminal runs, and cannot change it.
+// These would: they write its name, its messages, its approvals or its branch. A list
+// or a copy (/fork, /clone, /export) is still fine.
+const VIEW_ONLY_REFUSED = new Set(['compact', 'import', 'approvals']);
+const VIEW_ONLY_REFUSED_WITH_ARGS = new Set(['name', 'skill']);
+const VIEW_ONLY_WORDS = 'view only · another terminal runs this session';
 const THEMES = ['auto', 'dark', 'light'] as const;
 const DOUBLE_ESCAPE = ['tree', 'fork', 'none'] as const;
 const DEPTH_NOTES: Record<string, string> = {
@@ -267,6 +285,14 @@ export async function runCommand(
     if (!host.state.draft) host.setDraft(`/${name}${args ? ' ' + args : ''}`);
     return true;
   }
+  if (
+    runtime.viewOnly &&
+    (VIEW_ONLY_REFUSED.has(name) ||
+      (VIEW_ONLY_REFUSED_WITH_ARGS.has(name) && args.trim()))
+  ) {
+    host.flash(VIEW_ONLY_WORDS, 4000);
+    return true;
+  }
   const extension = runtime.extensions.commands().get(name);
   if (extension) {
     try {
@@ -301,6 +327,9 @@ export async function runCommand(
   return true;
 }
 
+function aligned(prefix: string, body: string): string {
+  return hangingWrap(prefix, body, noticeColumns()).join('\n');
+}
 function help(host: CommandHost): void {
   const custom: [string, string][] = discoverCustomCommands(
     host.workspace,
@@ -311,10 +340,31 @@ function help(host: CommandHost): void {
   ]);
   for (const command of host.runtime.extensions.commands().values())
     custom.push([command.name, command.description]);
-  host.notice(helpText(custom));
+  const lines = [t('Available commands:'), ''];
+  for (const command of BUILTIN_SLASH) {
+    const alias = command.aliases?.length
+      ? uiAside(command.aliases.map((name) => '/' + name).join(', '))
+      : '';
+    lines.push(
+      aligned(`  /${command.name.padEnd(10)} `, t(command.description) + alias),
+    );
+  }
+  if (custom.length) {
+    lines.push('', t('Custom commands:'));
+    for (const [name, description] of custom)
+      lines.push(aligned(`  /${name.padEnd(10)} `, t(description)));
+  }
+  lines.push('', t('Type text without / to chat. Skills also: /skill:name'));
+  host.notice(lines.join('\n'));
 }
 
+function refuseViewOnly(host: CommandHost): boolean {
+  if (!host.runtime.viewOnly) return false;
+  host.flash('view only, the mode stays');
+  return true;
+}
 function plan(host: CommandHost, args: string): void {
+  if (refuseViewOnly(host)) return;
   const runtime = host.runtime;
   const token = args.trim().toLowerCase();
   let want: boolean;
@@ -338,6 +388,7 @@ function plan(host: CommandHost, args: string): void {
 }
 
 function yolo(host: CommandHost, args: string): void {
+  if (refuseViewOnly(host)) return;
   const enabled = !['off', '0', 'false', 'no'].includes(
     args.trim().toLowerCase(),
   );
@@ -371,6 +422,7 @@ const MODE_META: Record<SessionMode, string> = {
 
 // /mode with no argument moves to the next mode; shift+tab does the same.
 function mode(host: CommandHost, args: string): void {
+  if (refuseViewOnly(host)) return;
   const runtime = host.runtime;
   const token = args
     .trim()
@@ -399,6 +451,7 @@ function mode(host: CommandHost, args: string): void {
 // The mode list from /settings: enter uses a mode in this session, alt+d
 // also writes default_mode, as /effort does for the thinking depth.
 function modePicker(host: CommandHost): void {
+  if (refuseViewOnly(host)) return;
   const now = host.runtime.mode;
   let saved: SessionMode | '' = '';
   try {
@@ -718,9 +771,10 @@ function approvalsList(host: CommandHost): void {
   });
   host.picker('Session approvals', items, choose, {
     hint: [
-      rules.length ? '' : 'No always-allow rules this session.',
+      rules.length ? '' : t('No always-allow rules this session.'),
       recent.length
-        ? 'recent: ' +
+        ? t('recent') +
+          ': ' +
           recent
             .map(
               (entry) =>
@@ -728,7 +782,7 @@ function approvalsList(host: CommandHost): void {
             )
             .join(' · ')
         : '',
-      '/approvals add <pattern> allows commands by pattern',
+      t('/approvals add <pattern> allows commands by pattern'),
     ]
       .filter(Boolean)
       .join(' · '),
@@ -762,13 +816,17 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
   if (['enable', 'disable'].includes(verb.toLowerCase())) {
     const enable = verb.toLowerCase() === 'enable';
     if (!name) {
-      host.fail(`Usage: /extensions ${enable ? 'enable' : 'disable'} <name>`);
+      host.fail(
+        t('Usage: /extensions {verb} <name>', {
+          verb: enable ? 'enable' : 'disable',
+        }),
+      );
       return;
     }
     // The list is complete once integrations have loaded at start.
     await runtime.initialize().catch(() => {});
     if (!runtime.extensions.extensions.some((ext) => ext.name === name)) {
-      host.fail(`No extension named ${name}`);
+      host.fail(t('No extension named {name}', { name }));
       return;
     }
     // Saved, so it stays on (or off) in the next session too.
@@ -782,10 +840,14 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
     try {
       await runtime.reloadIntegrations();
     } catch (error) {
-      host.fail(`Extension reload failed: ${reason(error)}`);
+      host.fail(
+        t('Extension reload failed: {error}', { error: reason(error) }),
+      );
       return;
     }
-    host.notice(`${name} ${enable ? 'enabled' : 'disabled'}`);
+    host.notice(
+      enable ? t('{name} enabled', { name }) : t('{name} disabled', { name }),
+    );
     host.notice(runtime.extensions.describe());
     return;
   }
@@ -793,11 +855,15 @@ async function extensions(host: CommandHost, args: string): Promise<void> {
     try {
       await runtime.reloadIntegrations();
     } catch (error) {
-      host.fail(`Extension reload failed: ${reason(error)}`);
+      host.fail(
+        t('Extension reload failed: {error}', { error: reason(error) }),
+      );
       return;
     }
     host.notice(
-      `Extensions reloaded · ${runtime.extensions.tools().length} tools`,
+      t('Extensions reloaded · {n} tools', {
+        n: runtime.extensions.tools().length,
+      }),
     );
   }
   host.notice(runtime.extensions.describe());
@@ -1419,16 +1485,24 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     host.notice(
       skills.length
         ? [
-            'Skills:',
+            t('Skills:'),
             '',
-            ...skills.map(
-              (skill) =>
-                `  ${skill.name.padEnd(20)} ${skill.description.slice(0, 80)}${skill.source_label ? ` (${skill.source_label})` : ''}`,
-            ),
+            ...skills.map((skill) => {
+              const description = uiText(skill.description);
+              const source = skill.source_label
+                ? uiAside(uiText(skill.source_label))
+                : '';
+              return aligned(
+                `  ${pad(skill.name, 20)} `,
+                `${description}${source}`,
+              );
+            }),
             '',
-            'Load with /skill <name>',
+            t('Load with /skill <name>'),
           ].join('\n')
-        : 'No skills found. Install with `npx skills add … -a amp` (writes .agents/skills), or add SKILL.md under ~/.circle/skills / .agent/skills.',
+        : t(
+            'No skills found. Install with `npx skills add … -a amp` (writes .agents/skills), or add SKILL.md under ~/.circle/skills / .agent/skills.',
+          ),
     );
     return;
   }
@@ -1455,7 +1529,8 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     },
   ]);
   host.notice(
-    `Loaded skill \`${name}\`` + (skillArgs ? ` args='${skillArgs}'` : ''),
+    t('Loaded skill `{name}`', { name }) +
+      (skillArgs ? t(" args='{args}'", { args: skillArgs }) : ''),
   );
 }
 
@@ -1664,6 +1739,10 @@ function sessionList(
         // Both ask in the list; esc there leaves the session as it was.
         'ctrl+r': (item) => {
           if (!item) return;
+          if (host.heldElsewhere?.(item.key)) {
+            host.flash(VIEW_ONLY_WORDS, 4000);
+            return;
+          }
           const stored = runtime.store.get(item.key)?.title ?? '';
           host.state.picker?.ask(
             'Rename',
@@ -1731,6 +1810,10 @@ async function tree(
         'change this branch after the current turn and background jobs finish',
       );
     const point = user ? checkpoint.parent : checkpoint.id;
+    if (!fork && runtime.viewOnly) {
+      host.flash(VIEW_ONLY_WORDS, 4000);
+      return;
+    }
     if (fork) {
       const session = runtime.store.fork(
         runtime.session.id,
@@ -1833,6 +1916,10 @@ async function tree(
         const message = item && branches.entries.get(item.key)?.message;
         const list = host.state.picker;
         if (!message || !list) return;
+        if (runtime.viewOnly) {
+          host.flash(VIEW_ONLY_WORDS, 4000);
+          return;
+        }
         list.ask(
           'Label (empty removes it)',
           marks[message.id] ?? '',
@@ -1996,6 +2083,70 @@ async function clone(host: CommandHost): Promise<void> {
   redrawn(host, `Cloned this branch → ${session.id}`);
 }
 
+function hookSource(label: string): string {
+  if (label === 'user' || label === 'project') return t(label);
+  if (label.startsWith('skill:'))
+    return `${t('skill')}:${label.slice('skill:'.length)}`;
+  return label;
+}
+function hooks(host: CommandHost): void {
+  const {
+    hooks: rows,
+    projectIgnored,
+    projectChanged,
+  } = host.runtime.listHooks();
+  const width = noticeColumns();
+  const line = (row: (typeof rows)[number], waiting: boolean): string => {
+    const hook = row.hook;
+    const state = waiting
+      ? t('waiting for /skill {name}', { name: hook.skill ?? hook.name })
+      : t('trusted');
+    return wrapHang(
+      `  ${hook.name} · ${hookSource(hook.sourceLabel)} · ${hook.event} · ${hook.command} · ${state}`,
+      width,
+      2,
+    ).join('\n');
+  };
+  const running = rows.filter((row) => row.active);
+  const waiting = rows.filter((row) => !row.active);
+  const lines: string[] = [];
+  if (projectIgnored) lines.push(t('project hooks need trust'), '');
+  if (projectChanged.length) {
+    lines.push(t('project hooks need approval'), '');
+    for (const change of projectChanged)
+      lines.push(
+        wrapHang(
+          `  ${hookFileShown(change.file, host.workspace)} · ${t('needs approval')}`,
+          width,
+          2,
+        ).join('\n'),
+      );
+    lines.push(
+      wrapHang(
+        `  ${t('Circle asks when a turn starts. After skip, /reload asks again.')}`,
+        width,
+        2,
+      ).join('\n'),
+      '',
+    );
+  }
+  if (!rows.length && !projectChanged.length) {
+    lines.push(t('No hooks configured.'));
+    host.notice(lines.join('\n'));
+    return;
+  }
+  if (rows.length) {
+    lines.push(t('Hooks:'), '');
+    if (running.length) lines.push(...running.map((row) => line(row, false)));
+    if (waiting.length) {
+      if (running.length) lines.push('');
+      lines.push(t('Skill hooks waiting for load:'), '');
+      lines.push(...waiting.map((row) => line(row, true)));
+    }
+  }
+  host.notice(lines.join('\n'));
+}
+
 const HANDLERS: Record<string, Handler> = {
   new: newSession,
   continue: continueSession,
@@ -2004,7 +2155,7 @@ const HANDLERS: Record<string, Handler> = {
   fork: (host, args) => tree(host, args, true),
   clone,
   help,
-  hotkeys: (host) => host.notice(hotkeysText()),
+  hotkeys: (host) => host.notice(formatHotkeys()),
   plan,
   yolo,
   mode,
@@ -2016,6 +2167,7 @@ const HANDLERS: Record<string, Handler> = {
   approvals,
   mcp,
   extensions,
+  hooks,
   trust,
   undo,
   redo,

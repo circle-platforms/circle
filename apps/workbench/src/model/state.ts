@@ -92,6 +92,7 @@ export const COMMAND_UI: Record<string, string> = {
   themes: 'settings',
   variables: 'settings',
   secrets: 'settings',
+  hooks: 'settings',
   mcp: 'mcp',
   extensions: 'extensions',
   approvals: 'approvals',
@@ -864,6 +865,8 @@ export class PreviewRuntime implements RuntimePort {
       themes: 'settings',
       variables: 'settings',
       secrets: 'settings',
+      // Settings lists each hook and the files that wait for approval.
+      hooks: 'settings',
       mcp: 'mcp',
       extensions: 'extensions',
       approvals: 'approvals',

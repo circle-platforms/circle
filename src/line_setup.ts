@@ -20,6 +20,7 @@ import {
   withConnection,
   type CircleSettings,
 } from './settings.js';
+import { t } from './locale.js';
 import { normalizeWorkspace } from './paths.js';
 export interface LinePrompter {
   // The next line typed, or undefined once input has ended or ctrl+c was pressed.
@@ -249,14 +250,16 @@ export async function runLineTrust(
 ): Promise<CircleSettings | undefined> {
   try {
     const target = normalizeWorkspace(workspace);
-    io.say('Trust this folder?');
+    io.say(t('Trust this folder?'));
     io.say(`  ${target}`);
     io.say(
-      "Circle reads, edits and runs commands here, asking first for anything that\nchanges files. Trusting also loads the folder's own commands, skills,\nextensions and hooks. Hooks are shell commands.",
+      t(
+        "Circle reads, edits and runs commands here, asking first for anything that\nchanges files. Trusting also loads the folder's own commands, skills,\nextensions and hooks. Hooks are shell commands.",
+      ),
     );
-    const answer = (await io.ask('trust it? [y/N]: '))?.trim().toLowerCase();
+    const answer = (await io.ask(t('trust it? [y/N]: ')))?.trim().toLowerCase();
     if (answer !== 'y' && answer !== 'yes') {
-      io.say('Not trusted.');
+      io.say(t('Not trusted.'));
       return undefined;
     }
     saveSettingsChange(home, (saved) => {

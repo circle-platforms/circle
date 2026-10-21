@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
+import { t } from './locale.js';
 import { ensureHome } from './paths.js';
 
 // A lease outlives a turn: queued work, approvals and background jobs still own history.
@@ -11,7 +12,10 @@ const STALE = SESSION_LEASE_STALE_MS;
 const UPDATE = 5000;
 /** What to say when another runtime holds the session. Names the copy command. */
 export function occupiedSessionMessage(sessionId: string): string {
-  return `this session is open in another terminal. Close it there to continue, or copy it with circle --fork ${sessionId}`;
+  return t(
+    'this session is open in another terminal. Close it there to continue, or copy it with circle --fork {id}',
+    { id: sessionId },
+  );
 }
 
 export class SessionOccupiedError extends Error {

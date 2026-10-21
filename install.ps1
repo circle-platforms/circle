@@ -2,6 +2,20 @@
 & {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
+    # Chinese built from its code points: the script stays ASCII, so Windows PowerShell
+    # reads it the same whatever the system's code page, from -File as from irm | iex.
+    function Circle-Zh([int[]]$Codes) { -join ($Codes | ForEach-Object { [char]$_ }) }
+    function Circle-Line([string]$Text) {
+        $lang = if ($env:LC_ALL) { $env:LC_ALL } elseif ($env:LANG) { $env:LANG } else { '' }
+        if ($lang -notmatch '^(?i)zh') { return $Text }
+        switch -Regex ($Text) {
+            '^downloading (.+)$' { return "$(Circle-Zh 0x6B63,0x5728,0x4E0B,0x8F7D) $($Matches[1])" }
+            '^verifying the download$' { return (Circle-Zh 0x6B63,0x5728,0x6821,0x9A8C,0x4E0B,0x8F7D) }
+            '^unpacking$' { return (Circle-Zh 0x6B63,0x5728,0x89E3,0x538B) }
+            '^Run circle, or (.+)\.$' { return "$(Circle-Zh 0x8FD0,0x884C) circle$(Circle-Zh 0xFF0C,0x6216) $($Matches[1])$(Circle-Zh 0x3002)" }
+            default { return $Text }
+        }
+    }
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
     $repo = if ($env:CIRCLE_REPO) { $env:CIRCLE_REPO } else { 'circle-platforms/circle' }
     if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Invalid repository' }
@@ -26,11 +40,11 @@
             Copy-Item -LiteralPath (Join-Path $env:CIRCLE_ASSET_DIR "$asset.sha256") -Destination "$archive.sha256"
         } else {
             $base = "https://github.com/$repo/releases/download/v$version"
-            Write-Host "[circle-install] downloading $asset"
+            Write-Host "[circle-install] $(Circle-Line "downloading $asset")"
             Invoke-WebRequest -Uri "$base/$asset" -OutFile $archive @web
             Invoke-WebRequest -Uri "$base/$asset.sha256" -OutFile "$archive.sha256" @web
         }
-        Write-Host '[circle-install] verifying the download'
+        Write-Host "[circle-install] $(Circle-Line 'verifying the download')"
         $receipt = (Get-Content -LiteralPath "$archive.sha256" -Raw).Trim()
         if ($receipt -notmatch ('^([0-9a-fA-F]{64})\s+' + [regex]::Escape($asset) + '$')) { throw 'Invalid checksum receipt' }
         $expected = $Matches[1]
@@ -49,7 +63,7 @@
                 if ($kind -ne 0 -and $kind -ne 0x8000 -and $kind -ne 0x4000) { throw 'Archive links and special files are not allowed' }
             }
         } finally { $zip.Dispose() }
-        Write-Host '[circle-install] unpacking'
+        Write-Host "[circle-install] $(Circle-Line 'unpacking')"
         [IO.Compression.ZipFile]::ExtractToDirectory($archive, $temporary)
         $root = Join-Path $temporary 'circle'
         $node = Join-Path $root 'runtime\node.exe'
@@ -84,6 +98,6 @@
         # terminals see the new PATH.
         if ($changed) { [Environment]::SetEnvironmentVariable('CIRCLE_PATH_TOUCH', $null, 'User') }
         if ($env:CIRCLE_NO_PATH -ne '1') { $env:Path = "$binDir;$env:Path" }
-        Write-Host "[circle-install] Run circle, or $binDir\circle.cmd."
+        Write-Host "[circle-install] $(Circle-Line "Run circle, or $binDir\circle.cmd.")"
     } finally { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }
 }

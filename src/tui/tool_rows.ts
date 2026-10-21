@@ -154,7 +154,7 @@ export function toolRow(
       text,
     ],
   ];
-  if (waiting) segments.push(['', '  '], [p.blue, 'waiting for you']);
+  if (waiting) segments.push(['', '  '], [p.blue, uiText('waiting for you')]);
   return tintedRow(segments, bg, options.width);
 }
 
@@ -251,7 +251,20 @@ export function resultRows(
   if (job) return jobResultRows(job, bg, options);
   const error = result.status === 'error';
   const recoverable = error && Boolean(result.recoverable);
-  const output = uiText(terminalText(result.content));
+  const raw = terminalText(result.content);
+  const whole = uiText(raw);
+  const output =
+    whole !== raw
+      ? whole
+      : raw
+          .split('\n')
+          .map((line) =>
+            /^Exit code: -?\d+$/.test(line) ||
+            line.startsWith('The user rejected this tool call.')
+              ? uiText(line)
+              : line,
+          )
+          .join('\n');
   if (call.name === 'read_file' && !error && !options.expanded) {
     const window = readWindow(output);
     if (window)
@@ -261,7 +274,9 @@ export function resultRows(
             ['', '   ⎿ '],
             [
               p.faint,
-              `Read ${window.count} line${window.count === 1 ? '' : 's'} · ctrl+o`,
+              uiText(
+                `Read ${window.count} line${window.count === 1 ? '' : 's'} · ctrl+o`,
+              ),
             ],
           ],
           bg,
@@ -500,6 +515,7 @@ export function thinkingRows(
   let header = options.done ? '∴ Thought' : '∴ Thinking';
   if (seconds !== undefined) header += ` ${formatBusyElapsed(seconds)}`;
   if (title) header += ` · ${title}`;
+  header = uiText(header);
   const style = sgrJoin(options.expanded ? p.reason_dim : p.reason, '\x1b[3m');
   const head: [string, string][] = [
     ['', ' '],

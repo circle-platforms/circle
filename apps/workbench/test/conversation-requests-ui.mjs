@@ -124,8 +124,58 @@ try {
     0,
     'late answers cannot take focus from another session',
   );
+  // A project hooks file waiting for approval: each changed hook with its whole
+  // command, the unchanged ones by name, and the answer is the card's own choice.
+  await page.goto(
+    `${server.resolvedUrls.local[0]}test/conversation-requests-ui.html?kind=hooks`,
+  );
+  const approve = page.getByRole('button', {
+    name: 'approve these hooks',
+    exact: true,
+  });
+  await approve.waitFor();
+  const card = page.locator('.inline-request[data-kind="hooks"]');
+  assert.match(await card.innerText(), /project hooks need approval/);
+  assert.match(await card.innerText(), /\/work\/app\/\.circle\/hooks\.json/);
+  // A question in words, as the question card's heading is: the monospace font is a
+  // tool card's, which names a tool
+  const fonts = await card.evaluate((section) => ({
+    heading: getComputedStyle(section.querySelector('header strong'))
+      .fontFamily,
+    card: getComputedStyle(section).fontFamily,
+  }));
+  assert.equal(fonts.heading, fonts.card, 'the heading takes the card font');
+  assert.equal(
+    await card.locator('.hook-changes li[data-mark="changed"] pre').innerText(),
+    'npm run lint',
+  );
+  assert.equal(
+    await card.locator('.hook-changes li[data-mark="new"] pre').innerText(),
+    'node .circle/guard.mjs',
+  );
+  assert.match(
+    await card.locator('.hook-changes li[data-mark="unchanged"]').innerText(),
+    /unchanged hook · fmt/,
+  );
+  assert.equal(await card.getByText('prettier --write .').count(), 0);
+  await page.getByRole('button', { name: 'skip', exact: true }).click();
+  await page.evaluate(() => window.fixture.resolve());
+  await approve.waitFor({ state: 'detached' });
+  assert.deepEqual(await page.evaluate(() => window.fixture.calls), [
+    ['hooks-local', 2, 'skip'],
+  ]);
+  await page.goto(
+    `${server.resolvedUrls.local[0]}test/conversation-requests-ui.html?kind=hooks`,
+  );
+  await page
+    .getByRole('button', { name: 'approve these hooks', exact: true })
+    .click();
+  await page.evaluate(() => window.fixture.resolve());
+  assert.deepEqual(await page.evaluate(() => window.fixture.calls), [
+    ['hooks-local', 2, 'approve'],
+  ]);
   console.log(
-    'conversation requests: pending transport, local failure, explicit retry, source navigation and retained draft passed',
+    'conversation requests: pending transport, local failure, explicit retry, source navigation, retained draft and the hooks card passed',
   );
 } finally {
   await browser?.close();

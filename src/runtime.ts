@@ -84,7 +84,14 @@ import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
-import { HookRunner, loadHooks, type HookDefinition } from './hooks.js';
+import {
+  HookRunner,
+  approveHookFile,
+  approvedHookDigest,
+  loadHooks,
+  type HookChange,
+  type HookDefinition,
+} from './hooks.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -193,6 +200,18 @@ export interface RuntimeOptions {
     signal: AbortSignal,
     origin?: InteractionContext,
   ) => Promise<void>;
+  /**
+   * Ask the person whether a project hooks file that was never approved, or changed
+   * since, may run: true approves exactly the bytes in `change`. Asked once per file
+   * version when a turn starts, and again after a reload or in a new session. Without
+   * it (print, line and rpc mode) such a file does not run and the turn says so.
+   */
+  approveHooks?: (change: HookChange, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * The terminal's `circle -c`: a session another terminal holds opens view only
+   * instead of failing. Nothing else gets this; the desktop starts a session of its own.
+   */
+  viewOccupied?: boolean;
   /**
    * Keep a new session out of the database until its first message. The terminal uses this
    * so startup and /new do not leave an empty row.
@@ -418,17 +437,33 @@ export class AgentRuntime {
             !this.runOptions.session_name &&
             !options.sessionId,
         );
-      if (!options.inspect)
-        this.store.claimSession(this.session.id, (error) =>
-          this.ownershipLost(error),
-        );
+      if (!options.inspect) {
+        try {
+          this.store.claimSession(this.session.id, (error) =>
+            this.ownershipLost(error),
+          );
+        } catch (error) {
+          // Only the terminal's `circle -c` watches a held session. Everyone else
+          // (print mode, the desktop) is told it is taken.
+          if (
+            !options.viewOccupied ||
+            options.headless ||
+            !(error instanceof SessionOccupiedError)
+          )
+            throw error;
+          this.options.inspect = true;
+        }
+      }
       // A delete may have completed between discovery and acquiring the lease.
       const current = this.store.get(this.session.id);
       if (!current) throw new Error('unknown session');
       this.session = current;
-      this.store.repairStaleTitles();
-      const repaired = this.store.get(this.session.id);
-      if (repaired) this.session = repaired;
+      // A view-only open does not rename another terminal's session.
+      if (!this.options.inspect) {
+        this.store.repairStaleTitles();
+        const repaired = this.store.get(this.session.id);
+        if (repaired) this.session = repaired;
+      }
     } catch (error) {
       this.store.close();
       throw error;
@@ -953,6 +988,7 @@ export class AgentRuntime {
       headless: this.options.headless,
       approve: this.options.approve,
       hooks: this.ensureHooks(),
+      reviewHooks: (signal) => this.reviewHooks(signal),
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
       beforeRun: async (signal) => {
@@ -1370,6 +1406,74 @@ export class AgentRuntime {
     }, 0);
     this.toolsCheck.unref?.();
   }
+  /** Configured hooks, including skill hooks this session has not loaded. */
+  listHooks(): {
+    hooks: { hook: HookDefinition; active: boolean }[];
+    projectIgnored: boolean;
+    projectChanged: HookChange[];
+  } {
+    const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
+    return {
+      hooks: runner.listing(),
+      projectIgnored: runner.loaded.projectIgnored,
+      projectChanged: [...runner.loaded.projectChanged],
+    };
+  }
+  /** Project hooks files this session is not running because they wait for approval. */
+  pendingHooks(): HookChange[] {
+    const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
+    return [...runner.loaded.projectChanged];
+  }
+  /**
+   * Approve a file that waits in this session: the digest, and the hooks that load,
+   * are those of `change`, the read the person was shown. False when this session is
+   * not waiting for exactly that version (the file was read again since).
+   */
+  approveHooks(change: HookChange): boolean {
+    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
+    const runner = this.ensureHooks();
+    const waiting = runner.loaded.projectChanged.find(
+      (item) => item.file === change.file && item.digest === change.digest,
+    );
+    if (!waiting) return false;
+    approveHookFile(this.options.home, waiting);
+    return runner.approve(waiting);
+  }
+  /** A file approved elsewhere (another session, another Circle) loads here too. */
+  private syncHookApprovals(runner: HookRunner): void {
+    for (const change of [...runner.loaded.projectChanged])
+      if (approvedHookDigest(this.options.home, change.file) === change.digest)
+        runner.approve(change);
+  }
+  /** Files this session asked about and the person left off. A reload asks again. */
+  private hooksAsked = new Set<string>();
+  /**
+   * When a turn starts: load files approved elsewhere (another session, another
+   * Circle), then ask the person about each version not asked about yet.
+   */
+  private async reviewHooks(signal: AbortSignal): Promise<void> {
+    const runner = this.ensureHooks();
+    this.syncHookApprovals(runner);
+    if (this.viewOnly || !runner.loaded.projectChanged.length) return;
+    const ask = this.options.approveHooks;
+    if (!ask) return;
+    for (const change of [...runner.loaded.projectChanged]) {
+      const key = `${change.file}\0${change.digest}`;
+      if (this.hooksAsked.has(key)) continue;
+      let approved: boolean;
+      try {
+        approved = await ask(change, signal);
+      } catch (error) {
+        // An interrupted turn did not answer; the next turn asks again.
+        if (signal.aborted) throw error;
+        approved = false;
+      }
+      this.hooksAsked.add(key);
+      if (approved) this.approveHooks(change);
+    }
+  }
   /** Skills whose hooks are armed for the current session. */
   private armedSkills = new Set<string>();
   private ensureHooks(): HookRunner {
@@ -1388,6 +1492,8 @@ export class AgentRuntime {
         { workspace: this.options.workspace, home: this.options.home },
       );
       for (const name of this.armedSkills) this.hookRunner.activateSkill(name);
+      // A fresh read asks again about every file still waiting.
+      this.hooksAsked.clear();
     }
     return this.hookRunner;
   }
@@ -1518,17 +1624,8 @@ export class AgentRuntime {
       );
   }
   private requireTurnConnection(): void {
-    try {
-      this.requireCurrentConnection();
-    } catch (error) {
-      this.bus.emit('run_error', {
-        payload: {
-          message: error instanceof Error ? error.message : String(error),
-          connection_changed: true,
-        },
-      });
-      throw error;
-    }
+    // The harness reports the failure once. Emitting here as well printed it twice.
+    this.requireCurrentConnection();
   }
   private gatewayModel(
     settings: CircleSettings,
@@ -1693,6 +1790,7 @@ export class AgentRuntime {
   }
   async compact(hint = '', signal?: AbortSignal): Promise<string> {
     if (this.ownershipError) throw this.ownershipError;
+    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
     if (!signal) this.requireCurrentConnection();
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (signal)

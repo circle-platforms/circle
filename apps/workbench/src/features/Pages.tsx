@@ -1642,7 +1642,7 @@ function ApprovalsPage() {
           .map((item) => (
             <div className="decision-row" key={item.id}>
               <span>{recordedTitle(item)}</span>
-              <strong>{recordedDecision(item.decision)}</strong>
+              <strong>{recordedDecision(item.decision, item.kind)}</strong>
             </div>
           ))}
         {runtime.mode !== 'live' && (
@@ -1867,6 +1867,14 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
               {t('Project hooks are not running until this folder is trusted.')}
             </p>
           )}
+          {(settings.projectHooksWaiting ?? []).map((file) => (
+            <p className="panel-note" key={file}>
+              {t(
+                '{file} does not run until you approve this version. Circle asks when a conversation starts its next turn.',
+                { file },
+              )}
+            </p>
+          ))}
           {(settings.hooks ?? []).length === 0 ? (
             <p className="panel-note">{t('no hooks')}</p>
           ) : (

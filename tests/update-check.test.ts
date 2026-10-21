@@ -16,6 +16,7 @@ import {
   downloadFile,
   updateInstalled,
   updateNotice,
+  versionsSince,
 } from '../src/update.js';
 import {
   activateRelease,
@@ -336,11 +337,17 @@ test('circle update downloads the release itself, showing how far it got, and ha
   const code = await updateInstalled(
     ['99.0.0'],
     async (url) => {
-      asked.push(String(url));
+      const address = String(url);
+      asked.push(address);
+      if (address.includes('/releases?'))
+        return new Response(
+          JSON.stringify([{ tag_name: 'v99.0.0' }, { tag_name: 'v1.0.0' }]),
+          { headers: { 'content-type': 'application/json' } },
+        );
       // The update's own download folder is the one counted, and another runner's is not.
       assert.equal(temp.folders().length, 1);
       temp.neighbour();
-      return String(url).endsWith('.sha256')
+      return address.endsWith('.sha256')
         ? new Response(`${'a'.repeat(64)}  ${asset}\n`)
         : slowly([archive.subarray(0, 100_000), archive.subarray(100_000)], {
             gap: 120,
@@ -350,11 +357,25 @@ test('circle update downloads the release itself, showing how far it got, and ha
   );
   assert.equal(code, 0);
   const base = 'https://github.com/example/circle/releases/download/v99.0.0/';
-  assert.deepEqual(asked, [base + asset, base + asset + '.sha256']);
+  assert.deepEqual(asked, [
+    base + asset,
+    base + asset + '.sha256',
+    'https://api.github.com/repos/example/circle/releases?per_page=100',
+  ]);
   assert.equal(shown.writes[0], `updating circle ${VERSION} to 99.0.0\n`);
   assert.match(
-    shown.writes.at(-1)!,
+    shown.writes.join(''),
     new RegExp(`downloading ${asset.replaceAll('.', '\\.')} {2}100%`),
+  );
+  // The release notes of the repository this installation updates from
+  assert.match(
+    shown.writes.join(''),
+    /https:\/\/github.com\/example\/circle\/releases\/tag\/v99\.0\.0/,
+  );
+  // A kept copy's folder is quoted, so the line can be pasted whatever the path holds
+  assert.match(
+    shown.writes.join(''),
+    /rm -rf '[^']+'|Remove-Item -Recurse -Force '[^']+'/,
   );
   // The installer got both files and the version, and the folder is gone afterwards.
   assert.deepEqual(readFileSync(join(seen, asset)), Buffer.from(archive));
@@ -390,6 +411,47 @@ test('ctrl+c during the download of circle update stops it and leaves nothing be
   assert.deepEqual(process.listeners('SIGINT'), listeners);
   assert.deepEqual(temp.folders(), []);
   assert.equal(existsSync(seen), false);
+});
+
+test('an update names every release it skipped and how to remove a kept copy', async () => {
+  const notes = await versionsSince(
+    'example/circle',
+    '1.8.0',
+    '1.9.1',
+    async () =>
+      new Response(
+        JSON.stringify([
+          { tag_name: 'v1.9.1' },
+          { tag_name: 'v1.7.0' },
+          { tag_name: 'v1.9.0' },
+          { tag_name: 'v2.0.0' },
+        ]),
+      ),
+  );
+  assert.deepEqual(notes, ['1.9.0', '1.9.1']);
+});
+
+test('a refused release lookup names a rate limit or a blocked network and says to retry', async (t) => {
+  const { root } = installed(t);
+  await assert.rejects(
+    () =>
+      updateInstalled([], async () => new Response('no', { status: 403 }), {
+        root,
+        out: { write: () => true },
+      }),
+    /release lookup failed: HTTP 403[\s\S]*rate limit[\s\S]*circle update again/,
+  );
+  await assert.rejects(
+    () =>
+      updateInstalled(
+        [],
+        async () => {
+          throw new Error('fetch failed');
+        },
+        { root, out: { write: () => true } },
+      ),
+    /release lookup failed: fetch failed[\s\S]*network[\s\S]*circle update again/,
+  );
 });
 
 test('keybindings.json keeps working, with an older action name too, and its problems are shown', (t) => {

@@ -5,6 +5,7 @@ import type { Server as HttpServer } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { approveHookFile, loadHooks } from '../src/hooks.js';
 interface TestContext {
   after(fn: () => void | Promise<void>): void;
 }
@@ -45,6 +46,16 @@ function owned(t: TestContext): Resources {
     });
   }
   return state;
+}
+/** Approve a trusted folder's project hooks files as they are now, as the card would. */
+export function approveProjectHooks(
+  home: string,
+  workspace: string,
+  userHome?: string,
+): void {
+  for (const change of loadHooks({ workspace, home, trusted: true, userHome })
+    .projectChanged)
+    approveHookFile(home, change);
 }
 export function scratch(t: TestContext, prefix = 'circle-test-'): string {
   const root = mkdtempSync(join(tmpdir(), prefix));

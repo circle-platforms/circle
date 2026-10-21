@@ -123,3 +123,28 @@
   color: var(--secondary);
   font-size: var(--ui-small);
 }
+
+/* A project hooks file waiting for approval: one row per hook, its command whole. */
+.hook-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ui-small);
+}
+.hook-changes li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hook-changes li[data-mark='changed'] strong,
+.hook-changes li[data-mark='removed'] strong {
+  color: var(--attention);
+}
+.hook-changes li[data-mark='unchanged'] {
+  color: var(--secondary);
+}

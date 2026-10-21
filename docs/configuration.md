@@ -10,26 +10,26 @@ Circle is configured by files: a data folder for your account-level settings and
 
 The data folder is `~/.circle`. Set `CIRCLE_HOME` to use another location, and run `circle --print-home` to see which one is in use.
 
-| Path | What it is |
-|---|---|
-| `settings.json` | Model, endpoint, trusted folders, MCP servers. See [Settings](settings.md). |
-| `credentials.json` | Your API key. Readable only by you. |
-| `history` | Your prompt history, last 1,000 messages. |
-| `circle.sqlite` | Every session: its messages, branches and titles, for `/resume` and `circle -c`. See [Sessions](sessions.md). |
-| `approvals/` | "Allow for this session" rules, one file per session. |
+| Path                      | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `settings.json`           | Model, endpoint, trusted folders, MCP servers. See [Settings](settings.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `credentials.json`        | Your API key. Readable only by you.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `history`                 | Your prompt history, last 1,000 messages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `circle.sqlite`           | Every session: its messages, branches and titles, for `/resume` and `circle -c`. See [Sessions](sessions.md).                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `approvals/`              | "Allow for this session" rules, one file per session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `projects/<folder>-<id>/` | Per project: the messages a summary replaced (`conversation_history/`), tool output too long for the conversation (`large_tool_results/`), the output of commands and [background jobs](background-jobs.md) (`background_jobs/`, one folder per run of Circle, removed a day after that run ended), and pictures: screenshots (`screenshots/`), pictures pasted in the terminal (`pasted_images/`) and pictures sent with a message for a model that does not read images (`images/`). See [Images and screenshots](usage.md#images-and-screenshots). |
-| `cache/models-dev.json` | The copy of models.dev that context windows and prices come from. See [Models](models.md#cost-and-context-in-the-footer). |
-| `update-check.json` | The answer of the daily [update check](cli.md#the-reminder). |
-| `secret_requests/` | Requests for secrets waiting to be typed; each is removed once collected. |
-| `extension_secrets/` | Values extensions keep with `api.secrets`, one `<extension>.secrets.json` each, readable only by you. |
-| `extension_data/` | A folder for each extension that asked for one (`api.dataDir`). |
-| `exports/`, `shares/` | Output of `/export`, `/copy` (fallback) and `/share`. |
-| `skills/` | Your [skills](skills.md). |
-| `hooks.json` | Your [hooks](hooks.md). A project's hooks are `.circle/hooks.json`, and they run only in a trusted folder. |
-| `commands/`, `prompts/` | Your [custom commands](custom-commands.md). |
-| `extensions/` | Your [extensions](extensions.md). |
-| `AGENTS.md` and friends | Your personal [instruction files](#instruction-files). |
-| `keybindings.json` | Your own keys for Circle's actions. See [Keyboard and mouse](keybindings.md#your-own-keys). |
+| `cache/models-dev.json`   | The copy of models.dev that context windows and prices come from. See [Models](models.md#cost-and-context-in-the-footer).                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `update-check.json`       | The answer of the daily [update check](cli.md#the-reminder).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `secret_requests/`        | Requests for secrets waiting to be typed; each is removed once collected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `extension_secrets/`      | Values extensions keep with `api.secrets`, one `<extension>.secrets.json` each, readable only by you.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `extension_data/`         | A folder for each extension that asked for one (`api.dataDir`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `exports/`, `shares/`     | Output of `/export`, `/copy` (fallback) and `/share`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `skills/`                 | Your [skills](skills.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `hooks.json`              | Your [hooks](hooks.md). A project's hooks are `.circle/hooks.json`. They run in a trusted folder after you approve that version of the file. `hook-trust.json` in this folder remembers the digest.                                                                                                                                                                                                                                                                                                                                                   |
+| `commands/`, `prompts/`   | Your [custom commands](custom-commands.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `extensions/`             | Your [extensions](extensions.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `AGENTS.md` and friends   | Your personal [instruction files](#instruction-files).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `keybindings.json`        | Your own keys for Circle's actions. See [Keyboard and mouse](keybindings.md#your-own-keys).                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Circle creates most of these when it first needs them. Hook runs are appended to `hooks.log`; see [Hooks](hooks.md#the-log).
 
@@ -37,12 +37,12 @@ Circle creates most of these when it first needs them. Hook runs are appended to
 
 Instruction files tell Circle how to work: build commands, conventions, things to avoid. Circle reads them when a session opens and puts them in the system prompt, in this order:
 
-| Where | Which files |
-|---|---|
-| The workspace folder | `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md` |
-| The data folder | `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `agents.md`, `memory/AGENTS.md` |
-| Your home | `~/.agents/AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `agents.md`, and `~/.deepagents/AGENTS.md` |
-| The workspace | `MEMORY.md`, `agents.md`, `.agent/AGENTS.md`, `.circle/AGENTS.md`, `.deepagents/AGENTS.md` |
+| Where                | Which files                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| The workspace folder | `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`                                              |
+| The data folder      | `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `agents.md`, `memory/AGENTS.md`                      |
+| Your home            | `~/.agents/AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `agents.md`, and `~/.deepagents/AGENTS.md` |
+| The workspace        | `MEMORY.md`, `agents.md`, `.agent/AGENTS.md`, `.circle/AGENTS.md`, `.deepagents/AGENTS.md`  |
 
 Project instruction files come from the workspace folder only. A parent checkout's `AGENTS.md` is not applied to a session opened in a subdirectory. Your personal files, in the data folder and under your home directory, still apply in every folder. Each file goes into the prompt once: a file reached under two names (as `AGENTS.md` and `agents.md` are on macOS) is read once. Only the first 24,000 bytes of each file go in; a note in the prompt says when the rest was left out.
 
@@ -56,10 +56,10 @@ To have Circle write a starting `AGENTS.md` for a project, run `/init`. It reads
 
 Circle's system prompt starts with its own instructions, then the instruction files, the environment (folder, platform, date) and anything appended. Two files change it, the way pi's do, in a project's `.circle/` folder or in the data folder:
 
-| File | What it does |
-|---|---|
-| `SYSTEM.md` | Replaces Circle's own instructions and guidelines. The instruction files and the environment still follow. |
-| `APPEND_SYSTEM.md` | Is added at the end of the prompt. |
+| File               | What it does                                                                                               |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `SYSTEM.md`        | Replaces Circle's own instructions and guidelines. The instruction files and the environment still follow. |
+| `APPEND_SYSTEM.md` | Is added at the end of the prompt.                                                                         |
 
 The project's file wins over the data folder's. On the command line, `--system-prompt` wins over both `SYSTEM.md` files and `--append-system-prompt` over both `APPEND_SYSTEM.md` files, for that run. An empty file, or an empty `--system-prompt ""`, leaves Circle's own. See [CLI](cli.md#arguments-and-options).
 
@@ -69,15 +69,15 @@ Replacing the instructions also removes what they say about approvals, plans and
 
 Inside a project, Circle looks in these folders. Circle works only in a folder you have [trusted](security.md#workspace-trust), and trusting it is what lets these apply.
 
-| Folder | What |
-|---|---|
-| `.circle/skills`, `.agent/skills`, `.agents/skills` | Skills. See [Skills](skills.md) for all locations and their order. |
-| `.circle/commands`, `.circle/prompts` | Custom commands |
-| `.circle/extensions/<name>/extension.ts` (or `.mjs`, `.js`) | Extensions |
-| `.circle/AGENTS.md`, `.agent/AGENTS.md` | Instructions |
-| `.circle/SYSTEM.md`, `.circle/APPEND_SYSTEM.md` | The [system prompt](#system-prompt) for this project |
-| `.circle/settings.json` | [Settings for this project](settings.md#project-settings) |
-| `.circle/hooks.json` | [Hooks for this project](hooks.md). They run only after you trust the folder. |
+| Folder                                                      | What                                                                                                          |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `.circle/skills`, `.agent/skills`, `.agents/skills`         | Skills. See [Skills](skills.md) for all locations and their order.                                            |
+| `.circle/commands`, `.circle/prompts`                       | Custom commands                                                                                               |
+| `.circle/extensions/<name>/extension.ts` (or `.mjs`, `.js`) | Extensions                                                                                                    |
+| `.circle/AGENTS.md`, `.agent/AGENTS.md`                     | Instructions                                                                                                  |
+| `.circle/SYSTEM.md`, `.circle/APPEND_SYSTEM.md`             | The [system prompt](#system-prompt) for this project                                                          |
+| `.circle/settings.json`                                     | [Settings for this project](settings.md#project-settings)                                                     |
+| `.circle/hooks.json`                                        | [Hooks for this project](hooks.md). They run after you trust the folder and approve this version of the file. |
 
 Trusting a folder writes nothing into it. The trusted folders are listed in `settings.json` in the data folder.
 

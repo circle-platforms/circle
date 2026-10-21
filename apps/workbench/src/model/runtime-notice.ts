@@ -41,6 +41,13 @@ export function formatHookNotice(notice: HookNotice): string {
       return t('hooks active · {count}', { count: notice.count ?? 0 }) + tail;
     case 'untrusted':
       return t('project hooks need trust');
+    case 'changed':
+      // `name` is the files, as written. The card was skipped in this conversation.
+      return (
+        t('project hooks need approval') +
+        (notice.name ? ` · ${notice.name}` : '') +
+        ` · ${t('a new conversation asks again')}`
+      );
   }
 }
 /** Translate only a persisted host-authored enum; identical content stays content. */

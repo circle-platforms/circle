@@ -29,7 +29,7 @@ import {
   formatChord,
 } from '../model/shortcuts';
 import { DiffBlock } from '../components/DiffBlock';
-import { BrowserApproval, requestReason } from './InlineRequest';
+import { BrowserApproval, HookChanges, requestReason } from './InlineRequest';
 import { approvalHeading } from '../model/reasons.ts';
 import { hasToolInput } from '../model/browser';
 import {
@@ -1513,7 +1513,13 @@ export function InteractionDialog({
       setCancelConfirm(true);
       return;
     }
-    finish(item.kind === 'question' ? 'cancelled' : 'reject');
+    finish(
+      item.kind === 'question'
+        ? 'cancelled'
+        : item.kind === 'hooks'
+          ? 'skip'
+          : 'reject',
+    );
   };
   return (
     <Modal
@@ -1526,7 +1532,9 @@ export function InteractionDialog({
           ? [approvalHeading(item), requestReason(item.reason)]
               .filter(Boolean)
               .join(' · ')
-          : (item?.title ?? t('request'))
+          : item?.kind === 'hooks'
+            ? t('project hooks need approval')
+            : (item?.title ?? t('request'))
       }
       wide={!!item?.before || !!item?.diff}
     >
@@ -1630,6 +1638,21 @@ export function InteractionDialog({
                   }
                 >
                   {t('save response')}
+                </Button>
+              </div>
+            </>
+          ) : item.kind === 'hooks' ? (
+            <>
+              <HookChanges hooks={item.hooks ?? []} />
+              <p className="panel-note">
+                {t(
+                  'These hooks run shell commands. They stay off until you approve this version of the file.',
+                )}
+              </p>
+              <div className="dialog-actions">
+                <Button onClick={() => finish('skip')}>{t('skip')}</Button>
+                <Button className="primary" onClick={() => finish('approve')}>
+                  {t('approve these hooks')}
                 </Button>
               </div>
             </>

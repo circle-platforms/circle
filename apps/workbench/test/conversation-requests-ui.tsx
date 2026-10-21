@@ -26,21 +26,55 @@ runtime.answer = async (...args) => {
     rejectAnswer = reject;
   });
 };
-const question =
-  new URLSearchParams(location.search).get('kind') === 'question';
-const item: Interaction = {
-  id: 'approval-local',
-  sessionId,
-  revision: 4,
-  kind: question ? 'question' : 'approval',
-  status: 'pending',
-  title: 'update source',
-  tool: 'edit_file',
-  target: 'src/example.ts',
-  command: 'node local-only.js',
-  choices: question ? ['small patch', 'full rewrite'] : ['approve', 'always'],
-  multiple: question,
-};
+const kind = new URLSearchParams(location.search).get('kind');
+const question = kind === 'question';
+const item: Interaction =
+  kind === 'hooks'
+    ? {
+        id: 'hooks-local',
+        sessionId,
+        revision: 2,
+        kind: 'hooks',
+        status: 'pending',
+        title: 'project hooks need approval',
+        target: '/work/app/.circle/hooks.json',
+        hooks: [
+          {
+            name: 'lint',
+            event: 'after_tool',
+            command: 'npm run lint',
+            mark: 'changed',
+          },
+          {
+            name: 'guard',
+            event: 'before_tool',
+            command: 'node .circle/guard.mjs',
+            mark: 'new',
+          },
+          {
+            name: 'fmt',
+            event: 'after_tool',
+            command: 'prettier --write .',
+            mark: 'unchanged',
+          },
+        ],
+        choices: ['approve', 'skip'],
+      }
+    : {
+        id: 'approval-local',
+        sessionId,
+        revision: 4,
+        kind: question ? 'question' : 'approval',
+        status: 'pending',
+        title: 'update source',
+        tool: 'edit_file',
+        target: 'src/example.ts',
+        command: 'node local-only.js',
+        choices: question
+          ? ['small patch', 'full rewrite']
+          : ['approve', 'always'],
+        multiple: question,
+      };
 function Fixture() {
   const [show, setShow] = useState(true);
   return (
