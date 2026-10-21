@@ -18,6 +18,9 @@ const DELETE_WORD_FORWARD = new Set(['alt+d', 'alt+delete']);
 const WORD_GAP = new Set([' ', '\t', '\n']);
 const COMPLETION_ROWS = 6;
 const CURSOR = '▏';
+// The same Japanese/Chinese line-boundary marks as the transcript's wrapping.
+const NO_LINE_START = new Set(Array.from('）】」』》〉〗〕｝、。，．！？：；'));
+const NO_LINE_END = new Set(Array.from('（【「『《〈〖〔｛'));
 
 /** The part of the screen state the input box owns. */
 export interface DraftState {
@@ -116,7 +119,19 @@ export function visualLines(
         space = -1;
         continue;
       }
-      const cut = space >= start ? space + 1 : at;
+      let cut = space >= start ? space + 1 : at;
+      // Keep the original indexes for cursor movement and submission. Moving the
+      // break back, rather than adding punctuation past the width, keeps the box
+      // inside its frame even on a narrow console.
+      let boundary = cut;
+      while (
+        boundary > start &&
+        (NO_LINE_START.has(chars[boundary]!) ||
+          NO_LINE_END.has(chars[boundary - 1]!))
+      )
+        boundary--;
+      // A mark that cannot fit with any preceding text must still make progress.
+      if (boundary > start) cut = boundary;
       rows.push([start, cut]);
       start = cut;
       space = -1;

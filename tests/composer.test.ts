@@ -247,6 +247,74 @@ test('rows break after the last space that fits and the cursor at a wrap shows o
   ]);
 });
 
+test('draft wrapping keeps CJK punctuation with its text and preserves cursor indexes', () => {
+  for (const [text, width, expected] of [
+    ['中文，后', 4, ['中', '文，', '后']],
+    ['中中中中，。后', 8, ['中中中', '中，。后']],
+    ['甲（乙丙丁', 4, ['甲', '（乙', '丙丁']],
+    ['中文，\n后文。', 4, ['中', '文，', '后', '文。']],
+  ] as const) {
+    const chars = Array.from(text);
+    const rows = visualLines(chars, width);
+    assert.deepEqual(
+      rows.map(([start, end]) => chars.slice(start, end).join('')),
+      expected,
+    );
+    for (const [start, end] of rows)
+      assert.ok(stringWidth(chars.slice(start, end).join('')) <= width);
+  }
+  const rows = visualLines(Array.from('中文，后'), 4);
+  assert.equal(cursorRow(rows, 1), 1);
+  assert.equal(cursorRow(rows, 2), 1);
+  assert.equal(cursorRow(rows, 3), 2);
+  // Even a console narrower than a punctuation pair must terminate.
+  assert.deepEqual(visualLines(Array.from('中，'), 2), [
+    [0, 1],
+    [1, 2],
+  ]);
+});
+
+test('typed and pasted Chinese wrap inside a narrow draft on both palettes and reach the model unchanged', async (t) => {
+  const columns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+  Object.defineProperty(process.stdout, 'columns', {
+    configurable: true,
+    value: 50,
+  });
+  t.after(() => {
+    if (columns) Object.defineProperty(process.stdout, 'columns', columns);
+    else Reflect.deleteProperty(process.stdout, 'columns');
+    setPalette(buildPalette(...DEFAULT_DARK));
+  });
+  const text = '中'.repeat(22) + '，。后文';
+  for (const palette of [DEFAULT_DARK, DEFAULT_LIGHT]) {
+    setPalette(buildPalette(...palette));
+    for (const paste of [false, true]) {
+      const f = session(t, [answer('received')]);
+      if (paste) f.feed('\x1b[200~' + text + '\x1b[201~');
+      else f.type(text);
+      f.ui.repaint();
+      const rows = f.box();
+      assert.equal(rows.length, 2);
+      assert.ok(
+        rows.every((row) => stringWidth(row) === 48),
+        rows.join('\n'),
+      );
+      assert.ok(
+        rows.every((row) => !/^\s*[，。]/u.test(row)),
+        rows.join('\n'),
+      );
+      assert.equal(f.app.state.draft, text);
+      f.feed('\r');
+      await until(() => f.model.requests.length === 1 && !f.runtime.busy);
+      assert.equal(f.model.requests[0]!.messages.at(-1)!.content, text);
+      assert.equal(
+        f.runtime.store.messages(f.runtime.session.id)[0]!.content,
+        text,
+      );
+    }
+  }
+});
+
 test('a long paste becomes a placeholder: the model reads the paste, the transcript and history keep the placeholder, and /fork brings both back', async (t) => {
   const { app, ui, model, feed, type, runtime, screen, picker } = session(t, [
     answer('first'),

@@ -8,7 +8,7 @@ This page covers working in a session: sending messages, answering questions, st
 
 ## Send a message
 
-Type in the box at the bottom and press `enter`. The box grows with your message, up to 30% of the screen, and wraps long lines. To put a line break in a message, press `shift+enter` or `ctrl+j`, or type `\` and then `enter`. For a longer message, press `ctrl+g` (or run `/editor`) to write it in your editor.
+Type in the box at the bottom and press `enter`. The box grows with your message, up to 30% of the screen, and wraps long lines. Chinese characters use two columns. Wrapping keeps closing punctuation with the preceding text and opening punctuation with the following text when the pair fits. To put a line break in a message, press `shift+enter` or `ctrl+j`, or type `\` and then `enter`. For a longer message, press `ctrl+g` (or run `/editor`) to write it in your editor.
 
 A long paste shows as `[Pasted text #1 +39 lines]` so the box stays readable, and the model gets the whole text. Your message in the conversation keeps the short form.
 
