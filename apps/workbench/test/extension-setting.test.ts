@@ -115,7 +115,7 @@ test('extension row requests preserve an existing conversation failure', async (
   runtime.dispose();
 });
 
-test("an extension's command runs in the runtime, which writes what it says into the conversation", async () => {
+test('an extension command is sent to the runtime as custom-command with its arguments', async () => {
   const snapshot = createFixtures();
   snapshot.runtime = { connected: true, configured: true };
   snapshot.commands = [
