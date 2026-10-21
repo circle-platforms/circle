@@ -45,45 +45,41 @@ try {
     const zh = language === 'zh-CN';
     const mark = (kind) => page.locator(`.monaco-editor .change-mark-${kind}`);
     const count = async (kind) => mark(kind).count();
-    // The rows of the editor, top to bottom: a mark sits on the row of its line.
-    const rowTops = () =>
-      page
-        .locator('.monaco-editor .view-lines .view-line')
-        .evaluateAll((rows) =>
-          rows
-            .map((row) => Math.round(row.getBoundingClientRect().top))
-            .sort((a, b) => a - b),
-        );
-    const tops = (kind) =>
-      mark(kind).evaluateAll((nodes) =>
-        nodes
-          .map((node) => Math.round(node.getBoundingClientRect().top))
-          .sort((a, b) => a - b),
-      );
 
     // A file just opened has nothing to say about saving.
     assert.equal(await page.locator('.file-view-state').innerText(), '');
     // Lines 3 and 4 changed, line 5 is new and a line went after 11: two orange rows, a
     // blue one and a red triangle on the row after the gap.
     await mark('deleted').first().waitFor({ state: 'attached' });
-    // the rows are laid out: the editor has measured its font
-    await page.waitForFunction(() => {
-      const rows = [
-        ...document.querySelectorAll('.monaco-editor .view-lines .view-line'),
-      ];
-      return (
-        rows.length >= 14 &&
-        rows.every((row) => row.getBoundingClientRect().top > 0)
-      );
-    });
     assert.equal(await count('changed'), 2);
     assert.equal(await count('added'), 1);
     assert.equal(await count('deleted'), 1);
-    const rows = await rowTops();
-    assert.deepEqual(await tops('changed'), [rows[2], rows[3]]);
-    assert.deepEqual(await tops('added'), [rows[4]]);
+    // The rows of the editor and the marks, top to bottom, read in one frame once the editor
+    // has laid out every row: Monaco redraws its rows after a file opens (the word under the
+    // cursor is highlighted a moment later), and a row it is redrawing reads 0.
+    const { rows, changed, added, deleted } = await (
+      await page.waitForFunction(() => {
+        const tops = (selector) =>
+          [...document.querySelectorAll(`.monaco-editor ${selector}`)]
+            .map((node) => Math.round(node.getBoundingClientRect().top))
+            .sort((a, b) => a - b);
+        const layout = {
+          rows: tops('.view-lines .view-line'),
+          changed: tops('.change-mark-changed'),
+          added: tops('.change-mark-added'),
+          deleted: tops('.change-mark-deleted'),
+        };
+        const placed = Object.values(layout).flat();
+        return layout.rows.length >= 14 && placed.every((top) => top > 0)
+          ? layout
+          : false;
+      })
+    ).jsonValue();
+    // A mark sits on the row of its line
+    assert.deepEqual(changed, [rows[2], rows[3]]);
+    assert.deepEqual(added, [rows[4]]);
     // the line after the gap is the 13th of the file as it stands: the hunk above added one
-    assert.deepEqual(await tops('deleted'), [rows[12]]);
+    assert.deepEqual(deleted, [rows[12]]);
     // the colours are the interface's own: attention, accent and negative
     const colour = (variable) =>
       page.evaluate((variable) => {
