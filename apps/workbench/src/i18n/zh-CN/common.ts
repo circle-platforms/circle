@@ -30,23 +30,6 @@ export const common: Record<string, string> = {
   'or write your own answer': '或者写下你自己的回答',
   'send answer': '发送回答',
   skip: '跳过',
-  // plan mode's plan and its card
-  'the plan is ready, what next?': '计划写好了，接下来怎么做？',
-  'implement in auto mode': '自动模式执行',
-  'leave plan mode; changes run without asking':
-    '退出计划模式，改动直接执行，不再询问',
-  'implement with manual approval': '手动审批执行',
-  'leave plan mode; each change asks first': '退出计划模式，每项改动先问你',
-  'change the plan': '需要修改',
-  'stay in plan mode and say what to change': '留在计划模式，写下要改什么',
-  'save the plan only': '只保存计划，不做修改',
-  'stay in plan mode; nothing changes': '留在计划模式，什么也不改',
-  'what should change?': '要改什么？',
-  'open plan': '打开计划',
-  'close plan': '关闭计划',
-  'updated {time}': '更新于 {time}',
-  'Circle has not written a plan in this conversation yet.':
-    'Circle 还没有在这个会话里写计划。',
   '{n} request waiting for you': '{n} 个请求等待你处理',
   '{n} requests waiting for you': '{n} 个请求等待你处理',
   working: '工作中',

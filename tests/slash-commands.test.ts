@@ -532,7 +532,7 @@ test('/yolo takes off, 0, false and no as off; /plan takes on and off and says w
   assert.ok(runtime.harness.planMode);
   assert.equal(
     app.state.notices.at(-1),
-    'Read-only on · writes and shell are blocked, except the plan',
+    'Read-only on · writes and shell are blocked, /plan.md is allowed',
   );
   await app.submit('/plan on');
   assert.equal(app.state.flash, 'Read-only is already on');
@@ -971,7 +971,7 @@ test('/settings picks the mode new sessions start in, and alt+d saves it', async
     [
       ['manual', 'asking before each change and command'],
       ['accept edits', 'workspace edits run without asking'],
-      ['read-only', 'writes and shell are blocked · except the plan'],
+      ['read-only', 'writes and shell are blocked · plan.md is allowed'],
       [
         'auto',
         'nothing asks · deletes, certificate warnings and uploads included',

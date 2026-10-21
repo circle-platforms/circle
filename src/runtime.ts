@@ -1,14 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { GitHubConnectionBackend } from './github_connection.js';
-import { join, dirname } from 'node:path';
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from 'node:fs';
+import { join, basename } from 'node:path';
+import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
@@ -34,20 +27,7 @@ import {
   written,
   type Redactor,
 } from './secrets.js';
-import {
-  buildSystemPrompt,
-  planModePrompt,
-  type ContextInstruction,
-} from './system_prompt.js';
-import {
-  PLAN_CHOICE_NOTES,
-  PLAN_CHOICES,
-  planAnswer,
-  planFile,
-  planSession,
-  shownPath,
-  type PlanChoice,
-} from './plan_file.js';
+import { buildSystemPrompt, type ContextInstruction } from './system_prompt.js';
 import {
   Harness,
   type ApprovalDecision,
@@ -560,54 +540,56 @@ export class AgentRuntime {
           keep: (name, value) => this.keepVariable(name, value),
         }),
       plan: async (enabled, context) => {
-        const { file, path } = this.planFile;
-        if (enabled) {
-          this.setPlanMode(true);
-          return `Plan mode is on: research, write the plan to ${file}, then call plan_exit.`;
-        }
-        if (!this.options.question)
+        if (!enabled && !this.options.question)
           throw new Error('plan_exit requires an interactive answer');
-        const reply = await this.options.question(
-          {
-            questions: [
-              {
-                question: `The plan is ready: ${shownPath(path)}\nHow should Circle go on?`,
-                header: 'plan',
-                options: (Object.keys(PLAN_CHOICES) as PlanChoice[]).map(
-                  (choice) => ({
-                    label: PLAN_CHOICES[choice],
-                    description: PLAN_CHOICE_NOTES[choice],
-                  }),
-                ),
-                multiple: false,
-                // Written words say what to change
-                custom: true,
-              },
-            ],
-            // The desktop shows its plan card for this question, beside the plan
-            plan: { file },
-          },
-          context.signal,
-        );
-        context.signal.throwIfAborted();
-        const { choice, words } = planAnswer(reply);
-        if (choice === 'auto' || choice === 'manual') {
-          this.setMode(choice);
-          return (
-            (choice === 'auto'
-              ? 'Plan mode is off and auto mode is on: changes run without asking.'
-              : 'Plan mode is off: each change asks the user first.') +
-            ` Implement the plan in ${file} now.` +
-            (words ? ` The user added: ${words}` : '')
+        if (!enabled) {
+          const reply = await this.options.question!(
+            {
+              questions: [
+                {
+                  question: 'Implement the completed plan?',
+                  header: 'plan',
+                  options: [
+                    {
+                      label: 'implement plan',
+                      description: 'Leave read-only mode, ask before edits',
+                    },
+                    {
+                      label: 'implement plan, accept edits',
+                      description:
+                        'Leave read-only mode, edit workspace files without asking',
+                    },
+                    {
+                      label: 'continue planning',
+                      description: 'Stay in read-only mode',
+                    },
+                  ],
+                  multiple: false,
+                  custom: false,
+                },
+              ],
+            },
+            context.signal,
           );
+          context.signal.throwIfAborted();
+          let answers: unknown;
+          try {
+            answers = JSON.parse(reply);
+          } catch {
+            answers = undefined;
+          }
+          const chosen = Array.isArray(answers) ? answers.flat() : [];
+          if (chosen.includes('implement plan, accept edits')) {
+            this.setMode('accept-edits');
+            return 'Read-only mode disabled. File edits inside the workspace are accepted without asking.';
+          }
+          if (!chosen.includes('implement plan'))
+            return 'The user kept read-only mode active. Continue planning.';
+          this.setMode('manual');
+          return 'Read-only mode disabled.';
         }
-        if (choice === 'change')
-          return words
-            ? `The user wants the plan changed before it is implemented. They said: ${words}\nRevise ${file}, then call plan_exit again.`
-            : `The user wants the plan changed but did not say how. Ask what to change with question, revise ${file}, then call plan_exit again.`;
-        if (choice === 'keep')
-          return `The user is keeping the plan in ${file} and does not want it implemented now. Plan mode stays on. Change nothing, and end your turn with one short line.`;
-        return 'The user closed the question without choosing. Plan mode stays on; end your turn.';
+        this.setPlanMode(enabled);
+        return enabled ? 'Read-only mode enabled.' : 'Read-only mode disabled.';
       },
       compact: async (hint, context) => this.compact(hint, context.signal),
       task: async (args, context) => {
@@ -928,33 +910,27 @@ export class AgentRuntime {
         ),
       settled: () => this.releaseIfAway(),
       planFileMutation: (call) => {
-        let paths: string[];
-        if (call.name === 'write_file' || call.name === 'edit_file')
-          paths = [String(call.args.file_path || call.args.path || '')];
-        else if (call.name === 'apply_patch') {
-          const patch = String(call.args.patchText || '');
-          if (/^\*\*\* (?:Delete File|Move to):/m.test(patch)) return false;
-          paths = [
-            ...patch.matchAll(/^\*\*\* (?:Add File|Update File):\s*(.+)$/gm),
-          ].map((match) => match[1]!);
-        } else return false;
-        try {
-          const own = this.planFile.path;
-          return (
-            paths.length > 0 &&
-            paths.every(
-              (path) =>
-                path.trim() !== '' && this.sandbox.resolvePath(path) === own,
-            )
+        if (['write_file', 'edit_file', 'delete'].includes(call.name)) {
+          const path = this.sandbox.resolvePath(
+            String(call.args.file_path || call.args.path || ''),
           );
-        } catch {
-          return false;
+          return ['plan.md', 'plan'].includes(basename(path).toLowerCase());
         }
+        if (call.name !== 'apply_patch') return false;
+        const paths = [
+          ...String(call.args.patchText || '').matchAll(
+            /^\*\*\* (?:Add File|Update File|Delete File|Move to):\s*(.+)$/gm,
+          ),
+        ].map((match) => this.sandbox.resolvePath(match[1]!));
+        return (
+          paths.length > 0 &&
+          paths.every((path) =>
+            ['plan.md', 'plan'].includes(basename(path).toLowerCase()),
+          )
+        );
       },
-      planPrompt: () => planModePrompt(this.planFile.file),
     });
     harness.planMode = restoredPlanMode(harness.messages);
-    this.adoptPlan(harness.messages);
     return harness;
   }
   private classifyCoreTools(tools: Tool[]): Tool[] {
@@ -1359,69 +1335,6 @@ export class AgentRuntime {
     this.integrationsReady = undefined;
     await this.initialize();
   }
-  /** This conversation's plan file: the path the model writes, and where it is kept. */
-  get planFile(): { file: string; path: string } {
-    const file = planFile(this.session.id);
-    let path = this.planPaths.get(file);
-    if (!path)
-      this.planPaths.set(file, (path = this.sandbox.resolvePath(file)));
-    return { file, path };
-  }
-  private planPaths = new Map<string, string>();
-  private planRead?: {
-    path: string;
-    mtime: number;
-    size: number;
-    text: string;
-  };
-  /** The plan as last written, read again only when the file changed. */
-  plan(): { file: string; text: string; updatedAt: string } | undefined {
-    const { file, path } = this.planFile;
-    try {
-      const stat = statSync(path);
-      if (
-        this.planRead?.path !== path ||
-        this.planRead.mtime !== stat.mtimeMs ||
-        this.planRead.size !== stat.size
-      )
-        this.planRead = {
-          path,
-          mtime: stat.mtimeMs,
-          size: stat.size,
-          text: readFileSync(path, 'utf8'),
-        };
-      return {
-        file,
-        text: this.planRead.text,
-        updatedAt: stat.mtime.toISOString(),
-      };
-    } catch {
-      return undefined;
-    }
-  }
-  // A fork or a clone has a new id, so its history names the plan of the conversation it
-  // came from. It starts with a copy of that plan, which it then keeps as its own.
-  private adoptPlan(messages: Message[]): void {
-    try {
-      const own = this.planFile.path;
-      if (existsSync(own)) return;
-      for (const message of [...messages].reverse())
-        for (const call of message.tool_calls ?? []) {
-          if (call.name !== 'write_file' && call.name !== 'edit_file') continue;
-          const source = planSession(
-            String(call.args.file_path || call.args.path || ''),
-          );
-          if (!source || source === this.session.id) continue;
-          const from = this.sandbox.resolvePath(planFile(source));
-          if (!existsSync(from)) continue;
-          mkdirSync(dirname(own), { recursive: true });
-          copyFileSync(from, own);
-          return;
-        }
-    } catch {
-      /* The conversation goes on without the plan it came from. */
-    }
-  }
   setPlanMode(enabled: boolean): void {
     if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
     if (this.harness.planMode === enabled) return;
@@ -1435,7 +1348,7 @@ export class AgentRuntime {
         role: 'user',
         internal: 'mode-boundary',
         content: enabled
-          ? `[Circle system] Plan mode is now ON. Do not change the workspace or run shell commands. Research, write the plan to ${this.planFile.file}, and call plan_exit when it is ready.`
+          ? '[Circle system] Plan mode is now ON. Do not create/edit/delete project files except plan.md; do not run shell commands. Research and update the plan only.'
           : '[Circle system] Plan mode is now OFF. Previous plan-mode constraints no longer apply. Implement changes subject to normal approval.',
       },
     ]);
@@ -2045,15 +1958,7 @@ export class AgentRuntime {
     if (deleteSession) await this.options.beforeDelete?.();
     if (deleteSession)
       this.store.delete(this.session.id, (ids) => {
-        for (const id of ids) {
-          this.policy.store.remove(id);
-          // A plan left behind is harmless; it never keeps a session from going
-          try {
-            rmSync(this.sandbox.resolvePath(planFile(id)), { force: true });
-          } catch {
-            /* kept */
-          }
-        }
+        for (const id of ids) this.policy.store.remove(id);
       });
     this.store.close();
   }

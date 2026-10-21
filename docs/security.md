@@ -98,7 +98,7 @@ Add names with `credential_files` in [settings](settings.md), or in a project's 
 
 ## Read-only mode
 
-`/plan` turns on `read-only`, and so can the model with `plan_enter`. Circle then cannot run commands at all, and can change only its plan: one Markdown file for the conversation, kept in the data folder (`projects/<folder>-<id>/session_plans/<session>.md`), never in your workspace. Writing it never asks, in any mode. Reads, searches and the web keep working. A card is never shown for a blocked call; the model is simply told. Your own `!` commands are refused too. To leave it, run `/plan` again, or choose to implement the plan when the model asks with `plan_exit`: in `auto` mode, or with each change asking you first.
+`/plan` turns on `read-only`, and so can the model with `plan_enter`. Circle then cannot run commands at all, and can change only a file named `plan.md` (or `plan`), anywhere, with the usual approval. Reads, searches and the web keep working. A card is never shown for a blocked call; the model is simply told. Your own `!` commands are refused too. To leave it, run `/plan` again, or answer yes when the model asks with `plan_exit`.
 
 MCP tools and extension tools that are not marked read-only are blocked. Secret entry is not.
 
@@ -132,11 +132,11 @@ While you hold a console — attached from its page, or handed over by `terminal
 
 ## Accept-edits mode
 
-`/mode accept-edits` turns on `accept edits`. Changes to files inside the workspace (`write_file`, `edit_file`, and patches that add or change files) then run without a card. An existing skill-run output still asks: a file named in a workspace `skillpack.json` `outputs` list, and any existing file in that file's directory. A declared output at the workspace root protects only that file. Creating a new file beside it does not ask. Everything else still asks: commands, deleting files (`delete`, or a patch that deletes one), changes outside the workspace, MCP and extension tools. It is decided call by call: a patch that touches one file outside the workspace asks. Like `auto`, it applies to the current conversation only.
+`/mode accept-edits` turns on `accept edits`. Changes to files inside the workspace (`write_file`, `edit_file`, and patches that add or change files) then run without a card. An existing skill-run output still asks: a file named in a workspace `skillpack.json` `outputs` list, and any existing file in that file's directory. A declared output at the workspace root protects only that file. Creating a new file beside it does not ask. Everything else still asks: commands, deleting files (`delete`, or a patch that deletes one), changes outside the workspace, MCP and extension tools. It is decided call by call: a patch that touches one file outside the workspace asks. The model can also leave `read-only` into this mode, when you answer its `plan_exit` question with "implement plan, accept edits". Like `auto`, it applies to the current conversation only.
 
 ## Auto mode
 
-`/yolo` (or `/auto`) turns on `auto`. In auto mode Circle stops asking, **including for the calls that always ask**: `rm -rf`, force pushes, `delete`, patches that delete files, writes outside the workspace, a click that deletes on a page, passing a certificate warning and giving a page files. In the desktop browser a page's permission request and a site's request for a client certificate are refused without asking, and the model is told. Turning it on says what it lets through, in the terminal and in the desktop application. Credential files and `sudo` are still refused. `/yolo off` turns it off. Choosing **implement in auto mode** when the model asks with `plan_exit` turns it on too.
+`/yolo` (or `/auto`) turns on `auto`. In auto mode Circle stops asking, **including for the calls that always ask**: `rm -rf`, force pushes, `delete`, patches that delete files, writes outside the workspace, a click that deletes on a page, passing a certificate warning and giving a page files. In the desktop browser a page's permission request and a site's request for a client certificate are refused without asking, and the model is told. Turning it on says what it lets through, in the terminal and in the desktop application. Credential files and `sudo` are still refused. `/yolo off` turns it off.
 
 Auto mode applies to the current conversation only and is not saved. `/new`, `/fork`, `/clone`, `/import` and restarting turn it off — unless you set `default_mode` to `auto` in [settings](settings.md), which starts every new session (and every print, line and RPC run) in auto. That is a standing decision to never be asked; only set it where you would run `--yolo` every time anyway. Use auto for work you could throw away.
 
@@ -158,7 +158,7 @@ Nothing restricts the network, other processes, or which files a command can rea
 
 Relative paths and paths that start with `/` inside the project are resolved under the workspace. Real system paths such as `/Users/...`, `/home/...`, `/etc/...`, `/tmp/...`, `C:\...` and `~/...` are taken as they are, so Circle can read outside the workspace without asking. Writes outside the workspace ask every time, with no "for this session" option. A file tool's path with `..` in it is refused.
 
-Circle writes nothing of its own into your workspace. Older messages after a summary, very long tool output, the output of commands and background jobs, and plan mode's plans are kept in the data folder under `projects/`; the model reads them at `/conversation_history/`, `/large_tool_results/`, `/background_jobs/` and `/session_plans/`, and cannot change the jobs' output. Its own conversation's plan is the one file there it writes without asking.
+Circle writes nothing of its own into your workspace. Older messages after a summary, very long tool output and the output of commands and background jobs are kept in the data folder under `projects/`; the model reads them at `/conversation_history/`, `/large_tool_results/` and `/background_jobs/`, and cannot change the jobs' output.
 
 ## Workspace trust
 

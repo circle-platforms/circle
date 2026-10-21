@@ -364,7 +364,7 @@ test('in accept-edits the harness writes the file without asking and still asks 
   assert.match(String(results[2]!.content), /rejected/);
 });
 
-test('the runtime mode joins plan and the approval modes, and plan exit can implement in auto mode', async (t) => {
+test('the runtime mode joins plan and the approval modes, and plan exit can accept edits', async (t) => {
   const root = scratch(t);
   const model = new ScriptedModel([
     {
@@ -381,7 +381,7 @@ test('the runtime mode joins plan and the approval modes, and plan exit can impl
     headless: true,
     question: async (args) => {
       questions.push(args);
-      return JSON.stringify([['implement in auto mode']]);
+      return JSON.stringify([['implement plan, accept edits']]);
     },
   });
   cleanup(t, () => runtime.close());
@@ -399,14 +399,11 @@ test('the runtime mode joins plan and the approval modes, and plan exit can impl
   await runtime.harness.run('done planning');
   assert.equal(questions.length, 1);
   assert.equal(runtime.harness.planMode, false);
-  assert.equal(runtime.mode, 'auto');
+  assert.equal(runtime.mode, 'accept-edits');
   const result = model.requests[1]!.messages.findLast(
     (message) => message.role === 'tool',
   );
-  assert.match(
-    String(result!.content),
-    /auto mode is on: changes run without asking\. Implement the plan in \/session_plans\//,
-  );
+  assert.match(String(result!.content), /accepted without asking/);
 });
 
 test('a settings pattern covers a command only when every segment matches', (t) => {
