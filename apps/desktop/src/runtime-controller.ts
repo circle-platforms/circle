@@ -5441,7 +5441,6 @@ export class RuntimeController {
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
         )
           throw Error('trust this workspace first');
-        if (runtime.busy) throw Error('a turn is running');
         const name = text(p.name, 'command name', 100);
         const args = text(p.args ?? '', 'command args', 16000);
         const secret =
@@ -5449,6 +5448,20 @@ export class RuntimeController {
             ? p.secret
             : undefined;
         let found = this.extensionCommand(runtime, name);
+        // GitHub connect/status/configure/cancel/disconnect only touch the
+        // native connection backend and a status notice — not the running turn.
+        const githubConnectionWhileBusy =
+          !!found &&
+          name === 'github' &&
+          /^(status|connect|configure|cancel|disconnect)(?:\s|$)/.test(
+            args.trim() || 'status',
+          ) &&
+          found.owner.extensions.isTrustedBundledCommand(
+            found.command,
+            'github',
+          );
+        if (runtime.busy && !githubConnectionWhileBusy)
+          throw Error('a turn is running');
         if (
           !found &&
           isFolderTrusted(runtime.options.settings, runtime.options.workspace)

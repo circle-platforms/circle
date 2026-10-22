@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
 import { AgentRuntime } from '../../../src/runtime.ts';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
@@ -27,6 +28,13 @@ const getRuntime = (controller: RuntimeController) =>
       }
     ).runtimes.values(),
   ][0]!;
+async function untilBusy(runtime: AgentRuntime): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    if (runtime.busy) return;
+    await delay(10);
+  }
+  assert.fail('turn did not become busy');
+}
 test('actual bundled command stores notice provenance while identical user/model text stays unchanged after reload', async () => {
   const root = await mkdtemp(join(tmpdir(), 'circle-github-notice-')),
     home = join(root, 'home'),
@@ -265,5 +273,131 @@ test('a same-name user extension and legacy assistant status text are not locali
     setLanguage('en');
     await controller.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+test('bundled GitHub connection verbs run while a turn is busy; a same-name user command does not', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-github-busy-')),
+    home = join(root, 'home'),
+    workspace = join(root, 'workspace');
+  await mkdir(workspace);
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.extensions.github = { enabled: true };
+  saveSettings(settings, home);
+  const calls: string[] = [];
+  const backend = {
+    call: async (method: string) => {
+      calls.push(method);
+      return {
+        provider: 'github',
+        client: 'GitHub CLI',
+        epoch: 1,
+        state: method === 'connect' ? 'authorizing' : 'disconnected',
+        repositories: [],
+        remoteRevocation: 'not-requested',
+      } satisfies GitHubConnectionState;
+    },
+    subscribe: () => () => {},
+  } as GitHubConnectionBackend;
+  let releaseTurn!: () => void;
+  const held = new Promise<void>((resolve) => {
+    releaseTurn = resolve;
+  });
+  const model = new ScriptedModel([
+    async () => {
+      await held;
+      return {
+        message: { id: 'held-done', role: 'assistant', content: 'done' },
+      };
+    },
+  ]);
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    workspace,
+    model,
+    emit: () => {},
+  });
+  try {
+    await controller.initialize();
+    const runtime = getRuntime(controller);
+    runtime.options.githubConnection = backend;
+    runtime.extensions.options.githubConnection = backend;
+    await runtime.initialize();
+    assert.ok(runtime.extensions.commands().get('github'));
+    const turn = runtime.harness.run('hold the turn');
+    await untilBusy(runtime);
+    const status = await controller.dispatch({
+      id: 'github-status-busy',
+      name: 'custom-command',
+      sessionId: runtime.session.id,
+      payload: { name: 'github', args: 'status' },
+    });
+    assert.equal(status.ok, true, JSON.stringify(status));
+    const connect = await controller.dispatch({
+      id: 'github-connect-busy',
+      name: 'custom-command',
+      sessionId: runtime.session.id,
+      payload: {
+        name: 'github',
+        args: 'connect {"storage":"session","repositories":[]}',
+      },
+    });
+    assert.equal(connect.ok, true, JSON.stringify(connect));
+    assert.deepEqual(calls, ['status', 'status', 'connect']);
+    assert.equal(runtime.busy, true);
+    releaseTurn();
+    await turn;
+  } finally {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  }
+
+  const userRoot = await mkdtemp(join(tmpdir(), 'circle-github-busy-user-')),
+    userHome = join(userRoot, 'home'),
+    userWorkspace = join(userRoot, 'workspace');
+  await mkdir(userWorkspace);
+  await mkdir(join(userHome, 'extensions', 'github'), { recursive: true });
+  saveSettings(trustFolder(defaultSettings(), userWorkspace), userHome);
+  await writeFile(
+    join(userHome, 'extensions', 'github', 'extension.mjs'),
+    "export function register(api){api.registerCommand('github','user',()=>{});}",
+  );
+  let releaseUser!: () => void;
+  const userHeld = new Promise<void>((resolve) => {
+    releaseUser = resolve;
+  });
+  const userModel = new ScriptedModel([
+    async () => {
+      await userHeld;
+      return {
+        message: { id: 'user-held', role: 'assistant', content: 'done' },
+      };
+    },
+  ]);
+  const userController = new RuntimeController({
+    home: userHome,
+    userHome,
+    workspace: userWorkspace,
+    model: userModel,
+    emit: () => {},
+  });
+  try {
+    await userController.initialize();
+    const runtime = getRuntime(userController);
+    const turn = runtime.harness.run('hold the turn');
+    await untilBusy(runtime);
+    const reply = await userController.dispatch({
+      id: 'user-github-busy',
+      name: 'custom-command',
+      sessionId: runtime.session.id,
+      payload: { name: 'github', args: 'status' },
+    });
+    assert.equal(reply.ok, false);
+    assert.match(String(reply.error), /a turn is running/);
+    releaseUser();
+    await turn;
+  } finally {
+    await userController.close();
+    await rm(userRoot, { recursive: true, force: true });
   }
 });
