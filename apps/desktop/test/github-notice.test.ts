@@ -307,6 +307,7 @@ test('bundled GitHub connection verbs run while a turn is busy; a same-name user
       await held;
       return {
         message: { id: 'held-done', role: 'assistant', content: 'done' },
+        usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 },
       };
     },
   ]);
@@ -377,6 +378,7 @@ test('bundled GitHub connection verbs run while a turn is busy; a same-name user
       await userHeld;
       return {
         message: { id: 'user-held', role: 'assistant', content: 'done' },
+        usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 },
       };
     },
   ]);
