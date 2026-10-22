@@ -235,6 +235,13 @@ export const HUB_ZH: Record<string, string> = {
     '✓ 已替换 {task} 的输入（{request}）',
   '✓ answered {task} ({request})': '✓ 已回答 {task}（{request}）',
   'usage: /hub get <id>': '用法：/hub get <id>',
+  'usage: /hub cancel <id>': '用法：/hub cancel <id>',
+  'stop a running task you handed over; what it gathered is not kept, submit again to start fresh':
+    '停止一个你交出且仍在运行的任务；它收集的东西不保留，要重跑请重新投单',
+  '{task} already ended as {phase} · /hub cancel is for a task still running':
+    '{task} 已以 {phase} 结束 · /hub cancel 只针对仍在运行的任务',
+  '✓ cancel asked for {task} · the server settles it shortly · what that run gathered is not kept · submit again to start fresh':
+    '✓ 已向服务器请求取消 {task} · 服务器稍后落定 · 这一轮收集的东西不保留 · 要重跑请重新投单',
   '  read {tasks} tasks and {packs} capability packs from the server (work tasks for the pages, at most 20, not tool or index tasks). /hub tasks lists only what this window handed over; "seen to N" there is the last event number shown for that task':
     '  从服务器读到 {tasks} 个工作任务和 {packs} 个能力包（页面上的工作任务，最多 20 个，不含工具任务和索引任务）。/hub tasks 只列出这个窗口交出的任务；那里的「事件已看到 N」是该任务已显示的最后一个事件号',
   'usage: /hub trial start [--force]': '用法：/hub trial start [--force]',
