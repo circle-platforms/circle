@@ -276,6 +276,17 @@ const TASKKILL_TIMEOUT = 3000;
 const TASKKILL_NOT_FOUND = 128;
 const taskkillFoundNothing = (error: unknown): boolean =>
   (error as { code?: unknown } | undefined)?.code === TASKKILL_NOT_FOUND;
+/** How long the exit event of a process the OS says has ended has to arrive. */
+const EXIT_EVENT_GRACE = 1000;
+/** Whether the OS says no process has this PID: signal 0 only looks. */
+const processGone = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+};
 /** How long a browser whose pipe closed during its start has for its exit to arrive. */
 const STARTUP_END_WAIT = 1000;
 /** How long a Windows root whose termination was accepted has to finish ending. */
@@ -559,10 +570,20 @@ export class ChromeBrowser implements BrowserPort {
       const done = (): void => {
         if (this.exited(child)) finish(true);
       };
-      const timer = setTimeout(() => {
+      let timer = setTimeout(() => {
         // A busy event loop can deliver this timer before a queued process exit.
         // Let the poll phase deliver that event before judging the unchanged deadline.
-        observation = setImmediate(() => finish(this.exited(child)));
+        observation = setImmediate(() => {
+          if (this.exited(child)) return finish(true);
+          // On Windows the exit can arrive turns later still. Node holds the process
+          // handle until it handles the exit, so the PID is not reused: ESRCH is this
+          // process gone, and its exit event is on the way. Only that event confirms it.
+          if (!processGone(child.pid!)) return finish(false);
+          timer = setTimeout(
+            () => finish(this.exited(child)),
+            EXIT_EVENT_GRACE,
+          );
+        });
       }, timeout);
       child.once('exit', done);
       child.on('error', done);
