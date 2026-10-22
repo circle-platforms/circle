@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 
 // Use the production adapter on exactly the standalone raw probe's main/iframe scene.
 // Every mode starts a new process and profile; no input is retried or set through DOM.
@@ -23,7 +24,7 @@ const server = createServer((request, response) => {
       : '<!doctype html><title>circle input focus fixture</title><label>username<input id="username" value="old username"></label><label>number<input id="number" type="number" value="12"></label><iframe src="/frame"></iframe>',
   );
 });
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(server);
 const url = `http://127.0.0.1:${server.address().port}/`;
 const bundle = join(temp, 'browser.cjs');
 await build({

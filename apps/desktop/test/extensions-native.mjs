@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/extensions');
@@ -33,7 +34,7 @@ const site = createServer((_request, response) => {
     '<!doctype html><title>extension link fixture</title><h1>opened by an extension</h1>',
   );
 });
-await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(site);
 const siteUrl = `http://127.0.0.1:${site.address().port}/live`;
 // A user extension in the runtime's own home whose command opens the local page.
 const extension = join(data, 'runtime-home', 'extensions', 'linker');

@@ -79,6 +79,7 @@ import { createRequire } from 'node:module';
 import { setViewport } from './helpers/viewport.mjs';
 import { patience } from './helpers/patience.mjs';
 import { saveWithShortcut } from './helpers/native-editor-save.mjs';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packaged = !!process.env.CIRCLE_DESKTOP_EXECUTABLE;
@@ -222,7 +223,7 @@ const server = createServer((request, response) => {
     '<!doctype html><meta name="viewport" content="width=device-width"><title>native journey fixture</title><h1>Native browser fixture</h1><script src="/source.js"></script>',
   );
 });
-await new Promise((done) => server.listen(0, '127.0.0.1', done));
+await listenForBrowser(server);
 const origin = 'http://127.0.0.1:' + server.address().port;
 const env = {
   ...process.env,

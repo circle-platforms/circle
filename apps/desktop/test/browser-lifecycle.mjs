@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 if (process.env.CIRCLE_DESKTOP_EXECUTABLE) {
   console.log(
     'SKIP browser lifecycle harness: packaged application uses browser-live',
@@ -48,7 +49,7 @@ const server = createServer((req, res) => {
       '<title>opener</title><button onclick="window.open(\'/popup\')">open popup</button>',
     );
 });
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(server);
 const url = `http://127.0.0.1:${server.address().port}/`;
 const bundle = join(temp, 'browser.cjs');
 await build({
