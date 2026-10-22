@@ -77,55 +77,59 @@ export function MessageView({
           <p>{message.thinking}</p>
         </details>
       )}
-      <div className={message.role === 'user' ? 'bubble' : 'message-body'}>
-        {message.shell ? (
-          <>
-            <ToolMessage
-              tool={{
-                id: 'human-' + (message.shell.id ?? message.id),
-                name: message.shell.quiet ? '!!' : '!',
-                input: { command: message.shell.command },
-                output: message.shell.output,
-                status:
-                  message.shell.status === 'done'
-                    ? 'success'
-                    : message.shell.status === 'error'
-                      ? 'error'
-                      : message.shell.status === 'stopped'
-                        ? 'cancelled'
-                        : 'running',
-              }}
-              ownerSessionId={message.shell.sourceSessionId}
-              userShellId={
-                message.shell.interactive ? message.shell.id : undefined
-              }
-              expanded
-              onFile={(path) => sources?.openFile(path)}
-              onAgent={() => {}}
-            />
-            {message.shell.exitCode !== undefined && (
-              <div className="message-meta">
-                {t('exit {code}', { code: message.shell.exitCode })}
-              </div>
-            )}
-          </>
-        ) : (
-          <Markdown text={shownMessageText(message.role, message.text)} />
-        )}
-        {message.attachments?.length ? (
-          <div className="message-attachments">
-            {message.attachments.map((file) => (
-              <FileChip
-                key={file.id}
-                name={file.name}
-                onClick={() =>
-                  sources ? sources.openAttachment(file) : onAttachment?.()
+      {(message.shell ||
+        message.text.trim() ||
+        message.attachments?.length) && (
+        <div className={message.role === 'user' ? 'bubble' : 'message-body'}>
+          {message.shell ? (
+            <>
+              <ToolMessage
+                tool={{
+                  id: 'human-' + (message.shell.id ?? message.id),
+                  name: message.shell.quiet ? '!!' : '!',
+                  input: { command: message.shell.command },
+                  output: message.shell.output,
+                  status:
+                    message.shell.status === 'done'
+                      ? 'success'
+                      : message.shell.status === 'error'
+                        ? 'error'
+                        : message.shell.status === 'stopped'
+                          ? 'cancelled'
+                          : 'running',
+                }}
+                ownerSessionId={message.shell.sourceSessionId}
+                userShellId={
+                  message.shell.interactive ? message.shell.id : undefined
                 }
+                expanded
+                onFile={(path) => sources?.openFile(path)}
+                onAgent={() => {}}
               />
-            ))}
-          </div>
-        ) : null}
-      </div>
+              {message.shell.exitCode !== undefined && (
+                <div className="message-meta">
+                  {t('exit {code}', { code: message.shell.exitCode })}
+                </div>
+              )}
+            </>
+          ) : (
+            <Markdown text={shownMessageText(message.role, message.text)} />
+          )}
+          {message.attachments?.length ? (
+            <div className="message-attachments">
+              {message.attachments.map((file) => (
+                <FileChip
+                  key={file.id}
+                  name={file.name}
+                  onClick={() =>
+                    sources ? sources.openAttachment(file) : onAttachment?.()
+                  }
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
       <div className="message-meta">
         {message.label && <span className="label">{message.label}</span>}
         {shownTime(message.at) ? (
