@@ -109,15 +109,16 @@ function revealIn(scroller: HTMLElement, target: Element): void {
 }
 const mediaFiles = (files: FileList): File[] =>
   Array.from(files).filter((file) => MEDIA_TYPES.has(file.type));
-// A transcript item: a message, or the tool calls between two messages, folded together.
+// A transcript item: a message, or the tool calls of one model step, folded together.
 export type TranscriptItem =
   | { kind: 'message'; message: Message }
-  | { kind: 'tools'; id: string; rows: Message[] };
+  | { kind: 'tools'; id: string; batchKey: string; rows: Message[] };
 /**
- * Fold consecutive tool rows (and empty assistant placeholders) into one group.
- * When thinking is shown, an assistant step that only reasoned stays its own row so
- * OpenAI `reasoning_content` and Anthropic thinking blocks both appear between tool
- * batches — same field on both protocols, not Anthropic-only `thinking.display`.
+ * Fold tool rows (and empty assistant placeholders) into one group per model step.
+ * A tool's `parentId` (or a quiet assistant's own id) is the batch key, so consecutive
+ * tool rounds do not merge into one whole-turn summary. When thinking is shown, an
+ * assistant step that only reasoned stays its own row so OpenAI `reasoning_content`
+ * and Anthropic thinking blocks both appear between tool batches.
  */
 export function groupMessages(
   messages: Message[],
@@ -130,15 +131,19 @@ export function groupMessages(
     !message.text.trim() &&
     !message.attachments?.length &&
     !(options.showThinking && Boolean(message.thinking?.trim()));
+  // Tools inherit the issuing assistant's id as parentId; a quiet assistant is that id.
+  const batchKey = (message: Message) =>
+    message.role === 'tool' ? (message.parentId ?? message.id) : message.id;
   for (const message of messages) {
     const last = items.at(-1);
     if ((message.role === 'tool' && message.tool) || quiet(message)) {
-      if (last?.kind === 'tools') last.rows.push(message);
-      // Keyed by the message the calls follow, which stays when a call's result arrives.
+      const key = batchKey(message);
+      if (last?.kind === 'tools' && last.batchKey === key) last.rows.push(message);
       else
         items.push({
           kind: 'tools',
-          id: 'tools-' + (message.parentId ?? message.id),
+          id: 'tools-' + key,
+          batchKey: key,
           rows: [message],
         });
     } else items.push({ kind: 'message', message });
