@@ -235,6 +235,17 @@ export const HUB_ZH: Record<string, string> = {
     '✓ 已替换 {task} 的输入（{request}）',
   '✓ answered {task} ({request})': '✓ 已回答 {task}（{request}）',
   'usage: /hub get <id>': '用法：/hub get <id>',
+  '  {task} · {seq} · said: {text}': '  {task} · {seq} · 工人说：{text}',
+  '  {task} · {seq} · wants tools: {tools}':
+    '  {task} · {seq} · 要用的工具：{tools}',
+  '  {task} · {seq} · tool {name} answered':
+    '  {task} · {seq} · 工具 {name} 回话',
+  '  {task} · {seq} · tool {name} failed':
+    '  {task} · {seq} · 工具 {name} 失败',
+  '  {task} · still working · events seen to {seq}':
+    '  {task} · 仍在运行 · 事件已看到 {seq}',
+  '  {task} · run over at event {seq} · the server keeps the full record':
+    '  {task} · 全程到事件 {seq} 结束 · 服务器保留完整录像可回看',
   '  read {tasks} tasks and {packs} capability packs from the server (work tasks for the pages, at most 20, not tool or index tasks). /hub tasks lists only what this window handed over; "seen to N" there is the last event number shown for that task':
     '  从服务器读到 {tasks} 个工作任务和 {packs} 个能力包（页面上的工作任务，最多 20 个，不含工具任务和索引任务）。/hub tasks 只列出这个窗口交出的任务；那里的「事件已看到 N」是该任务已显示的最后一个事件号',
   'usage: /hub trial start [--force]': '用法：/hub trial start [--force]',

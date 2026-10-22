@@ -2351,3 +2351,112 @@ test('a server that cannot be reached is named without the transport error', asy
     return view?.username === 'ada' && view.url === 'http://127.0.0.1:1';
   });
 });
+
+test('a followed task says what each event means, beats when quiet and counts at the end', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  let looks = 0;
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    for await (const _chunk of request);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: { token: TOKEN, tokenType: 'Bearer', scopes: ['scp_lab'] },
+      });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/tasks/task_live/status')
+      return send(200, {
+        data: {
+          taskId: 'task_live',
+          phase: ++looks > 4 ? 'failed' : 'running',
+          title: 'live work',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_live/events') {
+      const after = Number(url.searchParams.get('after') ?? '0');
+      const events = [
+        {
+          seq: 1,
+          taskId: 'task_live',
+          kind: 'runtime.assistant',
+          payload: {},
+          content: {
+            sha256: 'a'.repeat(64),
+            size: 40,
+            downloadPath: '/v1/tasks/task_live/events/1/content',
+          },
+        },
+        {
+          seq: 2,
+          taskId: 'task_live',
+          kind: 'runtime.tool_result',
+          payload: { name: 'hub_tool_docs_search' },
+        },
+      ].filter((event) => event.seq > after);
+      return send(200, {
+        data: { events, after: events.at(-1)?.seq ?? after },
+      });
+    }
+    if (url.pathname === '/v1/tasks/task_live/events/1/content')
+      return send(200, {
+        data: { event: { id: 'e1', text: '检查 sdns 命令头' } },
+      });
+    return send(404, {
+      status: 'failed',
+      error: { code: 'NOT_FOUND', message: 'no route' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const { port } = server.address() as AddressInfo;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port} tester`, context);
+  await command.handler('task task_live', context);
+  await until(() =>
+    lines.some((line) => line.includes('said: 检查 sdns 命令头')),
+  );
+  assert.ok(
+    lines.some((line) => line.includes('tool hub_tool_docs_search answered')),
+  );
+  assert.ok(
+    !lines.some((line) => / · runtime\.assistant$/.test(line)),
+    'the assistant envelope alone must not stand in for its words',
+  );
+  await until(() => lines.some((line) => line.includes('events seen to 2')));
+  await until(() => lines.some((line) => line.includes('run over at event 2')));
+  assert.ok(lines.some((line) => line.startsWith('✖ task_live failed')));
+});
