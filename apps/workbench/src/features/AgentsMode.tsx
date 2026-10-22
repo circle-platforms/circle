@@ -76,8 +76,11 @@ export function AgentsMode({
   const jobOf = (agent: AgentRecord) =>
     snapshot.jobs.find((job) => job.agentId === agent.id);
   const items = useMemo(
-    () => groupMessages(selected?.messages ?? []),
-    [selected?.messages],
+    () =>
+      groupMessages(selected?.messages ?? [], {
+        showThinking: session.showThinking,
+      }),
+    [selected?.messages, session.showThinking],
   );
   const list = (
     <div className="agent-list" role="list" aria-label={t('subagents')}>

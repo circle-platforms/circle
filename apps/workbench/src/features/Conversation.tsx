@@ -113,15 +113,23 @@ const mediaFiles = (files: FileList): File[] =>
 export type TranscriptItem =
   | { kind: 'message'; message: Message }
   | { kind: 'tools'; id: string; rows: Message[] };
-export function groupMessages(messages: Message[]): TranscriptItem[] {
+/**
+ * Fold consecutive tool rows (and empty assistant placeholders) into one group.
+ * When thinking is shown, an assistant step that only reasoned stays its own row so
+ * OpenAI `reasoning_content` and Anthropic thinking blocks both appear between tool
+ * batches — same field on both protocols, not Anthropic-only `thinking.display`.
+ */
+export function groupMessages(
+  messages: Message[],
+  options: { showThinking?: boolean } = {},
+): TranscriptItem[] {
   const items: TranscriptItem[] = [];
-  // An answer with no words of its own, only thinking before its calls, folds in with
-  // them: a turn reads as your message, a few folded lines, and the answer.
   const quiet = (message: Message) =>
     message.role === 'assistant' &&
     message.at !== 'streaming' &&
     !message.text.trim() &&
-    !message.attachments?.length;
+    !message.attachments?.length &&
+    !(options.showThinking && Boolean(message.thinking?.trim()));
   for (const message of messages) {
     const last = items.at(-1);
     if ((message.role === 'tool' && message.tool) || quiet(message)) {
@@ -670,7 +678,10 @@ export function Conversation({
   };
   // The turn's clock goes on the row of its latest tools, as Claude's does; before any, on
   // a row of its own. Waiting for you, it stops.
-  const items = useMemo(() => groupMessages(messages), [messages]);
+  const items = useMemo(
+    () => groupMessages(messages, { showThinking: session.showThinking }),
+    [messages, session.showThinking],
+  );
   const savedAnchor = sessionScrollAnchor(session.presentation?.scroll?.anchor);
   const initialAnchor = useMemo(() => {
     if (!savedAnchor || session.presentation?.scroll?.follow) return undefined;
