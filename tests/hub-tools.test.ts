@@ -32,6 +32,7 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
   const calls: { name: string; body: Record<string, unknown> }[] = [];
   const packs: Record<string, any>[] = [];
   const runs: Record<string, any>[] = [];
+  let listRows: Record<string, any>[] | undefined;
   let catalogVersion = 1;
   let catalogReads = 0;
   let notModified = 0;
@@ -241,11 +242,17 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
     }
     if (url.pathname === '/v1/skillpacks')
       return send(200, {
-        data: packs.map(() => ({
-          skillPackId: 'skp_1',
-          manifest: { id: 'mindmap-compile', version: '0.1.0' },
-          status: 'candidate',
-        })),
+        data:
+          listRows ??
+          packs.map(() => ({
+            skillPackId: 'skp_1',
+            manifest: {
+              id: 'mindmap-compile',
+              version: '0.1.0',
+              inputs: { mindmap: 'file', line: 'text', build: 'text' },
+            },
+            status: 'candidate',
+          })),
       });
     if (url.pathname === '/v1/tasks/task_approve/approvals')
       return send(200, {
@@ -293,6 +300,9 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
     calls,
     changeCatalog: () => {
       catalogVersion = 2;
+    },
+    setList: (rows: Record<string, any>[]) => {
+      listRows = rows;
     },
     packs,
     runs,
@@ -695,6 +705,143 @@ test('a trial records which server tools the model used, and /hub skill push sen
     server.packs.length,
     runs,
     '--outputs with no file list does not submit',
+  );
+  await delay(300);
+});
+
+test('/hub skill run takes a pack name, named inputs, files from anywhere, and never a credential file', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(join(home, '.ssh'), { recursive: true });
+  writeFileSync(join(home, '.ssh', 'id_rsa'), 'private key bytes');
+  writeFileSync(join(root, 'outside.json'), 'outside bytes');
+  writeFileSync(join(workspace, 'LBX-200.json'), '[{"data":{},"children":[]}]');
+  const server = await toolServer(t);
+  server.setList([
+    {
+      skillPackId: 'skp_1',
+      manifest: {
+        id: 'mindmap-compile',
+        version: '0.1.0',
+        inputs: { mindmap: 'file', line: 'text', build: 'text' },
+      },
+      status: 'candidate',
+    },
+  ]);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => {
+      await submitAnswer(home, request.id, PASSWORD);
+    },
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login ${server.url} tester`, context);
+  const literal = (text: string) =>
+    new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+  // A declared pack name stands for its id, and named inputs fill the JSON.
+  await command.handler(
+    'skill run mindmap-compile --mindmap LBX-200.json --line 10.5 --file LBX-200.json',
+    context,
+  );
+  const named = server.runs.at(-1)!;
+  assert.equal(named.inputs.mindmap, 'LBX-200.json');
+  assert.equal(named.inputs.line, '10.5');
+  assert.deepEqual(
+    named.inputs.files.map((f: { path: string }) => f.path),
+    ['LBX-200.json'],
+  );
+  assert.ok(
+    lines.some((line) =>
+      /✓ running skp_1 on the server as task_run/.test(line),
+    ),
+    'a name still reports the id the run went to',
+  );
+
+  // The id plus raw JSON still runs as it did before.
+  await command.handler('skill run skp_1 {"build":"585"}', context);
+  assert.equal(server.runs.at(-1)!.inputs.build, '585');
+
+  // A file outside the workspace travels with the name the server sees.
+  await command.handler(
+    `skill run mindmap-compile --file ${join(root, 'outside.json')}`,
+    context,
+  );
+  const outside = server.runs.at(-1)!.inputs.files[0];
+  assert.equal(outside.path, 'outside.json');
+  assert.equal(
+    Buffer.from(outside.base64, 'base64').toString(),
+    'outside bytes',
+  );
+
+  // A credential file never travels, wherever it lives.
+  await assert.rejects(
+    async () =>
+      command.handler(
+        `skill run mindmap-compile --file ${join(home, '.ssh', 'id_rsa')}`,
+        context,
+      ),
+    /cannot attach a credential file/,
+  );
+
+  // An option the pack does not declare is refused, with the real names.
+  await assert.rejects(
+    async () => command.handler('skill run mindmap-compile --nope 1', context),
+    /unknown option --nope[\s\S]*mindmap/,
+  );
+  await assert.rejects(
+    async () => command.handler('skill run nosuch-pack', context),
+    /no skill pack named nosuch-pack/,
+  );
+
+  // A missing file says which workspace it looked in.
+  await assert.rejects(
+    async () =>
+      command.handler('skill run mindmap-compile --file gone.json', context),
+    (error: unknown) => {
+      assert.match(String(error), /is not a file in the workspace/);
+      assert.match(String(error), literal(workspace));
+      return true;
+    },
+  );
+
+  // Two packs under one name: refuse, and show both ids.
+  server.setList([
+    {
+      skillPackId: 'skp_1',
+      manifest: { id: 'mindmap-compile', version: '0.2.0' },
+      status: 'candidate',
+    },
+    {
+      skillPackId: 'skp_2',
+      manifest: { id: 'mindmap-compile', version: '0.1.0' },
+      status: 'retired',
+    },
+  ]);
+  await assert.rejects(
+    async () => command.handler('skill run mindmap-compile', context),
+    (error: unknown) => {
+      assert.match(
+        String(error),
+        /several skill packs are named mindmap-compile/,
+      );
+      assert.match(String(error), /skp_1/);
+      assert.match(String(error), /skp_2/);
+      return true;
+    },
   );
   await delay(300);
 });

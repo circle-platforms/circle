@@ -135,7 +135,14 @@ export const HUB_ZH: Record<string, string> = {
   '  ✖ {label}: {names}': '  ✖ {label}：{names}',
   '  submitted, but the server named no approval task. /hub review lists open approvals':
     '  已提交，但服务器没有给出审批任务。/hub review 列出待处理的审批',
-  '{name} is not a file in the workspace': '{name} 不是工作区里的文件',
+  'the file {name} is not a file in the workspace {workspace}':
+    '文件 {name} 不是工作区 {workspace} 里的文件',
+  'cannot attach a credential file: {name}': '不能随单附上凭据文件：{name}',
+  'no skill pack named {name}': '没有名为 {name} 的技能包',
+  'several skill packs are named {name}: {ids}':
+    '有多个同名技能包 {name}：{ids}——请用编号指定其中一个',
+  'unknown option --{flag}; the pack declares: {options}':
+    '未知选项 --{flag}；该技能包声明的输入是：{options}',
   '{what} are not a JSON object: {message}': '{what} 不是 JSON 对象：{message}',
   'not an interval: {text} (for example 30m, 1h or 1d)':
     '不是时间间隔：{text}（例如 30m、1h 或 1d）',
@@ -239,13 +246,13 @@ export const HUB_ZH: Record<string, string> = {
     '  从服务器读到 {tasks} 个工作任务和 {packs} 个能力包（页面上的工作任务，最多 20 个，不含工具任务和索引任务）。/hub tasks 只列出这个窗口交出的任务；那里的「事件已看到 N」是该任务已显示的最后一个事件号',
   'usage: /hub trial start [--force]': '用法：/hub trial start [--force]',
   'No skill packs on this server': '这台服务器上没有技能包',
-  'usage: /hub skill run <id> [json inputs] [--file <path>]…':
-    '用法：/hub skill run <id> [json inputs] [--file <path>]…',
+  'usage: /hub skill run <id|name> [json inputs] [--option <value>] [--file <path>]…':
+    '用法：/hub skill run <编号|包名> [json 参数] [--输入 <值>] [--file <路径>]…',
   'the server started no task': '服务器没有启动任务',
   '✓ running {id} on the server as {task} · following it':
     '✓ 正在服务器上运行 {id}，任务 {task} · 正在跟随',
-  'usage: /hub skill push <folder> | list | run <id> [json]':
-    '用法：/hub skill push <folder> | list | run <id> [json]',
+  'usage: /hub skill push <folder> | list | run <id|name> [json]':
+    '用法：/hub skill push <folder> | list | run <编号|包名> [json]',
   'usage: /hub reconcile <id> [operationId]':
     '用法：/hub reconcile <id> [operationId]',
   'name the operation: /hub reconcile <id> <operationId>':
@@ -301,8 +308,8 @@ export const HUB_ZH: Record<string, string> = {
   'submit a skill pack. skillpack.json outputs are required; the trial call record may be empty. --outputs a,b names trial files and defaults to that list':
     '提交技能包。skillpack.json 的 outputs 是必需的；试验调用记录可以是空的。--outputs a,b 指定试验文件，缺省时用这份列表',
   'the skill packs on the server': '服务器上的技能包',
-  'run a skill pack on the server and follow it (--file <path> attaches)':
-    '在服务器上运行技能包并跟随（--file <path> 附加文件）',
+  'run a skill pack on the server and follow it (--option <value> fills a declared input, --file <path> attaches)':
+    '在服务器上运行技能包并跟随（--输入名 <值> 填一项声明的输入，--file <路径> 附加文件）',
   'the bots you can see; yours with their runs and new results':
     '你能看到的机器人；你自己的会带上运行记录和新结果',
   'a bot that runs a skill pack on a schedule (--from, --inputs, --file, --name)':
