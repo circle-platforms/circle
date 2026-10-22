@@ -1254,11 +1254,40 @@ try {
     checks.push(
       "the native page hides when another mode of the drawer, the drawer's closing, a menu or a dialog covers it, and follows a window resize",
     );
-    // The screenshot Circle took is a small picture under its tool line, the very PNG the
-    // model got. A click shows it large, to copy or to keep, over the page.
+    // The screenshot Circle took is the very PNG the model got, and it stays with
+    // the call that took it: the folded line only counts the pictures, and opening
+    // that line brings them out. A click shows one large, to copy or to keep.
     const shot = screenshot.attachments.find(
       (row) => row.filename === 'browser.png',
     );
+    // Which line has a picture count is read once, before it is opened: the
+    // count itself goes away when the line opens, so it cannot also find it.
+    const foldedAt = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.tool-group')];
+      for (let index = rows.length - 1; index >= 0; index--)
+        if (rows[index].querySelector('.tool-shots-count')) return index;
+      return -1;
+    });
+    if (foldedAt >= 0) {
+      const group = page.locator('.tool-group').nth(foldedAt);
+      const line = group.locator(':scope > .tool-summary');
+      assert.match(
+        (await line.textContent()) ?? '',
+        /picture/,
+        'the folded line counts the picture its call took',
+      );
+      assert.equal(
+        await group.locator('.tool-shots').count(),
+        0,
+        'a folded line keeps its picture out of the conversation',
+      );
+      await line.click();
+      await waitFor(
+        async () =>
+          (await group.locator('.tool-shots .image-thumb').count()) > 0,
+        'the opened line shows the picture of its call',
+      );
+    }
     const thumb = page
       .getByRole('button', { name: 'enlarge browser.png', exact: true })
       .last();
@@ -1290,7 +1319,7 @@ try {
       'the page did not return after the large picture',
     );
     checks.push(
-      'the screenshot Circle took is a small picture in the conversation, the PNG the model got, which opens large with copy image and save to file while the native page steps aside',
+      'the screenshot Circle took stays with its tool line, which counts it folded and shows it opened, the PNG the model got, opening large with copy image and save to file while the native page steps aside',
     );
 
     await send('open the unavailable local port');
