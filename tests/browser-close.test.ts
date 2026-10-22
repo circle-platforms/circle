@@ -228,6 +228,30 @@ function liveChild(): ChildProcess {
   }) as unknown as ChildProcess;
 }
 
+test('an exit the OS has confirmed is waited for when its event comes turns after the deadline (#277)', async () => {
+  // No process has this PID: the OS says it is gone, as Windows does before Node is told
+  const child = liveChild();
+  const browser = browserWithChild(child);
+  const waiting: Promise<boolean> = (browser as any).waitForExit(child, 10);
+  setTimeout(() => {
+    (child as unknown as { exitCode: number | null }).exitCode = 0;
+    child.emit('exit', 0, null);
+  }, 80);
+  assert.equal(await waiting, true);
+  assert.equal(child.exitCode, 0);
+});
+
+test('a process the OS has let go of whose exit is never told is not confirmed', async () => {
+  const child = liveChild();
+  const browser = browserWithChild(child);
+  const started = Date.now();
+  assert.equal(await (browser as any).waitForExit(child, 10), false);
+  assert.ok(
+    Date.now() - started < 5000,
+    'the wait for the exit event was not bounded',
+  );
+});
+
 test('a child process error without exit does not confirm browser cleanup', async () => {
   const child = liveChild();
   const browser = browserWithChild(child);
