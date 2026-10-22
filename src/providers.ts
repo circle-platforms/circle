@@ -28,6 +28,9 @@ const SEARCH_ADAPTERS: Readonly<Record<string, NativeSearchAdapter>> = {
   ark: 'ark-responses',
   'ark-anthropic': 'anthropic',
   bailian: 'bailian',
+  // The Messages route runs web_search once the request carries Bailian's
+  // Claude Code billing identifier; see native_websearch.ts.
+  'bailian-anthropic': 'anthropic',
   zhipu: 'zhipu',
   // The Anthropic route has no web_search tool. Search uses the same key on paas v4.
   'zhipu-anthropic': 'zhipu',
@@ -239,11 +242,19 @@ export function searchProvider(
         ['/api/paas/v4', '/api/coding/paas/v4'].includes(path)
       )
         id = 'zhipu';
-    } else if (
-      /^ark\.[a-z0-9-]+\.volces\.com$/.test(url.hostname) &&
-      path === '/api/compatible'
-    )
-      id = 'ark-anthropic';
+    } else {
+      if (
+        /^ark\.[a-z0-9-]+\.volces\.com$/.test(url.hostname) &&
+        path === '/api/compatible'
+      )
+        id = 'ark-anthropic';
+      else if (
+        path === '/apps/anthropic' &&
+        (/^dashscope(?:-intl|-us)?\.aliyuncs\.com$/.test(url.hostname) ||
+          /^[a-z0-9-]+\.[a-z0-9-]+\.maas\.aliyuncs\.com$/.test(url.hostname))
+      )
+        id = 'bailian-anthropic';
+    }
     if (id) match = PROVIDER_PRESETS.find((item) => item.id === id);
   }
   if (!match) {

@@ -547,6 +547,16 @@ export async function nativeWebSearch(
         ],
         tool_choice: { type: 'auto' },
       };
+      // https://help.aliyun.com/zh/model-studio/web-search: direct HTTP calls
+      // to Bailian's Messages route need this client identity in system,
+      // otherwise the gateway silently ignores web_search.
+      if (provider.id === 'bailian-anthropic')
+        body.system = [
+          {
+            type: 'text',
+            text: 'x-anthropic-billing-header: cc_entrypoint=cli;',
+          },
+        ];
       break;
     case 'gemini': {
       url = base(connection);
