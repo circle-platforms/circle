@@ -615,6 +615,68 @@ test('a runtime that stops while it is asked to close lets Circle quit', () =>
     assert.equal(child.sent.at(-1)?.name, 'close');
   }));
 
+test('a runtime that never answers its close is killed so Circle can quit', () =>
+  fixture(async (supervisor, child) => {
+    child.postMessage = (value) => {
+      child.sent.push(structuredClone(value));
+    };
+    let killed = false;
+    child.kill = () => {
+      killed = true;
+      child.emit('exit', null);
+    };
+    const started = Date.now();
+    const clean = await supervisor.close(50);
+    assert.equal(clean, false);
+    assert.ok(killed);
+    assert.equal(child.sent.at(-1)?.name, 'close');
+    assert.ok(
+      Date.now() - started < 5000,
+      'the close was not bounded by its limit',
+    );
+  }));
+
+test('a runtime that refuses to close is ended rather than keeping Circle up', () =>
+  fixture(async (supervisor, child) => {
+    child.postMessage = (value) => {
+      child.sent.push(structuredClone(value));
+      if (value.name === 'close')
+        queueMicrotask(() =>
+          child.emit('message', {
+            type: 'reply',
+            reply: { id: value.id, ok: false, error: 'jobs are running' },
+          }),
+        );
+    };
+    let killed = false;
+    child.kill = () => {
+      killed = true;
+      child.emit('exit', 0);
+    };
+    assert.equal(await supervisor.close(50), false);
+    assert.ok(killed);
+  }));
+
+test('a runtime that ignores the kill settles the close after the exit limit', () =>
+  fixture(
+    async (supervisor, child) => {
+      child.postMessage = (value) => {
+        child.sent.push(structuredClone(value));
+      };
+      child.kill = () => {}; // never exits; the fake child has no pid to SIGKILL
+      const started = Date.now();
+      const clean = await supervisor.close(50);
+      assert.equal(clean, false);
+      assert.ok(
+        Date.now() - started < 5000,
+        'the exit was not bounded by its limit',
+      );
+      // Lets the process go: the unanswered command's own timer is retired with it
+      child.emit('exit', null);
+    },
+    { closeExitMs: 50 },
+  ));
+
 test('quitting while a restart waits for stale leases cancels it', async (t) => {
   const logFile = await scratchLog(t);
   const started = Date.now();
