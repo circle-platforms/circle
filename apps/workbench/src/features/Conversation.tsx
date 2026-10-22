@@ -141,7 +141,8 @@ export function groupMessages(
     const last = items.at(-1);
     if ((message.role === 'tool' && message.tool) || quiet(message)) {
       const key = batchKey(message);
-      if (last?.kind === 'tools' && last.batchKey === key) last.rows.push(message);
+      if (last?.kind === 'tools' && last.batchKey === key)
+        last.rows.push(message);
       else
         items.push({
           kind: 'tools',
