@@ -32,6 +32,7 @@ import type {
 import { emptyUsage } from '../src/types.js';
 import { getEventListeners } from 'node:events';
 import { cleanup, cleanupServer, scratch as made } from './helpers.js';
+import { listenForBrowser } from './browser-port.mjs';
 import {
   BrowserFixture,
   BrowserFixtureDeadline,
@@ -181,12 +182,7 @@ test('close returns only after the browser it stopped has exited, and kills one 
   }
 });
 
-const listen = (server: Server) =>
-  new Promise<number>((resolve) =>
-    server.listen(0, '127.0.0.1', () =>
-      resolve((server.address() as { port: number }).port),
-    ),
-  );
+const listen = (server: Server) => listenForBrowser(server);
 
 /** The simulated person hands back a page they have actually finished opening. */
 async function humanNavigation(

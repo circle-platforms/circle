@@ -13,6 +13,7 @@ import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { readModelRequests } from './helpers/model-requests.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
 import { patience } from './helpers/patience.mjs';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-parallel-sessions-'));
@@ -105,7 +106,7 @@ const browserServer = createServer((request, response) => {
     `<title>synthetic browser ${request.url}</title><p>isolated browser fixture</p>`,
   );
 });
-await new Promise((done) => browserServer.listen(0, '127.0.0.1', done));
+await listenForBrowser(browserServer);
 const browserUrl = `http://127.0.0.1:${browserServer.address().port}`;
 let app;
 let page;

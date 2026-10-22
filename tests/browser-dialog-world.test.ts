@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { ChildProcess } from 'node:child_process';
 import { ChromeBrowser, findBrowser } from '../src/browser/chrome.js';
 import { cleanup, cleanupServer } from './helpers.js';
+import { listenForBrowser } from './browser-port.mjs';
 import { BrowserFixture } from './browser-fixture.js';
 
 const executable = findBrowser();
@@ -29,9 +30,7 @@ test(
           : '<title>Home</title><p>home</p>',
       );
     });
-    await new Promise<void>((resolve) =>
-      server.listen(0, '127.0.0.1', resolve),
-    );
+    await listenForBrowser(server);
     cleanupServer(t, server);
     const base =
       'http://127.0.0.1:' + (server.address() as { port: number }).port;

@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 import { _electron as electron } from 'playwright';
 import { readModelRequests } from './helpers/model-requests.mjs';
 import { patience } from './helpers/patience.mjs';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 if (
   process.env.CIRCLE_DESKTOP_EXECUTABLE ||
   (process.getuid?.() === 0 && !process.env.DISPLAY_WRAPPER)
@@ -65,7 +66,7 @@ const site = createServer((request, response) => {
           : '<!doctype html><title>pop</title><body style="margin:0;background:#00aa44"><h1 id="mark" style="color:#fff">popped page</h1></body>',
   );
 });
-await new Promise((done) => site.listen(0, '127.0.0.1', done));
+await listenForBrowser(site);
 const address = `127.0.0.1:${site.address().port}`;
 const pageUrl = `http://${address}/`;
 const env = {

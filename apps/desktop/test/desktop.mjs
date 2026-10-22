@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { patience } from './helpers/patience.mjs';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const require = createRequire(import.meta.url);
@@ -81,7 +82,7 @@ const site = createServer((req, res) => {
     '<!doctype html><title>Circle native browser fixture</title><h1>same browser session</h1><p>isolated desktop verification</p>',
   );
 });
-await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(site);
 const siteUrl = 'http://127.0.0.1:' + site.address().port;
 const checks = [];
 const errors = [];

@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 
 // The check runs its own main script, which only the development Electron runs: a
 // packaged application starts itself. The page script is the same in both.
@@ -34,7 +35,7 @@ const other = createServer((_req, res) => {
   res.setHeader('Content-Type', 'text/html');
   res.end('<button>cross origin secret</button>');
 });
-await new Promise((resolve) => other.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(other);
 const server = createServer((req, res) => {
   res.setHeader('Content-Type', 'text/html');
   if (req.url === '/refs') {
@@ -78,7 +79,7 @@ const server = createServer((req, res) => {
       window.circleBrowser = {refs: new Map(), x: 9999, y: 9999};
     </script>`);
 });
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(server);
 const url = `http://127.0.0.1:${server.address().port}/`;
 const main = join(temp, 'main.cjs');
 await writeFile(

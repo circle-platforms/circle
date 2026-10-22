@@ -12,6 +12,7 @@ import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings, trustFolder } from '../src/settings.js';
 import { cleanup, cleanupServer, scratch } from './helpers.js';
+import { listenForBrowser } from './browser-port.mjs';
 import {
   assertNothingLeft,
   fakeBrowser,
@@ -374,7 +375,7 @@ test(
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end('<!doctype html><title>Back</title><h1>back again</h1>');
     });
-    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
+    await listenForBrowser(site);
     cleanupServer(t, site);
     const url = `http://127.0.0.1:${(site.address() as { port: number }).port}/`;
     const chrome = new ChromeBrowser({

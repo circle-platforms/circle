@@ -25,6 +25,7 @@ import {
 import { patience } from './helpers/patience.mjs';
 import { saveWithShortcut } from './helpers/native-editor-save.mjs';
 import { findOpenssl } from './helpers/openssl.mjs';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 
 // The conversation's browser, driven by a scripted model and by the person, against local
 // HTTPS sites with a self-signed certificate: everything a page asks for reaches both.
@@ -257,14 +258,14 @@ const tls = {
 // Two sites with the same certificate: an exception is for one host and port only.
 const site = createHttpsServer(tls, handler);
 const other = createHttpsServer(tls, handler);
-await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve));
-await new Promise((resolve) => other.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(site);
+await listenForBrowser(other);
 const url = `https://127.0.0.1:${site.address().port}/`;
 const host = `127.0.0.1:${site.address().port}`;
 const otherUrl = `https://127.0.0.1:${other.address().port}/`;
 // Reserve then close a local port, so connection failure does not depend on a remote host.
 const unavailable = createHttpServer();
-await new Promise((resolve) => unavailable.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(unavailable);
 const unavailableUrl = `http://127.0.0.1:${unavailable.address().port}/`;
 await new Promise((resolve) => unavailable.close(resolve));
 

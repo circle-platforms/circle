@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
 import { patience } from './helpers/patience.mjs';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 
 // One diagnostic experiment, not a substitute for the production adapter's tests.
 // Every combination uses identical real CDP arguments, with both clients attached.
@@ -33,7 +34,7 @@ const server = createServer((request, response) => {
       : '<!doctype html><title>circle input focus fixture</title><label>username<input id="username" value="old username"></label><label>number<input id="number" type="number" value="12"></label><iframe src="/frame"></iframe>',
   );
 });
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(server);
 const url = `http://127.0.0.1:${server.address().port}/`;
 const main = join(temp, 'main.cjs');
 await writeFile(

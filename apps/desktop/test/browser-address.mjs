@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { _electron as electron } from 'playwright';
 import { waitBrowserState } from './helpers/browser-state.mjs';
 import { patience } from './helpers/patience.mjs';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -24,7 +25,7 @@ const site = createServer((_request, response) => {
     '<!doctype html><title>Circle address fixture</title><h1>local address fixture</h1>',
   );
 });
-await new Promise((done) => site.listen(0, '127.0.0.1', done));
+await listenForBrowser(site);
 const siteUrl = `http://127.0.0.1:${site.address().port}/`;
 const env = {
   ...process.env,

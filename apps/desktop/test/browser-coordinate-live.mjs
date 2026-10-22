@@ -10,6 +10,7 @@ import { _electron as electron } from 'playwright';
 import { captureFailure } from './helpers/diagnostics.mjs';
 import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
 import { patience } from './helpers/patience.mjs';
+import { listenForBrowser } from '../../../tests/browser-port.mjs';
 
 // A local model gateway reads the real preceding screenshot result. It never calls a model.
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -142,7 +143,7 @@ const server = createServer(async (req, res) => {
   );
   res.end('data: [DONE]\n\n');
 });
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+await listenForBrowser(server);
 url = `http://127.0.0.1:${server.address().port}/`;
 const env = {
   ...process.env,
