@@ -809,13 +809,14 @@ export class LiveRuntime implements RuntimePort {
           Object.assign(this.settings, { [key]: requested.settings[key] });
           Object.assign(next.settings, { [key]: requested.settings[key] });
         } else if (
-          // The connection has its own command; the default workspace only
-          // changes through the native folder dialog's grant.
+          // The connection has its own command. The default workspace and the
+          // task folder only change through the native folder dialog's grant.
           ![
             'endpoint',
             'protocol',
             'workspaceFolder',
             'oldWorkspaceFolder',
+            'taskFolder',
           ].includes(key)
         )
           settings[key] = requested.settings[key];
@@ -1043,6 +1044,7 @@ export class LiveRuntime implements RuntimePort {
         'archive-workspace': 'archive-workspace',
         'remove-workspace': 'remove-workspace',
         'set-default-workspace': 'set-default-workspace',
+        'set-task-folder': 'set-task-folder',
         reload: 'reload',
         'clear-queue': 'clear-queue',
         'preview-file-undo': 'preview-file-undo',
