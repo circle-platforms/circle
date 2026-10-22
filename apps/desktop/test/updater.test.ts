@@ -512,6 +512,90 @@ test(
   },
 );
 
+test(
+  'an application that never quits fails the install instead of stalling it forever',
+  {
+    skip: windows,
+  },
+  async (t) => {
+    const root = scratch(t);
+    const bundle = (parent: string, version: string) => {
+      const app = join(parent, 'Circle.app');
+      mkdirSync(join(app, 'Contents', 'MacOS'), { recursive: true });
+      writeFileSync(join(app, 'Contents', 'VERSION'), version);
+      recorder(join(app, 'Contents', 'MacOS', 'Circle'), join(root, 'started'));
+      return app;
+    };
+    const installed = bundle(join(root, 'Applications'), '1.0.0');
+    const folder = join(root, 'updates');
+    const staged = bundle(join(folder, '1.1.0'), '1.1.0');
+    writeFileSync(
+      join(folder, 'ready.json'),
+      JSON.stringify({ version: '1.1.0', staged }),
+    );
+    // The application stands in for a copy whose runtime cannot stop: the update's
+    // quit() reaches it and nothing happens. The installer must give up, not wait forever.
+    const sleeper = spawn('sleep', ['60'], { stdio: 'ignore' });
+    t.after(() => sleeper.kill());
+    const bundleInstallation: Installation = {
+      kind: 'bundle',
+      target: installed,
+      executable: join(installed, 'Contents', 'MacOS', 'Circle'),
+      asset: (version) => `circle-desktop-${version}-darwin-arm64.dmg`,
+    };
+    let quit = 0;
+    const updater = new Updater({
+      version: '1.0.0',
+      home: join(root, 'home'),
+      folder,
+      installation: bundleInstallation,
+      releases: 'http://127.0.0.1:9/releases',
+      launch: (command, args) => {
+        assert.equal(args[6], '1');
+        assert.equal(spawnSync(command, args, { stdio: 'inherit' }).status, 0);
+      },
+      quit: () => quit++,
+      pid: sleeper.pid,
+      quitWaitSeconds: 1,
+      platform: 'darwin',
+    });
+    assert.deepEqual(await updater.start(), {
+      phase: 'ready',
+      version: '1.1.0',
+    });
+    assert.equal((await updater.install()).phase, 'installing');
+    assert.equal(quit, 1);
+    assert.match(
+      readFileSync(join(folder, 'install.log'), 'utf8'),
+      /failed: the application did not quit/,
+    );
+    // Nothing was swapped or started; the staged copy stays for a retry.
+    assert.equal(
+      readFileSync(join(installed, 'Contents', 'VERSION'), 'utf8'),
+      '1.0.0',
+    );
+    assert.ok(existsSync(staged));
+    assert.equal(existsSync(join(root, 'started')), false);
+    // The next start reports the cause in the installer's own words.
+    const restarted = new Updater({
+      version: '1.0.0',
+      home: join(root, 'home'),
+      folder,
+      installation: bundleInstallation,
+      releases: 'http://127.0.0.1:9/releases',
+      launch: () => {},
+      quit: () => {},
+      platform: 'darwin',
+    });
+    const state = await restarted.start();
+    assert.equal(state.phase, 'failed');
+    assert.equal(
+      state.phase === 'failed' ? state.error : '',
+      'Circle 1.1.0 was not installed: the application did not quit',
+    );
+  },
+);
+
 test('a daily check that answers late does not take back a download the user started', async (t) => {
   const root = scratch(t);
   const msi = 'an installer package';

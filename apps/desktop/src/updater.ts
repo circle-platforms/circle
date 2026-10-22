@@ -1,6 +1,7 @@
 // Keeps the desktop application up to date. A check asks GitHub for the newest release; the
 // update downloads this system's package into the data folder and checks it, and a restart hands
-// it to a small installer that waits for the application to quit, puts the new version in place
+// it to a small installer that waits for the application to quit — two minutes at most, or a
+// copy that cannot quit would stall the update forever — puts the new version in place
 // and starts it: on macOS the .dmg's bundle replaces the running one, on Windows the .msi
 // replaces the installed copy, and on Linux the unpacked folder replaces the running one when
 // that folder can be written. A setuid chrome-sandbox cannot be kept, so that Linux update
@@ -126,14 +127,27 @@ async function sha256(path: string): Promise<string> {
 
 // The installer for macOS: waits for the application to quit, moves the new bundle beside the
 // old one (copies it when the two are on different disks), swaps the two by renaming and starts
-// the application. When the new copy cannot be put in place the old one stays, and the
-// application starts as it was. Each step goes to the log, which the next start reads.
+// the application. The wait has a bound: a copy that cannot quit, as one whose runtime never
+// stops, would otherwise be waited on forever, and swapping under it would start the new version
+// beside the old one, still running. Past the bound the staged copy is left for a retry and the
+// log says why, which the next start reads. When the new copy cannot be put in place the old one
+// stays, and the application starts as it was. Each step goes to the log, which the next start reads.
 export const POSIX_INSTALLER = `#!/bin/sh
-pid=$1 staged=$2 target=$3 executable=$4 log=$5
-shift 5
+pid=$1 staged=$2 target=$3 executable=$4 log=$5 wait=$6
+shift 6
 exec >>"$log" 2>&1
 echo "$(date) installing $staged over $target"
-while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+case "$wait" in ''|*[!0-9]*) wait=120 ;; esac
+ticks=$((wait * 5))
+waited=0
+while kill -0 "$pid" 2>/dev/null; do
+  sleep 0.2
+  waited=$((waited + 1))
+  if [ "$waited" -ge "$ticks" ]; then
+    echo "failed: the application did not quit"
+    exit 0
+  fi
+done
 echo "Circle has quit"
 parent=$(dirname "$target")
 name=$(basename "$target")
@@ -167,11 +181,21 @@ echo "starting $executable"
 // chrome-sandbox on the copy that just quit will not be setuid on the new files,
 // and Ubuntu 24.04 and later then refuse to start. The log names the two commands.
 export const LINUX_INSTALLER = `#!/bin/sh
-pid=$1 staged=$2 target=$3 executable=$4 log=$5 sandbox=$6
-shift 6
+pid=$1 staged=$2 target=$3 executable=$4 log=$5 sandbox=$6 wait=$7
+shift 7
 exec >>"$log" 2>&1
 echo "$(date) installing $staged over $target"
-while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+case "$wait" in ''|*[!0-9]*) wait=120 ;; esac
+ticks=$((wait * 5))
+waited=0
+while kill -0 "$pid" 2>/dev/null; do
+  sleep 0.2
+  waited=$((waited + 1))
+  if [ "$waited" -ge "$ticks" ]; then
+    echo "failed: the application did not quit"
+    exit 0
+  fi
+done
 echo "Circle has quit"
 parent=$(dirname "$target")
 name=$(basename "$target")
@@ -309,6 +333,8 @@ export interface UpdaterOptions {
   /** The arguments the new version starts with: the ones this one had. */
   args?: string[];
   pid?: number;
+  /** Seconds the macOS/Linux installer waits for this copy to quit; a test shortens it. */
+  quitWaitSeconds?: number;
   /** Windows Installer, msiexec.exe; a test gives a stand-in. */
   msiexec?: string;
 }
@@ -715,6 +741,7 @@ export class Updater {
           found.executable,
           log,
           this.linuxGuide()?.sandbox ? '1' : '0',
+          String(this.options.quitWaitSeconds ?? 120),
           ...args,
         ],
       ];
@@ -730,6 +757,7 @@ export class Updater {
           found.target,
           found.executable,
           log,
+          String(this.options.quitWaitSeconds ?? 120),
           ...args,
         ],
       ];

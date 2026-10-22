@@ -68,6 +68,7 @@ import type {
   UpdateAction,
 } from './contracts';
 import { installation, Updater } from './updater';
+import { closeForQuit } from './quit';
 import { circleAppVersion } from './circle-version';
 import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
 import { channelOf } from './channel';
@@ -1399,24 +1400,25 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 let quitting = false;
+// Quitting always ends the process. A runtime that cannot stop is ended by the bounded
+// close; a browser close that stalls must not hold the application either: the update's
+// installer waits for this process, and a copy that cannot quit can never be replaced.
+const QUIT_CLOSE_LIMIT_MS = 20_000;
 app.on('before-quit', (event) => {
   if (quitting || !runtime) return;
   event.preventDefault();
-  void runtime
-    .close()
-    .then(async () => {
+  void (async () => {
+    const failure = await closeForQuit(async () => {
+      const clean = await runtime!.close();
+      if (!clean) throw Error('the runtime did not stop in time');
       await browsers?.close();
       await browserClosePending;
-    })
-    .then(() => {
-      quitting = true;
-      app.quit();
-    })
-    .catch((error) => {
-      void dialog.showMessageBox({
-        type: 'error',
-        message: text('Circle could not stop its runtime'),
-        detail: String(error),
-      });
-    });
+    }, QUIT_CLOSE_LIMIT_MS);
+    if (failure)
+      process.stderr.write(
+        `${text('Circle could not stop its runtime')}: ${String(failure)}\n`,
+      );
+    quitting = true;
+    app.quit();
+  })();
 });

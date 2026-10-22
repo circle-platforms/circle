@@ -111,6 +111,10 @@ export const RUNTIME_COMMAND_WAIT_MS = 4_000;
 const RUNTIME_COMMAND_WAIT_TICK_MS = 1_000;
 /** How long the runtime may keep a command before it is said to have failed. */
 export const RUNTIME_COMMAND_TIMEOUT_MS = 120_000;
+/** A close the runtime does not answer within this is ended with a kill: quitting must work. */
+export const RUNTIME_CLOSE_LIMIT_MS = 10_000;
+/** After the kill, the exit is waited on only this long before a SIGKILL settles it. */
+const RUNTIME_CLOSE_EXIT_MS = 5_000;
 export interface RuntimeSupervisorOptions {
   /** Where unexpected exits, with the end of the runtime's stderr, are recorded. */
   logFile?: string;
@@ -120,6 +124,8 @@ export interface RuntimeSupervisorOptions {
   commandTimeoutMs?: number;
   /** How long a command may be held before the windows are told the runtime is busy. */
   commandWaitMs?: number;
+  /** After the close's kill, how long the exit is waited on; a test shortens it. */
+  closeExitMs?: number;
 }
 
 /** One app-owned core process survives renderer reloads and closes actual jobs on quit. */
@@ -154,7 +160,7 @@ export class RuntimeSupervisor {
   private tokenListeners = new Set<(delta: RuntimeTokenDelta) => void>();
   private tokenResync?: Promise<void>;
   private exited?: Promise<void>;
-  private closing?: Promise<void>;
+  private closing?: Promise<boolean>;
   private listeners = new Set<(update: RuntimeUpdate) => void>();
   private workspaceListeners = new Set<
     (event: WorkspaceServiceEvent) => void
@@ -1000,29 +1006,59 @@ export class RuntimeSupervisor {
       });
     });
   }
-  close(): Promise<void> {
+  /**
+   * Stops the runtime, bounded: a close it does not answer within `limit`, or refuses,
+   * ends with the process killed, and its exit is waited on only briefly before a SIGKILL.
+   * Quitting must always be possible — the update's installer waits for this process, and
+   * a copy that cannot quit can never be replaced. Resolves false when force did the
+   * stopping, so the quitter can say the runtime did not stop by itself.
+   */
+  close(limit = RUNTIME_CLOSE_LIMIT_MS): Promise<boolean> {
     if (this.closing) return this.closing;
     this.closing = (async () => {
       this.cancelRestartWait?.();
       const child = this.child;
-      if (!child) return;
-      let reply;
+      if (!child) return true;
+      const exited = this.exited;
+      let forced = false;
       try {
-        reply = await this.command({
-          id: randomUUID(),
-          name: 'close',
-          payload: {},
-        });
-      } catch (error) {
+        const answer = await Promise.race([
+          this.command({ id: randomUUID(), name: 'close', payload: {} }),
+          new Promise<'timeout'>((resolve) =>
+            setTimeout(() => resolve('timeout'), limit),
+          ),
+        ]);
+        if (answer === 'timeout') forced = true;
+        else if (!answer.ok)
+          throw Error(answer.error ?? 'runtime close failed');
+      } catch {
         // A runtime that stopped while it was asked to close has nothing left to stop. A
         // signal to every process of the application (pkill, the end of a Linux session)
         // stops it just as the main process asks, and quitting goes on.
-        if (this.child !== child) return;
-        throw error;
+        if (this.child !== child) return true;
+        // A refusal does not keep Circle running either: the process is ended instead.
+        forced = true;
       }
-      if (!reply.ok) throw Error(reply.error ?? 'runtime close failed');
-      this.child?.kill();
-      await this.exited;
+      if (this.child === child) child.kill();
+      if (!exited) return !forced;
+      const exitLimit = this.options.closeExitMs ?? RUNTIME_CLOSE_EXIT_MS;
+      const gone = await Promise.race([
+        exited.then(() => true),
+        new Promise<false>((resolve) =>
+          setTimeout(() => resolve(false), exitLimit),
+        ),
+      ]);
+      if (gone) return !forced;
+      try {
+        if (child.pid !== undefined) process.kill(child.pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+      await Promise.race([
+        exited,
+        new Promise((resolve) => setTimeout(resolve, exitLimit)),
+      ]);
+      return false;
     })();
     return this.closing;
   }
