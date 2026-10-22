@@ -11,7 +11,12 @@ import {
   loadCredentials,
   saveCredentials,
 } from '../src/settings.js';
-import { transcriptRows, type ScreenState } from '../src/tui/render.js';
+import {
+  renderScreen,
+  transcriptRows,
+  type ScreenState,
+} from '../src/tui/render.js';
+import { TranscriptFind } from '../src/tui/transcript_find.js';
 import {
   buildPalette,
   DEFAULT_DARK,
@@ -213,6 +218,49 @@ test('frozen message rows replay from the cache, and every input that changes th
   const done = transcriptRows(screen(messages), 80);
   assert.deepEqual(transcriptRows(screen(messages), 80), done);
   assert.ok(done.some((row) => stripAnsi(row).includes('+2 lines')));
+});
+
+test('typing in find over a long transcript rematches cached rows and never renormalizes them', (t) => {
+  const root = scratch(t);
+  const app = new SessionApp(root, root, defaultSettings());
+  const ui = app as any;
+  ui.screen.render = (): void => {};
+  cleanup(t, () => {
+    if (ui.renderTimer) clearTimeout(ui.renderTimer);
+    ui.input.close();
+  });
+  const messages: Message[] = [];
+  for (let i = 0; i < 200; i++) {
+    messages.push(user(`u${i}`, `question ${i} about the needle stack`));
+    messages.push(reply(`a${i}`, `answer ${i} explains the haystack`));
+  }
+  ui.state.messages = messages;
+  ui.handle({ type: 'key', key: 'ctrl+f', char: '' });
+  const find = app.state.find!;
+  assert.ok(find, 'ctrl+f opens find');
+  assert.equal(
+    find.normalizations,
+    1,
+    'opening normalizes the transcript once',
+  );
+  for (const char of 'needle') ui.handle({ type: 'key', key: '', char });
+  assert.equal(find.query, 'needle');
+  assert.equal(find.normalizations, 1, 'six keystrokes renormalize nothing');
+  // The cached rematch agrees with a fresh full render of the same conversation.
+  const width = process.stdout.columns || 80;
+  const expected = new TranscriptFind();
+  expected.query = 'needle';
+  expected.refresh(transcriptRows(app.state, width));
+  assert.deepEqual(find.matches, expected.matches);
+  assert.ok(find.matches.length >= 200);
+  ui.handle({ type: 'key', key: 'backspace', char: '' });
+  assert.equal(find.query, 'needl');
+  assert.equal(find.normalizations, 1);
+  const rows = renderScreen(app.state, width, 40);
+  assert.ok(
+    rows.some((row) => stripAnsi(row).includes('find: needl')),
+    'the find status shows the edited query',
+  );
 });
 
 test('requestRender coalesces a burst into one frame and a direct repaint supersedes it', async (t) => {

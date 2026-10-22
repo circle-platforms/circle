@@ -61,12 +61,7 @@ import { welcomeRows } from '../ink/components/welcome.js';
 import { noticeLocale, type WhatsNewNotice } from '../whats_new.js';
 import { dismissWhatsNew, pendingWhatsNew } from '../whats_new_state.js';
 import { whatsNewRows } from './whats_new_rows.js';
-import {
-  renderScreen,
-  transcriptRows,
-  type ScreenCursor,
-  type ScreenState,
-} from './render.js';
+import { renderScreen, type ScreenCursor, type ScreenState } from './render.js';
 import { InputHistory } from './input_history.js';
 import { Composer } from './composer.js';
 import { TranscriptFind } from './transcript_find.js';
@@ -2252,9 +2247,7 @@ export class SessionApp {
         this.state.picker.paste(event.text);
       else if (this.state.find && !this.state.dialog) {
         this.state.find.query += event.text;
-        this.state.find.refresh(
-          transcriptRows(this.state, process.stdout.columns || 80),
-        );
+        this.state.find.retype();
       } else if (this.history.query !== undefined && !this.state.dialog) {
         const match = this.history.update(this.history.query + event.text);
         if (match !== undefined) this.setDraft(match);
@@ -2356,21 +2349,7 @@ export class SessionApp {
           key === 'backspace'
             ? Array.from(find.query).slice(0, -1).join('')
             : find.query + char;
-        const messages =
-          this.state.agentDetail?.messages ?? this.state.messages;
-        find.refresh(
-          transcriptRows(
-            {
-              ...this.state,
-              messages,
-              notices: [],
-              noticeAnchors: [],
-              streaming: '',
-              thinking: '',
-            },
-            process.stdout.columns || 80,
-          ),
-        );
+        find.retype();
       }
       this.repaint();
       return;

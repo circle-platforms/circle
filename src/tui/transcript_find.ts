@@ -1,26 +1,54 @@
 import { stripAnsi } from '../ink/string_width.js';
+// The form matching compares: lowercase, runs of whitespace folded to one space.
+function normalized(text: string): string {
+  return text.toLocaleLowerCase().replace(/\s+/g, ' ');
+}
 export class TranscriptFind {
   query = '';
   matches: number[] = [];
   at = -1;
-  refresh(rows: string[], top = 0): void {
-    const needle = this.query.toLocaleLowerCase().replace(/\s+/g, ' ').trim();
-    this.matches = needle
-      ? rows.flatMap((row, index) =>
-          stripAnsi(row)
-            .toLocaleLowerCase()
-            .replace(/\s+/g, ' ')
-            .includes(needle)
-            ? [index]
-            : [],
+  /** How many times rows were normalized; the cache holds it to once per transcript change. */
+  normalizations = 0;
+  private rows: string[] = [];
+  private haystacks: string[] = [];
+  private memo?: { needle: string; matches: number[] };
+  // Rows replayed from the transcript's block cache are the same string objects, so an
+  // unchanged transcript is recognised by reference without normalizing it again.
+  private adopt(rows: string[]): void {
+    if (
+      rows.length === this.rows.length &&
+      rows.every((row, index) => row === this.rows[index])
+    )
+      return;
+    this.rows = rows;
+    this.haystacks = rows.map((row) => normalized(stripAnsi(row)));
+    this.normalizations++;
+    this.memo = undefined;
+  }
+  private scan(needle: string): number[] {
+    if (this.memo?.needle === needle) return this.memo.matches;
+    const matches = needle
+      ? this.haystacks.flatMap((row, index) =>
+          row.includes(needle) ? [index] : [],
         )
       : [];
+    this.memo = { needle, matches };
+    return matches;
+  }
+  refresh(rows: string[], top = 0): void {
+    this.adopt(rows);
+    this.matches = this.scan(normalized(this.query).trim());
     this.at = this.matches.length
       ? Math.max(
           0,
           this.matches.findIndex((row) => row >= top),
         )
       : -1;
+  }
+  /** Rematches an edited query against the rows of the last refresh: a keystroke never
+   * re-renders the transcript. */
+  retype(): void {
+    this.refresh(this.rows);
   }
   next(reverse = false): void {
     if (this.matches.length)

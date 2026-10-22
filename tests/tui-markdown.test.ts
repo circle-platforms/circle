@@ -243,3 +243,35 @@ test('find highlighting matches normalized whitespace and literal regex punctuat
   assert.equal(stripAnsi(highlighted), rows[1]);
   assert.match(highlightMatches('(literal)', '(literal)'), /\x1b\[7m/);
 });
+test('find normalizes a transcript once and rematches typed queries from the cache', () => {
+  const rows = ['alpha', '\x1b[31mBETA   gamma\x1b[0m', 'delta beta'];
+  const find = new TranscriptFind();
+  find.query = 'beta';
+  find.refresh(rows);
+  assert.deepEqual(find.matches, [1, 2]);
+  assert.equal(find.normalizations, 1);
+  // A repaint hands in a fresh array; the same rows are not normalized again.
+  find.updateRows([...rows]);
+  assert.equal(find.normalizations, 1);
+  assert.deepEqual(find.matches, [1, 2]);
+  assert.equal(find.row, 1);
+  // A typed character rematches the cached rows and jumps to the first match.
+  find.query = 'beta gamma';
+  find.retype();
+  assert.deepEqual(find.matches, [1]);
+  assert.equal(find.row, 1);
+  assert.equal(find.normalizations, 1);
+  // Backspace widens again; an empty query has no matches.
+  find.query = 'beta';
+  find.retype();
+  assert.deepEqual(find.matches, [1, 2]);
+  find.query = '';
+  find.retype();
+  assert.deepEqual(find.matches, []);
+  assert.equal(find.row, undefined);
+  // A changed transcript normalizes once more.
+  find.query = 'zeta';
+  find.refresh(['alpha', 'zeta here']);
+  assert.equal(find.normalizations, 2);
+  assert.deepEqual(find.matches, [1]);
+});

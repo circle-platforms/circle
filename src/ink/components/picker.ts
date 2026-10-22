@@ -63,6 +63,10 @@ export class Picker {
   private window = 10;
   private asked?: Asked;
   private confirming?: { question: string; done: () => void | Promise<void> };
+  // The lowercase search text of an item, computed once per item object: a keystroke
+  // filters with it instead of concatenating and lowering every session's text again.
+  private haystacks = new WeakMap<PickerItem, string>();
+  private memo?: { query: string; items: PickerItem[]; matches: PickerItem[] };
   /** Runs what an answer does; the session puts its own here to repaint and report errors. */
   settle: (work: () => void | Promise<void>) => void = (work) => {
     void Promise.resolve().then(work);
@@ -89,15 +93,29 @@ export class Picker {
       this.matches().findIndex((item) => item.key === key),
     );
   }
+  private haystack(item: PickerItem): string {
+    let text = this.haystacks.get(item);
+    if (text === undefined) {
+      text =
+        `${item.label} ${item.meta || ''} ${item.search || ''}`.toLowerCase();
+      this.haystacks.set(item, text);
+    }
+    return text;
+  }
   matches(): PickerItem[] {
+    if (
+      this.memo &&
+      this.memo.query === this.query &&
+      this.memo.items === this.items
+    )
+      return this.memo.matches;
     const words = this.query.toLowerCase().split(/\s+/).filter(Boolean);
-    return this.items.filter((item) =>
-      words.every((word) =>
-        `${item.label} ${item.meta || ''} ${item.search || ''}`
-          .toLowerCase()
-          .includes(word),
-      ),
-    );
+    const matches = this.items.filter((item) => {
+      const haystack = this.haystack(item);
+      return words.every((word) => haystack.includes(word));
+    });
+    this.memo = { query: this.query, items: this.items, matches };
+    return matches;
   }
   /** A line of text in place of the search: enter hands it to `done`, esc cancels. `mask`
    * shows what is typed or pasted as dots, as setup shows a key. `cancel` runs after esc, in
@@ -167,25 +185,27 @@ export class Picker {
       }
       return true;
     }
-    const shown = this.matches();
+    // Computed per branch: a key that only edits the query never scans the list.
     if (this.options.keys?.[key]) {
-      this.options.keys[key](shown[this.focus]);
+      this.options.keys[key](this.matches()[this.focus]);
       return true;
     }
     if (['up', 'ctrl+p'].includes(key)) {
+      const shown = this.matches();
       if (shown.length)
         this.focus = (this.focus - 1 + shown.length) % shown.length;
     } else if (['down', 'ctrl+n'].includes(key)) {
+      const shown = this.matches();
       if (shown.length) this.focus = (this.focus + 1) % shown.length;
     } else if (key === 'pageup')
       this.focus = Math.max(0, this.focus - this.window);
     else if (key === 'pagedown')
       this.focus = Math.max(
         0,
-        Math.min(shown.length - 1, this.focus + this.window),
+        Math.min(this.matches().length - 1, this.focus + this.window),
       );
     else if (key === 'enter') {
-      const item = shown[this.focus];
+      const item = this.matches()[this.focus];
       if (item) this.pick(item);
       else if (this.options.freeText && this.query.trim()) {
         const typed = this.query.trim();
