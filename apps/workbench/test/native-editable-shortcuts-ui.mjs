@@ -255,6 +255,40 @@ try {
     );
   }
   await other.evaluate((n) => n.remove());
+  // Text the person selected in the conversation copies with the platform key:
+  // Control+C is also the draft-clearing key and must not eat the selection.
+  await box.fill('draft that must survive');
+  await page.evaluate(() => {
+    const body = document.querySelector('.message.assistant .message-body');
+    const range = document.createRange();
+    range.selectNodeContents(body);
+    const selection = document.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  const copiesBefore = await page.evaluate(() => window.copyResults.length);
+  await page.keyboard.press('Control+c');
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+  assert.equal(await box.inputValue(), 'draft that must survive');
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.keyResults.filter((r) => r.key === 'c' && r.ctrl).at(-1)
+          .prevented,
+    ),
+    false,
+    'the window keeps the copy key over a selection',
+  );
+  await page.waitForFunction(
+    (n) => window.copyResults.length > n,
+    copiesBefore,
+  );
+  assert.equal(
+    await page.evaluate(() => window.copyResults.at(-1).trusted),
+    true,
+    'the browser copied what the person selected',
+  );
+  await page.evaluate(() => document.getSelection()?.removeAllRanges());
   console.log(
     'actual full App trusted keyboard/copy event, selected draft and native Undo; editor ownership and noneditable suspend; ⌘ chords left to the system on macOS, ctrl+d over a draft and keys in other fields left to the field passed (host clipboard writes intercepted)',
   );

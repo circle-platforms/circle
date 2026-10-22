@@ -2142,10 +2142,10 @@ export class RuntimeController {
     }
     if (request.service === 'tasks')
       return this.workspaceOperation(command, workspace, request, async () => {
-        if (
-          request.method === 'settings' &&
-          (this.taskSettingsError || this.taskStartRequired(workspace))
-        ) {
+        // The limits belong to the application: they are read from and written to
+        // the shared pool and its file, so this never opens a folder's scheduler.
+        // A ledger that cannot be opened today must not hide the settings page.
+        if (request.method === 'settings') {
           if (request.params?.limits === undefined)
             return {
               ...this.taskResources.getLimits(),
@@ -2164,7 +2164,11 @@ export class RuntimeController {
               this.taskResources.setLimits(next);
               this.taskSettingsError = undefined;
             },
-            () => this.persistTaskRecovery(),
+            // Only the recovery gate that is already exceptional is made durable
+            // before the repair: a plain save must not pause the queues.
+            this.taskSettingsError || this.taskStartRequired(workspace)
+              ? () => this.persistTaskRecovery()
+              : undefined,
           );
           this.publish();
           return next;

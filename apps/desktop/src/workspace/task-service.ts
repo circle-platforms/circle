@@ -183,6 +183,9 @@ export function writeTaskLimits(
 ): Promise<CollaborationLimits> {
   return serialTaskSettings(path, async () => {
     const next = limits(value, current());
+    // The settings belong to the application, so they can be saved before any
+    // folder's task service has had a reason to make the directory.
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     // Validate first, then make an exceptional recovery gate durable before repairing limits.
     await beforeWrite?.();
     const temporary = `${path}.${randomUUID()}.tmp`;

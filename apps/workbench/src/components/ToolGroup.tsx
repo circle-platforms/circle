@@ -65,7 +65,8 @@ export function ToolGroup({
   );
   const summary = toolSummary(rows);
   const running = tools.find((tool) => tool.status === 'running');
-  // A picture a tool brought back, such as the browser's screenshot, shows under the line.
+  // A picture a tool brought back, such as the browser's screenshot, belongs to the
+  // call that took it: the folded line only says how many there are.
   const shots = rows.flatMap((row) =>
     (row.attachments ?? []).filter((file) => file.kind === 'image'),
   );
@@ -114,34 +115,41 @@ export function ToolGroup({
             )}
           </code>
         )}
+        {!open && shots.length > 0 && (
+          <span className="tool-shots-count">
+            {tn(shots.length, '{n} picture', '{n} pictures')}
+          </span>
+        )}
         {turn && <TurnClock turn={turn} />}
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
-      {shots.length > 0 && (
-        <div className="tool-shots">
-          {shots.map((shot) => (
-            <ImageThumb key={shot.id} attachment={shot} />
-          ))}
-        </div>
-      )}
       {open && (
-        <div id={detailsId} className="tool-group-calls">
-          {rows.map((row) =>
-            row.tool ? (
-              <div key={row.id} data-message-id={row.id}>
-                <ToolMessage
-                  tool={row.tool}
-                  ownerSessionId={ownerSessionId}
-                  expanded={expanded}
-                  onAgent={onAgent}
-                  onFile={onFile}
-                />
-              </div>
-            ) : row.thinking ? (
-              <GroupThinking key={row.id} row={row} />
-            ) : null,
+        <>
+          {shots.length > 0 && (
+            <div className="tool-shots">
+              {shots.map((shot) => (
+                <ImageThumb key={shot.id} attachment={shot} />
+              ))}
+            </div>
           )}
-        </div>
+          <div id={detailsId} className="tool-group-calls">
+            {rows.map((row) =>
+              row.tool ? (
+                <div key={row.id} data-message-id={row.id}>
+                  <ToolMessage
+                    tool={row.tool}
+                    ownerSessionId={ownerSessionId}
+                    expanded={expanded}
+                    onAgent={onAgent}
+                    onFile={onFile}
+                  />
+                </div>
+              ) : row.thinking ? (
+                <GroupThinking key={row.id} row={row} />
+              ) : null,
+            )}
+          </div>
+        </>
       )}
       {children}
     </div>

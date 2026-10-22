@@ -1,4 +1,5 @@
 import { taskWorkspaceIds } from '../model/session-management';
+import { workspaceHint } from '../model/workspace-label';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -204,9 +205,12 @@ export function Home({
     rememberHomeComposer(remembered.current);
   }, [draft, attachments, model, effort, mode, project?.id, requestedId]);
   const taskFolders = taskWorkspaceIds(snapshot.sessions, snapshot.agents);
-  const projects = homeProjects(
+  // Every project, so a name two folders share is told apart the same way
+  // whether or not the search has narrowed the list.
+  const everyProject = homeProjects(
     snapshot.workspaces.filter((item) => !taskFolders.has(item.id)),
-  ).filter((item) =>
+  );
+  const projects = everyProject.filter((item) =>
     (item.name + ' ' + item.path)
       .toLowerCase()
       .includes(query.trim().toLowerCase()),
@@ -458,6 +462,7 @@ export function Home({
                 <button
                   className="footbar-button"
                   aria-label={t('choose a project')}
+                  title={project?.path}
                 >
                   <Folder size={13} />
                   <span>{project ? project.name : t('no project')}</span>
@@ -500,16 +505,25 @@ export function Home({
                       {t('no matching projects')}
                     </p>
                   )}
-                  {projects.map((item) => (
-                    <DropdownMenu.Item
-                      key={item.id}
-                      onSelect={() => choose(item.id)}
-                    >
-                      <Folder size={14} />
-                      <span>{item.name}</span>
-                      {item.id === project?.id && <Check size={14} />}
-                    </DropdownMenu.Item>
-                  ))}
+                  {projects.map((item) => {
+                    const hint = workspaceHint(item, everyProject);
+                    return (
+                      <DropdownMenu.Item
+                        key={item.id}
+                        title={item.path}
+                        onSelect={() => choose(item.id)}
+                      >
+                        <Folder size={14} />
+                        <span>
+                          {item.name}
+                          {hint && (
+                            <small className="project-hint">{hint}</small>
+                          )}
+                        </span>
+                        {item.id === project?.id && <Check size={14} />}
+                      </DropdownMenu.Item>
+                    );
+                  })}
                   <DropdownMenu.Separator className="dropdown-separator" />
                   <DropdownMenu.Item
                     disabled={!desktopHost()}

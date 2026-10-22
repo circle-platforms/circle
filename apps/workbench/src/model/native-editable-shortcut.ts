@@ -74,3 +74,34 @@ export function preserveNativeEditing(
   if (event.metaKey) return true;
   return hasSelection(field.node);
 }
+
+/**
+ * Whether the key that clears the draft (Control+C by default) is the window's own
+ * copy instead: the person selected text with the mouse outside any text field, as in
+ * the conversation, and expects that selection to go to the clipboard.
+ */
+export function preserveNativeCopy(
+  event: KeyboardEvent,
+  action?: string,
+): boolean {
+  if (action !== 'clear') return false;
+  // Only a copy chord: Control+C, or Command+C where that is the binding too.
+  if (event.altKey || event.shiftKey || event.key.toLowerCase() !== 'c')
+    return false;
+  if (!(event.ctrlKey || event.metaKey)) return false;
+  const selection =
+    typeof document === 'undefined'
+      ? null
+      : (document.getSelection?.() ?? null);
+  if (!selection || selection.isCollapsed || !selection.toString())
+    return false;
+  // A selection inside a field is the field's own; preserveNativeEditing decides it.
+  const anchor = selection.anchorNode;
+  const holder =
+    anchor?.nodeType === 3
+      ? anchor.parentElement
+      : (anchor as HTMLElement | null);
+  return !holder?.closest(
+    'textarea, input, select, [contenteditable], .monaco-editor, .native-terminal',
+  );
+}

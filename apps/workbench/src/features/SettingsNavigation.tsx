@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -14,6 +15,20 @@ interface Section {
   id: string;
   label: string;
   keywords: string;
+}
+
+/**
+ * The element the settings page actually scrolls in, such as its `.page`.
+ * A box that never scrolls is no help: the page may scroll with the window, so
+ * only an ancestor that overflows and has room to move is taken for the scrollport.
+ */
+function scrollAncestor(node: HTMLElement): HTMLElement | undefined {
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    const { overflowY } = getComputedStyle(parent);
+    if (overflowY === 'visible') continue;
+    if (parent.scrollHeight > parent.clientHeight + 1) return parent;
+  }
+  return undefined;
 }
 
 /** A local index: finding a setting never remounts its form or saves a value. */
@@ -60,6 +75,47 @@ export function SettingsNavigation({ children }: { children: ReactNode }) {
       JSON.stringify(previous) === JSON.stringify(found) ? previous : found,
     );
   });
+  // The index follows the page: the highlight shows the section at the top of
+  // the scroller, so scrolling to another group moves it with the words.
+  useEffect(() => {
+    const page = content.current;
+    if (!page) return;
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      const ids = [...targets.current.keys()];
+      if (!ids.length) return;
+      const scroller = scrollAncestor(page);
+      const limit = (scroller?.getBoundingClientRect().top ?? 0) + 24;
+      let current = ids[0];
+      for (const id of ids) {
+        const heading = targets.current.get(id);
+        if (!heading?.isConnected) continue;
+        if (heading.getBoundingClientRect().top > limit) break;
+        current = id;
+      }
+      // The last group cannot always reach the top of a long page: at its end
+      // it owns the highlight, so a click on it stays where it was put.
+      const ends =
+        !!scroller &&
+        scroller.scrollHeight > scroller.clientHeight + 2 &&
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+      if (ends) current = ids[ids.length - 1];
+      setActive((previous) => (previous === current ? previous : current));
+    };
+    const follow = () => {
+      if (!frame) frame = requestAnimationFrame(read);
+    };
+    follow();
+    document.addEventListener('scroll', follow, true);
+    const resize = new ResizeObserver(follow);
+    resize.observe(page);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      document.removeEventListener('scroll', follow, true);
+      resize.disconnect();
+    };
+  }, [sections]);
   const shown = sections.filter((section) =>
     matchesSettingsSection(query, section.label, section.keywords),
   );
