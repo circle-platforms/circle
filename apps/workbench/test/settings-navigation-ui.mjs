@@ -84,6 +84,40 @@ try {
           ),
           true,
         );
+        // The index follows the page: the highlight is the section at its top,
+        // so scrolling to another group moves it without a click.
+        const highlighted = (index) =>
+          document.querySelectorAll('.settings-index-list button')[index] ===
+          document.querySelector(
+            ".settings-index-list button[aria-current='location']",
+          );
+        await page.evaluate(() => {
+          // Whatever box actually scrolls the page goes back to its top.
+          for (const box of [
+            document.querySelector('.page'),
+            document.body,
+            document.documentElement,
+            window,
+          ])
+            box?.scrollTo?.(0, 0);
+        });
+        await page.waitForFunction(highlighted, 0);
+        await page.evaluate(() => {
+          document.querySelectorAll('.settings-sections h2')[2].scrollIntoView({
+            block: 'start',
+          });
+        });
+        await page.waitForFunction(highlighted, 2);
+        assert.equal(
+          await page
+            .locator('.settings-index-list button')
+            .nth(2)
+            .textContent(),
+          await page
+            .locator(".settings-index-list button[aria-current='location']")
+            .textContent(),
+          'the highlight follows the scroll to the third group',
+        );
         if (output)
           await page.screenshot({
             path: join(output, `${theme}-${language}-${width}.png`),

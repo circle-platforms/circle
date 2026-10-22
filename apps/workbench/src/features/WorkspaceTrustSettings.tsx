@@ -4,6 +4,7 @@ import { Button, Modal, Status } from '../components/common';
 import {
   archiveStopsWork,
   removeWorkspace,
+  trustListed,
   workspaceSessions,
 } from '../model/session-management';
 import { currentSession } from '../model/state';
@@ -15,7 +16,8 @@ import { t, tn } from '../i18n';
  * The folders this application has worked in. Trust decides whether Circle may
  * read a folder's own instructions, skills, commands and extensions. Removing one
  * takes that away and archives its sessions in one runtime step; nothing on disk
- * changes.
+ * changes. The row goes with it: only a folder Circle trusts, works in, or still
+ * has a conversation in view for is named here.
  */
 export function WorkspaceTrustSettings({
   onReview,
@@ -49,7 +51,11 @@ export function WorkspaceTrustSettings({
         )}
       </p>
       {snapshot.workspaces
-        .filter((workspace) => !hidden?.has(workspace.id))
+        .filter(
+          (workspace) =>
+            !hidden?.has(workspace.id) &&
+            trustListed(workspace, snapshot.sessions, activeId),
+        )
         .map((workspace) => (
           <div className="setting-row" key={workspace.id}>
             <span>

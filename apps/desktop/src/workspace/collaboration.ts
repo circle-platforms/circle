@@ -6,6 +6,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -51,6 +52,12 @@ export interface CollaborationLimits {
 }
 export const DEFAULT_COLLABORATION_LIMITS: Readonly<CollaborationLimits> =
   Object.freeze({ agents: 8, builds: 2, ui: 1, browsers: 1 });
+
+// The lease says who holds the task ledger, and its owner renews it on a heartbeat,
+// as a session lease does (src/session_lock.ts). A process that stopped renewing it
+// is gone: its id is not proof, because the system hands the same id out again.
+export const COLLABORATION_LEASE_HEARTBEAT_MS = 5_000;
+export const COLLABORATION_LEASE_STALE_MS = 30_000;
 export interface TaskExecutionResult {
   passed: boolean;
   verdict?: 'passed' | 'failed' | 'needs_review';
@@ -454,6 +461,8 @@ export class CollaborationScheduler {
   private readonly idleWaiters = new Set<() => void>();
   private readonly leasePath: string;
   private readonly leaseToken = randomUUID();
+  private leaseBeat?: ReturnType<typeof setInterval>;
+  private leaseLost = false;
   private limits: CollaborationLimits;
   private readonly allowedResources: TaskResource[];
   private started = false;
@@ -534,40 +543,98 @@ export class CollaborationScheduler {
       try {
         const descriptor = openSync(this.leasePath, 'wx', 0o600);
         try {
-          writeFileSync(
-            descriptor,
-            JSON.stringify({ pid: process.pid, token: this.leaseToken }),
-          );
+          writeFileSync(descriptor, this.leaseBody());
         } finally {
           closeSync(descriptor);
         }
+        this.keepLease();
         return;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        let owner: { pid?: unknown };
-        try {
-          owner = JSON.parse(readFileSync(this.leasePath, 'utf8'));
-        } catch {
-          throw new Error(
-            'collaboration lease is unreadable; review it before opening',
-          );
-        }
-        if (
-          typeof owner.pid !== 'number' ||
-          !Number.isSafeInteger(owner.pid) ||
-          owner.pid < 1
-        )
-          throw new Error('invalid collaboration lease');
-        try {
-          process.kill(owner.pid, 0);
+        if (this.leaseHeld())
           throw new Error('collaboration scheduler is already open');
-        } catch (cause) {
-          if ((cause as NodeJS.ErrnoException).code !== 'ESRCH') throw cause;
-        }
         unlinkSync(this.leasePath);
       }
     }
     throw new Error('could not acquire collaboration lease');
+  }
+  /** What the owner writes: itself, and the instant it last said so. */
+  private leaseBody(): string {
+    return JSON.stringify({
+      pid: process.pid,
+      token: this.leaseToken,
+      at: Date.now(),
+    });
+  }
+  /**
+   * Whether another Circle holds the lease now. A process id alone is not proof
+   * of anything: a killed runtime leaves its number behind, and the system hands
+   * that number to another process, which would lock the ledger for good. So a
+   * holder that cannot be proved gone still expires, and a lease that cannot be
+   * read is judged by the time on the file itself.
+   */
+  private leaseHeld(): boolean {
+    let written = 0;
+    try {
+      written = statSync(this.leasePath).mtimeMs;
+    } catch {
+      return false;
+    }
+    let owner: { pid?: unknown; token?: unknown; at?: unknown } = {};
+    try {
+      owner = JSON.parse(readFileSync(this.leasePath, 'utf8'));
+    } catch {
+      /* Only its own time can say anything about it. */
+    }
+    if (owner.token === this.leaseToken) return false;
+    // Two proofs that the owner is gone, and neither one alone is enough: an
+    // id the system has taken back, or a renewal that stopped. A lease nobody
+    // can prove is dead still expires, which is what frees a ledger whose
+    // runtime was killed and whose number the system has handed out again.
+    if (!CollaborationScheduler.ownerRunning(owner.pid)) return false;
+    const at = typeof owner.at === 'number' ? owner.at : written;
+    return Date.now() - at < COLLABORATION_LEASE_STALE_MS;
+  }
+  /**
+   * Whether the id a lease left behind still names a running process.
+   * An answer the system cannot give is no proof of death: the renewal does.
+   */
+  private static ownerRunning(pid: unknown): boolean {
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1)
+      return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      // ESRCH is the one answer that proves the owner is gone. EPERM means it is
+      // there and merely not ours to signal, and anything else the system will
+      // not say leaves the renewal to decide.
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
+  }
+  /** Renew the lease, and notice when another Circle has taken the ledger. */
+  private keepLease(): void {
+    clearInterval(this.leaseBeat);
+    this.leaseBeat = setInterval(() => {
+      if (this.closing || this.closed) return;
+      let token: unknown;
+      try {
+        token = JSON.parse(readFileSync(this.leasePath, 'utf8')).token;
+      } catch {
+        token = undefined;
+      }
+      if (token !== this.leaseToken) {
+        // Someone else holds it now: start nothing more from this one.
+        this.leaseLost = true;
+        return;
+      }
+      try {
+        writeFileSync(this.leasePath, this.leaseBody());
+      } catch {
+        this.leaseLost = true;
+      }
+    }, COLLABORATION_LEASE_HEARTBEAT_MS);
+    this.leaseBeat.unref();
   }
   private releaseLease(): void {
     try {
@@ -763,6 +830,10 @@ export class CollaborationScheduler {
   }
   start(): void {
     this.assertOpen();
+    if (this.leaseLost)
+      throw new Error(
+        'collaboration lease was taken by another Circle; reopen the tasks',
+      );
     this.started = true;
     this.schedule();
   }
@@ -801,7 +872,15 @@ export class CollaborationScheduler {
     } while (changed);
   }
   private schedule(): void {
-    if (!this.started || this.closing || this.closed || this.pumping) return;
+    if (
+      !this.started ||
+      this.closing ||
+      this.closed ||
+      this.pumping ||
+      // Another Circle took the ledger while this one was not looking.
+      this.leaseLost
+    )
+      return;
     this.pumping = true;
     queueMicrotask(() => {
       if (this.closing || this.closed) {
@@ -1639,6 +1718,7 @@ export class CollaborationScheduler {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
     this.started = false;
+    clearInterval(this.leaseBeat);
     this.closePromise = (async () => {
       for (const entry of this.active.values()) entry.controller.abort();
       await Promise.allSettled(

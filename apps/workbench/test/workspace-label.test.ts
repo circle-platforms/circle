@@ -1,9 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { workspaceLabel } from '../src/model/workspace-label';
+import { workspaceHint, workspaceLabel } from '../src/model/workspace-label';
+import type { Workspace } from '../src/model/types';
 import { PreviewRuntime } from '../src/model/state';
 import { setLanguage } from '../src/i18n';
 const generated = 'a0b1c2d3e4f5678901234567-2';
+function folder(id: string, name: string, path: string): Workspace {
+  return {
+    id,
+    name,
+    path,
+    branch: '',
+    trusted: true,
+    kind: 'project',
+    instructions: [],
+  };
+}
 function fixture() {
   const snapshot = new PreviewRuntime().getSnapshot();
   const owner = {
@@ -80,4 +92,28 @@ test('a folder with no project uses the same words as the home screen', () => {
     'work without a project',
   );
   assert.equal(workspaceLabel({ name: 'circle' }), 'circle');
+});
+
+test('two folders of one name say which folder each sits in', () => {
+  const repo = folder('repo', 'circle', 'D:\\circle');
+  const old = folder(
+    'old',
+    'circle',
+    'C:\\Users\\me\\Circle\\runtime-home\\workspace',
+  );
+  const alone = folder('alone', 'docs-site', 'D:\\docs-site');
+  const all = [repo, old, alone];
+  assert.equal(workspaceHint(repo, all), 'D:');
+  assert.equal(workspaceHint(old, all), 'runtime-home');
+  assert.equal(workspaceHint(alone, all), '');
+  // The nearest folder that differs, not the whole path.
+  const payments = folder('p', 'app', 'C:\\work\\payments\\app');
+  const archive = folder('a', 'app', 'C:\\work\\archive\\app');
+  assert.equal(workspaceHint(payments, [payments, archive]), 'payments');
+  assert.equal(workspaceHint(archive, [payments, archive]), 'archive');
+  // One name all the way up: the hint grows until the two differ.
+  const c = folder('c', 'app', 'C:\\work\\app\\app');
+  const d = folder('d', 'app', 'D:\\work\\app\\app');
+  assert.equal(workspaceHint(c, [c, d]), 'C:/work/app');
+  assert.equal(workspaceHint(d, [c, d]), 'D:/work/app');
 });

@@ -36,6 +36,7 @@ import {
   sessionActivityAt,
   sessionHasContent,
   sidebarProjects,
+  trustListed,
   visibleSessions,
   workspaceListed,
   workspaceSessions,
@@ -850,6 +851,32 @@ test('working without a project creates one scratch session, and an empty projec
     .sessions.filter((session) => session.workspaceId === workspace.id);
   assert.equal(scratch.length, 2);
   assert.ok(scratch.every((session) => session.messages.length === 1));
+});
+
+test('a removed folder leaves the trust list with its last live conversation', () => {
+  const project: Workspace = {
+    id: 'proj',
+    name: 'docs-site',
+    path: '/docs',
+    branch: '',
+    trusted: true,
+    kind: 'project',
+    instructions: [],
+  };
+  const sample = new PreviewRuntime().getSnapshot().sessions[0]!;
+  const live = { ...sample, workspaceId: 'proj' };
+  const archived = { ...live, id: 'old', archivedAt: '2026-10-15T02:00:00Z' };
+  // A trusted folder is named here whether or not it holds a conversation.
+  assert.equal(trustListed(project, [], 'other'), true);
+  assert.equal(trustListed(project, [live], 'other'), true);
+  // Removing it takes the row with it once nothing of its own is still in view.
+  const untrusted = { ...project, trusted: false };
+  assert.equal(trustListed(untrusted, [archived], 'other'), false);
+  assert.equal(trustListed(untrusted, [], 'other'), false);
+  // A conversation still in view, or the folder Circle is working in, keeps it
+  // listed so its trust can be given back on this page.
+  assert.equal(trustListed(untrusted, [live], 'other'), true);
+  assert.equal(trustListed(untrusted, [archived], 'proj'), true);
 });
 
 test('recent lists every context newest first, and its hover names only a project', () => {

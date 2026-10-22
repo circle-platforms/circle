@@ -27,6 +27,10 @@
   gap: 8px;
   padding: 6px 0 2px 21px;
 }
+/* The folded line only says a call brought pictures back; they open with the calls. */
+.tool-summary .tool-shots-count {
+  font-size: var(--ui-small);
+}
 .lightbox {
   display: flex;
   flex-direction: column;

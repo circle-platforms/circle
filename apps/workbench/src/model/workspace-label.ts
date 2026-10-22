@@ -32,3 +32,35 @@ export function workspaceLabel(
     ? t('isolated copy for {name}', { name: names.join(', ') })
     : t('isolated task copy');
 }
+
+/** The folders above this one, nearest last. A drive root gives its own name. */
+function parents(path: string): string[] {
+  const parts = path.split(/[/\\]+/u).filter(Boolean);
+  parts.pop();
+  return parts;
+}
+
+/**
+ * What tells two folders of one name apart in a list: the folder each sits in,
+ * and higher up until the two differ. A name nobody shares needs nothing more,
+ * so the common row stays a bare name.
+ */
+export function workspaceHint(
+  workspace: Workspace,
+  workspaces: readonly Workspace[],
+): string {
+  const others = workspaces.filter(
+    (item) => item.id !== workspace.id && item.name === workspace.name,
+  );
+  if (!others.length) return '';
+  const mine = parents(workspace.path);
+  for (let depth = 1; depth <= mine.length; depth++) {
+    const tail = mine.slice(-depth).join('/');
+    const taken = others.some(
+      (item) => parents(item.path).slice(-depth).join('/') === tail,
+    );
+    if (!taken) return tail;
+  }
+  // Every folder above both is the same: only the whole path tells them apart.
+  return workspace.path;
+}

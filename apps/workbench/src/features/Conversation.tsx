@@ -1,5 +1,8 @@
 import { SafeFileUndo } from './SafeFileUndo';
-import { preserveNativeEditing } from '../model/native-editable-shortcut';
+import {
+  preserveNativeCopy,
+  preserveNativeEditing,
+} from '../model/native-editable-shortcut';
 import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import {
   completionNoticeText,
@@ -534,6 +537,10 @@ export function Conversation({
       // A copy chord over a selection stays a cut or a copy.
       if (mapped === 'message.copy' && window.getSelection()?.toString())
         return;
+      // Control+C is the key that clears the draft. Over text the person
+      // selected outside a field, as anywhere in the conversation, it stays the
+      // window's copy: the draft survives and the selection reaches the clipboard.
+      if (preserveNativeCopy(event, mapped)) return;
       // The window handles the sidebar, including settings and home.
       if (mapped === 'sidebar.toggle') return;
       // The browser owns paste, including images. Cancelling this key prevents

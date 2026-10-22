@@ -1773,6 +1773,11 @@ pre {
   text-overflow: ellipsis;
   text-align: left;
 }
+/* Two folders can carry one name: the row says which folder each sits in. */
+.project-menu .project-hint {
+  margin-inline-start: 6px;
+  color: var(--muted);
+}
 .project-picker-search {
   display: flex;
   align-items: center;
