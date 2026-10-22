@@ -317,14 +317,20 @@ test('bundled GitHub connection verbs run while a turn is busy; a same-name user
     model,
     emit: () => {},
   });
+  let turn: Promise<unknown> | undefined;
   try {
-    await controller.initialize();
     const runtime = getRuntime(controller);
+    // Wire the stub before the first initialize so the bundled command owns the backend.
     runtime.options.githubConnection = backend;
     runtime.extensions.options.githubConnection = backend;
     await runtime.initialize();
-    assert.ok(runtime.extensions.commands().get('github'));
-    const turn = runtime.harness.run('hold the turn');
+    assert.ok(
+      runtime.extensions.isTrustedBundledCommand(
+        runtime.extensions.commands().get('github')!,
+        'github',
+      ),
+    );
+    turn = runtime.harness.run('hold the turn');
     await untilBusy(runtime);
     const status = await controller.dispatch({
       id: 'github-status-busy',
@@ -345,9 +351,9 @@ test('bundled GitHub connection verbs run while a turn is busy; a same-name user
     assert.equal(connect.ok, true, JSON.stringify(connect));
     assert.deepEqual(calls, ['status', 'status', 'connect']);
     assert.equal(runtime.busy, true);
-    releaseTurn();
-    await turn;
   } finally {
+    releaseTurn();
+    await turn?.catch(() => undefined);
     await controller.close();
     await rm(root, { recursive: true, force: true });
   }
@@ -381,10 +387,11 @@ test('bundled GitHub connection verbs run while a turn is busy; a same-name user
     model: userModel,
     emit: () => {},
   });
+  let userTurn: Promise<unknown> | undefined;
   try {
-    await userController.initialize();
     const runtime = getRuntime(userController);
-    const turn = runtime.harness.run('hold the turn');
+    await runtime.initialize();
+    userTurn = runtime.harness.run('hold the turn');
     await untilBusy(runtime);
     const reply = await userController.dispatch({
       id: 'user-github-busy',
@@ -394,9 +401,9 @@ test('bundled GitHub connection verbs run while a turn is busy; a same-name user
     });
     assert.equal(reply.ok, false);
     assert.match(String(reply.error), /a turn is running/);
-    releaseUser();
-    await turn;
   } finally {
+    releaseUser();
+    await userTurn?.catch(() => undefined);
     await userController.close();
     await rm(userRoot, { recursive: true, force: true });
   }
