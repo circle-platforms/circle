@@ -2,6 +2,13 @@
 
 All notable changes to Circle are listed here, newest first. Circle follows [Semantic Versioning](https://semver.org) from 1.0 on.
 
+## 1.10.3 - 2026-10-22
+
+### Fixed
+
+- **A desktop update no longer stalls at `restarting…`.** Quitting waits at most ten seconds for the runtime to close and then ends it, and no longer stays open behind a dialog when it cannot stop. The macOS and Linux installers wait two minutes at most for the old copy to quit; past that they keep the old copy and the download, and the next start says the application did not quit. This protects updates from 1.10.3 on; updating from an earlier version can still stall, see [Known issues](docs/known-issues.md#install-and-release).
+- **Closing the browser on Windows no longer says it did not stop when it had.** An exit Windows has confirmed is waited for even when Node hears of it a few turns after the deadline.
+
 ## 1.10.2 - 2026-10-22
 
 ### Fixed
