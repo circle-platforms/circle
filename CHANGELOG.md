@@ -2,6 +2,13 @@
 
 All notable changes to Circle are listed here, newest first. Circle follows [Semantic Versioning](https://semver.org) from 1.0 on.
 
+## 1.10.2 - 2026-10-22
+
+### Fixed
+
+- **The desktop says when the runtime is slow to answer a command.** After four seconds the conversation that asked shows `Circle is still working on custom-command · 9s`, counting up until the runtime answers. A command that fails, or goes unanswered for two minutes, leaves a card in the conversation with the runtime's own words under **error details**, instead of failing with nothing on screen. A slash command that failed outright can be retried by name; a timed-out one cannot, because it may still run. A title request no longer holds a session open for more than three seconds when it closes, and the runtime's output is written to `logs/runtime.log` when a command times out.
+- **On Windows, stopping a command waits until its processes have exited** before saying they stopped, and one process that cannot be observed no longer leaves the others running.
+
 ## 1.10.1 - 2026-10-22
 
 ### Changed
