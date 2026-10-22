@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 
-// A screenshot Circle took is a small picture under the tool line, and a press on it opens
+// A screenshot Circle took is a small picture that stays with its tool call, and a press opens
 // the whole picture with a way to copy it and a way to keep it.
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
@@ -37,19 +37,33 @@ try {
       await page.goto(
         `${server.resolvedUrls.local[0]}test/screenshot-thumb-ui.html?theme=${theme}&locale=${locale}`,
       );
+      const line = page.locator('.tool-summary');
       const thumbs = page.locator('.tool-shots .image-thumb');
+      await line.waitFor();
+      // The pictures stay with the call that took them: the folded line
+      // only counts them, and opening the calls shows them.
+      assert.equal(
+        await thumbs.count(),
+        0,
+        'a folded line keeps its pictures out of the conversation',
+      );
+      assert.match(
+        (await line.textContent()) ?? '',
+        locale === 'zh-CN' ? /2 张图片/ : /2 pictures/,
+        'the folded line says how many pictures the call brought back',
+      );
+      await line.click();
       const thumb = thumbs.first();
       await thumb.waitFor();
       assert.equal(
         await thumbs.count(),
         2,
-        'each picture of the call, shown under the line',
+        'each picture of the call, under the opened line',
       );
-      // It shows with the tool line folded: nobody has to open the call to see it.
       assert.equal(
         await page.locator('.tool-group-calls').count(),
-        0,
-        'the calls are still folded',
+        1,
+        'the calls open with their pictures',
       );
       const box = await thumb.boundingBox();
       assert.ok(

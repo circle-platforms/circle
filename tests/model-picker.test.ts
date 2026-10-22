@@ -71,6 +71,59 @@ test('picker action keys operate on filtered focus and preserve it when items ar
   assert.equal(chosen.length, 2);
 });
 
+test('picker search filters every word from the cached haystack and replays a repeated query', () => {
+  const picker = new Picker(
+    'sessions',
+    [
+      { key: 'a', label: 'Session A', search: 'Alpha text about pipelines' },
+      { key: 'b', label: 'Session B', search: 'Beta text' },
+      { key: 'c', label: 'Session C', meta: 'alpha', search: 'Gamma' },
+    ],
+    () => {},
+    () => {},
+  );
+  assert.deepEqual(
+    picker.matches().map((item) => item.key),
+    ['a', 'b', 'c'],
+  );
+  for (const char of 'ALPH') picker.handle('', char);
+  assert.equal(picker.query, 'ALPH');
+  assert.deepEqual(
+    picker.matches().map((item) => item.key),
+    ['a', 'c'],
+    'the search stays case-insensitive',
+  );
+  const memo = picker.matches();
+  assert.equal(picker.matches(), memo, 'a repeated query replays its result');
+  picker.handle('', ' ');
+  picker.handle('', 'g');
+  assert.equal(picker.query, 'ALPH g');
+  assert.deepEqual(
+    picker.matches().map((item) => item.key),
+    ['c'],
+    'every word must appear',
+  );
+  assert.notEqual(picker.matches(), memo);
+  // Navigation and rendering keep working from the filtered list.
+  picker.handle('ctrl+u', '');
+  picker.handle('', 'b');
+  assert.deepEqual(
+    picker.matches().map((item) => item.key),
+    ['a', 'b'],
+  );
+  picker.handle('down', '');
+  assert.equal(picker.focus, 1);
+  const lines = picker.rows(60, 10).map(stripAnsi);
+  assert.ok(lines.some((line) => line.includes('Session B')));
+  assert.ok(!lines.some((line) => line.includes('Session C')));
+  // A refreshed list filters through the same search.
+  picker.setItems([{ key: 'z', label: 'Session Z', search: 'b replaced' }]);
+  assert.deepEqual(
+    picker.matches().map((item) => item.key),
+    ['z'],
+  );
+});
+
 for (const scopedRun of [false, true])
   test(`terminal model/effort actions use real discovery and preserve ${scopedRun ? 'run-only scope' : 'account defaults'}`, async (t) => {
     const root = scratch(t);

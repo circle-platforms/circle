@@ -58,7 +58,7 @@ function Fixture() {
           </div>
         </section>
         <Form />
-        <section className="settings-block" style={{ minHeight: 350 }}>
+        <section className="settings-block" style={{ minHeight: 900 }}>
           <h2>{t('keyboard')}</h2>
           <button>{t('view shortcuts')}</button>
         </section>

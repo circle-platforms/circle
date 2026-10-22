@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, readFile, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -887,4 +887,44 @@ test('shared external build leases coordinate with tasks and nested verification
   await external;
   await scheduler.waitForIdle();
   assert.equal(nested, true);
+});
+
+test('the collaboration lease is held by its heartbeat, not by a process id', async (t) => {
+  const data = scratch(t);
+  const lock = join(data, 'collaboration.lock');
+  const open = () =>
+    new CollaborationScheduler({
+      dataDir: data,
+      executor: async () => ({ passed: true }),
+    });
+  const first = open();
+  cleanup(t, () => first.close());
+  assert.throws(open, /already open/, 'a live owner holds the ledger');
+  await first.close();
+  // A runtime that was killed leaves its lease behind, and the system hands its
+  // id to another process. The id proves nothing; a stopped heartbeat does.
+  await writeFile(
+    lock,
+    JSON.stringify({
+      pid: process.pid,
+      token: randomUUID(),
+      at: Date.now() - 31_000,
+    }),
+  );
+  const second = open();
+  cleanup(t, () => second.close());
+  await second.close();
+  // A lease from before Circle renewed it is judged by the file's own time.
+  await writeFile(
+    lock,
+    JSON.stringify({ pid: process.pid, token: randomUUID() }),
+  );
+  assert.throws(open, /already open/, 'an older Circle still holds it');
+  const gone = Math.floor(Date.now() / 1000) - 120;
+  await utimes(lock, gone, gone);
+  const third = open();
+  cleanup(t, () => third.close());
+  // The new owner renews, so nobody takes the ledger from under it.
+  assert.throws(open, /already open/, 'the renewal holds it');
+  await third.close();
 });

@@ -6607,3 +6607,89 @@ test('what a hub command finds shows in the conversation, and its sign-in status
   );
   assert.equal(notices().length, before);
 });
+
+test('the parallel-task settings answer while another Circle holds the ledger', async (t) => {
+  const f = await setup(t, [{ message: assistant('ok') }]);
+  const snapshot = f.controller.snapshot();
+  const session = snapshot.sessions.find(
+    (row) => row.id === snapshot.activeSessionId,
+  )!;
+  // Another Circle runtime holds this folder's task ledger and renews its
+  // lease. Its process id is nobody's business: the system hands it out again.
+  const ledger = join(f.home, 'collaboration', session.workspaceId);
+  await mkdir(ledger, { recursive: true });
+  const leasePath = join(ledger, 'collaboration.lock');
+  const held = JSON.stringify({
+    pid: process.pid,
+    token: 'another-circle',
+    at: Date.now(),
+  });
+  await writeFile(leasePath, held);
+  const settings = (params?: Record<string, unknown>) =>
+    f.call('workspace-service', {
+      service: 'tasks',
+      method: 'settings',
+      params,
+    });
+  // The limit belongs to the application, so reading it needs no ledger.
+  const read = await settings();
+  assert.equal(read.ok, true, String(read.error));
+  assert.deepEqual(read.data, { agents: 8, builds: 2, ui: 1, browsers: 1 });
+  const saved = await settings({
+    limits: { agents: 3, builds: 2, ui: 1, browsers: 1 },
+  });
+  assert.equal(saved.ok, true, String(saved.error));
+  assert.equal((saved.data as { agents: number }).agents, 3);
+  // The other Circle's lease is untouched and its database was never opened.
+  assert.equal(await readFile(leasePath, 'utf8'), held);
+  assert.equal(existsSync(join(ledger, 'collaboration.sqlite')), false);
+  // What it saved is what the next Circle reads when it starts.
+  assert.deepEqual(
+    JSON.parse(
+      await readFile(
+        join(f.home, 'workspace-services', 'task-settings.json'),
+        'utf8',
+      ),
+    ),
+    { agents: 3, builds: 2, ui: 1, browsers: 1 },
+  );
+  // The ledger itself stays guarded: one owner at a time, as it was.
+  const list = await f.call('workspace-service', {
+    service: 'tasks',
+    method: 'list',
+  });
+  assert.equal(list.ok, false);
+  assert.match(String(list.error), /already open/);
+});
+
+test('opening a folder that is already a project keeps one row and its own id', async (t) => {
+  const f = await setup(t, [{ message: assistant('ok') }]);
+  const project = join(f.root, 'twice');
+  await mkdir(project);
+  saveSettingsChange(f.home, (saved) => {
+    Object.assign(saved, trustFolder(saved, realpathSync.native(project)));
+  });
+  const first = await f.call('open-workspace', { path: project });
+  assert.equal(first.ok, true, String(first.error));
+  const id = (first.data as { workspaceId: string }).workspaceId;
+  const begun = await f.call('begin-session', {
+    workspaceId: id,
+    text: 'work here',
+  });
+  assert.equal(begun.ok, true, String(begun.error));
+  const rows = () =>
+    f.controller.snapshot().workspaces.filter((row) => row.id === id);
+  assert.equal(rows().length, 1);
+  // The same folder chosen again, spelled another way: one project, one row,
+  // and the id the window already has it under.
+  const again = await f.call('open-workspace', {
+    path: realpathSync.native(project) + sep,
+  });
+  assert.equal(again.ok, true, String(again.error));
+  assert.equal(
+    (again.data as { workspaceId: string }).workspaceId,
+    id,
+    'the folder keeps its id',
+  );
+  assert.equal(rows().length, 1, 'one row for one folder');
+});

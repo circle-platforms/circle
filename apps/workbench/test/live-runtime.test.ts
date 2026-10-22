@@ -133,6 +133,7 @@ test('settings changes never carry the default workspace folders', async () => {
     // into the batched save-settings command.
     state.settings.workspaceFolder = '/tmp/forged';
     state.settings.oldWorkspaceFolder = '/tmp/also-forged';
+    state.settings.taskFolder = '/tmp/forged-tasks';
   });
   // request() flushes the queued change first, then sends its own command.
   await runtime.request('set-default-workspace', { workspaceGrant: 'grant-1' });
@@ -147,8 +148,30 @@ test('settings changes never carry the default workspace folders', async () => {
   assert.equal(settings.theme, 'dark');
   assert.equal('workspaceFolder' in settings, false);
   assert.equal('oldWorkspaceFolder' in settings, false);
+  assert.equal('taskFolder' in settings, false);
   // The folder itself travels only as the native dialog's grant id.
   assert.deepEqual(host.commands[1]!.payload, { workspaceGrant: 'grant-1' });
+});
+
+test('changing the task folder sends set-task-folder with the native grant', async () => {
+  const { runtime, host } = live();
+  await runtime.request('set-task-folder', { workspaceGrant: 'grant-task' });
+  assert.deepEqual(
+    host.commands.map((command) => command.name),
+    ['set-task-folder'],
+  );
+  // Same grant indirection as the default workspace: the window never names a path.
+  assert.deepEqual(host.commands[0]!.payload, {
+    workspaceGrant: 'grant-task',
+  });
+  assert.equal(
+    runtime
+      .getSnapshot()
+      .sessions.find(
+        (session) => session.id === runtime.getSnapshot().activeSessionId,
+      )?.actionError,
+    undefined,
+  );
 });
 
 test('session presentation survives background snapshots and switching without replacing core history', async () => {

@@ -160,6 +160,30 @@ test('endpoint metadata matches complete official routes and never infers vendor
     searchProvider('https://api.moonshot.ai/v1', 'openai', 'kimi').adapter,
     'kimi',
   );
+  assert.deepEqual(
+    searchProvider(
+      'https://dashscope.aliyuncs.com/apps/anthropic',
+      'anthropic',
+      'qwen3.8-max',
+    ),
+    { id: 'bailian-anthropic', adapter: 'anthropic' },
+  );
+  assert.deepEqual(
+    searchProvider(
+      'https://workspace.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1',
+      'anthropic',
+      'qwen3.8-max',
+    ),
+    { id: 'bailian-anthropic', adapter: 'anthropic' },
+  );
+  assert.deepEqual(
+    searchProvider(
+      'https://workspace.ap-southeast-1.maas.aliyuncs.com/apps/other',
+      'anthropic',
+      'qwen3.8-max',
+    ),
+    { id: 'custom', adapter: 'anthropic' },
+  );
 });
 
 test('OpenAI, xAI, Ark and supported Bailian models use the current model and same-origin Responses', async (t) => {
@@ -390,6 +414,44 @@ test('Anthropic compatible search pairs server calls with results and accounts f
   assert.equal(result.results[0]?.title, source.title);
   assert.equal(charges[0]?.usage.input_tokens, 20);
   assert.equal(charges[0]?.usage.cache_write_tokens, 3);
+});
+
+test('Bailian Messages search carries the documented client identity and plain Anthropic does not', async (t) => {
+  const answer = {
+    usage: {
+      input_tokens: 6,
+      output_tokens: 2,
+      server_tool_use: { web_search_requests: 1 },
+    },
+    content: [
+      { type: 'server_tool_use', name: 'web_search', id: 'search-1' },
+      {
+        type: 'web_search_tool_result',
+        tool_use_id: 'search-1',
+        content: [{ type: 'web_search_result', ...source }],
+      },
+    ],
+  };
+  const identity = [
+    { type: 'text', text: 'x-anthropic-billing-header: cc_entrypoint=cli;' },
+  ];
+  for (const [baseUrl, expected] of [
+    ['https://workspace.cn-beijing.maas.aliyuncs.com/apps/anthropic', identity],
+    ['https://proxy.example/prefix', undefined],
+  ] as const) {
+    const { request, seen } = await gateway(t, answer);
+    const result = await nativeWebSearch(
+      connection(baseUrl, 'qwen3.8-max', 'anthropic'),
+      'query',
+      2,
+      signal(),
+      request,
+    );
+    assert.equal(seen[0]?.headers['x-api-key'], 'synthetic-test-key');
+    assert.deepEqual(seen[0]?.body.system, expected);
+    assert.equal(result.executed, true);
+    assert.equal(result.searchRequests, 1);
+  }
 });
 
 test('Anthropic embedded failures preserve usage and do not classify rate limits as unsupported', async (t) => {

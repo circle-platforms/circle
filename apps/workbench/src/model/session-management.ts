@@ -73,6 +73,26 @@ export function sidebarProjects(
   );
 }
 
+/**
+ * Whether the trust list still has a reason to name a folder. Removing one from
+ * that page takes it away: a folder Circle no longer trusts, is not working in,
+ * and holds no conversation still in view has nothing left to trust or remove.
+ * Its archived sessions stay under all sessions, where they can be opened again.
+ */
+export function trustListed(
+  workspace: Workspace,
+  sessions: readonly Session[],
+  activeId: string,
+): boolean {
+  return (
+    workspace.trusted ||
+    workspace.id === activeId ||
+    sessions.some(
+      (session) => session.workspaceId === workspace.id && !session.archivedAt,
+    )
+  );
+}
+
 /** How many recent rows show before "show more". Project groups keep their own count. */
 export const RECENT_SHOWN = 5;
 /**

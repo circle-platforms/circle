@@ -215,7 +215,7 @@ An extension that signs in somewhere needs to keep a token, and sometimes to ask
 
 - `name` uses lowercase letters, digits, `_` and `-`, up to 32 characters, starting with a letter or digit, and must not be a built-in command or alias, a custom command, or another extension's.
 - `handler(args, ctx)` gets the argument text and a context with `ctx.workspace`, `ctx.toast(text)` and `ctx.append(text)` (a line in the conversation that the model does not see), and `ctx.sendUserMessage(text)` (send a message as if you had typed it). It may be `async`. Something it starts and does not wait for, such as following a task after the command returned, goes to `api.background(promise)`, so that Circle can wait for it when it leaves.
-- Extension commands do not run while a turn is running, are listed in `/help`, and are completed in the command list. An exception in the handler shows as `✖ /name failed: …`.
+- Extension commands do not run while a turn is running, are listed in `/help`, and are completed in the command list. An exception in the handler shows as `✖ /name failed: …`. On the desktop, the bundled GitHub connection verbs (`status`, `connect`, `configure`, `cancel`, `disconnect`) may still run while a turn is running; they only talk to the connection backend.
 
 ### Middleware
 

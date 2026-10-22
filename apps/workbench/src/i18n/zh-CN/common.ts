@@ -256,4 +256,6 @@ export const common: Record<string, string> = {
   'used {n} tools': '使用了 {n} 个工具',
   '{n} failed': '{n} 个失败',
   'used {tools}': '使用了 {tools}',
+  '{n} picture': '{n} 张图片',
+  '{n} pictures': '{n} 张图片',
 };
