@@ -4,6 +4,18 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **Circle can sign the work it does.** In a git repository, the commits and pull requests Circle makes now credit Circle: as the author on headless runs, as a co-author in the TUI and the desktop app, with the person who ran it as the other party either way. A `Generated with Circle` line closes its pull request bodies. The `attribution` setting turns it off, and the desktop settings page carries the switch.
+
+### Fixed
+
+- **A device key answer now does its work where you can see it.** Answering a first-login key question opens the console it was for and brings it to the front; if that login stops on the way in, the panel says why and keeps the question open for another answer, and a click on a question that has already closed says so instead of doing nothing.
+- **Terminal tabs stand in the order they came to be.** A shell opened after a device console now sits after it rather than jumping in front of it; an order you set by dragging still wins.
+- **Closing a device console asks first.** A console's × confirms before it cuts the wire to the machine; closing several at once from a tab's menu does not ask for each.
+- **A release that cannot reach nodejs.org no longer fails for it.** The pinned Node.js archive is downloaded once, kept on disk, and reused by later builds while its checksum matches the pinned digest, instead of being downloaded again for every target.
+- **Two desktop checks measured their machines instead of the application.** The component journeys' timed step no longer includes their browser install, the journeys run as three parallel shards each with a budget of its own so a slow runner cannot starve the tail of the list, and the check that sends a several-megabyte pasted picture now waits for the request and the finished turn separately instead of giving both one short wall clock.
+
 ## 1.11.0 - 2026-10-23
 
 ### Added
