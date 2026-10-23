@@ -98,6 +98,14 @@ jobs:
         with:
           node-version: '24.21.0'
           cache: npm
+      # The pinned Node.js runtime archive, kept between runs: build-release
+      # reuses an entry while its digest matches, so a run does not download
+      # the same archive once per target and an unreachable nodejs.org cannot
+      # fail a release whose archive is already here (#279).
+      - uses: actions/cache@v6
+        with:
+          path: .tmp/node-runtime-cache
+          key: node-runtime-${{ hashFiles('scripts/node-runtime.json') }}
       - run: npm ci
       - name: Tag, version files and changelog agree
         if: env.VERIFY_ONLY == 'true'
