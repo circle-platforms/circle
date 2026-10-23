@@ -173,8 +173,9 @@ jobs:
   # serial step shared a single 20-minute budget, and a runner running at
   # half speed starved the tail of the list (#296). Three parallel jobs run
   # interleaved thirds of the same ordered list, each with budgets of its
-  # own; the journeys launch headless Chromium, so this job needs no
-  # display and no desktop install.
+  # own. The journeys launch headless Chromium, so this job needs no
+  # display; it does need the desktop install, because the terminal suites
+  # import the desktop terminal manager and its node-pty.
   components:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     strategy:
@@ -192,8 +193,10 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             apps/workbench/package-lock.json
+            apps/desktop/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
+      - run: npm --prefix apps/desktop ci
       # The browser download is cached between runs; its key follows the
       # workbench lockfile, which pins the Playwright version.
       - uses: actions/cache@v6

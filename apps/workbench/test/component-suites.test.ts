@@ -218,10 +218,7 @@ test('component shards partition the ordered suites without overlap or loss', ()
     shards.reduce((sum, shard) => sum + shard.length, 0),
     COMPONENT_SUITES.length,
   );
-  assert.equal(
-    new Set(shards.flat()).size,
-    COMPONENT_SUITES.length,
-  );
+  assert.equal(new Set(shards.flat()).size, COMPONENT_SUITES.length);
   // Each shard keeps the list's order and its stride: shard i starts at
   // position i and steps by the shard count.
   for (const [index, shard] of shards.entries()) {
