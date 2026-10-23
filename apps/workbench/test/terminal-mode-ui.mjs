@@ -63,11 +63,13 @@ try {
     await page.waitForFunction(
       () => document.querySelectorAll('.term-tab-main').length === 5,
     );
+    // The row follows when each tab came to be, not what kind of tab it is: a
+    // console opened after a shell stands after it, not in front of it.
     assert.deepEqual(await names(page), [
       'terminal 1',
       'terminal 2',
-      'npm run test -- reconnect',
       'core-switch · SSH',
+      'npm run test -- reconnect',
       'rack-pdu · Telnet',
     ]);
     // A command Circle runs in the foreground has a terminal and no tab; the terminal
@@ -171,7 +173,27 @@ try {
       .waitFor();
     assert.deepEqual(await calls(page, 'terminalDetach'), [['t1']]);
     await page.screenshot({ path: `${output}/device-light-en.png` });
-    await page.getByRole('button', { name: 'disconnect core-switch' }).click();
+    // Closing a console to another machine asks first: cutting that wire is not
+    // something to do by accident, and cancelling changes nothing at all.
+    const closeCore = page.getByRole('button', {
+      name: 'disconnect core-switch',
+      exact: true,
+    });
+    const confirm = page.getByRole('dialog', {
+      name: 'disconnect core-switch?',
+      exact: true,
+    });
+    await closeCore.click();
+    await confirm.waitFor();
+    await page.screenshot({
+      path: `${output}/disconnect-light-en.png`,
+    });
+    await confirm.getByRole('button', { name: 'cancel' }).click();
+    await confirm.waitFor({ state: 'detached' });
+    assert.equal((await calls(page, 'terminalDisconnect')).length, 0);
+    await closeCore.click();
+    await confirm.waitFor();
+    await confirm.getByRole('button', { name: 'disconnect' }).click();
     await page.waitForFunction(
       () =>
         ![...document.querySelectorAll('.term-tab-main')].some((node) =>
@@ -179,6 +201,51 @@ try {
         ),
     );
     assert.deepEqual(await calls(page, 'terminalDisconnect'), [['t1']]);
+
+    // A device whose key nobody has trusted: the panel asks, and the answer
+    // opens the console it was for and puts it in front. A connect that
+    // stopped at a key used to leave the tab already showing on screen.
+    const ask = page.locator('.terminal-ask');
+    const connectDevice = async (host) => {
+      await page
+        .getByRole('button', { name: 'new terminal or device' })
+        .click();
+      await page.getByRole('menuitem', { name: /connect new device/ }).click();
+      const keyForm = page.locator('.term-connect');
+      await keyForm.waitFor();
+      await keyForm.getByLabel('address').fill(host);
+      await keyForm.getByRole('button', { name: 'connect' }).click();
+      await ask.waitFor();
+    };
+    await connectDevice('newkey.invalid');
+    assert.match(await ask.innerText(), /newkey\.invalid:22/);
+    await page.screenshot({ path: `${output}/host-key-light-en.png` });
+    await ask.getByRole('button', { name: 'connect once' }).click();
+    await ask.waitFor({ state: 'detached' });
+    assert.deepEqual(await calls(page, 'terminalHostKey'), [['once']]);
+    const openedConsole = page.getByRole('tab', {
+      name: 'newkey.invalid · SSH',
+    });
+    await openedConsole.waitFor();
+    assert.equal(
+      await openedConsole.getAttribute('aria-selected'),
+      'true',
+      'the console the answer opened is the one in front',
+    );
+    await page.locator('#device-t4').waitFor();
+    // An answer whose login stops again says why, and keeps its question: a
+    // button that did nothing is the one fault nobody can see for themselves.
+    await connectDevice('refused.invalid');
+    await ask.getByRole('button', { name: 'connect once' }).click();
+    await page
+      .locator('.toast')
+      .filter({ hasText: 'could not sign in to refused.invalid:22' })
+      .waitFor();
+    assert.equal(
+      await ask.count(),
+      1,
+      'the question stays where it can be answered again',
+    );
 
     // Circle in your shells. Its question about the shell is an orange dot on the tab, an
     // orange ring and a card in the conversation headed by the tab; its work is blue and
@@ -338,6 +405,31 @@ try {
           node.textContent.includes('npm run test'),
         ),
     );
+    // A bulk close from a tab's menu is the person's choice already: it closes
+    // every console on the row without asking once per machine.
+    await page
+      .getByRole('tab', { name: 'rack-pdu · Telnet' })
+      .click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'close all' }).click();
+    assert.equal(
+      await page
+        .getByRole('dialog')
+        .filter({ hasText: /closes this console/ })
+        .count(),
+      0,
+      'a bulk close asks nothing',
+    );
+    await page.waitForFunction(
+      () =>
+        ![...document.querySelectorAll('.term-tab-main')].some((node) =>
+          node.textContent.includes('rack-pdu'),
+        ),
+    );
+    assert.equal(
+      (await calls(page, 'terminalDisconnect')).length,
+      4,
+      'every console left on the row was closed with it',
+    );
     assert.deepEqual(errors, []);
     await page.close();
   }
@@ -353,8 +445,8 @@ try {
     assert.deepEqual(await names(page), [
       zh ? '终端 1' : 'terminal 1',
       zh ? '终端 2' : 'terminal 2',
-      'npm run test -- reconnect',
       'core-switch · SSH',
+      'npm run test -- reconnect',
       'rack-pdu · Telnet',
     ]);
     await page.getByRole('tab', { name: /rack-pdu/ }).click();

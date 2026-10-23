@@ -52,6 +52,8 @@ export interface TerminalView {
   quiet: number;
   cols: number;
   rows: number;
+  /** When this console opened: a tab row puts a later one after an earlier one. */
+  startedAt?: number;
   /** The last line on the screen, for the strip's doing column; '' before any. */
   last?: string;
 }
@@ -388,6 +390,7 @@ export class TerminalSessions {
       quiet: session.quiet,
       cols: session.cols,
       rows: session.rows,
+      startedAt: session.startedAt,
       last: session.tail(1)[0] ?? '',
     }));
   }

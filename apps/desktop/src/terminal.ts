@@ -313,28 +313,58 @@ export class TerminalPanelHost {
     }
     return this.mine(own, result.session);
   }
+  /**
+   * The person's answer to a device key. Only the decision comes from the window:
+   * the token and the connect's arguments, including a one-time password, stay here.
+   * A click that cannot do its work says so, and a login that stops again keeps the
+   * question on the panel rather than leaving dead buttons behind.
+   */
   async hostKey(
     conversation: unknown,
     decision: 'once' | 'always' | 'reject',
   ): Promise<TerminalState> {
     const own = validConversation(conversation);
     const ask = this.pendingKey.get(own);
-    if (!ask) return this.state(own);
+    if (!ask)
+      throw Error(
+        'that device key question is no longer open; connect again to see it',
+      );
     this.pendingKey.delete(own);
     if (decision === 'reject') {
       this.pushState(own);
       return this.state(own);
     }
     const stop = new AbortController();
-    const result = await this.manager.request(
-      own,
-      'connect',
-      {
-        ...ask.args,
-        approval: { token: ask.token, scope: decision },
-      },
-      stop.signal,
-    );
+    let result;
+    try {
+      result = await this.manager.request(
+        own,
+        'connect',
+        { ...ask.args, approval: { token: ask.token, scope: decision } },
+        stop.signal,
+      );
+    } catch (error) {
+      // The login stopped for a reason of its own. The question stands, so the
+      // person can answer again or reject it instead of clicking twice for nothing.
+      this.pendingKey.set(own, ask);
+      this.pushState(own);
+      throw error;
+    }
+    if (result.approval) {
+      // A second device answered on the way in: ask about that key instead.
+      const approval = result.approval;
+      this.pendingKey.set(own, {
+        token: approval.token,
+        profile: ask.profile,
+        args: ask.args,
+        host: approval.host,
+        keyType: approval.keyType,
+        fingerprint: approval.fingerprint,
+        privateHost: approval.privateHost,
+      });
+      this.pushState(own);
+      return this.state(own);
+    }
     return this.mine(own, result.session);
   }
   /**
@@ -533,5 +563,6 @@ function rowOf(
     quiet: view.quiet,
     cols: view.cols,
     rows: view.rows,
+    startedAt: view.startedAt,
   };
 }
