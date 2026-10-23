@@ -294,8 +294,36 @@ try {
     .filter({ hasText: `127.0.0.1` })
     .filter({ hasNotText: 'rack' });
   await quick.waitFor();
-  // The tabs are the consoles: closing one disconnects only that device.
-  await quick.getByRole('button', { name: /^disconnect / }).click();
+  // A console is another machine: closing its tab asks first, and cancelling
+  // leaves the wire alone. Answering for one tab disconnects only that device.
+  const closeConsole = async (tab) => {
+    const close = tab.getByRole('button', { name: /^disconnect / });
+    const label = (await close.getAttribute('aria-label')) ?? '';
+    await close.click();
+    const asked = page.getByRole('dialog', { name: `${label}?` });
+    await asked.waitFor();
+    return asked;
+  };
+  const asked = await closeConsole(quick);
+  await asked.getByRole('button', { name: 'cancel', exact: true }).click();
+  await asked.waitFor({ state: 'hidden' });
+  assert.equal(
+    await quick.isVisible(),
+    true,
+    'a cancelled close leaves the console up',
+  );
+  const still = await page.evaluate(
+    (id) => window.circleDesktop.terminalState(id),
+    session,
+  );
+  assert.equal(
+    still.sessions.filter((row) => row.state === 'ready').length,
+    2,
+    'nothing was disconnected behind the dialog',
+  );
+  const again = await closeConsole(quick);
+  await again.getByRole('button', { name: 'disconnect', exact: true }).click();
+  await again.waitFor({ state: 'hidden' });
   await quick.waitFor({ state: 'hidden' });
   const left = await page.evaluate(
     (id) => window.circleDesktop.terminalState(id),
@@ -360,7 +388,10 @@ try {
     clipped: node.scrollWidth > node.clientWidth,
   }));
   assert.deepEqual(label, { overflow: 'ellipsis', clipped: true });
-  await longTab.getByRole('button', { name: /^disconnect / }).click();
+  const longAsked = await closeConsole(longTab);
+  await longAsked
+    .getByRole('button', { name: 'disconnect', exact: true })
+    .click();
   await longTab.waitFor({ state: 'hidden' });
 } catch (error) {
   failures.push(error instanceof Error ? error.message : String(error));

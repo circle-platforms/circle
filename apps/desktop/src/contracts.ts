@@ -505,6 +505,8 @@ export interface TerminalSessionRow {
   quiet: number;
   cols: number;
   rows: number;
+  /** When this console opened, in ms: a tab created later stands later in the row. */
+  startedAt?: number;
 }
 /** A device reached by address from the panel: a telnet console answers its own
  * login; ssh signs in only where a saved profile says how. */

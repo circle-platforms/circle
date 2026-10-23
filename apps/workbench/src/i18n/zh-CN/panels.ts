@@ -207,6 +207,9 @@ export const panels: Record<string, string> = {
   'no saved profiles yet; a new connection reaches a device by address':
     '还没有保存的配置文件；用“新建连接”按地址连接设备。',
   'disconnect {name}': '断开 {name}',
+  'disconnect {name}?': '断开 {name}？',
+  'Circle closes this console and stops reading the device. What runs in its foreground usually ends when the wire is cut.':
+    'Circle 会关闭这个控制台，不再读取设备。前台运行的程序通常会在连接断开时结束。',
   'no device terminals yet': '尚无设备终端',
   'the desktop application shows Circle device terminals here':
     '桌面应用会在这里显示 Circle 的设备终端。',

@@ -48,7 +48,10 @@ import {
 } from '../model/command-terminal-client';
 import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal } from './common';
-import type { LocalTerminalRow } from '../../../desktop/src/contracts';
+import type {
+  LocalTerminalRow,
+  TerminalSessionRow,
+} from '../../../desktop/src/contracts';
 import {
   terminalTabName,
   terminalTabNumbers,
@@ -388,6 +391,10 @@ export function NativeTerminal({
   // it is dragged.
   const [localOrder, setLocalOrder] = useState<Record<string, string[]>>({});
   const [renameFor, setRenameFor] = useState<string | null>(null);
+  // A device console waits to be closed on purpose: the wire goes to another machine.
+  const [closingDevice, setClosingDevice] = useState<TerminalSessionRow | null>(
+    null,
+  );
   const [renameValue, setRenameValue] = useState('');
   // Every command Circle runs has a terminal; only a command that runs in the background,
   // which has a row of its own in the jobs, is a tab. A foreground one is seen from its
@@ -746,6 +753,17 @@ export function NativeTerminal({
     return path ? folderName(path) : '';
   })();
   const deviceRows = commandTerminal ? [] : devices.rows;
+  // Cutting a console's wire and dropping its tab: what the dialog confirms and a
+  // bulk close both do.
+  const disconnectDevice = (row: TerminalSessionRow) => {
+    if (deviceChosen === row.id) setDeviceChosen('');
+    void devices
+      .disconnect(row)
+      .catch((error) =>
+        notify(error instanceof Error ? error.message : String(error)),
+      );
+  };
+
   const [deviceChosen, setDeviceChosen] = useState('');
   const [deviceRefresh, setDeviceRefresh] = useState(0);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -779,7 +797,8 @@ export function NativeTerminal({
     });
   // The row in the person's order: the main process keeps it for every window, so a
   // reload, a visit home and a window of its own show it too. A tab it does not name
-  // goes last, and a restarted terminal stands where the one it replaced stood.
+  // goes after the ones it names, in the order they came to be, and a restarted
+  // terminal stands where the one it replaced stood.
   const chosen = devices.order ?? localOrder[sessionId] ?? [];
   const rank = (key: string) => {
     let at = chosen.indexOf(key);
@@ -788,8 +807,24 @@ export function NativeTerminal({
       id = terminals.find((item) => item.id === id)?.restartOf ?? '';
       if (id) at = chosen.indexOf(`local:${id}`);
     }
-    return at === -1 ? Number.MAX_SAFE_INTEGER : at;
+    return at;
   };
+  // When each tab came to be: a shell started after a device console stands after
+  // it, rather than in front of it because it is of another kind.
+  const openedAt = new Map<string, number>();
+  for (const item of visible) {
+    let stamp = Date.parse(item.startedAt) || 0;
+    let before = item.restartOf;
+    for (let step = 0; before && step < 32; step++) {
+      const last = terminals.find((row) => row.id === before);
+      if (!last) break;
+      stamp = Date.parse(last.startedAt) || stamp;
+      before = last.restartOf;
+    }
+    openedAt.set(`local:${item.id}`, stamp);
+  }
+  for (const row of deviceRows)
+    openedAt.set(`dev:${row.id}`, row.startedAt ?? 0);
   // A tab keeps a stored number; a closed tab does not. The model's tools use the same rule.
   // A drag reorders the row without renumbering a tab.
   const numbers = terminalTabNumbers(
@@ -883,14 +918,30 @@ export function NativeTerminal({
             : undefined,
       controls: `device-${row.id}`,
       closeLabel: t('disconnect {name}', { name: row.name }),
-      onClose: () => devices.disconnect(row),
+      // Closing a console cuts a wire to a machine: the person means to do it.
+      onClose: () => setClosingDevice(row),
     })),
   ];
-  const orderedTabs = tabs.sort((a, b) => rank(a.key) - rank(b.key));
+  // A bulk close from a tab's menu is the person's choice already: asking once for
+  // every console on the row would be a wall of dialogs. The tab's × still asks.
+  const closeNow = new Map<string, () => void>(
+    deviceRows.map((row) => [`dev:${row.id}`, () => disconnectDevice(row)]),
+  );
+  const orderedTabs = tabs.sort((a, b) => {
+    const left = rank(a.key);
+    const right = rank(b.key);
+    // Neither is named by the person: the later arrival stands later.
+    if (left < 0 && right < 0)
+      return (openedAt.get(a.key) ?? 0) - (openedAt.get(b.key) ?? 0);
+    if (left < 0) return 1;
+    if (right < 0) return -1;
+    return left - right;
+  });
   const shellOf = (key: string) =>
     terminals.find((item) => `local:${item.id}` === key);
   const closeExcept = (keep: string) => {
-    for (const tab of orderedTabs) if (tab.key !== keep) tab.onClose?.();
+    for (const tab of orderedTabs)
+      if (tab.key !== keep) (closeNow.get(tab.key) ?? tab.onClose)?.();
   };
   // A tab dropped on another takes that one's place: to its right when it came from
   // the left, so a tab can go to the end of the row, and to its left otherwise.
@@ -1341,6 +1392,8 @@ export function NativeTerminal({
           row={deviceSelected}
           tab={circleInFront}
           tabName={frontName}
+          onOpened={(id) => selectDevice(id)}
+          onProblem={(message) => notify(message)}
         />
       )}
       {!selected && !deviceRows.length && !error && (
@@ -1664,6 +1717,33 @@ export function NativeTerminal({
             </Button>
           </div>
         </form>
+      </Modal>
+      <Modal
+        open={closingDevice !== null}
+        onOpenChange={(open) => {
+          if (!open) setClosingDevice(null);
+        }}
+        title={t('disconnect {name}?', { name: closingDevice?.name ?? '' })}
+      >
+        <p className="dialog-paragraph">
+          {t(
+            'Circle closes this console and stops reading the device. What runs in its foreground usually ends when the wire is cut.',
+          )}
+        </p>
+        <div className="native-service-actions">
+          <Button onClick={() => setClosingDevice(null)}>{t('cancel')}</Button>
+          <Button
+            className="danger"
+            disabled={busy}
+            onClick={() => {
+              const row = closingDevice;
+              setClosingDevice(null);
+              if (row) disconnectDevice(row);
+            }}
+          >
+            {t('disconnect')}
+          </Button>
+        </div>
       </Modal>
     </section>
   );

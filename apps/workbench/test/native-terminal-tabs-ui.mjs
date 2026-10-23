@@ -574,13 +574,22 @@ try {
       assert.equal(reordered.selected, created.selected);
       // A shell keeps its name whatever order the service lists it in.
       assert.equal(reordered.label, 'terminal 10');
+      // And the row does not follow that list order either: a tab stands where
+      // it came to be, so re-reading the list never moves one under the pointer.
       assert.equal(
         await strip
           .locator('.term-tab-main')
           .first()
           .getAttribute('aria-controls'),
+        'terminal-terminal-2',
+        'the row keeps the order the tabs came to be in',
+      );
+      assert.equal(
+        await strip
+          .locator('.term-tab-main')
+          .last()
+          .getAttribute('aria-controls'),
         'terminal-terminal-10',
-        'the row follows the order the service gave',
       );
       await page.screenshot({ path: `${output}/${theme}-${width}.png` });
       assert.equal(reordered.pageX, initial.pageX);

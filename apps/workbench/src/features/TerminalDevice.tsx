@@ -66,15 +66,17 @@ export interface DeviceTerminals {
   connectProfile: (name: string) => Promise<string>;
   /** Reach a device by its address, without saving it; the id of the console. */
   connectTarget: (target: TerminalTargetRow) => Promise<string>;
-  disconnect: (row: TerminalSessionRow) => void;
+  /** Close a console: the promise settles when the main process has done it. */
+  disconnect: (row: TerminalSessionRow) => Promise<void>;
   attach: (row: TerminalSessionRow) => void;
   detach: (row: TerminalSessionRow) => void;
   /** Take one of the person's terminal tabs from Circle, or give it back. */
   takeTab: (row: LocalTerminalRow) => void;
+  /** Answer a device key: the console the answer opened, '' when it opened none. */
+  answerHostKey: (decision: 'once' | 'always' | 'reject') => Promise<string>;
   giveBackTab: (row: LocalTerminalRow) => void;
   /** End what Circle is doing in a tab, without taking it. */
   stopTab: (row: LocalTerminalRow) => void;
-  answerHostKey: (decision: 'once' | 'always' | 'reject') => void;
 }
 
 export function useDeviceTerminals(sessionId: string): DeviceTerminals {
@@ -98,14 +100,16 @@ export function useDeviceTerminals(sessionId: string): DeviceTerminals {
     // opened one meanwhile.
     connectProfile: async (name) => {
       const next = await host!.terminalConnect(sessionId, name);
-      return next.opened ?? next.sessions.at(-1)?.id ?? '';
+      // Only what this connect opened; a fallback would select some other console.
+      return next.opened ?? '';
     },
     connectTarget: async (target) => {
       const next = await host!.terminalConnectTarget(sessionId, target);
-      return next.opened ?? next.sessions.at(-1)?.id ?? '';
+      return next.opened ?? '';
     },
+    // A close that did not work says so: the panel that asked reports it.
     disconnect: (row) =>
-      void host?.terminalDisconnect(sessionId, row.id).catch(quiet),
+      host!.terminalDisconnect(sessionId, row.id).then(() => undefined),
     attach: (row) => void host?.terminalAttach(sessionId, row.id).catch(quiet),
     detach: (row) => void host?.terminalDetach(sessionId, row.id).catch(quiet),
     takeTab: (row) => void host?.terminalAttach(sessionId, row.id).catch(quiet),
@@ -113,8 +117,13 @@ export function useDeviceTerminals(sessionId: string): DeviceTerminals {
       void host?.terminalDetach(sessionId, row.id).catch(quiet),
     stopTab: (row) =>
       void host?.terminalStop?.(sessionId, row.id)?.catch(quiet),
-    answerHostKey: (decision) =>
-      void host?.terminalHostKey(sessionId, decision).catch(quiet),
+    // The answer's own state says which console it opened, so the panel can show
+    // that one: a connect that stopped at a device key used to leave the person
+    // looking at whatever tab was already in front.
+    answerHostKey: async (decision) => {
+      const next = await host!.terminalHostKey(sessionId, decision);
+      return next.opened ?? '';
+    },
   };
 }
 
@@ -287,14 +296,29 @@ export function DeviceNotices({
   row,
   tab,
   tabName,
+  onOpened,
+  onProblem,
 }: {
   devices: DeviceTerminals;
   row: TerminalSessionRow | undefined;
   /** What Circle is doing in the tab in front, when that is a terminal tab of yours. */
   tab?: LocalTerminalRow;
   tabName?: string;
+  /** The console an answer opened: the panel shows that one. */
+  onOpened?: (session: string) => void;
+  /** Why an answer did not do its work, in the runtime's own words. */
+  onProblem?: (message: string) => void;
 }) {
   const { asking, handoff } = devices;
+  // A button here either opens the console or says why it did not: a click
+  // that changes nothing is the one fault a person cannot see for themselves.
+  const answer = (decision: 'once' | 'always' | 'reject') =>
+    void devices
+      .answerHostKey(decision)
+      .then((opened) => opened && onOpened?.(opened))
+      .catch((error) =>
+        onProblem?.(error instanceof Error ? error.message : String(error)),
+      );
   return (
     <>
       {tab?.held === 'handoff' && (
@@ -316,17 +340,13 @@ export function DeviceNotices({
             <code>{asking.fingerprint}</code>
           </span>
           <div>
-            <Button onClick={() => devices.answerHostKey('once')}>
-              {t('connect once')}
-            </Button>
+            <Button onClick={() => answer('once')}>{t('connect once')}</Button>
             {asking.privateHost && (
-              <Button onClick={() => devices.answerHostKey('always')}>
+              <Button onClick={() => answer('always')}>
                 {t('trust for good')}
               </Button>
             )}
-            <Button onClick={() => devices.answerHostKey('reject')}>
-              {t('reject')}
-            </Button>
+            <Button onClick={() => answer('reject')}>{t('reject')}</Button>
           </div>
         </div>
       )}

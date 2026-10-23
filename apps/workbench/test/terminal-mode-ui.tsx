@@ -172,6 +172,8 @@ let devices: any[] = [
     detail: '',
     held: '',
     quiet: 4000,
+    // opened after terminal 2 and before the command below
+    startedAt: 2500,
     cols: 80,
     rows: 24,
   },
@@ -184,6 +186,8 @@ let devices: any[] = [
     detail: '',
     held: '',
     quiet: 100,
+    // the last thing that came to be
+    startedAt: 3500,
     cols: 80,
     rows: 24,
   },
@@ -210,12 +214,20 @@ let local: any[] = [1, 2].map((n) => ({
   state: 'idle',
   allowed: false,
 }));
+let asking: null | {
+  token: string;
+  host: string;
+  keyType: string;
+  fingerprint: string;
+  privateHost: boolean;
+} = null;
 const state = () => ({
   sessionId: 'terminal:A',
   conversation: 'A',
   sessions: devices,
   profiles,
   local,
+  ...(asking ? { pendingKey: asking } : {}),
 });
 const pushState = () => {
   for (const listener of terminalListeners)
@@ -243,6 +255,18 @@ window.circleDesktop = {
     record('terminalConnectTarget', target);
     if (target.host === 'unreachable.invalid')
       throw new Error('could not reach unreachable.invalid');
+    // A device nobody has a key for: the login stops and the panel is asked.
+    if (target.host === 'newkey.invalid' || target.host === 'refused.invalid') {
+      asking = {
+        token: 'fixture-token',
+        host: `${target.host}:${target.port ?? 22}`,
+        keyType: 'ssh-ed25519',
+        fingerprint: 'SHA256:fixture',
+        privateHost: true,
+      };
+      pushState();
+      return state();
+    }
     devices = [
       ...devices,
       {
@@ -299,7 +323,36 @@ window.circleDesktop = {
     pushState();
     return state();
   },
-  terminalHostKey: async () => state(),
+  // The answer either opens the console it was waiting for, or says why it did
+  // not: a button that changes nothing is the one fault nobody can see.
+  terminalHostKey: async (_: string, decision: string) => {
+    record('terminalHostKey', decision);
+    if (!asking)
+      throw new Error(
+        'that device key question is no longer open; connect again to see it',
+      );
+    if (asking.host.startsWith('refused.'))
+      throw new Error(`could not sign in to ${asking.host}`);
+    asking = null;
+    devices = [
+      ...devices,
+      {
+        id: 't4',
+        name: 'newkey.invalid',
+        target: 'newkey.invalid:22',
+        transport: 'ssh',
+        state: 'ready',
+        detail: '',
+        held: 'attach',
+        quiet: 10,
+        cols: 80,
+        rows: 24,
+        startedAt: 9000,
+      },
+    ];
+    pushState();
+    return { ...state(), opened: 't4' };
+  },
   terminalInput: async (_: string, id: string, data: string) => {
     record('terminalInput', id, data);
   },
