@@ -21,7 +21,7 @@ import {
   validateRelease,
   type ReleaseManifest,
 } from '../src/install_layout.js';
-import { downloadRuntime } from './download.js';
+import { downloadRuntimeCached } from './download.js';
 import { verifyWindowsQueryPackage } from './verify-windows-query-package.js';
 const runtimes = JSON.parse(
   readFileSync('scripts/node-runtime.json', 'utf8'),
@@ -55,11 +55,17 @@ function run(command: string, args: string[], cwd = process.cwd()): string {
 try {
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build']);
   const archive = join(temporary, runtime.name);
-  const bytes = await downloadRuntime(
-    `https://nodejs.org/dist/v${runtimes.version}/${runtime.name}`,
+  // Kept between builds (the release workflow caches the folder), so a release
+  // does not download the same archive once per target; the digest is checked
+  // before an entry is used, as it is for a fresh download.
+  const cacheDir = resolve(
+    process.env.CIRCLE_NODE_RUNTIME_CACHE ?? '.tmp/node-runtime-cache',
   );
-  if (createHash('sha256').update(bytes).digest('hex') !== runtime.sha256)
-    throw new Error('runtime checksum does not match pinned digest');
+  const bytes = await downloadRuntimeCached(
+    `https://nodejs.org/dist/v${runtimes.version}/${runtime.name}`,
+    join(cacheDir, runtime.name),
+    runtime.sha256,
+  );
   writeFileSync(archive, bytes);
   const extracted = join(temporary, 'runtime');
   mkdirSync(extracted);
