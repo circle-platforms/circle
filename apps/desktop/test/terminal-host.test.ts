@@ -29,10 +29,11 @@ async function until(check: () => boolean, description: string) {
 }
 
 /** One console server: greets a newcomer and records the lines it is given. */
-async function consoleServer(t: TestContext) {
+async function consoleServer(t: TestContext, chatter = false) {
   const typed: string[] = [];
   let banner = 'TELNET banner\r\ncon> ';
   const sockets = new Set<Socket>();
+  const timers = new Set<ReturnType<typeof setInterval>>();
   const server = createServer((socket) => {
     sockets.add(socket);
     socket.on('error', () => {});
@@ -94,12 +95,24 @@ async function consoleServer(t: TestContext) {
       }
     });
     socket.write(Buffer.from(banner, 'utf8'));
+    // A device whose screen keeps moving for a second: the settle has something to
+    // wait for, so a call that waits and one that does not read differently.
+    if (chatter) {
+      let line = 0;
+      const timer = setInterval(() => {
+        if (line >= 10) return clearInterval(timer);
+        line += 1;
+        socket.write(Buffer.from(`chatter ${line}\r\n`, 'utf8'));
+      }, 100);
+      timers.add(timer);
+    }
   });
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   if (!address || typeof address !== 'object')
     throw Error('no fixture address');
   t.after(async () => {
+    for (const timer of timers) clearInterval(timer);
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((done) => server.close(() => done()));
   });
@@ -531,4 +544,42 @@ test('an answer whose login stops again keeps its question instead of a dead but
   // Rejecting it now works, so a stopped login never leaves the panel stuck.
   const rejected = await panel.hostKey('c1', 'reject');
   assert.equal(rejected.pendingKey, undefined);
+});
+
+test("a person's connect shows the console at once; the model's still waits", async (t) => {
+  const device = await consoleServer(t, true);
+  const profile: TerminalProfile = {
+    name: 'rack',
+    transport: 'telnet',
+    host: '127.0.0.1',
+    port: device.port,
+    cols: 80,
+    rows: 24,
+  };
+  const { panel } = await makeHost(t, [profile]);
+  // The panel used to sit on the settle: the console was connected, and the
+  // person waited seconds on a question they had already answered.
+  const person = await panel.connect('c1', 'rack');
+  assert.equal(person.opened, 't1');
+  assert.equal(person.sessions[0]?.state, 'ready');
+  // What the panel has of that console at the moment it answers: the device was
+  // still talking, so a connect that waited for the screen to rest would show it.
+  const atFirst = Buffer.from(panel.snapshot('c1', 't1'), 'base64').toString(
+    'utf8',
+  );
+  assert.ok(
+    !atFirst.includes('chatter 10'),
+    'the console came forward while the device was still talking',
+  );
+  // The model keeps the wait: its result must read a screen at rest.
+  const model = await panel.agent(
+    {
+      id: 'a1',
+      sessionId: 'c2',
+      action: 'connect',
+      args: { host: '127.0.0.1', transport: 'telnet', port: device.port },
+    },
+    new AbortController().signal,
+  );
+  assert.match(model.text, /chatter 10/);
 });

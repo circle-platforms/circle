@@ -367,9 +367,12 @@ export class TerminalSessions {
     action: TerminalAction,
     args: Record<string, unknown>,
     signal: AbortSignal,
+    /** The person asked for this from the panel: their own eyes are the settle. */
+    person = false,
   ): Promise<TerminalResult> {
     const own = this.conversation(conversation);
-    const run = () => this.perform(own, conversation, action, args, signal);
+    const run = () =>
+      this.perform(own, conversation, action, args, signal, person);
     // One action's failure must not sink the ones after it. The person's own close of a
     // console does not come this way: see disconnectForPerson.
     own.queue = own.queue.then(run, run);
@@ -541,10 +544,11 @@ export class TerminalSessions {
     action: TerminalAction,
     args: Record<string, unknown>,
     signal: AbortSignal,
+    person = false,
   ): Promise<TerminalResult> {
     if (action === 'sessions') return this.sessionsResult(own);
     if (action === 'connect')
-      return this.connect(own, conversation, args, signal);
+      return this.connect(own, conversation, args, signal, person);
     const session = this.find(own, String(args.session ?? ''));
     if (session.local)
       return this.performLocal(
@@ -778,6 +782,7 @@ export class TerminalSessions {
     conversation: string,
     args: Record<string, unknown>,
     signal: AbortSignal,
+    person = false,
   ): Promise<TerminalResult> {
     const request = this.connectArgs(own, args);
     const { profile, transport, explicit, approval } = request;
@@ -893,9 +898,13 @@ export class TerminalSessions {
     own.sessions.set(id, session);
     own.events.push(`${name}: connected (${transport} ${explicit.target})`);
     this.options.onChange(conversation);
-    // A login banner or first prompt is worth waiting the short settle for
+    // A login banner or first prompt is worth waiting the short settle for, so the
+    // model reads a screen that has stopped moving. A person watching the panel is
+    // the settle: their console comes forward as soon as it exists, and the banner
+    // types itself in a moment later, instead of the panel sitting on the question.
     try {
-      await this.quiet(session, SEND_SETTLE_QUIET_MS, 3000, signal);
+      if (!person)
+        await this.quiet(session, SEND_SETTLE_QUIET_MS, 3000, signal);
     } catch (error) {
       own.sessions.delete(id);
       session.close();

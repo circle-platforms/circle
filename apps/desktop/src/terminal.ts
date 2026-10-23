@@ -266,6 +266,7 @@ export class TerminalPanelHost {
       'connect',
       { profile: name },
       stop.signal,
+      true,
     );
     for (let round = 0; result.approval && round < 4; round++) {
       const approval = result.approval;
@@ -297,6 +298,7 @@ export class TerminalPanelHost {
       'connect',
       args,
       stop.signal,
+      true,
     );
     if (result.approval) {
       this.pendingKey.set(own, {
@@ -342,6 +344,7 @@ export class TerminalPanelHost {
         'connect',
         { ...ask.args, approval: { token: ask.token, scope: decision } },
         stop.signal,
+        true,
       );
     } catch (error) {
       // The login stopped for a reason of its own. The question stands, so the
