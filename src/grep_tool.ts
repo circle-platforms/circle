@@ -1,7 +1,7 @@
 // The grep tool, as deepagents' filesystem middleware defines it: a
 // literal (not regex) search, `output_mode` files_with_matches (the default), content or
 // count, and a total cap on matches (`max_count`, 1000 unless the call asks otherwise).
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, posix, relative, sep } from 'node:path';
 import { glob } from 'glob';
 import type { Sandbox } from './sandbox.js';
@@ -12,9 +12,32 @@ const RESULT_LIMIT = 20000 * 4;
 const TRUNCATION_GUIDANCE =
   '... [results truncated, try being more specific with your parameters]';
 export const GREP_TRUNCATION_NOTE =
-  'Note: the search stopped early (it hit its time limit or the maximum match count). ' +
+  'Note: the search stopped early at the maximum match count. ' +
   'The matches above are valid but incomplete. Narrow the search (a more specific pattern or a ' +
   'narrower path), or raise max_count, to see the rest.';
+// A file the scan could not look inside is a false "no matches" waiting to happen, so the
+// reason is counted and told. Binary content and credential files are declared exclusions
+// (docs/tools.md) and stay out of the count, as do .git and node_modules in the walk.
+const SKIP_REASONS = ['too_big', 'not_utf8', 'unreadable'] as const;
+type SkipReason = (typeof SKIP_REASONS)[number];
+const SKIP_LABELS: Record<SkipReason, string> = {
+  too_big: `over the ${MAX_FILE_BYTES / (1024 * 1024)} MB limit`,
+  not_utf8: 'not UTF-8 text',
+  unreadable: 'not readable',
+};
+/** One line saying what the scan did not cover, or an empty string when it covered the rest. */
+function notSearchedNote(counts: Record<SkipReason, number>): string {
+  const missed = SKIP_REASONS.reduce((sum, reason) => sum + counts[reason], 0);
+  if (!missed) return '';
+  const parts = SKIP_REASONS.filter((reason) => counts[reason] > 0).map(
+    (reason) => `${counts[reason]} ${SKIP_LABELS[reason]}`,
+  );
+  return (
+    `Note: ${missed} ${missed === 1 ? 'file was' : 'files were'} not searched ` +
+    `(${parts.join(', ')}). A match could be in one of them: narrow the path or glob, ` +
+    'or open the file with read_file.'
+  );
+}
 const REGEX_HINT =
   'Note: grep matches literal text, not regex, so characters like ' +
   '`|`, `.*`, and `\\.` are searched verbatim. Search for the literal ' +
@@ -109,6 +132,49 @@ function pathShower(sandbox: Sandbox): (path: string) => string {
   };
 }
 
+// What one file gave the search: its bytes, a reason the model should hear about, or an
+// exclusion the rules state up front (a credential file, binary content, a link out of the root).
+type Read = { data: Buffer } | { skip: SkipReason } | { excluded: true };
+
+/** Read one file for the search. Only a link pays for path resolution: on Windows a
+ * `realpathSync` costs about as much again as reading the file, so a scan of a big tree is
+ * floored by it, and the search root is already resolved. */
+export function readSearchableFile(
+  sandbox: Sandbox,
+  file: string,
+  root: string,
+  directory: boolean,
+): Read {
+  try {
+    const info = lstatSync(file);
+    if (sandbox.isCredentialPath(file)) return { excluded: true };
+    let data: Buffer;
+    if (info.isSymbolicLink()) {
+      const real = realpathSync(file);
+      // A link that leads out of the search root is not followed.
+      if (directory && inside(root, real) === undefined)
+        return { excluded: true };
+      if (sandbox.isCredentialPath(real)) return { excluded: true };
+      const target = statSync(real);
+      // A link to a folder is not a file to read: the walk does not follow it.
+      if (target.isDirectory()) return { excluded: true };
+      if (target.size > MAX_FILE_BYTES) return { skip: 'too_big' };
+      data = readFileSync(real);
+    } else {
+      if (info.size > MAX_FILE_BYTES) return { skip: 'too_big' };
+      data = readFileSync(file);
+    }
+    if (data.includes(0)) return { excluded: true };
+    return { data };
+  } catch (error) {
+    // The walk saw it, the read did not: deleted while the search ran, so there is
+    // nothing there to have missed. Anything else is a refusal worth telling the model about.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      return { excluded: true };
+    return { skip: 'unreadable' };
+  }
+}
+
 export async function grepSearch(
   sandbox: Sandbox,
   args: Record<string, unknown>,
@@ -160,25 +226,37 @@ export async function grepSearch(
   }
   const show = pathShower(sandbox);
   const results = new Map<string, [number, string][]>();
+  const counts: Record<SkipReason, number> = {
+    too_big: 0,
+    not_utf8: 0,
+    unreadable: 0,
+  };
+  // An ASCII pattern is the same bytes in any 8-bit encoding, so a byte search for it cannot
+  // miss a line a decoded search would have found. A non-ASCII pattern would miss text stored
+  // as GBK, so there the decode below is the filter instead.
+  const needle = Buffer.from(pattern, 'utf8');
+  const bytesFirst = needle.every((byte) => byte < 0x80);
   let total = 0;
   let truncated = false;
   search: for (const file of files) {
     signal.throwIfAborted();
-    let text: string;
-    let real: string;
-    try {
-      real = realpathSync(file);
-      // A link that leads out of the search root is not followed.
-      if (directory && inside(root, real) === undefined) continue;
-      sandbox.checkCredentialPath(file);
-      sandbox.checkCredentialPath(real);
-      if (statSync(real).size > MAX_FILE_BYTES) continue;
-      const data = readFileSync(real);
-      if (data.includes(0)) continue;
-      text = new TextDecoder('utf-8', { fatal: true }).decode(data);
-    } catch {
-      continue; // unreadable, binary, not UTF-8 or a credential file
+    const read = readSearchableFile(sandbox, file, root, directory);
+    if ('excluded' in read) continue;
+    if ('skip' in read) {
+      counts[read.skip]++;
+      continue;
     }
+    // The byte search is what makes a full scan cheap: most files in a tree hold nothing the
+    // question is about, and decoding and splitting those was the cost.
+    if (bytesFirst && !read.data.includes(needle)) continue;
+    let text: string;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(read.data);
+    } catch {
+      counts.not_utf8++;
+      continue;
+    }
+    if (!bytesFirst && !text.includes(pattern)) continue;
     const lines = text.split('\n');
     if (lines.at(-1) === '') lines.pop();
     const shown = show(file);
@@ -210,8 +288,10 @@ export async function grepSearch(
       ])
       .join('\n');
   body = truncate(body);
-  if (truncated) return `${body}\n\n${GREP_TRUNCATION_NOTE}`;
-  if (!paths.length && looksLikeRegex(pattern))
-    return `${body}\n\n${REGEX_HINT}`;
-  return body;
+  const notes: string[] = [];
+  const missed = notSearchedNote(counts);
+  if (missed) notes.push(missed);
+  if (truncated) notes.push(GREP_TRUNCATION_NOTE);
+  if (!paths.length && looksLikeRegex(pattern)) notes.push(REGEX_HINT);
+  return notes.length ? `${body}\n\n${notes.join('\n\n')}` : body;
 }
