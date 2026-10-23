@@ -2,6 +2,30 @@
 
 All notable changes to Circle are listed here, newest first. Circle follows [Semantic Versioning](https://semver.org) from 1.0 on.
 
+## Unreleased
+
+## 1.11.0 - 2026-10-23
+
+### Added
+
+- **Web search works on Bailian Anthropic routes.** Native web search now runs on the `bailian-anthropic` preset and carries the documented billing identity; before, the gateway silently ignored the search tool and the model answered from memory instead of searching.
+- **GitHub can be connected while a turn is running.** Connecting, checking or disconnecting GitHub from the desktop no longer fails with `a turn is running` when the open conversation is busy; those actions only talk to the connection backend and leave a status notice in the conversation.
+
+### Changed
+
+- **Tool calls fold per model step on the desktop.** Each step of a turn gets its own folded line, such as `ran 2 commands, edited calc.py +1 −1`, instead of one summary for the whole turn, and when thinking is shown, a thinking-only step stays between its tool lines.
+- **A screenshot Circle took stays with the call that took it**: the folded line says `2 pictures`, and opening the calls brings them out, each a small picture, instead of the picture sitting under the line on its own.
+- **Settings is one page with its groups listed at the left.** The search box and the list jump to a group, and the highlighted name follows the page as it scrolls.
+
+### Fixed
+
+- **Changing the folder for tasks with no project works.** Settings → tasks with no project → change… picked a folder and then failed with `set-task-folder is not connected yet`; the request now goes through.
+- **Find and picker search stay fast in long conversations.** A keystroke in the ctrl+f find box, or in a picker such as /resume, rescanned the whole conversation twice; on a 39,000-row transcript that cost about 89 ms per keystroke. The searched text is now cached until the conversation changes.
+- **The parallel-task limit no longer opens a folder's task ledger.** Reading or saving **agents at once** in settings could fail with `collaboration scheduler is already open`; the limit belongs to the application and is now read and saved without opening a folder, and a task ledger a dead process left behind expires by heartbeat instead of blocking its folder.
+- **Two folders that share a name are told apart in the project menu**, which says which folder each sits in, and a folder already on the list keeps its single row and its place when it is opened again.
+- **A removed folder leaves the workspace trust list** once its conversations are archived, instead of staying on the list with nothing left to trust or remove.
+- **Ctrl+C copies text selected anywhere**, such as an answer in the conversation, not only text selected in the message box; the draft survives.
+
 ## 1.10.3 - 2026-10-22
 
 ### Fixed
