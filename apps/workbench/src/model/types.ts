@@ -429,6 +429,8 @@ export interface Settings {
   /** Names of the saved secrets, used as %NAME%: never a value. */
   secrets: string[];
   updateCheck: boolean;
+  /** Commits and pull requests Circle makes credit Circle (`attribution.enabled`). */
+  attribution: boolean;
   /**
    * The folder new sessions start in when no other folder was opened: the
    * configured default workspace, or the built-in scratch folder. It only

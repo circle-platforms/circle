@@ -17,6 +17,7 @@ import {
   normalizeWorkspace,
 } from './paths.js';
 import type { SessionMode } from './approvals.js';
+import { defaultAttribution, type AttributionSettings } from './attribution.js';
 
 // Circle signs in only with an API URL and key. A `mode` or `oauth_provider` that older
 // releases wrote is dropped on load.
@@ -66,6 +67,8 @@ export interface CircleSettings {
   task_folder: string;
   /** Named values, written %NAME% in a tool's arguments; the model also reads them. */
   variables: Record<string, string>;
+  /** Whether Circle's commits and pull requests credit Circle, and who authors a commit. */
+  attribution: AttributionSettings;
   [key: string]: unknown;
 }
 /** A variable's or a secret's name: capital letters, digits and _, from a letter. */
@@ -99,6 +102,7 @@ export const defaultSettings = (): CircleSettings => ({
   workspace_folder: '',
   task_folder: '',
   variables: {},
+  attribution: defaultAttribution(),
 });
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -183,6 +187,15 @@ export function loadSettingsFromDict(
   settings.double_escape =
     double === 'fork' || double === 'none' ? double : 'tree';
   settings.hide_thinking = Boolean(raw.hide_thinking);
+  const attribution = isRecord(raw.attribution) ? raw.attribution : {};
+  const author = String(attribution.author || '')
+    .trim()
+    .toLowerCase();
+  settings.attribution = {
+    enabled:
+      attribution.enabled === undefined ? true : Boolean(attribution.enabled),
+    author: author === 'user' || author === 'circle' ? author : 'auto',
+  };
   const folder =
     typeof raw.workspace_folder === 'string' ? raw.workspace_folder.trim() : '';
   settings.workspace_folder =
@@ -446,6 +459,7 @@ export const PROJECT_KEYS = [
   'theme',
   'credential_files',
   'allowed_commands',
+  'attribution',
 ] as const;
 export type ProjectChanges = Record<string, [unknown, unknown]>;
 export function applyProjectSettings(

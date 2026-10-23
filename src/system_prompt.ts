@@ -3,6 +3,11 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
 import { currentBranch } from './git_info.js';
+import {
+  attributionSection,
+  gitUser,
+  type AttributionSettings,
+} from './attribution.js';
 import type { RunOptions } from './run_options.js';
 import { formatMemorySources, readCappedText } from './memory_sources.js';
 const prompts = fileURLToPath(new URL('./prompts/', import.meta.url));
@@ -148,6 +153,10 @@ export interface PromptCatalog {
   variables?: Record<string, string>;
   /** Names of the saved secrets: the model never sees a value. */
   secrets?: string[];
+  /** How commits and pull requests credit Circle; absent leaves it out. */
+  attribution?: AttributionSettings;
+  /** A run nobody watches: Circle may author its commits. */
+  headless?: boolean;
 }
 function skillLine(skill: { name: string; description: string }): string {
   const description = skill.description.replace(/\s+/g, ' ').trim();
@@ -214,6 +223,12 @@ export function buildSystemPrompt(
   sections.push(
     `<env>\n  Working directory: ${workspace}\n  Platform: ${platform()}\n  Today's date: ${new Date().toISOString().slice(0, 10)}\n  Is directory a git repo: ${currentBranch(workspace) ? 'yes' : 'no'}\n  Model: ${model}\n  Protocol: ${protocol}\n</env>`,
   );
+  if (catalog.attribution && currentBranch(workspace))
+    sections.push(
+      attributionSection(catalog.attribution, Boolean(catalog.headless), () =>
+        gitUser(workspace),
+      ),
+    );
   sections.push(...append);
   if (catalog.skills?.length)
     sections.push(

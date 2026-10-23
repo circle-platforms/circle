@@ -5348,6 +5348,7 @@ test('shared desktop preferences and saved defaults do not revert when switching
     defaultEffort: 'high',
     doubleEscape: 'fork',
     updateCheck: false,
+    attribution: false,
     enabledModels: ['saved-default'],
   };
   assert.equal((await f.call('save-settings', { settings })).ok, true);

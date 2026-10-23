@@ -882,6 +882,7 @@ export class RuntimeController {
         hide_thinking: settings.hide_thinking,
         double_escape: settings.double_escape,
         update_check: settings.update_check,
+        attribution: { ...settings.attribution },
         enabled_models: [...settings.enabled_models],
         credential_files: [...settings.credential_files],
         variables: { ...settings.variables },
@@ -3257,6 +3258,7 @@ export class RuntimeController {
         // Names only: a saved value never leaves the runtime
         secrets: secretNames(this.home),
         updateCheck: savedSettings.update_check,
+        attribution: savedSettings.attribution.enabled,
         workspaceFolder: defaultFolder.folder,
         ...(defaultFolder.stale
           ? { oldWorkspaceFolder: defaultFolder.stale }
@@ -5089,6 +5091,11 @@ export class RuntimeController {
             settings.hide_thinking = flag(data.hideThinking);
           if (data.updateCheck !== undefined)
             settings.update_check = flag(data.updateCheck);
+          if (data.attribution !== undefined)
+            settings.attribution = {
+              ...settings.attribution,
+              enabled: flag(data.attribution),
+            };
           if (data.defaultModel !== undefined)
             settings.auth.model = text(data.defaultModel, 'model', 500);
           if (data.defaultEffort !== undefined) {
@@ -5195,6 +5202,9 @@ export class RuntimeController {
             owner.options.settings.variables = { ...settings.variables };
             owner.refreshPrompt();
           }
+        // The next request in every open conversation says whether to credit Circle.
+        if (data.attribution !== undefined)
+          for (const owner of this.runtimes.values()) owner.refreshPrompt();
         return {};
       }
       case 'reload': {
