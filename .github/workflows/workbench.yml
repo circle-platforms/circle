@@ -98,13 +98,29 @@ jobs:
       - run: npm --prefix apps/workbench run format:check
       - run: npm --prefix apps/desktop run format:check
       - run: npm --prefix apps/workbench test
-      - name: Run the renderer component regression journeys on Linux
+      # The browser download is cached between runs; its key follows the
+      # workbench lockfile, which pins the Playwright version.
+      - uses: actions/cache@v6
+        if: runner.os == 'Linux'
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/workbench/package-lock.json') }}
+      # The install has a budget of its own, outside the journeys' step: a slow
+      # package mirror once spent minutes of the journeys' 20 minutes on apt
+      # downloads, and the step timed out mid-journey with the suite healthy.
+      - name: Install the component journey browser on Linux
         if: runner.os == 'Linux'
         timeout-minutes: 20
         shell: bash
         run: |
           unset CIRCLE_TEST_BROWSER_CHANNEL
           node apps/workbench/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Run the renderer component regression journeys on Linux
+        if: runner.os == 'Linux'
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          unset CIRCLE_TEST_BROWSER_CHANNEL
           npm --prefix apps/workbench run test:components
       - name: Compare desktop appearance on Apple silicon
         if: matrix.target == 'darwin-arm64'
