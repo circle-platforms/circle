@@ -50,6 +50,7 @@ interface ServerEvent {
   taskId: string;
   kind: string;
   payload: Record<string, unknown>;
+  content?: { sha256?: string; size?: number; downloadPath?: string };
 }
 interface Artifact {
   artifactId: string;
@@ -1705,6 +1706,67 @@ export async function register(api: ExtensionAPI): Promise<void> {
     return `  ${event.taskId} · ${event.seq} · ${event.kind}${parts.length ? ' · ' + parts.join(' · ') : ''}`;
   }
 
+  // A followed run is mostly machine speech: assistant turns and tool results.
+  // The envelope alone (issue #275) reads as a stream of numbers, so say what
+  // each line means: fetch the body behind an assistant's content reference,
+  // name the tool behind a result, and fall back to the envelope otherwise.
+  async function readableLine(event: ServerEvent): Promise<string> {
+    const payload = event.payload ?? {};
+    if (event.kind === 'runtime.assistant') {
+      const path = event.content?.downloadPath;
+      if (typeof path === 'string') {
+        try {
+          const { data } = await request('GET', path, { timeoutMs: 10_000 });
+          const body =
+            isRecord(data) && isRecord(data.event) ? data.event : data;
+          const said =
+            isRecord(body) && typeof body.text === 'string'
+              ? body.text.trim().replace(/\s+/g, ' ').slice(0, 90)
+              : '';
+          if (said)
+            return hubText('  {task} · {seq} · said: {text}', {
+              task: event.taskId,
+              seq: String(event.seq),
+              text: said,
+            });
+          const tools =
+            isRecord(body) && Array.isArray(body.tool_calls)
+              ? (body.tool_calls as unknown[])
+                  .map((call) =>
+                    isRecord(call) && typeof call.name === 'string'
+                      ? call.name
+                      : '',
+                  )
+                  .filter(Boolean)
+              : [];
+          if (tools.length)
+            return hubText('  {task} · {seq} · wants tools: {tools}', {
+              task: event.taskId,
+              seq: String(event.seq),
+              tools: tools.join(', '),
+            });
+        } catch {
+          // The envelope line still says something.
+        }
+      }
+    }
+    if (
+      event.kind === 'runtime.tool_result' &&
+      typeof payload.name === 'string'
+    )
+      return hubText(
+        payload.isError === true
+          ? '  {task} · {seq} · tool {name} failed'
+          : '  {task} · {seq} · tool {name} answered',
+        {
+          task: event.taskId,
+          seq: String(event.seq),
+          name: payload.name,
+        },
+      );
+    return eventLine(event);
+  }
+
   function freePath(directory: string, name: string): string {
     const safe =
       basename(name).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_') || 'result';
@@ -1888,6 +1950,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
     api.background(showStatus());
     let cursor = followed()[taskId]?.seq ?? 0;
     let ended = false;
+    // Quiet stretches get one heartbeat line per minute, not silence: a long
+    // compile looks identical to a hang otherwise (issue #275).
+    let idle = 0;
     try {
       while (!controller.signal.aborted && !api.signal.aborted) {
         // The task's state first: a task that has ended has only its missed events left,
@@ -1918,10 +1983,21 @@ export async function register(api: ExtensionAPI): Promise<void> {
           isRecord(data) && Array.isArray(data.events) ? data.events : []
         ) as ServerEvent[];
         for (const event of events) {
-          context.append(eventLine(event));
+          context.append(await readableLine(event));
           cursor = Math.max(cursor, event.seq);
         }
-        if (events.length) remember(taskId, { seq: cursor });
+        if (events.length) {
+          remember(taskId, { seq: cursor });
+          idle = 0;
+        } else if (++idle >= 3) {
+          idle = 0;
+          context.append(
+            hubText('  {task} · still working · events seen to {seq}', {
+              task: taskId,
+              seq: String(cursor),
+            }),
+          );
+        }
         if (over) {
           if (phase === 'delivered') {
             if (followed()[taskId]?.saved)
@@ -1940,6 +2016,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
               ),
             );
           else context.append(await failureNote(taskId, phase));
+          context.append(
+            hubText(
+              '  {task} · run over at event {seq} · the server keeps the full record',
+              { task: taskId, seq: String(cursor) },
+            ),
+          );
           ended = true;
           return;
         }
