@@ -72,9 +72,28 @@ export const COMPONENT_SUITES = Object.freeze([
   'terminal-tab-menu-ui.mjs',
 ]);
 
+/**
+ * One shard of the ordered list: the suites at positions index, index + count,
+ * index + 2 * count, and so on. The shards are disjoint and together cover the
+ * list, so the workflow can run them as parallel jobs, each with its own
+ * budget, instead of every journey sharing one step's wall clock (#296).
+ */
+export function componentShard(suites, index, count) {
+  if (
+    !Number.isInteger(count) ||
+    count < 1 ||
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= count
+  )
+    throw Error(`invalid component shard ${index}/${count}`);
+  return suites.filter((_, position) => position % count === index);
+}
+
 /** Explicit suites run serially; a failed suite prevents later execution. */
 export async function runComponentSuites({
   suites = COMPONENT_SUITES.map((name) => join(root, 'test', name)),
+  shard,
   outputRoot = process.env.CIRCLE_COMPONENT_UI_OUTPUT ??
     join(root, '../desktop/artifacts/component-ui'),
   nodeArguments = [
@@ -87,17 +106,26 @@ export async function runComponentSuites({
   // The live-pressure suite drives eight runtimes and a PTY; shared runners need over 90 s.
   timeoutMs = 180_000,
 } = {}) {
+  const selected = suites.map((file, position) => ({ file, position }));
+  const run = shard
+    ? componentShard(selected, shard.index, shard.count)
+    : selected;
   await mkdir(outputRoot, { recursive: true });
   const output = await mkdtemp(join(outputRoot, 'attempt-'));
-  const receipt = { output, startedAt: new Date().toISOString(), suites: [] };
+  const receipt = {
+    output,
+    startedAt: new Date().toISOString(),
+    ...(shard ? { shard: { ...shard, ofSuites: suites.length } } : {}),
+    suites: [],
+  };
   const save = () =>
     writeFile(
       join(output, 'receipt.json'),
       JSON.stringify(receipt, null, 2) + '\n',
     );
   await save();
-  for (const [index, file] of suites.entries()) {
-    const name = `${index + 1}-${file
+  for (const { file, position } of run) {
+    const name = `${position + 1}-${file
       .split(/[\\/]/)
       .at(-1)
       .replace(/\.mjs$/, '')}`;
@@ -167,5 +195,14 @@ export async function runComponentSuites({
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-)
-  await runComponentSuites();
+) {
+  const flag = process.argv.indexOf('--shard');
+  if (flag === -1) await runComponentSuites();
+  else {
+    const match = /^(\d+)\/(\d+)$/.exec(process.argv[flag + 1] ?? '');
+    if (!match) throw Error('usage: --shard <index>/<count>');
+    await runComponentSuites({
+      shard: { index: Number(match[1]), count: Number(match[2]) },
+    });
+  }
+}
