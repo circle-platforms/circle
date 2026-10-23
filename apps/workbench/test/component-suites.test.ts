@@ -255,7 +255,7 @@ test('a sharded run executes only its share, under the full list numbers', async
   });
   assert.equal(await readFile(effects, 'utf8'), '2\n4\n');
   assert.deepEqual(
-    receipt.suites.map((suite) => suite.directory.split('/').at(-1)),
+    receipt.suites.map((suite) => suite.directory.split(/[\\/]/).at(-1)),
     ['2-two', '4-four'],
   );
 });
