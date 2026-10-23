@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { ExtensionError } from '../../extension_error.js';
 import { hubLocaleChinese, hubText } from '../../hub_text.js';
+import { DEFAULT_CREDENTIAL_FILES, matchPattern } from '../../file_patterns.js';
 import { hangingWrap, noticeColumns, pad } from '../../ink/string_width.js';
 import {
   existsSync,
@@ -288,9 +289,9 @@ function usageText(): string {
     ],
     ['/hub skill list', hubText('the skill packs on the server')],
     [
-      '/hub skill run <id> [json]',
+      '/hub skill run <id|name> [inputs]',
       hubText(
-        'run a skill pack on the server and follow it (--file <path> attaches)',
+        'run a skill pack on the server and follow it (--option <value> fills a declared input, --file <path> attaches)',
       ),
     ],
     [
@@ -2738,6 +2739,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
   }
 
   // Files of the workspace as a skill pack run takes them: inputs.files.
+  // Files a skill pack run takes with it: inputs.files. A file may sit anywhere
+  // the person can name — the workspace is not a fence, only a default — but a
+  // credential file never travels, and a file outside the workspace arrives
+  // under its own name, not a path into the person's disk.
   function attach(
     names: string[],
     context: CommandContext,
@@ -2745,15 +2750,32 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const workspace = api.workspace ?? context.workspace;
     return names.map((name) => {
       const path = resolve(workspace, name);
+      const file = basename(path);
+      if (DEFAULT_CREDENTIAL_FILES.some((p) => matchPattern(p, file)))
+        throw new ServerError(
+          hubText('cannot attach a credential file: {name}', { name }),
+        );
       if (!existsSync(path) || !statSync(path).isFile())
         throw new ServerError(
-          hubText('{name} is not a file in the workspace', { name }),
+          hubText(
+            'the file {name} is not a file in the workspace {workspace}',
+            {
+              name,
+              workspace,
+            },
+          ),
         );
-      if (statSync(path).size > MAX_UPLOAD_BYTES)
+      const size = statSync(path).size;
+      if (size > MAX_UPLOAD_BYTES)
         throw new ServerError(hubText('{name} is larger than 16 MB', { name }));
       const bytes = readFileSync(path);
+      const inside = relative(workspace, path);
+      const shown =
+        inside && !inside.startsWith('..') && !isAbsolute(inside)
+          ? inside.split(sep).join('/')
+          : file;
       return {
-        path: relative(workspace, path).split(sep).join('/'),
+        path: shown,
         base64: bytes.toString('base64'),
         sha256: sha256(bytes),
       };
@@ -4039,21 +4061,59 @@ export async function register(api: ExtensionAPI): Promise<void> {
         return;
       }
       if (verb === 'run') {
-        // --file <path> attaches a file of the workspace as inputs.files.
-        const attached: string[] = [];
-        const words: string[] = [];
-        for (let i = 0; i < rest.length; i++)
-          if (rest[i] === '--file' && rest[i + 1]) attached.push(rest[++i]!);
-          else words.push(rest[i]!);
-        const [id, ...json] = words;
-        if (!id)
+        // A pack by id or by its manifest name; named options fill the inputs
+        // the pack declares, and --file attaches a file wherever it lies.
+        const { args, values } = options(rest);
+        const [ref, ...jsonWords] = args;
+        if (!ref)
           throw new ServerError(
             hubText(
-              'usage: /hub skill run <id> [json inputs] [--file <path>]…',
+              'usage: /hub skill run <id|name> [json inputs] [--option <value>] [--file <path>]…',
             ),
           );
-        const inputs = json.length ? jsonObject(json.join(' '), 'inputs') : {};
-        if (attached.length) inputs.files = attach(attached, context);
+        let id = ref;
+        let declared: string[] | undefined;
+        if (!id.startsWith('skp_')) {
+          const { data } = await request('GET', '/v1/skillpacks');
+          const rows = (Array.isArray(data) ? data : []).filter(isRecord);
+          const named = rows.filter(
+            (row) => isRecord(row.manifest) && row.manifest.id === id,
+          );
+          const ids = [...new Set(named.map((row) => String(row.skillPackId)))];
+          if (!ids.length)
+            throw new ServerError(
+              hubText('no skill pack named {name}', { name: id }),
+            );
+          if (ids.length > 1)
+            throw new ServerError(
+              hubText('several skill packs are named {name}: {ids}', {
+                name: id,
+                ids: ids.join(', '),
+              }),
+            );
+          id = ids[0]!;
+          const manifest = named[0]!.manifest;
+          const inputsOf = isRecord(manifest) ? manifest.inputs : undefined;
+          if (isRecord(inputsOf))
+            declared = Object.keys(
+              isRecord(inputsOf.properties) ? inputsOf.properties : inputsOf,
+            );
+        }
+        const inputs = jsonWords.length
+          ? jsonObject(jsonWords.join(' '), 'inputs')
+          : {};
+        for (const [flag, taken] of Object.entries(values)) {
+          if (flag === 'file') continue;
+          if (declared && !declared.includes(flag))
+            throw new ServerError(
+              hubText('unknown option --{flag}; the pack declares: {options}', {
+                flag,
+                options: declared.join(', '),
+              }),
+            );
+          inputs[flag] = taken.at(-1) ?? '';
+        }
+        if (values.file?.length) inputs.files = attach(values.file, context);
         const { data } = await request(
           'POST',
           `/v1/skillpacks/${encodeURIComponent(id)}/runs`,
@@ -4073,7 +4133,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
         return;
       }
       throw new ServerError(
-        hubText('usage: /hub skill push <folder> | list | run <id> [json]'),
+        hubText(
+          'usage: /hub skill push <folder> | list | run <id|name> [json]',
+        ),
       );
     },
     async tools(_rest, context) {
