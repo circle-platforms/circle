@@ -196,13 +196,13 @@ const command = (name, payload = {}, sessionId) =>
     },
     { name, payload, sessionId },
   );
-async function waitFor(check, name, milliseconds = 12_000) {
+async function waitFor(check, name, milliseconds = 12_000, pollMs = 20) {
   const deadline = Date.now() + milliseconds;
   lastWait = { name, startedAt: Date.now(), deadline };
   phase('wait started', { wait: name });
   while (!(await check())) {
     if (Date.now() > deadline) throw Error(`timed out: ${name}`);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
   phase('wait completed', {
     wait: name,
@@ -881,11 +881,25 @@ try {
   const before = gatewayRequests.length;
   largePicture.gatewayRequestsBeforeSend = before;
   await send('and this screenshot');
+  // The picture is decoded, scaled and re-encoded before its request goes
+  // out: seconds of CPU work whose length follows the machine, not the 12 s
+  // the light waits share. Wait on the two effects separately. The request
+  // arriving is an event this process records itself, so nothing polls the
+  // application while it does that work — the old wait rebuilt the full
+  // state snapshot every 20 ms throughout it, and on a shared Intel runner
+  // the request landed 0.4 s after the shared deadline had already failed
+  // the check. The turn finishing is a state, polled gently.
   await waitFor(
-    async () =>
-      gatewayRequests.length > before &&
-      (await state()).sessions[0].state === 'idle',
-    'large picture sent',
+    () => gatewayRequests.length > before,
+    'large picture request',
+    60_000,
+  );
+  phase('large picture request dispatched');
+  await waitFor(
+    async () => (await state()).sessions[0].state === 'idle',
+    'large picture turn',
+    30_000,
+    250,
   );
   const large = gatewayRequests.at(-1).messages.at(-1);
   largePicture.sent = imageMetadata(large.content);
