@@ -2075,6 +2075,17 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
               }
             />
           </div>
+          <div className="setting-row">
+            <Switch
+              label={t('credit circle in commits')}
+              checked={settings.attribution}
+              onChange={(checked) =>
+                save((value) => {
+                  value.attribution = checked;
+                })
+              }
+            />
+          </div>
           {desktopHost() ? (
             <UpdateControl />
           ) : (

@@ -224,6 +224,7 @@ export const pages: Record<string, string> = {
   data: '数据',
   'Circle desktop data folder': '桌面版的数据文件夹',
   'check for updates': '检查更新',
+  'credit circle in commits': '在提交和 PR 中署名 Circle',
   'update check requires a connected host': '检查更新需要桌面版',
   'check now': '立即检查',
   // commands and help

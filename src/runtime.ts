@@ -1169,6 +1169,8 @@ export class AgentRuntime {
         localContext: this.options.localContext,
         variables: this.options.settings.variables,
         secrets: secretNames(this.options.home),
+        attribution: this.options.settings.attribution,
+        headless: this.options.headless,
       },
     );
   }
