@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.11.0 - 2026-10-23
+
 ### Added
 
 - **Web search works on Bailian Anthropic routes.** Native web search now runs on the `bailian-anthropic` preset and carries the documented billing identity; before, the gateway silently ignored the search tool and the model answered from memory instead of searching.
