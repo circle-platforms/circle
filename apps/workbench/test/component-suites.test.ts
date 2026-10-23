@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runComponentSuites, COMPONENT_SUITES } from './component-suites.mjs';
+import {
+  runComponentSuites,
+  componentShard,
+  COMPONENT_SUITES,
+} from './component-suites.mjs';
 
 test('component gate runs real child processes serially and retains the first failure without running later suites', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'circle-component-gate-'));
@@ -203,4 +207,58 @@ test('remaining-goal journeys stay required once', () => {
     'external-file-access-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((value) => value === name).length, 1);
+});
+
+test('component shards partition the ordered suites without overlap or loss', () => {
+  const shards = [0, 1, 2].map((index) =>
+    componentShard(COMPONENT_SUITES, index, 3),
+  );
+  // Together they cover the list exactly once.
+  assert.equal(
+    shards.reduce((sum, shard) => sum + shard.length, 0),
+    COMPONENT_SUITES.length,
+  );
+  assert.equal(
+    new Set(shards.flat()).size,
+    COMPONENT_SUITES.length,
+  );
+  // Each shard keeps the list's order and its stride: shard i starts at
+  // position i and steps by the shard count.
+  for (const [index, shard] of shards.entries()) {
+    assert.equal(shard[0], COMPONENT_SUITES[index]);
+    assert.equal(shard[1], COMPONENT_SUITES[index + 3]);
+    for (let at = 1; at < shard.length; at++)
+      assert.ok(
+        COMPONENT_SUITES.indexOf(shard[at]!) >
+          COMPONENT_SUITES.indexOf(shard[at - 1]!),
+      );
+  }
+  assert.throws(() => componentShard(COMPONENT_SUITES, 3, 3), /invalid/);
+  assert.throws(() => componentShard(COMPONENT_SUITES, 0, 0), /invalid/);
+});
+
+test('a sharded run executes only its share, under the full list numbers', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-component-shard-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const effects = join(root, 'effects.log');
+  const files = ['one', 'two', 'three', 'four'].map((name) =>
+    join(root, name + '.mjs'),
+  );
+  for (const [index, file] of files.entries())
+    await writeFile(
+      file,
+      `import {appendFileSync} from 'node:fs'; appendFileSync(${JSON.stringify(effects)}, '${index + 1}\\n');`,
+    );
+  const outputRoot = join(root, 'evidence');
+  const receipt = await runComponentSuites({
+    suites: files,
+    shard: { index: 1, count: 2 },
+    outputRoot,
+    nodeArguments: [],
+  });
+  assert.equal(await readFile(effects, 'utf8'), '2\n4\n');
+  assert.deepEqual(
+    receipt.suites.map((suite) => suite.directory.split('/').at(-1)),
+    ['2-two', '4-four'],
+  );
 });
