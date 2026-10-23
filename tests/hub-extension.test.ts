@@ -2351,3 +2351,94 @@ test('a server that cannot be reached is named without the transport error', asy
     return view?.username === 'ada' && view.url === 'http://127.0.0.1:1';
   });
 });
+
+test('/hub cancel asks the server to stop a running task and refuses one that already ended', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const posts: { path: string; body: string }[] = [];
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const body = await read(request);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (request.method === 'POST')
+      posts.push({ path: url.pathname, body: body.toString() });
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: { token: TOKEN, tokenType: 'Bearer', scopes: ['scp_lab'] },
+      });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/tasks/task_run/status')
+      return send(200, {
+        data: {
+          taskId: 'task_run',
+          phase: 'running',
+          title: 'run work',
+          inputRevisionId: 'inrev_1',
+        },
+      });
+    if (
+      url.pathname === '/v1/tasks/task_run/cancel' &&
+      request.method === 'POST'
+    )
+      return send(202, { data: { taskId: 'task_run', phase: 'cancelled' } });
+    if (url.pathname === '/v1/tasks/task_old/status')
+      return send(200, {
+        data: {
+          taskId: 'task_old',
+          phase: 'delivered',
+          title: 'done work',
+          inputRevisionId: 'inrev_1',
+        },
+      });
+    return send(404, {
+      status: 'failed',
+      error: { code: 'NOT_FOUND', message: 'no route' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const { port } = server.address() as AddressInfo;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port} tester`, context);
+  await command.handler('cancel task_run', context);
+  assert.match(lines.at(-1)!, /cancel asked for task_run[\s\S]*not kept/);
+  assert.equal(
+    posts.find((p) => p.path === '/v1/tasks/task_run/cancel')?.body,
+    '{}',
+  );
+  await assert.rejects(
+    async () => command.handler('cancel task_old', context),
+    /already ended as delivered[\s\S]*\/hub cancel/,
+  );
+});

@@ -184,6 +184,12 @@ function usageText(): string {
     ],
     ['/hub task <id>', hubText('show a task and follow it until it ends')],
     [
+      '/hub cancel <id>',
+      hubText(
+        'stop a running task you handed over; what it gathered is not kept, submit again to start fresh',
+      ),
+    ],
+    [
       '/hub respond <id> <answer>',
       hubText(
         'answer a clarification or a repair. An approval is /hub approve, not this',
@@ -4007,6 +4013,32 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async get([taskId], context) {
       if (!taskId) throw new ServerError(hubText('usage: /hub get <id>'));
       await deliver(taskId, context);
+    },
+    async cancel([taskId], context) {
+      if (!taskId) throw new ServerError(hubText('usage: /hub cancel <id>'));
+      const current = await status(taskId);
+      const phase = String(current.phase ?? '');
+      if (TERMINAL.has(phase))
+        throw new ServerError(
+          hubText(
+            '{task} already ended as {phase} · /hub cancel is for a task still running',
+            {
+              task: taskId,
+              phase,
+            },
+          ),
+        );
+      await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/cancel`, {
+        json: {},
+      });
+      context.append(
+        hubText(
+          '✓ cancel asked for {task} · the server settles it shortly · what that run gathered is not kept · submit again to start fresh',
+          { task: taskId },
+        ),
+      );
+      // A follow already running on this task sees the terminal phase from its
+      // own poll; nothing else to undo here.
     },
     async refresh(_rest, context) {
       const counts = await collectObjects();
