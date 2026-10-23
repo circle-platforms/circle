@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.12.0 - 2026-10-23
+
 ### Added
 
 - **Circle can sign the work it does.** In a git repository, the commits and pull requests Circle makes now credit Circle: as the author on headless runs, as a co-author in the TUI and the desktop app, with the person who ran it as the other party either way. A `Generated with Circle` line closes its pull request bodies. The `attribution` setting turns it off, and the desktop settings page carries the switch.
