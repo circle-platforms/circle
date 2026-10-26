@@ -192,7 +192,7 @@ export function hookNoticeText(notice: HookNotice): string {
 /** The line a tool result starts with when a hook decided. The model reads the English. */
 export const HOOK_DENIED_LINE = 'Hook denied this call:';
 export const HOOK_ASKED_LINE = 'Hook asked before this call:';
-export const HOOK_ALLOWED_LINE = 'Hook allowed this call.';
+export { HOOK_ALLOWED_LINE } from './hook_display.js';
 export const HOOK_OUTPUT_LINE = 'Hook output';
 
 export function hookDeniedMessage(reason: string): string {

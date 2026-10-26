@@ -33,6 +33,7 @@ import { currentSession } from '../model/state';
 import { useSources } from './SourceNavigation';
 import type { Attachment } from '../model/types';
 import { hasToolInput } from '../model/browser';
+import { withoutHookAllowedLine } from '../../../../src/hook_display';
 const AGENT_TOOLS = new Set([
   'task',
   'native_tasks_enqueue',
@@ -106,8 +107,8 @@ export function AgentToolLinks({
 const SEARCH_QUOTA = 'Native search unavailable: search quota exceeded';
 const SEARCH_PROVIDER = 'Provider: DuckDuckGo';
 /** The provider line and its quota error, in the interface language. The stored text stays English. */
-function shownToolOutput(text: string): string {
-  return text
+export function shownToolOutput(text: string): string {
+  return withoutHookAllowedLine(text)
     .replaceAll(SEARCH_PROVIDER, t(SEARCH_PROVIDER))
     .replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA))
     .replaceAll('Hook denied this call:', t('Hook denied this call:'))
@@ -147,7 +148,7 @@ export function ToolMessage({
   const { view, update } = useSessionPresentation();
   const tab = view.toolTabs?.[tool.id] ?? 'output';
   const textOutput = useMemo(
-    () => structuredTextOutput(tool.output),
+    () => structuredTextOutput(withoutHookAllowedLine(tool.output)),
     [tool.output],
   );
   const setTab = (value: 'input' | 'output') =>

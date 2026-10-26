@@ -58,7 +58,6 @@ import {
   hookFileShown,
   hookNoticeText,
   hookToolPaths,
-  HOOK_ALLOWED_LINE,
   HOOK_ASKED_LINE,
   HOOK_OUTPUT_LINE,
   type HookBatch,
@@ -1580,7 +1579,6 @@ export class Harness {
         this.options.policy.tabAlwaysAsks(call.name, resolved);
       const hookAsk = before?.decision === 'ask';
       const hookAllow = before?.decision === 'allow' && !alwaysAsk;
-      if (hookAllow) hookLine = HOOK_ALLOWED_LINE;
       const preparedRun = tool.prepare
         ? await tool.prepare(resolved, {
             signal,
@@ -1623,9 +1621,7 @@ export class Harness {
           );
         if (permission?.decision === 'ask' && permission.reason)
           call = { ...call, hook_reason: permission.reason };
-        if (permission?.decision === 'allow' && !alwaysAsk && !hookAsk) {
-          hookLine = HOOK_ALLOWED_LINE;
-        } else {
+        if (permission?.decision !== 'allow' || alwaysAsk || hookAsk) {
           this.bus.emit('tool_waiting', {
             payload: { ...call, reason: call.hook_reason || found.reason },
           });

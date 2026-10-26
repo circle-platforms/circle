@@ -132,7 +132,7 @@ The command's standard output and standard error are kept up to 100,000 characte
 
 Claude Code blocks a command hook only on exit 2. Any other exit is a non-blocking error, and exit 0 with plain text is not a decision. Circle is stricter on `before_tool`, `permission_request` and `before_stop`: any non-zero exit, a timeout, a failure to start, or output that is not a JSON object is a deny. Exit 2 is a deny here too, so a hook written to that convention still blocks in Circle: exit 0 with a JSON decision, or exit 2 to refuse. A hook that prints plain text and exits 0 on a gating event is a deny in Circle, where Claude Code would let the call through. On `after_tool` and `session_start` a non-zero exit does not interrupt the turn. Circle writes it to `hooks.log` and shows a notice. The transcript keeps the hook's error text. The model is told only `hook failed · name`, so it does not quote that text back. In the desktop's 简体中文 that notice is Chinese (`钩子失败`, and Circle's own words such as a timeout); the hook's own text stays as it wrote it. Exit 0 still feeds the output back, which is how a formatter reports what it did.
 
-A deny the model sees starts with `Hook denied this call:`. An ask that you then reject includes `A hook asked:`. After you approve a call a hook asked about, the tool result starts with `Hook asked before this call:`. An allow starts the result with `Hook allowed this call.`. `after_tool` context is appended as `Hook output (name):`.
+A deny the model sees starts with `Hook denied this call:`. An ask that you then reject includes `A hook asked:`. After you approve a call a hook asked about, the tool result starts with `Hook asked before this call:`. A routine allow does not add `Hook allowed this call.` to the tool result; an older result with that prefix hides it only on display. `after_tool` context is appended as `Hook output (name):`.
 
 ## Path globs
 
@@ -144,7 +144,7 @@ Matching is case-sensitive, except on Windows, where `\` and `/` are the same an
 
 ## What you see
 
-The terminal keeps hook lines in the transcript as notices, in English whatever the system language; the hook's own reason, the command and the tool name stay as written. The welcome inventory names `.circle/hooks.json` when that file is present. The approval card adds `hook · <reason>` when a hook asked.
+The terminal keeps hook notices in English whatever the system language; the hook's own reason, the command and the tool name stay as written. A routine allow notice is hidden by default. Set `show_hook_allow: true` to show it in the terminal and desktop. Denials, questions, failures and `after_tool` output notices remain visible. The welcome inventory names `.circle/hooks.json` when that file is present. The approval card adds `hook · <reason>` when a hook asked.
 
 The desktop transcript uses the same notices. In 简体中文 the labels are fully Chinese, and the reason stays as the hook wrote it. Settings lists each hook's name, whether it came from you, the project or a skill (and which skill), the event, the tools when they are not `*`, and the command. A skill hook that this session has not loaded is listed as waiting and does not run. An untrusted project file is named there and is not run, and so is a project file that waits for approval.
 

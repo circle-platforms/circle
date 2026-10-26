@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setLanguage } from '../src/i18n/index.ts';
 import { formatHookNotice } from '../src/model/runtime-notice.ts';
+import { shownMessageText } from '../src/components/MessageView.tsx';
+import type { Message } from '../src/model/types.ts';
 
 test('a hook notice in zh-CN is Chinese and keeps the hook reason and tool name', () => {
   try {
@@ -52,6 +54,26 @@ test('a hook notice in zh-CN is Chinese and keeps the hook reason and tool name'
     assert.equal(
       formatHookNotice({ kind: 'failed', reason: 'hook exited 2' }),
       '钩子失败 · 钩子退出码 2',
+    );
+    assert.equal(
+      formatHookNotice({ kind: 'allowed', tool: 'write_file', reason: 'safe' }),
+      '钩子允许了 write_file · safe',
+    );
+    assert.equal(
+      formatHookNotice({
+        kind: 'asked',
+        tool: 'write_file',
+        reason: 'look first',
+      }),
+      '钩子要求确认 write_file · look first',
+    );
+    assert.equal(
+      shownMessageText({
+        role: 'notice',
+        text: 'hook allowed write_file · safe',
+        hookNotice: { kind: 'allowed', tool: 'write_file', reason: 'safe' },
+      } as Message),
+      '钩子允许了 write_file · safe',
     );
   } finally {
     setLanguage('en');

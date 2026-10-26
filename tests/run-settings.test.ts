@@ -202,3 +202,20 @@ test('print mode sends --model over the project model and --thinking over the va
   assert.equal(bodies[0]!.reasoning_effort, 'high');
   assert.deepEqual(readFileSync(join(home, 'settings.json')), before);
 });
+
+test('show_hook_allow is a user preference, not a project setting', (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  assert.equal(defaultSettings().show_hook_allow, false);
+  saveSettings(
+    trustFolder({ ...defaultSettings(), show_hook_allow: true }, workspace),
+    home,
+  );
+  assert.equal(loadSettings(home).show_hook_allow, true);
+  project(workspace, { show_hook_allow: true });
+  const { settings, problems } = settingsForRun(home, workspace);
+  assert.equal(settings.show_hook_allow, true);
+  assert.deepEqual(problems, [
+    `${join(workspace, '.circle', 'settings.json')}: 'show_hook_allow' is not a project setting`,
+  ]);
+});

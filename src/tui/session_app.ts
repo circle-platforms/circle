@@ -474,6 +474,7 @@ export class SessionApp {
       autoMode: false,
       todos: [],
       showThinking: !settings.hide_thinking,
+      showHookAllow: settings.show_hook_allow === true,
       showTools: false,
       streaming: '',
       thinking: '',
@@ -1084,6 +1085,7 @@ export class SessionApp {
     this.keyProblems = [];
     this.state.model = this.settings.auth.model;
     this.state.showThinking = !this.settings.hide_thinking;
+    this.state.showHookAllow = this.settings.show_hook_allow === true;
     if (this.theme.mode !== this.settings.theme) {
       this.theme.mode = this.settings.theme;
       this.theme.apply();

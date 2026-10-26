@@ -282,7 +282,7 @@ test("a hook's allow does not skip a destructive tool's card, and print mode doe
     ['files-server_remove_file'],
   );
   assert.deepEqual(allowed.ran(), ['save_note', 'remove_file']);
-  assert.match(allowed.results()[0]!, /^Hook allowed this call\./);
+  assert.doesNotMatch(allowed.results()[0]!, /^Hook allowed this call\./);
   const headless = await setup(t, undefined, { headless: true });
   headless.runtime.policy.setYolo(headless.runtime.session.id, true);
   headless.replies.push(calling('save_note', 'remove_file'), assistant('done'));

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { structuredTextOutput } from '../src/model/tool-output';
+import { shownToolOutput } from '../src/components/ToolMessage';
+import { withoutHookAllowedLine } from '../../../src/hook_display';
+import { setLanguage } from '../src/i18n';
 import type { GitHubConnectionBackend } from '../../../src/github_connection';
 test('structured log text is readable while both originals remain exact', () => {
   const text = Array.from(
@@ -37,6 +40,34 @@ test('only a root string text field gets an inert text preview', () => {
     structuredTextOutput(JSON.stringify({ text }))?.preview,
     '<img src=x onerror=alert(1)>untrusted link',
   );
+});
+
+test('routine allow is filtered only for display, with other hook lines translated', () => {
+  const raw = 'Hook allowed this call.\n\n{"text":"ok"}';
+  assert.equal(shownToolOutput(raw), '{"text":"ok"}');
+  assert.equal(structuredTextOutput(withoutHookAllowedLine(raw))?.text, 'ok');
+  assert.equal(raw, 'Hook allowed this call.\n\n{"text":"ok"}');
+  assert.equal(
+    withoutHookAllowedLine('before\nHook allowed this call.'),
+    'before\nHook allowed this call.',
+  );
+  try {
+    setLanguage('zh-CN');
+    assert.equal(
+      shownToolOutput('Hook denied this call: no writes'),
+      '钩子拒绝了此次调用： no writes',
+    );
+    assert.equal(
+      shownToolOutput('Hook asked before this call: look first'),
+      '钩子在调用前要求确认： look first',
+    );
+    assert.equal(
+      shownToolOutput('Hook output (lint):\nformatted'),
+      '钩子输出（lint）：\nformatted',
+    );
+  } finally {
+    setLanguage('en');
+  }
 });
 
 test('real bundled extension serialization retains its log envelope for the model and raw view', async () => {

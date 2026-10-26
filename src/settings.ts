@@ -53,6 +53,7 @@ export interface CircleSettings {
   vision: { base_url: string; model: string; api_key_ref: string };
   double_escape: 'tree' | 'fork' | 'none';
   hide_thinking: boolean;
+  show_hook_allow: boolean;
   /**
    * Where the desktop application starts its default workspace; "" is the
    * built-in scratch folder inside the data folder. Desktop-only: the
@@ -99,6 +100,7 @@ export const defaultSettings = (): CircleSettings => ({
   vision: { base_url: '', model: '', api_key_ref: 'vision_key' },
   double_escape: 'tree',
   hide_thinking: false,
+  show_hook_allow: false,
   workspace_folder: '',
   task_folder: '',
   variables: {},
@@ -187,6 +189,7 @@ export function loadSettingsFromDict(
   settings.double_escape =
     double === 'fork' || double === 'none' ? double : 'tree';
   settings.hide_thinking = Boolean(raw.hide_thinking);
+  settings.show_hook_allow = Boolean(raw.show_hook_allow);
   const attribution = isRecord(raw.attribution) ? raw.attribution : {};
   const author = String(attribution.author || '')
     .trim()

@@ -1862,6 +1862,17 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           <p className="panel-note">
             {t('A skill hook runs after that skill is loaded in this session.')}
           </p>
+          <div className="setting-row">
+            <Switch
+              label={t('show hook allowed notices')}
+              checked={settings.showHookAllow === true}
+              onChange={(checked) =>
+                save((value) => {
+                  value.showHookAllow = checked;
+                })
+              }
+            />
+          </div>
           {settings.projectHooksIgnored && (
             <p className="panel-note">
               {t('Project hooks are not running until this folder is trusted.')}

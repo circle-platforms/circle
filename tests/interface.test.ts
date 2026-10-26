@@ -18,7 +18,11 @@ import {
   wrap,
   truncate,
 } from '../src/ink/string_width.js';
-import { renderScreen, type ScreenState } from '../src/tui/render.js';
+import {
+  renderScreen,
+  transcriptRows,
+  type ScreenState,
+} from '../src/tui/render.js';
 import { CompactionProgress } from '../src/compaction.js';
 import { emptyUsage } from '../src/types.js';
 import { parseCli, UsageError } from '../src/cli.js';
@@ -50,6 +54,70 @@ function state(): ScreenState {
     hiddenTurns: 0,
   };
 }
+test('routine hook allow is hidden once, while asked and denied results stay visible', () => {
+  const calls = [
+    { id: 'allow', name: 'execute', args: { command: 'allow' } },
+    { id: 'ask', name: 'execute', args: { command: 'ask' } },
+    { id: 'deny', name: 'execute', args: { command: 'deny' } },
+  ];
+  const messages = [
+    {
+      id: 'assistant',
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: calls,
+    },
+    {
+      id: 'allow-result',
+      role: 'tool' as const,
+      tool_call_id: 'allow',
+      name: 'execute',
+      status: 'success' as const,
+      content: 'Hook allowed this call.\n\nordinary output',
+    },
+    {
+      id: 'ask-result',
+      role: 'tool' as const,
+      tool_call_id: 'ask',
+      name: 'execute',
+      status: 'success' as const,
+      content: 'Hook asked before this call: look first\n\nasked output',
+    },
+    {
+      id: 'deny-result',
+      role: 'tool' as const,
+      tool_call_id: 'deny',
+      name: 'execute',
+      status: 'error' as const,
+      content: 'Hook denied this call: no writes',
+    },
+    {
+      id: 'allow-notice',
+      role: 'user' as const,
+      internal: 'hook_notice' as const,
+      content: '<system-reminder>hook allowed execute · safe</system-reminder>',
+      display: 'hook allowed execute · safe',
+      hook: { kind: 'allowed' as const, tool: 'execute', reason: 'safe' },
+    },
+  ];
+  const shown = (enabled: boolean) =>
+    stripAnsi(
+      transcriptRows(
+        { ...state(), messages, showHookAllow: enabled },
+        100,
+      ).join('\n'),
+    );
+  const hidden = shown(false);
+  assert.match(hidden, /ordinary output/);
+  assert.match(hidden, /Hook asked before this call: look first/);
+  assert.match(hidden, /Hook denied this call: no writes/);
+  assert.doesNotMatch(hidden, /hook allowed/i);
+  const visible = shown(true);
+  assert.equal(visible.split('hook allowed execute · safe').length - 1, 1);
+  assert.doesNotMatch(visible, /Hook allowed this call\./);
+  assert.doesNotMatch(shown(false), /hook allowed/i);
+});
+
 test('input parser buffers fragmented bracketed paste and terminal reports never type letters', () => {
   const parser = new InputParser();
   assert.deepEqual(parser.feed('\x1b[200~hello\n\x1b[20'), []);
