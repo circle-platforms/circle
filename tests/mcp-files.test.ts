@@ -440,7 +440,12 @@ test("with the desktop's file backend a workspace file read_file may not read th
     result('circle').content,
     /file is not available in this workspace: \.circle/,
   );
-  if (folds)
+  if (process.platform === 'win32')
+    assert.match(
+      result('env').content,
+      /Denied by approval policy: '\.ENV' is a credential file/,
+    );
+  else if (folds)
     assert.match(
       result('env').content,
       /file is not available in this workspace: \.ENV/,
