@@ -662,15 +662,14 @@ test(
   'a denied probe with unavailable process inspection cannot confirm exit',
   { skip: process.platform === 'win32' },
   async (t) => {
-    const originalPath = process.env.PATH;
-    process.env.PATH = scratch(t);
-    t.after(() => {
-      process.env.PATH = originalPath;
-    });
+    const root = scratch(t);
     t.mock.method(process, 'kill', () => {
       throw Object.assign(new Error('probe denied'), { code: 'EPERM' });
     });
-    const browser = new ChromeBrowser({ executable: process.execPath });
+    const browser = new ChromeBrowser({
+      executable: process.execPath,
+      processInspector: join(root, 'ps'),
+    });
     await assert.rejects((browser as any).groupRunning(1_073_741_824), {
       code: 'ENOENT',
     });
@@ -686,7 +685,7 @@ test(
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
     writeFileSync(
       join(root, 'ps'),
-      `#!/bin/sh\nprintf '%s' "$$" > ${quote(marker)}\n/bin/sleep 0.12\nexec /bin/ps "$@"\n`,
+      `#!/bin/sh\nif [ "$1" = --warm ]; then exec /bin/ps -A -o pgid=,stat=; fi\nprintf '%s' "$$" > ${quote(marker)}\n/bin/sleep 0.12\nexec /bin/ps "$@"\n`,
       { mode: 0o755 },
     );
     const child = spawn(
@@ -698,6 +697,7 @@ test(
       child.stdout!.once('data', () => resolve());
       child.once('error', reject);
     });
+    assert.equal(spawnSync(join(root, 'ps'), ['--warm']).status, 0);
     const exited = new Promise<void>((resolve) =>
       child.once('exit', () => resolve()),
     );
@@ -705,13 +705,12 @@ test(
       executable: process.execPath,
       closeTimeout: 40,
       processInspectionTimeout: 1000,
+      processInspector: join(root, 'ps'),
     });
     const owned = browser as any;
     owned.processGroups.add(child.pid);
     owned.cdp = { close: () => {} };
-    const previousPath = process.env.PATH;
     try {
-      process.env.PATH = root;
       const started = Date.now();
       assert.equal(await owned.groupRunning(child.pid), true);
       assert.ok(Date.now() - started >= 100, 'the actual delayed ps ran');
@@ -723,8 +722,6 @@ test(
       assert.equal(child.signalCode, 'SIGKILL');
       assert.equal(owned.processGroups.has(child.pid), false);
     } finally {
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
       if (child.exitCode === null && child.signalCode === null)
         child.kill('SIGKILL');
       await exited;
@@ -744,7 +741,7 @@ test(
     // Ignore TERM so a timeout that only sends TERM still fails this regression.
     writeFileSync(
       join(root, 'ps'),
-      `#!/bin/sh\ntrap '' TERM\nprintf '%s' "$$" > ${quote(inspectorPid)}\nexec /bin/cat\n`,
+      `#!/bin/sh\nif [ "$1" = --warm ]; then exec /bin/cat /dev/null; fi\ntrap '' TERM\nprintf '%s' "$$" > ${quote(inspectorPid)}\nexec /bin/cat\n`,
       { mode: 0o755 },
     );
     const child = spawn(
@@ -756,6 +753,7 @@ test(
       child.stdout!.once('data', () => resolve());
       child.once('error', reject);
     });
+    assert.equal(spawnSync(join(root, 'ps'), ['--warm']).status, 0);
     const exited = new Promise<void>((resolve) =>
       child.once('exit', () => resolve()),
     );
@@ -763,6 +761,7 @@ test(
       executable: process.execPath,
       closeTimeout: 1000,
       processInspectionTimeout: 1000,
+      processInspector: join(root, 'ps'),
     };
     const browser = new ChromeBrowser(options);
     const owned = browser as any;
@@ -773,15 +772,9 @@ test(
         closed = true;
       },
     };
-    const previousPath = process.env.PATH;
     let closing: Promise<void> | undefined;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
-    const restorePath = () => {
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
-    };
     try {
-      process.env.PATH = root;
       closing = browser.close();
       const outcome = await Promise.race([
         closing.then(
@@ -813,7 +806,7 @@ test(
       // The one-second injection belongs only to the hanging inspector. Real
       // process inspection on the success retry uses the production default.
       delete options.processInspectionTimeout;
-      restorePath();
+      delete options.processInspector;
       await browser.close();
       await exited;
       assert.equal(child.signalCode, 'SIGKILL');
@@ -821,7 +814,6 @@ test(
       assert.equal(closed, true);
     } finally {
       clearTimeout(watchdog);
-      restorePath();
       if (existsSync(inspectorPid)) {
         try {
           process.kill(Number(readFileSync(inspectorPid, 'utf8')), 'SIGKILL');
@@ -847,7 +839,7 @@ test(
     // same command must fail with the injected second and pass with the default.
     writeFileSync(
       join(root, 'ps'),
-      '#!/bin/sh\n/bin/sleep 1.1\nexec /bin/ps "$@"\n',
+      '#!/bin/sh\nif [ "$1" = --warm ]; then exec /bin/ps -A -o pgid=,stat=; fi\n/bin/sleep 1.1\nexec /bin/ps "$@"\n',
       { mode: 0o755 },
     );
     const child = spawn(
@@ -859,6 +851,7 @@ test(
       child.stdout!.once('data', () => resolve());
       child.once('error', reject);
     });
+    assert.equal(spawnSync(join(root, 'ps'), ['--warm']).status, 0);
     const exited = new Promise<void>((resolve) =>
       child.once('exit', () => resolve()),
     );
@@ -866,6 +859,7 @@ test(
       executable: process.execPath,
       closeTimeout: 1000,
       processInspectionTimeout: 1000,
+      processInspector: join(root, 'ps'),
     };
     const browser = new ChromeBrowser(options);
     const owned = browser as any;
@@ -876,9 +870,7 @@ test(
         closed = true;
       },
     };
-    const previousPath = process.env.PATH;
     try {
-      process.env.PATH = root;
       await assert.rejects(browser.close(), (error: any) => {
         assert.equal(error.killed, true);
         assert.equal(error.signal, 'SIGKILL');
@@ -894,8 +886,6 @@ test(
       assert.equal(owned.processGroups.has(child.pid), false);
       assert.equal(closed, true);
     } finally {
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
       if (child.exitCode === null && child.signalCode === null)
         child.kill('SIGKILL');
       await exited;
