@@ -575,6 +575,10 @@ export class TerminalSessions {
     if (action === 'connect')
       return this.connect(own, conversation, args, signal, person);
     if (action === 'profile-save') return this.saveProfile(conversation, args);
+    if (action === 'decline-host-key') {
+      this.declineHostKey(conversation, String(args.token ?? ''));
+      return { text: '' };
+    }
     const session = this.find(own, String(args.session ?? ''));
     if (session.local)
       return this.performLocal(

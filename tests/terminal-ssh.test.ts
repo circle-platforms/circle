@@ -388,7 +388,12 @@ test('a refused host key drops the paused login and retires its question', async
     () => device.open() === 1,
     'the paused login did not keep its wire',
   );
-  sessions.declineHostKey('c1', ask.approval!.token);
+  await sessions.request(
+    'c1',
+    'decline-host-key',
+    { token: ask.approval!.token },
+    signal,
+  );
   await until(
     () => device.open() === 0,
     'the refused login kept its wire open',

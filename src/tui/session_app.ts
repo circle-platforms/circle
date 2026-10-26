@@ -2010,6 +2010,12 @@ export class SessionApp {
         this.confirmHostKey(result!.approval!, stop.signal),
       ).catch(() => 'reject' as const);
       if (answer === 'reject') {
+        await manager.request(
+          conversation,
+          'decline-host-key',
+          { token: result!.approval!.token },
+          stop.signal,
+        );
         this.flash('Not connected');
         return;
       }

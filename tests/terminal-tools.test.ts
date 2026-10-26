@@ -328,8 +328,13 @@ test('a refused host key sends nothing, and auto mode trusts nothing for good', 
     String(results[0]!.content),
     /did not trust this device host key/,
   );
+  assert.deepEqual(requests[1], {
+    action: 'decline-host-key',
+    token: 'tk',
+  });
+  assert.equal(JSON.stringify(model.requests).includes('"tk"'), false);
   // auto mode still needs the person for the host key, but never trusts for good
-  assert.equal((requests[2]!.approval as { scope: string }).scope, 'once');
+  assert.equal((requests[3]!.approval as { scope: string }).scope, 'once');
 });
 
 test('a device password is a secret name going in and its value coming back redacted', async (t) => {

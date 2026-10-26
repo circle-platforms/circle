@@ -251,6 +251,91 @@ test('an unknown device host key asks the person, and the tokened answer reconne
   );
 });
 
+test('a refused device host key retires the paused login through the terminal port', async (t) => {
+  const requests: Omit<TerminalRequest, 'id'>[] = [];
+  const port: TerminalPort = {
+    async request(sessionId, action, args, signal) {
+      signal.throwIfAborted();
+      requests.push({ sessionId, action, args: structuredClone(args) });
+      if (action === 'connect' && !args.approval)
+        return {
+          text: 'sw1.lan:22 offered a host key nobody has trusted yet',
+          host: 'sw1.lan:22',
+          approval: {
+            kind: 'hostkey',
+            token: 'desktop-refuse-token',
+            host: 'sw1.lan:22',
+            keyType: 'ssh-ed25519',
+            fingerprint: 'SHA256:desktopfp',
+            privateHost: true,
+          },
+        };
+      return { text: 'unused' };
+    },
+  };
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          {
+            id: 'open',
+            name: 'terminal_connect',
+            args: { profile: 'LAB-DEVICE-01' },
+          },
+        ]),
+      },
+      { message: assistant('not connected') },
+    ],
+    port,
+  );
+  await f.call('prompt', { text: 'open the lab switch' });
+  await until(
+    () => f.controller.snapshot().interactions.length > 0,
+    'the approval card',
+  );
+  const approval = f.controller.snapshot().interactions[0]!;
+  await f.call('answer', {
+    id: approval.id,
+    revision: approval.revision,
+    answer: 'always',
+  });
+  await until(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some(
+          (row) => row.reason === 'trusts an unknown device host key',
+        ),
+    'the host key card',
+  );
+  const card = f.controller
+    .snapshot()
+    .interactions.find(
+      (row) => row.reason === 'trusts an unknown device host key',
+    )!;
+  await f.call('answer', {
+    id: card.id,
+    revision: card.revision,
+    answer: 'reject',
+  });
+  await until(
+    () => f.model.requests.length === 2,
+    'the refusal finishes the turn',
+  );
+  assert.deepEqual(
+    requests.map((request) => [request.action, request.args]),
+    [
+      ['connect', { profile: 'LAB-DEVICE-01' }],
+      ['decline-host-key', { token: 'desktop-refuse-token' }],
+    ],
+  );
+  assert.equal(
+    JSON.stringify(f.model.requests).includes('desktop-refuse-token'),
+    false,
+  );
+});
+
 test('without a host to answer, the card falls closed: the person rejects and nothing runs', async (t) => {
   const port: TerminalPort = {
     async request() {

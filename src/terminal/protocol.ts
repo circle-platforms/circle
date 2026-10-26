@@ -6,6 +6,7 @@
 export const terminalActions = [
   'sessions',
   'connect',
+  'decline-host-key',
   'profile-save',
   'send',
   'read',

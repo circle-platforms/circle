@@ -290,10 +290,17 @@ export function terminalTools(
             context.callId,
           )
         : 'reject';
-      if (decision === 'reject')
+      if (decision === 'reject') {
+        await port.request(
+          context.sessionId,
+          'decline-host-key',
+          { token: approval.token },
+          context.signal,
+        );
         throw Error(
           'the user did not trust this device host key; nothing was sent to it',
         );
+      }
       result = await port.request(
         context.sessionId,
         action,
