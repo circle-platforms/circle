@@ -49,7 +49,6 @@ const helper = spawn(process.execPath, ['-e', ${JSON.stringify(`
   process.stderr.write('detached helper inherited stderr\\n', () => process.send('ready'));
   setInterval(() => {}, 1000);
 `)}], { detached: true, stdio: ['ignore', 'ignore', 2, 'ipc'] });
-fs.writeFileSync(${JSON.stringify(helperPidFile)}, String(helper.pid));
 helper.once('message', () => {
   helper.disconnect();
   helper.unref();
@@ -66,6 +65,7 @@ helper.once('message', () => {
     }
   });
 });
+fs.writeFileSync(${JSON.stringify(helperPidFile)}, String(helper.pid));
 `,
     );
     const browser = new ChromeBrowser({
