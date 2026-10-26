@@ -20,6 +20,64 @@ import { jsonEvent } from '../src/headless.js';
 import { compactionRow } from '../src/tui/status_rows.js';
 import { stripAnsi } from '../src/ink/string_width.js';
 import { scratch, cleanup } from './helpers.js';
+
+test('manual compaction consumes a queued user input once after the complete summary is installed', async (t) => {
+  const root = scratch(t);
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => (entered = resolve));
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let answered!: () => void;
+  const done = new Promise<void>((resolve) => (answered = resolve));
+  const model = new ScriptedModel([
+    async () => {
+      entered();
+      await held;
+      return {
+        message: {
+          id: 'summary',
+          role: 'assistant',
+          content: 'Complete prior work.',
+        },
+        usage: emptyUsage(),
+      };
+    },
+    async (request) => {
+      assert.equal(request.messages.at(-1)?.content, 'next instruction');
+      assert.equal(request.messages[0]?.internal, 'summary');
+      assert.equal(runtime.contextMeter().estimated, true);
+      return {
+        message: { id: 'answer', role: 'assistant', content: 'done' },
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    bundledExtensions: false,
+  });
+  runtime.bus.subscribe((event) => {
+    if (event.kind === 'run_end') answered();
+  });
+  cleanup(t, () => runtime.close());
+  runtime.store.append(runtime.session.id, history());
+  const compacting = runtime.compact();
+  await ready;
+  runtime.harness.queue('next instruction');
+  release();
+  await compacting;
+  await done;
+  assert.equal(runtime.contextMeter().estimated, false);
+  assert.equal(model.requests.length, 2);
+  assert.equal(
+    runtime.harness.messages.filter((m) => m.content === 'next instruction')
+      .length,
+    1,
+  );
+});
 function history(): Message[] {
   return Array.from({ length: 10 }, (_, index) => ({
     id: 'raw-' + index,
@@ -93,7 +151,11 @@ test('compaction archives exact raw history before summarizing, reports stages a
     compactionDone(done),
     /compacted.*summarized 4 messages, kept 6.*history:/,
   );
-  assert.equal(store.contextState(session.id).compactionCalls!.length, 1);
+  const operation = store.compactions.operations(session.id).at(-1)!;
+  assert.equal(
+    store.compactions.attempts(operation.snapshot.operationId).length,
+    1,
+  );
 });
 test('an output reservation can trigger compaction before 85 percent and native model windows retain a token-based tail', async (t) => {
   const root = scratch(t);
@@ -101,9 +163,9 @@ test('an output reservation can trigger compaction before 85 percent and native 
   cleanup(t, () => store.close());
   const session = store.create(root, 'test');
   store.append(session.id, [
-    { id: 'old-user', role: 'user', content: 'x'.repeat(13_000) },
+    { id: 'old-user', role: 'user', content: 'x'.repeat(9_000) },
     { id: 'old-answer', role: 'assistant', content: 'done' },
-    { id: 'next-user', role: 'user', content: 'y'.repeat(13_000) },
+    { id: 'next-user', role: 'user', content: 'y'.repeat(9_000) },
     { id: 'next-answer', role: 'assistant', content: 'done' },
     { id: 'current-user', role: 'user', content: 'z'.repeat(3000) },
   ]);
@@ -137,7 +199,7 @@ test('an output reservation can trigger compaction before 85 percent and native 
   assert.match(projected[0]!.content, /earlier work/);
   assert.ok(events.at(-1)!.tokens_after! < events[0]!.tokens_before!);
 });
-test('one oversized message remains unsplit and a balanced tool-call round is never partially summarized', async (t) => {
+test('an oversized current prompt fails locally and a balanced historical tool-call round is never partially summarized', async (t) => {
   const root = scratch(t);
   const store = new CheckpointStore(root);
   cleanup(t, () => store.close());
@@ -149,12 +211,9 @@ test('one oversized message remains unsplit and a balanced tool-call round is ne
   store.append(session.id, [
     { id: 'single', role: 'user', content: 'x'.repeat(10000) },
   ]);
-  await manager.prepare(
-    session.id,
-    model,
-    '',
-    [],
-    new AbortController().signal,
+  await assert.rejects(
+    manager.prepare(session.id, model, '', [], new AbortController().signal),
+    /context budget/,
   );
   assert.equal(model.requests.length, 0);
   const session2 = store.create(root, 'balanced');
@@ -184,7 +243,11 @@ test('one oversized message remains unsplit and a balanced tool-call round is ne
   const summarizer = new ScriptedModel([
     { message: { id: 'summary', role: 'assistant', content: 'summary' } },
   ]);
-  await manager.compact(session2.id, summarizer, new AbortController().signal);
+  await new ContextManager(store, join(root, 'data')).compact(
+    session2.id,
+    summarizer,
+    new AbortController().signal,
+  );
   const archived = readFileSync(
     join(
       root,

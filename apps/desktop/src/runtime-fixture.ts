@@ -41,6 +41,11 @@ export interface RuntimeFixtureRoute {
   replies: RuntimeFixtureReply[];
 }
 export interface RuntimeFixture {
+  model?: string;
+  contextWindow?: number;
+  inputLimit?: number;
+  outputLimit?: number;
+  outputBudget?: number;
   requestsPath?: string;
   replies?: RuntimeFixtureReply[];
   routes?: RuntimeFixtureRoute[];
@@ -71,6 +76,18 @@ export class RuntimeFixtureModel implements ChatModel {
   private workers = new Map<string, RuntimeFixtureIdentity>();
 
   constructor(private fixture: RuntimeFixture) {
+    for (const key of [
+      'contextWindow',
+      'inputLimit',
+      'outputLimit',
+      'outputBudget',
+    ] as const)
+      if (
+        fixture[key] !== undefined &&
+        (!Number.isSafeInteger(fixture[key]) || fixture[key]! <= 0)
+      )
+        throw Error('invalid runtime fixture model limit');
+    this.model = fixture.model ?? this.model;
     if (Boolean(fixture.routes) === Boolean(fixture.replies))
       throw Error('runtime fixture requires exactly one of routes or replies');
     const ids = new Set<string>();
@@ -87,6 +104,18 @@ export class RuntimeFixtureModel implements ChatModel {
     }
   }
 
+  get contextWindow() {
+    return this.fixture.contextWindow;
+  }
+  get inputLimit() {
+    return this.fixture.inputLimit;
+  }
+  get outputLimit() {
+    return this.fixture.outputLimit;
+  }
+  get outputBudget() {
+    return this.fixture.outputBudget;
+  }
   private identity(request: ModelRequest): RuntimeFixtureIdentity {
     const first = request.messages.find((message) => message.role === 'user');
     if (!first)

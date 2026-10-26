@@ -2,11 +2,14 @@ import type { Session, Checkpoint, ContextState } from './checkpoint_store.js';
 import type { Message } from './types.js';
 import { isRecord } from './settings.js';
 import { validateAttachments } from './media.js';
+import type { CompactionArchive } from './compaction.js';
+import { validateCompactionArchive } from './compaction_store.js';
 export interface SessionGraphNode {
   session: Session;
   checkpoints: Checkpoint[];
   contexts: { checkpoint_id: string; state: ContextState; created: number }[];
   labels: Record<string, string>;
+  compactions?: CompactionArchive;
 }
 export interface SessionGraph {
   root: string;
@@ -156,6 +159,14 @@ function validateContext(
       typeof state.summary.text !== 'string'
     )
       throw new Error('invalid summary boundary');
+    if (
+      state.summary.pinnedMessageIds !== undefined &&
+      (!Array.isArray(state.summary.pinnedMessageIds) ||
+        !state.summary.pinnedMessageIds.every(
+          (id) => string(id) && contains(id, 'user'),
+        ))
+    )
+      throw new Error('invalid pinned summary input');
     if (
       state.summary.historyPath !== undefined &&
       !artifact(state.summary.historyPath, 'conversation_history', 'jsonl')
@@ -307,6 +318,19 @@ export function validateSessionGraph(
     const ordered = orderedCheckpoints(node);
     // Validate every branch, including unfinished intermediate tool-call rounds.
     const byId = new Set(node.checkpoints.map((checkpoint) => checkpoint.id));
+    const checkpointById = new Map(
+      node.checkpoints.map((checkpoint) => [checkpoint.id, checkpoint]),
+    );
+    const ancestorCheckpoint = (head: string, id: string) => {
+      let cursor: string | null = head;
+      while (cursor) {
+        if (cursor === id) return true;
+        cursor = checkpointById.get(cursor)?.parent ?? null;
+      }
+      return false;
+    };
+    if (node.compactions !== undefined)
+      validateCompactionArchive(node.compactions, node.session.id, byId);
     const pendingAt = new Map<string, Set<string>>();
     for (const checkpoint of ordered) {
       const pending = checkpoint.parent
@@ -341,6 +365,38 @@ export function validateSessionGraph(
         (id, role) => contains(context.checkpoint_id, id, role),
         ids,
       );
+      const summary = context.state.summary;
+      if (
+        summary?.cutoffCheckpointId !== undefined &&
+        (!string(summary.cutoffCheckpointId) ||
+          !ancestorCheckpoint(
+            context.checkpoint_id,
+            summary.cutoffCheckpointId,
+          ) ||
+          checkpointById.get(summary.cutoffCheckpointId)?.message?.id !==
+            summary.cutoffMessageId)
+      )
+        throw new Error('invalid summary checkpoint');
+      if (
+        summary?.pinnedCheckpointIds !== undefined &&
+        (!Array.isArray(summary.pinnedCheckpointIds) ||
+          !summary.pinnedCheckpointIds.every(
+            (id) =>
+              string(id) &&
+              ancestorCheckpoint(context.checkpoint_id, id) &&
+              checkpointById.get(id)?.message?.role === 'user',
+          ))
+      )
+        throw new Error('invalid pinned summary checkpoints');
+      if (
+        context.state.compactionOperationId !== undefined &&
+        !node.compactions?.operations.some(
+          (op) =>
+            op.snapshot.operationId === context.state.compactionOperationId &&
+            ancestorCheckpoint(context.checkpoint_id, op.snapshot.branchHead),
+        )
+      )
+        throw new Error('missing compaction operation');
       for (const child of context.state.subagentSessionIds ?? [])
         if (nodes.get(child)!.session.parent_id !== node.session.id)
           throw new Error('child-session owner does not match its context');

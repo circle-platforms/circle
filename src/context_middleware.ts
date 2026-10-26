@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChatModel, Message, ModelNotice, Tool, Usage } from './types.js';
@@ -7,21 +7,23 @@ import type { Todo } from './tools.js';
 import {
   nextPruneState,
   pruneMessages,
-  tokenLen,
   type PruneOptions,
 } from './middleware/tool_result_prune.js';
 import { planReminder } from './middleware/plan_tail.js';
 import { loopReminder } from './middleware/loop_guard.js';
 import { isRecord } from './settings.js';
 import type { CompactionEvent } from './compaction.js';
-import { redact } from './redact.js';
-import { summaryMessages } from './media.js';
-import { completionFailure } from './model_completion.js';
 import {
   runningJobReminder,
   pollingJobReminder,
 } from './middleware/job_notice.js';
 import type { Job } from './jobs.js';
+import {
+  messageTokenEstimate,
+  requestBudget,
+  BudgetExceeded,
+} from './request_budget.js';
+import { CompactionEngine, type CompactionFrame } from './compaction_engine.js';
 // When a request would carry more images and PDFs than MEDIA_LIMIT, the older ones are left
 // out down to the newest that fit MEDIA_KEEP, all in one go, so the requests after stay the
 // same (and cached) until they fill up again. The newest message keeps its own whatever size.
@@ -64,6 +66,7 @@ export function nextMediaState(
   return { ...state, droppedMedia: [...dropped] };
 }
 export interface ContextOptions {
+  readOnly?: () => boolean;
   runningJobs?: (sessionId: string) => Job[];
   contextWindow?: number;
   autoCompact?: boolean;
@@ -77,27 +80,7 @@ export interface ContextOptions {
   ) => import('./pricing.js').PriceReceipt;
 }
 export function messageTokens(messages: Message[]): number {
-  return messages.reduce(
-    (total, message) =>
-      total +
-      4 +
-      tokenLen(
-        message.provider_content
-          ? JSON.stringify(message.provider_content)
-          : message.content + (message.thinking || ''),
-      ) +
-      tokenLen(JSON.stringify(message.tool_calls ?? [])) +
-      (message.attachments ?? []).reduce(
-        (sum, item) =>
-          sum +
-          // Preflight estimates only; persisted usage and prices use API receipts.
-          (item.kind === 'image'
-            ? 2048
-            : Math.max(8192, Math.ceil(item.data.length / 4))),
-        0,
-      ),
-    0,
-  );
+  return messageTokenEstimate(messages);
 }
 export function restoredTodos(messages: Message[]): Todo[] {
   const completed = new Set(
@@ -141,12 +124,24 @@ export function restoredPlanMode(messages: Message[]): boolean {
   return false;
 }
 export class ContextManager {
+  readonly compactor: CompactionEngine;
   constructor(
     readonly store: CheckpointStore,
     readonly root: string,
     readonly options: ContextOptions = {},
-  ) {}
-  private recoverArtifacts(raw: Message[], state: ContextState): void {
+  ) {
+    this.compactor = new CompactionEngine(
+      store,
+      root,
+      (id) => this.project(id),
+      options,
+    );
+  }
+  private recoverArtifacts(
+    sessionId: string,
+    raw: Message[],
+    state: ContextState,
+  ): void {
     const restore = (virtual: string, body: string): void => {
       if (
         !/^\/(large_tool_results|conversation_history)\/[a-f0-9]{24}\.(txt|jsonl)$/.test(
@@ -168,9 +163,7 @@ export class ContextManager {
       if (path) restore(path, message.content);
     }
     if (state.summary?.historyPath) {
-      const cutoff = raw.findIndex(
-        (message) => message.id === state.summary!.cutoffMessageId,
-      );
+      const cutoff = this.store.summaryCutoffIndex(sessionId, state.summary);
       if (cutoff >= 0)
         restore(
           state.summary.historyPath,
@@ -274,7 +267,7 @@ export class ContextManager {
     if (reminders.length) this.store.append(sessionId, reminders);
     let state = this.store.contextState(sessionId);
     const messages = this.store.projectedMessages(sessionId);
-    this.recoverArtifacts(this.store.messages(sessionId), state);
+    this.recoverArtifacts(sessionId, this.store.messages(sessionId), state);
     const offloaded = this.offload(messages, state, sessionId);
     const pruned = nextPruneState(
       this.projectWith(messages, offloaded),
@@ -287,30 +280,28 @@ export class ContextManager {
       state = next;
     }
     let projected = this.project(sessionId);
-    const parsed = Number(process.env.CIRCLE_CONTEXT_WINDOW || 128000);
-    const window =
-      this.options.contextWindow ??
-      model.contextWindow ??
-      (Number.isFinite(parsed) && parsed > 0 ? parsed : 128000);
-    const estimate =
-      tokenLen(system) +
-      tokenLen(
-        JSON.stringify(
-          tools.map(({ run: _run, approvalFacts: _facts, ...tool }) => tool),
-        ),
-      ) +
-      messageTokens(projected);
-    const budget = window * 0.95 - (model.outputBudget ?? 0);
+    const budget = requestBudget(
+      model,
+      { system, tools, messages: projected },
+      this.options.contextWindow,
+    );
+    const estimate = budget.input;
     if (
       (this.options.autoCompact ?? true) &&
-      (estimate >= window * 0.85 || estimate > budget)
+      (estimate >= budget.window * 0.85 || !budget.fits)
     ) {
       await this.compact(sessionId, model, signal, '', {
         system,
         tools,
-        trigger: estimate >= window * 0.85 ? 'auto' : 'overflow',
+        trigger: estimate >= budget.window * 0.85 ? 'auto' : 'overflow',
       });
       projected = this.project(sessionId);
+      const after = requestBudget(
+        model,
+        { system, tools, messages: projected },
+        this.options.contextWindow,
+      );
+      if (!after.fits) throw new BudgetExceeded(after);
     }
     if (!subagent && this.store.contextState(sessionId).summary) {
       const reminder = runningJobReminder(
@@ -324,190 +315,13 @@ export class ContextManager {
     }
     return projected;
   }
-  async compact(
+  compact(
     sessionId: string,
     model: ChatModel,
     signal: AbortSignal,
     hint = '',
-    frame: {
-      system?: string;
-      tools?: Tool[];
-      trigger?: CompactionEvent['trigger'];
-    } = {},
+    frame: CompactionFrame = {},
   ): Promise<string> {
-    signal.throwIfAborted();
-    const visible = this.project(sessionId);
-    if (visible.length < 2) return 'Nothing to compact yet';
-    let end = visible.length - 6;
-    if (model.contextWindow) {
-      const keepTokens = model.contextWindow * 0.1;
-      let kept = 0;
-      end = visible.length;
-      while (end > 0) {
-        const size = messageTokens([visible[end - 1]!]);
-        if (kept + size > keepTokens) break;
-        kept += size;
-        end--;
-      }
-      end = Math.min(end, visible.length - 1);
-    }
-    while (end > 0) {
-      try {
-        this.store.requireBalancedTools(visible.slice(0, end));
-        break;
-      } catch {
-        end--;
-      }
-    }
-    if (end <= 0) return 'Nothing to compact yet';
-    const prefix = visible.slice(0, end);
-    const initialHead = this.store.get(sessionId)!.head;
-    const started = Date.now();
-    const trigger = frame.trigger ?? 'tool';
-    const overhead =
-      tokenLen(frame.system ?? '') +
-      tokenLen(
-        JSON.stringify(
-          (frame.tools ?? []).map(
-            ({ run: _run, approvalFacts: _facts, ...tool }) => tool,
-          ),
-        ),
-      );
-    const tokensBefore = overhead + messageTokens(visible);
-    const emit = (
-      phase: CompactionEvent['phase'],
-      extra: Partial<CompactionEvent> = {},
-    ): void => {
-      try {
-        this.options.progress?.({ sessionId, phase, trigger, ...extra });
-      } catch {
-        /* Displays cannot interrupt compaction. */
-      }
-    };
-    emit('start', {
-      tokens_before: tokensBefore,
-      summarized: prefix.length,
-      kept: visible.length - end,
-    });
-    try {
-      const stateBefore = this.store.contextState(sessionId);
-      const cutoffMessage = visible[end - 1]!;
-      const cutoffId =
-        cutoffMessage.internal === 'summary'
-          ? stateBefore.summary?.cutoffMessageId
-          : cutoffMessage.id;
-      const raw = this.store.messages(sessionId);
-      const cutoff = raw.findIndex((message) => message.id === cutoffId);
-      if (cutoff < 0)
-        throw new Error('summary boundary is no longer on the active branch');
-      const name =
-        createHash('sha256')
-          .update(sessionId + ':' + cutoffId)
-          .digest('hex')
-          .slice(0, 24) + '.jsonl';
-      const folder = join(this.root, 'conversation_history');
-      mkdirSync(folder, { recursive: true });
-      const path = join(folder, name);
-      const bytes =
-        raw
-          .slice(0, cutoff + 1)
-          .map((message) => JSON.stringify(message))
-          .join('\n') + '\n';
-      emit('saving');
-      if (existsSync(path)) {
-        if (!readFileSync(path).equals(Buffer.from(bytes)))
-          throw new Error('summary history does not match raw conversation');
-      } else writeFileSync(path, bytes, { mode: 0o600, flag: 'wx' });
-      const virtualPath = '/conversation_history/' + name;
-      emit('saved', { file: virtualPath });
-      signal.throwIfAborted();
-      emit('summarizing');
-      let chunks = 0;
-      const response = await model.complete({
-        system:
-          'Summarize the conversation so another coding agent can continue. Preserve exact goals, constraints, decisions, paths, completed results and unresolved tasks. Use these headings: Goal, Decisions, Files & paths, Open tasks, Notes. Reply with the summary only. ' +
-          hint,
-        messages: [
-          {
-            id: randomUUID(),
-            role: 'user',
-            content: JSON.stringify(summaryMessages(prefix)),
-          },
-        ],
-        tools: [],
-        signal,
-        token: () => {
-          chunks++;
-          if (chunks === 1 || chunks % 8 === 0) emit('chunks', { chunks });
-        },
-        notice: this.options.notice,
-      });
-      signal.throwIfAborted();
-      if (this.store.get(sessionId)?.head !== initialHead)
-        throw new Error('conversation changed during compaction');
-      const state = this.store.contextState(sessionId);
-      response.message.cost ??= this.options.priceUsage?.(
-        response.message.model || model.model,
-        response.usage,
-      );
-      const priorCalls =
-        state.compactionCalls ??
-        (state.summary?.usage
-          ? [
-              {
-                id: 'legacy-' + state.summary.cutoffMessageId,
-                model: state.summary.model ?? '',
-                usage: state.summary.usage,
-                cost: state.summary.response?.cost,
-              },
-            ]
-          : []);
-      const chargedState: ContextState = {
-        ...state,
-        compactionCalls: [
-          ...priorCalls,
-          {
-            id: randomUUID(),
-            model: response.message.model || model.model,
-            usage: response.usage,
-            cost: response.message.cost,
-          },
-        ],
-      };
-      // The provider returned usage even when its summary is incomplete. Charge
-      // it once, but never replace the active projection with that partial text.
-      const incomplete = completionFailure(response.message);
-      if (incomplete || response.message.tool_calls?.length) {
-        this.store.setContextState(sessionId, chargedState);
-        throw incomplete ?? new Error('summary did not complete');
-      }
-      emit('summarized', { chunks });
-      this.store.setContextState(sessionId, {
-        ...chargedState,
-        summary: {
-          cutoffMessageId: cutoffId!,
-          text: response.message.content,
-          historyPath: virtualPath,
-          usage: response.usage,
-          response: response.message,
-          model: model.model,
-        },
-      });
-      emit('done', {
-        tokens_before: tokensBefore,
-        tokens_after: overhead + messageTokens(this.project(sessionId)),
-        summarized: prefix.length,
-        kept: visible.length - end,
-        file: virtualPath,
-        seconds: (Date.now() - started) / 1000,
-      });
-      this.options.notice?.({ event: 'compacted', messages: cutoff + 1 });
-      return `Compacted ${cutoff + 1} messages. Raw history retained.`;
-    } catch (error) {
-      emit('error', {
-        message: redact(error instanceof Error ? error.message : String(error)),
-      });
-      throw error;
-    }
+    return this.compactor.compact(sessionId, model, signal, hint, frame);
   }
 }

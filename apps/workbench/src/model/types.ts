@@ -108,11 +108,13 @@ export interface Message {
   hookNotice?: import('../../../../src/hooks.js').HookNotice;
   /** A core completion diagnostic; arbitrary model/provider text stays untranslated. */
   completionFailure?: ModelCompletionFailureCode;
+  compaction?: import('../../../../src/compaction').CompactionSnapshot;
   /** The user stopped this reply, or a crash saved no reply. */
   interrupted?: boolean;
   usage?: {
     input: number;
     output: number;
+    unreported?: boolean;
     cost: number | null;
     elapsed: string;
     /** A stopped turn's price is an estimate. The dollar figure then ends with `~`. */
@@ -195,9 +197,11 @@ export interface Session {
     inputUnknown?: boolean;
     cost: string;
     contextInput: number | null;
+    contextEstimated?: boolean;
     contextWindow: number | null;
   };
   /** The running turn: its busy word, start, tokens written, and a retry in progress. */
+  compaction?: import('../../../../src/compaction').CompactionSnapshot;
   turn?: {
     verb: string;
     startedAt: number;

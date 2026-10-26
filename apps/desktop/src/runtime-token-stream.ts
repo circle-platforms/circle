@@ -17,6 +17,10 @@ export class RuntimeTokenBuffer {
   private full?: RuntimeUpdate;
   private sessions = new Map<string, Session>();
   private streams = new Map<string, StreamState>();
+  private compactions = new Map<
+    string,
+    { state: NonNullable<Session['compaction']>; turn?: Session['turn'] }
+  >();
   private cursor = { epoch: '', seq: 0 };
   private retiredEpochs = new Set<string>();
   get tokenCursor() {
@@ -46,6 +50,7 @@ export class RuntimeTokenBuffer {
       update.snapshot.sessions.map((session) => [session.id, session]),
     );
     this.streams.clear();
+    this.compactions.clear();
     return true;
   }
   apply(delta: RuntimeTokenDelta): TokenDeltaResult {
@@ -68,6 +73,22 @@ export class RuntimeTokenBuffer {
       return 'gap';
     const session = this.sessions.get(delta.sessionId);
     if (!session) return 'missing-session';
+    if (delta.compaction) {
+      const state = delta.compaction;
+      const previous =
+        this.compactions.get(delta.sessionId)?.state ?? session.compaction;
+      if (
+        state.sessionId !== delta.sessionId ||
+        state.operationId !== previous?.operationId ||
+        state.status !== 'running' ||
+        previous.status !== 'running'
+      )
+        return 'gap';
+      if (state.updatedAt < previous.updatedAt) return 'gap';
+      this.compactions.set(delta.sessionId, { state, turn: delta.turn });
+      this.cursor = { epoch: delta.epoch, seq: delta.seq };
+      return 'applied';
+    }
     let stream = this.streams.get(delta.sessionId);
     if (stream && stream.message.id !== delta.streamId) return 'gap';
     if (!stream || stream.message.id !== delta.streamId) {
@@ -102,13 +123,20 @@ export class RuntimeTokenBuffer {
   }
   materialize(): RuntimeUpdate {
     if (!this.full) throw Error('runtime token stream has no full baseline');
-    if (!this.streams.size) return this.full;
+    if (!this.streams.size && !this.compactions.size) return this.full;
     return {
       ...this.full,
       tokenStream: { ...this.cursor },
       snapshot: {
         ...this.full.snapshot,
         sessions: this.full.snapshot.sessions.map((session) => {
+          const progress = this.compactions.get(session.id);
+          if (progress)
+            session = {
+              ...session,
+              compaction: progress.state,
+              ...(progress.turn ? { turn: progress.turn } : {}),
+            };
           const stream = this.streams.get(session.id);
           if (!stream) return session;
           const messages = session.messages.slice();

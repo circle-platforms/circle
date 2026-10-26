@@ -424,8 +424,8 @@ test('a typed manual compaction failure remains visible on its source session wi
         role: 'assistant',
         content: 'partial summary',
         completion: {
-          reason: 'length',
-          provider_reason: 'max_tokens',
+          reason: 'filter',
+          provider_reason: 'refusal',
           output_limit: 32000,
         },
       },
@@ -456,10 +456,11 @@ test('a typed manual compaction failure remains visible on its source session wi
     .find((row) => row.id === snapshot.activeSessionId)!
     .messages.filter((row) => row.role === 'notice');
   assert.equal(notices.length, 1);
-  assert.equal(notices[0]!.completionFailure, 'output_limit');
+  // Output limits now recover; a refusal exercises the terminal manual error path.
+  assert.equal(notices[0]!.completionFailure, 'filtered');
   assert.equal(
     notices[0]!.text,
-    '✖ model output limit reached; response incomplete',
+    '✖ compaction failed: model response was filtered · ↑ 13 · ↓ 3',
   );
   assert.equal(snapshot.runtime?.error, undefined);
   assert.equal(
@@ -468,9 +469,185 @@ test('a typed manual compaction failure remains visible on its source session wi
   );
   assert.equal(f.model.requests.length, 1);
   assert.equal(
-    active.store.contextState(active.session.id).compactionCalls?.length,
+    active.store.compactions.attempts(active.compaction!.operationId).length,
     1,
   );
+});
+
+test('manual compaction snapshots belong to their source session and stale stop commands cannot cancel them', async (t) => {
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => (entered = resolve));
+  const f = await setup(t, [
+    async (request) => {
+      request.token('summary progress');
+      entered();
+      await new Promise<void>((_resolve, reject) =>
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        ),
+      );
+      return { message: assistant('late'), usage: emptyUsage() };
+    },
+  ]);
+  const owner = (f.controller as unknown as { active: AgentRuntime }).active;
+  const a = owner.session.id;
+  owner.store.append(
+    a,
+    Array.from({ length: 10 }, (_, index) => ({
+      id: 'manual-history-' + index,
+      role: index % 2 ? ('assistant' as const) : ('user' as const),
+      content: 'history ' + index,
+    })),
+  );
+  assert.equal((await f.call('compact', {}, a)).ok, true);
+  await ready;
+  const initial = f.controller.snapshot().sessions.find((s) => s.id === a)!;
+  assert.equal(initial.compaction?.status, 'running');
+  assert.equal(
+    initial.turn,
+    undefined,
+    'manual progress does not invent a normal assistant turn',
+  );
+  const operationId = initial.compaction!.operationId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(a, b);
+  assert.equal(
+    f.controller.snapshot().sessions.find((s) => s.id === b)!.compaction,
+    undefined,
+  );
+  const staleStop = await f.call(
+    'abort',
+    { compactionOperationId: 'stale' },
+    a,
+  );
+  assert.equal(staleStop.ok, true, staleStop.error);
+  assert.equal(owner.compaction!.status, 'running');
+  assert.equal(
+    (await f.call('abort', { compactionOperationId: operationId }, a)).ok,
+    true,
+  );
+  await wait(
+    () => owner.compaction?.status === 'cancelled',
+    'cancelled compaction',
+  );
+  for (let repeat = 0; repeat < 3; repeat++) {
+    const state = f.controller.snapshot();
+    assert.equal(state.activeSessionId, b);
+    assert.equal(state.sessions.find((s) => s.id === b)!.compaction, undefined);
+    assert.equal(
+      state.sessions
+        .find((s) => s.id === a)!
+        .messages.filter((m) => m.compaction?.operationId === operationId)
+        .length,
+      1,
+    );
+  }
+  assert.equal(f.model.requests.length, 1);
+  assert.equal(owner.store.contextState(a).summary, undefined);
+});
+
+test('desktop observes terminal-owned compaction without taking its lease, cancelling it or calling a model', async (t) => {
+  const f = await setup(t, []);
+  const id = f.controller.snapshot().activeSessionId;
+  const initial = (f.controller as unknown as { active: AgentRuntime }).active;
+  initial.store.append(
+    id,
+    Array.from({ length: 10 }, (_, n) => ({
+      id: `history-${n}`,
+      role: n % 2 ? ('assistant' as const) : ('user' as const),
+      content: `synthetic history ${n}`,
+    })),
+  );
+  await f.controller.close();
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>((r) => (entered = r));
+  const gate = new Promise<void>((r) => (release = r));
+  const model = new ScriptedModel([
+    async () => {
+      entered();
+      await gate;
+      return {
+        message: assistant('Complete synthetic checkpoint.'),
+        usage: { input_tokens: 100, output_tokens: 8, cache_read_tokens: 0 },
+      };
+    },
+  ]);
+  const owner = new AgentRuntime({
+    workspace: f.workspace,
+    home: f.home,
+    userHome: f.home,
+    session: id,
+    settings: loadSettings(f.home),
+    model,
+    headless: true,
+  });
+  const readerModel = new ScriptedModel();
+  let viewer: RuntimeController | undefined;
+  const running = owner.compact();
+  try {
+    await ready;
+    const operationId = owner.compaction!.operationId;
+    viewer = new RuntimeController({
+      workspace: f.workspace,
+      home: f.home,
+      userHome: f.home,
+      model: readerModel,
+      emit: () => {},
+    });
+    assert.equal(
+      (
+        await viewer.dispatch({
+          id: randomUUID(),
+          name: 'select-session',
+          sessionId: viewer.snapshot().activeSessionId,
+          payload: { id },
+        })
+      ).ok,
+      true,
+    );
+    const viewed = () =>
+      viewer!.snapshot().sessions.find((session) => session.id === id)!;
+    assert.equal(viewed().occupied, true);
+    assert.equal(viewed().compaction?.operationId, operationId);
+    assert.equal(viewed().compaction?.status, 'running');
+    assert.equal(
+      (
+        await viewer.dispatch({
+          id: randomUUID(),
+          name: 'compact',
+          sessionId: id,
+          payload: {},
+        })
+      ).ok,
+      false,
+    );
+    await viewer.dispatch({
+      id: randomUUID(),
+      name: 'abort',
+      sessionId: id,
+      payload: { compactionOperationId: operationId },
+    });
+    assert.equal(owner.compaction!.status, 'running');
+    assert.equal(readerModel.requests.length, 0);
+    release();
+    await running;
+    assert.equal(viewed().compaction?.status, 'succeeded');
+    assert.equal(
+      viewed().messages.filter((m) => m.compaction?.operationId === operationId)
+        .length,
+      1,
+    );
+    assert.equal(model.requests.length, 1);
+    assert.equal(readerModel.requests.length, 0);
+  } finally {
+    release();
+    await running.catch(() => {});
+    await viewer?.close();
+    await owner.close();
+  }
 });
 
 test('an error anchored to an invisible empty assistant stays before the continued turn', async (t) => {

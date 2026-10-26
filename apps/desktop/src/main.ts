@@ -156,6 +156,13 @@ const rendererRoot = join(__dirname, 'renderer');
 const fixtureProfile = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
   ? JSON.parse(process.env.CIRCLE_WORKBENCH_TEST_PROFILE)
   : undefined;
+// Native integration checks can exercise the real window/worker without taking
+// focus from the person's running apps. This flag has no effect outside fixtures.
+const backgroundTest = Boolean(
+  fixtureProfile && process.env.CIRCLE_WORKBENCH_BACKGROUND_TEST === '1',
+);
+if (backgroundTest && process.platform === 'darwin')
+  app.setActivationPolicy('prohibited');
 // The window follows the system language; checks read it in English on any machine.
 // (Chromium's --lang does not change the languages a page sees on macOS.)
 const forcedLanguage: NativeLocale | undefined = process.env
@@ -606,6 +613,7 @@ async function createWindow() {
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
+      backgroundThrottling: !backgroundTest,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -669,7 +677,9 @@ async function createWindow() {
     return terminals.agent(request, signal);
   });
   installWindowChrome(window);
-  window.once('ready-to-show', () => window?.show());
+  window.once('ready-to-show', () => {
+    if (!backgroundTest) window?.show();
+  });
   window.on('close', () => {
     popouts?.dockAll();
     terminals?.close();

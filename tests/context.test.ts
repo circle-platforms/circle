@@ -222,7 +222,7 @@ test('automatic compaction uses a balanced prefix, retains raw bytes, and expose
       {
         id: 'user-' + i,
         role: 'user',
-        content: 'goal ' + i + 'x'.repeat(2000),
+        content: 'goal ' + i + 'x'.repeat(3000),
       },
       assistant('ai-' + i, 'answer ' + i),
     );
@@ -232,7 +232,7 @@ test('automatic compaction uses a balanced prefix, retains raw bytes, and expose
     { message: assistant('summary', 'structured summary') },
   ]);
   const manager = new ContextManager(store, join(root, 'data'), {
-    contextWindow: 1000,
+    contextWindow: 10000,
   });
   const result = await manager.prepare(
     session.id,
@@ -242,7 +242,7 @@ test('automatic compaction uses a balanced prefix, retains raw bytes, and expose
     new AbortController().signal,
   );
   assert.match(result[0]!.content, /structured summary/);
-  assert.equal(result.length, 7);
+  assert.equal(result.length, 4);
   assert.equal(digest(store.messages(session.id)), before);
   const state = store.contextState(session.id);
   assert.ok(state.summary?.historyPath);
@@ -253,7 +253,7 @@ test('automatic compaction uses a balanced prefix, retains raw bytes, and expose
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line));
-  assert.deepEqual(artifact, raw.slice(0, 6));
+  assert.deepEqual(artifact, raw.slice(0, 9));
   assert.equal(model.requests[0]!.tools.length, 0);
 });
 test('plan reminders are bounded, after tool results, current-turn-only and do not treat subagents as the main agent', () => {
@@ -382,37 +382,38 @@ for (const reason of [
     const raw: Message[] = [];
     for (let i = 0; i < 6; i++)
       raw.push(
-        { id: `u-${i}`, role: 'user', content: 'x'.repeat(2000) },
+        { id: `u-${i}`, role: 'user', content: 'x'.repeat(3000) },
         assistant(`a-${i}`, 'answer'),
       );
     store.append(session.id, raw);
     const before = digest(store.messages(session.id));
-    const model = new ScriptedModel([
-      {
+    const model = new ScriptedModel(
+      Array.from({ length: reason === 'length' ? 9 : 1 }, () => ({
         message: {
           ...assistant('summary', 'unfinished summary'),
           completion: { reason },
         },
         usage: { input_tokens: 17, output_tokens: 23, cache_read_tokens: 3 },
-      },
-    ]);
+      })),
+    );
     const manager = new ContextManager(store, join(root, 'data'), {
-      contextWindow: 1000,
+      contextWindow: 10000,
     });
     await assert.rejects(
       manager.prepare(session.id, model, '', [], new AbortController().signal),
     );
-    assert.equal(model.requests.length, 1);
+    if (reason === 'length')
+      assert.ok(model.requests.length > 1 && model.requests.length <= 9);
+    else assert.equal(model.requests.length, 1);
     assert.equal(store.contextState(session.id).summary, undefined);
-    assert.equal(store.contextState(session.id).compactionCalls?.length, 1);
-    assert.deepEqual(
-      store.contextState(session.id).compactionCalls?.[0]?.usage,
-      {
-        input_tokens: 17,
-        output_tokens: 23,
-        cache_read_tokens: 3,
-      },
-    );
+    const operation = store.compactions.operations(session.id).at(-1)!;
+    const calls = store.compactions.attempts(operation.snapshot.operationId);
+    assert.equal(calls.length, model.requests.length);
+    assert.deepEqual(calls[0]?.usage, {
+      input_tokens: 17,
+      output_tokens: 23,
+      cache_read_tokens: 3,
+    });
     assert.equal(digest(store.messages(session.id)), before);
   });
 }

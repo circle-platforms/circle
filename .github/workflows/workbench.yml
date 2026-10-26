@@ -117,6 +117,8 @@ jobs:
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
       - run: npm --prefix apps/desktop run test:desktop
       - run: npm --prefix apps/desktop run test:live
+      - name: Verify compaction recovery in the native development application
+        run: npm --prefix apps/desktop run test:compaction
       - run: CIRCLE_DESKTOP_TEST_WIDTH=1024 npm --prefix apps/desktop run test:live
       - run: cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/development-receipt.json
       - name: Exercise the native developer journey in development
@@ -139,6 +141,7 @@ jobs:
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live
           CIRCLE_DESKTOP_TEST_WIDTH=1024 npm --prefix apps/desktop run test:live
+          npm --prefix apps/desktop run test:compaction
       # A pull request runs the journey in development above; main repeats it in the packaged
       # application, before the update replaces it.
       - name: Exercise the native developer journey in the packaged application
@@ -277,6 +280,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           npm --prefix apps/desktop run test:desktop
           node apps/desktop/test/native-developer-journey.mjs
+          npm --prefix apps/desktop run test:compaction
       - name: Check invalid browser addresses on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -288,6 +292,7 @@ jobs:
           node apps/desktop/test/developer-toolchain-smoke.mjs
           npm --prefix apps/desktop run test:desktop
           node apps/desktop/test/browser-address.mjs
+          npm --prefix apps/desktop run test:compaction
       - name: Exercise the native developer journey in the packaged application on Windows
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         timeout-minutes: 12
@@ -301,7 +306,9 @@ jobs:
         if: runner.os == 'Windows' && always()
         with:
           name: circle-windows-browser-address
-          path: apps/desktop/artifacts/browser-address/
+          path: |
+            apps/desktop/artifacts/browser-address/
+            outputs/compaction-native/
           if-no-files-found: ignore
       # The release workflow installs and removes it; here it only has to build and validate
       - name: Build the MSI
