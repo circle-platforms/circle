@@ -8,9 +8,11 @@ import { randomUUID } from 'node:crypto';
 import xterm from '@xterm/headless';
 import { privateHost } from '../browser/hosts.js';
 import type {
+  ConnectOutcome,
   Connector,
   ConnectEnv,
   HostKeyApproval,
+  LiveHostKey,
   TerminalTarget,
   TerminalTransport,
 } from './transport.js';
@@ -19,6 +21,7 @@ import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
   findProfile,
+  parseProfile,
   parseTarget,
   profileTarget,
   type TerminalProfile,
@@ -66,6 +69,11 @@ export interface TerminalSessionsOptions {
   connectors: Record<'ssh' | 'telnet', Connector>;
   /** The saved profiles, read fresh when a connect names one. */
   profiles: () => TerminalProfile[];
+  /**
+   * Rewrites the saved profiles, whole, when a profile-save adds one. Without it no
+   * host here keeps profiles and the action says so instead of losing the write.
+   */
+  save?: (profiles: TerminalProfile[]) => void;
   /** Host keys the person trusted for good; without it a "for good" answer changes nothing. */
   hostkeys?: TrustedHostKeys;
   /** A saved secret's value by name; '' when it is not saved. */
@@ -331,6 +339,8 @@ interface PendingConnect {
   profile?: TerminalProfile;
   transport: 'ssh' | 'telnet';
   explicit: { host: string; port: number; target: string; user?: string };
+  /** The login paused at the key, still open on its wire: see transport.ts. */
+  live?: LiveHostKey;
 }
 
 interface Conversation {
@@ -521,6 +531,7 @@ export class TerminalSessions {
     const own = this.conversations.get(conversation);
     if (!own) return;
     this.conversations.delete(conversation);
+    for (const held of own.pending.values()) held.live?.decline();
     for (const [name, entry] of this.onceSecrets)
       if (entry.conversation === conversation) this.onceSecrets.delete(name);
     for (const session of own.sessions.values()) {
@@ -529,13 +540,27 @@ export class TerminalSessions {
     }
   }
   close(): void {
-    for (const own of this.conversations.values())
+    for (const own of this.conversations.values()) {
+      for (const held of own.pending.values()) held.live?.decline();
       for (const session of own.sessions.values()) {
         session.close();
         session.dispose();
       }
+    }
     this.conversations.clear();
     this.onceSecrets.clear();
+  }
+  /**
+   * The person said no to a device key: the login paused on it goes at once rather
+   * than keep its wire open for an answer that will not come. The token retires with
+   * it, as the panel has already taken its buttons away.
+   */
+  declineHostKey(conversation: string, token: string): void {
+    const own = this.conversations.get(conversation);
+    const held = own?.pending.get(token);
+    if (!own || !held) return;
+    own.pending.delete(token);
+    held.live?.decline();
   }
   // -- the actions --
   private async perform(
@@ -549,6 +574,7 @@ export class TerminalSessions {
     if (action === 'sessions') return this.sessionsResult(own);
     if (action === 'connect')
       return this.connect(own, conversation, args, signal, person);
+    if (action === 'profile-save') return this.saveProfile(conversation, args);
     const session = this.find(own, String(args.session ?? ''));
     if (session.local)
       return this.performLocal(
@@ -696,6 +722,83 @@ export class TerminalSessions {
         `\n### Profiles\n${profiles.length ? profiles.join('\n') : '- none'}`,
     };
   }
+  /**
+   * Saves one device profile from a tool's arguments: the same check a loaded entry
+   * goes through, so nothing here can make a profile carry a password value - only
+   * the NAME of a secret the person saved. A later save under the same name replaces
+   * the profile where it stands, keeping the person's order.
+   */
+  private saveProfile(
+    conversation: string,
+    args: Record<string, unknown>,
+  ): TerminalResult {
+    if (!this.options.save)
+      throw Error(
+        'this host keeps no saved profiles; the user saves them in terminal-sessions.json',
+      );
+    const transport = args.transport === 'telnet' ? 'telnet' : 'ssh';
+    const host = typeof args.host === 'string' ? args.host : '';
+    // A person writes an address with its port; the profile keeps the two apart.
+    const parsed = parseTarget(
+      transport,
+      host,
+      typeof args.port === 'number' ? args.port : undefined,
+    );
+    if (!parsed)
+      throw Error(
+        `profile-save takes a plain device host${host ? ` (${host} is not one)` : ''}`,
+      );
+    const text = (value: unknown): string | undefined =>
+      typeof value === 'string' && value ? value : undefined;
+    const profile = parseProfile({
+      name: text(args.name),
+      transport,
+      host: parsed.host,
+      port: parsed.port,
+      user: text(args.user),
+      auth: {
+        ...(text(args.password_secret)
+          ? { password: text(args.password_secret) }
+          : {}),
+        ...(text(args.key_path) ? { key: text(args.key_path) } : {}),
+        ...(text(args.passphrase_secret)
+          ? { passphrase: text(args.passphrase_secret) }
+          : {}),
+      },
+    });
+    if (!profile)
+      throw Error(
+        'the profile is incomplete or malformed: a name, a plain host, and for SSH a saved secret name or a key are needed',
+      );
+    if (transport === 'ssh' && !profile.passwordSecret && !profile.keyPath)
+      throw Error(
+        `an SSH profile needs a way to sign in: ${parsed.target} has no password secret name and no key`,
+      );
+    const list = this.options.profiles().slice();
+    const at = list.findIndex(
+      (one) => one.name.toLowerCase() === profile.name.toLowerCase(),
+    );
+    const replaced = at >= 0;
+    if (replaced) list[at] = profile;
+    else list.push(profile);
+    this.options.save(list);
+    this.options.onChange(conversation);
+    const own = this.conversations.get(conversation);
+    own?.events.push(
+      `profile ${profile.name}: ${replaced ? 'updated' : 'saved'}`,
+    );
+    const signIn = profile.passwordSecret
+      ? `the secret ${profile.passwordSecret}`
+      : String(profile.keyPath);
+    return {
+      text:
+        `${replaced ? 'Updated' : 'Saved'} profile ${profile.name}: ` +
+        `${transport} ${profileTarget(profile)}` +
+        `${profile.user ? ` as ${profile.user}` : ''}, ` +
+        `signing in with ${signIn}` +
+        `${profile.passphraseSecret ? ` and the passphrase secret ${profile.passphraseSecret}` : ''}.`,
+    };
+  }
   private connectArgs(
     own: Conversation,
     args: Record<string, unknown>,
@@ -798,10 +901,18 @@ export class TerminalSessions {
           `this conversation already has ${own.sessions.size} terminals; disconnect one first`,
         );
     }
+    // The answer to an open host key question resumes the login that paused for it:
+    // the handshake is already done, so the console opens as soon as the device signs
+    // the person in - no second TCP connection, no second key exchange. A paused login
+    // that died or ran out falls back to the connect from scratch below, as before.
+    let resumed: TerminalTransport | undefined;
+    if (approval && request.live)
+      resumed = await request.live.resume().catch(() => undefined);
     // A password typed into a quick connect becomes a one-time secret: the wire
     // level only ever sees a secret name, exactly as a saved profile's does.
     let once: string | undefined;
     if (
+      !resumed &&
       !profile &&
       transport === 'ssh' &&
       typeof args.password === 'string' &&
@@ -844,12 +955,11 @@ export class TerminalSessions {
     };
     // The connector reads the password as it starts; a one-time one is gone after it,
     // and a login stopped by a host key gets the password again with the person's answer
-    const outcome = await this.options.connectors[transport](
-      target,
-      env,
-    ).finally(() => {
-      if (once) this.onceSecrets.delete(once);
-    });
+    const outcome: ConnectOutcome = resumed
+      ? { transport: resumed }
+      : await this.options.connectors[transport](target, env).finally(() => {
+          if (once) this.onceSecrets.delete(once);
+        });
     if ('hostkey' in outcome) {
       const token = randomUUID();
       const challenge: TerminalApproval = {
@@ -860,7 +970,7 @@ export class TerminalSessions {
         fingerprint: outcome.hostkey.fingerprint,
         privateHost: privateHost(explicit.target),
       };
-      own.pending.set(token, { ...request, challenge });
+      own.pending.set(token, { ...request, challenge, live: outcome.live });
       return {
         text:
           `${explicit.target} offered a host key nobody has trusted yet:\n` +

@@ -385,6 +385,7 @@ test('the tool surface: reads are free, actors are not, nothing of it enters sub
   assert.deepEqual(Object.keys(byName), [
     'terminal_sessions',
     'terminal_connect',
+    'terminal_profile_save',
     'terminal_send',
     'terminal_read',
     'terminal_wait',
@@ -396,6 +397,7 @@ test('the tool surface: reads are free, actors are not, nothing of it enters sub
   assert.equal(byName.terminal_read!.effect, 'read');
   assert.equal(byName.terminal_sessions!.effect, 'read');
   assert.equal(byName.terminal_wait!.effect, 'read');
+  assert.equal(byName.terminal_profile_save!.effect, 'write');
   assert.equal(byName.terminal_handoff!.effect, 'read');
   assert.equal(byName.terminal_connect!.effect, 'unknown');
   assert.equal(byName.terminal_send!.effect, 'unknown');
@@ -429,4 +431,49 @@ test('the tool surface: reads are free, actors are not, nothing of it enters sub
   );
   assert.match(desktop.terminal_wait!.description ?? '', /sleep/);
   assert.match(desktop.terminal_wait!.description ?? '', /do not run it again/);
+});
+
+test('terminal_profile_save asks like a write and routes the save', async (t) => {
+  const root = scratch(t);
+  const requests: { action: string; args: Record<string, unknown> }[] = [];
+  const port: TerminalPort = {
+    async request(_session, action, args) {
+      requests.push({ action, args: structuredClone(args) });
+      return {
+        text: 'Saved profile lab85: ssh 172.16.6.85:22 as admin, signing in with the secret DEV_85_PASS.',
+      };
+    },
+  };
+  const model = new ScriptedModel([
+    step('c1', 'terminal_profile_save', {
+      name: 'lab85',
+      transport: 'ssh',
+      host: '172.16.6.85:22',
+      user: 'admin',
+      password_secret: 'DEV_85_PASS',
+    }),
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const asked: string[] = [];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: terminalTools(port, { profiles: () => profiles }),
+    approve: async (call) => {
+      asked.push(call.name);
+      return 'always';
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('save the device');
+  // A write: the person sees a card for it, as for any tool that changes state
+  assert.deepEqual(asked, ['terminal_profile_save']);
+  // It is not a per-device terminal rule: the save names the device in its arguments
+  assert.equal(ruleTool('terminal_profile_save'), 'terminal_profile_save');
+  // The save reaches the manager with the secret NAME, never a value
+  assert.equal(requests[0]!.action, 'profile-save');
+  assert.equal(requests[0]!.args.password_secret, 'DEV_85_PASS');
+  assert.equal(requests[0]!.args.host, '172.16.6.85:22');
 });

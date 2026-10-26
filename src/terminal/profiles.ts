@@ -38,7 +38,7 @@ function hostAllowed(host: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/i.test(host);
 }
 
-interface LoadedProfile {
+export interface LoadedProfile {
   name?: unknown;
   transport?: unknown;
   host?: unknown;
@@ -51,9 +51,12 @@ interface LoadedProfile {
 
 /**
  * One entry as saved, or undefined to drop it. A malformed secret name is dropped as a
- * field, not trusted as a value: nothing here can make a profile carry a password.
+ * field, not trusted as a value: nothing here can make a profile carry a password. The
+ * same check answers a profile a caller hands in to be saved.
  */
-function parseProfile(entry: LoadedProfile): TerminalProfile | undefined {
+export function parseProfile(
+  entry: LoadedProfile,
+): TerminalProfile | undefined {
   if (typeof entry.name !== 'string' || !NAME.test(entry.name)) return;
   if (entry.transport !== 'ssh' && entry.transport !== 'telnet') return;
   if (typeof entry.host !== 'string' || !hostAllowed(entry.host)) return;
@@ -168,8 +171,10 @@ export function findProfile(
 }
 
 /**
- * A device an action names without a profile: `host` as it stands or with an explicit
- * port, checked like a profile's. Nothing else: no scheme, no user, no path.
+ * A device an action names without a profile: `host` as it stands, `host:port` as a
+ * person writes an address, or a host with an explicit port argument - the argument
+ * wins over a port written into the text. Checked like a profile's host. Nothing
+ * else: no scheme, no user, no path.
  */
 export function parseTarget(
   transport: 'ssh' | 'telnet',
@@ -177,8 +182,19 @@ export function parseTarget(
   port?: number,
 ): { host: string; port: number; target: string } | undefined {
   const clean = host.trim().toLowerCase();
-  if (!hostAllowed(clean)) return;
-  const wanted = port ?? (transport === 'ssh' ? 22 : 23);
+  let given = clean;
+  let written: number | undefined;
+  const at = clean.lastIndexOf(':');
+  if (at > 0 && /^\d{1,5}$/.test(clean.slice(at + 1))) {
+    const head = clean.slice(0, at);
+    // Split `host:port`; brackets say IPv6, and only close a bracketed form.
+    if (!head.startsWith('[') || head.endsWith(']')) {
+      given = head;
+      written = Number(clean.slice(at + 1));
+    }
+  }
+  if (!hostAllowed(given)) return;
+  const wanted = port ?? written ?? (transport === 'ssh' ? 22 : 23);
   if (!Number.isInteger(wanted) || wanted < 1 || wanted > 65535) return;
-  return { host: clean, port: wanted, target: `${clean}:${wanted}` };
+  return { host: given, port: wanted, target: `${given}:${wanted}` };
 }

@@ -350,6 +350,18 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'terminal',
   },
   {
+    name: 'terminal_profile_save',
+    get description() {
+      return t('Save a device profile so SSH can sign in');
+    },
+    get detail() {
+      return t(
+        'Save a device under a profile name so terminal_connect can sign in to it: the password comes from the NAME of a secret the user saved, never its value; a save replaces the profile of the same name.',
+      );
+    },
+    kind: 'terminal',
+  },
+  {
     name: 'terminal_send',
     get description() {
       return t('Type text to a device console');

@@ -19,9 +19,25 @@ export interface HostKeyChallenge {
   fingerprint: string;
 }
 
+/**
+ * The login a connect paused mid-handshake on an unknown host key, still open for the
+ * person's answer: resuming it does the sign-in on the wire already built, so an
+ * approval does not pay for a second TCP connection and key exchange.
+ */
+export interface LiveHostKey {
+  /**
+   * Resume the paused handshake with the person's answer and give the open console.
+   * Rejects when the wire died or the wait ran out: the connect must then start over.
+   */
+  resume(): Promise<TerminalTransport>;
+  /** The person said no: drop the paused login. */
+  decline(): void;
+}
+
 /** What one connect gives back: an open console, or the host key to ask about first. */
 export type ConnectOutcome =
-  { transport: TerminalTransport } | { hostkey: HostKeyChallenge };
+  | { transport: TerminalTransport }
+  | { hostkey: HostKeyChallenge; live?: LiveHostKey };
 
 /** The person's answer to a host key challenge, carried into the connect asked again. */
 export interface HostKeyApproval {
