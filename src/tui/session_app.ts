@@ -131,7 +131,7 @@ import { TerminalSessions } from '../terminal/sessions.js';
 import { terminalTools, runtimeTerminalOptions } from '../terminal/tools.js';
 import { sshConnector } from '../terminal/ssh.js';
 import { telnetConnector } from '../terminal/telnet.js';
-import { loadProfiles } from '../terminal/profiles.js';
+import { loadProfiles, saveProfiles } from '../terminal/profiles.js';
 import { TrustedHostKeys } from '../terminal/hostkeys.js';
 import { terminalKeyBytes } from '../terminal/keys.js';
 import type { TerminalApproval } from '../terminal/protocol.js';
@@ -1174,6 +1174,7 @@ export class SessionApp {
     const terminals = new TerminalSessions({
       connectors: { ssh: sshConnector, telnet: telnetConnector },
       profiles: () => loadProfiles(profilesFile),
+      save: (list) => saveProfiles(profilesFile, list),
       hostkeys: new TrustedHostKeys(join(this.home, 'terminal-host-keys.json')),
       secret: (name) => loadSecrets(this.home)[name] ?? '',
       keyFile: (path) => {

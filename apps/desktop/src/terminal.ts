@@ -9,7 +9,11 @@ import {
   TerminalSessions,
   type TerminalView,
 } from '../../../src/terminal/sessions.js';
-import { loadProfiles, profileTarget } from '../../../src/terminal/profiles.js';
+import {
+  loadProfiles,
+  profileTarget,
+  saveProfiles,
+} from '../../../src/terminal/profiles.js';
 import { sshConnector } from '../../../src/terminal/ssh.js';
 import { telnetConnector } from '../../../src/terminal/telnet.js';
 import { TrustedHostKeys } from '../../../src/terminal/hostkeys.js';
@@ -81,7 +85,9 @@ const validTarget = (value: unknown): TerminalTargetArgs => {
   if (row.transport !== 'ssh' && row.transport !== 'telnet')
     throw Error('invalid terminal transport');
   const host = String(row.host ?? '').trim();
-  if (!/^[a-zA-Z0-9._:-]{1,253}$/.test(host))
+  // A written port and a bracketed IPv6 are taken apart by parseTarget; the shape
+  // check here only keeps scheme, path and credentials out.
+  if (!/^[a-zA-Z0-9._:[\]-]{1,253}$/.test(host))
     throw Error('invalid terminal host');
   const port =
     row.port === undefined || row.port === '' ? undefined : Number(row.port);
@@ -136,6 +142,8 @@ export class TerminalPanelHost {
     string,
     TerminalHostKeyAsk & { profile: string; args: Record<string, unknown> }
   >();
+  // The person's answer being worked on, by conversation: see hostKey()
+  private answering = new Map<string, Promise<TerminalState>>();
   private handoffs = new Map<
     string,
     { resolve: () => void; session: string; reason: string }
@@ -161,6 +169,7 @@ export class TerminalPanelHost {
     this.manager = new TerminalSessions({
       connectors: { ssh: sshConnector, telnet: telnetConnector },
       profiles: () => loadProfiles(join(home, 'terminal-sessions.json')),
+      save: (list) => saveProfiles(join(home, 'terminal-sessions.json'), list),
       hostkeys: new TrustedHostKeys(trustFile),
       secret: (name) => this.secret(name),
       keyFile: (path) => {
@@ -326,6 +335,22 @@ export class TerminalPanelHost {
     decision: 'once' | 'always' | 'reject',
   ): Promise<TerminalState> {
     const own = validConversation(conversation);
+    // A second click while the first is still signing in joins that answer rather
+    // than failing over a question it has already taken away.
+    const running = this.answering.get(own);
+    if (running) return running;
+    const answer = this.answerHostKey(own, decision);
+    this.answering.set(own, answer);
+    try {
+      return await answer;
+    } finally {
+      this.answering.delete(own);
+    }
+  }
+  private async answerHostKey(
+    own: string,
+    decision: 'once' | 'always' | 'reject',
+  ): Promise<TerminalState> {
     const ask = this.pendingKey.get(own);
     if (!ask)
       throw Error(
@@ -333,6 +358,8 @@ export class TerminalPanelHost {
       );
     this.pendingKey.delete(own);
     if (decision === 'reject') {
+      // The login paused at the key goes with the question, not at its hold timer.
+      this.manager.declineHostKey(own, ask.token);
       this.pushState(own);
       return this.state(own);
     }
@@ -473,6 +500,7 @@ export class TerminalPanelHost {
   async releaseSession(conversation: unknown): Promise<void> {
     const own = validConversation(conversation);
     this.pendingKey.delete(own);
+    this.answering.delete(own);
     this.giveBack(own);
     this.manager.releaseSession(own);
     this.tabs.delete(own);
@@ -482,6 +510,7 @@ export class TerminalPanelHost {
   close(): void {
     this.manager.close();
     this.pendingKey.clear();
+    this.answering.clear();
     this.tabs.clear();
     this.order.clear();
     for (const batch of this.batches.values()) clearTimeout(batch.timer);

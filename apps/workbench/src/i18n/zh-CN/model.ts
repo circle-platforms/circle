@@ -229,6 +229,9 @@ export const model: Record<string, string> = {
   'Open an SSH or Telnet console': '打开 SSH 或 Telnet 控制台',
   'Open a device console by a saved profile or a bare host. SSH sign-in comes only from a profile, whose password is a saved secret; an unknown device host key stops the login and asks you.':
     '按已保存的档案或主机地址打开设备控制台。SSH 登录只能来自档案，其密码是已保存的秘密；陌生的设备主机密钥会中止登录并询问你。',
+  'Save a device profile so SSH can sign in': '保存设备档案，供 SSH 登录',
+  'Save a device under a profile name so terminal_connect can sign in to it: the password comes from the NAME of a secret the user saved, never its value; a save replaces the profile of the same name.':
+    '把设备保存为档案，terminal_connect 即可按名登录：密码只引用用户保存的秘密名，绝不写入其值；同名档案会被替换。',
   'Type text to a device console': '向设备控制台输入文本',
   'Type text to a device, Enter when asked; a word that can destroy device state in the line asks you every time. %NAME% puts in a secret whose value you never see back.':
     '向设备输入文本，需要时按下回车；行内含有会破坏设备状态的词时每次都要询问你。%NAME% 填入秘密，其值不会再出现在结果里。',

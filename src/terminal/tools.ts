@@ -391,6 +391,48 @@ export function terminalTools(
       },
     }),
     tool(
+      'terminal_profile_save',
+      'profile-save',
+      'write',
+      {
+        name: {
+          type: 'string',
+          description:
+            'The profile name to save under; a later save replaces the same name',
+        },
+        transport: {
+          type: 'string',
+          enum: ['ssh', 'telnet'],
+          description: 'The protocol',
+        },
+        host: {
+          type: 'string',
+          description:
+            'The device address; a host written host:port is taken apart',
+        },
+        port: {
+          type: 'number',
+          description: 'The port; 22 for ssh, 23 for telnet',
+        },
+        user: { type: 'string', description: 'The SSH login name' },
+        password_secret: {
+          type: 'string',
+          description:
+            'The NAME of a secret the user saved, holding the password: its value never enters the profile and you never see it',
+        },
+        key_path: {
+          type: 'string',
+          description:
+            'A private key file, for key sign-in instead of a password',
+        },
+        passphrase_secret: {
+          type: 'string',
+          description: 'The NAME of a saved secret for the key passphrase',
+        },
+      },
+      ['name', 'transport', 'host'],
+    ),
+    tool(
       'terminal_send',
       'send',
       'unknown',
