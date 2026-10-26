@@ -38,6 +38,15 @@ const REASONS: Record<string, () => string> = {
   'restarts this terminal and types this command into it': () =>
     t('restarts this terminal and types this command into it'),
   'runs the line on the screen': () => t('runs the line on the screen'),
+  // An MCP or extension tool; the card's heading names it
+  'can change state': () => t('can change state'),
+  'its MCP server says it can delete or overwrite data': () =>
+    t('its MCP server says it can delete or overwrite data'),
+  'its MCP server says it only reads; the call sends it a local file or a secret':
+    () =>
+      t(
+        'its MCP server says it only reads; the call sends it a local file or a secret',
+      ),
 };
 export const requestReason = (reason?: string) =>
   reason ? (REASONS[reason]?.() ?? reason) : '';

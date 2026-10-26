@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 const pending = new Map<unknown, NodeJS.Timeout>();
 const input = createInterface({ input: process.stdin, terminal: false });
 const send = (id: unknown, result: unknown): void => {
@@ -16,6 +16,15 @@ for await (const line of input) {
       protocolVersion: request.params?.protocolVersion,
       capabilities: { tools: {} },
       serverInfo: { name: 'test-server', version: '1' },
+      // Read at each start, so a test can change them between connections
+      ...(process.env.TEST_INSTRUCTIONS_FILE
+        ? {
+            instructions: readFileSync(
+              process.env.TEST_INSTRUCTIONS_FILE,
+              'utf8',
+            ),
+          }
+        : {}),
     });
   else if (request.method === 'tools/list')
     send(request.id, {
@@ -59,6 +68,16 @@ for await (const line of input) {
             },
             required: ['path'],
           },
+        },
+        {
+          name: 'checksum',
+          description: 'Say how long a file is, and which process read it.',
+          inputSchema: {
+            type: 'object',
+            properties: { file: { type: 'string', contentEncoding: 'base64' } },
+            required: ['file'],
+          },
+          annotations: { idempotentHint: true },
         },
       ],
     });
@@ -105,6 +124,15 @@ for await (const line of input) {
       send(request.id, {
         isError: true,
         content: [{ type: 'text', text: 'fixture error' }],
+      });
+    else if (name === 'checksum')
+      send(request.id, {
+        content: [
+          {
+            type: 'text',
+            text: `${Buffer.from(String((args as { file?: string }).file), 'base64').length} bytes read by ${process.pid}`,
+          },
+        ],
       });
     else if (name === 'login.wait') {
       if (args.started) writeFileSync(args.started, '');
