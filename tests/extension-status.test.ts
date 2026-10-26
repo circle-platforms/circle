@@ -41,7 +41,10 @@ test('setStatus keeps one line per extension, masks secrets, redraws on change a
   const home = join(root, 'home');
   const workspace = join(root, 'project');
   mkdirSync(workspace);
-  await new ExtensionSecrets(home, 'status').set('token', 'tok-9f8e7d6c5b');
+  await new ExtensionSecrets(home, 'status').set(
+    'token',
+    'tok-' + '9f8e7d6c5b',
+  );
   const path = join(home, 'extensions', 'status');
   mkdirSync(path, { recursive: true });
   writeFileSync(

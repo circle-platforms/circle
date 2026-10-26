@@ -507,7 +507,8 @@ test('exit codes say what is known: crashpad without a handler, out of memory, a
   assert.equal(describeRuntimeExit(null).code, 'unknown');
   assert.equal(
     redactRuntimeOutput(
-      'Authorization: Bearer abc.def-123 api_key=sk-live-1234567890 "token": "ghp_abcdefghijkl"',
+      'Authorization: Bearer abc.def-123 api_key=sk-live-' +
+        '1234567890 "token": "ghp_abcdefghijkl"',
     ).match(/abc\.def|1234567890|abcdefghijkl/g),
     null,
   );

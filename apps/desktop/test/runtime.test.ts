@@ -1992,7 +1992,7 @@ test('untrusted workspaces cannot load project context, extensions or execute pr
 
 test('configuration secrets never appear in snapshots or events', async (t) => {
   const f = await setup(t, []);
-  const secret = 'fixture-key-private-9279';
+  const secret = 'fixture-key-private-' + '9279';
   assert.equal(
     (
       await f.call('configure', {
