@@ -14,6 +14,7 @@ import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
 import type { NativeSearchConnection } from './native_websearch.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
+import { requestBudget, resolveBudget, contentHash } from './request_budget.js';
 import {
   occupiedSessionMessage,
   SessionOccupiedError,
@@ -568,8 +569,24 @@ export class AgentRuntime {
     this.policy.declareHints((tool) => this.mcp.hint(tool));
     this.lsp = new LspManager(this.sandbox);
     this.context = new ContextManager(this.store, this.sandbox.offloadRoot!, {
-      progress: (event) =>
-        this.bus.emit('compaction', { payload: { ...event } }),
+      readOnly: () => this.viewOnly,
+      progress: (event) => {
+        const owner = this.childJobOwners.get(event.sessionId);
+        this.bus.emit('compaction', {
+          payload: { ...event },
+          ...(event.sessionId !== this.session.id
+            ? {
+                tags: {
+                  subagent: event.sessionId,
+                  ...(owner?.parent && owner.parent !== event.sessionId
+                    ? { job_id: owner.parent }
+                    : {}),
+                },
+                parent_run_id: owner?.sessionId ?? this.session.id,
+              }
+            : {}),
+        });
+      },
       runningJobs: (sessionId) =>
         this.jobs
           .list(sessionId)
@@ -1832,8 +1849,22 @@ export class AgentRuntime {
     const costs = messageCosts(messages);
     const compactions = new UsageCostTotals();
     const state = this.store.contextState(this.session.id);
+    const addCompactionReceipts = (id: string) => {
+      for (const operation of this.store.compactions.operations(
+        id,
+        this.store.ancestorIds(id),
+      ))
+        for (const call of this.store.compactions.attempts(
+          operation.snapshot.operationId,
+        )) {
+          if (call.usage) addUsage(usage, call.usage);
+          compactions.add(call.cost);
+        }
+    };
+    addCompactionReceipts(this.session.id);
     for (const id of state.subagentSessionIds ?? []) {
       if (!this.store.get(id)) continue;
+      addCompactionReceipts(id);
       const messages = this.store.messages(id);
       for (const message of messages)
         if (message.usage) {
@@ -1919,13 +1950,94 @@ export class AgentRuntime {
       hint,
       { system: this.harness.system, tools: this.harness.tools },
     );
+    let completed = false;
     try {
-      return await this.activeCompaction;
+      const result = await this.activeCompaction;
+      completed = true;
+      return result;
     } finally {
       this.activeCompaction = undefined;
       this.compactionController = undefined;
       this.releaseIfAway();
+      if (
+        completed &&
+        !this.closing &&
+        !this.viewOnly &&
+        this.harness.pendingMessageCount
+      )
+        void this.harness.run('').catch(() => {
+          /* Harness emits the turn outcome. */
+        });
     }
+  }
+  get compaction(): import('./compaction.js').CompactionSnapshot | undefined {
+    return this.context.compactor.snapshot(this.session.id);
+  }
+  compactionHistory(): import('./compaction.js').CompactionSnapshot[] {
+    return this.context.compactor.records(this.session.id);
+  }
+  private contextMeterCache?: { key: string; input: number };
+  /** A receipt predating compaction cannot describe its replacement context. */
+  contextMeter(): { input?: number; window?: number; estimated: boolean } {
+    const model = this.harness.model;
+    const facts =
+      model.modelFacts ??
+      this.catalog.facts(
+        model.model,
+        this.options.settings,
+        model.contextWindow,
+      );
+    const limits = resolveBudget(model);
+    const window = facts.windowKnown ? limits.window : undefined;
+    const last = this.harness.messages.findLast(
+      (m) => m.role === 'assistant' && m.usage,
+    );
+    const state = this.store.contextState(this.session.id);
+    const operation = state.compactionOperationId
+      ? this.store.compactions
+          .operations(this.session.id)
+          .find((o) => o.snapshot.operationId === state.compactionOperationId)
+          ?.snapshot
+      : undefined;
+    const checkpoint =
+      last &&
+      this.store.tree(this.session.id).findLast((c) => c.message === last);
+    const oldReceipt =
+      !!state.summary &&
+      (!operation ||
+        !checkpoint ||
+        this.store
+          .ancestorIds(this.session.id, operation.branchHead)
+          .has(checkpoint.id));
+    const differentModel =
+      !!last?.request_model && last.request_model !== model.model;
+    const differentConnection =
+      !!last?.request_budget &&
+      last.request_budget.identity !== limits.identity;
+    if (last?.usage && !oldReceipt && !differentModel && !differentConnection)
+      return { input: last.usage.input_tokens, window, estimated: false };
+    if (!state.summary && !differentModel && !differentConnection)
+      return { window, estimated: false };
+    const key = contentHash({
+      head: this.store.get(this.session.id)?.head,
+      state,
+      limits,
+      factor: model.inputEstimateFactor,
+      system: this.harness.system,
+      tools: this.harness.tools.map(
+        ({ run: _run, approvalFacts: _facts, ...tool }) => tool,
+      ),
+    });
+    if (this.contextMeterCache?.key !== key)
+      this.contextMeterCache = {
+        key,
+        input: requestBudget(model, {
+          system: this.harness.system,
+          tools: this.harness.tools,
+          messages: this.context.project(this.session.id),
+        }).input,
+      };
+    return { input: this.contextMeterCache.input, window, estimated: true };
   }
   /** Another terminal owns this session. History is readable; nothing may write. */
   get viewOnly(): boolean {
@@ -1981,7 +2093,21 @@ export class AgentRuntime {
       Boolean(this.activeCompaction)
     );
   }
-  async cancel(options: { keepQueue?: boolean } = {}): Promise<void> {
+  async cancel(
+    options: { keepQueue?: boolean; compactionOperationId?: string } = {},
+  ): Promise<void> {
+    if (options.compactionOperationId) {
+      const snapshot = this.compaction;
+      if (
+        snapshot?.operationId !== options.compactionOperationId ||
+        snapshot.status !== 'running'
+      )
+        return;
+    }
+    this.context.compactor.cancel(
+      this.session.id,
+      options.compactionOperationId,
+    );
     this.compactionController?.abort(new Error('Interrupted'));
     await Promise.allSettled([
       this.activeCompaction,

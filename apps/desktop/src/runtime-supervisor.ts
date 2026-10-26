@@ -400,6 +400,20 @@ export class RuntimeSupervisor {
           // does not assert that detached child processes were killed.
           sessions: this.latest.snapshot.sessions.map((session) => ({
             ...session,
+            ...(session.compaction?.status === 'running' &&
+            (session.compaction.ownerProcessId !== undefined
+              ? session.compaction.ownerProcessId === previous?.processId
+              : !session.occupied)
+              ? {
+                  compaction: {
+                    ...session.compaction,
+                    status: 'interrupted' as const,
+                    recoverable: true,
+                    liveTokens: 0,
+                    updatedAt: this.stoppedAt,
+                  },
+                }
+              : {}),
             state:
               session.turn || session.state === 'waiting'
                 ? ('paused' as const)

@@ -1,4 +1,11 @@
 /* One composer surface and bounded menus for home and active conversations. */
+.compaction-progress {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .composer-menu {
   max-height: min(360px, var(--radix-dropdown-menu-content-available-height));
   overflow-y: auto;

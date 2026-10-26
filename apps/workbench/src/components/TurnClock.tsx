@@ -17,6 +17,7 @@ const RETRIES: Record<string, () => string> = {
   error: () => t('error'),
 };
 const VERBS: Record<string, () => string> = {
+  compacting: () => t('compacting'),
   thinking: () => t('thinking'),
   considering: () => t('considering'),
   analyzing: () => t('analyzing'),

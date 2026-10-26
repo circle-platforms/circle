@@ -14,6 +14,7 @@ export interface Rates {
 }
 export interface CatalogEntry {
   context?: number;
+  input?: number;
   output?: number;
   cost?: Rates;
   /** models.dev lists image among the model's inputs; absent when it lists no inputs. */
@@ -30,8 +31,9 @@ export interface ModelFacts {
   model: string;
   contextWindow: number;
   windowKnown: boolean;
-  windowSource: 'settings' | 'models.dev' | 'profile' | 'fallback';
+  windowSource: 'settings' | 'models.dev' | 'profile' | 'fallback' | 'provider';
   outputLimit?: number;
+  inputLimit?: number;
   rates?: Rates;
   provider: string;
   priceProvider: string;
@@ -86,6 +88,7 @@ export function slimCatalog(raw: unknown): CatalogData {
       const limit = isRecord(model.limit) ? model.limit : {};
       const entry: CatalogEntry = {};
       if (whole(limit.context)) entry.context = limit.context;
+      if (whole(limit.input)) entry.input = limit.input;
       if (whole(limit.output)) entry.output = limit.output;
       const cost = rates(model.cost);
       if (cost) entry.cost = cost;
@@ -121,7 +124,7 @@ export function validCatalog(raw: unknown): raw is CatalogData {
     for (const model of Object.values(provider.models)) {
       if (
         !isRecord(model) ||
-        ['context', 'output'].some(
+        ['context', 'input', 'output'].some(
           (key) => key in model && !whole(model[key]),
         ) ||
         ('image' in model && typeof model.image !== 'boolean')
@@ -335,7 +338,12 @@ export class ModelCatalog {
       contextWindow,
       windowKnown: windowSource !== 'fallback',
       windowSource,
-      outputLimit: windowItem?.[1].output,
+      outputLimit: whole(settings.models[model]?.output_limit)
+        ? (settings.models[model]!.output_limit as number)
+        : windowItem?.[1].output,
+      inputLimit: whole(settings.models[model]?.input_limit)
+        ? (settings.models[model]!.input_limit as number)
+        : windowItem?.[1].input,
       rates: priceItem?.[1].cost
         ? structuredClone(priceItem[1].cost)
         : undefined,

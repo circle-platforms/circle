@@ -53,7 +53,10 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `model_profiles.ts`          | Thinking depths and other capabilities per model, from `data/provider_profiles.json.gz`.                                                                                                                          |
 | `model_scope.ts`             | Which models `ctrl+p` goes through.                                                                                                                                                                               |
 | `pricing.ts`                 | The cost of each call and the totals the footer shows.                                                                                                                                                            |
-| `compaction.ts`              | The progress of a compaction and the line it leaves.                                                                                                                                                              |
+| `compaction.ts` | Shared operation snapshots, progress and persistent outcomes. |
+| `request_budget.ts` | Model input/output reservations, complete provider-frame estimates and shared recovery allowances. |
+| `compaction_engine.ts` | Content-only serialization, bounded parallel parts, complete coverage, cached nodes and atomic activation. |
+| `compaction_store.ts` | Independent SQLite operation, attempt and summary-node records; branch-aware export and restore. |
 | `context_middleware.ts`      | What the model sees of a long session: large results kept in files, older messages summarized, older images left out, and the originals read back when needed.                                                    |
 | `middleware/`                | Reminders added to a request: running and polled jobs (`job_notice.ts`), repeated tool calls (`loop_guard.ts`), the plan (`plan_tail.ts`), and pruning of old tool results (`tool_result_prune.ts`).              |
 

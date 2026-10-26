@@ -66,6 +66,40 @@ export const conversation: Record<string, string> = {
   'model returned an empty response': '模型返回了空响应',
   'model output limit reached; response incomplete':
     '模型达到输出上限，响应未完成',
+  'model context window exhausted; response incomplete':
+    '模型上下文已满，响应未完成',
+  'merging {done}/{total}': '正在合并 {done}/{total}',
+  'compacted · ~{before} → ~{after} · {n} messages':
+    '已压缩 · ~{before} → ~{after} · {n} 条消息',
+  'auto-compacted · ~{before} → ~{after} · {n} messages':
+    '已自动压缩 · ~{before} → ~{after} · {n} 条消息',
+  'compaction interrupted; completed parts saved':
+    '压缩已中断，已完成的部分已保存',
+  'compaction recovery budget exhausted': '压缩恢复次数已用尽',
+  'summary did not complete': '摘要未完成',
+  'compaction failed: {message}': '压缩失败：{message}',
+  compacting: '正在压缩',
+  'compacting {done}/{total}': '正在压缩 {done}/{total}',
+  'recovering {done}/{total}': '正在恢复 {done}/{total}',
+  'some usage unreported': '部分用量未返回',
+  'request does not fit the model context budget': '请求无法放入模型上下文预算',
+  'requested output exceeds the model output limit':
+    '请求的输出额度超过模型上限',
+  'requested output exceeds the endpoint limit': '请求的输出额度超过接口上限',
+  'model context leaves no room for a usable summary':
+    '模型上下文没有足够空间生成可用摘要',
+  'model context cannot fit the summary instructions and one history fragment':
+    '模型上下文无法容纳摘要指令和一段历史',
+  'model context cannot fit the summary instructions':
+    '模型上下文无法容纳摘要指令',
+  'summary did not shrink to its target': '摘要未缩减到目标长度',
+  'summary attempted to call a tool': '摘要响应尝试调用工具',
+  'summary was empty': '摘要为空',
+  'conversation changed during compaction': '压缩期间会话发生变化',
+  'summary boundary is no longer on the active branch':
+    '摘要边界已不在当前分支',
+  'summary history does not match raw conversation': '摘要历史与原始会话不一致',
+  'session changed in another process': '会话已被其他进程更改',
   'model response ended without a complete finish signal':
     '模型响应缺少完整的结束信号',
   'model response was filtered': '模型响应被过滤',

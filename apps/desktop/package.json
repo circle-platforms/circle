@@ -35,6 +35,7 @@
     "test:journey": "node test/native-developer-journey.mjs",
     "test:performance": "node --import tsx test/native-performance.mjs",
     "test:completion": "node test/completion.mjs",
+    "test:compaction": "node --import tsx test/compaction.mjs",
     "test:restart": "node test/runtime-restart.mjs",
     "test:thinking": "node ../../node_modules/tsx/dist/cli.mjs test/thinking-switch.mjs"
   },

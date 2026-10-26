@@ -1,4 +1,5 @@
 import { SafeFileUndo } from './SafeFileUndo';
+import { CompactionStatus } from './CompactionStatus';
 import {
   preserveNativeCopy,
   preserveNativeEditing,
@@ -710,9 +711,11 @@ export function Conversation({
     savedAnchor?.offset,
     session.presentation?.scroll?.follow,
   ]);
-  const clock = showTurnClock(messages, pending.length, session.turn)
-    ? session.turn
-    : undefined;
+  const clock =
+    session.compaction?.status !== 'running' &&
+    showTurnClock(messages, pending.length, session.turn)
+      ? session.turn
+      : undefined;
   const asked = items.findLastIndex(
     (item) => item.kind !== 'tools' && item.message.role === 'user',
   );
@@ -1001,8 +1004,14 @@ export function Conversation({
           </Button>
         </div>
       )}
+      {!composerWritable && session.compaction?.status === 'running' && (
+        <div className="composer-area">
+          <CompactionStatus state={session.compaction} />
+        </div>
+      )}
       {composerWritable && (
         <div className="composer-area">
+          <CompactionStatus state={session.compaction} />
           {snapshot.runtime?.connected && (
             <RecoveredInputs key={session.id} sessionId={session.id} />
           )}

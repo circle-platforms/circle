@@ -995,6 +995,13 @@ export class LiveRuntime implements RuntimePort {
               ?.sessionId
           : undefined;
     const sessionId = owner ?? sourceSessionId ?? this.snapshot.activeSessionId;
+    if (kind === 'abort' && payload.compactionOperationId === undefined) {
+      const compaction = this.snapshot.sessions.find(
+        (s) => s.id === sessionId,
+      )?.compaction;
+      if (compaction?.status === 'running')
+        payload = { ...payload, compactionOperationId: compaction.operationId };
+    }
     const operation = async () => {
       await this.changes;
       if (

@@ -70,6 +70,7 @@ import { InteractionQueue, ParkedDraft } from './interaction_queue.js';
 import {
   CompactionProgress,
   compactionDone,
+  compactionNotice,
   type CompactionEvent,
 } from '../compaction.js';
 import { formatCosts } from '../pricing.js';
@@ -80,7 +81,7 @@ import { nextAgentActivity } from '../session_activity.js';
 import { networkSummary } from '../net.js';
 import { terminalText } from '../ink/components/markdown_renderer.js';
 import { WelcomeState } from './welcome_state.js';
-import { contextInputOf, windowTitle } from './status_rows.js';
+import { windowTitle } from './status_rows.js';
 import { loadRemap } from '../keybindings.js';
 import { emptyUsage, type ToolCall } from '../types.js';
 import { ScreenRenderer } from '../ink/screen.js';
@@ -415,7 +416,13 @@ export class SessionApp {
     if (this.externalEditor) return;
     if (this.backgroundCard) return;
     this.jobWakeSnoozed = true;
-    if (this.runtime?.busy) void this.runtime.cancel();
+    if (this.runtime?.busy)
+      void this.runtime.cancel({
+        compactionOperationId:
+          this.runtime.compaction?.status === 'running'
+            ? this.runtime.compaction.operationId
+            : undefined,
+      });
     else this.exit(0);
   };
   constructor(
@@ -589,6 +596,20 @@ export class SessionApp {
     if (this.runtime && !this.runtime.isClosing) {
       this.state.messages = this.undo.visible(this.runtime.harness.messages);
       this.projectCompletionNotices();
+      const compaction = this.runtime.compaction;
+      if (compaction?.status === 'running') {
+        if (
+          this.state.compaction?.snapshot?.operationId !==
+          compaction.operationId
+        )
+          this.state.compaction = new CompactionProgress(compaction.trigger);
+        this.state.compaction.apply({
+          sessionId: compaction.sessionId,
+          trigger: compaction.trigger,
+          phase: 'chunks',
+          snapshot: compaction,
+        });
+      } else this.state.compaction = undefined;
       this.state.userShells = this.runtime.userShells.views.filter(
         (shell) => shell.sessionId === this.runtime!.session.id,
       );
@@ -636,10 +657,10 @@ export class SessionApp {
       const lastAnswer = this.runtime.harness.messages
         .filter((message) => message.role === 'assistant' && message.usage)
         .at(-1);
-      this.state.contextInput = contextInputOf(
-        lastAnswer,
-        this.runtime.harness.model.model,
-      );
+      const context = this.runtime.contextMeter();
+      this.state.contextInput = context.input;
+      this.state.contextWindow = context.window;
+      this.state.contextEstimated = context.estimated;
       // After /undo or /redo the meter is unknown until the next answer.
       if (this.meterCleared !== undefined) {
         if ((lastAnswer?.id ?? '') === this.meterCleared)
@@ -839,6 +860,12 @@ export class SessionApp {
       },
     );
     this.turns.fill(this.state);
+    if (this.state.compaction?.snapshot?.trigger === 'tool') {
+      this.state.busyVerb = 'compacting';
+      this.state.busyTokens =
+        this.state.compaction.snapshot.usage.output_tokens +
+        this.state.compaction.snapshot.liveTokens;
+    }
     this.state.welcome = welcomeRows(
       process.stdout.columns || 80,
       this.welcomeState.info({
@@ -922,26 +949,34 @@ export class SessionApp {
     }
     if (changed) this.repaint();
   }
-  private projectedCompletionNotices = new WeakMap<SessionView, Set<string>>();
-  private get persistedCompletionNotices(): Set<string> {
+  private projectedCompletionNotices = new WeakMap<SessionView, string[]>();
+  private get persistedCompletionNotices(): string[] {
     let notices = this.projectedCompletionNotices.get(this.view);
     if (!notices) {
-      notices = new Set<string>();
+      notices = [];
       this.projectedCompletionNotices.set(this.view, notices);
     }
     return notices;
   }
   private projectCompletionNotices(): void {
     const anchors = this.state.noticeAnchors ?? [];
-    const projected = new Set(this.persistedCompletionNotices);
+    const projected = new Map<string, number>();
+    for (const key of this.persistedCompletionNotices)
+      projected.set(key, (projected.get(key) ?? 0) + 1);
     const kept = this.state.notices
       .map((text, index) => [text, anchors[index]] as const)
       // Remove exactly the projected occurrence: a later, unsaved request may
       // fail with the same text at the same history position.
-      .filter(([text, anchor]) => !projected.delete(`${anchor}\0${text}`));
+      .filter(([text, anchor]) => {
+        const key = `${anchor}\0${text}`,
+          count = projected.get(key) ?? 0;
+        if (!count) return true;
+        projected.set(key, count - 1);
+        return false;
+      });
     this.state.notices = kept.map(([text]) => text);
     this.state.noticeAnchors = kept.map(([, anchor]) => anchor);
-    this.persistedCompletionNotices.clear();
+    this.persistedCompletionNotices.length = 0;
     for (const [index, message] of this.state.messages.entries()) {
       if (
         message.role !== 'assistant' ||
@@ -961,7 +996,19 @@ export class SessionApp {
       const text = `✖ ${failure.message}`;
       this.state.notices.push(text);
       this.state.noticeAnchors.push(anchor);
-      this.persistedCompletionNotices.add(`${anchor}\0${text}`);
+      this.persistedCompletionNotices.push(`${anchor}\0${text}`);
+    }
+    for (const snapshot of this.runtime?.compactionHistory() ?? []) {
+      if (snapshot.status === 'running') continue;
+      const checkpoint = this.runtime!.store.checkpoint(snapshot.branchHead);
+      const anchor = checkpoint?.message?.id;
+      if (!anchor || !this.state.messages.some((m) => m.id === anchor))
+        continue;
+      const text =
+        (snapshot.status === 'failed' ? '✖ ' : '') + compactionNotice(snapshot);
+      this.state.notices.push(text);
+      this.state.noticeAnchors.push(anchor);
+      this.persistedCompletionNotices.push(`${anchor}\0${text}`);
     }
   }
   // A notice goes after the message on screen when it came, not under everything that
@@ -998,6 +1045,14 @@ export class SessionApp {
     );
   }
   private fail(error: unknown): void {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'compactionOperationId' in error
+    ) {
+      this.repaint();
+      return;
+    }
     this.notice(
       '✖ ' + (error instanceof Error ? error.message : String(error)),
     );
@@ -1275,7 +1330,7 @@ export class SessionApp {
               this.state.compaction?.apply(progress);
               if (progress.phase === 'done') {
                 this.state.compaction = undefined;
-                this.notice(compactionDone(progress));
+                if (!progress.snapshot) this.notice(compactionDone(progress));
               }
               if (progress.phase === 'error') this.state.compaction = undefined;
             }
@@ -1388,7 +1443,9 @@ export class SessionApp {
               assistant && (assistant.completion || assistant.truncated)
                 ? completionFailure(assistant)
                 : undefined;
-            if (event.payload.interrupted) {
+            if (event.payload.compaction_operation_id) {
+              // Projected from the operation record, including after restart.
+            } else if (event.payload.interrupted) {
               const saved = this.runtime?.harness.messages.findLast(
                 (message) => !message.internal,
               );
@@ -2868,24 +2925,32 @@ export class SessionApp {
     const runtime = this.runtime;
     const view = this.view;
     if (!runtime) return;
-    void runtime.cancel({ keepQueue: true }).then(() => {
-      if (
-        this.ended ||
-        runtime.isClosing ||
-        runtime.busy ||
-        !runtime.harness.pendingMessageCount
-      )
-        return;
-      // A message of yours starts this turn: finished jobs may start turns again
-      view.jobWakeSnoozed = false;
-      view.jobWakeCount = 0;
-      void runtime.harness
-        .run()
-        .catch(() => {
-          /* The event bus shows how the turn ended. */
-        })
-        .finally(() => this.repaint());
-    });
+    void runtime
+      .cancel({
+        keepQueue: true,
+        compactionOperationId:
+          runtime.compaction?.status === 'running'
+            ? runtime.compaction.operationId
+            : undefined,
+      })
+      .then(() => {
+        if (
+          this.ended ||
+          runtime.isClosing ||
+          runtime.busy ||
+          !runtime.harness.pendingMessageCount
+        )
+          return;
+        // A message of yours starts this turn: finished jobs may start turns again
+        view.jobWakeSnoozed = false;
+        view.jobWakeCount = 0;
+        void runtime.harness
+          .run()
+          .catch(() => {
+            /* The event bus shows how the turn ended. */
+          })
+          .finally(() => this.repaint());
+      });
   }
   // ctrl+z: the shell gets the terminal back and `fg` brings Circle back with the screen drawn
   // again. Windows has no job control.

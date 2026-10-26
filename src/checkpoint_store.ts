@@ -11,6 +11,8 @@ import {
   type SessionLease,
 } from './session_lock.js';
 import { InputOutbox } from './input_outbox.js';
+import { CompactionStore } from './compaction_store.js';
+import type { CompactionOperation } from './compaction.js';
 import {
   validateSessionGraph,
   orderedCheckpoints,
@@ -56,6 +58,7 @@ interface CheckpointRows {
   byId: Map<string, Checkpoint>;
 }
 export interface ContextState {
+  compactionOperationId?: string;
   subagentSessionIds?: string[];
   compactionCalls?: {
     id: string;
@@ -64,6 +67,9 @@ export interface ContextState {
     cost?: import('./pricing.js').PriceReceipt;
   }[];
   summary?: {
+    pinnedMessageIds?: string[];
+    pinnedCheckpointIds?: string[];
+    cutoffCheckpointId?: string;
     cutoffMessageId: string;
     text: string;
     historyPath?: string;
@@ -267,6 +273,14 @@ export class CheckpointStore {
       hooks?.onBusy,
       home,
     );
+    this.compactions = new CompactionStore(this.db, (id, action) =>
+      this.writing([id], () => {
+        this.materialize(id);
+        const result = action();
+        this.writeVersion++;
+        return result;
+      }),
+    );
     this.inputs = new InputOutbox(
       this.db,
       (id, action) => this.writing([id], action),
@@ -278,6 +292,25 @@ export class CheckpointStore {
         },
       },
     );
+  }
+  readonly compactions: CompactionStore;
+  /** Checkpoint identity, not a mutable session-wide projection. */
+  ancestorIds(
+    sessionId: string,
+    head = this.get(sessionId)?.head,
+  ): Set<string> {
+    const result = new Set<string>();
+    const byId = this.checkpoints(sessionId).byId;
+    let cursor = head;
+    while (cursor) {
+      if (result.has(cursor)) throw new Error('checkpoint ancestry cycle');
+      const node = byId.get(cursor);
+      if (!node || node.session_id !== sessionId)
+        throw new Error('invalid checkpoint ancestry');
+      result.add(cursor);
+      cursor = node.parent;
+    }
+    return result;
   }
   /** Sessions kept in memory until the first message, so an unused /new leaves no row. */
   private deferred = new Map<string, Session>();
@@ -350,7 +383,8 @@ export class CheckpointStore {
     onCompromised?: (error: Error) => void,
   ): void {
     if (!this.home) return;
-    if (!this.ownership.has(sessionId))
+    const fresh = !this.ownership.has(sessionId);
+    if (fresh)
       this.ownership.set(
         sessionId,
         acquireSessionLease(this.home, sessionId, (error) =>
@@ -358,6 +392,7 @@ export class CheckpointStore {
         ),
       );
     if (onCompromised) this.ownershipHandlers.set(sessionId, onCompromised);
+    if (fresh) this.compactions.interruptAbandoned(sessionId);
   }
   releaseSession(sessionId: string): void {
     this.ownership.get(sessionId)?.release();
@@ -946,6 +981,7 @@ export class CheckpointStore {
           checkpoints,
           contexts,
           labels,
+          compactions: this.compactions.archive(item.id, checkpointIds),
         };
         graph.sessions.push(node);
         const children = new Set(
@@ -972,6 +1008,13 @@ export class CheckpointStore {
       graph.sessions.flatMap((node) =>
         node.checkpoints.map(
           (checkpoint) => [checkpoint.id, randomUUID()] as const,
+        ),
+      ),
+    );
+    const operationIds = new Map(
+      graph.sessions.flatMap((node) =>
+        (node.compactions?.operations ?? []).map(
+          (op) => [op.snapshot.operationId, randomUUID()] as const,
         ),
       ),
     );
@@ -1007,6 +1050,19 @@ export class CheckpointStore {
             );
         for (const context of node.contexts) {
           const state = structuredClone(context.state);
+          if (state.compactionOperationId)
+            state.compactionOperationId = operationIds.get(
+              state.compactionOperationId,
+            );
+          if (state.summary?.cutoffCheckpointId)
+            state.summary.cutoffCheckpointId = checkpointIds.get(
+              state.summary.cutoffCheckpointId,
+            )!;
+          if (state.summary?.pinnedCheckpointIds)
+            state.summary.pinnedCheckpointIds =
+              state.summary.pinnedCheckpointIds.map((id) =>
+                checkpointIds.get(id)!,
+              );
           if (state.subagentSessionIds)
             state.subagentSessionIds = state.subagentSessionIds.map((id) =>
               sessionIds.get(id)!,
@@ -1025,6 +1081,27 @@ export class CheckpointStore {
           this.db
             .prepare('INSERT INTO labels VALUES (?,?,?)')
             .run(sessionIds.get(node.session.id)!, id, label);
+        if (node.compactions) {
+          const archive = structuredClone(node.compactions);
+          const owner = sessionIds.get(node.session.id)!;
+          for (const op of archive.operations) {
+            op.snapshot.operationId = operationIds.get(
+              op.snapshot.operationId,
+            )!;
+            op.snapshot.sessionId = owner;
+            op.snapshot.branchHead = checkpointIds.get(op.snapshot.branchHead)!;
+            if (op.snapshot.status === 'running') {
+              op.snapshot.status = 'interrupted';
+              op.snapshot.recoverable = true;
+            }
+          }
+          for (const attempt of archive.attempts) {
+            attempt.id = randomUUID();
+            attempt.operationId = operationIds.get(attempt.operationId)!;
+            if (attempt.status === 'running') attempt.status = 'cancelled';
+          }
+          this.compactions.restore(owner, archive);
+        }
       }
       this.db.exec('COMMIT');
       this.writeVersion++;
@@ -1220,10 +1297,31 @@ export class CheckpointStore {
       this.setContextStateOwned(sessionId, state, expectedHead),
     );
   }
+  finalizeCompaction(
+    sessionId: string,
+    state: ContextState,
+    operation: CompactionOperation,
+  ): void {
+    if (
+      operation.snapshot.sessionId !== sessionId ||
+      operation.snapshot.status !== 'succeeded' ||
+      state.compactionOperationId !== operation.snapshot.operationId
+    )
+      throw new Error('invalid compaction commit');
+    this.writing([sessionId], () =>
+      this.setContextStateOwned(
+        sessionId,
+        state,
+        operation.snapshot.branchHead,
+        operation,
+      ),
+    );
+  }
   private setContextStateOwned(
     sessionId: string,
     state: ContextState,
     expectedHead?: string | null,
+    operation?: CompactionOperation,
   ): void {
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -1237,6 +1335,20 @@ export class CheckpointStore {
           'INSERT INTO context_versions (checkpoint_id, state, created) VALUES (?, ?, ?)',
         )
         .run(session.head, JSON.stringify(state), Date.now());
+      if (operation) {
+        const updated = this.db
+          .prepare(
+            'UPDATE compaction_operations SET updated=?,data=? WHERE id=? AND session_id=?',
+          )
+          .run(
+            operation.snapshot.updatedAt,
+            JSON.stringify(operation),
+            operation.snapshot.operationId,
+            sessionId,
+          );
+        if (Number(updated.changes) !== 1)
+          throw new Error('missing compaction operation');
+      }
       this.db.exec('COMMIT');
       this.writeVersion++;
     } catch (error) {
@@ -1248,10 +1360,14 @@ export class CheckpointStore {
     const raw = this.messages(sessionId);
     const projection = this.contextState(sessionId).summary;
     if (!projection) return raw;
-    const index = raw.findIndex(
-      (message) => message.id === projection.cutoffMessageId,
-    );
+    const index = this.summaryCutoffIndex(sessionId, projection);
     if (index < 0) return raw;
+    const byId = projection.pinnedCheckpointIds
+      ? this.checkpoints(sessionId).byId
+      : undefined;
+    const pinned = new Set(
+      projection.pinnedCheckpointIds?.map((id) => byId?.get(id)?.message),
+    );
     return [
       {
         id: 'summary-' + projection.cutoffMessageId,
@@ -1259,8 +1375,33 @@ export class CheckpointStore {
         content: `Earlier conversation summary:\n${projection.text}${projection.historyPath ? '\nFull earlier history: ' + projection.historyPath : ''}`,
         internal: 'summary',
       },
+      ...raw
+        .slice(0, index + 1)
+        .filter((message) =>
+          projection.pinnedCheckpointIds
+            ? pinned.has(message)
+            : projection.pinnedMessageIds?.includes(message.id),
+        ),
       ...raw.slice(index + 1),
     ];
+  }
+  summaryCutoffIndex(
+    sessionId: string,
+    summary: NonNullable<ContextState['summary']>,
+  ): number {
+    const raw = this.messages(sessionId);
+    if (summary.cutoffCheckpointId) {
+      const message = this.checkpoints(sessionId).byId.get(
+        summary.cutoffCheckpointId,
+      )?.message;
+      return message ? raw.indexOf(message) : -1;
+    }
+    return raw.findIndex((message) => message.id === summary.cutoffMessageId);
+  }
+  messageCheckpointId(sessionId: string, message: Message): string | undefined {
+    return this.checkpoints(sessionId).tree.find(
+      (checkpoint) => checkpoint.message === message,
+    )?.id;
   }
   close(): void {
     if (this.closed) return;

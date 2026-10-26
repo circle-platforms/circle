@@ -1530,7 +1530,13 @@ async function compact(host: CommandHost, args: string): Promise<void> {
   try {
     result = await runtime.compact(args.trim());
   } catch (error) {
-    host.fail(`Compact failed: ${reason(error)}`);
+    if (!(
+      error &&
+      typeof error === 'object' &&
+      'compactionOperationId' in error
+    ))
+      host.fail(`Compact failed: ${reason(error)}`);
+    host.repaint();
     return;
   }
   if (result === 'Nothing to compact yet')

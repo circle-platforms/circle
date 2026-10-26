@@ -161,6 +161,7 @@ export interface Meters {
   usage: Usage;
   costText?: string;
   contextInput?: number;
+  contextEstimated?: boolean;
   contextWindow?: number;
   /** A turn is in flight and the endpoint has not reported usage yet. */
   unreported?: boolean;
@@ -182,12 +183,13 @@ function meterParts(meters: Meters): {
   const cost = meters.costText ?? '';
   const head = [tokens, ...(cost ? [cost] : []), cache].join(' · ');
   let context = '';
+  const estimateMark = meters.contextEstimated ? '~' : '';
   let percent = 0;
   if (meters.contextInput !== undefined && !meters.contextWindow)
-    context = `ctx ${formatTokens(meters.contextInput)}/N/A`;
+    context = `ctx ${estimateMark}${formatTokens(meters.contextInput)}/N/A`;
   else if (meters.contextInput !== undefined && meters.contextWindow) {
     percent = Math.min(999, (meters.contextInput / meters.contextWindow) * 100);
-    context = `ctx ${formatTokens(meters.contextInput)}/${formatWindow(meters.contextWindow)} (${Math.round(percent)}%)`;
+    context = `ctx ${estimateMark}${formatTokens(meters.contextInput)}/${formatWindow(meters.contextWindow)} (${Math.round(percent)}%)`;
   }
   const lines = [
     [tokens, cost, cache, context],
@@ -295,12 +297,15 @@ export interface TurnUsage {
   seconds: number;
   input: number;
   output: number;
+  unreported?: boolean;
   /** In US dollars; null when a request's price is not known in dollars. */
   cost?: number | null;
 }
 export function turnUsageRow(usage: TurnUsage): string {
   const p = palette();
-  return `   ${p.dim}${formatElapsed(usage.seconds)} · ↑ ${formatTokens(usage.input)} · ↓ ${formatTokens(usage.output)}${p.reset}`;
+  const show = (n: number) =>
+    usage.unreported ? (n ? formatTokens(n) + '+' : 'N/A') : formatTokens(n);
+  return `   ${p.dim}${formatElapsed(usage.seconds)} · ↑ ${show(usage.input)} · ↓ ${show(usage.output)}${p.reset}`;
 }
 
 // Above the input box while a compaction runs: `auto-compacting · ████░░░░ summarizing · 12s`
@@ -317,7 +322,10 @@ export function compactionRow(
   let filled = Math.round(fraction * BAR_CELLS);
   if (fraction < 1) filled = Math.min(filled, BAR_CELLS - 1);
   const head = `${progress.label} · `;
-  let tail = ` ${progress.stage} · ${Math.round(progress.elapsed(now))}s`;
+  const parts = progress.snapshot
+    ? ` ${progress.snapshot.completed}/${Math.max(progress.snapshot.completed, progress.snapshot.total)}`
+    : '';
+  let tail = ` ${progress.stage}${parts} · ${Math.round(progress.elapsed(now))}s`;
   const room = Math.max(8, width - 2);
   if (stringWidth(head) + BAR_CELLS + stringWidth(tail) > room) tail = '';
   if (stringWidth(head) + BAR_CELLS > room)
