@@ -5,15 +5,13 @@ nav_order: 7
 
 # Desktop interface language
 
-The desktop application shows its interface in English or Simplified Chinese. The terminal stays English whatever `LANG`, `LC_ALL` or `LANGUAGE` says. The desktop runs Circle's core as its runtime and starts it with `CIRCLE_DESKTOP_RUNTIME_HOME`, and in Chinese with `LANG` and `LANGUAGE` in Chinese. Only there do the few messages the window shows as the core wrote them follow that language: `/hub`'s words (`src/hub_text.ts`), and the database-busy and missing-API-key errors (`desktopText` in `src/locale.ts`). Everything else the window says is its own `t('…')`.
+The desktop application shows its interface in English or Simplified Chinese. The terminal stays English whatever `LANG`, `LC_ALL` or `LANGUAGE` says. The desktop runs Circle's core as its runtime and starts it with `CIRCLE_DESKTOP_RUNTIME_HOME`, and in Chinese with `LANG` and `LANGUAGE` in Chinese. Only there do the few messages the window shows as the core wrote them follow that language: the database-busy and missing-API-key errors (`desktopText` in `src/locale.ts`). Everything else the window says is its own `t('…')`.
 
 The first start follows the system language: any Chinese system language gives Chinese, everything else English. Settings → appearance → language changes it (follow system, English, 简体中文). The choice is kept in the window's local storage. Menus, system dialogs and notifications follow the window: the renderer tells the main process its language.
 
 Checks and the packaged-app tests run with a test profile, and then the window is English on any machine. `CIRCLE_WORKBENCH_LANGUAGE` (for example `en-US` or `zh-CN`) sets the language for a run.
 
 ## How a text is translated
-
-`/hub` in the terminal uses the same idea in `src/hub_text.ts` (`hubText`). It reads `LANGUAGE`, then `LC_ALL`, then `LC_MESSAGES`, then `LANG`, and skips `C` and `POSIX`. The first other tag decides: one that starts with `zh` selects Simplified Chinese, and anything else stays English. The choice is read when the line is made. Commands, ids, paths and the server's own status words stay as they are. `/hub reconcile` prints a heading line, then the explanation.
 
 English is the key. In the renderer (`apps/workbench/src`):
 

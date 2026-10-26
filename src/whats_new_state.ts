@@ -54,26 +54,6 @@ export function circleHasHistory(home: string): boolean {
   }
 }
 
-/** The old extension is still named in settings. An empty `extensions` object is not. */
-export function hadCircleServer(home: string): boolean {
-  try {
-    const raw = JSON.parse(
-      readFileSync(join(home, 'settings.json'), 'utf8'),
-    ) as {
-      extensions?: unknown;
-    };
-    const extensions = raw.extensions;
-    return (
-      typeof extensions === 'object' &&
-      extensions !== null &&
-      !Array.isArray(extensions) &&
-      Object.prototype.hasOwnProperty.call(extensions, 'circle-server')
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** Release folders still installed under a prefix, newest first, older than `current`. */
 export function installedBefore(
   current: string,
@@ -145,7 +125,7 @@ export function pendingWhatsNew(
     return undefined;
   }
   const from = notesBaseline(version, seen, prefix);
-  const items = notesSince(from, version, { hub: hadCircleServer(home) });
+  const items = notesSince(from, version);
   if (!items.length) {
     if (seen !== version) writeSeen(home, version);
     return undefined;

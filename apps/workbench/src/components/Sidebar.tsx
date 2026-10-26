@@ -52,7 +52,6 @@ import {
 import { agentActivityText, agentState } from '../model/activity';
 import { selectedHomeProject } from '../features/home-selection';
 import type { DialogId, Session } from '../model/types';
-import { platformTitle } from '../plugins/labels';
 import { armComposerFocus } from '../model/composer-focus';
 import {
   afterSidebarChromeMove,
@@ -150,7 +149,7 @@ export function Sidebar({
   renaming?: boolean;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
-  // The pages of the extensions that are on, such as hub's
+  // The pages of the interface components that are on
   const { registry, enabled } = usePlugins();
   const pluginPages = registry.pages(enabled);
   const navigate = useNavigate();
@@ -764,9 +763,9 @@ export function Sidebar({
         </NavLink>
       </nav>
       {pluginPages.length > 0 && (
-        <nav className="sidebar-primary" aria-label={t('platform')}>
+        <nav className="sidebar-primary" aria-label={t('pages')}>
           <div className="section-label">
-            <span>{t('platform')}</span>
+            <span>{t('pages')}</span>
           </div>
           {pluginPages.map(({ page }) => (
             <NavLink
@@ -778,7 +777,7 @@ export function Sidebar({
               onClick={onNavigate}
             >
               <page.icon size={15} />
-              <span>{platformTitle(page.id, page.title)}</span>
+              <span>{page.title}</span>
             </NavLink>
           ))}
         </nav>

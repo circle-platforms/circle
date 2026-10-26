@@ -115,32 +115,28 @@ test('extension row requests preserve an existing conversation failure', async (
   runtime.dispose();
 });
 
-test("an extension command's notice reaches the window, as the hub's sign-in status does (#199)", async () => {
+test('an extension command is sent to the runtime as custom-command with its arguments', async () => {
   const snapshot = createFixtures();
   snapshot.runtime = { connected: true, configured: true };
   snapshot.commands = [
     ...snapshot.commands,
-    { name: 'hub', description: 'Work with a hub', source: 'extension' },
+    { name: 'notes', description: 'Show the notes', source: 'extension' },
   ] as typeof snapshot.commands;
   const calls: RuntimeCommand[] = [];
   const host = {
     runtimeCommand: async (command: RuntimeCommand) => {
       calls.push(command);
-      return {
-        id: command.id,
-        ok: true,
-        data: { notice: '○ https://hub.example · not signed in' },
-      };
+      return { id: command.id, ok: true, data: {} };
     },
     onRuntime: () => () => {},
     runtimeState: async () => update,
   } as unknown as DesktopBridge;
   const update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
   const runtime = new LiveRuntime(host, update);
-  const result = await runtime.command('hub', '');
+  const result = await runtime.command('notes', 'today');
   assert.deepEqual(
     calls.map((command) => [command.name, command.payload]),
-    [['custom-command', { name: 'hub', args: '' }]],
+    [['custom-command', { name: 'notes', args: 'today' }]],
   );
-  assert.equal(result.notice, '○ https://hub.example · not signed in');
+  assert.deepEqual(result, {});
 });

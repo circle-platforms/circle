@@ -5,6 +5,7 @@ import { extensionErrorText } from '../src/plugins/labels.ts';
 import {
   PluginRegistry,
   effectivePlugins,
+  pairedSwitch,
   pairing,
 } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
@@ -25,19 +26,19 @@ const plain: WorkbenchPlugin = {
   icon,
 };
 const paired: WorkbenchPlugin = {
-  id: 'hub',
+  id: 'connector',
   apiVersion: 1,
   version: '0.1.0',
-  title: 'hub',
+  title: 'connector',
   description: '',
   icon,
-  runtimeExtension: 'hub',
-  pages: [page('server')],
+  runtimeExtension: 'connector',
+  pages: [page('connection')],
 };
 const row = (
   change: Partial<{ version: string; enabled: boolean; error: string }> = {},
 ) => ({
-  name: 'hub',
+  name: 'connector',
   version: '0.1.0',
   enabled: true,
   ...change,
@@ -59,31 +60,39 @@ test('a paired plugin shows exactly while its runtime extension is installed, lo
 });
 
 test('a paired page shows only when it is chosen and its extension is live', () => {
-  const knowledge: WorkbenchPlugin = {
+  const reports: WorkbenchPlugin = {
     ...paired,
-    id: 'knowledge',
-    pages: [page('knowledge')],
+    id: 'reports',
+    pages: [page('reports')],
   };
-  const plugins = [plain, paired, knowledge];
+  const plugins = [plain, paired, reports];
   const live = [row()];
-  assert.deepEqual(effectivePlugins(plugins, ['files', 'hub'], live), [
+  assert.deepEqual(effectivePlugins(plugins, ['files', 'connector'], live), [
     'files',
-    'hub',
+    'connector',
   ]);
   assert.deepEqual(effectivePlugins(plugins, ['files'], live), ['files']);
-  assert.deepEqual(effectivePlugins(plugins, ['hub', 'knowledge'], live), [
-    'hub',
-    'knowledge',
+  assert.deepEqual(effectivePlugins(plugins, ['connector', 'reports'], live), [
+    'connector',
+    'reports',
   ]);
   assert.deepEqual(
-    effectivePlugins(plugins, ['files', 'hub'], [row({ enabled: false })]),
+    effectivePlugins(
+      plugins,
+      ['files', 'connector'],
+      [row({ enabled: false })],
+    ),
     ['files'],
   );
   const registry = new PluginRegistry(plugins);
-  const shown = effectivePlugins(registry.plugins, ['files', 'hub'], live);
+  const shown = effectivePlugins(
+    registry.plugins,
+    ['files', 'connector'],
+    live,
+  );
   assert.deepEqual(
     registry.pages(shown).map((item) => item.page.id),
-    ['server'],
+    ['connection'],
   );
 });
 
@@ -96,10 +105,10 @@ test('a page chosen in an earlier version that the application no longer has is 
   assert.deepEqual(
     effectivePlugins(
       [plain, paired],
-      ['developer', 'files', 'hub'],
+      ['developer', 'files', 'connector'],
       extensions,
     ),
-    ['files', 'hub'],
+    ['files', 'connector'],
   );
   assert.deepEqual(
     new PluginRegistry([plain, paired])
@@ -112,26 +121,54 @@ test('a page chosen in an earlier version that the application no longer has is 
 test('pairing reasons and a missing module use the interface language', () => {
   setLanguage('zh-CN');
   try {
-    assert.equal(pairing(paired, []).reason, '运行时扩展 枢纽 未安装');
+    assert.equal(pairing(paired, []).reason, '运行时扩展 connector 未安装');
     assert.equal(
       pairing(paired, [row({ enabled: false })]).reason,
-      '运行时扩展 枢纽 已关闭',
+      '运行时扩展 connector 已关闭',
     );
     assert.equal(
       pairing(paired, [row({ error: 'Error: Cannot find module' })]).reason,
-      '运行时扩展 枢纽 加载失败',
+      '运行时扩展 connector 加载失败',
     );
     assert.equal(
       extensionErrorText(
-        "Error: Cannot find module '/opt/circle/hub_text.js' imported from extension.ts",
+        "Error: Cannot find module '/opt/circle/extension_error.js' imported from extension.ts",
       ),
-      '找不到模块 /opt/circle/hub_text.js',
+      '找不到模块 /opt/circle/extension_error.js',
     );
   } finally {
     setLanguage('en');
   }
   assert.match(
     pairing(paired, []).reason,
-    /runtime extension hub is not installed/,
+    /runtime extension connector is not installed/,
+  );
+});
+
+test('of two pages of one extension, switching one off keeps the extension on for the other; the last one off turns it off', () => {
+  const reports: WorkbenchPlugin = {
+    ...paired,
+    id: 'reports',
+    pages: [page('reports')],
+  };
+  const registry = new PluginRegistry([plain, paired, reports]);
+  // Turning a page on turns the extension on and leaves the other page as it was
+  assert.deepEqual(pairedSwitch(registry, ['files'], 'connector', true), {
+    chosen: ['files', 'connector'],
+    extension: true,
+  });
+  const both = ['files', 'connector', 'reports'];
+  assert.deepEqual(pairedSwitch(registry, both, 'connector', false), {
+    chosen: ['files', 'reports'],
+    extension: true,
+  });
+  assert.deepEqual(
+    pairedSwitch(registry, ['files', 'reports'], 'reports', false),
+    { chosen: ['files'], extension: false },
+  );
+  // A page an earlier version had is not counted as one of the extension's
+  assert.deepEqual(
+    pairedSwitch(registry, ['developer', 'connector'], 'connector', false),
+    { chosen: [], extension: false },
   );
 });

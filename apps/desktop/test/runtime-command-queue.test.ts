@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +10,6 @@ import { ScriptedModel } from '../../../src/testing.ts';
 import {
   defaultSettings,
   saveSettings,
-  saveSettingsChange,
   trustFolder,
 } from '../../../src/settings.ts';
 import type {
@@ -62,21 +61,22 @@ async function setup(
 }
 
 /**
- * A hub sign-in waits for the person's password, so its command stays in the
- * queue: the runtime holding one command is what the next one must survive.
- * It comes back in a box because an async function that returns a promise
- * would be waited for before its caller goes on.
+ * An extension's secret prompt holds its command in the queue. Return the
+ * pending reply in an object so the helper does not await it before its caller.
  */
-async function hubLoginWaiting(
+async function secretCommandWaiting(
   f: Awaited<ReturnType<typeof setup>>,
 ): Promise<{ held: Promise<RuntimeReply> }> {
-  saveSettingsChange(f.home, (settings) => {
-    settings.extensions.hub = { enabled: true };
-  });
+  const folder = join(f.home, 'extensions', 'lab');
+  await mkdir(folder, { recursive: true });
+  await writeFile(
+    join(folder, 'extension.mjs'),
+    `export function register(api){api.registerCommand('lab','Sign in to the lab',async(args,ctx)=>{const password=await api.askSecret('password for '+(args||'the lab'));ctx.append(password===null?'not signed in':'signed in')})}`,
+  );
   assert.equal((await f.call('reload')).ok, true);
   const held = f.call('custom-command', {
-    name: 'hub',
-    args: 'login http://127.0.0.1:9 tester',
+    name: 'lab',
+    args: 'tester',
   });
   await wait(
     () =>
@@ -115,7 +115,7 @@ test(
   { timeout: patience(30000) },
   async (t) => {
     const f = await setup(t, []);
-    const { held } = await hubLoginWaiting(f);
+    const { held } = await secretCommandWaiting(f);
     let answered = false;
     const next = f.call('prompt', { text: 'hello' }).then(() => {
       answered = true;

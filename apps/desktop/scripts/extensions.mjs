@@ -1,8 +1,8 @@
 // Bundled extensions for the desktop runtime. The terminal copies extension.ts and
-// lets Node strip types, beside the tsc output hub_text.js. This build does not run
-// tsc: it compiles each extension to extension.js and emits hub_text.js and
-// extension_error.js where those imports resolve. The worker imports the same
-// extension_error.js, so ExtensionError is one class.
+// lets Node strip types. This build does not run tsc: it compiles each extension
+// to extension.js and emits extension_error.js where an extension's import of it
+// resolves. The worker imports the same extension_error.js, so ExtensionError is
+// one class.
 import { build } from 'esbuild';
 import { cp, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -11,13 +11,13 @@ import { join } from 'node:path';
 
 const sourceRoot = fileURLToPath(new URL('../../../src/', import.meta.url));
 
-/** Keep the extension's sibling imports as written, and do not bundle them. */
-function keepExtensionImports() {
+/** Keep an extension's import of extension_error.js as written, and do not bundle it. */
+export function keepExtensionImports() {
   return {
     name: 'keep-extension-imports',
     setup(build) {
       build.onResolve(
-        { filter: /^(?:\.\.\/)+(?:hub_text|extension_error)\.js$/ },
+        { filter: /^(?:\.\.\/)+extension_error\.js$/ },
         (args) => ({ path: args.path, external: true }),
       );
     },
@@ -44,13 +44,8 @@ const moduleBuild = {
   target: 'node24',
 };
 
-/** Compile the modules a bundled extension imports, and the extensions themselves. */
+/** Compile the module a bundled extension may import, and the extensions themselves. */
 export async function buildBundledExtensions(dist) {
-  await build({
-    ...moduleBuild,
-    entryPoints: [join(sourceRoot, 'hub_text.ts')],
-    outfile: join(dist, 'hub_text.js'),
-  });
   await build({
     ...moduleBuild,
     entryPoints: [join(sourceRoot, 'extension_error.ts')],

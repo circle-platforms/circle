@@ -1,6 +1,6 @@
 # Desktop workbench architecture
 
-The user requested a Circle application, with its complete frontend and four platform objects available through one plugin mechanism. The native desktop package is the primary entry point. React is the renderer inside that application.
+The user requested a Circle application, with its complete frontend and four platform objects available through one plugin mechanism. The native desktop package is the primary entry point. React is the renderer inside that application. The pages of the four platform objects have since been removed; the plugin mechanism remains.
 
 ## Ownership
 
@@ -10,12 +10,6 @@ The user requested a Circle application, with its complete frontend and four pla
 | Preload | A small, typed, origin-checked capability bridge |
 | Shared workbench | Session presentation, drafts, selection, layout, transcript and user interaction |
 | Circle runtime adapter | A bundled utility process hosting the interactive AgentRuntime; actual events/history, awaited approvals/questions/secrets, cancellation and checkpoint recovery |
-| Knowledge plugin B | Sources, revisions, evidence and artifacts |
-| Long-running work plugin C | Goals, waiting items, handoffs and work requests |
-| Execution plugin D | Resource and operation observations, control and stop requests |
-| Methods plugin E | Versioned capabilities, session loading and candidate review |
-
-The current B/C/D/E service is a separate local preview implementation. The Circle session port and platform service do not share a status field. A Circle pause does not pause C or confirm D stopped. Loading a method does not publish it, and viewing another knowledge revision does not rewrite existing input.
 
 ## Desktop boundary
 
@@ -29,7 +23,7 @@ These choices follow Electron's [security recommendations](https://www.electronj
 
 ## Plugins
 
-The same `WorkbenchPlugin` declaration is used for the Circle files, changes and browser components and B/C/D/E. A declaration includes an ID, version, interface version, dependencies and page/panel/context/composer contributions. Registration rejects conflicts and dependency cycles. React rendering errors are contained at a component boundary.
+The same `WorkbenchPlugin` declaration is used for the Circle files, changes and browser components and the GitHub connection. A declaration includes an ID, version, interface version, dependencies and page/panel/context/composer contributions. Registration rejects conflicts and dependency cycles. React rendering errors are contained at a component boundary.
 
 Current modules are reviewed first-party code, bundled with the application. UI disablement hides contributions; it is not code unloading. A future third-party distribution channel needs its own trust and isolation design. Circle runtime extensions and workbench UI components are separate mechanisms.
 

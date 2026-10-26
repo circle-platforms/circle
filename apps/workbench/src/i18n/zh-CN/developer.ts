@@ -51,7 +51,6 @@ export const developer: Record<string, string> = {
     '已核对该输入，确认移除恢复副本',
   'discard recovered input': '移除恢复副本',
   operation: '操作',
-  state: '状态',
   'technical operation': '技术详情',
   'github delivery': 'GitHub 交付',
   'operation review': '操作核对',

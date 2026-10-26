@@ -5913,6 +5913,17 @@ test('the first message keeps the thinking depth and mode chosen on home', async
   );
 });
 
+// An extension of the home: it publishes a view and a status as it registers, and its
+// command writes what it was given.
+async function notesExtension(home: string): Promise<void> {
+  const folder = join(home, 'extensions', 'notes');
+  await mkdir(folder, { recursive: true });
+  await writeFile(
+    join(folder, 'extension.mjs'),
+    `export function register(api){api.setView({ready:true});api.setStatus('notes · ada','ok');api.registerCommand('notes','Show the notes',(args,ctx)=>{ctx.append('notes: '+(args||'none'))})}`,
+  );
+}
+
 async function coldStartFixture(
   t: TestContext,
   mode: 'scratch' | 'untrusted' = 'scratch',
@@ -5923,9 +5934,7 @@ async function coldStartFixture(
     workspace = join(root, 'workspace');
   await mkdir(home);
   await mkdir(workspace);
-  const settings = defaultSettings();
-  settings.extensions.hub = { enabled: true };
-  saveSettings(settings, home);
+  saveSettings(defaultSettings(), home);
   await prepare?.(home, workspace);
   const model = new ScriptedModel([]),
     updates: RuntimeUpdate[] = [];
@@ -5949,24 +5958,21 @@ async function coldStartFixture(
   return { root, home, workspace, model, updates, controller, controllers };
 }
 
-test('trusted scratch cold start loads the enabled hub before any prompt trust or reload and retains it after restart', async (t) => {
-  const f = await coldStartFixture(t);
+test('trusted scratch cold start loads the extensions before any prompt trust or reload and again after restart', async (t) => {
+  const f = await coldStartFixture(t, 'scratch', notesExtension);
   f.controller.publish();
   assert.equal(f.updates[0]!.connected, true);
   await f.controller.initialize();
-  const hub = f.controller.snapshot().extensions.find((x) => x.name === 'hub');
-  assert.ok(hub);
-  assert.equal(hub?.enabled, true);
-  assert.equal(hub.error, undefined);
+  const notes = () =>
+    f.controller.snapshot().extensions.find((x) => x.name === 'notes');
+  assert.ok(notes());
+  assert.equal(notes()?.enabled, true);
+  assert.equal(notes()?.error, undefined);
   await wait(
-    () =>
-      (
-        f.controller.snapshot().extensions.find((x) => x.name === 'hub')
-          ?.view as { signedIn?: boolean } | undefined
-      )?.signedIn === false,
-    'cold-start hub view',
+    () => (notes()?.view as { ready?: boolean } | undefined)?.ready === true,
+    'cold-start view',
   );
-  assert.ok(hub.commands.includes('hub'));
+  assert.ok(notes()?.commands.includes('notes'));
   assert.equal(f.model.requests.length, 0);
   const saved = loadSettings(f.home);
   assert.equal(isFolderTrusted(saved, join(f.home, 'workspace')), true);
@@ -5981,39 +5987,22 @@ test('trusted scratch cold start loads the enabled hub before any prompt trust o
   f.controllers.push(restart);
   await restart.initialize();
   assert.equal(
-    restart.snapshot().extensions.find((x) => x.name === 'hub')?.enabled,
+    restart.snapshot().extensions.find((x) => x.name === 'notes')?.enabled,
     true,
   );
   assert.equal(f.model.requests.length, 0);
 });
 
-test('hub sign-in stays on the page after another session is selected', async (t) => {
-  const f = await coldStartFixture(t, 'scratch', async (home) => {
-    const data = join(home, 'extension_data', 'hub');
-    const secrets = join(home, 'extension_secrets');
-    await mkdir(data, { recursive: true });
-    await mkdir(secrets, { recursive: true });
-    await writeFile(
-      join(data, 'config.json'),
-      JSON.stringify({
-        url: 'http://127.0.0.1:7410',
-        username: 'ada',
-        scopeId: 'scp_lab',
-      }),
-    );
-    await writeFile(
-      join(secrets, 'hub.secrets.json'),
-      JSON.stringify({ token: 'desktop-hub-token' }),
-    );
-  });
+test("an extension's view, status and command stay on the page after another session is selected", async (t) => {
+  const f = await coldStartFixture(t, 'scratch', notesExtension);
   await f.controller.initialize();
-  const hub = () =>
-    f.controller.snapshot().extensions.find((item) => item.name === 'hub');
+  const notes = () =>
+    f.controller.snapshot().extensions.find((item) => item.name === 'notes');
+  const ready = () =>
+    (notes()?.view as { ready?: boolean } | undefined)?.ready === true;
   await wait(
-    () =>
-      (hub()?.view as { signedIn?: boolean } | undefined)?.signedIn === true &&
-      Boolean(hub()?.status?.text.includes('ada')),
-    'saved hub sign-in',
+    () => ready() && Boolean(notes()?.status?.text.includes('ada')),
+    'published view and status',
   );
   const call = (
     name: RuntimeCommandName,
@@ -6035,11 +6024,13 @@ test('hub sign-in stays on the page after another session is selected', async (t
   assert.equal(created.ok, true, created.error);
   const second = (created.data as { sessionId: string }).sessionId;
   assert.notEqual(second, first);
-  assert.equal((hub()?.view as { signedIn?: boolean }).signedIn, true);
-  assert.match(hub()?.status?.text ?? '', /ada/);
-  assert.ok(hub()?.commands.includes('hub'));
+  assert.equal(ready(), true);
+  assert.match(notes()?.status?.text ?? '', /ada/);
+  assert.ok(notes()?.commands.includes('notes'));
   assert.ok(
-    f.controller.snapshot().commands.some((command) => command.name === 'hub'),
+    f.controller
+      .snapshot()
+      .commands.some((command) => command.name === 'notes'),
   );
   assert.equal(
     (await call('rename-session', { id: second, title: 'other' }, second)).ok,
@@ -6050,30 +6041,11 @@ test('hub sign-in stays on the page after another session is selected', async (t
     true,
   );
   assert.equal((await call('select-session', { id: first })).ok, true);
-  assert.equal((hub()?.view as { signedIn?: boolean }).signedIn, true);
+  assert.equal(ready(), true);
   const back = await call('select-session', { id: second });
   assert.equal(back.ok, true, back.error);
-  await wait(
-    () =>
-      (hub()?.view as { signedIn?: boolean } | undefined)?.signedIn === true,
-    'sign-in after the loaded session was left',
-  );
-  assert.match(hub()?.status?.text ?? '', /ada/);
-  const status = await call(
-    'custom-command',
-    { name: 'hub', args: '' },
-    second,
-  );
-  assert.equal(status.ok, true, status.error);
-  const session = f.controller
-    .snapshot()
-    .sessions.find((item) => item.id === second);
-  assert.equal(
-    session?.messages.some((message) =>
-      /signed in|已登录|api 1\.0\.0/.test(message.text),
-    ),
-    false,
-  );
+  await wait(ready, 'view after the loaded session was left');
+  assert.match(notes()?.status?.text ?? '', /ada/);
 });
 
 test('cold start leaves an untrusted workspace and its extension code untouched', async (t) => {
@@ -6100,6 +6072,7 @@ test('cold start reports a discovery failure and an explicit reload can recover 
   assert.match(f.controller.snapshot().runtime?.error ?? '', /ENOTDIR/);
   assert.equal(f.model.requests.length, 0);
   await unlink(join(f.home, 'extensions'));
+  await notesExtension(f.home);
   const reply = await f.controller.dispatch({
     id: randomUUID(),
     name: 'reload',
@@ -6109,7 +6082,7 @@ test('cold start reports a discovery failure and an explicit reload can recover 
   assert.equal(reply.ok, true);
   assert.equal(f.controller.snapshot().runtime?.error, undefined);
   assert.equal(
-    f.controller.snapshot().extensions.find((x) => x.name === 'hub')?.enabled,
+    f.controller.snapshot().extensions.find((x) => x.name === 'notes')?.enabled,
     true,
   );
   assert.equal(f.model.requests.length, 0);
@@ -6201,7 +6174,7 @@ test(
 
 for (const mode of ['released', 'bounded'] as const)
   test(
-    `closing cold start owns a late hub token read through ${mode} drain without recreating data or publishing`,
+    `closing cold start owns a late token read through ${mode} drain without recreating data or publishing`,
     { timeout: patience(8000) },
     async (t) => {
       let release!: () => void;
@@ -6220,7 +6193,7 @@ for (const mode of ['released', 'bounded'] as const)
         'get',
         async function (this: ExtensionSecrets, name: string) {
           const value = await get.call(this, name);
-          if (name === 'token' && Reflect.get(this, 'extension') === 'hub') {
+          if (name === 'token' && Reflect.get(this, 'extension') === 'late') {
             paused = true;
             await barrier;
           }
@@ -6231,7 +6204,7 @@ for (const mode of ['released', 'bounded'] as const)
         ExtensionAPI.prototype,
         'background',
         function (this: ExtensionAPI, promise: Promise<unknown>) {
-          if (this.name === 'hub') work.push(promise);
+          if (this.name === 'late') work.push(promise);
           return background.call(this, promise);
         },
       );
@@ -6239,7 +6212,7 @@ for (const mode of ['released', 'bounded'] as const)
         ExtensionAPI.prototype,
         'setView',
         function (this: ExtensionAPI, value: unknown) {
-          if (this.name === 'hub' && this.signal.aborted) late.push('view');
+          if (this.name === 'late' && this.signal.aborted) late.push('view');
           return setView.call(this, value);
         },
       );
@@ -6250,11 +6223,19 @@ for (const mode of ['released', 'bounded'] as const)
           this: ExtensionAPI,
           ...args: Parameters<ExtensionAPI['setStatus']>
         ) {
-          if (this.name === 'hub' && this.signal.aborted) late.push('status');
+          if (this.name === 'late' && this.signal.aborted) late.push('status');
           return setStatus.apply(this, args);
         },
       );
       const f = await coldStartFixture(t, 'scratch', async (home) => {
+        // Reads its saved token in the background as it registers, then keeps
+        // its data and publishes what it found, unless it was closed by then.
+        const reader = join(home, 'extensions', 'late');
+        await mkdir(reader, { recursive: true });
+        await writeFile(
+          join(reader, 'extension.mjs'),
+          `export function register(api){api.background((async()=>{const token=await api.secrets.get('token');void api.dataDir;if(api.signal.aborted)return;api.setView({token:Boolean(token)});api.setStatus('late · ready','ok')})())}`,
+        );
         const folder = join(home, 'extensions', 'waiting');
         await mkdir(folder, { recursive: true });
         await writeFile(
@@ -6268,7 +6249,7 @@ for (const mode of ['released', 'bounded'] as const)
         initializing = f.controller.initialize();
         await wait(
           () => paused && existsSync(join(f.home, 'register-started')),
-          'late hub token read and pending registration',
+          'late token read and pending registration',
         );
         let ended = false;
         closing = f.controller.close().then(() => {
@@ -6303,12 +6284,12 @@ for (const mode of ['released', 'bounded'] as const)
         assert.equal(
           existsSync(join(f.home, 'extension_data')),
           false,
-          'late hub work must not recreate a removed home',
+          'late work must not recreate a removed home',
         );
         assert.deepEqual(
           late,
           [],
-          'a closed hub may publish neither a view nor a status',
+          'a closed extension may publish neither a view nor a status',
         );
         assert.equal(f.model.requests.length, 0);
         assert.ok(
@@ -6331,14 +6312,17 @@ for (const mode of ['released', 'bounded'] as const)
     },
   );
 
-test('opening another session still works while hub login is waiting for a password', async (t) => {
+test("opening another session still works while an extension's command is waiting for a password", async (t) => {
   const f = await setup(t, [
     { message: assistant('started') },
     { message: assistant('second') },
   ]);
-  saveSettingsChange(f.home, (settings) => {
-    settings.extensions.hub = { enabled: true };
-  });
+  const folder = join(f.home, 'extensions', 'lab');
+  await mkdir(folder, { recursive: true });
+  await writeFile(
+    join(folder, 'extension.mjs'),
+    `export function register(api){api.registerCommand('lab','Sign in to the lab',async(args,ctx)=>{const password=await api.askSecret('password for '+(args||'the lab'));ctx.append(password===null?'not signed in':'signed in')})}`,
+  );
   assert.equal((await f.call('reload')).ok, true);
   assert.equal((await f.call('prompt', { text: 'hello' })).ok, true);
   await wait(() => {
@@ -6363,8 +6347,8 @@ test('opening another session still works while hub login is waiting for a passw
   }, 'second session is idle');
   assert.equal((await f.call('select-session', { id: first })).ok, true);
   const loggingIn = f.call('custom-command', {
-    name: 'hub',
-    args: 'login http://127.0.0.1:9 tester',
+    name: 'lab',
+    args: 'tester',
   });
   await wait(
     () =>
@@ -6395,34 +6379,6 @@ test('opening another session still works while hub login is waiting for a passw
   );
   const finished = await loggingIn;
   assert.equal(finished.ok, true, finished.error);
-});
-
-test('a hub password passed to the command is not asked for and does not enter the snapshot', async (t) => {
-  const f = await setup(t, []);
-  saveSettingsChange(f.home, (settings) => {
-    settings.extensions.hub = { enabled: true };
-  });
-  assert.equal((await f.call('reload')).ok, true);
-  const password = 'desk-secret-4419';
-  const reply = await f.call('custom-command', {
-    name: 'hub',
-    args: 'login http://127.0.0.1:9 someone',
-    secret: password,
-  });
-  assert.equal(reply.ok, false);
-  assert.match(String(reply.error), /cannot reach/);
-  assert.equal(
-    f.controller.snapshot().interactions.some((row) => row.kind === 'secret'),
-    false,
-  );
-  assert.equal(
-    JSON.stringify(f.controller.snapshot()).includes(password),
-    false,
-  );
-  assert.equal(JSON.stringify(f.updates).includes(password), false);
-  const stored = await readFile(join(f.home, 'settings.json'), 'utf8');
-  assert.match(stored, /http:\/\/127\.0\.0\.1:9/);
-  assert.equal(stored.includes(password), false);
 });
 
 // The window names the folder a trust answer is about, by the id its snapshot gave.
@@ -6581,32 +6537,20 @@ test('a deletion whose cleanup fails tells the window why and keeps the history,
   }
 });
 
-test('what a hub command finds shows in the conversation, and its sign-in status is a notice in passing (#199)', async (t) => {
+test("what an extension's command writes shows in the conversation", async (t) => {
   const f = await setup(t, []);
-  saveSettingsChange(f.home, (settings) => {
-    settings.extensions.hub = { enabled: true };
-  });
+  await notesExtension(f.home);
   assert.equal((await f.call('reload')).ok, true);
   const notices = () =>
     activeSession(f)
       .messages.filter((row) => row.role === 'notice')
       .map((row) => row.text);
-  // A command's own result is the conversation's, as every extension's is.
-  const help = await f.call('custom-command', { name: 'hub', args: 'help' });
-  assert.equal(help.ok, true, help.error);
-  assert.ok(
-    notices().some((text) => text.includes('/hub packs')),
-    'the hub commands are listed in the conversation',
-  );
-  // Where you are signed in is status: said in passing, not a row of the conversation.
-  const before = notices().length;
-  const status = await f.call('custom-command', { name: 'hub', args: '' });
-  assert.equal(status.ok, true, status.error);
-  assert.match(
-    String((status.data as { notice?: string }).notice),
-    /not signed in/,
-  );
-  assert.equal(notices().length, before);
+  const reply = await f.call('custom-command', {
+    name: 'notes',
+    args: 'today',
+  });
+  assert.equal(reply.ok, true, reply.error);
+  assert.ok(notices().includes('notes: today'), notices().join('\n'));
 });
 
 test('the parallel-task settings answer while another Circle holds the ledger', async (t) => {

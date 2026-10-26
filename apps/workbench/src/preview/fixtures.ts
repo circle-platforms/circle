@@ -636,13 +636,6 @@ export function createFixtures(): WorkbenchSnapshot {
       textSize: 'default',
       keybindings: {},
     },
-    uiPlugins: [
-      'files',
-      'browser',
-      'knowledge',
-      'work',
-      'execution',
-      'methods',
-    ],
+    uiPlugins: ['files', 'browser'],
   };
 }

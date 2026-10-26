@@ -11,8 +11,6 @@ export interface WhatsNewItem {
   id: string;
   /** First release this item belongs to. Shown once, while the last-seen version is older. */
   since: string;
-  /** Shown only when the saved settings still name the old extension. */
-  when?: 'circle-server';
   text: Localized;
 }
 
@@ -26,16 +24,6 @@ export function releaseNotesUrl(version: string): string {
 // a lowercase L is not read as i. alt+k and alt+d both used to be ctrl+s,
 // for a secret and for saving a list default; the release notes say which.
 export const WHATS_NEW_ITEMS: WhatsNewItem[] = [
-  {
-    id: 'hub',
-    since: '1.7.0',
-    when: 'circle-server',
-    text: {
-      en: 'The circle-server extension is now named hub. Enable hub and sign in again.',
-      'zh-CN':
-        '原先的 circle-server 扩展现在叫 hub。请重新启用 hub 并再次登录。',
-    },
-  },
   {
     id: 'keys',
     since: '1.7.4',
@@ -75,20 +63,17 @@ export interface WhatsNewNotice {
 }
 
 /**
- * Items introduced after `seen` and already in `current`. Hub is included
- * only when `hub` is set: someone who never had circle-server has nothing
- * to rename. An empty list is not worth a notice.
+ * Items introduced after `seen` and already in `current`. An empty list is
+ * not worth a notice.
  */
 export function notesSince(
   seen: string | undefined,
   current: string,
-  options?: { hub?: boolean },
 ): WhatsNewItem[] {
   const from = seen && validVersion(seen) ? seen : '0.0.0';
   if (!validVersion(current)) return [];
   return WHATS_NEW_ITEMS.filter(
     (item) =>
-      (item.when !== 'circle-server' || options?.hub === true) &&
       compareVersions(item.since, from) > 0 &&
       compareVersions(item.since, current) <= 0,
   );

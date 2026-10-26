@@ -75,7 +75,7 @@ export const components: Record<string, string> = {
   'search Circle': '搜索 Circle',
   sessions: '会话',
   all: '全部',
-  platform: '平台',
+  pages: '页面',
   models: '模型',
   skills: '技能',
   commands: '命令',
