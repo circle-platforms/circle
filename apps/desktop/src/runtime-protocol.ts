@@ -106,6 +106,8 @@ export interface RuntimeTokenDelta {
   thinking?: string;
   at: string;
   turn?: WorkbenchSnapshot['sessions'][number]['turn'];
+  /** Progress-only update: no assistant message or conversation history. */
+  compaction?: import('../../../src/compaction').CompactionSnapshot;
 }
 export const runtimeCommands = new Set<RuntimeCommandName>([
   'workspace-service',

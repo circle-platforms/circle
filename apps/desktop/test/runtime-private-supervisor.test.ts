@@ -692,6 +692,62 @@ test('quitting while a restart waits for stale leases cancels it', async (t) => 
   assert(Date.now() - started < 30_000, 'close did not wait for the restart');
 });
 
+test('worker exit immediately retires its compaction but not another process ownership claim', async (t) => {
+  const logFile = await scratchLog(t);
+  await fixture(
+    async (supervisor, child) => {
+      child.emit('exit', 9);
+      const rows = supervisor.state().snapshot.sessions;
+      assert.equal(
+        rows.find((row) => row.id === 'own')!.compaction!.status,
+        'interrupted',
+      );
+      assert.equal(
+        rows.find((row) => row.id === 'own')!.compaction!.recoverable,
+        true,
+      );
+      assert.equal(
+        rows.find((row) => row.id === 'own')!.compaction!.liveTokens,
+        0,
+      );
+      assert.equal(
+        rows.find((row) => row.id === 'foreign')!.compaction!.status,
+        'running',
+      );
+    },
+    { logFile, restartDelayMs: 60000 },
+    {
+      ...configured,
+      runtime: { ...configured.runtime, processId: 42 },
+      sessions: [
+        {
+          ...configured.sessions[0],
+          id: 'own',
+          compaction: {
+            operationId: 'a',
+            ownerProcessId: 42,
+            status: 'running',
+            liveTokens: 12,
+            recoverable: false,
+          },
+        },
+        {
+          ...configured.sessions[0],
+          id: 'foreign',
+          occupied: true,
+          compaction: {
+            operationId: 'b',
+            ownerProcessId: 99,
+            status: 'running',
+            liveTokens: 8,
+            recoverable: false,
+          },
+        },
+      ],
+    },
+  );
+});
+
 test('what the runtime says of the terminal tabs reaches the window only when it is well formed, and a tab action is the runtime’s to answer', async (t) => {
   const logFile = await scratchLog(t);
   await fixture(

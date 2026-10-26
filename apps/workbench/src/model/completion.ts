@@ -1,6 +1,7 @@
 import type { ModelCompletionFailureCode } from '../../../../src/model_completion';
 import type { Message } from './types';
 import { locale, t } from '../i18n/index.ts';
+import { compactionOutcomeText } from './compaction';
 
 /**
  * English is the sentence the terminal stores. Chinese uses the shared word
@@ -53,6 +54,8 @@ export function completionFailureText(
       return t('model returned an empty response');
     case 'output_limit':
       return t('model output limit reached; response incomplete');
+    case 'context_limit':
+      return t('model context window exhausted; response incomplete');
     case 'missing_finish':
       return t('model response ended without a complete finish signal');
     case 'filtered':
@@ -69,9 +72,14 @@ export function completionFailureText(
 export function completionNoticeText(
   message: Pick<
     Message,
-    'text' | 'planCompleted' | 'completionFailure' | 'interrupted'
+    | 'text'
+    | 'planCompleted'
+    | 'completionFailure'
+    | 'interrupted'
+    | 'compaction'
   >,
 ): string {
+  if (message.compaction) return compactionOutcomeText(message.compaction);
   if (message.interrupted) return interruptedLabel();
   if (message.planCompleted !== undefined)
     return t('plan completed · {n} steps', { n: message.planCompleted });

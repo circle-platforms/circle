@@ -128,6 +128,7 @@ export interface ScreenState {
   terminalPage?: { cols: number; rows: number };
   compaction?: CompactionProgress;
   contextInput?: number;
+  contextEstimated?: boolean;
   contextWindow?: number;
   costText?: string;
   subagents?: SubagentView[];
@@ -747,6 +748,7 @@ export function renderScreen(
           usage: state.usage,
           costText: state.costText,
           contextInput: state.contextInput,
+          contextEstimated: state.contextEstimated,
           contextWindow: state.contextWindow,
           unreported: state.usageUnreported,
         },
