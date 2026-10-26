@@ -87,9 +87,15 @@ export class Sandbox {
       rel !== '..' && !rel.startsWith('..' + sep) && !/^[A-Za-z]:/.test(rel)
     );
   }
+  /** Whether a path is refused by name alone, without throwing: a search needs to count
+   * the files it leaves out, not stop on the first one. */
+  isCredentialPath(path: string): boolean {
+    const name = path.replace(/\\/g, '/').split('/').at(-1)!;
+    return this.credentialFiles.some((pattern) => wildcard(pattern, name));
+  }
   checkCredentialPath(path: string): void {
     const name = path.replace(/\\/g, '/').split('/').at(-1)!;
-    if (this.credentialFiles.some((pattern) => wildcard(pattern, name)))
+    if (this.isCredentialPath(path))
       throw new Error(
         `Denied by approval policy: '${name}' is a credential file`,
       );

@@ -8,7 +8,7 @@ import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import { prepareToolCall } from '../src/tool_call_compat.js';
 import { buildTools } from '../src/tools.js';
-import { GREP_TRUNCATION_NOTE } from '../src/grep_tool.js';
+import { GREP_TRUNCATION_NOTE, readSearchableFile } from '../src/grep_tool.js';
 import { cleanup, scratch } from './helpers.js';
 
 function project(t: { after(fn: () => void): void }): string {
@@ -172,6 +172,111 @@ test('grep shows paths outside the folder as they are and does not follow links 
   assert.equal(
     await run({ pattern: 'needle', path: outside, output_mode: 'content' }),
     `${realpathSync.native(join(outside, 'far.txt')).split(sep).join('/')}:\n  1: needle far away`,
+  );
+});
+
+test('the byte prefilter cannot miss a match: the line rules stay as they were', async (t) => {
+  const root = realpathSync(scratch(t));
+  writeFileSync(join(root, 'span.txt'), 'a\nb\n');
+  writeFileSync(join(root, 'utf8.txt'), 'const 错误码 = 1;\n');
+  writeFileSync(join(root, 'crlf.txt'), 'needle = 1\r\nprint\r\n');
+  const run = grep(root);
+  // The file bytes hold this pattern across a line end, but no single line does.
+  assert.equal(await run({ pattern: 'a\nb' }), 'No matches found');
+  // A multi-byte pattern is searched as the same bytes UTF-8 writes it as.
+  assert.equal(await run({ pattern: '错误码' }), '/utf8.txt');
+  assert.equal(
+    await run({ pattern: '错误码', output_mode: 'content' }),
+    '/utf8.txt:\n  1: const 错误码 = 1;',
+  );
+  // A match on a CRLF line is found, with the trailing return character dropped as before.
+  assert.equal(
+    await run({ pattern: 'needle = 1', output_mode: 'content' }),
+    '/crlf.txt:\n  1: needle = 1',
+  );
+  // An empty pattern still matches every line.
+  assert.equal(
+    await run({ pattern: '', path: 'span.txt', output_mode: 'count' }),
+    '/span.txt: 2',
+  );
+});
+
+test('grep names the files it could not search instead of claiming nothing matched', async (t) => {
+  const root = realpathSync(scratch(t));
+  writeFileSync(join(root, 'top.txt'), 'needle here\n');
+  // One byte over the 10 MB limit, with the needle in it: the size is known before the read,
+  // so the file was not looked in, whatever the pattern is.
+  writeFileSync(
+    join(root, 'big.txt'),
+    Buffer.concat([
+      Buffer.alloc(10 * 1024 * 1024, 0x78),
+      Buffer.from('needle\n'),
+    ]),
+  );
+  // Not valid UTF-8. An ASCII needle still shows up in the bytes, so the byte search passes
+  // the file on and it is the failed decode that gets told.
+  writeFileSync(
+    join(root, 'gbk.txt'),
+    Buffer.concat([Buffer.from('needle '), Buffer.from([0xff, 0xfe])]),
+  );
+  const run = grep(root);
+  assert.equal(
+    await run({ pattern: 'needle' }),
+    '/top.txt\n\n' +
+      'Note: 2 files were not searched (1 over the 10 MB limit, 1 not UTF-8 text). ' +
+      'A match could be in one of them: narrow the path or glob, or open the file with read_file.',
+  );
+  // With a non-ASCII pattern the decode is the filter, so a legacy 8-bit file is named as not
+  // searched rather than reported as having no match: 错误 is two bytes, not one.
+  writeFileSync(join(root, 'gbk2.txt'), Buffer.from([0xb4, 0xed, 0x0a])); // 错误 in GBK
+  assert.match(
+    await run({ pattern: '错误' }),
+    /^No matches found\n\nNote: 3 files were not searched \(1 over the 10 MB limit, 2 not UTF-8 text\)/,
+  );
+});
+
+test('binary and credential files are declared exclusions, not coverage gaps', async (t) => {
+  const root = realpathSync(scratch(t));
+  writeFileSync(join(root, 'ok.txt'), 'needle\n');
+  writeFileSync(join(root, '.env'), 'needle=secret\n');
+  writeFileSync(join(root, 'blob.bin'), Buffer.from('needle\0binary'));
+  const run = grep(root);
+  // docs/tools.md states these two are skipped by rule, so a search stays free of the note.
+  assert.equal(await run({ pattern: 'needle' }), '/ok.txt');
+});
+
+test('the reader tells a vanished file from a refused one', (t) => {
+  const root = realpathSync(scratch(t));
+  const sandbox = new Sandbox(root);
+  // Between the walk and the read a file can go away: nothing there could have held a
+  // match, so the search does not claim a gap.
+  assert.deepEqual(
+    readSearchableFile(sandbox, join(root, 'gone.txt'), root, true),
+    { excluded: true },
+  );
+  // A read the operating system refuses is a gap the model has to hear about. A folder is
+  // the portable way to make a read fail: the walk only lists files, so this path stands in
+  // for the refusal, not for a search the model can ask for.
+  mkdirSync(join(root, 'a-folder'));
+  assert.deepEqual(
+    readSearchableFile(sandbox, join(root, 'a-folder'), root, true),
+    { skip: 'unreadable' },
+  );
+});
+
+test('the coverage note comes before the note about a hit match cap', async (t) => {
+  const root = realpathSync(scratch(t));
+  writeFileSync(join(root, 'hit.txt'), 'hit\nhit\nhit\n');
+  writeFileSync(
+    join(root, 'big.txt'),
+    Buffer.alloc(10 * 1024 * 1024 + 1, 0x78),
+  );
+  const run = grep(root);
+  assert.equal(
+    await run({ pattern: 'hit', output_mode: 'count', max_count: 2 }),
+    `/hit.txt: 2\n\nNote: 1 file was not searched (1 over the 10 MB limit). ` +
+      'A match could be in one of them: narrow the path or glob, or open the file with read_file.' +
+      `\n\n${GREP_TRUNCATION_NOTE}`,
   );
 });
 
