@@ -1599,6 +1599,40 @@ test('/variables and /secrets keep named values, and the model is told the names
   assert.match(screen(), /Removed secret API_TOKEN/);
 });
 
+test('a refused host key from a manual terminal profile connection retires its question', async (t) => {
+  const { app, ui } = await session(t, []);
+  const requests: { action: string; args: Record<string, unknown> }[] = [];
+  ui.terminals.set(app.runtime, {
+    request: async (
+      _conversation: string,
+      action: string,
+      args: Record<string, unknown>,
+    ) => {
+      requests.push({ action, args: structuredClone(args) });
+      if (action === 'connect')
+        return {
+          text: 'the host key needs an answer',
+          approval: {
+            kind: 'hostkey',
+            token: 'manual-hk-token',
+            host: 'sw1.lan:22',
+            keyType: 'ssh-ed25519',
+            fingerprint: 'SHA256:abc',
+            privateHost: true,
+          },
+        };
+      return { text: '' };
+    },
+    views: () => [],
+  });
+  ui.confirmHostKey = async () => 'reject';
+  await ui.connectTerminalProfile('lab');
+  assert.deepEqual(requests, [
+    { action: 'connect', args: { profile: 'lab' } },
+    { action: 'decline-host-key', args: { token: 'manual-hk-token' } },
+  ]);
+});
+
 test('the terminal asks for files a page would get or gave, and for passing a certificate warning, on cards of their own', async (t) => {
   const { app, ui, key } = await session(t, []);
   const signal = new AbortController().signal;

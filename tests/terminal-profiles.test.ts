@@ -7,6 +7,7 @@ import {
   DEFAULT_ROWS,
   findProfile,
   loadProfiles,
+  parseTarget,
   profileTarget,
   saveProfiles,
   type TerminalProfile,
@@ -127,4 +128,51 @@ test('the target names the device for approvals, and a profile is found by any c
   );
   assert.equal(findProfile([profile], ' lab-device-01 ')?.name, profile.name);
   assert.equal(findProfile([profile], 'other'), undefined);
+});
+
+test('parseTarget takes a plain host, a port written after it, and an explicit port', () => {
+  assert.deepEqual(parseTarget('ssh', '172.16.6.85'), {
+    host: '172.16.6.85',
+    port: 22,
+    target: '172.16.6.85:22',
+  });
+  // The way a person types an address: the port rides on the host text
+  assert.deepEqual(parseTarget('ssh', '172.16.6.85:2222'), {
+    host: '172.16.6.85',
+    port: 2222,
+    target: '172.16.6.85:2222',
+  });
+  assert.deepEqual(parseTarget('telnet', 'SW1.LAN:2000'), {
+    host: 'sw1.lan',
+    port: 2000,
+    target: 'sw1.lan:2000',
+  });
+  // An explicit port argument says what the caller means over one written in the text
+  assert.deepEqual(parseTarget('ssh', '172.16.6.85:22', 2222), {
+    host: '172.16.6.85',
+    port: 2222,
+    target: '172.16.6.85:2222',
+  });
+  // Bracketed IPv6, with and without a written port
+  assert.deepEqual(parseTarget('ssh', '[fe80::1]:22'), {
+    host: '[fe80::1]',
+    port: 22,
+    target: '[fe80::1]:22',
+  });
+  assert.deepEqual(parseTarget('ssh', '[fe80::1]'), {
+    host: '[fe80::1]',
+    port: 22,
+    target: '[fe80::1]:22',
+  });
+  // Still not a device: a scheme, a path, credentials, a bad or doubled port
+  assert.equal(parseTarget('ssh', 'ssh://172.16.6.85'), undefined);
+  assert.equal(parseTarget('ssh', '172.16.6.85/path'), undefined);
+  assert.equal(parseTarget('ssh', 'op@172.16.6.85'), undefined);
+  assert.equal(parseTarget('ssh', '172.16.6.85:'), undefined);
+  assert.equal(parseTarget('ssh', '172.16.6.85:0'), undefined);
+  assert.equal(parseTarget('ssh', '172.16.6.85:70000'), undefined);
+  assert.equal(parseTarget('ssh', '172.16.6.85:abc'), undefined);
+  assert.equal(parseTarget('ssh', '172.16.6.85:22:23'), undefined);
+  // A bare IPv6 without brackets stays refused: the brackets tell the port apart
+  assert.equal(parseTarget('ssh', 'fe80::1'), undefined);
 });

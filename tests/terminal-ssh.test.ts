@@ -29,6 +29,12 @@ const HOST_KEY = Buffer.from(
 
 interface Device {
   port: number;
+  /** Handshakes begun: a login paused at a host key counts as one, resumed or not. */
+  connections: number;
+  /** Wires open right now. */
+  open: () => number;
+  /** Cut every open wire: the device grew tired of a wait. */
+  hangUp: () => void;
   authed: string[];
   input: string[];
   pty: { cols: number; rows: number; term: string }[];
@@ -40,6 +46,9 @@ interface Device {
 function startDevice(t: test.TestContext, accepts = PASSWORD): Promise<Device> {
   const device: Device = {
     port: 0,
+    connections: 0,
+    open: () => 0,
+    hangUp: () => {},
     authed: [],
     input: [],
     pty: [],
@@ -99,10 +108,15 @@ function startDevice(t: test.TestContext, accepts = PASSWORD): Promise<Device> {
       };
     }
   )._srv.on('connection', (socket) => {
+    device.connections++;
     live.add(socket);
     socket.on('close', () => live.delete(socket));
     socket.on('error', () => {});
   });
+  device.open = () => live.size;
+  device.hangUp = () => {
+    for (const socket of [...live]) socket.destroy();
+  };
   let closed: Promise<void> | undefined;
   device.close = () =>
     (closed ??= new Promise<void>((done) => {
@@ -313,6 +327,124 @@ test('a once answer trusts nothing on disk, and the next conversation is asked a
   assert.equal(other.approval?.kind, 'hostkey');
 });
 
+// The point of pausing the handshake rather than refusing it: the person's answer
+// resumes the login already begun, so entering the device after the click costs the
+// sign-in alone - no second TCP connection, no second key exchange.
+test('an approved host key resumes the paused login: the device sees one handshake', async (t) => {
+  const device = await startDevice(t);
+  const sessions = manager(t, [profile(device.port, 'lab')], {
+    secret: () => PASSWORD,
+  });
+  const ask = await sessions.request(
+    'c1',
+    'connect',
+    { profile: 'lab' },
+    signal,
+  );
+  assert.equal(ask.approval?.kind, 'hostkey');
+  assert.deepEqual(device.authed, []);
+  // The question stands on a live wire: the login waits mid-handshake, unauthenticated
+  await until(
+    () => device.open() === 1,
+    'the paused login did not keep its wire',
+  );
+  const done = await sessions.request(
+    'c1',
+    'connect',
+    { profile: 'lab', approval: { token: ask.approval!.token, scope: 'once' } },
+    signal,
+  );
+  assert.match(done.text, /^Connected: /);
+  assert.equal(device.connections, 1);
+  assert.deepEqual(device.authed, ['operator']);
+  await sessions.request(
+    'c1',
+    'send',
+    { session: 't1', text: 'show clock', enter: true },
+    signal,
+  );
+  const ran = await sessions.request(
+    'c1',
+    'wait',
+    { session: 't1', pattern: 'ran: show clock', timeout_ms: 10000 },
+    signal,
+  );
+  assert.match(ran.text, /matched ran: show clock/);
+});
+
+test('a refused host key drops the paused login and retires its question', async (t) => {
+  const device = await startDevice(t);
+  const sessions = manager(t, [profile(device.port, 'lab')], {
+    secret: () => PASSWORD,
+  });
+  const ask = await sessions.request(
+    'c1',
+    'connect',
+    { profile: 'lab' },
+    signal,
+  );
+  assert.equal(ask.approval?.kind, 'hostkey');
+  await until(
+    () => device.open() === 1,
+    'the paused login did not keep its wire',
+  );
+  await sessions.request(
+    'c1',
+    'decline-host-key',
+    { token: ask.approval!.token },
+    signal,
+  );
+  await until(
+    () => device.open() === 0,
+    'the refused login kept its wire open',
+  );
+  // Answering after a refusal says so rather than signing in behind it
+  await assert.rejects(
+    sessions.request(
+      'c1',
+      'connect',
+      {
+        profile: 'lab',
+        approval: { token: ask.approval!.token, scope: 'once' },
+      },
+      signal,
+    ),
+    /host key request is gone/,
+  );
+  assert.deepEqual(device.authed, []);
+});
+
+test('a paused login the device hung up on still connects on one answer', async (t) => {
+  const device = await startDevice(t);
+  const sessions = manager(t, [profile(device.port, 'lab')], {
+    secret: () => PASSWORD,
+  });
+  const ask = await sessions.request(
+    'c1',
+    'connect',
+    { profile: 'lab' },
+    signal,
+  );
+  assert.equal(ask.approval?.kind, 'hostkey');
+  await until(
+    () => device.open() === 1,
+    'the paused login did not keep its wire',
+  );
+  // The device grows tired of the wait and cuts the wire: the answer cannot resume
+  // it, so it logs in from scratch - the person still only clicks once.
+  device.hangUp();
+  await until(() => device.open() === 0, 'the device wire stayed open');
+  const done = await sessions.request(
+    'c1',
+    'connect',
+    { profile: 'lab', approval: { token: ask.approval!.token, scope: 'once' } },
+    signal,
+  );
+  assert.match(done.text, /^Connected: /);
+  assert.equal(device.connections, 2);
+  assert.deepEqual(device.authed, ['operator']);
+});
+
 test('a quick connect password signs in once through the host key question and is not kept', async (t) => {
   const device = await startDevice(t);
   // What the SSH connector was given each time: a one-time secret name and the lookup
@@ -359,9 +491,10 @@ test('a quick connect password signs in once through the host key question and i
   );
   assert.match(done.text, /^Connected: /);
   assert.deepEqual(device.authed, ['operator']);
-  // Each try had its own name, and neither reaches the password once it was read
-  assert.equal(read.length, 2);
-  assert.notEqual(read[0]!.name, read[1]!.name);
+  // The answer resumed the login that paused at the key: one wire, one handshake,
+  // and the password read once - and gone from the one-time store now it was used
+  assert.equal(device.connections, 1);
+  assert.equal(read.length, 1);
   for (const { name, env } of read) {
     assert.match(name, /^once:/);
     assert.equal(env.secret(name), '');

@@ -290,10 +290,17 @@ export function terminalTools(
             context.callId,
           )
         : 'reject';
-      if (decision === 'reject')
+      if (decision === 'reject') {
+        await port.request(
+          context.sessionId,
+          'decline-host-key',
+          { token: approval.token },
+          context.signal,
+        );
         throw Error(
           'the user did not trust this device host key; nothing was sent to it',
         );
+      }
       result = await port.request(
         context.sessionId,
         action,
@@ -390,6 +397,48 @@ export function terminalTools(
         description: 'The login name, for a bare host',
       },
     }),
+    tool(
+      'terminal_profile_save',
+      'profile-save',
+      'write',
+      {
+        name: {
+          type: 'string',
+          description:
+            'The profile name to save under; a later save replaces the same name',
+        },
+        transport: {
+          type: 'string',
+          enum: ['ssh', 'telnet'],
+          description: 'The protocol',
+        },
+        host: {
+          type: 'string',
+          description:
+            'The device address; a host written host:port is taken apart',
+        },
+        port: {
+          type: 'number',
+          description: 'The port; 22 for ssh, 23 for telnet',
+        },
+        user: { type: 'string', description: 'The SSH login name' },
+        password_secret: {
+          type: 'string',
+          description:
+            'The NAME of a secret the user saved, holding the password: its value never enters the profile and you never see it',
+        },
+        key_path: {
+          type: 'string',
+          description:
+            'A private key file, for key sign-in instead of a password',
+        },
+        passphrase_secret: {
+          type: 'string',
+          description: 'The NAME of a saved secret for the key passphrase',
+        },
+      },
+      ['name', 'transport', 'host'],
+    ),
     tool(
       'terminal_send',
       'send',
