@@ -39,12 +39,6 @@ export interface CommandContext {
   toast(message: string): void;
   append(message: string): void;
   sendUserMessage(message: string): void;
-  /**
-   * A secret the caller already collected, such as a password typed on the hub
-   * page. It is not a slash argument: the transcript, the view and events must
-   * not contain it. Empty means the command asks itself.
-   */
-  secret?: string;
 }
 export interface ExtensionCommand {
   name: string;
@@ -461,14 +455,12 @@ export class ExtensionAPI {
         this.tracked(
           (async () => {
             try {
-              if (context.secret) mask.remember(context.secret);
               await handler(args, {
                 workspace: context.workspace,
                 toast: (message) => context.toast(mask.text(String(message))),
                 append: (message) => context.append(mask.text(String(message))),
                 sendUserMessage: (message) =>
                   context.sendUserMessage(mask.text(String(message))),
-                secret: context.secret,
               });
             } catch (error) {
               throw this.masked(error);
@@ -603,7 +595,7 @@ export class ExtensionHost {
   constructor(readonly options: ExtensionHostOptions) {
     // Listed before load, still with nothing registered, once the folder is
     // trusted. The desktop publishes a snapshot before integrations finish;
-    // the bundled hub is on that first frame instead of an empty page that
+    // the bundled extensions are on that first frame instead of a list that
     // fills in later. An untrusted workspace is not scanned. A root that is
     // not a directory fails the same way from load(), which is what
     // initialize() reports.
@@ -1072,7 +1064,7 @@ export class ExtensionHost {
       .join('\n');
   }
 }
-// extension.json is optional: { "version": "1.2.0", "description": "...", "commands": ["hub"] }.
+// extension.json is optional: { "version": "1.2.0", "description": "...", "commands": ["hello"] }.
 function manifest(path: string): {
   version: string;
   description: string;

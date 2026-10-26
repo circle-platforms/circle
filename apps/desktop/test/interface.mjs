@@ -829,19 +829,15 @@ try {
   assert.equal(decision.jobs[0].state, 'running');
   checks.push('approval records do not fabricate execution success');
   await reset();
-  assert.equal(
-    await page.getByRole('link', { name: 'knowledge', exact: true }).count(),
-    0,
-  );
   await route('/page/extensions');
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Two plain components (files and changes, the browser), GitHub, and the hub
-  // interface with the four platform objects. Paired ones stay off in preview. The
-  // activity and device terminal components went with their panels: the overview and
-  // the terminal mode, which are Circle's own, hold that work now.
-  assert.equal(await page.getByRole('checkbox').count(), 8);
+  // Two plain components (files and changes, the browser) and GitHub, which is
+  // paired with its runtime extension and stays off in preview. The activity and
+  // device terminal components went with their panels: the overview and the
+  // terminal mode, which are Circle's own, hold that work now.
+  assert.equal(await page.getByRole('checkbox').count(), 3);
   for (const name of ['file and diff inspector', 'browser pane'])
     assert.equal(
       await page
@@ -853,30 +849,14 @@ try {
       true,
     );
   // Each switch is named by the interface's shown title.
-  for (const id of ['GitHub', 'knowledge', 'work', 'execution', 'methods'])
-    assert.equal(
-      await page
-        .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
-        .isChecked(),
-      false,
-    );
   assert.equal(
     await page
-      .getByRole('checkbox', {
-        name: 'enable hub interface',
-        exact: true,
-      })
+      .getByRole('checkbox', { name: 'enable GitHub interface', exact: true })
       .isChecked(),
     false,
   );
-  assert.equal(
-    await page.evaluate(() =>
-      localStorage.getItem('circle.workbench.platform-preview.v1'),
-    ),
-    null,
-  );
   checks.push(
-    'the Circle interface excludes the four deferred platform objects',
+    "the Circle interface lists its own components and GitHub's, which stays off in preview",
   );
   await reset();
   await route('/page/settings');

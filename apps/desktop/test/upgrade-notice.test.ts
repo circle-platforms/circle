@@ -59,10 +59,6 @@ test('opening the last session after an upgrade does not invent an interrupted r
   }
   const notice = controller.snapshot().whatsNew;
   assert.equal(notice?.version, VERSION);
-  assert.equal(
-    notice!.items.some((item) => /circle-server/.test(item.en)),
-    false,
-  );
   assert.match(notice!.link, /releases\/tag\/v/);
   assert.equal(notice!.link.includes('blob/main'), false);
   const reply = await controller.dispatch({

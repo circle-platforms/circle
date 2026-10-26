@@ -16,9 +16,13 @@ export class ScriptedModel implements ChatModel {
       structuredClone({
         system: request.system,
         messages: request.messages,
-        tools: request.tools.map(
-          ({ run: _run, approvalFacts: _facts, prepare: _prepare, ...tool }) =>
-            tool,
+        // What the model is offered of each tool: its data, without the functions that run it
+        tools: request.tools.map((tool) =>
+          Object.fromEntries(
+            Object.entries(tool).filter(
+              ([, value]) => typeof value !== 'function',
+            ),
+          ),
         ),
       }) as Omit<ModelRequest, 'signal' | 'token'>,
     );

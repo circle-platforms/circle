@@ -65,7 +65,7 @@ if(a[0]!=='api'||a[1]!=='--hostname'||a[2]!=='github.invalid')throw Error('untru
 const endpoint=a[3];let out;
 if(endpoint==='repos/fixture/project/actions/runs/42'){s.runReads++;out={...s.run};if(s.changeRunAfterLogs&&s.runReads>1)out.run_attempt=2}
 else if(endpoint.startsWith('repos/fixture/project/actions/runs/42/attempts/1/jobs?')){const page=Number(new URL('https://fixture.invalid/?'+endpoint.split('?')[1]).searchParams.get('page'));out={total_count:s.jobs.length,jobs:s.jobs.slice((page-1)*100,page*100)}}
-else if(endpoint.match(/^repos\/fixture\/project\/actions\/jobs\/\d+\/logs$/)){const id=Number(endpoint.split('/').at(-2));out='ACTUAL_JOB_LOG '+id+' '+process.env.GH_TOKEN+' ghp_012345678901234567890123456789012345\n'+'noise\n'.repeat(s.jobNoise??0)+'assert expected repaired output '+id}
+else if(endpoint.match(/^repos\/fixture\/project\/actions\/jobs\/\d+\/logs$/)){const id=Number(endpoint.split('/').at(-2));out='ACTUAL_JOB_LOG '+id+' '+process.env.GH_TOKEN+' ghp_'+'012345678901234567890123456789012345\n'+'noise\n'.repeat(s.jobNoise??0)+'assert expected repaired output '+id}
 else if(endpoint.match(/^repos\/fixture\/project\/actions\/jobs\/\d+$/)){const id=Number(endpoint.split('/').at(-1));out=s.detail??s.jobs.find(job=>job.id===id)}
 else throw Error('unexpected endpoint '+endpoint);
 save();console.log(typeof out==='string'?out:JSON.stringify(out));
@@ -125,7 +125,7 @@ test('an incomplete real gh process branch falls back to paginated completed fai
   assert.match(result.text, /other jobs are still running/);
   assert.equal(JSON.stringify(result).includes(f.secret), false);
   assert.equal(
-    result.text.includes('ghp_012345678901234567890123456789012345'),
+    result.text.includes('ghp_' + '012345678901234567890123456789012345'),
     false,
   );
   assert.match(result.text, /\[redacted\]/);

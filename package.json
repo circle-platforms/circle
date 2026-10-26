@@ -19,7 +19,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsx scripts/copy-assets.ts",
+    "build": "tsx scripts/clean-build.ts && tsc -p tsconfig.build.json && tsx scripts/copy-assets.ts",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",

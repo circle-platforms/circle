@@ -10,43 +10,6 @@ import type {
   RuntimeUpdate,
 } from '../../desktop/src/runtime-protocol.ts';
 
-test('hub object pages disclose byte-budget omissions instead of claiming nothing was read', async () => {
-  const { createElement } = await import('react');
-  const { renderToStaticMarkup } = await import('react-dom/server');
-  const { HubProjectionNotice } = await import('../src/plugins/hub');
-  const { setLanguage } = await import('../src/i18n/index.ts');
-  const storage = {
-    getItem: () => null,
-    setItem: () => {},
-  } as unknown as Storage;
-  setLanguage('en', storage);
-  const projection = {
-    byteLimit: 65536,
-    shownItems: 300,
-    omittedItems: 2500,
-    shortenedFields: 4,
-  };
-  const english = renderToStaticMarkup(
-    createElement(HubProjectionNotice, { projection }),
-  );
-  assert.match(english, /300 shown, 2500 omitted/);
-  assert.match(english, /65536 byte budget/);
-  assert.match(english, /4 text fields shortened/);
-  assert.match(english, /full task details and results remain on hub/);
-  assert.match(english, /counts apply to the records returned by this refresh/);
-  assert.equal(
-    renderToStaticMarkup(createElement(HubProjectionNotice, {})),
-    '',
-  );
-  setLanguage('zh-CN', storage);
-  const chinese = renderToStaticMarkup(
-    createElement(HubProjectionNotice, { projection }),
-  );
-  assert.match(chinese, /显示 300 项，省略 2500 项/);
-  assert.match(chinese, /65536 字节预算/);
-  setLanguage('en', storage);
-});
-
 // A bridge stub that records the commands the window sends and answers them
 // with the fixture snapshot, as the runtime worker would.
 function bridge(update: RuntimeUpdate) {
@@ -650,43 +613,6 @@ test('a stopped reply shows one interrupt mark under its stats, and the estimate
   assert.equal(negative.includes('-$'), false);
   assert.equal(negative.includes('$-'), false);
   setLanguage('en', storage);
-});
-
-test('a page can drop a session error it is already showing', async () => {
-  const snapshot = createFixtures();
-  snapshot.runtime = { connected: true, configured: true };
-  const update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
-  const host = {
-    async runtimeCommand() {
-      return {
-        id: '1',
-        ok: false,
-        error:
-          '登录被拒绝（UNAUTHENTICATED）。请核对用户和密码，然后重新 /hub login。',
-      };
-    },
-    async runtimeState() {
-      return update;
-    },
-    onRuntime: () => () => {},
-  } as unknown as DesktopBridge;
-  const runtime = new LiveRuntime(host, update);
-  const refused =
-    '登录被拒绝（UNAUTHENTICATED）。请核对用户和密码，然后重新 /hub login。';
-  await assert.rejects(
-    runtime.request('extension-command', {
-      name: 'hub',
-      args: 'login http://127.0.0.1:7410 ada',
-    }),
-    { message: refused },
-  );
-  const session = () =>
-    runtime
-      .getSnapshot()
-      .sessions.find((item) => item.id === snapshot.activeSessionId);
-  assert.equal(session()?.actionError, refused);
-  runtime.dismissActionError();
-  assert.equal(session()?.actionError, undefined);
 });
 
 test('an untrusted project is not given a session from home', async () => {

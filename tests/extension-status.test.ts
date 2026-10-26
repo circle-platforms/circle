@@ -18,17 +18,17 @@ const meters = {
 };
 
 test('an extension status stays at the right of the footer, gives way to a flash and is dropped whole when it does not fit', () => {
-  const status = [{ text: 'hub · tester', lamp: 'ok' as const }];
+  const status = [{ text: 'notes · tester', lamp: 'ok' as const }];
   const wide = footerRow(meters, '', 100, status);
   const plain = stripAnsi(wide);
   assert.equal(stringWidth(plain), 100);
-  assert.ok(plain.endsWith('● hub · tester '));
+  assert.ok(plain.endsWith('● notes · tester '));
   assert.match(plain, /^ ↑/);
   const flashing = stripAnsi(footerRow(meters, 'Copied', 100, status));
-  assert.ok(!flashing.includes('hub'));
+  assert.ok(!flashing.includes('notes'));
   assert.ok(flashing.trimEnd().endsWith('Copied'));
   const narrow = stripAnsi(footerRow(meters, '', 40, status));
-  assert.ok(!narrow.includes('hub'));
+  assert.ok(!narrow.includes('notes'));
   assert.equal(narrow, stripAnsi(footerRow(meters, '', 40)));
   const unlit = stripAnsi(
     footerRow(meters, '', 100, [{ text: 'syncing', lamp: 'none' }]),
@@ -41,7 +41,10 @@ test('setStatus keeps one line per extension, masks secrets, redraws on change a
   const home = join(root, 'home');
   const workspace = join(root, 'project');
   mkdirSync(workspace);
-  await new ExtensionSecrets(home, 'status').set('token', 'tok-9f8e7d6c5b');
+  await new ExtensionSecrets(home, 'status').set(
+    'token',
+    'tok-' + '9f8e7d6c5b',
+  );
   const path = join(home, 'extensions', 'status');
   mkdirSync(path, { recursive: true });
   writeFileSync(

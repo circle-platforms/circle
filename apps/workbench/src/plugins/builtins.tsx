@@ -1,27 +1,8 @@
 import { githubPlugin } from './github';
-import {
-  Folder,
-  FileDiff,
-  Globe,
-  BookOpen,
-  CirclePlay,
-  Server,
-  Blocks,
-} from 'lucide-react';
+import { Folder, FileDiff, Globe } from 'lucide-react';
 import { FilesPanel, BrowserPanel } from '../features/Panels';
 import { ChangesMode } from '../features/ChangesMode';
-import {
-  KnowledgePage,
-  WorkPage,
-  ExecutionPage,
-  MethodsPage,
-  WorkWidget,
-  MethodsWidget,
-  KnowledgeAction,
-} from './platform/views';
 import type { WorkbenchPlugin } from './types';
-import { hubPlugin } from './hub';
-import { livePlatformPlugins } from './platform/live';
 import { t } from '../i18n';
 // Titles and descriptions are getters so they follow the interface language when it changes.
 export const circlePlugins: WorkbenchPlugin[] = [
@@ -92,82 +73,6 @@ export const circlePlugins: WorkbenchPlugin[] = [
         fullView: true,
       },
     ],
-  },
-  hubPlugin,
-  // B, C, D and E as hub holds them. Each page is switched on by itself.
-  ...livePlatformPlugins,
-];
-// The earlier local previews of B, C, D and E, kept for the preview store's tests and as
-// reference. The application shows the live ones in circlePlugins.
-export const platformPreviewPlugins: WorkbenchPlugin[] = [
-  {
-    id: 'knowledge',
-    apiVersion: 1,
-    version: '0.1.0',
-    title: 'knowledge',
-    description:
-      'B · product sources, evidence and artifacts with pinned revisions.',
-    icon: BookOpen,
-    recordPage: 'knowledge',
-    pages: [
-      {
-        id: 'knowledge',
-        title: 'knowledge',
-        icon: BookOpen,
-        component: KnowledgePage,
-      },
-    ],
-    composerActions: [{ id: 'attach-knowledge', component: KnowledgeAction }],
-  },
-  {
-    id: 'work',
-    apiVersion: 1,
-    version: '0.1.0',
-    title: 'long-running work',
-    description:
-      'C · durable goals, waiting items, handoffs and completion records.',
-    icon: CirclePlay,
-    recordPage: 'work',
-    pages: [
-      {
-        id: 'work',
-        title: 'long-running work',
-        icon: CirclePlay,
-        component: WorkPage,
-      },
-    ],
-    widgets: [{ id: 'linked-platform-work', component: WorkWidget }],
-  },
-  {
-    id: 'execution',
-    apiVersion: 1,
-    version: '0.1.0',
-    title: 'execution resources',
-    description:
-      'D · workspace, worker, SSH and browser observation and control.',
-    icon: Server,
-    recordPage: 'execution',
-    pages: [
-      {
-        id: 'execution',
-        title: 'execution resources',
-        icon: Server,
-        component: ExecutionPage,
-      },
-    ],
-  },
-  {
-    id: 'methods',
-    apiVersion: 1,
-    version: '0.1.0',
-    title: 'methods',
-    description: 'E · versioned skills, toolkits and product rules.',
-    icon: Blocks,
-    recordPage: 'methods',
-    pages: [
-      { id: 'methods', title: 'methods', icon: Blocks, component: MethodsPage },
-    ],
-    widgets: [{ id: 'session-methods', component: MethodsWidget }],
   },
 ];
 export const defaultPlugins = circlePlugins;

@@ -142,7 +142,7 @@ test('wrap breaks CJK anywhere and keeps ASCII runs and quoted spans whole', () 
     at.some((line) => line === '，不' || line.startsWith('，')),
     false,
   );
-  const prefix = '/hub submit <pack> <file>'.padEnd(38);
+  const prefix = '/sync push <target> <file>'.padEnd(38);
   const shown = wrap(hangingWrap(prefix, flow, 77).join('\n'), 77);
   assert.ok(shown.some((line) => line.includes('module-execute')));
   assert.ok(
@@ -182,8 +182,8 @@ test('wrap breaks CJK anywhere and keeps ASCII runs and quoted spans whole', () 
     '"hi". then',
     'more',
   ]);
-  const hung = hangingWrap('  /hub  ', 'revoke the token at the server', 24);
-  assert.equal(hung[0]?.startsWith('  /hub  '), true);
+  const hung = hangingWrap('  /sync ', 'revoke the token at the server', 24);
+  assert.equal(hung[0]?.startsWith('  /sync '), true);
   assert.ok(hung.length > 1);
   assert.ok(hung.slice(1).every((line) => line.startsWith(' '.repeat(8))));
   assert.ok(hung.every((line) => stringWidth(line) <= 24));

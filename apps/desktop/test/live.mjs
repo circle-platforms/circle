@@ -249,17 +249,6 @@ try {
   assert.equal(info.name, 'Circle');
   assert.equal(await page.title(), 'Circle');
   assert.equal(await page.locator('.brand').innerText(), 'circle');
-  for (const name of ['knowledge', 'work', 'execution', 'methods'])
-    assert.equal(
-      await page.getByRole('link', { name, exact: true }).count(),
-      0,
-    );
-  assert.equal(
-    await page.evaluate(() =>
-      localStorage.getItem('circle.workbench.platform-preview.v1'),
-    ),
-    null,
-  );
   assert.equal(info.runtimeConnected, true);
   const initial = await state();
   assert.equal(initial.sessions.length, 1);

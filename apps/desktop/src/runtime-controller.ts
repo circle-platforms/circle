@@ -2755,9 +2755,9 @@ export class RuntimeController {
       });
     return result;
   }
-  // A session opened later only catalogues extensions until initialize(). Hub
-  // sign-in lives in the home (config and token), so a page still reads the
-  // view and status a session that already loaded the extension published.
+  // A session opened later only catalogues extensions until initialize(). What an
+  // extension keeps lives in the home, so a page still reads the view and status
+  // that a session which already loaded the extension published.
   private presentExtension(
     runtime: AgentRuntime,
     extension: Extension,
@@ -5457,10 +5457,6 @@ export class RuntimeController {
           throw Error('trust this workspace first');
         const name = text(p.name, 'command name', 100);
         const args = text(p.args ?? '', 'command args', 16000);
-        const secret =
-          typeof p.secret === 'string' && p.secret.length > 0
-            ? p.secret
-            : undefined;
         let found = this.extensionCommand(runtime, name);
         // GitHub connect/status/configure/cancel/disconnect only touch the
         // native connection backend and a status notice — not the running turn.
@@ -5485,16 +5481,8 @@ export class RuntimeController {
         }
         if (found) {
           const extension = found.command;
-          // Hub sign-in and sign-out are status: the hub page shows them, and the window
-          // says them in passing rather than in the conversation. What any other hub
-          // command finds is the conversation's, as every extension's output is.
-          const hubStatus =
-            name === 'hub' &&
-            /^(?:(?:login|logout)(?:\s|$)|$)/.test(args.trim());
-          const status: string[] = [];
           await extension.handler(args, {
             workspace: found.owner.options.workspace,
-            ...(secret ? { secret } : {}),
             toast: (message) => {
               const id = runtime.session.id;
               if (this.runtimes.lifecycle(id) !== 'open') return;
@@ -5509,10 +5497,6 @@ export class RuntimeController {
               this.publish();
             },
             append: (content) => {
-              if (hubStatus) {
-                status.push(content);
-                return;
-              }
               const runtimeNotice = githubStatusNotice(
                 content,
                 name === 'github' &&
@@ -5550,7 +5534,7 @@ export class RuntimeController {
               this.track(runtime.harness.run(prompt), runtime);
             },
           });
-          return status.length ? { notice: status.join('\n') } : {};
+          return {};
         }
         const custom = discoverCustomCommands(
           runtime.options.workspace,

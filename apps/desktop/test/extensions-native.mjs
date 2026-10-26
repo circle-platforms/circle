@@ -1,10 +1,10 @@
-// Native check of the extension features in the application: a UI plugin paired with a
-// runtime extension (the bundled hub), the view that extension publishes, and a
-// link an extension opens arriving in the application's own browser panel. Isolated data
-// folder, scripted model, a local page; no real data, model or network.
+// Native check of the extension features in the application: an extension of the
+// runtime's home loads at cold start, and a link it opens arrives in the application's
+// own browser panel. Isolated data folder, scripted model, a local page; no real data,
+// model or network.
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -80,12 +80,6 @@ async function waitFor(check, name) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
-const route = async (path) => {
-  await page.evaluate((value) => {
-    location.hash = value;
-  }, path);
-  await page.waitForURL((url) => url.hash === '#' + path);
-};
 const row = async (name) =>
   (await state()).extensions.find((item) => item.name === name);
 try {
@@ -108,85 +102,8 @@ try {
     'cold-start extensions loaded',
   );
   assert.equal(existsSync(requestsPath), false);
-  const bundled = await row('hub');
-  assert.equal(bundled.scope, 'bundled');
-  assert.equal(bundled.version, '0.1.0');
-  assert.equal(bundled.enabled, false);
-  assert.equal(
-    await page.getByRole('link', { name: 'hub', exact: true }).count(),
-    0,
-  );
-  checks.push('the bundled hub extension ships off, and its page is hidden');
-
-  await route('/page/extensions');
-  await page
-    .getByRole('button', { name: 'interface components', exact: true })
-    .click();
-  const toggle = page.getByRole('checkbox', {
-    name: 'enable hub interface',
-    exact: true,
-  });
-  assert.equal(await toggle.isChecked(), false);
-  const pairedNotes = page.getByText(
-    /paired with runtime extension hub · 0\.1\.0 · runtime extension hub is off/,
-  );
-  await pairedNotes.first().waitFor();
-  // hub and the four platform objects share one runtime extension.
-  assert.equal(await pairedNotes.count(), 5);
-  // Generic extensions save first and require the existing explicit reload action.
-  // GitHub alone supports scoped hot loading; do not confuse a checked preference
-  // with an extension that has actually registered.
-  await toggle.click();
-  await page
-    .getByText('extension setting saved; reload required', { exact: true })
-    .first()
-    .waitFor();
-  assert.equal((await row('hub')).enabled, false);
-  assert.equal(
-    JSON.parse(
-      await readFile(join(data, 'runtime-home', 'settings.json'), 'utf8'),
-    ).extensions.hub.enabled,
-    true,
-  );
-  await page.getByRole('button', { name: 'reload', exact: true }).click();
-  await waitFor(
-    async () => (await row('hub'))?.enabled === true,
-    'runtime extension on',
-  );
-  const saved = JSON.parse(
-    await readFile(join(data, 'runtime-home', 'settings.json'), 'utf8'),
-  );
-  assert.equal(saved.extensions['hub'].enabled, true);
-  await page.getByRole('link', { name: 'hub', exact: true }).waitFor();
-  for (const id of ['knowledge', 'work', 'execution', 'methods']) {
-    assert.equal(
-      await page
-        .getByRole('checkbox', {
-          name: `enable ${id} interface`,
-          exact: true,
-        })
-        .isChecked(),
-      false,
-    );
-    assert.equal(
-      await page.getByRole('link', { name: id, exact: true }).count(),
-      0,
-    );
-  }
-  checks.push(
-    'turning the paired interface on turns its runtime extension on, saved, and shows its page',
-  );
-  checks.push(
-    'opening hub does not open knowledge, work, execution or methods',
-  );
-
-  await page.getByRole('link', { name: 'hub', exact: true }).click();
-  await page.getByRole('heading', { name: 'hub', exact: true }).waitFor();
-  await page.getByText('signed out', { exact: true }).waitFor();
-  const view = (await row('hub')).view;
-  assert.equal(view.signedIn, false);
-  assert.deepEqual(view.tasks, []);
-  checks.push('the page shows the view the runtime extension published');
+  assert.equal((await row('linker')).enabled, true);
+  checks.push('an extension of the runtime home loads at cold start');
 
   const reply = await command('custom-command', { name: 'openlab' });
   assert.equal(reply.ok, true, JSON.stringify(reply));
@@ -209,48 +126,6 @@ try {
   );
   checks.push(
     "a link an extension opens arrives in the application's browser panel",
-  );
-
-  await route('/page/extensions');
-  await page
-    .getByRole('button', { name: 'interface components', exact: true })
-    .click();
-  await page
-    .getByRole('checkbox', {
-      name: 'enable hub interface',
-      exact: true,
-    })
-    .click();
-  // Disabling this generic extension also becomes effective on explicit reload.
-  await page
-    .getByText('disabling extension', { exact: true })
-    .first()
-    .waitFor();
-  assert.equal((await row('hub')).enabled, true);
-  assert.equal(
-    JSON.parse(
-      await readFile(join(data, 'runtime-home', 'settings.json'), 'utf8'),
-    ).extensions.hub.enabled,
-    false,
-  );
-  await page.getByRole('button', { name: 'reload', exact: true }).click();
-  await waitFor(
-    async () => (await row('hub'))?.enabled === false,
-    'runtime extension off',
-  );
-  await waitFor(
-    async () =>
-      (await page.getByRole('link', { name: 'hub', exact: true }).count()) ===
-      0,
-    'page hidden',
-  );
-  for (const id of ['knowledge', 'work', 'execution', 'methods'])
-    assert.equal(
-      await page.getByRole('link', { name: id, exact: true }).count(),
-      0,
-    );
-  checks.push(
-    'turning it off turns the runtime extension off and hides the page',
   );
   assert.deepEqual(errors, []);
   await writeFile(

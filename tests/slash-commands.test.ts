@@ -19,7 +19,6 @@ import {
   stripAnsi,
 } from '../src/ink/string_width.js';
 import type { Picker } from '../src/ink/components/picker.js';
-import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { renderScreen, transcriptRows } from '../src/tui/render.js';
 import {
@@ -65,6 +64,8 @@ async function session(
     headless?: boolean;
     modelOverride?: string;
     integrations?: boolean;
+    /** In place of the extensions that ship with Circle. */
+    bundledExtensions?: string;
   } = {},
 ) {
   const home = options.home ?? scratch(t);
@@ -88,6 +89,7 @@ async function session(
     headless: options.headless ?? true,
     modelOverride: options.modelOverride,
     integrations: options.integrations,
+    bundledExtensions: options.bundledExtensions,
   });
   const runtime = app.runtime!;
   cleanup(t, async () => {
@@ -228,14 +230,28 @@ test('/undo and /redo put the screen back; the model keeps every turn', async (t
   assert.ok(screen().includes('answer one'));
 });
 
-test('/hub before the extension is on names the switch and clears the box', async (t) => {
-  const { app, ui, key } = await session(t, [], { integrations: true });
-  ui.setDraft('/hub status');
+test('a command of a shipped extension that is still off names the switch and clears the box', async (t) => {
+  // Shipped extensions are off until enabled; extension.json names the command.
+  const bundled = scratch(t);
+  mkdirSync(join(bundled, 'connector'));
+  writeFileSync(
+    join(bundled, 'connector', 'extension.json'),
+    JSON.stringify({ version: '0.1.0', commands: ['connector'] }),
+  );
+  writeFileSync(
+    join(bundled, 'connector', 'extension.mjs'),
+    "export function register(api){api.registerCommand('connector','Connect',()=>{})}",
+  );
+  const { app, ui, key } = await session(t, [], {
+    integrations: true,
+    bundledExtensions: bundled,
+  });
+  ui.setDraft('/connector status');
   await key('enter');
   assert.equal(app.state.draft, '');
   assert.equal(
     app.state.flash,
-    'Unknown command /hub · turn it on with /extensions enable hub',
+    'Unknown command /connector · turn it on with /extensions enable connector',
   );
 });
 
@@ -1318,7 +1334,7 @@ test('/compact, /mcp, /extensions, /trust and /reload report what they did', asy
   await app.submit('/mcp reload');
   assert.equal(app.state.notices.at(-1), 'MCP reloaded · 0 tools');
   await app.submit('/extensions');
-  // An untrusted folder is not scanned, so the bundled hub stays unlisted
+  // An untrusted folder is not scanned, so the bundled extensions stay unlisted
   // until the folder is trusted and integrations load.
   assert.match(app.state.notices.at(-1)!, /^No extensions\./);
   await app.submit('/trust');
@@ -1715,7 +1731,7 @@ function descriptionColumn(line: string): number | undefined {
   return stringWidth(match[1]!) + match[2]!.length;
 }
 
-test('/help, /hotkeys and /hub help hang continuations under the description column at 80 columns', async (t) => {
+test('/help and /hotkeys hang continuations under the description column at 80 columns', async (t) => {
   const saved = {
     LANG: process.env.LANG,
     LC_ALL: process.env.LC_ALL,
@@ -1731,7 +1747,7 @@ test('/help, /hotkeys and /hub help hang continuations under the description col
     value: 80,
   });
   try {
-    const { app, home, workspace } = await session(t, []);
+    const { app } = await session(t, []);
     const shown = async (command: string): Promise<string[]> => {
       await app.submit(command);
       return transcriptRows(app.state, 80).map((row) =>
@@ -1772,70 +1788,7 @@ test('/help, /hotkeys and /hub help hang continuations under the description col
         !row.includes('in a list'),
     );
     assert.ok(hung, hotkeys.join('\n'));
-    const hubHost = await new ExtensionHost({
-      home,
-      workspace,
-      trusted: true,
-      bundledRoot: bundledExtensionsRoot(),
-      settings: { hub: { enabled: true } },
-    }).load();
-    cleanup(t, () => hubHost.close());
-    const hubLines: string[] = [];
-    await hubHost
-      .commands()
-      .get('hub')!
-      .handler('help', {
-        workspace,
-        toast: (text: string) => hubLines.push(text),
-        append: (text: string) => hubLines.push(text),
-        sendUserMessage: () => {},
-      });
-    app.state.notices = [hubLines.at(-1)!];
-    app.state.noticeAnchors = [''];
-    const hub = transcriptRows(app.state, 80).map((row) =>
-      stripAnsi(row).replace(/ +$/, ''),
-    );
-    const login = hub.findIndex((row) =>
-      row.includes('/hub login [url] [user]'),
-    );
-    assert.ok(login >= 0, hub.join('\n'));
-    const hubColumn = descriptionColumn(hub[login]!);
-    assert.ok(hubColumn && hubColumn > 3, hub[login]);
-    const after = hub[login + 1]!;
-    assert.equal(after.slice(0, hubColumn), ' '.repeat(hubColumn), after);
-    assert.match(after, /password|masked|asked/);
-    const commands = hub.filter(
-      (row) =>
-        row.includes('/hub ') &&
-        (row.match(/^ */)?.[0].length ?? 0) < hubColumn,
-    );
-    assert.ok(commands.length > 1, hub.join('\n'));
-    assert.ok(
-      commands.every((row) => descriptionColumn(row) === hubColumn),
-      commands.join('\n'),
-    );
-    const submitAt = hub.findIndex((row) =>
-      row.includes('/hub submit <pack> <file>'),
-    );
-    assert.ok(submitAt >= 0, hub.join('\n'));
-    const submitRows: string[] = [];
-    for (let index = submitAt; index < hub.length; index++) {
-      const row = hub[index]!;
-      const lead = row.match(/^ */)?.[0].length ?? 0;
-      if (index > submitAt && row.trim() && lead < hubColumn) break;
-      submitRows.push(row);
-    }
-    assert.ok(
-      submitRows.some((row) => row.includes('module-execute')),
-      submitRows.join('\n'),
-    );
-    assert.ok(
-      submitRows
-        .slice(1)
-        .every((row) => row.slice(0, hubColumn) === ' '.repeat(hubColumn)),
-      submitRows.join('\n'),
-    );
-    for (const text of [help, hotkeys, hub].flat())
+    for (const text of [help, hotkeys].flat())
       assert.equal(/\p{Script=Han}/u.test(text), false, text);
   } finally {
     for (const [name, value] of Object.entries(saved))

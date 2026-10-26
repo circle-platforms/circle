@@ -29,8 +29,8 @@ import {
 } from 'node:path';
 import {
   DEFAULT_CREDENTIAL_FILES,
-  wildcard,
-} from '../../../../src/approvals.ts';
+  protectedWorkspaceName,
+} from '../../../../src/file_patterns.ts';
 
 export interface WorkspaceDocument {
   /** Stable across reads, saves and refreshes of the same workspace path. */
@@ -276,15 +276,13 @@ export class WorkspaceDocuments {
     for (const part of parts) {
       // The default macOS volume is case-insensitive, although the sandbox's
       // pattern matcher only folds case on Windows. Do not let .ENV or .GIT
-      // spelling variants extend this native workspace grant.
-      const foldCase =
-        process.platform === 'darwin' || process.platform === 'win32';
-      const folded = foldCase ? part.toLowerCase() : part;
+      // spelling variants extend this native workspace grant. An MCP tool's file
+      // parameter is refused by the same rule (src/file_access.ts).
       if (
-        folded === '.git' ||
-        folded === '.circle' ||
-        this.options.credentialFiles.some((pattern) =>
-          wildcard(foldCase ? pattern.toLowerCase() : pattern, folded),
+        protectedWorkspaceName(
+          part,
+          this.options.credentialFiles,
+          process.platform,
         )
       )
         throw new DocumentPathError(

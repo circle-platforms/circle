@@ -154,6 +154,8 @@ export interface ChromeOptions {
   commandTimeout?: number;
   /** Each owned-process inspection is bounded separately from the exit grace period. */
   processInspectionTimeout?: number;
+  /** The process-list executable; an absolute fixture path avoids PATH lookup. */
+  processInspector?: string;
   /**
    * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
    * a local site by a public name.
@@ -647,7 +649,7 @@ export class ChromeBrowser implements BrowserPort {
     // cannot run or write. Failure to read state or stop a live member still rejects.
     const output = await new Promise<string>((resolve, reject) =>
       execFile(
-        'ps',
+        this.options.processInspector ?? 'ps',
         ['-A', '-o', 'pgid=,stat='],
         {
           timeout: Math.max(1, this.options.processInspectionTimeout ?? 3000),

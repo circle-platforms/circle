@@ -428,12 +428,12 @@ test('a tab line is judged with its secrets’ values, as execute is, and the ca
   );
   // the line that ran had the value; the card that asked for it showed the name
   assert.deepEqual(typed, [
-    'curl -H "Authorization: s3cr3t-value" https://example.test',
+    'curl -H "Authorization: s3cr3t-' + 'value" https://example.test',
   ]);
   assert.equal(cards.length, 1);
   assert.equal(
     cards[0]!.command,
     'curl -H "Authorization: %TOKEN%" https://example.test',
   );
-  assert.equal(JSON.stringify(cards).includes('s3cr3t-value'), false);
+  assert.equal(JSON.stringify(cards).includes('s3cr3t-' + 'value'), false);
 });

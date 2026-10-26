@@ -130,7 +130,7 @@ import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { PlanView } from '../features/PlanView';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
-import { platformTitle, shellPageTitle } from '../plugins/labels';
+import { shellPageTitle } from '../plugins/labels';
 import { isSessionBrowser } from '../model/browser';
 import type { TerminalEvent } from '../../../desktop/src/contracts';
 import { isSessionTerminal } from '../features/useTerminalState';
@@ -1466,8 +1466,8 @@ export function App() {
         })),
         ...pluginPages.map(({ page }) => ({
           id: 'plugin-' + page.id,
-          label: platformTitle(page.id, page.title),
-          detail: t('platform plugin'),
+          label: page.title,
+          detail: t('plugin page'),
           run: () => navigate('/page/' + page.id),
         })),
         ...visibleSessions(snapshot.sessions).map((item) => {

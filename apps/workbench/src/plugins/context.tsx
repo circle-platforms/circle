@@ -7,8 +7,7 @@ import {
 import type { ReactNode } from 'react';
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
-import { platformTitle } from './labels';
-import { PluginRegistry, effectivePlugins } from './registry';
+import { PluginRegistry, effectivePlugins, pairedSwitch } from './registry';
 import type { ServiceRegistry, WorkbenchPlugin, PluginService } from './types';
 interface Value {
   registry: PluginRegistry;
@@ -50,28 +49,21 @@ export function PluginProvider({
                 throw Error(t('this interface needs the Circle runtime'));
               if (!snapshot.extensions.some((item) => item.name === name))
                 throw Error(
-                  t('runtime extension {name} is not installed', {
-                    name: platformTitle(name),
-                  }),
+                  t('runtime extension {name} is not installed', { name }),
                 );
               let reload = false;
               runtime.change((state) => {
                 const row = state.extensions.find((item) => item.name === name);
                 if (!row) return;
-                const chosen = registry.change(
-                  state.uiPlugins.filter((item) =>
-                    registry.plugins.some((candidate) => candidate.id === item),
-                  ),
+                const after = pairedSwitch(
+                  registry,
+                  state.uiPlugins,
                   id,
                   enabled,
                 );
-                state.uiPlugins = chosen;
-                const still = registry.plugins.some(
-                  (item) =>
-                    item.runtimeExtension === name && chosen.includes(item.id),
-                );
-                reload = row.enabled !== still;
-                row.enabled = still;
+                state.uiPlugins = after.chosen;
+                reload = row.enabled !== after.extension;
+                row.enabled = after.extension;
               });
               if (reload) await runtime.request('reload', {});
             });

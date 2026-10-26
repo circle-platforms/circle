@@ -15,7 +15,6 @@ import {
   validateKeybindings,
   matchingAction,
 } from '../src/model/shortcuts.ts';
-import { PlatformPreviewService } from '../src/plugins/platform/store.ts';
 import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
@@ -374,40 +373,6 @@ test('custom key preferences validate actions and resolve aliases', () => {
     ),
     undefined,
   );
-});
-test('platform work and execution retain independent states after Circle interaction', () => {
-  const runtime = new PreviewRuntime();
-  const platform = new PlatformPreviewService();
-  const resources = structuredClone(platform.getSnapshot().resources);
-  runtime.command('plan');
-  runtime.request('abort');
-  platform.requestWork('work1', 'pause');
-  assert.equal(platform.getSnapshot().work[0]!.status, 'running');
-  assert.deepEqual(platform.getSnapshot().resources, resources);
-  assert.equal(currentSession(runtime.getSnapshot()).readOnly, true);
-});
-test('methods load per session without publishing candidates', () => {
-  const service = new PlatformPreviewService();
-  service.bindMethod('session1', 'method1', true);
-  assert.equal(service.getSnapshot().bindings.session1?.[0]?.version, '0.8.0');
-  assert.equal(service.getSnapshot().bindings.session2, undefined);
-  assert.throws(
-    () => service.bindMethod('session1', 'method3', true),
-    /published/,
-  );
-  service.setRole('expert');
-  service.requestReview('method3');
-  assert.equal(service.getSnapshot().methods[2]!.status, 'candidate');
-  assert.equal(service.getSnapshot().methods[2]!.reviewRequested, true);
-});
-test('platform roles constrain local mutations and do not grant access by enabling a plugin', () => {
-  const service = new PlatformPreviewService();
-  service.setRole('viewer');
-  assert.equal(service.can('read'), true);
-  assert.throws(() => service.requestWork('work1', 'cancel'), /role/);
-  service.setRole('maintainer');
-  assert.equal(service.can('read'), false);
-  assert.throws(() => service.bindMethod('session1', 'method1', true), /role/);
 });
 const icon = (() => null) as unknown as WorkbenchPlugin['icon'];
 const component = () => null;

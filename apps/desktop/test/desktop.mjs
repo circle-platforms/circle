@@ -1324,11 +1324,6 @@ try {
     'GitHub',
     'file and diff inspector',
     'browser pane',
-    'hub',
-    'knowledge',
-    'work',
-    'execution',
-    'methods',
   ].map((title) => `enable ${title} interface`);
   assert.equal(
     await page.getByRole('checkbox').count(),
@@ -1339,35 +1334,6 @@ try {
       await page.getByRole('checkbox', { name, exact: true }).count(),
       1,
       `the interface list contains exactly one ${name} checkbox`,
-    );
-  for (const id of ['knowledge', 'work', 'execution', 'methods'])
-    assert.equal(
-      await page
-        .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
-        .isChecked(),
-      false,
-    );
-  // The hub interface and the four platform objects are paired with its
-  // runtime extension, which the preview does not have, so they stay off.
-  assert.equal(
-    await page
-      .getByRole('checkbox', {
-        name: 'enable hub interface',
-        exact: true,
-      })
-      .isChecked(),
-    false,
-  );
-  const pairedNotes = page.getByText(
-    /paired with runtime extension hub · 0\.1\.0 · runtime extension hub is not installed/,
-  );
-  await pairedNotes.first().waitFor();
-  // hub and the four platform objects share one runtime extension.
-  assert.equal(await pairedNotes.count(), 5);
-  for (const id of ['knowledge', 'work', 'execution', 'methods'])
-    assert.equal(
-      await page.getByRole('link', { name: id, exact: true }).count(),
-      0,
     );
   await page
     .getByRole('checkbox', {
@@ -1381,14 +1347,8 @@ try {
       exact: true,
     })
     .check();
-  assert.equal(
-    await page.evaluate(() =>
-      localStorage.getItem('circle.workbench.platform-preview.v1'),
-    ),
-    null,
-  );
   checks.push(
-    'Circle-only components are shown without starting platform previews',
+    "the interface list names each of Circle's components once, and one switches off and on",
   );
   assert.deepEqual(errors, []);
   if (originalClipboard !== undefined) {
