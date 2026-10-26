@@ -678,7 +678,7 @@ process.stdout.write(JSON.stringify({ decision, reason }));
     },
   });
   assert.equal(readFileSync(join(dirs.workspace, 'ok.txt'), 'utf8'), 'yes');
-  assert.match(
+  assert.doesNotMatch(
     String(
       allowed.model.requests[1]!.messages.find(
         (message) => message.role === 'tool',
@@ -719,6 +719,83 @@ process.stdout.write(JSON.stringify({ decision, reason }));
       )?.content,
     ),
     /hook asked: look first/,
+  );
+
+  const approved = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'ask.txt', content: 'yes' },
+        },
+      ]),
+      assistant('done'),
+    ],
+    approve: () => 'approve',
+  });
+  assert.deepEqual(approved.asked, ['write_file']);
+  assert.equal(readFileSync(join(dirs.workspace, 'ask.txt'), 'utf8'), 'yes');
+  assert.match(
+    String(
+      approved.model.requests[1]!.messages.find(
+        (message) => message.role === 'tool',
+      )?.content,
+    ),
+    /^Hook asked before this call: look first/,
+  );
+});
+
+test('a permission_request allow does not annotate the tool result', async (t) => {
+  const dirs = layout(t);
+  const script = join(dirs.workspace, 'permission.mjs');
+  writeFileSync(
+    script,
+    "process.stdout.write(JSON.stringify({ decision: 'allow', reason: 'safe' }));\n",
+  );
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      permission_request: [
+        {
+          name: 'permission',
+          command: nodeCommand(script),
+          tools: 'write_file',
+        },
+      ],
+    },
+  });
+  const allowed = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'manual',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'ok.txt', content: 'yes' },
+        },
+      ]),
+      assistant('done'),
+    ],
+    approve: () => {
+      throw new Error('the permission hook should replace the card');
+    },
+  });
+  assert.equal(readFileSync(join(dirs.workspace, 'ok.txt'), 'utf8'), 'yes');
+  assert.deepEqual(allowed.asked, []);
+  assert.doesNotMatch(
+    String(
+      allowed.model.requests[1]!.messages.find(
+        (message) => message.role === 'tool',
+      )?.content,
+    ),
+    /Hook allowed this call/,
   );
 });
 

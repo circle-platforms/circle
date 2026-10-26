@@ -66,6 +66,7 @@ import {
 } from './agent_rows.js';
 import { paletteRev } from '../ink/theme.js';
 import { PLAN_CHOICES } from '../plan_file.js';
+import { withoutHookAllowedLine } from '../hook_display.js';
 export interface ScreenState {
   messages: Message[];
   notices: string[];
@@ -95,6 +96,7 @@ export interface ScreenState {
   queue?: { steering: string[]; followUp: string[] };
   userShells?: UserShellView[];
   showThinking: boolean;
+  showHookAllow?: boolean;
   showTools: boolean;
   streaming: string;
   thinking: string;
@@ -360,6 +362,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       width,
       state.showTools ? 1 : 0,
       state.showThinking ? 1 : 0,
+      state.showHookAllow ? 1 : 0,
       state.thinkingExpanded ? 1 : 0,
       state.renderToolResult ? 1 : 0,
       message.thinking_seconds ?? state.thinkingSeconds?.[message.id] ?? '',
@@ -388,6 +391,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       return;
     }
     if (message.internal === 'hook_notice') {
+      if (message.hook?.kind === 'allowed' && !state.showHookAllow) return;
       noticeBlock(message.display || message.content);
       return;
     }
@@ -411,6 +415,9 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       let first = true;
       for (const call of message.tool_calls ?? []) {
         const result = toolResults.get(call.id);
+        const shownResult = result
+          ? { ...result, content: withoutHookAllowedLine(result.content) }
+          : undefined;
         // A call left without a result by a turn that has ended (interrupted, or a
         // session from an older version) is not running: its lamp stays unlit.
         const live = state.agentDetail
@@ -434,32 +441,43 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
         if (!result) first = false;
         if (HIDDEN_TOOLS.has(call.name)) continue;
         gap('tool');
-        rows.push(toolRow(call, result, { width, pending }));
+        rows.push(toolRow(call, shownResult, { width, pending }));
         if (together)
           rows.push(
             ...taskSummaryRows(agent, { width, expanded: state.showTools }),
           );
-        if (!result) continue;
+        if (!shownResult) continue;
         rows.push(
-          ...(extensionRows(state.renderToolResult?.(result), call, {
+          ...(extensionRows(state.renderToolResult?.(shownResult), call, {
             width,
             expanded: state.showTools,
-          }) ?? resultRows(call, result, { width, expanded: state.showTools })),
+          }) ??
+            resultRows(call, shownResult, {
+              width,
+              expanded: state.showTools,
+            })),
         );
       }
     } else if (message.role === 'tool') {
       // A result whose call is not in view (the turn was cut short of it).
       const called = calledIds.has(message.tool_call_id ?? '');
       if (!called && !HIDDEN_TOOLS.has(message.name ?? '')) {
+        const shownMessage = {
+          ...message,
+          content: withoutHookAllowedLine(message.content),
+        };
         const call = {
           id: message.tool_call_id ?? '',
           name: message.name ?? 'tool',
           args: {},
         };
         gap('tool');
-        rows.push(toolRow(call, message, { width }));
+        rows.push(toolRow(call, shownMessage, { width }));
         rows.push(
-          ...resultRows(call, message, { width, expanded: state.showTools }),
+          ...resultRows(call, shownMessage, {
+            width,
+            expanded: state.showTools,
+          }),
         );
       }
     }

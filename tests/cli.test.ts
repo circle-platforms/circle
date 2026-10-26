@@ -1217,6 +1217,74 @@ test(
   },
 );
 
+test('print mode keeps routine hook allow out of tool results and preserves after-tool context', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const endpoint = await gateway(t, [
+    {
+      call: {
+        name: 'write_file',
+        args: { file_path: 'note.txt', content: 'payload' },
+      },
+    },
+    { content: 'done' },
+  ]);
+  setUp(home, endpoint.base, [workspace]);
+  const allow = join(workspace, 'allow.mjs');
+  const after = join(workspace, 'after.mjs');
+  writeFileSync(
+    allow,
+    "process.stdout.write(JSON.stringify({ decision: 'allow', reason: 'safe' }));\n",
+  );
+  writeFileSync(
+    after,
+    `
+import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+if (input.tool_output.includes('Hook allowed this call.'))
+  throw new Error('routine allow reached after_tool');
+process.stdout.write('formatted output');
+`,
+  );
+  writeFileSync(
+    join(home, 'hooks.json'),
+    JSON.stringify({
+      hooks: {
+        before_tool: [
+          {
+            name: 'allow',
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(allow)}`,
+            tools: 'write_file',
+          },
+        ],
+        after_tool: [
+          {
+            name: 'after',
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(after)}`,
+            tools: 'write_file',
+          },
+        ],
+      },
+    }),
+  );
+  const result = await circle(home, ['-p', 'write', workspace], {
+    observe: () => observeGateway(endpoint),
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, 'done\n');
+  assert.equal(readFileSync(join(workspace, 'note.txt'), 'utf8'), 'payload');
+  assert.doesNotMatch(result.stdout, /hook allowed/i);
+  const tool = (
+    endpoint.bodies[1]!.messages as {
+      role: string;
+      content?: string;
+    }[]
+  ).find((message) => message.role === 'tool');
+  assert.ok(tool);
+  assert.doesNotMatch(tool.content ?? '', /Hook allowed this call\./);
+  assert.match(tool.content ?? '', /Hook output \(after\):\nformatted output/);
+});
+
 test('circle uninstall is its own subcommand, not a folder', async (t) => {
   const home = scratch(t);
   const run = await circle(home, ['uninstall'], {

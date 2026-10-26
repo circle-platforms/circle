@@ -1126,6 +1126,11 @@ function settingsList(host: CommandHost, focusKey?: string): void {
       meta: host.state.showThinking ? 'on' : 'off',
     },
     {
+      key: 'hook_allow',
+      label: 'hook allowed notices',
+      meta: host.state.showHookAllow ? 'on' : 'off',
+    },
+    {
       key: 'double_escape',
       label: 'esc esc opens',
       meta: host.settings.double_escape,
@@ -1185,6 +1190,13 @@ function settingsList(host: CommandHost, focusKey?: string): void {
       host.settings.hide_thinking = !show;
       saveSettingsChange(host.home, (saved) => {
         saved.hide_thinking = !show;
+      });
+    } else if (item.key === 'hook_allow') {
+      const show = !host.state.showHookAllow;
+      host.state.showHookAllow = show;
+      host.settings.show_hook_allow = show;
+      saveSettingsChange(host.home, (saved) => {
+        saved.show_hook_allow = show;
       });
     } else if (item.key === 'double_escape') {
       const next = following(DOUBLE_ESCAPE, host.settings.double_escape);

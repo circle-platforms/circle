@@ -10,9 +10,11 @@ import { RuntimeController } from '../src/runtime-controller.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import {
   defaultSettings,
+  loadSettings,
   saveSettings,
   trustFolder,
 } from '../../../src/settings.ts';
+import { approveHookFile, loadHooks } from '../../../src/hooks.ts';
 import { canonicalPath } from '../../../src/paths.ts';
 import type { RuntimeCommandName } from '../src/runtime-protocol.ts';
 import { patience } from './helpers/patience.mjs';
@@ -28,7 +30,14 @@ const reply = (content: string) => ({
   message: { id: randomUUID(), role: 'assistant' as const, content },
 });
 /** A trusted workspace whose project hooks file has a session_start hook that speaks. */
-async function setup(t: TestContext) {
+async function setup(
+  t: TestContext,
+  replies: ConstructorParameters<typeof ScriptedModel>[0] = [
+    reply('one'),
+    reply('two'),
+    reply('three'),
+  ],
+) {
   const root = realpathSync.native(
     await mkdtemp(join(tmpdir(), 'circle-desktop-hooks-')),
   );
@@ -56,7 +65,7 @@ async function setup(t: TestContext) {
     );
   };
   await write('hook says hi');
-  const model = new ScriptedModel([reply('one'), reply('two'), reply('three')]);
+  const model = new ScriptedModel(replies);
   const controller = new RuntimeController({
     home,
     workspace,
@@ -191,4 +200,86 @@ test('the desktop asks about a project hooks file in the conversation; approving
     'skipping does not approve',
   );
   assert.equal(existsSync(f.file), true);
+});
+
+test('routine allow is hidden once in the desktop and can be shown by the user setting', async (t) => {
+  const f = await setup(t, [
+    {
+      message: {
+        id: 'write',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'write',
+            name: 'write_file',
+            args: { file_path: 'note.txt', content: 'payload' },
+          },
+        ],
+      },
+    },
+    reply('done'),
+  ]);
+  const script = join(f.workspace, 'allow.mjs');
+  await writeFile(
+    script,
+    "process.stdout.write(JSON.stringify({ decision: 'allow', reason: 'safe' }));\n",
+  );
+  await writeFile(
+    f.file,
+    JSON.stringify({
+      hooks: {
+        before_tool: [
+          {
+            name: 'allow',
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+            tools: 'write_file',
+          },
+        ],
+      },
+    }),
+  );
+  for (const change of loadHooks({
+    workspace: f.workspace,
+    home: f.home,
+    trusted: true,
+    userHome: f.home,
+  }).projectChanged)
+    approveHookFile(f.home, change);
+  assert.equal((await f.call('reload')).ok, true);
+  assert.equal((await f.call('prompt', { text: 'write' })).ok, true);
+  await wait(
+    () => f.model.requests.length === 2,
+    'the tool result reaches the model',
+  );
+  const messages = () =>
+    f.controller.snapshot().sessions.flatMap((row) => row.messages);
+  const output = () =>
+    String(
+      messages().find((message) => message.tool?.name === 'write_file')?.tool
+        ?.output ?? '',
+    );
+  const allowed = () =>
+    messages().filter((message) => message.hookNotice?.kind === 'allowed');
+  assert.equal(
+    await readFile(join(f.workspace, 'note.txt'), 'utf8'),
+    'payload',
+  );
+  assert.doesNotMatch(output(), /Hook allowed this call\./);
+  assert.equal(allowed().length, 0);
+  assert.equal(
+    (await f.call('save-settings', { settings: { showHookAllow: true } })).ok,
+    true,
+  );
+  assert.equal(loadSettings(f.home).show_hook_allow, true);
+  assert.equal(f.controller.snapshot().settings.showHookAllow, true);
+  assert.equal(allowed().length, 1);
+  assert.doesNotMatch(output(), /Hook allowed this call\./);
+  assert.equal(
+    (await f.call('save-settings', { settings: { showHookAllow: false } })).ok,
+    true,
+  );
+  assert.equal(loadSettings(f.home).show_hook_allow, false);
+  assert.equal(f.controller.snapshot().settings.showHookAllow, undefined);
+  assert.equal(allowed().length, 0);
 });

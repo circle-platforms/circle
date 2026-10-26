@@ -377,6 +377,7 @@ test('/settings changes the marked setting and saves only that key', async (t) =
     [
       ['theme', 'light'],
       ['show thinking', 'on'],
+      ['hook allowed notices', 'off'],
       ['esc esc opens', 'tree'],
       ['model', 'scripted · /models'],
       ['thinking depth', 'default · /effort'],
@@ -403,10 +404,19 @@ test('/settings changes the marked setting and saves only that key', async (t) =
   // The list stays open on the row, showing the new value.
   assert.equal(app.state.picker!.title, 'Settings');
   assert.equal(app.state.picker!.items[app.state.picker!.focus]!.meta, 'off');
+  await choose('hook allowed notices');
+  assert.equal(app.state.showHookAllow, true);
+  assert.deepEqual(file(), {
+    ...before,
+    hide_thinking: true,
+    show_hook_allow: true,
+  });
+  assert.equal(app.state.picker!.items[app.state.picker!.focus]!.meta, 'on');
   await choose('esc esc opens');
   assert.deepEqual(file(), {
     ...before,
     hide_thinking: true,
+    show_hook_allow: true,
     double_escape: 'fork',
   });
   await choose('theme');
@@ -414,6 +424,16 @@ test('/settings changes the marked setting and saves only that key', async (t) =
   assert.deepEqual(file(), {
     ...before,
     hide_thinking: true,
+    show_hook_allow: true,
+    double_escape: 'fork',
+    theme: 'auto',
+  });
+  await choose('hook allowed notices');
+  assert.equal(app.state.showHookAllow, false);
+  assert.deepEqual(file(), {
+    ...before,
+    hide_thinking: true,
+    show_hook_allow: false,
     double_escape: 'fork',
     theme: 'auto',
   });

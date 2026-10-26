@@ -417,6 +417,7 @@ export interface PendingRequest {
 export interface Settings {
   theme: Theme;
   hideThinking: boolean;
+  showHookAllow?: boolean;
   defaultModel: string;
   defaultEffort: Effort;
   enabledModels: string[];

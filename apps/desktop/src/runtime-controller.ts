@@ -880,6 +880,7 @@ export class RuntimeController {
       Object.assign(owner.options.settings, {
         theme: settings.theme,
         hide_thinking: settings.hide_thinking,
+        show_hook_allow: settings.show_hook_allow,
         double_escape: settings.double_escape,
         update_check: settings.update_check,
         attribution: { ...settings.attribution },
@@ -2476,6 +2477,11 @@ export class RuntimeController {
         continue;
       }
       if (raw.internal === 'hook_notice') {
+        if (
+          raw.hook?.kind === 'allowed' &&
+          !loadSettings(this.home).show_hook_allow
+        )
+          continue;
         result.push({
           id: node.id,
           parentId: node.parent,
@@ -3247,6 +3253,7 @@ export class RuntimeController {
       settings: {
         theme: savedSettings.theme,
         hideThinking: savedSettings.hide_thinking,
+        ...(savedSettings.show_hook_allow ? { showHookAllow: true } : {}),
         defaultModel: savedSettings.auth.model,
         defaultEffort: (savedSettings.default_thinking || 'default') as Effort,
         enabledModels: savedSettings.enabled_models,
@@ -5089,6 +5096,8 @@ export class RuntimeController {
           }
           if (data.hideThinking !== undefined)
             settings.hide_thinking = flag(data.hideThinking);
+          if (data.showHookAllow !== undefined)
+            settings.show_hook_allow = flag(data.showHookAllow);
           if (data.updateCheck !== undefined)
             settings.update_check = flag(data.updateCheck);
           if (data.attribution !== undefined)

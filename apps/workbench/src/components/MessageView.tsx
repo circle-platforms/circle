@@ -16,10 +16,13 @@ import { ToolMessage } from './ToolMessage';
 import { formatUsdAmount } from '../../../../src/pricing.ts';
 
 /**
- * A hand-back notice is stored in English and shown in the interface language. A tab
- * the person named is called by that name, which is not translated.
+ * Hand-back and runtime notices are stored in English and shown in the interface language.
+ * A tab the person named is called by that name, which is not translated.
  */
-function shownMessageText(role: Message['role'], text: string): string {
+export function shownMessageText(message: Message): string {
+  if (message.role === 'notice' && message.hookNotice)
+    return formatRuntimeNotice(message);
+  const { role, text } = message;
   if (role !== 'user') return text;
   const gave = /^the user gave terminal (\d+) back$/.exec(text);
   if (gave) return t('the user gave terminal {n} back', { n: gave[1] ?? '' });
@@ -113,7 +116,7 @@ export function MessageView({
               )}
             </>
           ) : (
-            <Markdown text={shownMessageText(message.role, message.text)} />
+            <Markdown text={shownMessageText(message)} />
           )}
           {message.attachments?.length ? (
             <div className="message-attachments">

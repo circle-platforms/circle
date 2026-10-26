@@ -192,6 +192,7 @@ export const pages: Record<string, string> = {
   light: '浅色',
   dark: '深色',
   'hide thinking in new sessions': '新会话中隐藏思考',
+  'show hook allowed notices': '显示钩子放行提示',
   'session defaults': '会话默认值',
   model: '模型',
   'double Esc': '连按两次 Esc',
