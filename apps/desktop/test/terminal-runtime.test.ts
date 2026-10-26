@@ -75,7 +75,7 @@ async function setup(
   return { root, home, model, controller, call, updates };
 }
 
-test('terminal tools ride the terminal port: eight of them, main agent only', async (t) => {
+test('terminal tools ride the terminal port: nine of them, main agent only', async (t) => {
   const absent = await setup(t, [{ message: assistant('no terminal') }]);
   await absent.call('prompt', { text: 'inspect tools' });
   await until(() => absent.model.requests.length === 1, 'model request');
@@ -100,7 +100,7 @@ test('terminal tools ride the terminal port: eight of them, main agent only', as
   const tools = connected.model.requests[0]!.tools.filter((tool) =>
     tool.name.startsWith('terminal_'),
   );
-  assert.equal(tools.length, 8);
+  assert.equal(tools.length, 9);
   assert(tools.every((tool) => tool.subagents === false));
 });
 
