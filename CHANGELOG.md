@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.13.0 - 2026-10-28
+
 ### Breaking changes
 
 - **The bundled Hub integration has been removed.** Circle no longer ships the `hub` extension, its `/hub` commands or its desktop Hub and platform pages. Its saved extension data and secrets are left on disk; removal does not revoke tokens at the service that issued them.
@@ -26,7 +28,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ### Fixed
 
 - **Browser shortcuts close the active tab.** Closing a newly opened browser tab keeps the page you were already using, even when the interface has not yet caught up with the new tab.
-- **The changes list refreshes when reopened.** A pending Git read no longer leaves an old list after a later refresh was requested.
+- **The changes list catches up after a slow Git read.** Reopening the list, or a change arriving, while Git was still answering could leave it showing the older state.
+- **The work drawer's controls stay visible in a narrow window**; the conversation title is shortened instead.
 - **The sidebar keeps its position while sessions move.** When the list has room to scroll, the row you were looking at stays in place even if a scroll notification is still pending.
 - **The editor uses its updated HTML sanitizer.** The application now uses the patched sanitizer in the editor itself, as well as in its dependency list.
 - **An approved SSH host key resumes the paused login.** Rejecting a key closes the paused connection, and a connection that has already ended starts a fresh login instead.
