@@ -4,12 +4,17 @@ import { PassThrough } from 'node:stream';
 import { once } from 'node:events';
 import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { runRpc } from '../src/rpc.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
-import { scratch, cleanup } from './helpers.js';
+import {
+  scratch,
+  cleanup,
+  processGone,
+  until,
+  writtenPids,
+} from './helpers.js';
 import type { Message, ModelResponse } from '../src/types.js';
 import { rpcMessage } from '../src/rpc_codec.js';
 const answer = (content: string): Message => ({
@@ -17,14 +22,8 @@ const answer = (content: string): Message => ({
   role: 'assistant',
   content,
 });
-async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 3000;
-  while (!predicate()) {
-    if (Date.now() > deadline)
-      throw new Error('RPC did not reach expected state');
-    await delay(5);
-  }
-}
+const waitFor = (predicate: () => boolean) =>
+  until(predicate, { timeout: 3000, label: 'the expected RPC state' });
 test('RPC reports queue, busy guards, persisted usage, model changes and exported HTML through the real runtime', async (t) => {
   const root = scratch(t);
   const home = join(root, 'home');
@@ -260,7 +259,7 @@ test('RPC list_jobs and jobId stop the real process before reporting the settled
   cleanup(t, () => runtime.close());
   writeFileSync(
     join(root, 'job.cjs'),
-    "require('node:fs').writeFileSync('ready', 'yes'); setTimeout(() => require('node:fs').writeFileSync('late', 'bad'), 2000); setTimeout(() => {}, 10000);",
+    "require('node:fs').writeFileSync('ready', process.pid + '\\n'); setTimeout(() => require('node:fs').writeFileSync('late', 'bad'), 2000); setTimeout(() => {}, 60000);",
   );
   const input = new PassThrough();
   const output: any[] = [];
@@ -277,7 +276,8 @@ test('RPC list_jobs and jobId stop the real process before reporting the settled
     `"${process.execPath}" "${join(root, 'job.cjs')}"`,
     { sessionId: runtime.session.id, startedBy: 'user' },
   );
-  await waitFor(() => existsSync(join(root, 'ready')));
+  await waitFor(() => writtenPids(join(root, 'ready')) !== undefined);
+  const [pid] = writtenPids(join(root, 'ready'))!;
   input.write(JSON.stringify({ id: 'list', type: 'list_jobs' }) + '\n');
   input.write(
     JSON.stringify({ id: 'stop', type: 'stop_job', jobId: job.id }) + '\n',
@@ -298,7 +298,8 @@ test('RPC list_jobs and jobId stop the real process before reporting the settled
   input.end();
   assert.equal(await runner, 0);
   assert.equal(output.find((record) => record.id === 'again').success, false);
-  await delay(2200);
+  // The job would live a minute; once it is gone it can write nothing late.
+  await until(() => processGone(pid!), { label: 'the stopped job to end' });
   assert.equal(existsSync(join(root, 'late')), false);
   assert.ok(
     output.some(

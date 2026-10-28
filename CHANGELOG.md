@@ -12,20 +12,21 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Added
 
-- **Headless runs can connect MCP servers.** Print, line and RPC modes load configured MCP servers before the first prompt when started with `--extensions`, alongside extensions.
+- **Headless runs can connect MCP servers.** Print, line and RPC modes load configured MCP servers before the first prompt when started with `--extensions`, alongside extensions. Server instructions are available from the first turn, and tools follow the same approval, cancellation and redaction rules as in the full-screen interface.
 - **MCP headers can use a saved secret.** Configure `${secret:NAME}` in an HTTP server's headers instead of writing the value in settings; Circle substitutes it when connecting and redacts it where the server quotes it back.
 - **MCP tools can take local files.** For a tool that declares a base64 file argument, Circle reads the named file under its normal file-access rules and shows its path, size and digest on the approval card before sending it.
-- **Circle can save a device profile.** The `terminal_profile_save` tool saves a device's address, user and sign-in reference; a password is stored by the name of a saved secret, never by its value.
+- **Circle can save a device profile.** The `terminal_profile_save` tool saves a device's address, port, user and sign-in reference; a password is stored by the name of a saved secret, never by its value.
 
 ### Changed
 
 - **Desktop settings open over your work.** Settings and capability management are collected in one searchable dialog, with a simpler sidebar and direct links to each group. Closing settings returns to the view and keyboard focus you were using.
 - **Some MCP file calls can reuse a result.** When a server marks a tool idempotent, repeated calls with the same file contents and other arguments can return an earlier successful result until Circle sends a call that may change that server. Changes by other clients are not observed; set `trust_annotations: false` to send every call.
-- **Routine hook allows stay quiet by default.** New tool results no longer carry the routine allow prefix, and older prefixes are hidden in the interface without changing stored history. Set `show_hook_allow` to show routine allow notices; denials and questions remain visible.
+- **Routine hook allows stay quiet by default.** New tool results no longer carry the routine allow prefix, and older prefixes are hidden in the interface without changing stored history. Set `show_hook_allow` to show routine allow notices; denials, questions, failures and after-tool output remain visible.
 
 ### Fixed
 
 - **Browser shortcuts close the active tab.** Closing a newly opened browser tab keeps the page you were already using, even when the interface has not yet caught up with the new tab.
+- **The changes list refreshes when reopened.** A pending Git read no longer leaves an old list after a later refresh was requested.
 - **The sidebar keeps its position while sessions move.** When the list has room to scroll, the row you were looking at stays in place even if a scroll notification is still pending.
 - **The editor uses its updated HTML sanitizer.** The application now uses the patched sanitizer in the editor itself, as well as in its dependency list.
 - **An approved SSH host key resumes the paused login.** Rejecting a key closes the paused connection, and a connection that has already ended starts a fresh login instead.

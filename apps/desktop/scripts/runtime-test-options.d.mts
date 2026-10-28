@@ -23,6 +23,8 @@ export function runRuntimeTestGroups(options: {
   ci?: boolean;
   receiptDirectory: string;
   stdio?: 'inherit' | 'pipe';
+  log?: (line: string) => void;
+  summaryFile?: string;
 }): {
   exitCode: number;
   receipts: {
@@ -31,5 +33,6 @@ export function runRuntimeTestGroups(options: {
     status: string;
     attempts: { exitCode: number | null; signal: NodeJS.Signals | null }[];
     flaky?: true;
+    flakyTests?: { file: string; name: string }[];
   }[];
 };

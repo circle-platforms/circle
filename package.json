@@ -24,6 +24,7 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "tsx scripts/test.ts",
+    "test:coverage": "tsx scripts/test.ts --experimental-test-coverage --test-coverage-include=\"src/**\"",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\" \"*.json\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\" \"*.json\"",
     "check": "npm run typecheck && npm test && npm run build",

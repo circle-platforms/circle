@@ -13,6 +13,7 @@ import '../src/styles/developer-workbench.css';
 import '../src/styles/panes.css';
 const options = new URLSearchParams(location.search);
 const embedded = options.get('embedded') === 'true';
+const late = options.get('late') === 'true';
 applyTheme(options.get('theme') === 'dark' ? 'dark' : 'light');
 (window as any).__terminalTimings = [];
 if (options.get('timing') !== 'off')
@@ -53,7 +54,7 @@ const snapshot = (sessionId: string) => ({
     : {}),
   ...(options.get('error') ? { error: options.get('error') } : {}),
   startedAt: new Date(0).toISOString(),
-  lastSequence: 1,
+  lastSequence: late ? (ready ? 2 : 0) : 1,
   logPath: '/fixture/log',
   kind: 'shell',
 });
@@ -91,28 +92,39 @@ const runtime = new PreviewRuntime({
     if (method === 'resize' || method === 'write') return { ok: true };
     if (method === 'replay') {
       requests++;
-      if (!ready) await blocked;
+      if (!ready && !late) await blocked;
+      const sequence = late ? (ready ? 2 : 0) : 1;
+      const parts = late
+        ? [
+            '\u001b[32m' + lines[0].slice(0, -2),
+            lines[0].slice(-2) +
+              '\u001b[0m\r\n' +
+              lines.slice(1).join('\r\n') +
+              '\r\n',
+          ]
+        : [lines.join('\r\n') + '\r\n'];
+      const events = parts
+        .slice(0, sequence)
+        .map((data, index) => ({
+          terminalId: item.id,
+          owner: item.owner,
+          sessionId: item.sessionId,
+          epoch: item.epoch,
+          sequence: index + 1,
+          kind: 'data',
+          at: new Date(0).toISOString(),
+          data,
+        }))
+        .filter((event) => event.sequence > params.afterSequence)
+        .slice(0, params.limit ?? 128);
+      const nextSequence = events.at(-1)?.sequence ?? params.afterSequence;
       return {
         ok: true,
         data: {
-          snapshot: item,
-          nextSequence: 1,
-          events:
-            params.afterSequence < 1
-              ? [
-                  {
-                    terminalId: item.id,
-                    owner: item.owner,
-                    sessionId: item.sessionId,
-                    epoch: item.epoch,
-                    sequence: 1,
-                    kind: 'data',
-                    at: new Date(0).toISOString(),
-                    data: lines.join('\r\n') + '\r\n',
-                  },
-                ]
-              : [],
-          hasMore: false,
+          snapshot: snapshot(command.sessionId),
+          nextSequence,
+          events,
+          hasMore: nextSequence < sequence,
         },
       };
     }

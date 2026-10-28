@@ -4,6 +4,7 @@ import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { assertRenderedTerminalMatch } from '../../desktop/test/helpers/native-terminal-rendered-match.mjs';
 import {
   chooseTerminalMenu,
   openTerminalFind,
@@ -16,6 +17,14 @@ const server = await createServer({
   server: { host: '127.0.0.1', port: 0 },
 });
 const checks = [];
+const until = async (condition, description) => {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw Error('timed out: ' + description);
+};
 let browser;
 try {
   await server.listen();
@@ -277,6 +286,104 @@ try {
           });
       }
     }
+  // A search pins the current log end: output produced later does not change
+  // that result. Reproduce the ordering that can make a one-shot test stale.
+  await page.goto(
+    server.resolvedUrls.local[0] +
+      'test/native-terminal-search-ui.html?embedded=true&late=true&timing=record',
+  );
+  await openTerminalMode(page);
+  const lateFind = await openTerminalFind(page, page);
+  await page.waitForFunction(() => window.__terminalFixture.requests() > 0);
+  await lateFind.fill('CIRCLE_TERMINAL_LINE_0001_中文');
+  await lateFind.press('Enter');
+  await page.getByText('no matches', { exact: true }).waitFor();
+  await page.evaluate(() => window.__terminalFixture.release());
+  // Reopening the same mounted drawer wakes its replay after the late output.
+  await page
+    .getByRole('button', { name: 'terminal panel', exact: true })
+    .click();
+  await openTerminalMode(page);
+  await page.waitForFunction(() =>
+    window.__terminalTimings.some(
+      (record) => record.phase === 'write-parsed' && record.eventSequence === 2,
+    ),
+  );
+  assert.equal(
+    await page.getByText('no matches', { exact: true }).isVisible(),
+    true,
+  );
+  await lateFind.press('Enter');
+  await page.waitForFunction(
+    () => document.querySelector('.xterm-selection')?.children.length > 0,
+  );
+  checks.push({
+    profile: 'drawer',
+    scenario: 'late output after search',
+    status: 'passed',
+  });
+
+  // The journey helper must wait for the same terminal's durable output before
+  // searching. Split the match across colored, paginated replay events.
+  await page.goto(
+    server.resolvedUrls.local[0] +
+      'test/native-terminal-search-ui.html?embedded=true&late=true&timing=record',
+  );
+  await openTerminalMode(page);
+  const panel = page.locator('.native-terminal:visible');
+  const surface = panel.locator('#terminal-A-terminal:visible');
+  await surface.waitFor();
+  const cursors = [];
+  let completed = false;
+  const match = assertRenderedTerminalMatch({
+    panel,
+    surface,
+    text: 'CIRCLE_TERMINAL_LINE_0001_中文',
+    until,
+    terminalId: 'A-terminal',
+    replay: async (afterSequence) => {
+      cursors.push(afterSequence);
+      const reply = await page.evaluate(
+        (afterSequence) =>
+          window.circleDesktop.runtimeCommand({
+            id: crypto.randomUUID(),
+            name: 'workspace-service',
+            sessionId: 'A',
+            payload: {
+              service: 'terminal',
+              method: 'replay',
+              params: { id: 'A-terminal', afterSequence, limit: 1 },
+            },
+          }),
+        afterSequence,
+      );
+      assert.equal(reply.ok, true);
+      return reply.data;
+    },
+  }).then((value) => {
+    completed = true;
+    return value;
+  });
+  await until(() => cursors.length > 0, 'the empty terminal log is observed');
+  assert.equal(completed, false);
+  assert.equal(
+    await panel
+      .getByRole('textbox', { name: 'find in terminal', exact: true })
+      .isVisible(),
+    false,
+    'the rendered search must not start before the echo reaches the log',
+  );
+  await page.evaluate(() => window.__terminalFixture.release());
+  const matchEvidence = await match;
+  assert.equal(matchEvidence.missingTextRejected, true);
+  assert.ok(matchEvidence.selectionRectangles.length > 0);
+  assert.ok(cursors.includes(1), 'the original log is followed across pages');
+  checks.push({
+    profile: 'drawer',
+    scenario: 'wait for paginated late echo',
+    status: 'passed',
+  });
+
   for (const reason of ['exit 1', 'kernel rejected termination']) {
     await page.goto(
       server.resolvedUrls.local[0] +

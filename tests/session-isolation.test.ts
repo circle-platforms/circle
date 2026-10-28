@@ -29,7 +29,7 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 function gate() {
   let entered!: () => void;
@@ -607,11 +607,11 @@ test('a killed owner can be recovered after the heartbeat lease becomes stale', 
     readdirSync(join(home, 'session-locks'))[0]!,
   );
   const initial = statSync(lock).mtimeMs;
-  await new Promise((resolve) => setTimeout(resolve, 5600));
-  assert.ok(
-    statSync(lock).mtimeMs > initial,
-    'the live owner refreshes its heartbeat',
-  );
+  // The owner refreshes its lease every 5 seconds (session_lock.ts).
+  await until(() => statSync(lock).mtimeMs > initial, {
+    timeout: 15000,
+    label: 'the live owner to refresh its heartbeat',
+  });
   const exited = once(worker, 'exit');
   worker.kill('SIGKILL');
   await exited;

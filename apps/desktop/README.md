@@ -23,6 +23,8 @@ The default desktop data folder is `Circle` under the operating system's applica
 npm --prefix apps/desktop run package
 ```
 
+`package` builds first (`npm run build`). When `dist/` is already built from the current source, `npm --prefix apps/desktop run package:only` packages it without building again.
+
 On Windows, install the pinned UI extension alongside WiX before building the MSI:
 
 ```sh

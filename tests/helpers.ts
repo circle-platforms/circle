@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { createServer, type Socket } from 'node:net';
 import type { Server as HttpServer } from 'node:http';
@@ -67,6 +67,44 @@ export function cleanup(
   action: () => void | Promise<void>,
 ): void {
   owned(t).cleanup.push(action);
+}
+
+/**
+ * Poll until `predicate` holds; a test waits on state instead of a fixed sleep.
+ * The timeout only bounds a failure, so keep it well above the expected time.
+ */
+export async function until(
+  predicate: () => boolean | Promise<boolean>,
+  { timeout = 5000, label = 'the expected state' } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (!(await predicate())) {
+    if (Date.now() >= deadline)
+      throw new Error(`timed out after ${timeout} ms waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+/** The process ids a fixture wrote as one line, or undefined until the line is complete. */
+export function writtenPids(path: string): number[] | undefined {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+  return text.endsWith('\n') ? text.trim().split(' ').map(Number) : undefined;
+}
+/** Whether no process has this id any more (signal 0 checks, on Windows too). */
+export function processGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return true;
+    if (code === 'EPERM') return false;
+    throw error;
+  }
 }
 
 /** Register before clients connect; only this test's server and its sockets are closed. */
