@@ -4,6 +4,7 @@ import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { confirmLinuxUpdate } from '../../desktop/test/helpers/native-update-confirm.mjs';
 
 // Settings, and the skills, MCP servers, extensions and the rest with them, are one
 // dialog over the window: a list of groups at the left, the chosen one at the right,
@@ -423,6 +424,43 @@ try {
       .getByRole('checkbox', { name: 'check for updates', exact: true })
       .waitFor();
     checks.push('crediting Circle is under git, not about');
+
+    // A setuid Linux update opens its own confirmation inside settings. The
+    // packaged update journey must target it, then actually request install.
+    await page.evaluate(() => {
+      const state = {
+        phase: 'ready',
+        version: '9.9.9',
+        linux: { folder: '/tmp/Circle', sandbox: true },
+      };
+      window.updateFixtureActions = [];
+      window.circleDesktop = {
+        onAction: () => () => {},
+        onBrowserEvent: () => () => {},
+        onTerminalEvent: () => () => {},
+        setTheme: async () => {},
+        updateState: async () => state,
+        onUpdate: () => () => {},
+        update: async (action) => {
+          window.updateFixtureActions.push(action);
+          return { ...state, phase: 'installing' };
+        },
+      };
+    });
+    await pick(page, 'appearance');
+    await pick(page, 'about & updates');
+    await page
+      .locator('.update-control')
+      .getByRole('button', { name: 'quit and replace', exact: true })
+      .click();
+    await page.getByRole('dialog', { name: 'quit and replace' }).waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 2);
+    await confirmLinuxUpdate(page);
+    await page.waitForFunction(() =>
+      window.updateFixtureActions.includes('install'),
+    );
+    await page.evaluate(() => delete window.circleDesktop);
+    checks.push('Linux update confirmation works inside the settings dialog');
 
     // Extensions: GitHub is one, and its details open in the dialog too.
     await pick(page, 'extensions');
