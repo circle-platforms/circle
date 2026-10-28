@@ -141,7 +141,6 @@ export const common: Record<string, string> = {
   cache: '缓存',
   cost: '费用',
   'copy message': '复制消息',
-  customize: '自定义',
   more: '更多',
   'light theme': '浅色主题',
   'dark theme': '深色主题',

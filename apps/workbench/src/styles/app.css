@@ -1965,14 +1965,6 @@ pre {
   margin-top: 28px;
   padding-top: 23px;
 }
-.page.settings-page {
-  width: 100%;
-  align-self: stretch;
-}
-.page.settings-page > * {
-  width: min(720px, 100%);
-  margin-inline: auto;
-}
 .settings-block.first {
   margin-top: 0;
   padding-top: 0;
@@ -3733,23 +3725,6 @@ pre {
   padding: 0 10px;
   gap: 2px;
 }
-.sidebar-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  margin: 0 2px 8px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--muted);
-  font-size: var(--ui-small);
-  text-align: left;
-}
-.sidebar-search:hover {
-  color: var(--fg);
-}
 .sidebar-primary {
   display: flex;
   flex-direction: column;
@@ -3913,20 +3888,16 @@ pre {
 .connection-status[data-state='restarting'] i {
   background: var(--attention);
 }
-.sidebar-footer button.sidebar-settings {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+/* Search and settings: icons at the right end, named by their tips. */
+.sidebar-footer .sidebar-footer-actions {
   flex-shrink: 0;
-  width: auto;
-  height: 30px;
-  padding: 0 8px;
-  border: 0;
+  gap: 2px;
+}
+.sidebar-footer .sidebar-footer-actions .icon-button {
   border-radius: 7px;
   color: var(--secondary);
-  font-size: var(--ui-small);
 }
-.sidebar-footer button.sidebar-settings:hover {
+.sidebar-footer .sidebar-footer-actions .icon-button:hover {
   background: var(--hover);
   color: var(--fg);
 }
@@ -4352,36 +4323,6 @@ pre {
 .interaction-summary,
 .queue {
   border-radius: 12px;
-}
-
-/* Customize: one row of tabs over skills, commands, MCP servers, extensions, tools and
-   approvals. */
-.customize {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
-  overflow: auto;
-}
-.customize-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 18px 40px 0;
-}
-.customize-tabs a {
-  padding: 6px 12px;
-  border-radius: 8px;
-  color: var(--secondary);
-  font-size: var(--ui-small);
-}
-.customize-tabs a:hover {
-  background: var(--hover);
-  color: var(--fg);
-}
-.customize-tabs a.active {
-  background: var(--active);
-  color: var(--fg);
 }
 
 @media (max-width: 1200px) {
@@ -4922,7 +4863,7 @@ pre {
   display: none;
 }
 .drawer-context-index > .context-index-content {
-  padding: 10px;
+  padding: 0;
 }
 @media (max-width: 1100px) {
   .topbar .project-chip {
@@ -4958,11 +4899,6 @@ pre {
   flex: 1;
   height: 100%;
   min-height: 0;
-}
-.drawer-context-index .file-tree {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
 }
 
 /* ------------------------------------------------------------------ *

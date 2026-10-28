@@ -161,7 +161,10 @@ try {
       '#/page/settings',
       `a ${how} selection that completes after settings opened leaves settings shown`,
     );
-    // Back to the third session, as a person would, for the next case.
+    // Back to the third session, as a person would, for the next case:
+    // settings are a dialog over the window, so close them first.
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => location.hash !== '#/page/settings');
     await sidebarRow('navigation-third').click();
     await pending('navigation-third');
     await publish('navigation-third');

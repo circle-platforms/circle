@@ -17,21 +17,14 @@
   --header-end: 64px;
 }
 
-.inspector .panel-header-actions .icon-button,
 .inspector .browser-tabs > .icon-button {
   width: 26px;
   height: 26px;
   border-radius: 6px;
   color: var(--muted);
 }
-.inspector .panel-header-actions .icon-button:hover:not(:disabled) {
-  color: var(--fg);
-}
-.inspector .panel-header-actions .icon-button:disabled {
-  opacity: 0.45;
-}
 /* The terminal, browser and files: no rule under the header, the pane's own
-   background throughout, and their tabs or name in place of the title. */
+   background throughout, and their tabs or filter in place of the title. */
 .inspector:is(
   [data-inspector-panel='terminal'],
   [data-inspector-panel='browser'],
@@ -40,42 +33,11 @@
   background: var(--bg);
 }
 
-.inspector .inspector-body.flush .native-browser > .browser-tabs,
-.inspector .inspector-body.flush .files-panel > .panel-header-name {
+.inspector .inspector-body.flush .native-browser > .browser-tabs {
   position: absolute;
   z-index: 1;
   top: 6px;
   left: 8px;
-}
-.inspector .inspector-body.flush .panel-header-actions {
-  position: absolute;
-  z-index: 1;
-  top: 5px;
-  right: calc(var(--header-end) + 2px);
-  display: flex;
-  gap: 2px;
-}
-/* A pane's name where it has no tabs, as Claude's "Files". */
-.inspector .panel-header-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 6px;
-  background: var(--hover);
-  color: var(--fg);
-  font-size: var(--ui-small);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.inspector .panel-header-tabs > button {
-  flex-shrink: 0;
-  height: 28px;
-  padding: 0 8px;
-  font-size: var(--ui-small);
-  white-space: nowrap;
 }
 /* The terminal itself: the screen to the edges, a quiet bar under it. */
 .inspector .native-terminal.embedded {
@@ -414,71 +376,36 @@
   font-size: var(--ui-small);
   line-height: 1.5;
 }
-/* Files: a filter field and the tree under it. */
+/* Files: the filter in the toolbar every mode starts with, and the tree under it. As in
+   the changes and subagents modes, a row's background starts 8px in from the edge and
+   what is in it 16px in, the filter's edge too. */
 .inspector .files-panel {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding: 0 8px 8px;
+  padding: 0 0 8px;
 }
-.inspector .files-panel > .search-field {
-  height: 30px;
-  flex: none;
-  margin: 0 0 6px;
-  border-radius: 8px;
-}
-.inspector .files-panel > .search-field input {
-  padding: 0;
-}
-.inspector .files-panel > .file-tree {
-  flex: 1;
-  min-height: 0;
-  margin: 0;
-  overflow: auto;
-}
-.inspector .file-tree > button {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  gap: 6px;
-  height: 26px;
-  padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px);
-  border-radius: 6px;
-  color: var(--fg);
-  font-size: var(--ui-small);
-  text-align: left;
-}
-.inspector .file-tree > button:hover {
-  background: var(--hover);
-}
-.inspector .file-tree > button.active {
-  background: var(--active);
-}
-.inspector .file-tree > button > span {
+.inspector .files-panel > .mode-toolbar .search-field {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  height: 30px;
+  border-radius: 8px;
+  font-weight: 400;
 }
-.inspector .file-tree > .tree-folder > svg {
-  color: var(--muted);
+.inspector .files-panel > .mode-toolbar .search-field input {
+  padding: 0;
 }
-.inspector .file-tree > .tree-file {
-  /* a file lines up with the name of the folder it is in */
-  padding-left: calc(6px + var(--depth, 0) * 14px + 19px);
+.inspector .files-panel > .virtual-file-tree {
+  margin: 0 8px;
 }
 .inspector .file-icon {
   flex: none;
   color: var(--muted);
 }
-.inspector .files-panel > .panel-note {
-  margin: 10px 6px;
+.inspector .files-panel > .file-listing-status {
+  padding-inline: 16px;
 }
-/* The drawer owns the resource title and index toggle. The nested file index
-   already has a real filter; its legacy absolute heading must not cover the document. */
-.inspector .drawer-context-index .files-panel > .panel-header-name,
-.inspector .drawer-context-index .files-panel > .panel-header-actions {
-  display: none;
+.inspector .files-panel > .panel-note {
+  margin: 10px 16px;
 }

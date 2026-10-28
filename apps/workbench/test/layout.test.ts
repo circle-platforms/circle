@@ -87,17 +87,33 @@ test('a session column keeps the composer inside the window', () => {
   assert.match(composerBlock, /flex:\s*0 0 auto/);
 });
 
-test('the sidebar settings control shows its name', () => {
-  const source = readFileSync(
+// The owner's decision (2026-10-28): search, settings and hiding the sidebar are
+// icons at the right end of the sidebar footer, and the top bar has no menu of its own.
+test('search, settings and hide are icons at the end of the sidebar footer', () => {
+  const sidebar = readFileSync(
     fileURLToPath(new URL('../src/components/Sidebar.tsx', import.meta.url)),
     'utf8',
   );
-  assert.match(source, /className="sidebar-settings"/);
-  assert.match(source, /<span>\{t\('settings'\)\}<\/span>/);
-  const rule =
-    css.match(/\.sidebar-footer button\.sidebar-settings \{[^}]*\}/)?.[0] ?? '';
-  assert.match(rule, /width:\s*auto/);
-  assert.doesNotMatch(rule, /width:\s*30px/);
+  const footer = sidebar.slice(
+    sidebar.indexOf('<footer className="sidebar-footer">'),
+  );
+  const actions = footer.slice(footer.indexOf('sidebar-footer-actions'));
+  assert.ok(
+    footer.indexOf('connection-status') <
+      footer.indexOf('sidebar-footer-actions'),
+  );
+  const search = actions.indexOf("label={t('search')}");
+  const settings = actions.indexOf("label={t('settings')}");
+  const hide = actions.indexOf("label={t('hide sidebar')}");
+  assert.ok(search > 0 && settings > search, 'search, then settings');
+  assert.ok(hide > settings, 'then hide the sidebar');
+  assert.doesNotMatch(sidebar, /className="sidebar-search"/);
+  const app = readFileSync(
+    fileURLToPath(new URL('../src/app/App.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.doesNotMatch(app, /aria-label=\{t\('more'\)\}/);
+  assert.doesNotMatch(app, /t\('dark theme'\)/);
 });
 
 test('changes and the browser can take the full view', () => {

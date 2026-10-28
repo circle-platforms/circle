@@ -236,6 +236,11 @@ try {
     await view.evaluate(() => {
       location.hash = '#/page/settings';
     });
+    // Settings show one group at a time: choose it in their index.
+    await view
+      .locator('.settings-index-list')
+      .getByRole('button', { name: 'about & updates', exact: true })
+      .click();
     return view.locator('.update-control');
   };
   let { browser, page: view } = await page();

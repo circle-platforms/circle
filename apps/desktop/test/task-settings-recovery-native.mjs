@@ -151,6 +151,16 @@ const launch = async () => {
   receipt.identity = actual;
 };
 const openHistory = async () => {
+  // Settings are a dialog over the window, and a history row is in the window: close
+  // the dialog first, as a person does.
+  const dialog = page.locator('.settings-dialog');
+  if (await dialog.count()) {
+    await page.waitForFunction(() =>
+      document.activeElement?.closest('.settings-dialog'),
+    );
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached' });
+  }
   const historyLink = page.locator(
     `.sidebar:visible .session-link[href="#/session/${sessionId}"][tabindex="0"]`,
   );
@@ -165,10 +175,15 @@ const openHistory = async () => {
     .getByText('COLD_CONFIG_HISTORY_REMAINS_READABLE', { exact: true })
     .waitFor();
 };
-// The task limits are kept on the settings page, with the start of the tasks a repaired
-// limit left waiting. The tasks panel that also said so went with the manual task controls.
+// The task limits are kept in the workspace group of settings, with the start of the
+// tasks a repaired limit left waiting. The tasks panel that also said so went with the
+// manual task controls.
 const openTaskLimits = async () => {
   await page.getByRole('button', { name: 'settings', exact: true }).click();
+  await page
+    .locator('.settings-index-list')
+    .getByRole('button', { name: 'workspace', exact: true })
+    .click();
   const section = page.getByRole('region', {
     name: 'parallel tasks',
     exact: true,
