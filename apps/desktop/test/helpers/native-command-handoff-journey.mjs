@@ -235,6 +235,17 @@ export async function runNativeCommandHandoffJourney({
       surface,
       text: 'HANDOFF_ECHO:' + input,
       until,
+      terminalId: target.terminal.id,
+      replay: async (afterSequence) => {
+        const result = await query('command', {
+          target,
+          action: 'replay',
+          params: { afterSequence, limit: 128 },
+        });
+        assert.equal(result.available, true);
+        assert.deepEqual(result.target, target);
+        return result.value;
+      },
     });
     await page.screenshot({ path: join(output, 'command-handoff-live.png') });
     // A command Circle runs is stopped from the end of the tab row, while it runs.

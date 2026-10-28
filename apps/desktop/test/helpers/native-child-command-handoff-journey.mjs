@@ -447,6 +447,17 @@ export async function runNativeChildCommandHandoffJourney({
       surface,
       text: 'CHILD_HANDOFF_ECHO:' + childCommandInput.trimEnd(),
       until,
+      terminalId: target.terminal.id,
+      replay: async (afterSequence) => {
+        const result = await call(page, ownerId, 'terminal', 'command', {
+          target,
+          action: 'replay',
+          params: { afterSequence, limit: 128 },
+        });
+        assert.equal(result.available, true);
+        assert.deepEqual(result.target, target);
+        return result.value;
+      },
     });
     assert.equal(await optionalRead(workspace, fixture.paths.input), '');
     assert.equal((await sessionView(page, ownerId)).draft, parentDraft);
@@ -728,6 +739,23 @@ export async function runNativeChildCommandAfterRestart({
       surface,
       text: 'CHILD_HANDOFF_ECHO:' + childCommandInput.trimEnd(),
       until,
+      terminalId: previous.target.terminal.id,
+      replay: async (afterSequence) => {
+        const result = await call(
+          page,
+          previous.ownerId,
+          'terminal',
+          'command',
+          {
+            target: previous.target,
+            action: 'replay',
+            params: { afterSequence, limit: 128 },
+          },
+        );
+        assert.equal(result.available, true);
+        assert.deepEqual(result.target, previous.target);
+        return result.value;
+      },
     });
     // History offers neither a stop nor a restart, which would run the command again.
     assert.equal(
