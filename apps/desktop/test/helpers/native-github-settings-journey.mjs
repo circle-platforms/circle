@@ -48,12 +48,21 @@ export async function runNativeGitHubSettingsJourney({
   requestsPath,
 }) {
   const receipt = { checks: [] };
-  const openPlugin = async () => {
-    await page
-      .locator('.sidebar')
-      .getByRole('button', { name: 'settings', exact: true })
+  const settings = page.getByRole('dialog', { name: 'settings', exact: true });
+  const closeSettings = async () => {
+    if (!(await settings.isVisible())) return;
+    await settings
+      .getByRole('button', { name: 'close dialog', exact: true })
       .click();
-    await page
+    await settings.waitFor({ state: 'hidden' });
+  };
+  const openPlugin = async () => {
+    if (!(await settings.isVisible()))
+      await page
+        .locator('.sidebar')
+        .getByRole('button', { name: 'settings', exact: true })
+        .click();
+    await settings
       .getByRole('heading', { name: 'settings', exact: true })
       .waitFor();
     // GitHub is an extension: settings list it under extensions, with a link to its
@@ -316,6 +325,7 @@ export async function runNativeGitHubSettingsJourney({
     await page.screenshot({
       path: join(output, 'github-settings-disabled-unavailable.png'),
     });
+    await closeSettings();
     await page
       .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
       .first()
@@ -417,6 +427,11 @@ export async function runNativeGitHubSettingsJourney({
       }
     } catch (error) {
       receipt.cleanup = { error: String(error) };
+    }
+    try {
+      await closeSettings();
+    } catch (error) {
+      receipt.dialogCleanup = { error: String(error) };
     }
     await writeFile(
       join(output, 'github-settings-native-receipt.json'),
