@@ -511,12 +511,13 @@ export function NativeBrowser({
   const loading = !!state?.loading && (opened || navigating > 0);
   const zoomLevel = state?.zoom ?? 100;
   // What a browser shortcut does, from the page (through the main process) or the panel
-  // `tab`: the tab whose page had the keyboard, for a key pressed in the page
-  const run = (action: BrowserKeyAction, tab = state?.tab) => {
+  // `tab`: the tab captured by the native process when it received the key.
+  // For a key handled here without one, the native process closes its active tab.
+  const run = (action: BrowserKeyAction, tab?: string) => {
     if (action === 'address') focusAddress();
     else if (action === 'new-tab') void tabs('new').then(focusAddress);
     else if (action === 'close-tab') {
-      if (tab) void tabs('close', tab);
+      void tabs('close', tab);
     } else if (action === 'reload') {
       if (opened) void navigate('reload');
     } else if (action === 'back') {

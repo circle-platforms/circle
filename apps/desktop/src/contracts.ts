@@ -155,7 +155,7 @@ export interface DesktopBridge {
   ) => Promise<BrowserState>;
   browserHide: (sessionId: string) => Promise<void>;
   browserCapture: (sessionId: string) => Promise<BrowserCapture>;
-  /** Open, show or close a tab of the conversation's browser. */
+  /** Open, show or close a tab. Closing without an id targets the active tab. */
   browserTabs: (
     sessionId: string,
     action: 'new' | 'select' | 'close',
@@ -353,7 +353,7 @@ export interface BrowserKeyEvent {
   /** `browser:<session>`, as BrowserState names it. */
   sessionId: string;
   action: import('./browser-controls').BrowserKeyAction;
-  /** The tab whose page had the keyboard, when the key was pressed in a page. */
+  /** The tab to act on, captured when a page or window sends the key. */
   tab?: string;
 }
 export interface BrowserBounds {

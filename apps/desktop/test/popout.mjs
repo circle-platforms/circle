@@ -795,7 +795,8 @@ try {
     return state.url === pageUrl && !state.failure && !state.loading;
   }, 'the page again');
   await field().click();
-  const before = await tabs();
+  const beforeState = await browserState();
+  const before = beforeState.tabs.length;
   // In the main window the same keys are its own, as if there were no browser: they
   // reach its page, and the window's page is left alone.
   await main.evaluate(() => {
@@ -824,6 +825,13 @@ try {
   await until(async () => (await tabs()) === before + 1, 'a new tab');
   await press('#/popout/browser/', 'W', [commandKey]);
   await until(async () => (await tabs()) === before, 'the new tab closed');
+  const afterClose = await browserState();
+  assert.equal(
+    afterClose.tab,
+    beforeState.tab,
+    'closing the new tab retains the original page',
+  );
+  assert.equal(afterClose.url, pageUrl, 'the original address stays loaded');
   assert.equal((await windowsOf('#/popout/browser/')).length, 1);
 
   // ---- a bad id from a window never throws in the main process

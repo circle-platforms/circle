@@ -85,9 +85,9 @@ try {
           Object.assign(state, values);
           emit();
         },
-        key: (action) => {
+        key: (action, tab) => {
           for (const listener of keyListeners)
-            listener({ sessionId: 'browser:session1', action });
+            listener({ sessionId: 'browser:session1', action, tab });
         },
       };
       window.circleDesktop = new Proxy(
@@ -583,7 +583,17 @@ try {
   );
   assert.deepEqual(
     (await pageCalls()).filter((call) => call[0] === 'tabs'),
-    [['tabs', 'close', 't1']],
+    [['tabs', 'close', null]],
+  );
+  // A key from a page names that page's tab even if the renderer's state is stale.
+  await clearCalls();
+  await page.evaluate(() => window.__browser.key('close-tab', 't2'));
+  await page.waitForFunction(() =>
+    window.__browser.calls.some((call) => call[1] === 'close'),
+  );
+  assert.deepEqual(
+    (await pageCalls()).filter((call) => call[0] === 'tabs'),
+    [['tabs', 'close', 't2']],
   );
   // The panel tells the main process it has the keyboard, and when it loses it
   const composer = page.getByRole('textbox', { name: 'message', exact: true });

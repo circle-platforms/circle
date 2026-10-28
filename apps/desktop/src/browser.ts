@@ -2198,7 +2198,10 @@ export class BrowserSessions {
     const id = this.panelKeys.holder(from);
     if (!id) return;
     event.preventDefault();
-    this.sendKey({ sessionId: 'browser:' + id, action });
+    if (action === 'close-tab') {
+      const tab = this.conversations.get(id)?.active;
+      if (tab) this.sendKey({ sessionId: 'browser:' + id, action, tab });
+    } else this.sendKey({ sessionId: 'browser:' + id, action });
   }
   /**
    * Whether the browser panel of the window `from` has that window's keyboard; see
@@ -2451,7 +2454,13 @@ export class BrowserSessions {
       entry.screenshot = undefined;
     if (action === 'new') this.createTab(conversation, { activate: true });
     else {
-      const tab = conversation.tabs.get(String(tabValue));
+      // A keyboard action from the panel may arrive before the renderer has
+      // received the new active tab. Resolve an omitted close target here.
+      const target =
+        action === 'close' && tabValue === undefined
+          ? conversation.active
+          : String(tabValue);
+      const tab = target ? conversation.tabs.get(target) : undefined;
       if (!tab) throw Error('no such tab');
       if (action === 'select') {
         conversation.active = tab.id;
