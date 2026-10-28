@@ -57,6 +57,9 @@ export function IconButton({
           aria-label={label}
           {...props}
           onPointerDown={(event) => {
+            // A press can hide this still-mounted button before its click arrives.
+            // A later press is a new action, even when the old click never came.
+            if (event.button === 0) actedOnPress.current = false;
             props.onPointerDown?.(event);
             if (!shown) return;
             if (
@@ -70,12 +73,18 @@ export function IconButton({
             actedOnPress.current = true;
             props.onClick?.(event as unknown as MouseEvent<HTMLButtonElement>);
           }}
+          onPointerCancel={(event) => {
+            actedOnPress.current = false;
+            props.onPointerCancel?.(event);
+          }}
           onClick={(event) => {
-            const again = runControlAction({
-              kind: 'click',
-              button: 0,
-              actedOnPress: actedOnPress.current,
-            });
+            const again =
+              event.detail === 0 ||
+              runControlAction({
+                kind: 'click',
+                button: 0,
+                actedOnPress: actedOnPress.current,
+              });
             actedOnPress.current = false;
             if (again) props.onClick?.(event);
           }}
