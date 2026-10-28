@@ -171,8 +171,8 @@ export interface BrowserToolOptions {
    */
   writable?: (path: string) => string;
   /**
-   * Names the file a screenshot for a model that cannot read images is saved as. Without
-   * it such a screenshot lands in the system's temporary folder.
+   * Names the file a saved screenshot is written to. Without it the screenshot lands in
+   * the system's temporary folder.
    */
   screenshotTarget?: () => string;
   /** A conversation's stored messages, which `browser_record` writes a script from. */
@@ -444,20 +444,31 @@ export function browserTools(
       additionalProperties: false,
     },
     async run(args, context) {
+      const saveOnly = action === 'screenshot' && args.save_only === true;
       // Nothing is taken for a model that could not look at it, unless the side vision
-      // model will describe what was taken
+      // model will describe what was taken or it explicitly asks to save the file.
       if (
         action === 'screenshot' &&
         context.imageInput === false &&
-        !context.vision
+        !context.vision &&
+        !saveOnly
       )
         throw Error(
           'the model in use does not read images; use browser_snapshot',
         );
-      const result = await perform(action, args, context);
-      if (!result.image) return result.text;
+      // save_only is a Circle output choice, not an argument to the browser process.
+      const { save_only: _saveOnly, ...browserArgs } = args;
+      const result = await perform(
+        action,
+        action === 'screenshot' ? browserArgs : args,
+        context,
+      );
+      if (!result.image) {
+        if (saveOnly) throw Error('the browser did not return a screenshot');
+        return result.text;
+      }
       // The page's picture is saved and described: the model in use cannot look at it
-      if (context.imageInput === false) {
+      if (saveOnly || context.imageInput === false) {
         const target = options.screenshotTarget
           ? options.screenshotTarget()
           : join(
@@ -470,6 +481,8 @@ export function browserTools(
         writeFileSync(target, Buffer.from(result.image, 'base64'), {
           mode: 0o600,
         });
+        if (saveOnly)
+          return `${result.text}\nThe picture is saved as ${target}.`;
         try {
           const described = await context.vision!(
             [target],
@@ -580,7 +593,13 @@ export function browserTools(
       },
       ['key'],
     ),
-    tool('browser_screenshot', 'screenshot', 'read', {}),
+    tool('browser_screenshot', 'screenshot', 'read', {
+      save_only: {
+        type: 'boolean',
+        description:
+          'Save the screenshot as a local PNG without sending the image to the model',
+      },
+    }),
     tool(
       'browser_dialog',
       'dialog',
