@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.13.0 - 2026-10-28
+
 ### Added
 
 - **MCP servers and extensions load in print, line and rpc modes with `--extensions`.** Their tools are there from the first turn, as in the full-screen interface. MCP header secrets, server instructions, file arguments, read-only and destructive annotations, cancellation and result invalidation now go through the same approval and redaction rules everywhere.
@@ -21,6 +23,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **Accepting an unknown SSH host key continues the login you started** instead of opening a new connection, and rejecting one closes the waiting connection at once rather than leaving it open for up to a minute.
 - **A browser shortcut closes the tab you are looking at.** Opening a tab and closing it straight away with a shortcut could close the page behind it and leave a blank tab.
 - **A sidebar row stays in place when conversations reorder** while you are scrolling.
+- **The work drawer's controls stay visible in a narrow window**; the conversation title is shortened instead.
+- **The changes list catches up after a slow Git read.** Reopening the list, or a change arriving, while Git was still answering could leave it showing the older state.
 
 ## 1.12.0 - 2026-10-23
 
