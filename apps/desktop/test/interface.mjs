@@ -611,10 +611,11 @@ try {
     width: Math.round(contentSize.width),
     height: Math.round(contentSize.height),
   };
-  // The window will not shrink below its 560px minimum.
+  // Leave enough content below the anchored row for a session to move above it;
+  // a scroll container cannot keep the row at the top beyond its lower bound.
   await setViewport(application, page, {
     width: restored.width,
-    height: Math.min(restored.height, 640),
+    height: Math.min(restored.height, 560),
   });
   const list = page.locator('.project-list');
   const beforeScroll = await list.evaluate((node) => ({
@@ -683,9 +684,15 @@ try {
     return {
       delta: row.getBoundingClientRect().top - node.getBoundingClientRect().top,
       scrollTop: node.scrollTop,
+      maxScroll: node.scrollHeight - node.clientHeight,
+      rowHeight: row.getBoundingClientRect().height,
     };
   });
   assert.ok(anchored);
+  assert.ok(
+    anchored.maxScroll - anchored.scrollTop >= anchored.rowHeight + 8,
+    `the fixture has room to preserve the row: ${JSON.stringify(anchored)}`,
+  );
   const still = page.getByRole('textbox', { name: 'message', exact: true });
   await still.fill('keep the sidebar still');
   await still.press('Enter');
@@ -698,6 +705,7 @@ try {
     return {
       delta: row.getBoundingClientRect().top - node.getBoundingClientRect().top,
       scrollTop: node.scrollTop,
+      maxScroll: node.scrollHeight - node.clientHeight,
     };
   });
   assert.ok(kept);
