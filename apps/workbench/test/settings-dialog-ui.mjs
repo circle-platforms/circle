@@ -53,6 +53,22 @@ const currentIs = (page, text) =>
         ?.textContent === text,
     text,
   );
+// A route change commits before the list's scroll effect runs. Measure only
+// after the requested section is selected and the list has brought it into view.
+const currentInView = (page, text) =>
+  page.waitForFunction((text) => {
+    const list = document.querySelector('.settings-index-list');
+    const current = list?.querySelector('[aria-current="page"]');
+    if (!current || current.textContent !== text) return false;
+    const a = list.getBoundingClientRect();
+    const b = current.getBoundingClientRect();
+    return (
+      b.left >= a.left - 1 &&
+      b.right <= a.right + 1 &&
+      b.top >= a.top - 1 &&
+      b.bottom <= a.bottom + 1
+    );
+  }, text);
 // What the list shows, group by group, and the heading of the page each opens.
 const GROUPS = [
   [
@@ -670,11 +686,18 @@ try {
       'files',
       'variables',
     ]) {
+      const sections = GROUPS.flatMap(([, entries]) => entries);
+      const index = sections.findIndex((entry) => entry[1] === id);
+      assert.notEqual(index, -1, `known settings section ${id}`);
+      const label =
+        language === 'zh-CN' ? ZH_LABELS[index] : sections[index][0];
       await page.evaluate((id) => {
         location.hash = '/page/' + id;
       }, id);
       await page.waitForFunction((id) => location.hash === '#/page/' + id, id);
       await page.locator('.settings-sections h1').first().waitFor();
+      await currentIs(page, label);
+      await currentInView(page, label);
       assert.equal(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,
