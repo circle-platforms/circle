@@ -4,6 +4,24 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **MCP servers and extensions load in print, line and rpc modes with `--extensions`.** Their tools are there from the first turn, as in the full-screen interface. MCP header secrets, server instructions, file arguments, read-only and destructive annotations, cancellation and result invalidation now go through the same approval and redaction rules everywhere.
+- **Device connections can be saved as profiles.** `terminal_profile_save` stores a device's address, port and login with the *name* of a saved secret, never its value.
+
+### Changed
+
+- **Desktop settings open in a searchable dialog over your work.** Each group has a direct link, the sidebar is simpler, and closing the dialog brings back the view and the keyboard focus you had.
+- **Routine hook approvals no longer appear in tool results.** A hook that simply allows a call stays quiet; denials, questions, failures and after-tool output are still shown. `show_hook_allow` (in `/settings` and Settings → hooks) brings the allow notices back.
+- **The bundled Hub extension and the Hub pages of the desktop are gone.** A hub is now an ordinary MCP server entry.
+
+### Fixed
+
+- **Search says which files it could not look at.** A file over 10 MB, one that is not UTF-8 text or one that cannot be read is now named under the results instead of ending in a bare `No matches found`, and searches for plain text skip files that cannot match without decoding them.
+- **Accepting an unknown SSH host key continues the login you started** instead of opening a new connection, and rejecting one closes the waiting connection at once rather than leaving it open for up to a minute.
+- **A browser shortcut closes the tab you are looking at.** Opening a tab and closing it straight away with a shortcut could close the page behind it and leave a blank tab.
+- **A sidebar row stays in place when conversations reorder** while you are scrolling.
+
 ## 1.12.0 - 2026-10-23
 
 ### Added
