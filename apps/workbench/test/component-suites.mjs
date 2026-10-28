@@ -23,6 +23,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'child-terminal-rendered-match-ui.mjs',
   'tool-text-output-ui.mjs',
   'keyboard-navigation-ui.mjs',
+  'icon-button-press-ui.mjs',
   'paste-default-ui.mjs',
   'native-editable-shortcuts-ui.mjs',
   'terminal-window-keys-ui.mjs',
