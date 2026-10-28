@@ -344,6 +344,7 @@ const HELP_ROWS: [string, string][] = [
     "Work in a folder of Circle's own for this task, under the task folder",
   ],
   ['--print-home', 'Print the data directory'],
+  ['schedule COMMAND', 'Run prompts on a clock · circle schedule --help'],
   ['-v, --version', 'Print version'],
   ['-h, --help', 'Show help'],
 ];
@@ -591,6 +592,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (argv[0] === 'uninstall') {
       const { uninstallInstalled } = await import('./uninstall.js');
       return await uninstallInstalled(argv.slice(1));
+    }
+    if (argv[0] === 'schedule') {
+      const { runSchedule } = await import('./schedule_cli.js');
+      return await runSchedule(argv.slice(1));
     }
     const options = parseCli(argv);
     if (options.version) {

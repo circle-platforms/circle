@@ -227,6 +227,16 @@ A right-click in a text field offers **Cut**, **Copy**, **Paste** and **Select A
 
 While the window is in the background, Circle sends a system notification when a request needs you and when a turn ends or fails. On macOS the Dock icon counts the requests that wait. On Windows and Linux the taskbar shows a busy bar while Circle works.
 
+On Windows and Linux, closing the window keeps Circle running in the tray by the clock.
+The runtime goes on with its sessions. Click the tray icon to bring the window back, with
+the windows that were open beside it; right-click gives the menu, where **Open Circle**
+shows the window and **Quit Circle** ends the application and stops the runtime. The
+first close comes with a system hint saying where Circle went. On the first start a
+missing tray icon falls back to the old behaviour: closing ends the application, so no
+window is ever hidden with no way back. To keep the old behaviour anyway, start the app
+with `CIRCLE_DESKTOP_TRAY=off`. macOS is unchanged: the window closes, the application
+stays in the Dock, and clicking the Dock icon opens a window again.
+
 ## The default workspace
 
 When the folder of the last run cannot be resumed, the app starts in its default workspace. That is `workspace` inside its data folder at first; settings → default workspace → change… picks another folder through the system's folder dialog, so it can live on another drive. The choice is saved as `workspace_folder` in the data folder's `settings.json`; the app refuses its own data folder, a folder inside it and a folder containing it.
