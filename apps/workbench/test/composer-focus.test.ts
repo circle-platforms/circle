@@ -186,16 +186,6 @@ test(
         );
       });
       assert.deepEqual(commandPrompts, []);
-      // Help is a group of the settings dialog, over the window; a session is
-      // opened from the window, so the dialog is closed first.
-      const settings = page.getByRole('dialog', { name: 'settings' });
-      await settings.waitFor();
-      // A dialog that has just opened is ready for keys once it has taken the focus.
-      await page.waitForFunction(
-        () => !!document.activeElement?.closest('.settings-dialog'),
-      );
-      await page.keyboard.press('Escape');
-      await settings.waitFor({ state: 'detached' });
 
       await page.locator('.session-link').first().click();
       await page.waitForTimeout(320);

@@ -1,6 +1,5 @@
 import { t } from '../i18n/index.ts';
 import type { WorkbenchPlugin } from './types.ts';
-import { SETTINGS_SECTION_IDS } from '../model/settings-sections.ts';
 export interface PairedExtension {
   name: string;
   version: string;
@@ -90,11 +89,17 @@ export function pairedSwitch(
       ),
   };
 }
-// A page of a plugin may not take the address of a group of the settings dialog.
-const reservedPages = new Set<string>([
+const reservedPages = new Set([
   'sessions',
+  'models',
+  'skills',
+  'commands',
+  'mcp',
+  'extensions',
+  'tools',
+  'approvals',
   'settings',
-  ...SETTINGS_SECTION_IDS,
+  'help',
 ]);
 /** Ported from the shared workbench registry; first-party composition, not a sandbox. */
 export class PluginRegistry {

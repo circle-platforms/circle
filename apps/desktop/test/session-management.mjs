@@ -528,11 +528,6 @@ try {
     });
     await page.keyboard.press('Escape');
     await route('/page/settings');
-    // Settings show one group at a time: choose it in their index.
-    await page
-      .locator('.settings-index-list')
-      .getByRole('button', { name: 'network', exact: true })
-      .click();
     await page.locator('.network-status summary').click();
     const network = (await state()).runtime.network;
     assert(network.authorities > 0);

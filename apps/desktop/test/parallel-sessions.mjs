@@ -42,12 +42,6 @@ const longAnswer = Array.from(
   { length: 80 },
   (_, index) => `fixture line ${index + 1}\n\n`,
 ).join('');
-// Keep enough content below B's tool row to scroll it under the session hover
-// card even when the sidebar places that card near the top of the window.
-const afterTool = Array.from(
-  { length: 24 },
-  (_, index) => `B fixture line ${index + 1}\n\n`,
-).join('');
 await writeFile(
   fixturePath,
   JSON.stringify({
@@ -81,7 +75,7 @@ await writeFile(
         message: {
           id: 'b-saved',
           role: 'assistant',
-          content: `B independently completed\n\n${afterTool}`,
+          content: 'B independently completed',
           thinking: 'B independent reasoning',
         },
       },

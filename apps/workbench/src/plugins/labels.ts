@@ -8,10 +8,30 @@ export function extensionErrorText(error: string): string {
   return t('could not load the extension: {error}', { error });
 }
 
-/**
- * The name in the top bar. The sessions page has its own word; a plugin page keeps its
- * id. Every other page is a group of the settings dialog, which has no top bar of its own.
- */
+/** The name in the top bar. A built-in page has its own word; a plugin page keeps its id. */
 export function shellPageTitle(page: string): string {
-  return page === 'sessions' ? t('sessions') : page;
+  switch (page) {
+    case 'sessions':
+      return t('sessions');
+    case 'models':
+      return t('models');
+    case 'skills':
+      return t('skills');
+    case 'commands':
+      return t('commands');
+    case 'mcp':
+      return t('mcp servers');
+    case 'extensions':
+      return t('extensions');
+    case 'tools':
+      return t('tools');
+    case 'approvals':
+      return t('approvals');
+    case 'settings':
+      return t('settings');
+    case 'help':
+      return t('help');
+    default:
+      return page;
+  }
 }

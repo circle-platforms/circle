@@ -66,9 +66,7 @@ const host = {
   openExternal: async () => {},
   browserState: async () => ({ sessionId: 'none' }),
   runtimeCommand: async (command: RuntimeCommand) => {
-    // The conversation behind the settings dialog asks for its folder's state. This
-    // fixture counts the settings it is asked to save, not those questions.
-    if (command.name !== 'workspace-service') commands.push(command);
+    commands.push(command);
     if (command.name === 'save-settings')
       return await new Promise((resolve) =>
         pending.set(commands.length - 1, resolve),

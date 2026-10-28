@@ -1,5 +1,3 @@
-import { confirmLinuxUpdate } from './helpers/native-update-confirm.mjs';
-
 // Updates a packaged application as a user does. A copy of the package is "installed" in a
 // scratch folder, a newer version is packaged beside it and published from a local server, and
 // the copy is driven through settings → check now → update → restart to update. The check
@@ -238,11 +236,6 @@ try {
     await view.evaluate(() => {
       location.hash = '#/page/settings';
     });
-    // Settings show one group at a time: choose it in their index.
-    await view
-      .locator('.settings-index-list')
-      .getByRole('button', { name: 'about & updates', exact: true })
-      .click();
     return view.locator('.update-control');
   };
   let { browser, page: view } = await page();
@@ -286,7 +279,11 @@ try {
   await control.getByRole('button', { name: installName }).waitFor();
   check('the update downloads and is checked');
   await control.getByRole('button', { name: installName }).click();
-  if (setuid) await confirmLinuxUpdate(view);
+  if (setuid) {
+    const dialog = view.getByRole('dialog');
+    await dialog.getByText('sudo chmod 4755').waitFor();
+    await dialog.getByRole('button', { name: 'quit and replace' }).click();
+  }
   stage('restarting to update');
   // An installer that does not start leaves the application open, saying why. A line every
   // 20 seconds shows that the machine is still there.

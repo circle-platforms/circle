@@ -976,12 +976,6 @@ try {
     location.hash = '/page/settings';
   });
   await page.waitForURL((url) => url.hash === '#/page/settings');
-  // Settings show one group at a time: workspace holds the default workspace and the
-  // folder of tasks with no project.
-  await page
-    .locator('.settings-index-list')
-    .getByRole('button', { name: 'workspace', exact: true })
-    .click();
   const defaultWorkspace = page.locator('section.settings-block', {
     has: page.getByRole('heading', {
       name: 'default workspace',

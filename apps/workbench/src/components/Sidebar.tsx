@@ -1,8 +1,8 @@
 import '../features/navigation-settings.css';
 import { extensionStatusText } from '../model/extension-status';
+import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
 import {
-  Component,
   Fragment,
   useEffect,
   useLayoutEffect,
@@ -10,17 +10,23 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
-  type RefObject,
 } from 'react';
 import { NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
-  PanelLeftClose,
   Plus,
   Search,
   Settings2,
+  Blocks,
+  Plug,
+  BookOpen,
+  Command,
+  ShieldCheck,
   MessagesSquare,
+  Terminal,
+  FolderPlus,
   Folder,
   FolderOpen,
+  SlidersHorizontal,
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
@@ -61,53 +67,29 @@ import { IconButton } from './common';
 import { t, tn } from '../i18n';
 import { UpdateChip } from '../features/Update';
 import { SessionMenu, WorkspaceMenu } from './SessionMenus';
+// The labels are functions so they follow the interface language when it changes.
+export const NAVIGATION = [
+  { id: 'models', label: () => t('models'), icon: Blocks },
+  { id: 'skills', label: () => t('skills'), icon: BookOpen },
+  { id: 'commands', label: () => t('commands'), icon: Command },
+  { id: 'mcp', label: () => t('mcp servers'), icon: Plug },
+  { id: 'extensions', label: () => t('extensions'), icon: Blocks },
+  { id: 'tools', label: () => t('tools'), icon: Terminal },
+  { id: 'approvals', label: () => t('approvals'), icon: ShieldCheck },
+  { id: 'settings', label: () => t('settings'), icon: Settings2 },
+] as const;
+/** The pages under customize, as Claude gathers skills, connectors and tools. */
+export const CUSTOMIZE = [
+  'skills',
+  'commands',
+  'mcp',
+  'extensions',
+  'tools',
+  'approvals',
+] as const;
 const SHOWN = 8;
 /** Collapse state for the recent list. It is not a workspace id. */
 const RECENT = 'recent';
-
-type SidebarScrollSnapshot = {
-  scrollTop: number;
-  anchor: { key: string; delta: number } | null;
-};
-
-/** Read the actual row before React moves it, even if a scroll event is pending. */
-class SidebarScrollAnchor extends Component<
-  { order: string; list: RefObject<HTMLDivElement | null> },
-  object,
-  SidebarScrollSnapshot | null
-> {
-  getSnapshotBeforeUpdate(previous: Readonly<typeof this.props>) {
-    const list = this.props.list.current;
-    if (!list || previous.order === this.props.order) return null;
-    return { scrollTop: list.scrollTop, anchor: listAnchor(list) };
-  }
-
-  componentDidUpdate(
-    _previous: Readonly<typeof this.props>,
-    _state: object,
-    snapshot: SidebarScrollSnapshot | null,
-  ) {
-    const list = this.props.list.current;
-    if (!list || !snapshot) return;
-    if (snapshot.scrollTop <= 1) {
-      list.scrollTop = 0;
-      return;
-    }
-    if (list.scrollTop === 0) list.scrollTop = snapshot.scrollTop;
-    const row = [...list.querySelectorAll<HTMLElement>('[data-row-key]')].find(
-      (item) => item.dataset.rowKey === snapshot.anchor?.key,
-    );
-    if (!row || !snapshot.anchor) return;
-    const delta =
-      row.getBoundingClientRect().top - list.getBoundingClientRect().top;
-    const error = delta - snapshot.anchor.delta;
-    if (Math.abs(error) > 1) list.scrollTop += error;
-  }
-
-  render() {
-    return null;
-  }
-}
 
 function RenameField({
   label,
@@ -156,20 +138,17 @@ function RenameField({
 
 export function Sidebar({
   onSearch,
-  onHide,
   onNavigate,
   onDialog,
   renaming = false,
 }: {
   onSearch: () => void;
-  /** Folds the whole sidebar away, as the top bar's sidebar button does. */
-  onHide: () => void;
   onNavigate?: () => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
   /** The rename dialog is open, so a recent hover must not stay up over it. */
   renaming?: boolean;
 }) {
-  const { snapshot, runtime, perform } = useRuntime();
+  const { snapshot, runtime, perform, notify } = useRuntime();
   // The pages of the interface components that are on
   const { registry, enabled } = usePlugins();
   const pluginPages = registry.pages(enabled);
@@ -184,6 +163,10 @@ export function Sidebar({
   const [roving, setRoving] = useState<string | null>(null);
   const anchors = useRef(new Map<string, HTMLAnchorElement>());
   const listRef = useRef<HTMLDivElement>(null);
+  // The row at the top of the list, and how far it sits from that edge.
+  const anchor = useRef<{ key: string; delta: number } | null>(null);
+  // The list's scroll before the latest update. A render must not throw it away.
+  const scrollTop = useRef(0);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [menuFocus, setMenuFocus] = useState<string | null>(null);
   const menuFocusRef = useRef<string | null>(null);
@@ -198,6 +181,7 @@ export function Sidebar({
   // Focusing a row or opening a session can nudge scrollTop, and that must
   // not hide the card under a pointer that has not moved.
   const scrollGesture = useRef(false);
+  const seenOrder = useRef<string | null>(null);
   const asideRef = useRef<HTMLElement>(null);
   // A page change, or a press that started outside the sidebar, hides the
   // session card until the pointer really moves. The flag stays set through
@@ -416,13 +400,46 @@ export function Sidebar({
   ];
   rowKeysRef.current = rowKeys;
   const orderKey = rowKeys.join('\n');
-  // An open menu cannot stay focused on a row that no longer exists.
+  // A new message moves rows. Keep the row that was at the top of the view there.
+  // Hovering must not run this: a scroll event would close the card that just opened.
   useLayoutEffect(() => {
     const focused = menuFocusRef.current;
     if (focused && !rowKeys.includes(focused)) {
       menuFocusRef.current = null;
       setMenuFocus(null);
     }
+    const list = listRef.current;
+    const previous = seenOrder.current;
+    seenOrder.current = orderKey;
+    const saved = anchor.current;
+    const remember = () => {
+      if (list) scrollTop.current = list.scrollTop;
+    };
+    if (list && previous !== null && previous !== orderKey) {
+      // Stay with the newest row when the list was already at the top.
+      // Otherwise put back a position the update cleared.
+      if (scrollTop.current <= 1) list.scrollTop = 0;
+      else if (list.scrollTop === 0) list.scrollTop = scrollTop.current;
+    }
+    if (previous === null || previous === orderKey || !list || !saved) {
+      remember();
+      return;
+    }
+    if (list.scrollTop <= 1) {
+      anchor.current = listAnchor(list);
+      remember();
+      return;
+    }
+    const row = [...list.querySelectorAll<HTMLElement>('[data-row-key]')].find(
+      (item) => item.dataset.rowKey === saved.key,
+    );
+    if (!row) return;
+    const delta =
+      row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    const error = delta - saved.delta;
+    if (Math.abs(error) > 1) list.scrollTop += error;
+    anchor.current = listAnchor(list);
+    remember();
   });
   const tabKey =
     roving && rowKeys.includes(roving)
@@ -455,6 +472,7 @@ export function Sidebar({
     else if (rowBox.bottom > listBox.bottom)
       list.scrollTop += rowBox.bottom - listBox.bottom;
     ignoreScrollClose.current = false;
+    anchor.current = listAnchor(list);
   };
   const pointRow = (key: string, point: { x: number; y: number }) => {
     lastPointer.current = point;
@@ -641,6 +659,9 @@ export function Sidebar({
         </div>
       );
     });
+  const customizing = CUSTOMIZE.some(
+    (id) => location.pathname === '/page/' + id,
+  );
   const connection =
     runtime.mode !== 'live'
       ? 'preview'
@@ -689,6 +710,10 @@ export function Sidebar({
         <span className="circle-logo" />
         <strong>circle</strong>
       </header>
+      <button className="sidebar-search" onClick={onSearch}>
+        <Search size={14} />
+        <span>{t('search')}</span>
+      </button>
       <nav className="sidebar-primary" aria-label={t('navigation')}>
         <button
           className="sidebar-item"
@@ -717,6 +742,15 @@ export function Sidebar({
           <Plus size={15} />
           <span>{t('new session')}</span>
         </button>
+        <NavLink
+          to="/page/skills"
+          className={customizing ? 'sidebar-item active' : 'sidebar-item'}
+          aria-current={customizing ? 'page' : undefined}
+          onClick={onNavigate}
+        >
+          <SlidersHorizontal size={15} />
+          <span>{t('customize')}</span>
+        </NavLink>
         <NavLink
           to="/page/sessions"
           className={({ isActive }) =>
@@ -748,7 +782,6 @@ export function Sidebar({
           ))}
         </nav>
       )}
-      <SidebarScrollAnchor order={orderKey} list={listRef} />
       <div
         className="project-list"
         ref={listRef}
@@ -765,7 +798,9 @@ export function Sidebar({
         onTouchMove={() => {
           scrollGesture.current = true;
         }}
-        onScroll={() => {
+        onScroll={(event) => {
+          scrollTop.current = event.currentTarget.scrollTop;
+          anchor.current = listAnchor(event.currentTarget);
           if (
             ignoreScrollClose.current ||
             !scrollGesture.current ||
@@ -872,6 +907,29 @@ export function Sidebar({
             </Fragment>
           );
         })}
+        {desktopHost() && (
+          <button
+            className="sidebar-item"
+            onClick={async () => {
+              try {
+                const selected = await openNativeWorkspace(runtime);
+                if (selected) {
+                  openHome(
+                    navigate,
+                    `${location.pathname}${location.search}`,
+                    selected,
+                  );
+                  onNavigate?.();
+                }
+              } catch (error) {
+                notify(folderOpenMessage(error));
+              }
+            }}
+          >
+            <FolderPlus size={15} />
+            <span>{t('open folder')}</span>
+          </button>
+        )}
       </div>
       <UpdateChip />
       {snapshot.extensions.some((item) => item.status) && (
@@ -921,24 +979,17 @@ export function Sidebar({
                     : current.model}
           </span>
         </button>
-        {/* App-wide controls: search everything, settings, and folding the sidebar. */}
-        <span className="sidebar-footer-actions">
-          <IconButton label={t('search')} onClick={onSearch}>
-            <Search size={15} />
-          </IconButton>
-          <IconButton
-            label={t('settings')}
-            onClick={() => {
-              navigate('/page/settings');
-              onNavigate?.();
-            }}
-          >
-            <Settings2 size={15} />
-          </IconButton>
-          <IconButton label={t('hide sidebar')} onClick={onHide}>
-            <PanelLeftClose size={15} />
-          </IconButton>
-        </span>
+        <button
+          type="button"
+          className="sidebar-settings"
+          onClick={() => {
+            navigate('/page/settings');
+            onNavigate?.();
+          }}
+        >
+          <Settings2 size={15} />
+          <span>{t('settings')}</span>
+        </button>
       </footer>
     </aside>
   );

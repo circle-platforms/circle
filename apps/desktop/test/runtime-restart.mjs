@@ -346,14 +346,8 @@ try {
     'sidebar offers restart',
   );
   await page.getByRole('button', { name: 'settings', exact: true }).click();
-  // The connection is kept with the models, in settings.
   await page
-    .locator('.settings-index-list')
-    .getByRole('button', { name: 'models & connection', exact: true })
-    .click();
-  await page
-    .locator('.settings-sections')
-    .getByRole('button', { name: 'connection', exact: true })
+    .getByRole('button', { name: 'change connection', exact: true })
     .click();
   await page
     .getByText(

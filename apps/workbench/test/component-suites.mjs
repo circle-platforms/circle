@@ -13,7 +13,6 @@ export const COMPONENT_SUITES = Object.freeze([
   'virtual-file-tree-ui.mjs',
   'project-index-journey-ui.mjs',
   'settings-navigation-ui.mjs',
-  'settings-dialog-ui.mjs',
   'resource-boundary-ui.mjs',
   'pending-operations-ui.mjs',
   'conversation-requests-ui.mjs',
