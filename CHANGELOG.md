@@ -7,7 +7,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ### Breaking changes
 
 - **The bundled Hub integration has been removed.** Circle no longer ships the `hub` extension, its `/hub` commands or its desktop Hub and platform pages. Its saved extension data and secrets are left on disk; removal does not revoke tokens at the service that issued them.
-- **MCP tool approval follows the server's annotations by default.** A tool the server marks read-only can run without asking. A call that sends a local file or a secret's value asks like other tools and is refused in read-only and plan mode. Set `trust_annotations: false` on a server to make all its tools ask, as in 1.12.0. Only configure servers you trust.
+- **MCP tool approval follows the server's annotations by default.** A tool the server marks read-only can run without asking. A call that sends a local file or a secret's value follows the normal approval rules and is refused in read-only and plan mode. Set `trust_annotations: false` on a server to treat its tools as unannotated, as in 1.12.0; the session's approval mode still applies. Only configure servers you trust.
 - **Existing skill outputs no longer receive a separate overwrite approval.** In `accept-edits` mode, changes to files inside the workspace can proceed without a card even when they are existing skill-run outputs.
 
 ### Added
