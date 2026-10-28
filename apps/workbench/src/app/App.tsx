@@ -29,7 +29,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate, useLocation, type Location } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Group, Panel, usePanelRef } from 'react-resizable-panels';
 import { DropdownMenu, Tooltip } from 'radix-ui';
 import {
@@ -48,6 +48,7 @@ import {
   FileText,
   Command,
   ChevronDown,
+  MoreHorizontal,
 } from 'lucide-react';
 import { useRuntime } from './context';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
@@ -62,10 +63,9 @@ import type {
   DialogId,
   Interaction,
   PageId,
-  SettingsSectionId,
   PanelId,
 } from '../model/types';
-import { Sidebar } from '../components/Sidebar';
+import { Sidebar, NAVIGATION } from '../components/Sidebar';
 import {
   Button,
   IconButton,
@@ -126,17 +126,11 @@ const FileViewer = lazy(() =>
   })),
 );
 import { ManagementPage } from '../features/Pages';
-import { SettingsDialog } from '../features/SettingsDialog';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { PlanView } from '../features/PlanView';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
 import { shellPageTitle } from '../plugins/labels';
-import {
-  settingsGroups,
-  settingsHref,
-  settingsSectionOf,
-} from '../model/settings-sections';
 import { isSessionBrowser } from '../model/browser';
 import type { TerminalEvent } from '../../../desktop/src/contracts';
 import { isSessionTerminal } from '../features/useTerminalState';
@@ -144,6 +138,9 @@ import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
 import {
   effectiveBindings,
   DESKTOP_QUICK_OPEN_CHORD,
+  DESKTOP_SEARCH_CHORD,
+  DESKTOP_SETTINGS_CHORD,
+  formatChord,
   isChord,
   isDesktopNewSession,
   isDesktopSearch,
@@ -182,26 +179,8 @@ export function App() {
   const navigate = useNavigate();
   const { registry, enabled } = usePlugins();
   const pluginPages = registry.pages(enabled);
+  const location = useLocation();
   const session = currentSession(snapshot);
-  // Settings, and the skills, MCP servers, extensions and the rest with them, are a
-  // dialog over the view you were in. Its address is `/page/<group>`, and the rest of
-  // the window keeps drawing that view.
-  const route = useLocation();
-  const settingsSection = settingsSectionOf(route.pathname);
-  const settingsOpen = settingsSection !== null;
-  const behindSettings = useRef<Location | null>(null);
-  if (!settingsOpen) behindSettings.current = route;
-  const location: Location = settingsOpen
-    ? (behindSettings.current ?? {
-        ...route,
-        pathname: `/session/${session.id}`,
-        search: '',
-      })
-    : route;
-  const closeSettings = () =>
-    navigate(`${location.pathname}${location.search}`, { replace: true });
-  const openSettingsSection = (id: SettingsSectionId) =>
-    navigate(settingsHref(id), { replace: true });
   useEffect(
     () =>
       runtime.mode === 'live' && snapshot.runtime?.connected
@@ -1506,23 +1485,12 @@ export function App() {
             run: () => perform(() => selectSessionAndNavigate(item.id)),
           };
         }),
-        {
-          id: 'page:sessions',
-          label: t('all sessions'),
+        ...NAVIGATION.map((item) => ({
+          id: `page:${item.id}`,
+          label: item.label(),
           detail: t('page'),
-          run: () => navigate('/page/sessions'),
-        },
-        ...settingsGroups({
-          live: runtime.mode === 'live',
-          network: !!snapshot.runtime?.network,
-        }).flatMap((group) =>
-          group.sections.map((item) => ({
-            id: `page:${item.id}`,
-            label: item.label,
-            detail: t('settings'),
-            run: () => navigate(settingsHref(item.id)),
-          })),
-        ),
+          run: () => navigate('/page/' + item.id),
+        })),
         ...snapshot.files
           .filter((item) => item.workspaceId === session.workspaceId)
           .map((item) => ({
@@ -1572,7 +1540,6 @@ export function App() {
           <div className="desktop-sidebar" ref={sidebarElement}>
             <Sidebar
               onSearch={() => setSearchOpen(true)}
-              onHide={toggleSidebar}
               onDialog={onDialog}
               renaming={dialog === 'rename'}
             />
@@ -1649,6 +1616,67 @@ export function App() {
                     popped={poppedModes}
                   />
                 )}
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger asChild>
+                    <button className="icon-button" aria-label={t('more')}>
+                      <MoreHorizontal size={16} />
+                    </button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content
+                      className="dropdown app-menu"
+                      align="end"
+                      sideOffset={6}
+                    >
+                      <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
+                        <span>{t('search')}</span>
+                        {/* A visible hint. The item is still named by its words. */}
+                        <kbd aria-hidden="true">
+                          {formatChord(DESKTOP_SEARCH_CHORD)}
+                        </kbd>
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() => navigate('/page/settings')}
+                      >
+                        <span>{t('settings')}</span>
+                        <kbd aria-hidden="true">
+                          {formatChord(DESKTOP_SETTINGS_CHORD)}
+                        </kbd>
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() =>
+                          perform(() =>
+                            runtime.change((state) => {
+                              state.settings.theme =
+                                document.documentElement.dataset.theme ===
+                                'dark'
+                                  ? 'light'
+                                  : 'dark';
+                            }),
+                          )
+                        }
+                      >
+                        {document.documentElement.dataset.theme === 'dark'
+                          ? t('light theme')
+                          : t('dark theme')}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() =>
+                          onDialog(
+                            runtime.mode === 'live' ? 'connect' : 'preview',
+                          )
+                        }
+                      >
+                        {t('connection')}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() => navigate('/page/help')}
+                      >
+                        {t('help')}
+                      </DropdownMenu.Item>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
               </div>
             </header>
             <div
@@ -1785,12 +1813,6 @@ export function App() {
               )}
             </div>
           </main>
-          <SettingsDialog
-            section={settingsSection}
-            onSelect={openSettingsSection}
-            onClose={closeSettings}
-            onDialog={onDialog}
-          />
           <Modal
             open={sidebarOpen}
             onOpenChange={setSidebarOpen}
@@ -1801,7 +1823,6 @@ export function App() {
                 setSidebarOpen(false);
                 setSearchOpen(true);
               }}
-              onHide={() => setSidebarOpen(false)}
               onNavigate={() => setSidebarOpen(false)}
               onDialog={onDialog}
               renaming={dialog === 'rename'}

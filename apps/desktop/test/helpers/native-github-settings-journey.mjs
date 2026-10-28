@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { closeNativeSettings } from './native-settings.mjs';
 const unavailable = 'Turn on GitHub to connect your account.';
 const extension = (snapshot) =>
   snapshot.extensions.find(
@@ -49,37 +48,23 @@ export async function runNativeGitHubSettingsJourney({
   requestsPath,
 }) {
   const receipt = { checks: [] };
-  const settings = page.getByRole('dialog', { name: 'settings', exact: true });
   const openPlugin = async () => {
-    if (!(await settings.isVisible()))
-      await page
-        .locator('.sidebar')
-        .getByRole('button', { name: 'settings', exact: true })
-        .click();
-    await settings
+    await page
+      .locator('.sidebar')
+      .getByRole('button', { name: 'settings', exact: true })
+      .click();
+    await page
       .getByRole('heading', { name: 'settings', exact: true })
       .waitFor();
-    // GitHub is an extension: settings list it under extensions, with a link to its
-    // details, and have no group of their own for it.
-    await page
-      .locator('.settings-index-list')
-      .getByRole('button', { name: 'extensions', exact: true })
-      .click();
-    assert.equal(
-      await page
-        .locator('.settings-index-list')
-        .getByRole('button', { name: 'GitHub', exact: true })
-        .count(),
-      0,
-    );
-    const managePlugin = page
-      .getByRole('link', { name: 'plugin details', exact: true })
-      .first();
+    const managePlugin = page.getByRole('link', {
+      name: 'manage GitHub plugin',
+      exact: true,
+    });
     await managePlugin.waitFor({ state: 'visible' });
     assert.equal(
       await page.locator('#github-connection').count(),
       0,
-      'the extensions offer navigation rather than a second account-management card',
+      'settings offers navigation rather than a second account-management card',
     );
     await managePlugin.click();
     const detail = page.getByRole('region', {
@@ -319,7 +304,6 @@ export async function runNativeGitHubSettingsJourney({
     await page.screenshot({
       path: join(output, 'github-settings-disabled-unavailable.png'),
     });
-    await closeNativeSettings(page);
     await page
       .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
       .first()
@@ -421,11 +405,6 @@ export async function runNativeGitHubSettingsJourney({
       }
     } catch (error) {
       receipt.cleanup = { error: String(error) };
-    }
-    try {
-      await closeNativeSettings(page);
-    } catch (error) {
-      receipt.dialogCleanup = { error: String(error) };
     }
     await writeFile(
       join(output, 'github-settings-native-receipt.json'),

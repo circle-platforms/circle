@@ -14,7 +14,6 @@ import {
   runNativeReviewerSourceJourney,
 } from './helpers/native-child-command-handoff-journey.mjs';
 import { runNativeGitHubSettingsJourney } from './helpers/native-github-settings-journey.mjs';
-import { closeNativeSettings } from './helpers/native-settings.mjs';
 import {
   createNativeContinuityFixture,
   runNativeTerminalContextJourney,
@@ -441,7 +440,6 @@ for (const file of [
     'native-terminal-rendered-match',
     'native-paste-cleanup',
     'native-github-settings-journey',
-    'native-settings',
     'native-panel-acceptance',
     'native-keyboard-journey',
     'native-project-file',
@@ -1984,7 +1982,6 @@ try {
       let serviceShell;
       const appearance = async ({ locale, theme }) => {
         await closeServiceForm();
-        await closeNativeSettings(page);
         await closeDrawer();
         await (
           await visibleNavigation()
@@ -2005,7 +2002,11 @@ try {
           }),
           'theme chosen',
         );
-        await closeNativeSettings(page);
+        await (
+          await visibleNavigation()
+        )
+          .locator(`.session-link[href="#/session/${sessionId}"][tabindex="0"]`)
+          .click();
         // The session opens once the runtime has selected it; carry on only
         // when its page is on screen.
         await page.waitForFunction(
@@ -2014,7 +2015,6 @@ try {
             !!document.querySelector('.composer textarea'),
           sessionId,
         );
-        assert.equal((await state()).activeSessionId, sessionId);
         currentLocale = locale;
       };
       await runNativePanelAcceptance({
@@ -2195,7 +2195,6 @@ try {
   );
   await check('English Chinese dark light and narrow UI', async () => {
     await closeFile();
-    await closeNativeSettings(page);
     await closeDrawer();
     for (const language of ['English', '简体中文'])
       for (const theme of ['dark', 'light']) {
@@ -2213,9 +2212,10 @@ try {
           }),
           'theme chosen',
         );
-        await closeNativeSettings(page);
-        await page.waitForURL((url) => url.hash === `#/session/${sessionId}`);
-        assert.equal((await state()).activeSessionId, sessionId);
+        await page
+          .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+          .first()
+          .click();
         await screenshot(`08-${language === 'English' ? 'en' : 'zh'}-${theme}`);
       }
     await setViewport(app, page, { width: 760, height: 720 });

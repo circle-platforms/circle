@@ -15,7 +15,7 @@ npm --prefix apps/desktop ci
 npm --prefix apps/desktop run dev
 ```
 
-The default desktop data folder is `Circle` under the operating system's application-data directory. Runtime settings, credentials and SQLite history live in its `runtime-home` subfolder, separate from `~/.circle`. Development or tests can select a dedicated folder with `CIRCLE_WORKBENCH_DATA_DIR`. The default workspace is `runtime-home/workspace`; settings → workspace → default workspace saves another folder as `workspace_folder` in `runtime-home/settings.json`, chosen through the native folder dialog and its grant indirection, never a renderer-supplied path. Open a folder and explicitly trust it before Circle loads project context or runs tools. Saving API configuration does not by itself verify an endpoint response.
+The default desktop data folder is `Circle` under the operating system's application-data directory. Runtime settings, credentials and SQLite history live in its `runtime-home` subfolder, separate from `~/.circle`. Development or tests can select a dedicated folder with `CIRCLE_WORKBENCH_DATA_DIR`. The default workspace is `runtime-home/workspace`; settings → default workspace saves another folder as `workspace_folder` in `runtime-home/settings.json`, chosen through the native folder dialog and its grant indirection, never a renderer-supplied path. Open a folder and explicitly trust it before Circle loads project context or runs tools. Saving API configuration does not by itself verify an endpoint response.
 
 ## Build an application
 

@@ -1,47 +1,5 @@
 // Simplified Chinese for the interface words in the pages files. English is the key.
 export const pages: Record<string, string> = {
-  // the settings dialog
-  general: '通用',
-  capabilities: '能力',
-  'workspace & git': '工作区与 Git',
-  'permissions & safety': '权限与安全',
-  'models & connection': '模型与连接',
-  shortcuts: '快捷键',
-  'about & updates': '关于与更新',
-  'file access': '文件访问',
-  'variables & secrets': '变量与密钥',
-  'launch options': '启动选项',
-  'launch arguments': '启动参数',
-  'save launch draft': '保存启动草稿',
-  'launch draft saved; no process started': '启动草稿已保存，未启动进程',
-  'browser layout preview': '浏览器布局预览',
-  'this browser only': '仅此浏览器',
-  'update check requires the desktop application': '检查更新需要桌面应用',
-  'pull requests': '拉取请求',
-  'defaults for new sessions': '新会话的默认值',
-  'change it with “save as default” below': '用下面的“设为默认”来更改',
-  'credit Circle in commits and pull requests': '在提交和 PR 中署名 Circle',
-  'Theme, text size and language for this window.':
-    '此窗口的主题、文字大小和语言。',
-  'How a session starts, and what a double Esc does.':
-    '会话如何开始，以及连按两次 Esc 的作用。',
-  'Keys for the window and for the message box.': '窗口和消息框的按键。',
-  'The version, and whether Circle looks for a newer one.':
-    '当前版本，以及 Circle 是否检查新版本。',
-  'The folder Circle starts in, and the folders it trusts.':
-    'Circle 启动时所在的文件夹，以及它信任的文件夹。',
-  'Whether the commits and pull requests Circle makes credit Circle.':
-    'Circle 创建的提交和 PR 是否署名 Circle。',
-  'When enabled in a Git repository, Circle asks the model to credit Circle in commits and pull requests. The commit author follows your attribution settings.':
-    '在 Git 仓库中启用后，Circle 会要求模型在提交和 PR 中署名 Circle。提交作者取决于你的署名设置。',
-  'Files a session may read outside a project, and name-based protections for sensitive files.':
-    '会话可以读取的项目外文件，以及基于文件名的敏感文件保护。',
-  'Values you name once and use in a tool call as %NAME%.':
-    '只命名一次，之后在工具调用里写成 %NAME% 使用的值。',
-  'How Circle trusts a server before it sends anything.':
-    'Circle 在发送任何内容之前如何信任一台服务器。',
-  'Separate programs Circle connects to over MCP, and the tools they offer.':
-    'Circle 通过 MCP 连接的独立程序，以及它们提供的工具。',
   hooks: '钩子',
   'no hooks': '没有钩子',
   'Hooks run shell commands you configured. A deny overrides every approval mode, including auto.':
@@ -70,7 +28,6 @@ export const pages: Record<string, string> = {
   'extension enabled': '扩展已启用',
   'extension disabled': '扩展已停用',
 
-  network: '网络',
   'network trust': '网络信任',
   '{n} authority': '{n} 张证书',
   '{n} authorities': '{n} 张证书',
@@ -152,6 +109,8 @@ export const pages: Record<string, string> = {
   'command added to the message draft': '命令已加入消息草稿',
   'insert into draft': '插入草稿',
   // mcp servers
+  'Inspect server configuration and the tools it exposes.':
+    '查看服务器配置及其提供的工具。',
   'reloading MCP servers': '正在重新加载 MCP 服务器',
   'reloading skills': '正在重新加载技能',
   reload: '重新加载',
@@ -184,6 +143,8 @@ export const pages: Record<string, string> = {
     '已记录扩展重新加载请求；没有加载任何代码',
   'reloading extensions': '正在重新加载扩展',
   bundled: '内置',
+  'Turn an extension on here. Open its pages under interface components.':
+    '在这里打开扩展。它的页面在界面组件里打开。',
   'runtime extension {name} is not installed': '运行时扩展 {name} 未安装',
   'runtime extension {name} failed to load': '运行时扩展 {name} 加载失败',
   'runtime extension {name} is {version}, this interface is {interface}':
@@ -194,6 +155,7 @@ export const pages: Record<string, string> = {
   'cannot find module {module}': '找不到模块 {module}',
   'could not load the extension: {error}': '扩展无法加载：{error}',
   'this interface needs the Circle runtime': '这个界面需要 Circle 运行时',
+  'open extensions': '打开扩展',
   'runtime extensions': '运行时扩展',
   'interface components': '界面组件',
   '{n} command': '{n} 个命令',
@@ -224,14 +186,17 @@ export const pages: Record<string, string> = {
   'Preview decisions do not grant permissions to a running agent.':
     '预览中的决定不会给运行中的代理授予权限。',
   // settings
+  'Circle preferences and display settings.': 'Circle 偏好和显示设置。',
   appearance: '外观',
   theme: '主题',
   light: '浅色',
   dark: '深色',
   'hide thinking in new sessions': '新会话中隐藏思考',
   'show hook allowed notices': '显示钩子放行提示',
+  'session defaults': '会话默认值',
   model: '模型',
   'double Esc': '连按两次 Esc',
+  'change connection': '更换连接',
   'default workspace': '默认工作区',
   folder: '文件夹',
   'change…': '更改…',
@@ -260,6 +225,7 @@ export const pages: Record<string, string> = {
   data: '数据',
   'Circle desktop data folder': '桌面版的数据文件夹',
   'check for updates': '检查更新',
+  'credit circle in commits': '在提交和 PR 中署名 Circle',
   'update check requires a connected host': '检查更新需要桌面版',
   'check now': '立即检查',
   // commands and help
@@ -396,8 +362,8 @@ export const pages: Record<string, string> = {
     '{name} 已不再受信任，它的会话已归档',
   '{name} is no longer trusted and no longer listed':
     '已不再信任 {name}，且不再列出',
-  'File tools skip or refuse matching names, and shell commands that name one are denied. Commands that reach a file indirectly are not blocked. * is any run of characters and ? is one character, and only the name counts: write *.key, never secrets/*.key.':
-    '文件工具会跳过或拒绝匹配的名称，直接写出这些名称的 shell 命令会被拒绝。间接访问文件的命令不会被阻止。? 表示一个字符，* 表示任意多个字符，而且只比对文件名：写 *.key，不要写 secrets/*.key。',
+  'Circle will not read, copy or change a file whose name matches one of these patterns. * is any run of characters and ? is one character, and only the name counts: write *.key, never secrets/*.key.':
+    '名字符合下面任一样式的文件，Circle 不会读取、复制或修改。? 表示一个字符，* 表示任意多个字符，而且只比对文件名：写 *.key，不要写 secrets/*.key。',
   'new file pattern': '新文件样式',
   'for example *.key': '例如 *.key',
   'for example deploy.key': '例如 deploy.key',

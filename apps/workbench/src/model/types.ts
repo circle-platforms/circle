@@ -16,29 +16,17 @@ export interface DiffView {
   summary: string;
   rows: DiffRow[];
 }
-/** A group of the settings dialog. Each has its own address, `/page/<id>`. */
-export type SettingsSectionId =
-  | 'appearance'
-  | 'behavior'
-  | 'shortcuts'
-  | 'help'
-  | 'about'
+export type PageId =
+  | 'sessions'
   | 'models'
   | 'skills'
   | 'commands'
   | 'mcp'
   | 'extensions'
   | 'tools'
-  | 'hooks'
-  | 'workspace'
-  | 'git'
   | 'approvals'
-  | 'files'
-  | 'variables'
-  | 'network'
-  | 'launch';
-/** `settings` opens the dialog at its first group; every group also has its own page id. */
-export type PageId = 'sessions' | 'settings' | SettingsSectionId;
+  | 'settings'
+  | 'help';
 export type DialogId =
   | 'rename'
   | 'delete-session'

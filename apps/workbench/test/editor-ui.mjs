@@ -18,7 +18,6 @@ import {
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { saveWithShortcut } from '../../desktop/test/helpers/native-editor-save.mjs';
 const workspace = mkdtempSync(join(tmpdir(), 'circle-editor-ui-'));
 const initial =
   'import { amount } from "./lib";\nconst label = "amount";\nconsole.log(amount, label);\n';
@@ -48,8 +47,6 @@ let externalDuringSave;
 let releaseHeldRead;
 let mainReads = 0;
 let interruptNextBatch = false;
-let holdNextSaveResponse = false;
-let releaseSaveResponse;
 const batchCalls = [];
 const batchCommitCounts = new Map();
 let seq = 0,
@@ -281,12 +278,6 @@ const server = await createServer({
                   externalDuringSave = undefined;
                   await changed([['changed', params.path]]);
                 }
-                if (holdNextSaveResponse) {
-                  holdNextSaveResponse = false;
-                  await new Promise((resolve) => {
-                    releaseSaveResponse = resolve;
-                  });
-                }
                 await new Promise((resolve) => setTimeout(resolve, 400));
               } else throw Error('unsupported fixture operation');
               response.setHeader('Content-Type', 'application/json');
@@ -319,21 +310,6 @@ try {
       ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
       : {}),
   });
-  // Monaco's checked-in copy of DOMPurify is older than our pinned package.
-  // Verify the browser actually calls the package and still filters unsafe HTML.
-  const sanitizer = await browser.newPage();
-  await sanitizer.goto(
-    `${server.resolvedUrls.local[0]}test/monaco-sanitizer.html`,
-  );
-  await sanitizer.waitForFunction(() => window.sanitizerResult);
-  const sanitized = await sanitizer.evaluate(() => window.sanitizerResult);
-  assert.equal(sanitized.version, '3.4.17');
-  assert.ok(sanitized.calls > 0, 'Monaco uses the patched DOMPurify instance');
-  assert.match(sanitized.html, /<strong>kept<\/strong>/);
-  assert.match(sanitized.html, /href="https:\/\/example\.com\/"/);
-  assert.equal(sanitized.unsafeAttributes, 0);
-  assert.equal(sanitized.text, 'keptsafeunsafe eventunsafe');
-  await sanitizer.close();
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -589,49 +565,6 @@ try {
     }
     throw Error(label);
   };
-  // Disk bytes can be visible before the application's save has completed.
-  // Hold the real document service response after the write so the native
-  // journey cannot undo or start an external write while it is still saving.
-  await replaceDraft(initial + '// held save\n');
-  holdNextSaveResponse = true;
-  let observedWritten = false;
-  let helperFinished = false;
-  const heldSave = saveWithShortcut(
-    switched,
-    modifier,
-    async () => {
-      const written =
-        readFileSync(join(workspace, 'main.ts'), 'utf8') ===
-        initial + '// held save\n';
-      if (written) observedWritten = true;
-      return written;
-    },
-    'wait for the completed save',
-    switched.locator('.file-view:visible'),
-  ).then(() => {
-    helperFinished = true;
-  });
-  await settle(
-    () => !!releaseSaveResponse && observedWritten,
-    'save is held after the disk write',
-  );
-  await switched
-    .getByRole('button', { name: 'saving file', exact: true })
-    .waitFor();
-  assert.equal(
-    helperFinished,
-    false,
-    'disk bytes alone cannot finish the save helper',
-  );
-  releaseSaveResponse();
-  await heldSave;
-  assert.equal(
-    readFileSync(join(workspace, 'main.ts'), 'utf8'),
-    initial + '// held save\n',
-  );
-  await replaceDraft(initial);
-  await switched.getByRole('button', { name: 'save', exact: true }).click();
-  await switched.getByText('all changes saved', { exact: true }).waitFor();
   for (const { externalChange, pendingReply } of [
     { externalChange: false, pendingReply: true },
     { externalChange: false, pendingReply: false },

@@ -66,11 +66,6 @@ try {
           detail
             .locator('button.primary')
             .evaluateAll((nodes) => nodes.map((node) => node.textContent));
-        // The dialog the details are shown in takes the keyboard when it opens, into its
-        // search box; the switch is used after that, not under it.
-        await page.waitForFunction(() =>
-          document.activeElement?.matches('.settings-index input'),
-        );
         // The switch sits in the summary itself, not behind a fold.
         await detail.getByText(turnOn, { exact: true }).waitFor();
         const toggle = detail.getByRole('checkbox', { name: 'enable GitHub' });
@@ -301,46 +296,39 @@ try {
           ['save-settings'],
           'try does not send or authorize',
         );
-        // GitHub is an extension: it is in the dialog's extensions, and settings have no
-        // group of its own for it.
-        await page.evaluate(() => (location.hash = '/page/extensions'));
-        const link = page
-          .getByRole('link', {
-            name: label('plugin details', '插件详情'),
-            exact: true,
-          })
-          .first();
+        await page.evaluate(() => (location.hash = '/page/settings'));
+        const link = page.getByRole('link', {
+          name: label('manage GitHub plugin', '管理 GitHub 插件'),
+          exact: true,
+        });
         await link.waitFor();
         assert.equal(
           await page.locator('#github-connection').count(),
           0,
           'single account surface',
         );
-        assert.equal(
-          await page
-            .locator('.settings-index-list')
-            .getByRole('button', { name: 'GitHub', exact: true })
-            .count(),
-          0,
-          'GitHub is no group of the settings',
-        );
         await link.click();
         await detail.waitFor();
-        assert.equal(
-          await page
-            .locator(".settings-index [aria-current='page']")
-            .textContent(),
-          label('extensions', '扩展'),
-          'the details open inside the dialog, under extensions',
-        );
         await page
           .getByRole('button', {
             name: label('back to plugins', '返回插件'),
             exact: true,
           })
           .click();
-        await link.waitFor();
-        await link.click();
+        await page
+          .getByRole('link', {
+            name: label('plugin details', '插件详情'),
+            exact: true,
+          })
+          .first()
+          .waitFor();
+        await page
+          .getByRole('link', {
+            name: label('plugin details', '插件详情'),
+            exact: true,
+          })
+          .first()
+          .click();
         await detail.waitFor();
         const off = detail.getByRole('checkbox', { name: /GitHub/ });
         await off.uncheck();

@@ -39,6 +39,7 @@ export const githubConnection: Record<string, string> = {
     '草稿已变化，请检查后再试用示例',
   'back to plugins': '返回插件',
   'plugin details': '插件详情',
+  'manage GitHub plugin': '管理 GitHub 插件',
   'GitHub plugin': 'GitHub 插件',
   'the original conversation changed; return to it before trying the plugin':
     '原会话已变化，请返回该会话后再试用插件',

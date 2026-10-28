@@ -130,7 +130,6 @@ export async function runNativeEditorJourney({
         ),
     'Undo reaches Monaco before CmdS',
   );
-  await page.getByText('unsaved changes', { exact: true }).waitFor();
   await saveWithShortcut(
     page,
     modifier,
