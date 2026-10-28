@@ -116,7 +116,7 @@ const ZH_LABELS = [
   '快捷键',
   '帮助',
   '关于与更新',
-  'launch options',
+  '启动选项',
   '模型与连接',
   '技能',
   '命令',
@@ -668,6 +668,36 @@ try {
     const narrow = width <= 720;
     if (language === 'zh-CN')
       assert.deepEqual(await labelsOf(page), ZH_LABELS, 'the list in Chinese');
+    if (language === 'zh-CN' && width === 1280 && theme === 'light') {
+      await pick(page, '关于与更新');
+      await page.getByText('浏览器布局预览', { exact: true }).waitFor();
+      await page.getByText('仅此浏览器', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '立即检查', exact: true }).click();
+      await page.getByText('检查更新需要桌面应用', { exact: true }).waitFor();
+      await pick(page, '启动选项');
+      await page
+        .getByRole('heading', { name: '启动选项', exact: true })
+        .waitFor();
+      await page
+        .getByRole('textbox', { name: '启动参数', exact: true })
+        .fill('--mode rpc');
+      await page.getByRole('button', { name: '保存启动草稿' }).click();
+      await page
+        .getByText('启动草稿已保存，未启动进程', { exact: true })
+        .waitFor();
+      await page.waitForFunction(() => {
+        const snapshot = JSON.parse(
+          localStorage.getItem('circle.workbench.preview.v1') ?? 'null',
+        );
+        return snapshot?.requests?.some(
+          (request) =>
+            request.kind === 'launch-options' &&
+            request.payload.arguments === '--mode rpc',
+        );
+      });
+      await page.screenshot({ path: join(output, 'launch-zh-CN-1280.png') });
+      checks.push('Chinese launch draft records the requested arguments');
+    }
     // Wide, the list is a column under headings; narrow, one row to scroll along.
     assert.equal(
       await page
