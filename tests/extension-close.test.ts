@@ -1,4 +1,4 @@
-import { scratch, cleanup } from './helpers.js';
+import { scratch, cleanup, until } from './helpers.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
@@ -25,13 +25,6 @@ function extension(root: string, name: string, source: string): void {
   const path = join(root, name);
   mkdirSync(path, { recursive: true });
   writeFileSync(join(path, 'extension.mjs'), source);
-}
-async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('timed out');
-    await delay(10);
-  }
 }
 
 test('closing a host fires api.signal and waits for background work, calls in flight and handlers', async (t) => {
@@ -170,17 +163,21 @@ test('deletion retains history and its lease until slow extension cleanup finish
   extension(
     join(home, 'extensions'),
     'slow-delete',
-    `import {writeFileSync} from 'node:fs';
+    `import {existsSync,writeFileSync} from 'node:fs';
     import {join} from 'node:path';
     import {setTimeout as delay} from 'node:timers/promises';
     export function register(api) {
       api.background((async () => {
         await new Promise(resolve => api.signal.addEventListener('abort', resolve, {once:true}));
-        await delay(2600);
+        writeFileSync(join(api.workspace, 'cleaning'), 'started');
+        // Cleanup lasts until the test opens the gate (or its folder is gone).
+        while (existsSync(api.workspace) && !existsSync(join(api.workspace, 'gate'))) await delay(20);
         writeFileSync(join(api.workspace, 'cleanup'), 'finished');
       })());
     }`,
   );
+  // A failed test must not leave the extension's cleanup waiting.
+  cleanup(t, () => writeFileSync(join(workspace, 'gate'), ''));
   let externalCleanup = false;
   const runtime = new AgentRuntime({
     home,
@@ -207,7 +204,11 @@ test('deletion retains history and its lease until slow extension cleanup finish
   const reader = new CheckpointStore(home);
   cleanup(t, () => reader.close());
   assert.ok(reader.get(id));
-  await runtime.deleteSession();
+  assert.equal(existsSync(join(workspace, 'cleaning')), true);
+  const deleted = runtime.deleteSession();
+  // Cleanup is still held: the retry may finish only after it is let go.
+  writeFileSync(join(workspace, 'gate'), '');
+  await deleted;
   assert.equal(externalCleanup, true);
   assert.equal(reader.get(id), undefined);
   assert.equal(sessionOccupied(home, id), false);
