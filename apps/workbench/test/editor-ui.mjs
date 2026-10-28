@@ -310,6 +310,21 @@ try {
       ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
       : {}),
   });
+  // Monaco's checked-in copy of DOMPurify is older than our pinned package.
+  // Verify the browser actually calls the package and still filters unsafe HTML.
+  const sanitizer = await browser.newPage();
+  await sanitizer.goto(
+    `${server.resolvedUrls.local[0]}test/monaco-sanitizer.html`,
+  );
+  await sanitizer.waitForFunction(() => window.sanitizerResult);
+  const sanitized = await sanitizer.evaluate(() => window.sanitizerResult);
+  assert.equal(sanitized.version, '3.4.17');
+  assert.ok(sanitized.calls > 0, 'Monaco uses the patched DOMPurify instance');
+  assert.match(sanitized.html, /<strong>kept<\/strong>/);
+  assert.match(sanitized.html, /href="https:\/\/example\.com\/"/);
+  assert.equal(sanitized.unsafeAttributes, 0);
+  assert.equal(sanitized.text, 'keptsafeunsafe eventunsafe');
+  await sanitizer.close();
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
