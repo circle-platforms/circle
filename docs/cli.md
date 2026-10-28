@@ -4,13 +4,14 @@ nav_order: 16
 
 # CLI
 
-Circle has one command, `circle`, and two subcommands, `circle update` and `circle uninstall`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
+Circle has one command, `circle`, and three subcommands: `circle update`, `circle uninstall` and `circle schedule`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
 
 ```bash
 circle [options] [folder] [@file ...] [message ...]
 circle -p "prompt" [folder]
 circle update [version] [--check]
 circle uninstall [--purge] [--yes]
+circle schedule <command> [name] [options]
 ```
 
 ## Folder, messages and files
@@ -133,6 +134,21 @@ The exit codes are those of [print mode](#print-mode).
 
 `circle --mode rpc [folder]` keeps running and takes one JSON command per line on standard input: prompts, steering, follow-ups, stopping, switching models, listing and stopping jobs. The work it starts is written as the JSON events above. See [RPC mode](rpc.md) for the commands.
 
+## Scheduled tasks
+
+`circle schedule` keeps prompts that run on a clock. Prompts that stand until the screen
+is closed are [background jobs](background-jobs.md); prompts that stand until tomorrow
+morning are schedules, and they run headless whether or not a terminal is open:
+
+```bash
+circle schedule add notes "summarize yesterday's commits in NOTES.md" --daily 09:30
+circle schedule start
+```
+
+`circle schedule --help` lists the commands: `add`, `list`, `show`, `pause`, `resume`,
+`remove`, `run`, `tick`, `status`, `start`, `stop` and `daemon`. Like `update` and
+`uninstall`, the subcommand is read before any option: to open a folder that is called
+`schedule`, write `./schedule`. See [Scheduled tasks](scheduled-tasks.md).
 ## Updating
 
 ```bash
@@ -168,6 +184,7 @@ Turn it off with `"update_check": false` in [settings](settings.md#keys), or `CI
 
 ```bash
 circle uninstall [--purge] [--yes]
+circle schedule <command> [name] [options]
 ```
 
 | Option | What it does |
