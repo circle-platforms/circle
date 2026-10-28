@@ -37,9 +37,30 @@ jobs:
           node-version: '24.21.0'
           cache: npm
       - run: npm ci
-      - run: npm run check
-      - run: npm run format:check
+      # npm run check, in its three parts, so that Linux can keep a junit report of the suite
+      - run: npm run typecheck
+      - if: runner.os != 'Linux'
+        run: npm test
+      # spec is named too: with only junit the log would show nothing
+      - if: runner.os == 'Linux'
+        run: npm test -- --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml
+      - run: npm run build
+      # Formatting does not depend on the system
+      - if: runner.os == 'Linux'
+        run: npm run format:check
       - run: node dist/cli.js --version
+      # The slowest test files, so that one file holding up the suite shows (on CI a failing
+      # suite runs again with only its failed tests, and the report is then of those)
+      - name: Slowest test files
+        if: always() && runner.os == 'Linux' && hashFiles('test-results.xml') != ''
+        run: npx tsx scripts/ci-summary.ts timings test-results.xml >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && runner.os == 'Linux'
+        with:
+          name: test-results-${{ github.run_attempt }}
+          path: test-results.xml
+          if-no-files-found: ignore
+          retention-days: 14
       # The release workflow runs on a pull request only when it changes how Circle is packaged;
       # every pull request still builds and smoke-tests the package here, on one target
       - if: runner.os == 'Linux'
@@ -54,7 +75,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: macos-15
     timeout-minutes: 20
-    # The same steps as check above
+    # The steps of check above, without the reports Linux keeps and the format check Linux runs
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -63,8 +84,33 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: npm run format:check
       - run: node dist/cli.js --version
+  # Line, branch and function coverage of src/, for reading only: it is not a required check,
+  # and a failing test fails check above, not this job. The summary lists the files with the
+  # most uncovered lines; the lcov file is kept for two weeks.
+  coverage:
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage -- --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info
+        continue-on-error: true
+      - name: Coverage summary
+        if: always() && hashFiles('lcov.info') != ''
+        run: npx tsx scripts/ci-summary.ts coverage lcov.info >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage-lcov-${{ github.run_attempt }}
+          path: lcov.info
+          if-no-files-found: ignore
+          retention-days: 14
   # The desktop application, packaged and started as a person starts it: the window, the bridge
   # to the main process, a turn against a local model and a clean quit
   # (apps/desktop/test/launch-smoke.mjs). It takes seconds once the package is built.
@@ -126,7 +172,7 @@ jobs:
           else
             npm --prefix apps/desktop run test:launch
           fi
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
           name: launch-smoke-${{ matrix.os }}-${{ github.run_attempt }}
@@ -167,7 +213,7 @@ jobs:
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-darwin-arm64/Circle.app"
           export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Contents/MacOS/Circle"
           npm --prefix apps/desktop run test:launch
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
           name: launch-smoke-macos-15-${{ github.run_attempt }}

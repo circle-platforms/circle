@@ -6,7 +6,7 @@ Circle is a terminal coding agent written in TypeScript and run on Node.js 24. T
 
 ```bash
 npm ci                                   # once; the compiler and tools are local
-npm run check                            # type check, the whole suite and the build, about 20 seconds, no network
+npm run check                            # type check, the whole suite and the build, about three minutes, no network
 npx tsx --test tests/x.test.ts           # one file
 npm run format                           # prettier; CI runs npm run format:check
 npm run dev -- --version

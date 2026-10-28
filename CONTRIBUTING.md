@@ -31,7 +31,7 @@ npm run check          # type check, tests and build
 npm run format:check   # formatting, as CI checks it
 ```
 
-The suite runs in well under a minute and needs no network or model. Tests drive a scripted model or a local HTTP gateway and check real effects: the next model request, stored history, files and processes. Add a test with every behaviour change. Look at a neighbouring test for the pattern.
+`npm run check` takes about three minutes (183 s on an Apple silicon Mac in October 2026, nearly all of it the suite) and needs no network or model. Tests drive a scripted model or a local HTTP gateway and check real effects: the next model request, stored history, files and processes. Add a test with every behaviour change. Look at a neighbouring test for the pattern.
 
 Some tests guard the interface and will fail if a change breaks its rules:
 
