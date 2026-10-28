@@ -8,6 +8,7 @@ import {
   closeSync,
 } from 'node:fs';
 import { basename, join } from 'node:path';
+import { flakyTests, reportFlakyTests } from '../../../scripts/flaky-tests.ts';
 
 // Test-file processes each own independent runtime/service pools. Bound their
 // aggregate host load without changing product agent or task concurrency.
@@ -37,7 +38,8 @@ export const RUNTIME_TEST_CI_TIMEOUT_MS = 240_000;
 // On CI a stage that fails runs once more, and only its failed tests run
 // again (Node's --test-rerun-failures keeps which tests already passed). A
 // test must fail twice to fail the stage; one that passes the second time is
-// named in the log and the receipt, so flakiness stays visible.
+// named in a warning, the job summary and the receipt, so flakiness stays
+// visible.
 export const RUNTIME_TEST_CI_ATTEMPTS = 2;
 
 export const WINDOWS_NATIVE_TEST_PRIORITY = Object.freeze([
@@ -86,6 +88,8 @@ export function runRuntimeTestGroups({
   ci = false,
   receiptDirectory,
   stdio = 'inherit',
+  log = console.log,
+  summaryFile = process.env.GITHUB_STEP_SUMMARY,
 }) {
   mkdirSync(receiptDirectory, { recursive: true });
   let exitCode = 0;
@@ -112,7 +116,7 @@ export function runRuntimeTestGroups({
       renameSync(path + '.tmp', path);
     };
     persist();
-    console.log(
+    log(
       `# runtime stage ${index + 1}/${groups.length}: ${group.name} (${group.files.length} files)`,
     );
     const rerunState = ci ? path.replace(/\.json$/, '.rerun.json') : undefined;
@@ -124,7 +128,7 @@ export function runRuntimeTestGroups({
       attempt++
     ) {
       if (attempt > 1)
-        console.log(
+        log(
           `# runtime stage ${index + 1}/${groups.length}: ${group.name} failed; running only its failed tests again (attempt ${attempt})`,
         );
       result = spawnSync(
@@ -136,17 +140,21 @@ export function runRuntimeTestGroups({
       if ((result.status ?? 1) === 0) break;
     }
     const code = result.status ?? 1;
-    if (code === 0 && attempts.length > 1)
-      console.log(
+    const flaky =
+      code === 0 && attempts.length > 1 ? flakyTests(rerunState) : undefined;
+    if (flaky) {
+      log(
         `# runtime stage ${index + 1}/${groups.length}: ${group.name} passed only when its failed tests ran again; see ${rerunState}`,
       );
+      reportFlakyTests(flaky, { stage: group.name, log, summaryFile });
+    }
     Object.assign(receipt, {
       status: code === 0 ? 'passed' : 'failed',
       completedAt: new Date().toISOString(),
       exitCode: result.status,
       signal: result.signal,
       attempts,
-      ...(attempts.length > 1 && code === 0 ? { flaky: true } : {}),
+      ...(flaky ? { flaky: true, flakyTests: flaky } : {}),
       ...(result.error
         ? { errorCode: result.error.code ?? 'SPAWN_FAILED' }
         : {}),
