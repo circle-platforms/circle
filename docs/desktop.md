@@ -229,7 +229,7 @@ Circle's own keys in the input box are the terminal's, listed in [Keyboard and m
 
 Where the two meet, the field wins. With text selected in the input box, Ctrl+C copies instead of clearing, and so it does over text selected anywhere else, such as an answer in the conversation: the draft survives and the selection goes to the clipboard. Ctrl+Z in a text field is the field's undo, not suspend. Ctrl+D over a draft deletes the character after the cursor, as in the terminal; only on an empty box does it ask to close. In any other text field, such as a rename box, a settings field, the editor or the terminal, Circle's keys do nothing but `esc`. A terminal of the terminal mode, or a device console you hold, sends the keys typed into it to its shell or device: on Windows and Linux Ctrl+K, Ctrl+P and Ctrl+B there are the shell's control keys and open neither search nor quick open, nor hide the sidebar. On macOS ⌘ is no terminal key, so ⌘K, ⌘P and ⌘B still work from a terminal.
 
-A right-click in a text field offers **Cut**, **Copy**, **Paste** and **Select All**; on selected text, **Copy**. Elsewhere in the window there is no menu. The menu follows the application's language. Settings → keyboard gives an action another key; a key recorded with ⌘ on macOS stays a ⌘ key.
+A right-click in a text field offers **Cut**, **Copy**, **Paste** and **Select All**; on selected text, **Copy**. Elsewhere in the window there is no menu. The menu follows the application's language. Settings → shortcuts gives an action another key; a key recorded with ⌘ on macOS stays a ⌘ key.
 
 ## Outside the window
 
@@ -249,7 +249,7 @@ Session history, the `projects/` offload folders and updates stay in the data fo
 
 ## Tasks with no project
 
-A task that belongs to no project gets a folder of its own, so its files and its history sit apart from your projects and one task can be deleted whole. Those folders live under the **task folder**: `tasks` inside the data folder at first; settings → tasks with no project → change… points it somewhere else, on another drive if you like. The choice is saved as `task_folder` in the data folder's `settings.json`; the app refuses its own data folder, a folder inside it and a folder containing it.
+A task that belongs to no project gets a folder of its own, so its files and its history sit apart from your projects and one task can be deleted whole. Those folders live under the **task folder**: `tasks` inside the data folder at first; settings → workspace → tasks with no project → change… points it somewhere else, on another drive if you like. The choice is saved as `task_folder` in the data folder's `settings.json`; the app refuses its own data folder, a folder inside it and a folder containing it.
 
 Starting a new session while the app sits in its default workspace — nothing of yours opened — makes the task's folder, trusts it as the app trusts its own scratch folder, and starts the session there. A new session inside a project you opened stays with that project. The sidebar lists these tasks under **no project**, after your folders, each with its own folder name (`2026-10-15-1f2e3d`).
 

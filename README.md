@@ -53,7 +53,7 @@ Each release also has Circle as a desktop application: the same agent in its own
 
 Take the file from [Releases](https://github.com/circle-platforms/circle/releases). It is signed ad hoc, not by Apple or Microsoft, so the first launch asks you to confirm. The Windows installer puts Circle in `C:\Program Files\Circle` and on the Start menu. On Linux the sandbox helper needs one root command. The steps are in [Installation](https://circle-platforms.github.io/circle/installation/#the-desktop-application).
 
-On macOS and Windows the application updates itself: settings → about → check now, then update and restart. On Linux the same check replaces a folder it can write. Circle 1.6.0 and the published 1.7.4 do not have that updater: one manual update, in [Installation](https://circle-platforms.github.io/circle/installation/#the-desktop-application), is what installs it. Releases up to 1.2.0 do not update themselves on any system.
+On macOS and Windows the application updates itself: settings → about & updates → check now, then update and restart. On Linux the same check replaces a folder it can write. Circle 1.6.0 and the published 1.7.4 do not have that updater: one manual update, in [Installation](https://circle-platforms.github.io/circle/installation/#the-desktop-application), is what installs it. Releases up to 1.2.0 do not update themselves on any system.
 
 The window follows the system language the first time, and can be English or 简体中文. The terminal stays English. To run it from a checkout, see [apps/desktop](apps/desktop/README.md).
 
@@ -86,7 +86,7 @@ Ask Circle to open a page, such as a device's web interface on your network, and
 
 Ask Circle to reach a device you administer — a switch, a router, a server's console — and it opens an SSH or Telnet terminal and works it the way you would in SecureCRT: it reads what the device answers and types what you approve, approved device by device, with host keys you trust and passwords kept only as `%NAME%` secrets. In the terminal interface the device screen is a page you can attach to and type on yourself; in the desktop application it is a terminal panel you share. `/terminals` lists the open consoles and your saved sessions. See [Device terminals](https://circle-platforms.github.io/circle/tools/#device-terminals).
 
-Save a password with `/secrets NAME`, or under settings → variables in the desktop application. The model writes `%NAME%` wherever the password is needed, in a browser field or in any other tool, and never sees the value: Circle puts it in when the tool runs and hides it again in what comes back. `/variables NAME=value` keeps plain values the same way. See [The browser](https://circle-platforms.github.io/circle/tools/#the-browser) and [Secrets by name](https://circle-platforms.github.io/circle/security/#secrets-by-name).
+Save a password with `/secrets NAME`, or under settings → variables & secrets in the desktop application. The model writes `%NAME%` wherever the password is needed, in a browser field or in any other tool, and never sees the value: Circle puts it in when the tool runs and hides it again in what comes back. `/variables NAME=value` keeps plain values the same way. See [The browser](https://circle-platforms.github.io/circle/tools/#the-browser) and [Secrets by name](https://circle-platforms.github.io/circle/security/#secrets-by-name).
 
 ## Learn more
 
