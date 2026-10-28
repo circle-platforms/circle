@@ -775,7 +775,8 @@ test('a model without vision can explicitly save a browser screenshot as a file'
   assert.ok(saved);
   assert.equal(runtime.sandbox.isOffloadOutput(saved), true);
   assert.deepEqual(readFileSync(saved), picture);
-  assert.equal(statSync(saved).mode & 0o777, 0o600);
+  if (process.platform !== 'win32')
+    assert.equal(statSync(saved).mode & 0o777, 0o600);
   assert.equal(results.save!.attachments?.length ?? 0, 0);
   const upload = await readFileBytes(
     runtime.sandbox,
