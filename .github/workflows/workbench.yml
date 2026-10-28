@@ -164,7 +164,7 @@ jobs:
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
           export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
           npm --prefix apps/desktop run test:update
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: circle-desktop-${{ matrix.target }}-native
@@ -227,7 +227,7 @@ jobs:
         run: |
           unset CIRCLE_TEST_BROWSER_CHANNEL
           npm --prefix apps/workbench run test:components -- --shard ${{ matrix.shard }}/3
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: circle-component-ui-shard-${{ matrix.shard }}
@@ -265,7 +265,7 @@ jobs:
       - run: npm --prefix apps/desktop run test:runtime
         # Bound leaked native handles without forcing tests to report success.
         timeout-minutes: 20
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
           name: circle-desktop-${{ matrix.os }}-runtime
@@ -345,7 +345,7 @@ jobs:
           $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
           $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
           node apps/desktop/test/native-developer-journey.mjs
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: circle-windows-browser-address
@@ -366,14 +366,14 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           export CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi"
           npm --prefix apps/desktop run test:update
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: circle-desktop-${{ matrix.os }}-development
           path: apps/desktop/artifacts/
           if-no-files-found: error
       # The packaged folder and the MSI, several hundred MB, only when there is a failure to read
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
           name: circle-desktop-${{ matrix.os }}-out

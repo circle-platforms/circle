@@ -136,7 +136,7 @@ jobs:
       - run: npm run release:build
       - run: npm run release:smoke
       # Kept for a week, so the failed jobs of a tag's run can still be re-run days later
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: circle-${{ matrix.target }}
           path: .tmp/release/*
@@ -354,7 +354,7 @@ jobs:
           run=()
           if [ "$RUNNER_OS" = Linux ]; then run=(xvfb-run -a); fi
           "${run[@]}" npm --prefix apps/desktop run test:update
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           # Not circle-*: publish takes every circle-* artifact as a release asset
@@ -364,7 +364,7 @@ jobs:
             outputs/browser-regressions/*metadata.json
           if-no-files-found: ignore
           retention-days: 7
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() && runner.os == 'Windows'
         with:
           # Not circle-*: publish takes every circle-* artifact as a release asset
@@ -372,7 +372,7 @@ jobs:
           path: ${{ runner.temp }}/msi-*.log
           if-no-files-found: ignore
           retention-days: 7
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: circle-desktop-${{ matrix.target }}
           path: apps/desktop/out/circle-desktop-*
