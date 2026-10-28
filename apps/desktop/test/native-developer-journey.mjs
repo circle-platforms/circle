@@ -275,7 +275,17 @@ const choose = async (button, label) => {
 };
 const tasksCheckName =
   'two isolated write tasks and a readonly task Circle schedules with pending Git approval';
+const ptyCheckName = 'interactive PTY stdin and output';
+const childCommandCheckName =
+  'child task command card preserves original PTY and parent draft';
+const inputRecoveryCheckName =
+  'whole app restart preserves inputs without automatic sending';
+// A phase that reads what an earlier phase made is blocked, not run, when that phase did
+// not pass: it would only fail again, after waiting out every locator.
 const dependencies = {
+  // The shortcuts journey drives the one manual shell the PTY phase opened.
+  'original terminal keyboard paste and Control C preserve the existing shell':
+    [ptyCheckName],
   'original file viewer and active-turn manual edit save': [
     'native identity and original panels',
   ],
@@ -291,6 +301,69 @@ const dependencies = {
       'draft survives switching the drawer modes',
       tasksCheckName,
     ],
+  // Both read the receipt of the live child handoff; the history also needs the restart.
+  "a task reviewer's source opens read-only in its own conversation": [
+    childCommandCheckName,
+  ],
+  'child command history after app restart is read-only without respawn': [
+    childCommandCheckName,
+    inputRecoveryCheckName,
+  ],
+};
+// After a failed phase the window is probed once: a phase that cannot reach the parent
+// conversation would wait out each of its locators, so every later phase is blocked instead.
+let applicationUnhealthy;
+const within = (promise, ms, label) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(Error(label + ' did not answer')), ms).unref(),
+    ),
+  ]);
+const probeApplication = async () => {
+  const ms = patience(3000);
+  if (!page || page.isClosed()) return 'the window is closed';
+  if (!(await page.locator('.workspace-content .main-stack').count()))
+    return 'the workspace is not rendered';
+  const runtime = await within(
+    page.evaluate(() => window.circleDesktop.runtimeState()),
+    ms,
+    'runtime state',
+  );
+  if (!runtime?.connected) return 'the runtime is not connected';
+  if (sessionId && !runtime.snapshot.sessions.some((s) => s.id === sessionId))
+    return 'the runtime no longer lists the parent conversation';
+  // A modal left open by the failed phase takes every click; Escape is how a person
+  // would dismiss it.
+  const overlay = page.locator('.dialog-overlay[data-state="open"]');
+  for (let i = 0; i < 2 && (await overlay.count()); i++) {
+    await page.keyboard.press('Escape');
+    await overlay
+      .first()
+      .waitFor({ state: 'detached', timeout: ms })
+      .catch(() => {});
+  }
+  if (await overlay.count())
+    return 'a dialog left open covers the window and does not close';
+  if (sessionId) {
+    const parent = page
+      .locator(`.sidebar .session-link[href="#/session/${sessionId}"]:visible`)
+      .first();
+    if (await parent.count())
+      await parent.click({ trial: true, timeout: ms }).catch((error) => {
+        // Playwright's call log names the element that takes the click, if one does.
+        const lines = String(error).split('\n');
+        throw Error(
+          'the parent conversation cannot be clicked: ' +
+            (
+              lines.findLast((line) => line.includes('intercepts pointer')) ??
+              lines[0]
+            )
+              .trim()
+              .replace(/^- /, ''),
+        );
+      });
+  }
 };
 const check = async (name, action) => {
   phase = name;
@@ -302,12 +375,15 @@ const check = async (name, action) => {
   if (rendererUnavailable) blocked.push('renderer recovery');
   if (clipboardRecoveryPending)
     blocked.push('native clipboard recovery; preserve live main checkpoint');
-  if (blocked.length) {
-    checks.push({
-      name,
-      status: 'blocked',
-      reason: 'requires successful ' + blocked.join(', '),
-    });
+  if (blocked.length || applicationUnhealthy) {
+    const reasons = [];
+    if (blocked.length)
+      reasons.push('requires successful ' + blocked.join(', '));
+    if (applicationUnhealthy)
+      reasons.push(
+        `the application failed its health probe after "${applicationUnhealthy.phase}": ${applicationUnhealthy.reason}`,
+      );
+    checks.push({ name, status: 'blocked', reason: reasons.join('; ') });
     return;
   }
   const start = Date.now();
@@ -397,6 +473,20 @@ const check = async (name, action) => {
         recovery.error = String(failure);
       }
       recoveries.push(recovery);
+    }
+    if (!rendererUnavailable) {
+      const probeStart = Date.now();
+      const reason = await probeApplication().catch((failure) =>
+        String(failure?.message ?? failure),
+      );
+      recoveries.push({
+        phase,
+        action: 'health probe',
+        status: reason ? 'failed' : 'passed',
+        durationMs: Date.now() - probeStart,
+        ...(reason ? { error: reason } : {}),
+      });
+      if (reason) applicationUnhealthy = { phase, reason };
     }
   } finally {
     await writeFile(
@@ -841,7 +931,7 @@ try {
       await screenshot('02-active-manual-edit');
     },
   );
-  await check('interactive PTY stdin and output', async () => {
+  await check(ptyCheckName, async () => {
     // The + at the end of the terminal tabs makes a shell in the conversation's folder.
     const panel = await openNativeTerminalInspector(page);
     const prior = new Set((await query('terminal', 'list')).map((t) => t.id));
@@ -1787,30 +1877,20 @@ try {
     },
   );
   let childCommandReceipt;
-  await check(
-    'child task command card preserves original PTY and parent draft',
-    async () => {
-      childCommandReceipt = await runNativeChildCommandHandoffJourney({
-        page,
-        workspace: repo,
-        parentSessionId: sessionId,
-        state,
-        until,
-        output,
-        fixture: childCommandFixture,
-      });
-    },
-  );
-  const reviewerSourceCheckName =
-    "a task reviewer's source opens read-only in its own conversation";
-  if (!childCommandReceipt)
-    checks.push({
-      name: reviewerSourceCheckName,
-      status: 'blocked',
-      reason: 'requires successful child handoff',
+  await check(childCommandCheckName, async () => {
+    childCommandReceipt = await runNativeChildCommandHandoffJourney({
+      page,
+      workspace: repo,
+      parentSessionId: sessionId,
+      state,
+      until,
+      output,
+      fixture: childCommandFixture,
     });
-  else
-    await check(reviewerSourceCheckName, async () =>
+  });
+  await check(
+    "a task reviewer's source opens read-only in its own conversation",
+    async () =>
       runNativeReviewerSourceJourney({
         page,
         parentSessionId: sessionId,
@@ -1819,11 +1899,9 @@ try {
         output,
         previous: childCommandReceipt,
       }),
-    );
+  );
   const childCommandPreviousApp = app;
   let childCommandRestartConfirmed = false;
-  const inputRecoveryCheckName =
-    'whole app restart preserves inputs without automatic sending';
   await check(inputRecoveryCheckName, async () => {
     await runNativeInputRecovery({
       getApp: () => app,
@@ -1860,32 +1938,23 @@ try {
       },
     });
   });
-  const childHistoryCheckName =
-    'child command history after app restart is read-only without respawn';
-  if (
-    !childCommandReceipt ||
-    !childCommandRestartConfirmed ||
-    !checks.some(
-      (item) =>
-        item.name === inputRecoveryCheckName && item.status === 'passed',
-    )
-  )
-    checks.push({
-      name: childHistoryCheckName,
-      status: 'blocked',
-      reason: 'requires successful child handoff and whole app restart',
-    });
-  else
-    await check(childHistoryCheckName, async () =>
-      runNativeChildCommandAfterRestart({
+  await check(
+    'child command history after app restart is read-only without respawn',
+    async () => {
+      assert(
+        childCommandRestartConfirmed,
+        'the whole app restart replaced the application process',
+      );
+      return runNativeChildCommandAfterRestart({
         page,
         parentSessionId: sessionId,
         state,
         until,
         output,
         previous: childCommandReceipt,
-      }),
-    );
+      });
+    },
+  );
   if (process.env.CIRCLE_NATIVE_JOURNEY_WEB_DEBUG === '1')
     await check(
       'Chromium developer tools open and the page stays usable',
@@ -2254,8 +2323,11 @@ try {
     }
   }
   phase = 'final verification';
-  // The evidence folder may not reach CI's artifacts, so the log says why too.
-  for (const failed of checks.filter((c) => c.status !== 'passed'))
+  // The evidence folder may not reach CI's artifacts, so the log says why too: the
+  // phases that failed first, then those blocked behind them, which were not run.
+  const failedChecks = checks.filter((c) => c.status === 'failed');
+  const blockedChecks = checks.filter((c) => c.status === 'blocked');
+  for (const failed of [...failedChecks, ...blockedChecks])
     console.error(
       `native journey ${failed.status}: ${failed.name}\n  ${String(
         failed.error ?? failed.reason ?? '',
@@ -2264,8 +2336,20 @@ try {
         .slice(0, 12)
         .join('\n  ')}`,
     );
+  if (failedChecks.length || blockedChecks.length)
+    console.error(
+      `native journey: ${checks.length - failedChecks.length - blockedChecks.length} passed, ${failedChecks.length} failed, ${blockedChecks.length} blocked` +
+        (failedChecks.length
+          ? '\n  failed: ' +
+            failedChecks.map((c) => c.name).join('\n          ')
+          : '') +
+        (blockedChecks.length
+          ? '\n  blocked: ' +
+            blockedChecks.map((c) => c.name).join('\n           ')
+          : ''),
+    );
   assert.equal(
-    checks.filter((c) => c.status !== 'passed').length,
+    failedChecks.length + blockedChecks.length,
     0,
     'native journey has failed or blocked phases; see per-phase evidence',
   );
