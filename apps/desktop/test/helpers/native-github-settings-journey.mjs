@@ -56,15 +56,27 @@ export async function runNativeGitHubSettingsJourney({
     await page
       .getByRole('heading', { name: 'settings', exact: true })
       .waitFor();
-    const managePlugin = page.getByRole('link', {
-      name: 'manage GitHub plugin',
-      exact: true,
-    });
+    // GitHub is an extension: settings list it under extensions, with a link to its
+    // details, and have no group of their own for it.
+    await page
+      .locator('.settings-index-list')
+      .getByRole('button', { name: 'extensions', exact: true })
+      .click();
+    assert.equal(
+      await page
+        .locator('.settings-index-list')
+        .getByRole('button', { name: 'GitHub', exact: true })
+        .count(),
+      0,
+    );
+    const managePlugin = page
+      .getByRole('link', { name: 'plugin details', exact: true })
+      .first();
     await managePlugin.waitFor({ state: 'visible' });
     assert.equal(
       await page.locator('#github-connection').count(),
       0,
-      'settings offers navigation rather than a second account-management card',
+      'the extensions offer navigation rather than a second account-management card',
     );
     await managePlugin.click();
     const detail = page.getByRole('region', {

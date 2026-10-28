@@ -139,7 +139,10 @@ export function Modal({
   description,
   children,
   wide = false,
+  className = '',
+  restoreFocus = false,
   onCloseAutoFocus,
+  onEscapeKeyDown,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -147,9 +150,43 @@ export function Modal({
   description?: string;
   children: ReactNode;
   wide?: boolean;
+  className?: string;
+  /** Restore the focused control when this dialog closes, even outside another dialog. */
+  restoreFocus?: boolean;
   onCloseAutoFocus?: (event: Event) => void;
+  /** Called before `esc` closes the dialog; `preventDefault` keeps it open. */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void;
 }) {
   const content = useRef<HTMLDivElement>(null);
+  // A nested dialog, or one that opts in, returns the keyboard to its opener.
+  const opener = useRef<HTMLElement | null>(null);
+  // An autofocus field can take focus during mounting, before Radix reports that the
+  // dialog opened. Remember the last outside focus while the dialog is closed.
+  const lastOutsideFocus = useRef<HTMLElement | null>(null);
+  // A temporary search dialog can open this one and then disappear. Keep the last
+  // control in the window as a fallback when that dialog's opener is gone.
+  const lastWindowFocus = useRef<HTMLElement | null>(null);
+  const openNow = useRef(open);
+  openNow.current = open;
+  useEffect(() => {
+    if (!restoreFocus) return;
+    const remember = (target: EventTarget | null) => {
+      if (
+        !openNow.current &&
+        target instanceof HTMLElement &&
+        target !== document.body &&
+        !content.current?.contains(target)
+      ) {
+        lastOutsideFocus.current = target;
+        if (!target.closest('[role="dialog"]'))
+          lastWindowFocus.current = target;
+      }
+    };
+    const onFocus = (event: FocusEvent) => remember(event.target);
+    remember(document.activeElement);
+    document.addEventListener('focusin', onFocus, true);
+    return () => document.removeEventListener('focusin', onFocus, true);
+  }, [restoreFocus]);
   useEffect(() => {
     if (!open) return;
     // A menu that opened the dialog restores its trigger in a timeout. A nested
@@ -171,10 +208,59 @@ export function Modal({
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content
           ref={content}
-          className={`dialog-content ${wide ? 'wide' : ''}`}
-          onCloseAutoFocus={onCloseAutoFocus}
+          className={`dialog-content ${wide ? 'wide' : ''} ${className}`}
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus?.(event);
+            if (event.defaultPrevented) {
+              opener.current = null;
+              return;
+            }
+            // React's autofocus can skip Radix's open event entirely.
+            const original =
+              opener.current ??
+              (restoreFocus ? lastOutsideFocus.current : null);
+            opener.current = null;
+            const target = original?.isConnected
+              ? original
+              : restoreFocus
+                ? lastWindowFocus.current
+                : null;
+            // A dialog that was already open can still be underneath this one even
+            // when it had not yet focused a control when the settings menu was used.
+            // Keep the keyboard in that dialog rather than trying to focus the
+            // now-inert window behind it.
+            const underneath = restoreFocus
+              ? [...document.querySelectorAll<HTMLElement>('[role="dialog"]')]
+                  .filter((dialog) => dialog !== content.current)
+                  .at(-1)
+              : undefined;
+            if (
+              underneath &&
+              (!target?.isConnected || !underneath.contains(target))
+            ) {
+              event.preventDefault();
+              if (!underneath.contains(document.activeElement))
+                underneath.focus({ preventScroll: true });
+              return;
+            }
+            if (!target?.isConnected) return;
+            // Return the keyboard to the control that opened this dialog.
+            event.preventDefault();
+            target.focus({ preventScroll: true });
+          }}
+          onEscapeKeyDown={onEscapeKeyDown}
           aria-describedby={description ? 'dialog-description' : undefined}
           onOpenAutoFocus={(event) => {
+            const active = document.activeElement;
+            if (
+              active instanceof HTMLElement &&
+              active !== document.body &&
+              !content.current?.contains(active) &&
+              (restoreFocus || active.closest('[role="dialog"]'))
+            )
+              opener.current = active;
+            else
+              opener.current = restoreFocus ? lastOutsideFocus.current : null;
             // The close button is the first tab stop. Leaving focus there drops
             // keystrokes, and the composer behind the dialog receives them.
             event.preventDefault();

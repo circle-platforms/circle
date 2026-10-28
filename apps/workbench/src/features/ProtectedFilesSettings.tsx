@@ -15,9 +15,8 @@ const insensitiveNames = () => !/Mac|Linux|Android/i.test(navigator.userAgent);
 const fileName = (value: string) => value.trim().split(/[/\\]/).at(-1) ?? '';
 
 /**
- * The file names the model may not read, copy or change. Circle always protects a
- * list of its own; this page adds to it, one pattern each, and says what a name
- * would do before it is saved.
+ * Name-based file and command protections. Circle always protects a list of its
+ * own; this page adds to it and says what a name would do before it is saved.
  */
 export function ProtectedFilesSettings() {
   const { snapshot, runtime } = useRuntime();
@@ -66,7 +65,7 @@ export function ProtectedFilesSettings() {
       <h2>{t('protected files')}</h2>
       <p className="panel-note">
         {t(
-          'Circle will not read, copy or change a file whose name matches one of these patterns. * is any run of characters and ? is one character, and only the name counts: write *.key, never secrets/*.key.',
+          'File tools skip or refuse matching names, and shell commands that name one are denied. Commands that reach a file indirectly are not blocked. * is any run of characters and ? is one character, and only the name counts: write *.key, never secrets/*.key.',
         )}
       </p>
       <div className="pattern-add">

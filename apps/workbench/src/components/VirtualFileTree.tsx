@@ -202,7 +202,7 @@ export function VirtualFileTree({
                 style={{
                   top: index * ROW_HEIGHT,
                   height: ROW_HEIGHT,
-                  paddingInlineStart: 10 + row.depth * 14,
+                  paddingInlineStart: 8 + row.depth * 14,
                 }}
                 onClick={() => {
                   root.current?.focus({ preventScroll: true });

@@ -86,7 +86,7 @@ In a git repository, Circle's prompt tells the model how to credit Circle when i
 - With `author` `circle`, Circle is the commit author (`--author`) and you are added as `Co-authored-by`, from `git config user.name` and `user.email`. Circle then appears in the repository's Contributors list. Without a `user.email` the commit stays yours with the co-author line, so a commit never names Circle alone.
 - `auto`, the default, is `circle` for runs nobody watches (`-p`, JSON, line and RPC mode) and `user` in the full-screen interface and the desktop application.
 
-A pull request body gets the line `Generated with [Circle](https://github.com/circle-platforms/circle)`. `"attribution": {"enabled": false}` in your settings, in a project's `.circle/settings.json`, or the switch on the desktop settings page turns all of this off; the model is then told not to add it.
+A pull request body gets the line `Generated with [Circle](https://github.com/circle-platforms/circle)`. `"attribution": {"enabled": false}` in your settings, in a project's `.circle/settings.json`, or the switch under settings → git in the desktop application turns all of this off; the model is then told not to add it.
 
 ## credentials.json
 

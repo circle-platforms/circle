@@ -57,7 +57,7 @@ Object.assign(window, {
 });
 function LocalizedSidebar() {
   useLocale();
-  return <Sidebar onSearch={() => {}} />;
+  return <Sidebar onSearch={() => {}} onHide={() => {}} />;
 }
 createRoot(document.getElementById('root')!).render(
   <RuntimeProvider runtime={runtime}>

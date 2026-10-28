@@ -30,7 +30,6 @@ export const circlePlugins: WorkbenchPlugin[] = [
             selection={props.selection}
             visible={props.visible}
             onFile={props.onFile}
-            onDialog={props.onDialog}
           />
         ),
       },

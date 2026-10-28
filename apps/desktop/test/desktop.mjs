@@ -1175,8 +1175,15 @@ try {
   checks.push(
     'native export writes selected destination and rejects invalid names',
   );
-  // Open folder sits in the sidebar, under the folders and their sessions.
-  await page.getByRole('button', { name: 'open folder', exact: true }).click();
+  // A folder is opened where a new session picks its project.
+  await page.getByRole('button', { name: 'new session', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'choose a project', exact: true })
+    .click();
+  await page
+    .locator('.project-menu')
+    .getByRole('menuitem', { name: 'open folder', exact: true })
+    .click();
   await page
     .getByRole('heading', {
       name: 'what should we build in project?',

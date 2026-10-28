@@ -1,6 +1,5 @@
 import '../features/navigation-settings.css';
 import { extensionStatusText } from '../model/extension-status';
-import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
 import {
   Fragment,
@@ -13,20 +12,13 @@ import {
 } from 'react';
 import { NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
+  PanelLeftClose,
   Plus,
   Search,
   Settings2,
-  Blocks,
-  Plug,
-  BookOpen,
-  Command,
-  ShieldCheck,
   MessagesSquare,
-  Terminal,
-  FolderPlus,
   Folder,
   FolderOpen,
-  SlidersHorizontal,
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
@@ -67,26 +59,6 @@ import { IconButton } from './common';
 import { t, tn } from '../i18n';
 import { UpdateChip } from '../features/Update';
 import { SessionMenu, WorkspaceMenu } from './SessionMenus';
-// The labels are functions so they follow the interface language when it changes.
-export const NAVIGATION = [
-  { id: 'models', label: () => t('models'), icon: Blocks },
-  { id: 'skills', label: () => t('skills'), icon: BookOpen },
-  { id: 'commands', label: () => t('commands'), icon: Command },
-  { id: 'mcp', label: () => t('mcp servers'), icon: Plug },
-  { id: 'extensions', label: () => t('extensions'), icon: Blocks },
-  { id: 'tools', label: () => t('tools'), icon: Terminal },
-  { id: 'approvals', label: () => t('approvals'), icon: ShieldCheck },
-  { id: 'settings', label: () => t('settings'), icon: Settings2 },
-] as const;
-/** The pages under customize, as Claude gathers skills, connectors and tools. */
-export const CUSTOMIZE = [
-  'skills',
-  'commands',
-  'mcp',
-  'extensions',
-  'tools',
-  'approvals',
-] as const;
 const SHOWN = 8;
 /** Collapse state for the recent list. It is not a workspace id. */
 const RECENT = 'recent';
@@ -138,17 +110,20 @@ function RenameField({
 
 export function Sidebar({
   onSearch,
+  onHide,
   onNavigate,
   onDialog,
   renaming = false,
 }: {
   onSearch: () => void;
+  /** Folds the whole sidebar away, as the top bar's sidebar button does. */
+  onHide: () => void;
   onNavigate?: () => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
   /** The rename dialog is open, so a recent hover must not stay up over it. */
   renaming?: boolean;
 }) {
-  const { snapshot, runtime, perform, notify } = useRuntime();
+  const { snapshot, runtime, perform } = useRuntime();
   // The pages of the interface components that are on
   const { registry, enabled } = usePlugins();
   const pluginPages = registry.pages(enabled);
@@ -659,9 +634,6 @@ export function Sidebar({
         </div>
       );
     });
-  const customizing = CUSTOMIZE.some(
-    (id) => location.pathname === '/page/' + id,
-  );
   const connection =
     runtime.mode !== 'live'
       ? 'preview'
@@ -710,10 +682,6 @@ export function Sidebar({
         <span className="circle-logo" />
         <strong>circle</strong>
       </header>
-      <button className="sidebar-search" onClick={onSearch}>
-        <Search size={14} />
-        <span>{t('search')}</span>
-      </button>
       <nav className="sidebar-primary" aria-label={t('navigation')}>
         <button
           className="sidebar-item"
@@ -742,15 +710,6 @@ export function Sidebar({
           <Plus size={15} />
           <span>{t('new session')}</span>
         </button>
-        <NavLink
-          to="/page/skills"
-          className={customizing ? 'sidebar-item active' : 'sidebar-item'}
-          aria-current={customizing ? 'page' : undefined}
-          onClick={onNavigate}
-        >
-          <SlidersHorizontal size={15} />
-          <span>{t('customize')}</span>
-        </NavLink>
         <NavLink
           to="/page/sessions"
           className={({ isActive }) =>
@@ -907,29 +866,6 @@ export function Sidebar({
             </Fragment>
           );
         })}
-        {desktopHost() && (
-          <button
-            className="sidebar-item"
-            onClick={async () => {
-              try {
-                const selected = await openNativeWorkspace(runtime);
-                if (selected) {
-                  openHome(
-                    navigate,
-                    `${location.pathname}${location.search}`,
-                    selected,
-                  );
-                  onNavigate?.();
-                }
-              } catch (error) {
-                notify(folderOpenMessage(error));
-              }
-            }}
-          >
-            <FolderPlus size={15} />
-            <span>{t('open folder')}</span>
-          </button>
-        )}
       </div>
       <UpdateChip />
       {snapshot.extensions.some((item) => item.status) && (
@@ -979,17 +915,24 @@ export function Sidebar({
                     : current.model}
           </span>
         </button>
-        <button
-          type="button"
-          className="sidebar-settings"
-          onClick={() => {
-            navigate('/page/settings');
-            onNavigate?.();
-          }}
-        >
-          <Settings2 size={15} />
-          <span>{t('settings')}</span>
-        </button>
+        {/* App-wide controls: search everything, settings, and folding the sidebar. */}
+        <span className="sidebar-footer-actions">
+          <IconButton label={t('search')} onClick={onSearch}>
+            <Search size={15} />
+          </IconButton>
+          <IconButton
+            label={t('settings')}
+            onClick={() => {
+              navigate('/page/settings');
+              onNavigate?.();
+            }}
+          >
+            <Settings2 size={15} />
+          </IconButton>
+          <IconButton label={t('hide sidebar')} onClick={onHide}>
+            <PanelLeftClose size={15} />
+          </IconButton>
+        </span>
       </footer>
     </aside>
   );

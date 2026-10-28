@@ -243,6 +243,87 @@ try {
     window?.focus();
   });
   clipboard = await preserveNativeClipboard(application);
+
+  // Settings opened by the window shortcut returns the keyboard to the message box.
+  const settingsMessage = page.getByRole('textbox', {
+    name: 'message',
+    exact: true,
+  });
+  await settingsMessage.fill('settings focus');
+  await settingsMessage.focus();
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+,' : 'Control+,',
+  );
+  const settingsDialog = page.locator('.settings-dialog');
+  await settingsDialog.waitFor();
+  await page.waitForFunction(() =>
+    document.activeElement?.closest('.settings-dialog'),
+  );
+  await page.keyboard.press('Escape');
+  await settingsDialog.waitFor({ state: 'detached' });
+  await page.waitForFunction(
+    () =>
+      document.activeElement === document.querySelector('.composer textarea'),
+  );
+  await page.keyboard.type(' restored');
+  assert.equal(await settingsMessage.inputValue(), 'settings focus restored');
+  checks.push('closing settings returns the keyboard to the message box');
+
+  // Search is gone by the time settings closes; its original window focus still returns.
+  await settingsMessage.focus();
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+k' : 'Control+k',
+  );
+  await page
+    .getByRole('textbox', { name: 'global search' })
+    .fill('models & connection');
+  await page
+    .getByRole('button', { name: 'models & connection settings' })
+    .click();
+  await settingsDialog.waitFor();
+  await page.waitForFunction(() =>
+    document.activeElement?.closest('.settings-dialog'),
+  );
+  await page.keyboard.press('Escape');
+  await settingsDialog.waitFor({ state: 'detached' });
+  await page.waitForFunction(
+    () =>
+      document.activeElement === document.querySelector('.composer textarea'),
+  );
+  assert.equal(await settingsMessage.inputValue(), 'settings focus restored');
+  checks.push('settings opened from search returns the keyboard to the window');
+  await reset();
+
+  // The application menu may open settings over an existing dialog. Closing it must
+  // leave that lower dialog open and able to receive the keyboard again.
+  await page.locator('.sidebar-footer .connection-status').click();
+  const underneath = page.getByRole('dialog', {
+    name: 'frontend preview',
+    exact: true,
+  });
+  await underneath.waitFor();
+  await application.evaluate(({ Menu }) => {
+    const item = Menu.getApplicationMenu()
+      .items.flatMap((menu) => menu.submenu?.items ?? [])
+      .find((entry) => entry.label === 'settings' || entry.label === '设置');
+    if (!item) throw Error('settings menu item not found');
+    item.click();
+  });
+  await settingsDialog.waitFor();
+  await page.waitForFunction(() =>
+    document.activeElement?.closest('.settings-dialog'),
+  );
+  await settingsDialog.getByRole('button', { name: 'close dialog' }).click();
+  await settingsDialog.waitFor({ state: 'detached' });
+  assert.equal(await underneath.count(), 1);
+  await page.waitForFunction(() =>
+    document.activeElement?.closest('[role="dialog"]'),
+  );
+  await page.keyboard.press('Escape');
+  await underneath.waitFor({ state: 'detached' });
+  checks.push('settings closes over a previously open dialog');
+  await reset();
+
   const sections = page.locator('.project-list > .project');
   await sections
     .nth(0)
@@ -860,6 +941,12 @@ try {
   );
   await reset();
   await route('/page/settings');
+  // Settings show one group at a time: workspace holds the default workspace, the
+  // trust of the folders and the tasks with no project.
+  await page
+    .locator('.settings-index-list')
+    .getByRole('button', { name: 'workspace', exact: true })
+    .click();
   // The default workspace section shows the fixture folder; the native picker
   // exists only in the live app, never in the frontend preview.
   const defaultWorkspace = page.locator('section.settings-block', {
@@ -913,9 +1000,15 @@ try {
   checks.push(
     'a workspace is removed from settings through a confirmation, and the active one is not',
   );
+  await page
+    .locator('.settings-index-list')
+    .getByRole('button', { name: 'file access', exact: true })
+    .click();
   const protectedFiles = page.locator('section.settings-block', {
     has: page.getByRole('heading', { name: 'protected files', exact: true }),
   });
+  // The group is drawn a moment after its name is chosen; count what it holds after that.
+  await protectedFiles.waitFor();
   const patternField = protectedFiles.getByRole('textbox', {
     name: 'new file pattern',
     exact: true,
@@ -959,7 +1052,12 @@ try {
   checks.push(
     'a file pattern is refused, added, checked against a name and removed',
   );
-  // Key preferences are one row per action: change…, then the new key.
+  // Key preferences are one row per action, in the shortcuts group: change…, then the
+  // new key.
+  await page
+    .locator('.settings-index-list')
+    .getByRole('button', { name: 'shortcuts', exact: true })
+    .click();
   const modelsKey = page.locator('.keybinding-list .setting-row', {
     has: page.getByText('models', { exact: true }),
   });
@@ -972,8 +1070,8 @@ try {
   await modelsKey
     .getByRole('button', { name: 'reset the key for models' })
     .waitFor();
-  // A keyboard row answers to the action it changes, so the page keeps exactly one
-  // button named "change…": the default workspace's picker (live.mjs clicks it).
+  // A keyboard row answers to the action it changes, not to a bare "change…", which
+  // is the name of the default workspace's picker (live.mjs clicks it).
   assert.equal(
     await page.getByRole('button', { name: 'change…', exact: true }).count(),
     0,
