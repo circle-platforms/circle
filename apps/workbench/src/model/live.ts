@@ -1423,11 +1423,11 @@ export class LiveRuntime implements RuntimePort {
     const pages: Record<string, CommandResult['page']> = {
       help: 'help',
       settings: 'settings',
-      themes: 'settings',
-      variables: 'settings',
-      secrets: 'settings',
-      // Settings lists each hook and the files that wait for approval.
-      hooks: 'settings',
+      themes: 'appearance',
+      variables: 'variables',
+      secrets: 'variables',
+      // The hooks group lists each hook and the files that wait for approval.
+      hooks: 'hooks',
       mcp: 'mcp',
       extensions: 'extensions',
       approvals: 'approvals',
