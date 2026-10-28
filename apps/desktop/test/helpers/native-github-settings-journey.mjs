@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { closeNativeSettings } from './native-settings.mjs';
 const unavailable = 'Turn on GitHub to connect your account.';
 const extension = (snapshot) =>
   snapshot.extensions.find(
@@ -49,13 +50,6 @@ export async function runNativeGitHubSettingsJourney({
 }) {
   const receipt = { checks: [] };
   const settings = page.getByRole('dialog', { name: 'settings', exact: true });
-  const closeSettings = async () => {
-    if (!(await settings.isVisible())) return;
-    await settings
-      .getByRole('button', { name: 'close dialog', exact: true })
-      .click();
-    await settings.waitFor({ state: 'hidden' });
-  };
   const openPlugin = async () => {
     if (!(await settings.isVisible()))
       await page
@@ -325,7 +319,7 @@ export async function runNativeGitHubSettingsJourney({
     await page.screenshot({
       path: join(output, 'github-settings-disabled-unavailable.png'),
     });
-    await closeSettings();
+    await closeNativeSettings(page);
     await page
       .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
       .first()
@@ -429,7 +423,7 @@ export async function runNativeGitHubSettingsJourney({
       receipt.cleanup = { error: String(error) };
     }
     try {
-      await closeSettings();
+      await closeNativeSettings(page);
     } catch (error) {
       receipt.dialogCleanup = { error: String(error) };
     }
