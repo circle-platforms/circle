@@ -18,7 +18,7 @@ import {
 } from '../src/schedule.js';
 import type { Execute } from '../src/scheduler.js';
 import { UsageError } from '../src/usage_error.js';
-import { schedulesRoot } from '../src/paths.js';
+import { normalizeWorkspace, schedulesRoot } from '../src/paths.js';
 import {
   defaultSettings,
   saveCredentials,
@@ -82,7 +82,9 @@ test('add, list, show, pause, resume, run and remove', async (t) => {
   assert.match(h.screen.text, /circle schedule start/);
   const record = getSchedule('notes', home);
   assert.equal(record.prompt, 'summarize the day in NOTES.md');
-  assert.equal(record.workspace, workspace);
+  // The store keeps the canonical path: a CI tmpdir with a Windows 8.3 short name
+  // (RUNNER~1) is saved expanded, so the expected value normalizes too.
+  assert.equal(record.workspace, normalizeWorkspace(workspace));
   // The next 09:30 after 10:00 is tomorrow's.
   assert.equal(record.next_run, new Date(2026, 9, 29, 9, 30).getTime());
   h.reset();
