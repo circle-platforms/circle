@@ -1,6 +1,8 @@
 name: Check
-# Pull requests and the merge queue: the merge gate. A push to main is checked by the release
-# workflow, which runs the same check on all six release targets, so it is not repeated here.
+# Pull requests and the merge queue: the merge gate. The merge queue runs the check on the commit
+# that becomes main, on linux-x64, darwin-arm64 and windows-x64, so a push to main does not run it
+# again here; the release workflow runs it on main on the other three release targets
+# (linux-arm64, darwin-x64, windows-arm64).
 # The gate is the check and a launch of the packaged desktop application on each system; the
 # full desktop journeys run in the Desktop workbench workflow and do not gate a merge.
 on:

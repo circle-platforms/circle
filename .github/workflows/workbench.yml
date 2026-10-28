@@ -6,8 +6,6 @@ on:
       - 'apps/**'
       - 'src/**'
       - 'package*.json'
-      - 'src/tui/slash_commands.ts'
-      - 'src/ink/theme.ts'
       - 'docs/workbench/**'
       - '.github/workflows/workbench.yml'
   pull_request:
@@ -17,18 +15,16 @@ on:
       - 'apps/**'
       - 'src/**'
       - 'package*.json'
-      - 'src/tui/slash_commands.ts'
-      - 'src/ink/theme.ts'
       - 'docs/workbench/**'
       - '.github/workflows/workbench.yml'
   workflow_dispatch:
 permissions:
   contents: read
-# A newer push to a pull request replaces the run of the older one. On main a run finishes: macOS
-# runs only there, and a run a later merge cancels leaves that commit's desktop unchecked on macOS.
-# The newest waiting run replaces older waiting ones.
+# A newer push to a pull request replaces the run of the older one. Each push to main has a group
+# of its own, so every commit of main is checked and none waits behind or replaces another: macOS
+# runs only there, and the release workflow leaves the packaged journeys on main to this one.
 concurrency:
-  group: workbench-${{ github.ref }}
+  group: workbench-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   native:
