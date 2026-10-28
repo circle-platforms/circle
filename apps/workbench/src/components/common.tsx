@@ -119,6 +119,37 @@ export function Switch({
     </label>
   );
 }
+/** A setting with a few named values, one of them chosen: a row with its buttons. */
+export function Choice<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: readonly (readonly [T, string, string?])[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="setting-row">
+      <span>{label}</span>
+      <div className="segmented" role="group" aria-label={label}>
+        {options.map(([option, text, size]) => (
+          <button
+            key={option}
+            aria-pressed={value === option}
+            className={value === option ? 'active' : ''}
+            style={size ? { fontSize: size } : undefined}
+            onClick={() => onChange(option)}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 export function Fold({
   title,
   open,

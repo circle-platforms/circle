@@ -59,11 +59,20 @@ export function useGitChanges({
   );
   const [error, setError] = useState('');
   const inFlight = useRef<string | null>(null);
+  const pending = useRef(new Set<string>());
   const session = useRef(sessionId);
   session.current = sessionId;
+  const current = useRef({ sessionId, live, active });
+  current.current = { sessionId, live, active };
 
   const refresh = useCallback(async () => {
-    if (!live || !active || inFlight.current === sessionId) return;
+    if (!live || !active) return;
+    if (inFlight.current === sessionId) {
+      // A save, focus or reopen during this read may have changed Git after
+      // its snapshot. Follow it with one fresh read instead of dropping it.
+      pending.current.add(sessionId);
+      return;
+    }
     inFlight.current = sessionId;
     try {
       const result = await workspaceCall<GitChanges | undefined>(
@@ -83,6 +92,13 @@ export function useGitChanges({
         setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       if (inFlight.current === sessionId) inFlight.current = null;
+      if (
+        pending.current.delete(sessionId) &&
+        current.current.sessionId === sessionId &&
+        current.current.live &&
+        current.current.active
+      )
+        void refresh();
     }
   }, [live, active, sessionId]);
 

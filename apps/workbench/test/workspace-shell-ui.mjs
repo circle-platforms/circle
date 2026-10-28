@@ -331,7 +331,7 @@ try {
       ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
       : {}),
   });
-  for (const width of [1280, 500, 290])
+  for (const width of [290, 500, 1280])
     for (const theme of ['dark', 'light']) {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
       const errors = [];
@@ -421,6 +421,26 @@ try {
         'terminal panel',
       ]);
       assert.deepEqual(bar.badges, ['1', '1']);
+      if (width === 290) {
+        const clipped = await page
+          .locator('.drawer-mode-toolbar')
+          .evaluate((node) => {
+            const bounds = node.getBoundingClientRect();
+            return [...node.querySelectorAll('.drawer-mode-button')]
+              .filter((item) => {
+                const rect = item.getBoundingClientRect();
+                return (
+                  rect.left < bounds.left - 1 || rect.right > bounds.right + 1
+                );
+              })
+              .map((item) => item.getAttribute('aria-label'));
+          });
+        assert.deepEqual(
+          clipped,
+          [],
+          'all drawer buttons fit in the narrow top bar',
+        );
+      }
       assert.deepEqual(
         { width: bar.divider.width, height: bar.divider.height },
         { width: 1, height: 16 },

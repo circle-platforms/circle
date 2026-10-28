@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { stripVTControlCharacters } from 'node:util';
+import { readTerminalOutput } from '../../../workbench/src/model/terminal-stream.ts';
 
 /** Match the real xterm buffer through its original UI, including soft-wrapped and canvas-only output. */
 export async function assertRenderedTerminalMatch({
@@ -7,7 +9,18 @@ export async function assertRenderedTerminalMatch({
   surface,
   text,
   until,
+  terminalId,
+  replay,
 }) {
+  // Input receipt precedes the process's echo. Search takes a fixed log
+  // boundary, so first observe the echo in this original terminal's log.
+  await until(
+    async () =>
+      stripVTControlCharacters(
+        await readTerminalOutput(terminalId, replay),
+      ).includes(text),
+    'the original terminal log contains the exact process echo',
+  );
   const find = panel.getByRole('textbox', {
     name: 'find in terminal',
     exact: true,

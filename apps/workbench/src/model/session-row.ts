@@ -67,7 +67,7 @@ export function pointerOnSidebarChrome(target: EventTarget | null): boolean {
     !!target &&
     typeof Element !== 'undefined' &&
     target instanceof Element &&
-    !!target.closest('.sidebar-primary, .sidebar-search, .brand')
+    !!target.closest('.sidebar-primary, .brand')
   );
 }
 

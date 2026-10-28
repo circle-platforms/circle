@@ -78,11 +78,11 @@ async function setup(
   return { manager, root, workspace, logRoot, events, options };
 }
 
-async function shell(
+async function disableEcho(
   manager: TerminalManager,
   log: TerminalEvent[],
-): Promise<TerminalSnapshot> {
-  const terminal = await manager.create({ owner, sessionId: 'session-a' });
+  terminal: TerminalSnapshot,
+) {
   await manager.write(
     owner,
     terminal.id,
@@ -94,7 +94,22 @@ async function shell(
     // A shell starts slowly while the whole desktop suite runs on CI.
     20000,
   );
+}
+
+async function shell(
+  manager: TerminalManager,
+  log: TerminalEvent[],
+): Promise<TerminalSnapshot> {
+  const terminal = await manager.create({ owner, sessionId: 'session-a' });
+  await disableEcho(manager, log, terminal);
   return terminal;
+}
+
+function terminalOutput(events: TerminalEvent[], terminalId: string) {
+  return events
+    .filter((event) => event.terminalId === terminalId)
+    .map((event) => event.data ?? '')
+    .join('');
 }
 
 test(
@@ -547,11 +562,13 @@ test(
       true,
       'restart must not silently replay the previous command',
     );
+    await disableEcho(manager, events, restarted);
     await manager.write(owner, restarted.id, command);
     await wait(
-      async () => !(await portAvailable(port)),
+      () => terminalOutput(events, restarted.id).includes('SERVICE_READY\r\n'),
       'service ready after explicit restart input',
     );
+    assert.equal(await portAvailable(port), false);
     assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'ok');
     await manager.close(owner, restarted.id);
     await wait(() => portAvailable(port), 'restarted service released');
@@ -611,9 +628,11 @@ test(
       `${quote(process.execPath)} -e ${quote(script)} &\r`,
     );
     await wait(
-      async () => !(await portAvailable(port)),
+      () =>
+        terminalOutput(events, terminal.id).includes('BACKGROUND_READY\r\n'),
       'background port ready',
     );
+    assert.equal(await portAvailable(port), false);
     const stopped = await manager.close(owner, terminal.id);
     assert.equal(stopped.status, 'exited');
     assert.equal(await portAvailable(port), true);

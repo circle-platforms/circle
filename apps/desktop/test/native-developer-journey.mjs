@@ -14,6 +14,7 @@ import {
   runNativeReviewerSourceJourney,
 } from './helpers/native-child-command-handoff-journey.mjs';
 import { runNativeGitHubSettingsJourney } from './helpers/native-github-settings-journey.mjs';
+import { closeNativeSettings } from './helpers/native-settings.mjs';
 import {
   createNativeContinuityFixture,
   runNativeTerminalContextJourney,
@@ -80,6 +81,7 @@ import { setViewport } from './helpers/viewport.mjs';
 import { patience } from './helpers/patience.mjs';
 import { saveWithShortcut } from './helpers/native-editor-save.mjs';
 import { listenForBrowser } from '../../../tests/browser-port.mjs';
+import { expectedSessionChanges } from './helpers/native-changes-oracle.mjs';
 const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packaged = !!process.env.CIRCLE_DESKTOP_EXECUTABLE;
@@ -530,6 +532,7 @@ for (const file of [
     'native-terminal-rendered-match',
     'native-paste-cleanup',
     'native-github-settings-journey',
+    'native-settings',
     'native-panel-acceptance',
     'native-keyboard-journey',
     'native-project-file',
@@ -1106,27 +1109,77 @@ try {
               ),
           );
         let listed, actual;
-        const matchesGit = async () => {
+        const matches = async (sessionOnly) => {
           actual = await expected();
+          if (sessionOnly) {
+            const snapshot = await state();
+            const session = snapshot.sessions.find(
+              (item) => item.id === sessionId,
+            );
+            const workspace = snapshot.workspaces.find(
+              (item) => item.id === session?.workspaceId,
+            );
+            assert(
+              session && workspace,
+              'the original session has its workspace',
+            );
+            actual = expectedSessionChanges(
+              actual,
+              session.changes ?? [],
+              workspace.path,
+            );
+          }
           listed = await shown();
           return JSON.stringify(listed) === JSON.stringify(actual);
         };
-        // This session's list is what Circle's file tools changed here, nothing yet,
-        // together with the uncommitted files the overview's changes card lists: work
-        // done outside the window shows in both.
+        const waitForRows = async (sessionOnly, description) => {
+          try {
+            await until(() => matches(sessionOnly), description);
+          } catch (error) {
+            const snapshot = await state();
+            const backendGit = await query('git', 'changes').catch(
+              (reason) => ({
+                error: String(reason),
+              }),
+            );
+            await writeFile(
+              join(output, 'changes-list-mismatch.json'),
+              JSON.stringify(
+                {
+                  sessionOnly,
+                  expected: actual,
+                  shown: listed,
+                  backendGit,
+                  session: snapshot.sessions.find(
+                    (item) => item.id === sessionId,
+                  ),
+                  status: await git('status', '--short'),
+                },
+                null,
+                2,
+              ),
+            );
+            await page.screenshot({
+              path: join(output, 'changes-list-mismatch.png'),
+            });
+            throw error;
+          }
+        };
+        // This session includes its recorded edits, even a file restored to Git's
+        // original contents, as well as work done outside the window.
         await mode
           .getByRole('button', { name: 'this session', exact: true })
           .click();
-        await until(
-          matchesGit,
-          "this session's list is the files Git says differ, as the overview's changes card lists them",
+        await waitForRows(
+          true,
+          "this session's list combines recorded edits with Git's changed files",
         );
         await mode
           .getByRole('button', { name: 'all uncommitted', exact: true })
           .click();
         // Everything that differs from the last commit, staged or not, new files too.
-        await until(
-          matchesGit,
+        await waitForRows(
+          false,
           'the list is every file Git says differs from the last commit',
         );
         for (const [path, letter] of [
@@ -2051,6 +2104,7 @@ try {
       let serviceShell;
       const appearance = async ({ locale, theme }) => {
         await closeServiceForm();
+        await closeNativeSettings(page);
         await closeDrawer();
         await (
           await visibleNavigation()
@@ -2071,11 +2125,7 @@ try {
           }),
           'theme chosen',
         );
-        await (
-          await visibleNavigation()
-        )
-          .locator(`.session-link[href="#/session/${sessionId}"][tabindex="0"]`)
-          .click();
+        await closeNativeSettings(page);
         // The session opens once the runtime has selected it; carry on only
         // when its page is on screen.
         await page.waitForFunction(
@@ -2084,6 +2134,7 @@ try {
             !!document.querySelector('.composer textarea'),
           sessionId,
         );
+        assert.equal((await state()).activeSessionId, sessionId);
         currentLocale = locale;
       };
       await runNativePanelAcceptance({
@@ -2264,6 +2315,7 @@ try {
   );
   await check('English Chinese dark light and narrow UI', async () => {
     await closeFile();
+    await closeNativeSettings(page);
     await closeDrawer();
     for (const language of ['English', '简体中文'])
       for (const theme of ['dark', 'light']) {
@@ -2281,10 +2333,9 @@ try {
           }),
           'theme chosen',
         );
-        await page
-          .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-          .first()
-          .click();
+        await closeNativeSettings(page);
+        await page.waitForURL((url) => url.hash === `#/session/${sessionId}`);
+        assert.equal((await state()).activeSessionId, sessionId);
         await screenshot(`08-${language === 'English' ? 'en' : 'zh'}-${theme}`);
       }
     await setViewport(app, page, { width: 760, height: 720 });

@@ -1,68 +1,91 @@
 import { Tooltip } from 'radix-ui';
 import { createRoot } from 'react-dom/client';
-import { useEffect, useState } from 'react';
-import { SettingsNavigation } from '../src/features/SettingsNavigation';
+import { useState } from 'react';
+import { SettingsLayout } from '../src/features/SettingsLayout';
 import { t, setLanguage } from '../src/i18n';
 import { applyTheme } from '../src/theme';
 import '../src/styles/app.css';
 const params = new URLSearchParams(location.search);
 setLanguage(params.get('language') === 'zh-CN' ? 'zh-CN' : 'en');
 applyTheme(params.get('theme') === 'dark' ? 'dark' : 'light');
-const effects = { mounts: 0, unmounts: 0, changes: 0, escaped: 0 };
+const effects = { selected: [] as string[], escaped: 0 };
 Object.assign(window, { settingsEffects: effects });
-function Form() {
-  const [value, setValue] = useState('unsubmitted settings draft');
-  useEffect(() => {
-    effects.mounts++;
-    return () => {
-      effects.unmounts++;
-    };
-  }, []);
-  return (
-    <section className="settings-block">
-      <h2>{t('protected files')}</h2>
-      <label className="field-label" htmlFor="settings-local-draft">
-        {t('additional file patterns')}
-      </label>
-      <textarea
-        id="settings-local-draft"
-        value={value}
-        onChange={(event) => {
-          effects.changes++;
-          setValue(event.target.value);
-        }}
-      />
-      <input
-        type="password"
-        defaultValue="secret-token-must-not-be-indexed"
-        aria-label="synthetic credential"
-      />
-    </section>
-  );
-}
+// Three headings, four groups: the shape of the real dialog, without its runtime.
+const groups = () => [
+  {
+    id: 'general',
+    label: t('general'),
+    sections: [
+      {
+        id: 'appearance',
+        label: t('appearance'),
+        keywords: [t('theme'), t('text size'), t('language')].join(' '),
+      },
+      {
+        id: 'shortcuts',
+        label: t('shortcuts'),
+        keywords: t('view shortcuts'),
+      },
+    ],
+  },
+  {
+    id: 'capabilities',
+    label: t('capabilities'),
+    sections: [
+      { id: 'skills', label: t('skills'), keywords: '' },
+      {
+        id: 'extensions',
+        label: t('extensions'),
+        keywords: [t('interface components'), 'GitHub'].join(' '),
+      },
+    ],
+  },
+  {
+    id: 'safety',
+    label: t('permissions & safety'),
+    sections: [
+      {
+        id: 'files',
+        label: t('file access'),
+        keywords: t('protected files'),
+      },
+    ],
+  },
+];
 function Fixture() {
+  const [active, setActive] = useState('appearance');
   return (
     <div
-      className="page settings-page"
+      className="dialog-content settings-dialog"
       onKeyDown={(event) => {
         if (event.key === 'Escape') effects.escaped++;
       }}
     >
-      <h1>{t('settings')}</h1>
-      <SettingsNavigation>
-        <section className="settings-block first">
-          <h2>{t('appearance')}</h2>
-          <div className="setting-row">
-            <span>{t('theme')}</span>
-            <button>{t('light')}</button>
-          </div>
+      <div className="dialog-heading">
+        <h2>{t('settings')}</h2>
+      </div>
+      <SettingsLayout
+        groups={groups()}
+        active={active}
+        onSelect={(id) => {
+          effects.selected.push(id);
+          setActive(id);
+        }}
+      >
+        {/* A long page, to see that a new group starts at its top. */}
+        <section className="page" key={active} data-group={active}>
+          <header className="page-heading">
+            <div>
+              <h1>{active}</h1>
+            </div>
+          </header>
+          <input
+            aria-label="synthetic credential"
+            defaultValue="secret-token"
+          />
+          <div style={{ height: 1600 }} />
         </section>
-        <Form />
-        <section className="settings-block" style={{ minHeight: 900 }}>
-          <h2>{t('keyboard')}</h2>
-          <button>{t('view shortcuts')}</button>
-        </section>
-      </SettingsNavigation>
+      </SettingsLayout>
     </div>
   );
 }

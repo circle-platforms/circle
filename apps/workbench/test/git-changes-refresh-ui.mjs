@@ -79,6 +79,88 @@ try {
     (await page.locator('#list').getAttribute('data-error')) ?? '',
     /without a list of files/,
   );
+  // Reopening while an earlier Git read is in flight must request a fresh
+  // result after that read finishes, rather than displaying its stale answer.
+  await set({ active: false });
+  await settle();
+  await page.evaluate(() => {
+    window.setGitFiles([{ path: 'restored.md', status: 'M' }]);
+    window.holdNextGitRead();
+  });
+  await set({ active: true });
+  await settle();
+  assert.equal(await reads(), 5);
+  await page.evaluate(() => window.setGitFiles([]));
+  await set({ active: false });
+  await settle();
+  await set({ active: true });
+  await settle();
+  assert.equal(await reads(), 5, 'the old read is still in flight');
+  await set({ active: false });
+  await settle();
+  await set({ active: true });
+  await settle();
+  await page.evaluate(() => window.releaseGitRead());
+  await settle();
+  await settle();
+  assert.equal(await reads(), 6, 'reopening queues one fresh Git read');
+  assert.equal(await page.locator('#list').getAttribute('data-files'), '[]');
+
+  // Closing before the first read ends must not start a background reread;
+  // reopening later still reads the latest state.
+  await set({ active: false });
+  await settle();
+  await page.evaluate(() => window.holdNextGitRead());
+  await set({ active: true });
+  await settle();
+  assert.equal(await reads(), 7);
+  await set({ active: false });
+  await settle();
+  await set({ active: true });
+  await settle();
+  await set({ active: false });
+  await settle();
+  await page.evaluate(() => window.releaseGitRead());
+  await settle();
+  await settle();
+  assert.equal(
+    await reads(),
+    7,
+    'a closed panel does not refresh in the background',
+  );
+  await set({ active: true });
+  await settle();
+  assert.equal(await reads(), 8, 'opening the panel starts a fresh read');
+
+  // A pending refresh for one session cannot refresh or replace another.
+  await set({ active: false });
+  await settle();
+  await page.evaluate(() => window.holdNextGitRead());
+  await set({ active: true });
+  await settle();
+  assert.equal(await reads(), 9);
+  await set({ active: false });
+  await settle();
+  await set({ active: true });
+  await settle();
+  await page.evaluate(() =>
+    window.setGitFiles([{ path: 'other.md', status: 'A' }]),
+  );
+  await set({ sessionId: 'alternate' });
+  await settle();
+  assert.equal(await reads(), 10);
+  await page.evaluate(() => window.releaseGitRead());
+  await settle();
+  await settle();
+  assert.equal(
+    await reads(),
+    10,
+    'the old session cannot trigger another read',
+  );
+  assert.match(
+    await page.locator('#list').getAttribute('data-files'),
+    /other\.md/,
+  );
   assert.deepEqual(errors, []);
   console.log('git changes refresh: ok');
 } finally {
