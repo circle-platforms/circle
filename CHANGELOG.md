@@ -1,8 +1,35 @@
 # Changelog
 
-All notable changes to Circle are listed here, newest first. Circle follows [Semantic Versioning](https://semver.org) from 1.0 on.
+All notable changes to Circle are listed here, newest first. Circle generally follows [Semantic Versioning](https://semver.org) from 1.0 on; version 1.13.0 includes the breaking changes listed below.
 
 ## Unreleased
+
+### Breaking changes
+
+- **The bundled Hub integration has been removed.** Circle no longer ships the `hub` extension, its `/hub` commands or its desktop Hub and platform pages. Its saved extension data and secrets are left on disk; removal does not revoke tokens at the service that issued them.
+- **MCP tool approval follows the server's annotations by default.** A tool the server marks read-only can run without asking. A call that sends a local file or a secret's value asks like other tools and is refused in read-only and plan mode. Set `trust_annotations: false` on a server to make all its tools ask, as in 1.12.0. Only configure servers you trust.
+- **Existing skill outputs no longer receive a separate overwrite approval.** In `accept-edits` mode, changes to files inside the workspace can proceed without a card even when they are existing skill-run outputs.
+
+### Added
+
+- **Headless runs can connect MCP servers.** Print, line and RPC modes load configured MCP servers before the first prompt when started with `--extensions`, alongside extensions.
+- **MCP headers can use a saved secret.** Configure `${secret:NAME}` in an HTTP server's headers instead of writing the value in settings; Circle substitutes it when connecting and redacts it where the server quotes it back.
+- **MCP tools can take local files.** For a tool that declares a base64 file argument, Circle reads the named file under its normal file-access rules and shows its path, size and digest on the approval card before sending it.
+- **Circle can save a device profile.** The `terminal_profile_save` tool saves a device's address, user and sign-in reference; a password is stored by the name of a saved secret, never by its value.
+
+### Changed
+
+- **Desktop settings open over your work.** Settings and capability management are collected in one searchable dialog, with a simpler sidebar and direct links to each group. Closing settings returns to the view and keyboard focus you were using.
+- **Some MCP file calls can reuse a result.** When a server marks a tool idempotent, repeated calls with the same file contents and other arguments can return an earlier successful result until Circle sends a call that may change that server. Changes by other clients are not observed; set `trust_annotations: false` to send every call.
+- **Routine hook allows stay quiet by default.** New tool results no longer carry the routine allow prefix, and older prefixes are hidden in the interface without changing stored history. Set `show_hook_allow` to show routine allow notices; denials and questions remain visible.
+
+### Fixed
+
+- **Browser shortcuts close the active tab.** Closing a newly opened browser tab keeps the page you were already using, even when the interface has not yet caught up with the new tab.
+- **The sidebar keeps its position while sessions move.** When the list has room to scroll, the row you were looking at stays in place even if a scroll notification is still pending.
+- **The editor uses its updated HTML sanitizer.** The application now uses the patched sanitizer in the editor itself, as well as in its dependency list.
+- **An approved SSH host key resumes the paused login.** Rejecting a key closes the paused connection, and a connection that has already ended starts a fresh login instead.
+- **Grep reports files it did not search.** Files over the size limit, non-UTF-8 files and unreadable files are counted in the result, so a search with no matches no longer implies they were searched. Literal ASCII searches also avoid decoding files that cannot match.
 
 ## 1.12.0 - 2026-10-23
 
