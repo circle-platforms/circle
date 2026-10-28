@@ -26,11 +26,8 @@ import {
 import {
   ArrowUpRight,
   Bot,
-  ExternalLink,
-  Folder,
   Globe,
   LayoutDashboard,
-  Search,
   SquareTerminal,
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
@@ -353,9 +350,7 @@ export function FilesPanel({
   selection,
   visible,
   onFile,
-  onDialog,
-}: { selection: string } & Pick<Props, 'onFile' | 'visible'> &
-  Partial<Pick<Props, 'onDialog'>>) {
+}: { selection: string } & Pick<Props, 'onFile' | 'visible'>) {
   const { snapshot, runtime } = useRuntime();
   const session = currentSession(snapshot);
   const listing = snapshot.fileListings?.[session.workspaceId];
@@ -375,7 +370,6 @@ export function FilesPanel({
   const owner = JSON.stringify([session.workspaceId, session.id]);
   const [query, setQuery] = useOwnerState(owner, '');
   const [open, setOpen] = useOwnerState<Set<string>>(owner, new Set());
-  const panel = useRef<HTMLDivElement>(null);
   // Opening a source reveals its ancestors without replacing the retained editor.
   useEffect(() => {
     const parts = selection.split('/').slice(0, -1);
@@ -425,29 +419,15 @@ export function FilesPanel({
       return next;
     });
   return (
-    <div className="files-panel" ref={panel}>
-      <span className="panel-header-name">
-        <Folder size={14} aria-hidden />
-        {t('files')}
-      </span>
-      <span className="panel-header-actions">
-        <IconButton
-          label={t('search files')}
-          onClick={() =>
-            panel.current
-              ?.querySelector<HTMLInputElement>('.search-field input')
-              ?.focus()
-          }
-        >
-          <Search size={14} />
-        </IconButton>
-      </span>
-      <SearchInput
-        value={query}
-        onChange={setQuery}
-        label={t('filter files')}
-        placeholder={t('filter files…')}
-      />
+    <div className="files-panel">
+      <header className="mode-toolbar">
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          label={t('filter files')}
+          placeholder={t('filter files…')}
+        />
+      </header>
       <VirtualFileTree
         rows={tree.rows}
         selectedPath={selection}
@@ -514,14 +494,6 @@ export function FilesPanel({
       )}
       {!!query && !tree.matchedCount && (!listing || listing.complete) && (
         <p className="panel-note">{t('no matching files')}</p>
-      )}
-      {onDialog && (
-        <div className="file-index-footer">
-          <button type="button" onClick={() => onDialog('external-files')}>
-            <ExternalLink size={14} aria-hidden />
-            <span>{t('external files')}</span>
-          </button>
-        </div>
       )}
     </div>
   );

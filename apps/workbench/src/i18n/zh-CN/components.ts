@@ -1,6 +1,7 @@
 // Simplified Chinese for the interface words in the components files. English is the key.
 export const components: Record<string, string> = {
   'session actions for {title}': '{title} 的会话操作',
+  'hide sidebar': '隐藏侧边栏',
   'workspace actions for {name}': '{name} 的工作区操作',
   'pin session': '置顶会话',
   'unpin session': '取消置顶会话',

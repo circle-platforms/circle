@@ -76,14 +76,14 @@ test(
       'the file title is not repeated above the document',
     );
     assert.equal(
-      await index.locator('.panel-header-name').isVisible(),
-      false,
-      'legacy index heading never overlays the document',
+      await index.locator('.panel-header-name').count(),
+      0,
+      'there is no index heading to overlay the document',
     );
     assert.equal(
-      await index.locator('.panel-header-actions').isVisible(),
-      false,
-      'the filter replaces the legacy floating search trigger',
+      await index.locator('.panel-header-actions').count(),
+      0,
+      'the filter is the only search in the index',
     );
 
     // Another mode and back: the same editor, the same filter, the same draft.
@@ -184,6 +184,134 @@ test(
     assert.equal(
       await composer.inputValue(),
       'draft retained while reading a source document',
+    );
+    assert.deepEqual(errors, []);
+  },
+);
+
+test(
+  'the files, changes and subagents modes keep one grid, and the files mode offers only its tree',
+  {
+    skip: browserOptions ? false : 'no supported test browser is installed',
+  },
+  async (t) => {
+    const cleanup = workbenchCleanup(t);
+    const server = await createServer({
+      root: fileURLToPath(new URL('..', import.meta.url)),
+      server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
+      logLevel: 'error',
+    });
+    cleanup(() => server.close());
+    await server.listen();
+    await warmModules(server);
+    const browser = await chromium.launch({
+      ...browserOptions,
+      headless: true,
+    });
+    cleanup(() => browser.close());
+    const page = await browser.newPage({
+      viewport: { width: 1520, height: 980 },
+      locale: 'en-US',
+    });
+    page.setDefaultTimeout(10000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(String(error)));
+    await page.goto(server.resolvedUrls!.local[0]!, { timeout: 0 });
+    await page.locator('.composer textarea').waitFor();
+    // Where things sit in the open mode, in pixels from the drawer's left edge.
+    const grid = (spec: {
+      bar?: string;
+      control?: string;
+      row: string;
+      content: string;
+    }) =>
+      // A script as text: the test runner's transform adds helpers to functions that a
+      // browser page does not have.
+      page.evaluate(`(() => {
+        const spec = ${JSON.stringify(spec)};
+        const shown = (selector) =>
+          [...document.querySelectorAll(selector)].find(
+            (node) => node.getClientRects().length > 0,
+          );
+        const drawer = shown('.work-drawer');
+        const row = shown(spec.row);
+        if (!drawer || !row) return null;
+        const edge = drawer.getBoundingClientRect().left;
+        const left = (node) =>
+          node ? Math.round(node.getBoundingClientRect().left - edge) : null;
+        return {
+          bar: spec.bar
+            ? Math.round(shown(spec.bar)?.getBoundingClientRect().height ?? 0)
+            : undefined,
+          control: spec.control ? left(shown(spec.control)) : undefined,
+          row: left(row),
+          content: left(row.querySelector(spec.content)),
+        };
+      })()`);
+    // A toolbar row of 44px; what is in it and the row's own content 16px in; a row's
+    // background 8px in. The same in each mode, so the eye keeps its place between them.
+    const expected = { bar: 44, control: 16, row: 8, content: 16 };
+
+    await page
+      .getByRole('button', { name: 'files panel', exact: true })
+      .click();
+    const files = await grid({
+      bar: '.files-panel > .mode-toolbar',
+      control: '.files-panel .search-field',
+      row: '.virtual-file-tree-row',
+      content: 'svg',
+    });
+    assert.deepEqual(files, expected, 'files');
+    // The tree starts under the toolbar, and its filter is the only search in the mode.
+    assert.equal(
+      await page.evaluate(`(() => {
+        const panel = document.querySelector('.files-panel');
+        const tree = document.querySelector('.files-panel > .virtual-file-tree');
+        return Math.round(
+          tree.getBoundingClientRect().top - panel.getBoundingClientRect().top,
+        );
+      })()`),
+      44,
+    );
+    const filesPanel = page.locator('.files-panel');
+    assert.equal(
+      await filesPanel
+        .getByRole('button', { name: 'external files', includeHidden: true })
+        .count(),
+      0,
+      'external files are a setting now, not an entry of the tree',
+    );
+    assert.equal(
+      await filesPanel
+        .locator(
+          '.panel-header-name, .panel-header-actions, .file-index-footer',
+        )
+        .count(),
+      0,
+    );
+
+    await page
+      .getByRole('button', { name: 'changes panel', exact: true })
+      .click();
+    const changes = await grid({
+      bar: '.changes-mode > .mode-toolbar',
+      control: '.changes-mode > .mode-toolbar .segmented',
+      row: '.changes-row',
+      content: '.overview-letter',
+    });
+    assert.deepEqual(changes, expected, 'changes');
+
+    await page
+      .getByRole('button', { name: 'subagents panel', exact: true })
+      .click();
+    const agents = await grid({
+      row: '.agent-row',
+      content: '.overview-dot',
+    });
+    assert.deepEqual(
+      agents,
+      { bar: undefined, control: undefined, row: 8, content: 16 },
+      'subagents',
     );
     assert.deepEqual(errors, []);
   },
