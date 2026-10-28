@@ -11,6 +11,7 @@
     "start": "npm run tools:prepare && electron .",
     "dev": "npm run build && npm start",
     "package": "npm run build && node scripts/package.mjs",
+    "package:only": "node scripts/package.mjs",
     "package:beta": "npm run build && node scripts/package.mjs --beta",
     "package:msi": "node scripts/msi.ts",
     "pretest": "node -e \"require('electron')\"",

@@ -50,8 +50,10 @@ jobs:
       CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC: '1'
       # PUSH measures browser Console/CDP/IPC delivery, not a remote Git push.
       CIRCLE_NATIVE_JOURNEY_PUSH: '1'
-    # Both application modes and both viewport widths run on each native architecture, and
-    # the native developer journey in development (and, on main, in the packaged application).
+    # The development application runs test:desktop and test:live at both viewport widths and
+    # the native developer journey; on main the packaged application repeats them. A pull
+    # request packages the application and updates the package, and the Check workflow's launch
+    # already starts a package on every pull request.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -82,10 +84,12 @@ jobs:
           openssl version
       - name: Start an isolated Linux display and retain the Chromium sandbox
         if: runner.os == 'Linux'
+        # A slow package mirror fails here within minutes rather than holding the job
+        timeout-minutes: 8
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
+          timeout 180 sudo apt-get update -o Acquire::Retries=1
+          timeout 240 sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
           Xvfb :99 -screen 0 1920x1080x24 > "$RUNNER_TEMP/circle-xvfb.log" 2>&1 &
           echo 'DISPLAY=:99' >> "$GITHUB_ENV"
           helper="$GITHUB_WORKSPACE/apps/desktop/node_modules/electron/dist/chrome-sandbox"
@@ -119,8 +123,9 @@ jobs:
         timeout-minutes: 20
         run: node apps/desktop/test/native-developer-journey.mjs
       - run: npm --prefix apps/desktop run test:interface
-      - run: npm --prefix apps/desktop run package
-      - name: Check the packaged application
+      # The build step above already built dist/, which the tests since have used
+      - run: npm --prefix apps/desktop run package:only
+      - name: Prepare the packaged application
         shell: bash
         run: |
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
@@ -131,6 +136,14 @@ jobs:
             sudo chmod 4755 "$helper"
           fi
           node apps/desktop/test/developer-toolchain-smoke.mjs
+      # A pull request runs these in the development application above; main repeats them in
+      # the packaged one
+      - name: Check the packaged application
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
+          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
           npm --prefix apps/desktop run test:desktop
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live
@@ -220,6 +233,44 @@ jobs:
           name: circle-component-ui-shard-${{ matrix.shard }}
           path: apps/desktop/artifacts/component-ui/
           if-no-files-found: ignore
+  # The desktop runtime tests on Windows, in a job of their own beside the packaging below:
+  # together they were the longest job of the workflow.
+  runtime-other-platforms:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/workbench/package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm --prefix apps/workbench ci
+      - run: npm --prefix apps/desktop ci
+      # The pinned developer tools (Node, gh) from an earlier run, so a build does
+      # not download them again; each is used only while its receipt matches it
+      - uses: actions/cache@v6
+        with:
+          path: apps/desktop/dist/tools
+          key: developer-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/scripts/developer-toolchain.mjs') }}
+      - run: npm --prefix apps/desktop run test:runtime
+        # Bound leaked native handles without forcing tests to report success.
+        timeout-minutes: 20
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: failure() || cancelled()
+        with:
+          name: circle-desktop-${{ matrix.os }}-runtime
+          path: apps/desktop/artifacts/
+          if-no-files-found: ignore
   package-other-platforms:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     strategy:
@@ -233,14 +284,19 @@ jobs:
       CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC: '1'
       # PUSH measures browser Console/CDP/IPC delivery, not a remote Git push.
       CIRCLE_NATIVE_JOURNEY_PUSH: '1'
-    # Runtime tests, packaging, the native developer journey (12m each; the packaged one on
-    # main only), the MSI update (15m) and artifact upload.
-    timeout-minutes: 65
+    # Packaging, the native developer journey (12m each; the packaged one on main only), the
+    # MSI update (15m) and artifact upload. The runtime tests are the job above.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/workbench/package-lock.json
+            apps/desktop/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
@@ -251,7 +307,6 @@ jobs:
           path: apps/desktop/dist/tools
           key: developer-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/scripts/developer-toolchain.mjs') }}
       - name: Install the WiX Toolset
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
@@ -261,9 +316,6 @@ jobs:
       - name: Verify native developer tool resources
         timeout-minutes: 5
         run: node --test apps/desktop/test/developer-toolchain.test.mjs apps/desktop/test/journey-platform.test.mjs
-      - run: npm --prefix apps/desktop run test:runtime
-        # Bound leaked native handles without forcing tests to report success.
-        timeout-minutes: 20
       - run: npm --prefix apps/desktop run package
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
       - name: Exercise the development application on Windows
@@ -273,8 +325,8 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           npm --prefix apps/desktop run test:desktop
           node apps/desktop/test/native-developer-journey.mjs
+      # test:desktop in the packaged application on main only, as on the other systems
       - name: Check invalid browser addresses on Windows
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
@@ -282,10 +334,10 @@ jobs:
           $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
           $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
           node apps/desktop/test/developer-toolchain-smoke.mjs
-          npm --prefix apps/desktop run test:desktop
+          if ($env:GITHUB_EVENT_NAME -ne 'pull_request') { npm --prefix apps/desktop run test:desktop }
           node apps/desktop/test/browser-address.mjs
       - name: Exercise the native developer journey in the packaged application on Windows
-        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request'
         timeout-minutes: 12
         shell: pwsh
         run: |
@@ -294,21 +346,18 @@ jobs:
           $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
           node apps/desktop/test/native-developer-journey.mjs
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        if: runner.os == 'Windows' && always()
+        if: always()
         with:
           name: circle-windows-browser-address
           path: apps/desktop/artifacts/browser-address/
           if-no-files-found: ignore
       # The release workflow installs and removes it; here it only has to build and validate
       - name: Build the MSI
-        if: runner.os == 'Windows'
         run: npm --prefix apps/desktop run package:msi
       - name: Inspect the compiled MSI
-        if: runner.os == 'Windows'
         run: npm --prefix apps/desktop run test:msi
       # The installed MSI updates itself to a newer MSI through the application
       - name: Update the installed application
-        if: runner.os == 'Windows'
         timeout-minutes: 15
         shell: bash
         run: |
@@ -321,7 +370,12 @@ jobs:
         if: always()
         with:
           name: circle-desktop-${{ matrix.os }}-development
-          path: |
-            apps/desktop/out/
-            apps/desktop/artifacts/
+          path: apps/desktop/artifacts/
           if-no-files-found: error
+      # The packaged folder and the MSI, several hundred MB, only when there is a failure to read
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: failure() || cancelled()
+        with:
+          name: circle-desktop-${{ matrix.os }}-out
+          path: apps/desktop/out/
+          if-no-files-found: ignore
