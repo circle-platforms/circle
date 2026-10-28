@@ -81,6 +81,7 @@ import { setViewport } from './helpers/viewport.mjs';
 import { patience } from './helpers/patience.mjs';
 import { saveWithShortcut } from './helpers/native-editor-save.mjs';
 import { listenForBrowser } from '../../../tests/browser-port.mjs';
+import { expectedSessionChanges } from './helpers/native-changes-oracle.mjs';
 const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packaged = !!process.env.CIRCLE_DESKTOP_EXECUTABLE;
@@ -1018,27 +1019,77 @@ try {
               ),
           );
         let listed, actual;
-        const matchesGit = async () => {
+        const matches = async (sessionOnly) => {
           actual = await expected();
+          if (sessionOnly) {
+            const snapshot = await state();
+            const session = snapshot.sessions.find(
+              (item) => item.id === sessionId,
+            );
+            const workspace = snapshot.workspaces.find(
+              (item) => item.id === session?.workspaceId,
+            );
+            assert(
+              session && workspace,
+              'the original session has its workspace',
+            );
+            actual = expectedSessionChanges(
+              actual,
+              session.changes ?? [],
+              workspace.path,
+            );
+          }
           listed = await shown();
           return JSON.stringify(listed) === JSON.stringify(actual);
         };
-        // This session's list is what Circle's file tools changed here, nothing yet,
-        // together with the uncommitted files the overview's changes card lists: work
-        // done outside the window shows in both.
+        const waitForRows = async (sessionOnly, description) => {
+          try {
+            await until(() => matches(sessionOnly), description);
+          } catch (error) {
+            const snapshot = await state();
+            const backendGit = await query('git', 'changes').catch(
+              (reason) => ({
+                error: String(reason),
+              }),
+            );
+            await writeFile(
+              join(output, 'changes-list-mismatch.json'),
+              JSON.stringify(
+                {
+                  sessionOnly,
+                  expected: actual,
+                  shown: listed,
+                  backendGit,
+                  session: snapshot.sessions.find(
+                    (item) => item.id === sessionId,
+                  ),
+                  status: await git('status', '--short'),
+                },
+                null,
+                2,
+              ),
+            );
+            await page.screenshot({
+              path: join(output, 'changes-list-mismatch.png'),
+            });
+            throw error;
+          }
+        };
+        // This session includes its recorded edits, even a file restored to Git's
+        // original contents, as well as work done outside the window.
         await mode
           .getByRole('button', { name: 'this session', exact: true })
           .click();
-        await until(
-          matchesGit,
-          "this session's list is the files Git says differ, as the overview's changes card lists them",
+        await waitForRows(
+          true,
+          "this session's list combines recorded edits with Git's changed files",
         );
         await mode
           .getByRole('button', { name: 'all uncommitted', exact: true })
           .click();
         // Everything that differs from the last commit, staged or not, new files too.
-        await until(
-          matchesGit,
+        await waitForRows(
+          false,
           'the list is every file Git says differs from the last commit',
         );
         for (const [path, letter] of [

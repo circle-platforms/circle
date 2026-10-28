@@ -8,6 +8,9 @@ import { useGitChanges } from '../src/model/git-changes';
 const asked: string[] = [];
 // A host that answers without a list, once
 let empty = false;
+let files: { path: string; status: string }[] = [];
+let holdNext = false;
+let release: () => void = () => {};
 window.circleDesktop = {
   runtimeCommand: async (command: {
     payload?: { service?: string; method?: string };
@@ -17,29 +20,60 @@ window.circleDesktop = {
       empty = false;
       return { ok: true };
     }
-    return { ok: true, data: { revision: String(asked.length), files: [] } };
+    const response = { revision: String(asked.length), files: [...files] };
+    if (holdNext) {
+      holdNext = false;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    }
+    return { ok: true, data: response };
   },
   onWorkspaceEvent: () => () => {},
 } as unknown as DesktopBridge;
-let set: (next: { busy: boolean; settled: number }) => void = () => {};
+let set: (
+  next: Partial<{
+    busy: boolean;
+    settled: number;
+    active: boolean;
+    sessionId: string;
+  }>,
+) => void = () => {};
 function List() {
-  const [state, setState] = useState({ busy: false, settled: 0 });
-  set = setState;
-  const { error } = useGitChanges({
-    sessionId: 'refresh',
-    live: true,
+  const [state, setState] = useState({
+    busy: false,
+    settled: 0,
     active: true,
+    sessionId: 'refresh',
+  });
+  set = (next) => setState((previous) => ({ ...previous, ...next }));
+  const { error, files: shown } = useGitChanges({
+    live: true,
     ...state,
   });
   return (
-    <p id="list" data-error={error}>
+    <p id="list" data-error={error} data-files={JSON.stringify(shown)}>
       {state.busy ? 'busy' : 'idle'} {state.settled}
     </p>
   );
 }
 Object.assign(window, {
   reads: () => asked.filter((call) => call === 'git.changes').length,
-  setList: (next: { busy: boolean; settled: number }) => set(next),
+  setList: (
+    next: Partial<{
+      busy: boolean;
+      settled: number;
+      active: boolean;
+      sessionId: string;
+    }>,
+  ) => set(next),
+  setGitFiles: (next: typeof files) => {
+    files = next;
+  },
+  holdNextGitRead: () => {
+    holdNext = true;
+  },
+  releaseGitRead: () => release(),
   answerNothing: () => {
     empty = true;
   },
