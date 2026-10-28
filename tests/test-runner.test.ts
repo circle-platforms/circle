@@ -36,6 +36,34 @@ describe('group', () => {
 test('always fails', () => { throw Error('every attempt fails'); });
 `,
   );
+  writeFileSync(
+    join(directory, 'nested-steady.test.ts'),
+    `import { test } from 'node:test';
+import { appendFileSync } from 'node:fs';
+const log = (name: string) => appendFileSync(${JSON.stringify(runs)}, name + '\\n');
+test('stable parent', async (t) => {
+  await t.test('stable child', () => log('stable child'));
+  await t.test('another stable child', () => log('another stable child'));
+});
+`,
+  );
+  writeFileSync(
+    join(directory, 'nested-flaky.test.ts'),
+    `import { test } from 'node:test';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+const log = (name: string) => appendFileSync(${JSON.stringify(runs)}, name + '\\n');
+test('parent with failure', async (t) => {
+  await t.test('stable sibling', () => log('stable sibling'));
+  await t.test('flaky child', () => {
+    log('flaky child');
+    if (!existsSync('nested-failed-once')) {
+      writeFileSync('nested-failed-once', '');
+      throw Error('first attempt fails');
+    }
+  });
+});
+`,
+  );
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
   const lines: string[] = [];
@@ -83,6 +111,40 @@ test('on CI a test that fails every time still fails the run and warns of nothin
     [],
   );
   assert.equal(readFileSync(summaryFile, 'utf8'), '');
+});
+
+test('replayed passing subtests in another file are not reported as flaky', (t) => {
+  const { runs, lines, summaryFile, run } = suite(t);
+  assert.equal(run(['flaky.test.ts', 'nested-steady.test.ts']), 0);
+  const executions = readFileSync(runs, 'utf8').trim().split('\n');
+  assert.equal(executions.filter((name) => name === 'stable child').length, 1);
+  assert.equal(
+    executions.filter((name) => name === 'another stable child').length,
+    1,
+  );
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith('::warning')),
+    ['::warning title=flaky test::flaky.test.ts › group › fails once'],
+  );
+  assert.doesNotMatch(readFileSync(summaryFile, 'utf8'), /stable child/);
+});
+
+test('a failing child is named while its passing sibling stays unreported', (t) => {
+  const { runs, lines, summaryFile, run } = suite(t);
+  assert.equal(run(['nested-flaky.test.ts']), 0);
+  const executions = readFileSync(runs, 'utf8').trim().split('\n');
+  assert.equal(
+    executions.filter((name) => name === 'stable sibling').length,
+    1,
+  );
+  assert.equal(executions.filter((name) => name === 'flaky child').length, 2);
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith('::warning')),
+    [
+      '::warning title=flaky test::nested-flaky.test.ts › parent with failure › flaky child',
+    ],
+  );
+  assert.doesNotMatch(readFileSync(summaryFile, 'utf8'), /stable sibling/);
 });
 
 test('outside CI a failing test runs once and fails the run', (t) => {

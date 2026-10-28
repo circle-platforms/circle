@@ -14,7 +14,7 @@ export interface FlakyTest {
 interface StateEntry {
   name: string;
   passed_on_attempt: number;
-  children?: { line: number; column: number }[];
+  children?: { line: number; column: number; name?: string }[];
 }
 
 // GitHub keeps at most ten warning annotations of a step.
@@ -29,16 +29,45 @@ export function flakyTests(stateFile: string): FlakyTest[] {
   }
   const last = attempts.at(-1) ?? {};
   const where = (key: string) => {
-    const match = /^(.*):\d+:\d+$/.exec(key);
+    const match = /^(.*):\d+:\d+(?::\(\d+\))?$/.exec(key);
     return match ? match[1]! : key;
   };
+  const byLocation = new Map<string, string[]>();
+  for (const key of Object.keys(last)) {
+    const location = key.replace(/:\(\d+\)$/, '');
+    const matches = byLocation.get(location) ?? [];
+    matches.push(key);
+    byLocation.set(location, matches);
+  }
   const parent = new Map<string, string>();
   for (const [key, entry] of Object.entries(last))
-    for (const child of entry.children ?? [])
-      parent.set(`${where(key)}:${child.line}:${child.column}`, key);
-  const failed = Object.keys(last).filter(
-    (key) => last[key]!.passed_on_attempt > 0,
-  );
+    for (const child of entry.children ?? []) {
+      const candidates =
+        byLocation.get(`${where(key)}:${child.line}:${child.column}`) ?? [];
+      for (const candidate of candidates)
+        if (
+          candidate !== key &&
+          (child.name === undefined || last[candidate]!.name === child.name)
+        )
+          parent.set(candidate, key);
+    }
+  const failed = Object.keys(last).filter((key) => {
+    const attempt = last[key]!.passed_on_attempt;
+    if (attempt <= 0) return false;
+    // Node synthesizes children when replaying an already-passed parent. A
+    // synthetic child may receive a new location and attempt number even
+    // though its body did not run again.
+    const visited = new Set([key]);
+    for (
+      let at = parent.get(key);
+      at && !visited.has(at);
+      at = parent.get(at)
+    ) {
+      if (last[at]!.passed_on_attempt < attempt) return false;
+      visited.add(at);
+    }
+    return true;
+  });
   // A suite or a test with subtests reruns with the subtest that failed;
   // name the innermost one.
   const outer = new Set(
@@ -48,8 +77,15 @@ export function flakyTests(stateFile: string): FlakyTest[] {
     .filter((key) => !outer.has(key))
     .map((key) => {
       const names = [];
-      for (let at: string | undefined = key; at; at = parent.get(at))
+      const visited = new Set<string>();
+      for (
+        let at: string | undefined = key;
+        at && !visited.has(at);
+        at = parent.get(at)
+      ) {
         names.unshift(last[at]?.name ?? '?');
+        visited.add(at);
+      }
       return { file: where(key), name: names.join(' › ') };
     });
 }
