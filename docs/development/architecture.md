@@ -110,6 +110,9 @@ handled as signature errors, and signature errors do not disable thinking.
 | --------------- | ----------------------------------------------------------------------------------------------------------- |
 | `jobs.ts`       | Background jobs: commands and subagents, their output files, their notices to the model, and stopping them. |
 | `watch.ts`      | `api.Watch`, which an extension tool returns to wait for something slow.                                    |
+| `schedule.ts`   | Scheduled tasks: the store under `schedules/`, the clocks (`every`, `cron`, `once`), the run records and the per-schedule run lock. |
+| `scheduler.ts`  | Firing them: one headless `circle -p` in a child process per run, the tick loop, the daemon file. |
+| `schedule_cli.ts` | The `circle schedule` command line. |
 | `mcp_loader.ts` | Connects MCP servers and offers their tools under the same policy as built-in ones.                         |
 | `extensions.ts` | Loads extensions and what they register: tools, commands, middleware, renderers and event handlers.         |
 | `net.ts`        | The proxy and certificate settings for every request Circle makes itself.                                   |

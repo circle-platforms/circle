@@ -118,3 +118,8 @@ export function projectDataDir(workspace: string, home = circleHome()): string {
       .replace(/^[._]+|[._]+$/g, '') || 'root';
   return join(home, 'projects', `${name}-${digest}`);
 }
+
+/** The folder that holds scheduled tasks: one folder per schedule, with its runs. */
+export function schedulesRoot(home = circleHome()): string {
+  return join(home, 'schedules');
+}
