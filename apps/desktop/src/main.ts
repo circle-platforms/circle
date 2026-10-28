@@ -29,6 +29,7 @@ import {
   shell,
   session,
   safeStorage,
+  Tray,
 } from 'electron';
 import type {
   MenuItemConstructorOptions,
@@ -69,6 +70,12 @@ import type {
 } from './contracts';
 import { installation, Updater } from './updater';
 import { closeForQuit } from './quit';
+import {
+  shouldHideOnClose,
+  trayEnabled,
+  trayHint,
+  trayMenuTemplate,
+} from './tray';
 import { circleAppVersion } from './circle-version';
 import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
 import { channelOf } from './channel';
@@ -132,6 +139,11 @@ protocol.registerSchemesAsPrivileged([
 ]);
 const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
+// The icon by the clock: closing the window hides Circle there, and it answers there.
+let tray: Tray | null = null;
+let trayHintShown = false;
+// The windows of their own that were open when the main window hid to the tray.
+let hiddenPopouts: BrowserWindow[] = [];
 // The browser and the terminal can leave the drawer for a window of their own.
 let popouts: Popouts<BrowserWindow> | null = null;
 // The address each browser window is to open next, until its page takes it.
@@ -586,6 +598,74 @@ async function createPopoutWindow(
   if (kind === 'browser' && !popout.isDestroyed()) browsers?.repaint(sessionId);
   return popout;
 }
+/** Back from the tray: the window and the windows that were open beside it. */
+function showFromTray(): void {
+  if (!window || window.isDestroyed()) {
+    void createWindow();
+    return;
+  }
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+  for (const one of hiddenPopouts) if (!one.isDestroyed()) one.show();
+  hiddenPopouts = [];
+}
+
+/** Away to the tray. The runtime keeps working; the first hide says where to find it. */
+function hideToTray(): void {
+  const open = (popouts?.all() ?? []).filter(
+    (one) => !one.isDestroyed() && one.isVisible(),
+  );
+  hiddenPopouts = open;
+  window?.hide();
+  for (const one of open) one.hide();
+  if (!trayHintShown && process.platform === 'win32' && tray) {
+    trayHintShown = true;
+    const hint = trayHint(text);
+    tray.displayBalloon({
+      iconType: 'info',
+      title: hint.title,
+      content: hint.content,
+    });
+  }
+}
+
+/** The right-click menu, in the language the window shows. */
+function configureTrayMenu(): void {
+  tray?.setContextMenu(
+    Menu.buildFromTemplate(
+      trayMenuTemplate(text, { show: showFromTray, quit: () => app.quit() }),
+    ),
+  );
+}
+
+/** Make the icon. Without one the window closes for good, as it did before: a hidden
+ * window with no way back would trap the person, so hiding is decided by this check. */
+function makeTray(): void {
+  if (tray) return;
+  if (
+    !trayEnabled(process.platform, {
+      fixture: !!fixtureProfile,
+      env: process.env,
+    })
+  )
+    return;
+  let image = nativeImage.createFromPath(
+    join(__dirname, 'assets/circle-tray.png'),
+  );
+  if (image.isEmpty())
+    image = nativeImage.createFromPath(join(__dirname, 'assets/circle.png'));
+  if (image.isEmpty()) {
+    process.stderr.write('circle: no tray icon: the window will just close\n');
+    return;
+  }
+  tray = new Tray(image.resize({ width: 16, height: 16 }));
+  tray.setToolTip(app.name);
+  configureTrayMenu();
+  tray.on('click', showFromTray);
+  tray.on('double-click', showFromTray);
+}
+
 async function createWindow() {
   window = new BrowserWindow({
     width: 1440,
@@ -670,7 +750,12 @@ async function createWindow() {
   });
   installWindowChrome(window);
   window.once('ready-to-show', () => window?.show());
-  window.on('close', () => {
+  window.on('close', (event) => {
+    if (shouldHideOnClose(process.platform, { quitting, tray: !!tray })) {
+      event.preventDefault();
+      hideToTray();
+      return;
+    }
     popouts?.dockAll();
     terminals?.close();
     if (!browsers) return;
@@ -1063,6 +1148,7 @@ app
       if (!isNativeLocale(value)) throw Error('invalid language');
       interfaceLocale = value;
       configureMenu();
+      configureTrayMenu();
     });
     handle('circle:read-workspace-file', async (workspaceId, fileId) => {
       if (typeof workspaceId !== 'string' || typeof fileId !== 'string')
@@ -1383,6 +1469,7 @@ app
       () => false,
     );
     await createWindow();
+    makeTray();
     // Started by the installer, which macOS does not bring to the front by itself
     if (updated) app.focus({ steal: true });
     dailyUpdateCheck();
@@ -1404,8 +1491,18 @@ let quitting = false;
 // close; a browser close that stalls must not hold the application either: the update's
 // installer waits for this process, and a copy that cannot quit can never be replaced.
 const QUIT_CLOSE_LIMIT_MS = 20_000;
+app.on('will-quit', () => {
+  tray?.destroy();
+  tray = null;
+});
 app.on('before-quit', (event) => {
-  if (quitting || !runtime) return;
+  if (quitting) return;
+  if (!runtime) {
+    // A real quit, with no runtime to stop. Say so before the windows close, or
+    // the tray would take the hide and the application could never leave.
+    quitting = true;
+    return;
+  }
   event.preventDefault();
   void (async () => {
     const failure = await closeForQuit(async () => {

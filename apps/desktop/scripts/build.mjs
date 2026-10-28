@@ -91,6 +91,11 @@ const png = new Resvg(svg, { fitTo: { mode: 'width', value: 1024 } })
   .render()
   .asPng();
 await writeFile(join(dist, 'assets/circle.png'), png);
+// The tray by the clock draws from this one: the mark at its own small size.
+await writeFile(
+  join(dist, 'assets/circle-tray.png'),
+  new Resvg(svg, { fitTo: { mode: 'width', value: 64 } }).render().asPng(),
+);
 const icoPng = new Resvg(svg, { fitTo: { mode: 'width', value: 256 } })
   .render()
   .asPng();
