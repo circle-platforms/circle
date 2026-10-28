@@ -4886,6 +4886,26 @@ pre {
 .drawer-mode-toolbar {
   flex: 1 1 auto;
 }
+/* Keep every drawer mode reachable without a hidden horizontal scroll in a very
+   narrow top bar. The title still truncates and keeps its full text in its tip. */
+@container topbar (max-width: 360px) {
+  .topbar-title {
+    min-width: 72px;
+    flex-basis: 72px;
+  }
+  .topbar-actions {
+    max-width: calc(100% - 78px);
+  }
+  .drawer-mode-toolbar {
+    gap: 1px;
+  }
+  .drawer-mode-button {
+    padding-inline: 4px;
+  }
+  .drawer-mode-divider {
+    margin-inline: 2px;
+  }
+}
 /* The file tree owns its scroll viewport; measuring an unbounded ancestor defeats
    row virtualization even when the outer index itself can scroll. */
 .drawer-context-index > .context-index-content {
