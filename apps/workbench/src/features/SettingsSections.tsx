@@ -188,11 +188,11 @@ export function AboutSection() {
             : t('not connected'),
           [t('host')]: desktopHost()
             ? t('desktop application')
-            : 'browser layout preview',
+            : t('browser layout preview'),
           [t('data')]:
             runtime.mode === 'live'
               ? t('Circle desktop data folder')
-              : 'this browser only',
+              : t('this browser only'),
         }}
       />
       <div className="setting-row">
@@ -212,7 +212,7 @@ export function AboutSection() {
         <Button
           onClick={() => {
             runtime.request('check-update');
-            notify('update check requires the desktop application');
+            notify(t('update check requires the desktop application'));
           }}
         >
           {t('check now')}
@@ -461,9 +461,9 @@ export function LaunchSection() {
   const { runtime, notify } = useRuntime();
   const [launch, setLaunch] = useState('--mode rpc --no-tools');
   return (
-    <Page title="launch options">
+    <Page title={t('launch options')}>
       <textarea
-        aria-label="launch arguments"
+        aria-label={t('launch arguments')}
         className="input short"
         value={launch}
         onChange={(event) => setLaunch(event.target.value)}
@@ -471,10 +471,10 @@ export function LaunchSection() {
       <Button
         onClick={() => {
           runtime.request('launch-options', { arguments: launch });
-          notify('launch draft saved; no process started');
+          notify(t('launch draft saved; no process started'));
         }}
       >
-        save launch draft
+        {t('save launch draft')}
       </Button>
     </Page>
   );

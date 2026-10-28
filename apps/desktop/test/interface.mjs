@@ -611,10 +611,11 @@ try {
     width: Math.round(contentSize.width),
     height: Math.round(contentSize.height),
   };
-  // The window will not shrink below its 560px minimum.
+  // Leave enough content below the anchored row for a session to move above it;
+  // a scroll container cannot keep the row at the top beyond its lower bound.
   await setViewport(application, page, {
     width: restored.width,
-    height: Math.min(restored.height, 640),
+    height: Math.min(restored.height, 560),
   });
   const list = page.locator('.project-list');
   const beforeScroll = await list.evaluate((node) => ({
@@ -648,6 +649,16 @@ try {
   checks.push('the sidebar list scrolls');
   checks.push('scrolling the sidebar closes a menu tip');
   await list.evaluate((node) => {
+    // Hold the next scroll notification until after the session reorders. The
+    // actual position has already changed, even though React has not heard it.
+    node.addEventListener(
+      'scroll',
+      (event) => {
+        event.stopImmediatePropagation();
+        window.sidebarScrollHeld = true;
+      },
+      { capture: true, once: true },
+    );
     const row = [...node.querySelectorAll('[data-row-key]')].find(
       (item) => item.dataset.rowKey === 'recent:extra3',
     );
@@ -666,15 +677,22 @@ try {
       ) < 2
     );
   });
+  await page.waitForFunction(() => window.sidebarScrollHeld === true);
   const anchored = await list.evaluate((node) => {
     const row = node.querySelector('[data-row-key="recent:extra3"]');
     if (!(row instanceof HTMLElement)) return null;
     return {
       delta: row.getBoundingClientRect().top - node.getBoundingClientRect().top,
       scrollTop: node.scrollTop,
+      maxScroll: node.scrollHeight - node.clientHeight,
+      rowHeight: row.getBoundingClientRect().height,
     };
   });
   assert.ok(anchored);
+  assert.ok(
+    anchored.maxScroll - anchored.scrollTop >= anchored.rowHeight + 8,
+    `the fixture has room to preserve the row: ${JSON.stringify(anchored)}`,
+  );
   const still = page.getByRole('textbox', { name: 'message', exact: true });
   await still.fill('keep the sidebar still');
   await still.press('Enter');
@@ -687,11 +705,19 @@ try {
     return {
       delta: row.getBoundingClientRect().top - node.getBoundingClientRect().top,
       scrollTop: node.scrollTop,
+      maxScroll: node.scrollHeight - node.clientHeight,
     };
   });
   assert.ok(kept);
-  assert.ok(Math.abs(kept.delta - anchored.delta) < 2);
-  assert.ok(kept.scrollTop > anchored.scrollTop + 8);
+  assert.ok(
+    Math.abs(kept.delta - anchored.delta) < 2,
+    `the row stays put: ${JSON.stringify({ anchored, kept })}`,
+  );
+  assert.ok(
+    kept.scrollTop > anchored.scrollTop + 8,
+    `the list compensates for the moved row: ${JSON.stringify({ anchored, kept })}`,
+  );
+  await list.evaluate((node) => node.dispatchEvent(new Event('scroll')));
   await setViewport(application, page, restored);
   checks.push('sending a message keeps the row at the top of the sidebar');
   for (const command of sourceCommands) {

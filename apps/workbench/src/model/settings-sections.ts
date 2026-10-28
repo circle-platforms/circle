@@ -88,7 +88,7 @@ export function settingsGroups(context: SettingsContext): SettingsGroup[] {
     },
   ];
   if (!context.live)
-    general.push({ id: 'launch', label: 'launch options', keywords: '' });
+    general.push({ id: 'launch', label: t('launch options'), keywords: '' });
   const safety: SettingsSection[] = [
     {
       id: 'approvals',

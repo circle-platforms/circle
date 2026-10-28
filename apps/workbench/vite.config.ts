@@ -17,6 +17,17 @@ const componentReady: Plugin = {
 };
 export default defineConfig({
   plugins: [react(), ...(evidence ? [componentReady] : [])],
+  // Monaco includes its own copy of DOMPurify, so an npm override alone does
+  // not update the sanitizer it runs. Use the reviewed package in both the
+  // development server and the application bundle.
+  resolve: {
+    alias: [
+      {
+        find: /^\.\/dompurify\/dompurify\.js$/,
+        replacement: 'dompurify',
+      },
+    ],
+  },
   ...(evidence
     ? {
         cacheDir: resolve(evidence, 'vite-cache'),

@@ -4,6 +4,7 @@ import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { confirmLinuxUpdate } from '../../desktop/test/helpers/native-update-confirm.mjs';
 
 // Settings, and the skills, MCP servers, extensions and the rest with them, are one
 // dialog over the window: a list of groups at the left, the chosen one at the right,
@@ -53,6 +54,22 @@ const currentIs = (page, text) =>
         ?.textContent === text,
     text,
   );
+// A route change commits before the list's scroll effect runs. Measure only
+// after the requested section is selected and the list has brought it into view.
+const currentInView = (page, text) =>
+  page.waitForFunction((text) => {
+    const list = document.querySelector('.settings-index-list');
+    const current = list?.querySelector('[aria-current="page"]');
+    if (!current || current.textContent !== text) return false;
+    const a = list.getBoundingClientRect();
+    const b = current.getBoundingClientRect();
+    return (
+      b.left >= a.left - 1 &&
+      b.right <= a.right + 1 &&
+      b.top >= a.top - 1 &&
+      b.bottom <= a.bottom + 1
+    );
+  }, text);
 // What the list shows, group by group, and the heading of the page each opens.
 const GROUPS = [
   [
@@ -100,7 +117,7 @@ const ZH_LABELS = [
   '快捷键',
   '帮助',
   '关于与更新',
-  'launch options',
+  '启动选项',
   '模型与连接',
   '技能',
   '命令',
@@ -408,6 +425,43 @@ try {
       .waitFor();
     checks.push('crediting Circle is under git, not about');
 
+    // A setuid Linux update opens its own confirmation inside settings. The
+    // packaged update journey must target it, then actually request install.
+    await page.evaluate(() => {
+      const state = {
+        phase: 'ready',
+        version: '9.9.9',
+        linux: { folder: '/tmp/Circle', sandbox: true },
+      };
+      window.updateFixtureActions = [];
+      window.circleDesktop = {
+        onAction: () => () => {},
+        onBrowserEvent: () => () => {},
+        onTerminalEvent: () => () => {},
+        setTheme: async () => {},
+        updateState: async () => state,
+        onUpdate: () => () => {},
+        update: async (action) => {
+          window.updateFixtureActions.push(action);
+          return { ...state, phase: 'installing' };
+        },
+      };
+    });
+    await pick(page, 'appearance');
+    await pick(page, 'about & updates');
+    await page
+      .locator('.update-control')
+      .getByRole('button', { name: 'quit and replace', exact: true })
+      .click();
+    await page.getByRole('dialog', { name: 'quit and replace' }).waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 2);
+    await confirmLinuxUpdate(page);
+    await page.waitForFunction(() =>
+      window.updateFixtureActions.includes('install'),
+    );
+    await page.evaluate(() => delete window.circleDesktop);
+    checks.push('Linux update confirmation works inside the settings dialog');
+
     // Extensions: GitHub is one, and its details open in the dialog too.
     await pick(page, 'extensions');
     await page
@@ -652,6 +706,36 @@ try {
     const narrow = width <= 720;
     if (language === 'zh-CN')
       assert.deepEqual(await labelsOf(page), ZH_LABELS, 'the list in Chinese');
+    if (language === 'zh-CN' && width === 1280 && theme === 'light') {
+      await pick(page, '关于与更新');
+      await page.getByText('浏览器布局预览', { exact: true }).waitFor();
+      await page.getByText('仅此浏览器', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '立即检查', exact: true }).click();
+      await page.getByText('检查更新需要桌面应用', { exact: true }).waitFor();
+      await pick(page, '启动选项');
+      await page
+        .getByRole('heading', { name: '启动选项', exact: true })
+        .waitFor();
+      await page
+        .getByRole('textbox', { name: '启动参数', exact: true })
+        .fill('--mode rpc');
+      await page.getByRole('button', { name: '保存启动草稿' }).click();
+      await page
+        .getByText('启动草稿已保存，未启动进程', { exact: true })
+        .waitFor();
+      await page.waitForFunction(() => {
+        const snapshot = JSON.parse(
+          localStorage.getItem('circle.workbench.preview.v1') ?? 'null',
+        );
+        return snapshot?.requests?.some(
+          (request) =>
+            request.kind === 'launch-options' &&
+            request.payload.arguments === '--mode rpc',
+        );
+      });
+      await page.screenshot({ path: join(output, 'launch-zh-CN-1280.png') });
+      checks.push('Chinese launch draft records the requested arguments');
+    }
     // Wide, the list is a column under headings; narrow, one row to scroll along.
     assert.equal(
       await page
@@ -670,11 +754,18 @@ try {
       'files',
       'variables',
     ]) {
+      const sections = GROUPS.flatMap(([, entries]) => entries);
+      const index = sections.findIndex((entry) => entry[1] === id);
+      assert.notEqual(index, -1, `known settings section ${id}`);
+      const label =
+        language === 'zh-CN' ? ZH_LABELS[index] : sections[index][0];
       await page.evaluate((id) => {
         location.hash = '/page/' + id;
       }, id);
       await page.waitForFunction((id) => location.hash === '#/page/' + id, id);
       await page.locator('.settings-sections h1').first().waitFor();
+      await currentIs(page, label);
+      await currentInView(page, label);
       assert.equal(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,
