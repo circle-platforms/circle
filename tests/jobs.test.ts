@@ -18,7 +18,14 @@ import type { Message, ModelResponse, Tool } from '../src/types.js';
 import { emptyUsage } from '../src/types.js';
 import { InteractionQueue } from '../src/tui/interaction_queue.js';
 import { installExitGuard } from '../src/exit_guard.js';
-import { scratch, cleanup, cancellationFixture } from './helpers.js';
+import {
+  scratch,
+  cleanup,
+  cancellationFixture,
+  processGone,
+  until,
+  writtenPids,
+} from './helpers.js';
 let scriptNumber = 0;
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -31,14 +38,6 @@ function script(root: string, code: string): string {
   const path = join(root, `job-${++scriptNumber}.cjs`);
   writeFileSync(path, code);
   return `"${process.execPath}" "${path}"`;
-}
-async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline)
-      throw new Error('timed out waiting for actual job state');
-    await delay(20);
-  }
 }
 function response(
   id: string,
@@ -112,7 +111,7 @@ test('Ctrl+B and the default timeout promote the actual running command without 
       .map((name) => join(root, String(name)))
       .filter((path) => path.endsWith('.log'))
       .map((path) => readFileSync(path, 'utf8'));
-  await until(() => logs().includes('started\n'), 15000);
+  await until(() => logs().includes('started\n'), { timeout: 15000 });
   assert.equal(jobs.backgroundForeground(), 1);
   const userMoved = await second;
   assert.equal(userMoved.how, 'moved');
@@ -156,7 +155,7 @@ test(
     const childPath = join(root, 'left-running.cjs');
     writeFileSync(
       childPath,
-      `require('fs').writeFileSync('adopted-ready','ok'); setTimeout(()=>require('fs').writeFileSync('adopted-late','bad'),2000);`,
+      `require('fs').writeFileSync('adopted-ready',process.pid+'\\n'); setTimeout(()=>require('fs').writeFileSync('adopted-late','bad'),2000); setTimeout(()=>{},60000);`,
     );
     const command = script(
       root,
@@ -173,9 +172,13 @@ test(
       result.output,
       /^parent done\n\nThe command has ended, but processes it started are still running\.\nCommand continues in background: /,
     );
-    await until(() => existsSync(join(root, 'adopted-ready')));
+    await until(() => writtenPids(join(root, 'adopted-ready')) !== undefined);
+    const [pid] = writtenPids(join(root, 'adopted-ready'))!;
     await jobs.stop(result.job!.id);
-    await delay(2200);
+    // The child would live a minute; once it is gone it can write nothing late.
+    await until(() => processGone(pid!), {
+      label: 'the adopted process to end',
+    });
     assert.equal(existsSync(join(root, 'adopted-late')), false);
   },
 );
@@ -196,17 +199,21 @@ test('stop and close end real process trees before late file writes on every sup
   const child = join(root, 'child.cjs');
   writeFileSync(
     child,
-    `require('fs').writeFileSync(${JSON.stringify(ready)},'ready'); setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'bad'),2000);`,
+    `require('fs').writeFileSync(${JSON.stringify(ready)},process.ppid+' '+process.pid+'\\n'); setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'bad'),2000); setTimeout(()=>{},60000);`,
   );
   const command = script(
     root,
-    `require('child_process').spawn(process.execPath,[${JSON.stringify(child)}],{stdio:'inherit'}); setTimeout(()=>{},10000);`,
+    `require('child_process').spawn(process.execPath,[${JSON.stringify(child)}],{stdio:'inherit'}); setTimeout(()=>{},60000);`,
   );
   const job = await jobs.startShell(command, { sessionId: 'one' });
-  await until(() => existsSync(ready));
+  await until(() => writtenPids(ready) !== undefined);
+  const pids = writtenPids(ready)!;
   await jobs.stop(job.id, 'user');
   assert.equal(jobs.get(job.id)!.status, 'stopped');
-  await delay(2200);
+  // Both would live a minute; once they are gone nothing can write late.
+  await until(() => pids.every(processGone), {
+    label: 'the job process tree to end',
+  });
   assert.equal(existsSync(marker), false);
   const second = await jobs.startShell(
     script(root, 'setTimeout(()=>{},10000);'),
