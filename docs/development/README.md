@@ -11,7 +11,7 @@ Install Node.js 24 or newer, then run `npm ci`. The compiler and every tool are 
 |---|---|
 | `npm run dev -- [options]` | Run Circle from the TypeScript source. |
 | `npm run typecheck` | Strict type check, no output files. |
-| `npm test` | The test suite, with Node's test runner through `tsx`. On CI a failing run goes once more with only its failed tests (`--test-rerun-failures`); a test that passes only then is named as flaky in the log. `npm --prefix apps/desktop run test:runtime` does the same for each stage. |
+| `npm test` | The test suite, with Node's test runner through `tsx`. On CI a failing run goes once more with only its failed tests (`--test-rerun-failures`); a test that passes only then does not fail the check, but is named as flaky: a `flaky test` warning for each of the first ten (GitHub shows them as annotations) and a table of all of them in the job summary. `npm --prefix apps/desktop run test:runtime` does the same for each stage and also lists them in the stage receipt. |
 | `npm run build` | Empty `dist/`, compile into it and copy the prompts and data files. |
 | `npm run check` | Type check, tests and build. |
 | `npm run format` | Format the TypeScript sources and the root JSON files with prettier. |

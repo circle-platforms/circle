@@ -279,6 +279,8 @@ test('flaky',()=>{log('flaky');const mark=${JSON.stringify(join(directory, 'fail
   );
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
+  const lines: string[] = [];
+  const summaryFile = join(directory, 'summary.md');
   const ci = runRuntimeTestGroups({
     executable: process.execPath,
     tsxPath: tsx,
@@ -287,9 +289,24 @@ test('flaky',()=>{log('flaky');const mark=${JSON.stringify(join(directory, 'fail
     ci: true,
     receiptDirectory: join(directory, 'ci'),
     stdio: 'pipe',
+    log: (line: string) => lines.push(line),
+    summaryFile,
   });
   assert.equal(ci.exitCode, 0);
   assert.equal(ci.receipts[0]!.flaky, true);
+  // Node names the file relative to the working directory, through any
+  // symbolic link in the temporary path.
+  const flaky = ci.receipts[0]!.flakyTests!;
+  assert.equal(flaky.length, 1);
+  assert.equal(flaky[0]!.name, 'flaky');
+  assert.match(flaky[0]!.file, /rerun\.test\.mjs$/);
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith('::warning')),
+    [`::warning title=flaky test::${flaky[0]!.file} › flaky`],
+  );
+  const summary = await readFile(summaryFile, 'utf8');
+  assert.match(summary, /### Flaky tests in runtime stage all/);
+  assert.ok(summary.includes(`| ${flaky[0]!.file} | flaky |`));
   assert.deepEqual(
     ci.receipts[0]!.attempts.map((attempt) => attempt.exitCode),
     [1, 0],
