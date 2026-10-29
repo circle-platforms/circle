@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { createConnection, type AddressInfo } from 'node:net';
-import { cleanup, cleanupServer, scratch } from './helpers.js';
+import { cleanup, cleanupServer, scratch, until } from './helpers.js';
 
 function context(): {
   after: (hook: () => void | Promise<void>) => void;
@@ -109,4 +109,21 @@ test('a failed browser cleanup still closes its fixture server and connected soc
     server.closeAllConnections();
     server.close();
   }
+});
+
+test('a wait reads a label function only when it gives up, and ends when its signal aborts', async () => {
+  let reads = 0;
+  await assert.rejects(
+    until(() => false, { timeout: 50, label: () => `state ${++reads}` }),
+    { message: 'timed out after 50 ms waiting for state 1' },
+  );
+  assert.equal(reads, 1);
+  const controller = new AbortController();
+  const reason = new Error('the test was cancelled');
+  const waiting = until(() => false, {
+    timeout: 60_000,
+    signal: controller.signal,
+  });
+  controller.abort(reason);
+  await assert.rejects(waiting, (error) => error === reason);
 });

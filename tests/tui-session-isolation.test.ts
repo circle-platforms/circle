@@ -6,7 +6,6 @@ import { createServer, type ServerResponse } from 'node:http';
 import { ModelCatalog } from '../src/model_catalog.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { TITLE_MAX_TOKENS } from '../src/session_title.js';
-import { setTimeout as delay } from 'node:timers/promises';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScriptedModel } from '../src/testing.js';
 import {
@@ -23,7 +22,7 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
-import { cancellationFixture, cleanup, scratch } from './helpers.js';
+import { cancellationFixture, cleanup, scratch, until } from './helpers.js';
 
 const answer = (content: string): ModelResponse => ({
   message: { id: crypto.randomUUID(), role: 'assistant', content },
@@ -52,13 +51,6 @@ function held(text: string) {
       return answer(text);
     },
   };
-}
-async function until(predicate: () => boolean): Promise<void> {
-  const end = Date.now() + 5000;
-  while (!predicate()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await delay(5);
-  }
 }
 async function appFor(
   t: Parameters<typeof scratch>[0],

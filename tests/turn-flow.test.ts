@@ -30,19 +30,12 @@ import {
   type ModelResponse,
   type ToolCall,
 } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 type Reply =
   Partial<ModelResponse> | ((request: ModelRequest) => Promise<ModelResponse>);
 type Context = Parameters<typeof scratch>[0];
 
-async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('timed out');
-    await delay(5);
-  }
-}
 function response(
   id: string,
   content: string,
@@ -175,7 +168,7 @@ test('task calls in one reply run their subagents at the same time, the next req
         arrived.add(user);
         try {
           // Neither answers until both are asking: one after another never gets here
-          await until(() => arrived.size === 2, 3000);
+          await until(() => arrived.size === 2, { timeout: 3000 });
           // alpha, the first call, ends last
           if (user === 'alpha') {
             await until(() => jobOf('beta')?.status === 'stopped');
@@ -237,7 +230,7 @@ test('the cards of subagents running at the same time come one at a time while t
       if (user === 'alpha' || user === 'beta') {
         if (replied(request)) return response(`${user}-end`, `${user} wrote`);
         arrived.add(user);
-        await until(() => arrived.size === 2, 3000);
+        await until(() => arrived.size === 2, { timeout: 3000 });
         return response(`${user}-write`, '', [
           {
             id: `${user}-write`,

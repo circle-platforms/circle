@@ -18,7 +18,7 @@ import {
 } from '../src/middleware/job_notice.js';
 import { ContextManager } from '../src/context_middleware.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
-import { scratch, cleanup } from './helpers.js';
+import { scratch, cleanup, until } from './helpers.js';
 const reply = (
   id: string,
   content: string,
@@ -27,14 +27,6 @@ const reply = (
   message: { id, role: 'assistant' as const, content, tool_calls: calls },
   usage: emptyUsage(),
 });
-async function until(predicate: () => boolean, most = 5000): Promise<void> {
-  const end = Date.now() + most;
-  while (!predicate()) {
-    if (Date.now() >= end)
-      throw new Error('timed out waiting for actual watch state');
-    await delay(10);
-  }
-}
 test('a watch polls without a model turn, preserves false and zero results, and queues a conversation-owned completion notice', async (t) => {
   const root = scratch(t);
   const registry = new JobRegistry(new Sandbox(root, join(root, 'data')));
@@ -148,7 +140,7 @@ test('stopping a watch aborts a real HTTP poll before the server writes a delaye
     ),
     { sessionId: 'owner' },
   );
-  await until(() => reached);
+  await until(() => reached, { label: 'the actual watch state' });
   await registry.stop(job.id, 'user');
   await delay(600);
   assert.equal(existsSync(marker), false);
@@ -217,7 +209,9 @@ test('an approved extension returns immediately and its result enters the next a
     )!.content,
     /"state":"pending"/,
   );
-  await until(() => runtime.jobs.get('j1')?.status === 'done');
+  await until(() => runtime.jobs.get('j1')?.status === 'done', {
+    label: 'the actual watch state',
+  });
   await runtime.runJobNotices();
   assert.match(
     JSON.stringify(model.requests.at(-1)!.messages),

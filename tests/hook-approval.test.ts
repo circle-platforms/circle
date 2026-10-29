@@ -19,18 +19,11 @@ import { stripAnsi } from '../src/ink/string_width.js';
 import { dialogRows } from '../src/ink/components/dialog_card.js';
 import { HookApprovalCard } from '../src/ink/components/hook_card.js';
 import type { ModelResponse } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 const answer = (content: string): Partial<ModelResponse> => ({
   message: { id: crypto.randomUUID(), role: 'assistant', content },
 });
-async function until(check: () => boolean, ms = 5000): Promise<void> {
-  const end = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await delay(5);
-  }
-}
 /** A trusted folder whose `.circle/hooks.json` nobody approved: a session_start hook that speaks. */
 function folder(t: Parameters<typeof scratch>[0]) {
   // The runtime works in the folder's real path (macOS: /private/var/…).
@@ -205,7 +198,7 @@ test('the hooks card waits while you type, and the draft comes back after it', a
   const run = s.runtime.harness.run('hello');
   await delay(300);
   assert.equal(s.app.state.dialog, undefined);
-  await until(s.asking, 3000);
+  await until(s.asking, { timeout: 3000 });
   s.key('2');
   await run;
   assert.equal(s.app.state.draft, 'half a thought');

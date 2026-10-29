@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server as NetServer, type Socket } from 'node:net';
 import { telnetConnector } from '../src/terminal/telnet.js';
 import type { ConnectEnv } from '../src/terminal/transport.js';
-import { cleanup } from './helpers.js';
+import { cleanup, until } from './helpers.js';
 
 const IAC = 255;
 const WILL = 251;
@@ -27,17 +27,6 @@ function env(): ConnectEnv {
 }
 
 // A busy runner delays sockets: wait for the bytes, not for guessed milliseconds.
-async function until(
-  what: () => boolean,
-  message: string,
-  ms = 8000,
-): Promise<void> {
-  const stop = Date.now() + ms;
-  while (!what()) {
-    if (Date.now() >= stop) throw Error(message);
-    await new Promise((done) => setTimeout(done, 25));
-  }
-}
 
 const target = (port: number, cols = 80, rows = 24) => ({
   transport: 'telnet' as const,
@@ -100,18 +89,19 @@ test('the client offers its window, answers negotiation, and keeps raw data whol
   const screen: Buffer[] = [];
   console.onData((bytes) => screen.push(bytes));
   // Negotiation reaches the screen nowhere: what does is the banner, IAC IAC intact
-  await until(
-    () => Buffer.concat(screen).length >= 18,
-    `screen only got ${JSON.stringify(Buffer.concat(screen).toString('latin1'))}`,
-  );
+  await until(() => Buffer.concat(screen).length >= 18, {
+    timeout: 8000,
+    label: () =>
+      `18 bytes on the screen (saw ${JSON.stringify(Buffer.concat(screen).toString('latin1'))})`,
+  });
   const shown = Buffer.concat(screen).toString('latin1');
   assert.equal(shown, 'TELNET banner\r\ncon> ');
   assert.equal(shown.includes(String.fromCharCode(IAC)), false);
   // WILL NAWS was promised, the window reported, and DO ECHO declined
-  await until(
-    () => device.all().includes(Buffer.from([IAC, WONT, ECHO])),
-    `no WONT ECHO in ${device.all().toString('hex')}`,
-  );
+  await until(() => device.all().includes(Buffer.from([IAC, WONT, ECHO])), {
+    timeout: 8000,
+    label: () => `WONT ECHO (saw ${device.all().toString('hex')})`,
+  });
   const sent = device.all();
   assert.ok(
     sent.includes(Buffer.from([IAC, WILL, NAWS])),
@@ -122,10 +112,10 @@ test('the client offers its window, answers negotiation, and keeps raw data whol
     'no initial NAWS report',
   );
   console.write('show version\r');
-  await until(
-    () => device.all().includes(Buffer.from('show version\r')),
-    'the device never got the typed line',
-  );
+  await until(() => device.all().includes(Buffer.from('show version\r')), {
+    timeout: 8000,
+    label: 'the device to get the typed line',
+  });
   // A resize reports the new window
   console.resize(132, 43);
   await until(
@@ -133,7 +123,7 @@ test('the client offers its window, answers negotiation, and keeps raw data whol
       device
         .all()
         .includes(Buffer.from([IAC, SB, NAWS, 0, 132, 0, 43, IAC, SE])),
-    'no resized NAWS',
+    { timeout: 8000, label: 'the resized NAWS' },
   );
   console.close();
 });
@@ -156,10 +146,11 @@ test('negotiation split across packets is stitched, not shown', async (t) => {
   ).transport;
   const screen: Buffer[] = [];
   console.onData((bytes) => screen.push(bytes));
-  await until(
-    () => Buffer.concat(screen).length >= 4,
-    `screen only got ${Buffer.concat(screen).toString('hex')}`,
-  );
+  await until(() => Buffer.concat(screen).length >= 4, {
+    timeout: 8000,
+    label: () =>
+      `4 bytes on the screen (saw ${Buffer.concat(screen).toString('hex')})`,
+  });
   // 'a', one literal 0xFF, 'b', 'c': the split negotiation vanished as it should
   assert.deepEqual(
     [...Buffer.concat(screen)],
@@ -181,7 +172,10 @@ test('a closed console says so and typing stops', async (t) => {
   console.onEnd((reason) => {
     ended = reason;
   });
-  await until(() => device.ready(), 'the server never took the socket');
+  await until(() => device.ready(), {
+    timeout: 8000,
+    label: 'the server to take the socket',
+  });
   device.kill();
   for (let at = 0; at < 320 && !ended; at++)
     await new Promise((done) => setTimeout(done, 25));

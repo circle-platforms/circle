@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { CheckpointStore, databaseOpenError } from '../src/checkpoint_store.js';
 import { DATABASE_BUSY_MESSAGE } from '../src/locale.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 const moduleUrl = (name: string) =>
   JSON.stringify(pathToFileURL(join(process.cwd(), 'src', name + '.ts')).href);
@@ -31,18 +31,6 @@ function tracked(child: ChildProcess): {
     out: () => out,
     err: () => err,
   };
-}
-
-async function until(
-  predicate: () => boolean,
-  timeout: number,
-  detail: () => string,
-): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(detail());
-    await delay(10);
-  }
 }
 
 test('a locked database waits and then opens', async (t) => {
@@ -93,11 +81,9 @@ test('a locked database waits and then opens', async (t) => {
       await once(worker, 'exit');
     }
   });
-  await until(
-    () => text.out().includes('starting'),
-    5000,
-    () => `child did not start\n${text.out()}\n${text.err()}`,
-  );
+  await until(() => text.out().includes('starting'), {
+    label: () => `the child to start\n${text.out()}\n${text.err()}`,
+  });
   assert.equal(text.out().includes('opened'), false);
   await delay(300);
   assert.equal(
@@ -111,11 +97,10 @@ test('a locked database waits and then opens', async (t) => {
     `no waiting status while the database was locked\n${text.out()}\n${text.err()}`,
   );
   db.exec('COMMIT');
-  await until(
-    () => text.out().includes('opened'),
-    8000,
-    () => `child did not open\n${text.out()}\n${text.err()}`,
-  );
+  await until(() => text.out().includes('opened'), {
+    timeout: 8000,
+    label: () => `the child to open\n${text.out()}\n${text.err()}`,
+  });
   const [code] = await exited;
   assert.equal(code, 0, text.err());
 });

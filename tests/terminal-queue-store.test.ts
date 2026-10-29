@@ -2,14 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test, type TestContext } from 'node:test';
 import { syncBuiltinESMExports } from 'node:module';
-import { setTimeout as delay } from 'node:timers/promises';
 import type { DatabaseSync } from 'node:sqlite';
 import { AgentRuntime } from '../src/runtime.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings } from '../src/settings.js';
 import type { ChatModel, ModelRequest, ModelResponse } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 const blocked = (request: ModelRequest): Promise<ModelResponse> =>
   new Promise((_resolve, reject) => {
@@ -18,13 +17,6 @@ const blocked = (request: ModelRequest): Promise<ModelResponse> =>
       reject(request.signal.reason),
     );
   });
-async function until(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('timed out');
-    await delay(5);
-  }
-}
 function database(runtime: AgentRuntime): DatabaseSync {
   return (runtime.store as unknown as { db: DatabaseSync }).db;
 }

@@ -2,14 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings } from '../src/settings.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { rpcMessage } from '../src/rpc_codec.js';
 import { validateMessages } from '../src/session_graph.js';
-import { cleanup, scratch, cancellationFixture } from './helpers.js';
+import { cleanup, scratch, cancellationFixture, until } from './helpers.js';
 const command = (
   root: string,
   code: string,
@@ -19,13 +18,6 @@ const command = (
   writeFileSync(path, code);
   return `"${process.execPath}" "${path}"`;
 };
-async function until(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
-  while (!predicate()) {
-    if (Date.now() > deadline) throw new Error('user command did not settle');
-    await delay(10);
-  }
-}
 test('user commands execute without a model turn, share exact output with the next request and restore after export/restart', async (t) => {
   const root = scratch(t);
   const model = new ScriptedModel([
@@ -109,11 +101,15 @@ test('quiet foreground and background commands make real effects without enterin
     ),
     true,
   );
-  await until(() => existsSync(join(root, 'started')));
+  await until(() => existsSync(join(root, 'started')), {
+    label: 'the user command to settle',
+  });
   assert.equal(runtime.jobs.backgroundForeground(), 1);
   const result = await running;
   assert.ok(result.job);
-  await until(() => runtime.userShells.views.at(-1)!.status === 'done');
+  await until(() => runtime.userShells.views.at(-1)!.status === 'done', {
+    label: 'the user command to settle',
+  });
   assert.equal(existsSync(join(root, 'finished')), true);
   assert.equal(runtime.jobs.hasNotices(runtime.session.id), false);
   assert.equal(runtime.harness.messages.length, 0);
@@ -191,7 +187,9 @@ test('terminal ! and !! submissions use owned execution; queued prompts start af
   await app.submit('Queued prompt');
   assert.equal(runtime.harness.pendingMessageCount, 1);
   await running;
-  await until(() => model.requests.length === 1 && !runtime.busy);
+  await until(() => model.requests.length === 1 && !runtime.busy, {
+    label: 'the user command to settle',
+  });
   assert.equal(model.requests[0]!.messages.at(-1)!.content, 'Queued prompt');
   assert.ok(
     model.requests[0]!.messages.some((message) =>
