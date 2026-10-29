@@ -6,8 +6,11 @@ import { connectWorkspaceStreams } from '../src/model/workspace-client';
 import { setLanguage } from '../src/i18n';
 
 // Three shells of one conversation in the terminal mode, behind a desktop that answers a
-// rename and a restart as the main process does, refuses a name it would refuse, and keeps
-// the row's order for every window: an order it is given comes back in the state it sends.
+// rename, a new shell and a restart as the main process does, refuses a name it would
+// refuse, and keeps the row's order for every window: an order it is given comes back in
+// the state it sends. As the main process does, it announces a new shell before it
+// answers the request, and the test can hold that answer back. Each shell has printed
+// one line that names it, which "copy complete output" copies.
 const query = new URLSearchParams(location.search);
 const data = createFixtures();
 data.settings.theme = query.get('theme') === 'dark' ? 'dark' : 'light';
@@ -51,12 +54,26 @@ const shell = (n: number): Shell => ({
   rows: 24,
   status: 'running',
   startedAt: new Date(n * 1000).toISOString(),
-  lastSequence: 0,
+  lastSequence: 1,
   logPath: '/synthetic/log',
   kind: 'shell',
   tabNumber: n,
 });
 let items: Shell[] = [shell(1), shell(2), shell(3)];
+const copied: string[] = [];
+// The answer to a create or a restart the test holds back, after the shell is announced.
+let holding = false;
+let held: { method: string; release: () => void } | undefined;
+const answer = async (method: string, data: unknown) => {
+  if (holding) {
+    holding = false;
+    await new Promise<void>((release) => {
+      held = { method, release };
+    });
+    held = undefined;
+  }
+  return { ok: true, data };
+};
 const publish = (item: Shell) => {
   const event = {
     workspaceId,
@@ -111,6 +128,9 @@ window.circleDesktop = {
     listeners.add(receive);
     return () => listeners.delete(receive);
   },
+  copyText: async (text: string) => {
+    copied.push(text);
+  },
   runtimeCommand: async (command: {
     payload?: { service?: string; method?: string; params?: any };
   }) => {
@@ -124,14 +144,40 @@ window.circleDesktop = {
     if (method !== 'list' && method !== 'replay' && method !== 'resize')
       calls.push({ method: method!, params });
     if (method === 'list') return { ok: true, data: structuredClone(items) };
+    if (method === 'create') {
+      // The lowest number no open tab is using, as the main process gives a new shell
+      const used = new Set(
+        items.filter((one) => !one.hidden).map((one) => one.tabNumber),
+      );
+      let number = 1;
+      while (used.has(number)) number++;
+      const next: Shell = { ...shell(items.length + 1), tabNumber: number };
+      items = [...items, next];
+      publish(next);
+      return answer('create', structuredClone(next));
+    }
     const item = items.find((one) => one.id === params?.id);
     if (method === 'replay')
       return {
         ok: true,
         data: {
           snapshot: item,
-          events: [],
-          nextSequence: 0,
+          events:
+            item && params.afterSequence < 1
+              ? [
+                  {
+                    terminalId: item.id,
+                    owner: 'A',
+                    sessionId: 'A',
+                    epoch: item.epoch,
+                    sequence: 1,
+                    kind: 'data',
+                    at: new Date().toISOString(),
+                    data: `output of ${item.id}\r\n`,
+                  },
+                ]
+              : [],
+          nextSequence: 1,
           hasMore: false,
         },
       };
@@ -161,7 +207,7 @@ window.circleDesktop = {
       items = [...items, next];
       publish(next);
       publish(item);
-      return { ok: true, data: structuredClone(next) };
+      return answer('restart', structuredClone(next));
     }
     if (method === 'close') {
       item.status = 'exited';
@@ -181,11 +227,18 @@ connectWorkspaceStreams(workspaceId, 'A');
 Object.assign(window, {
   tabMenuFixture: {
     calls,
+    copied,
     // Another window of the conversation dragged the row: the main process says so
     arrangedElsewhere: (next: string[]) => {
       order = [...next];
       tell();
     },
+    // The next create or restart announces its shell and then waits to answer
+    hold: () => {
+      holding = true;
+    },
+    held: () => held?.method ?? '',
+    release: () => held?.release(),
   },
 });
 setLanguage(query.get('language') === 'zh-CN' ? 'zh-CN' : 'en');

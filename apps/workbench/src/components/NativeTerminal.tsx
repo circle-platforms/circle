@@ -581,9 +581,28 @@ export function NativeTerminal({
     }
   };
 
+  // A shell made or restarted for the person comes to the front when its reply arrives.
+  // Its tab is in the row before that, from the main process's event, and the person may
+  // pick a tab meanwhile, even the one already in front: the tab they picked stays there.
+  const picked = useRef<Record<string, { count: number; key: string }>>({});
+  const pickCount = (session: string) => picked.current[session]?.count ?? 0;
+  const bringToFront = (
+    session: string,
+    id: string,
+    pickedBefore: number,
+    replaced = '',
+  ) => {
+    const last = picked.current[session];
+    // Picking the tab a restart replaces is a wish for that shell, which is now this one.
+    if (last && last.count !== pickedBefore && last.key !== replaced) return;
+    focusTarget.current = id;
+    setSelected((previous) => ({ ...previous, [session]: id }));
+  };
+
   const create = () =>
     run(async () => {
       const capturedSession = sessionId;
+      const pickedBefore = pickCount(capturedSession);
       // A tab closed in the row still holds its number until hide lands. Wait
       // for that, so the shell created next takes the lowest number now free.
       const closing = terminals.filter(
@@ -604,17 +623,14 @@ export function NativeTerminal({
         'terminal',
         'create',
       );
-      focusTarget.current = snapshot.id;
       adopt(snapshot);
-      setSelected((previous) => ({
-        ...previous,
-        [capturedSession]: snapshot.id,
-      }));
+      bringToFront(capturedSession, snapshot.id, pickedBefore);
     });
 
   const createService = () =>
     run(async () => {
       const capturedSession = sessionId;
+      const pickedBefore = pickCount(capturedSession);
       const readiness =
         servicePort || servicePattern
           ? {
@@ -635,23 +651,20 @@ export function NativeTerminal({
           ...(readiness ? { readiness } : {}),
         },
       );
-      focusTarget.current = snapshot.id;
       adopt(snapshot);
-      setSelected((previous) => ({
-        ...previous,
-        [capturedSession]: snapshot.id,
-      }));
+      bringToFront(capturedSession, snapshot.id, pickedBefore);
       setServiceOpen(false);
     });
 
   const restart = () =>
     run(async () => {
       if (!selected) return;
+      const capturedSession = sessionId;
+      const pickedBefore = pickCount(capturedSession);
       const previousId = selected.id;
       const snapshot = await terminalRequest<TerminalSnapshot>('restart', {
         id: previousId,
       });
-      focusTarget.current = snapshot.id;
       setTerminals((current) =>
         mergeTerminalSnapshot(
           current.map((item) =>
@@ -660,10 +673,12 @@ export function NativeTerminal({
           snapshot,
         ),
       );
-      setSelected((previous) => ({
-        ...previous,
-        [snapshot.sessionId]: snapshot.id,
-      }));
+      bringToFront(
+        capturedSession,
+        snapshot.id,
+        pickedBefore,
+        `local:${previousId}`,
+      );
     });
 
   const copyAll = () =>
@@ -781,6 +796,7 @@ export function NativeTerminal({
       : '';
   const selectDevice = (id: string) => setDeviceChosen(id);
   const selectTab = (key: string, fromKeyboard = false) => {
+    picked.current[sessionId] = { count: pickCount(sessionId) + 1, key };
     if (key.startsWith('dev:')) return selectDevice(key.slice(4));
     const id = key.slice(6);
     setDeviceChosen('');
