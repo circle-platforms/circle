@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.13.1 - 2026-10-29
+
 ### Fixed
 
 - **Desktop controls respond after a drawer closes.** In 1.13.0, a control whose tooltip was open could ignore the next click or keyboard activation after its press closed the drawer. This could prevent the browser from opening in a separate window again after it was returned to the drawer.
