@@ -36,14 +36,25 @@ jobs:
         with:
           node-version: '24.21.0'
           cache: npm
+      # npm ci and the suite have limits of their own, below the job's: a step that stalls fails,
+      # and the job still ends with its log and keeps the test output (#348)
       - run: npm ci
-      # npm run check, in its three parts, so that Linux can keep a junit report of the suite
+        timeout-minutes: 10
+      # npm run check, in its three parts, so that the suite has its own limit and Linux can keep a
+      # junit report of it
       - run: npm run typecheck
-      - if: runner.os != 'Linux'
-        run: npm test
+      # What the suite prints also goes to test-output.log. On Windows the test runner writes that
+      # copy: through a PowerShell pipe the output would be read in the console's code page, and
+      # switching that to UTF-8 would change what the tests see. The Windows copy holds the last
+      # run only (a failing suite runs again with only its failed tests)
+      - if: runner.os == 'Windows'
+        timeout-minutes: 15
+        run: npm test -- --test-reporter=spec --test-reporter-destination=stdout --test-reporter=spec --test-reporter-destination=test-output.log
       # spec is named too: with only junit the log would show nothing
       - if: runner.os == 'Linux'
-        run: npm test -- --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml
+        timeout-minutes: 15
+        shell: bash
+        run: npm test -- --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml 2>&1 | tee test-output.log
       - run: npm run build
       # Formatting does not depend on the system
       - if: runner.os == 'Linux'
@@ -59,6 +70,16 @@ jobs:
         with:
           name: test-results-${{ github.run_attempt }}
           path: test-results.xml
+          if-no-files-found: ignore
+          retention-days: 14
+      # What the suite printed, when the check failed or was cancelled
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure() || cancelled()
+        with:
+          name: test-output-${{ matrix.os }}-${{ github.run_attempt }}
+          path: |
+            test-output.log
+            test-results.xml
           if-no-files-found: ignore
           retention-days: 14
       # The release workflow runs on a pull request only when it changes how Circle is packaged;
@@ -83,8 +104,20 @@ jobs:
           node-version: '24.21.0'
           cache: npm
       - run: npm ci
-      - run: npm run check
+        timeout-minutes: 10
+      - run: npm run typecheck
+      - timeout-minutes: 15
+        shell: bash
+        run: npm test 2>&1 | tee test-output.log
+      - run: npm run build
       - run: node dist/cli.js --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure() || cancelled()
+        with:
+          name: test-output-macos-15-${{ github.run_attempt }}
+          path: test-output.log
+          if-no-files-found: ignore
+          retention-days: 14
   # Line, branch and function coverage of src/, for reading only: it is not a required check,
   # and a failing test fails check above, not this job. The summary lists the files with the
   # most uncovered lines; the lcov file is kept for two weeks.
