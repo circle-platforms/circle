@@ -15,10 +15,12 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { realpathSync, type PathLike } from 'node:fs';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
@@ -874,6 +876,59 @@ test('a file held longer than a save waits fails the save, and only Windows wait
     else assert.equal(attempts(), 1);
     assert.equal(await readFile(join(root, 'main.ts'), 'utf8'), 'original\n');
     assert.deepEqual(await readdir(root), ['main.ts']);
+  }
+});
+
+// Node names a Windows error it has no POSIX name for UNKNOWN (errno -4094), as for a file
+// another program has mapped into memory. The refusal comes from the save's own rename.
+test('a rename Windows refuses as UNKNOWN is waited out like a held file, and only on Windows', async (t) => {
+  for (const platform of ['win32', 'linux'] as const) {
+    const { root, documents } = await fixture(t, { platform });
+    await writeFile(join(root, 'main.ts'), 'original\n');
+    const first = await documents.read('main.ts');
+    const realRename = fsPromises.rename.bind(fsPromises);
+    let attempts = 0;
+    const refused = t.mock.method(
+      fsPromises,
+      'rename',
+      async (from: PathLike, to: PathLike) => {
+        if (basename(String(to)) === 'main.ts' && ++attempts <= 2)
+          throw Object.assign(
+            Error(`UNKNOWN: unknown error, rename '${from}' -> '${to}'`),
+            {
+              errno: -4094,
+              code: 'UNKNOWN',
+              syscall: 'rename',
+              path: String(from),
+              dest: String(to),
+            },
+          );
+        return realRename(from, to);
+      },
+    );
+    syncBuiltinESMExports();
+    try {
+      if (platform === 'win32') {
+        const saved = await documents.save('main.ts', 'ours\n', first.revision);
+        assert.equal(attempts, 3);
+        assert.equal(saved.content, 'ours\n');
+        assert.equal(await readFile(join(root, 'main.ts'), 'utf8'), 'ours\n');
+      } else {
+        await assert.rejects(
+          documents.save('main.ts', 'ours\n', first.revision),
+          { code: 'UNKNOWN', syscall: 'rename' },
+        );
+        assert.equal(attempts, 1);
+        assert.equal(
+          await readFile(join(root, 'main.ts'), 'utf8'),
+          'original\n',
+        );
+      }
+      assert.deepEqual(await readdir(root), ['main.ts']);
+    } finally {
+      refused.mock.restore();
+      syncBuiltinESMExports();
+    }
   }
 });
 
