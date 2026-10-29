@@ -56,6 +56,7 @@ async function setup(
   overrides: Partial<
     Pick<TerminalCommandLauncherOptions, 'supervisorPath' | 'readyTimeoutMs'>
   > = {},
+  beforeFinalState?: () => Promise<void>,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-command-pty-')),
     workspace = join(root, 'workspace'),
@@ -76,8 +77,21 @@ async function setup(
       events.push(event);
     },
   );
+  if (beforeFinalState) {
+    const create = terminals.createManagedCommand.bind(terminals);
+    terminals.createManagedCommand = async (options) => {
+      const handle = await create(options),
+        recordState = handle.recordState;
+      handle.recordState = async (state) => {
+        if (state.completion.transportAndLogClosed) await beforeFinalState();
+        await recordState(state);
+      };
+      return handle;
+    };
+  }
   let jobs!: JobRegistry,
-    stopDelegations = 0;
+    stopDelegations = 0,
+    transportAndLogClosed: Promise<void> | undefined;
   const launcher = createTerminalCommandLauncher({
     terminals,
     runtimeExecutable: process.execPath,
@@ -99,25 +113,40 @@ async function setup(
           await rm(request.outputPath);
           await mkdir(request.outputPath);
         }
-        return launcher(request);
+        const process = await launcher(request);
+        if (process.kind === 'pty-group')
+          transportAndLogClosed = process.transportAndLogClosed;
+        return process;
       },
       onExecution: (state) => snapshots.push(state),
     },
   );
   let unknownCleanup: (() => Promise<void>) | undefined;
   let beforeCleanup: (() => Promise<void>) | undefined;
-  t.after(async () => {
-    await beforeCleanup?.();
-    if (unknownCleanup) {
-      await unknownCleanup();
-      await assert.rejects(jobs.close());
-      await assert.rejects(terminals.dispose(), /some terminals did not stop/);
-    } else {
-      await jobs.close();
-      await terminals.dispose();
-    }
-    await rm(root, { recursive: true, force: true });
-  });
+  let afterDispose: (() => void) | undefined;
+  let beforeRemove: (() => Promise<void>) | undefined;
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      await beforeCleanup?.();
+      if (unknownCleanup) {
+        await unknownCleanup();
+        await assert.rejects(jobs.close());
+        await assert.rejects(
+          terminals.dispose(),
+          /some terminals did not stop/,
+        );
+        afterDispose?.();
+        assert.ok(transportAndLogClosed);
+        await transportAndLogClosed;
+      } else {
+        await jobs.close();
+        await terminals.dispose();
+      }
+      await beforeRemove?.();
+      await rm(root, { recursive: true, force: true });
+    })());
+  t.after(cleanup);
   const command = async (body: string, name = 'program') => {
     const path = join(workspace, name + '.cjs');
     await writeFile(path, body);
@@ -140,6 +169,13 @@ async function setup(
     beforeCleanup: (cleanup: () => Promise<void>) => {
       beforeCleanup = cleanup;
     },
+    afterDispose: (callback: () => void) => {
+      afterDispose = callback;
+    },
+    beforeRemove: (callback: () => Promise<void>) => {
+      beforeRemove = callback;
+    },
+    cleanup,
   };
 }
 async function portOpen(port: number) {
@@ -537,51 +573,104 @@ test(
         'socket.destroy();',
       ),
     );
-    const f = await setup(t, false, { supervisorPath: disconnected }),
-      tail = 'LOST_CONTROL_' + '中🙂'.repeat(5000) + '_END';
-    const outcome = await f.jobs
-      .execute(
-        await f.command(
-          "require('fs').writeSync(1," + JSON.stringify(tail) + ');',
-        ),
-        {
-          sessionId: 'one',
-          origin: { executionSessionId: 'one', toolCallId: 'lost-exit' },
+    let enteredFinalState!: () => void, releaseFinalState!: () => void;
+    const finalStateStarted = new Promise<void>((resolve) => {
+        enteredFinalState = resolve;
+      }),
+      finalStateBlocked = new Promise<void>((resolve) => {
+        releaseFinalState = resolve;
+      });
+    const f = await setup(
+        t,
+        false,
+        { supervisorPath: disconnected },
+        async () => {
+          enteredFinalState();
+          await finalStateBlocked;
         },
-        new AbortController().signal,
-      )
-      .then(
-        (value) => ({ value }),
-        (error) => ({ error }),
-      );
-    assert.ok('error' in outcome);
-    const state = f.jobs.executionFor('one', 'lost-exit')!,
-      native = (await f.terminals.list('one'))[0]!;
-    f.unknownCleanup(async () => {
+      ),
+      tail = 'LOST_CONTROL_' + '中🙂'.repeat(5000) + '_END';
+    let cleaning: Promise<void> | undefined;
+    try {
+      const outcome = await f.jobs
+        .execute(
+          await f.command(
+            "require('fs').writeSync(1," + JSON.stringify(tail) + ');',
+          ),
+          {
+            sessionId: 'one',
+            origin: { executionSessionId: 'one', toolCallId: 'lost-exit' },
+          },
+          new AbortController().signal,
+        )
+        .then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        );
+      assert.ok('error' in outcome);
+      const state = f.jobs.executionFor('one', 'lost-exit')!,
+        native = (await f.terminals.list('one'))[0]!;
+      f.unknownCleanup(async () => {
+        await until(
+          async () => (await f.terminals.list('one'))[0]!.status !== 'running',
+          'fixture actual natural wrapper exit after lost connection',
+          6000,
+        );
+      });
+      assert.equal(state.status, 'failed');
+      assert.equal(state.completion!.rootExit, undefined);
+      assert.equal(state.completion!.controlledGroupEmpty, undefined);
+      assert.equal(state.completion!.descendantCoverage.state, 'unknown');
       await until(
         async () => (await f.terminals.list('one'))[0]!.status !== 'running',
-        'fixture actual natural wrapper exit after lost connection',
+        'wrapper bounded natural completion without host source proof',
         6000,
       );
-    });
-    assert.equal(state.status, 'failed');
-    assert.equal(state.completion!.rootExit, undefined);
-    assert.equal(state.completion!.controlledGroupEmpty, undefined);
-    assert.equal(state.completion!.descendantCoverage.state, 'unknown');
-    await until(
-      async () => (await f.terminals.list('one'))[0]!.status !== 'running',
-      'wrapper bounded natural completion without host source proof',
-      6000,
-    );
-    assert.ok((await read(native.logPath)).includes(tail));
-    const metadata = JSON.parse(
-      await read(join(f.root, 'terminal', native.id, 'metadata.json')),
-    );
-    assert.equal(metadata.managedCommand.completion.rootExit, undefined);
-    assert.equal(
-      metadata.managedCommand.completion.controlledGroupEmpty,
-      undefined,
-    );
+      await finalStateStarted;
+      assert.ok((await read(native.logPath)).includes(tail));
+      const metadataPath = join(f.root, 'terminal', native.id, 'metadata.json');
+      const metadata = JSON.parse(await read(metadataPath));
+      assert.equal(metadata.managedCommand.completion.rootExit, undefined);
+      assert.equal(
+        metadata.managedCommand.completion.controlledGroupEmpty,
+        undefined,
+      );
+      let disposed!: () => void,
+        removalStarted = false,
+        finalMetadata = '';
+      const disposalFinished = new Promise<void>((resolve) => {
+        disposed = resolve;
+      });
+      f.afterDispose(disposed);
+      f.beforeRemove(async () => {
+        removalStarted = true;
+        finalMetadata = await read(metadataPath);
+      });
+      cleaning = f.cleanup();
+      await Promise.race([
+        disposalFinished,
+        cleaning.then(() => {
+          throw Error('fixture cleanup completed before terminal disposal');
+        }),
+      ]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(
+        removalStarted,
+        false,
+        'cleanup must wait for the real transport and final metadata write',
+      );
+      releaseFinalState();
+      await cleaning;
+      assert.equal(removalStarted, true);
+      const finalCompletion =
+        JSON.parse(finalMetadata).managedCommand.completion;
+      assert.ok(finalCompletion.transportAndLogClosed);
+      assert.equal(finalCompletion.rootExit, undefined);
+      assert.equal(finalCompletion.controlledGroupEmpty, undefined);
+    } finally {
+      releaseFinalState();
+      await cleaning?.catch(() => {});
+    }
   },
 );
 
