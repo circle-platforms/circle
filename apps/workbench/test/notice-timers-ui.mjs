@@ -96,6 +96,79 @@ try {
   );
   await page.clock.runFor(1800);
   assert.equal(await shown(), 0, 'the newer notice goes at its own time');
+  // #302: a missed toast was the only trace of an answer, and an answer that
+  // arrived after the window moved on was dropped whole. Now every answer
+  // stays in the conversation that asked for it.
+  const asked = () =>
+    page.evaluate(
+      () =>
+        window.runtime
+          .getSnapshot()
+          .sessions.find((item) => item.id === 'notice-session')
+          .messages.filter(
+            (message) =>
+              message.text === 'unknown command /unrecognized-fixture-command',
+          ).length,
+    );
+  // The same words were asked twice; both answers stay, in the order they came.
+  assert.equal(
+    await asked(),
+    2,
+    'a missed toast leaves its answer in the conversation',
+  );
+  // The same asked in one conversation, answered after the window moved on:
+  // the answer lands where it was asked, and does not interrupt the other.
+  await send('/share');
+  await until(
+    async () => (await page.evaluate(() => window.shareCalls.length)) === 1,
+    'the share request reaches the host',
+  );
+  await page.evaluate(() => window.setActive('notice-session-b'));
+  await page.evaluate(() => window.releaseShare());
+  await until(
+    async () =>
+      await page.evaluate(() =>
+        window.runtime
+          .getSnapshot()
+          .sessions.find((item) => item.id === 'notice-session')
+          .messages.some(
+            (message) =>
+              message.role === 'notice' &&
+              message.text.startsWith('local share saved'),
+          ),
+      ),
+    'the answer stays in the conversation that asked for it',
+  );
+  assert.equal(
+    await page.locator('.toast').count(),
+    0,
+    'the other conversation is not interrupted by an answer it did not ask for',
+  );
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.runtime
+          .getSnapshot()
+          .sessions.find((item) => item.id === 'notice-session-b')
+          .messages.filter((message) => message.role === 'notice').length,
+    ),
+    0,
+    'the conversation on screen gains nothing',
+  );
+  await page.evaluate(() => window.setActive('notice-session'));
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.runtime
+          .getSnapshot()
+          .sessions.find((item) => item.id === 'notice-session')
+          .messages.filter((message) =>
+            message.text.startsWith('local share saved'),
+          ).length,
+    ),
+    1,
+    'back in the conversation that asked, the answer is there to read',
+  );
   assert.deepEqual(errors, []);
 } finally {
   await browser?.close();

@@ -15,6 +15,7 @@ import type {
   BeginResult,
   CommandResult,
   Effort,
+  Message,
   RuntimePort,
   SessionMode,
   WorkbenchSnapshot,
@@ -136,6 +137,9 @@ export class LiveRuntime implements RuntimePort {
   >();
   private sessionErrors = new Map<string, string>();
   private sessionFailures = new Map<string, ActionFailure>();
+  // A command's one-line answer, kept per session: the window says it in passing,
+  // and the conversation that asked keeps it (#302).
+  private commandNotices = new Map<string, Message[]>();
   // The command the runtime is holding, as the main process last said it
   private waiting?: NonNullable<WorkbenchSnapshot['runtime']>['waiting'];
   private unsubscribeWait: () => void = () => {};
@@ -290,10 +294,13 @@ export class LiveRuntime implements RuntimePort {
         this.sessionErrors.delete(id);
         this.sessionFailures.delete(id);
       }
+    for (const id of this.commandNotices.keys())
+      if (!existing.has(id)) this.commandNotices.delete(id);
     for (const session of this.snapshot.sessions) {
       Object.assign(session, this.views.get(session.id) ?? {});
       session.actionError = this.sessionErrors.get(session.id);
       session.actionFailure = this.sessionFailures.get(session.id);
+      this.attachCommandNotices(session);
     }
     this.snapshot = withWaiting(this.snapshot, this.waiting);
     for (const listener of this.listeners) listener();
@@ -365,12 +372,16 @@ export class LiveRuntime implements RuntimePort {
       const update = this.tokenBuffer.materialize();
       this.snapshot = {
         ...this.snapshot,
-        sessions: update.snapshot.sessions.map((session) => ({
-          ...session,
-          ...(this.views.get(session.id) ?? {}),
-          actionError: this.sessionErrors.get(session.id),
-          actionFailure: this.sessionFailures.get(session.id),
-        })),
+        sessions: update.snapshot.sessions.map((session) => {
+          const next = {
+            ...session,
+            ...(this.views.get(session.id) ?? {}),
+            actionError: this.sessionErrors.get(session.id),
+            actionFailure: this.sessionFailures.get(session.id),
+          };
+          this.attachCommandNotices(next);
+          return next;
+        }),
       };
       this.snapshot = withWaiting(this.snapshot, this.waiting);
       for (const listener of this.listeners) listener();
@@ -538,6 +549,82 @@ export class LiveRuntime implements RuntimePort {
     this.dismissActionError(sessionId);
     if (retry) await this.command(retry.name, retry.args, sessionId);
   };
+  /** Say a command's answer in the conversation that asked for it: the row it gets
+   * stays there, so a toast the person missed is never the only trace (#302). */
+  appendNotice = (sessionId: string, text: string): void => {
+    if (this.disposed || !text) return;
+    const session = this.snapshot.sessions.find(
+      (item) => item.id === sessionId,
+    );
+    if (!session || session.lifecycle === 'deleting') return;
+    // Anchor to the last line of the transcript, never to an answer the window
+    // kept itself: a trimmed list cannot then orphan the rows behind it.
+    const head = session.messages.findLast(
+      (item) => !item.id.startsWith('command-'),
+    );
+    const row: Message = {
+      id: `command-${crypto.randomUUID()}`,
+      parentId: head?.id ?? null,
+      role: 'notice',
+      text,
+      at: new Date().toISOString(),
+    };
+    const rows = this.commandNotices.get(sessionId) ?? [];
+    rows.push(row);
+    // The newest answers are the ones worth re-reading; an old window's list
+    // stays bounded.
+    if (rows.length > 40) rows.splice(0, rows.length - 40);
+    this.commandNotices.set(sessionId, rows);
+    this.snapshot = {
+      ...this.snapshot,
+      sessions: this.snapshot.sessions.map((item) => {
+        if (item.id !== sessionId) return item;
+        const next = { ...item };
+        this.attachCommandNotices(next);
+        return next;
+      }),
+    };
+    for (const listener of this.listeners) listener();
+  };
+  /** Put each kept answer back after the row it followed. When that row left the
+   * transcript, a branch switch that hid it, its answer hides too. Answers the
+   * window has dropped, an older line over the bound, go with it. */
+  private attachCommandNotices(session: Session): void {
+    const rows = this.commandNotices.get(session.id);
+    const had = session.messages.some((item) => item.id.startsWith('command-'));
+    if (!rows?.length && !had) return;
+    const messages = had
+      ? session.messages.filter((item) => !item.id.startsWith('command-'))
+      : session.messages.slice();
+    const placedAfter = new Map<string | null, string>();
+    for (const row of rows ?? []) {
+      if (row.parentId === null) {
+        const chained = placedAfter.get(null);
+        const at = chained
+          ? messages.findIndex((item) => item.id === chained)
+          : -1;
+        if (at >= 0) messages.splice(at + 1, 0, row);
+        else messages.unshift(row);
+        placedAfter.set(null, row.id);
+        continue;
+      }
+      let at = messages.findLastIndex(
+        (item) =>
+          item.id === row.parentId ||
+          (item.role === 'tool' && item.parentId === row.parentId) ||
+          item.id.startsWith(`${row.parentId}:`),
+      );
+      const chained = placedAfter.get(row.parentId);
+      if (chained) {
+        const after = messages.findIndex((item) => item.id === chained);
+        if (after > at) at = after;
+      }
+      if (at < 0) continue;
+      messages.splice(at + 1, 0, row);
+      placedAfter.set(row.parentId, row.id);
+    }
+    session.messages = messages;
+  }
   restartRuntime = async () => {
     if (!this.host.restartRuntime)
       throw Error(t('Circle runtime disconnected'));

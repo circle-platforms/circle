@@ -587,6 +587,11 @@ export interface RuntimePort {
   subscribe: (listener: () => void) => () => void;
   change: (update: (draft: WorkbenchSnapshot) => void) => void;
   updateSessionView: (sessionId: string, patch: SessionViewPatch) => boolean;
+  /**
+   * Record a command's one-line answer in the conversation that asked for it, and
+   * keep it there: a toast the person missed must not leave the answer nowhere.
+   */
+  appendNotice: (sessionId: string, text: string) => void;
   send: (
     kind?: 'steering' | 'follow-up',
   ) => CommandResult | Promise<CommandResult>;

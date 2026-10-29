@@ -84,6 +84,8 @@ When Circle wants to change a file or run a command, the request appears in the 
 
 A question from the model appears the same way, with its choices and a box for your own answer. While a request waits, the frame around the input box is orange and still, and the bar above the box says how many wait; click it to scroll to the first.
 
+**A command that answers with one line** — an unknown `/name`, `/undo`, `/share` — says it as a toast for a few seconds, and it also stays as a line of the conversation that asked, in its place in the transcript. A missed toast is not a lost answer. Asked in one conversation and answered while the window shows another, the line goes to the conversation that asked; the one on screen keeps its peace. A line an extension appends joins the conversation the same way, straight from the runtime.
+
 ## Modes
 
 The button under the input box, on the left, shows how this session asks. Click it to choose, or press `shift+tab` in the input box to move to the next one.
