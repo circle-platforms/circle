@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Fixed
+
+- **Desktop command answers stay where they were asked.** A command that answers with one line (`unknown command /name`, `/undo`, `/share`) said it only in a toast that passes in four seconds, and an answer that arrived after the window had moved to another conversation was dropped whole. The line now also stays in the conversation that asked for it, in its place in the transcript, and the toast is still said while that conversation is on screen. (#302)
+
 ## 1.13.1 - 2026-10-29
 
 ### Fixed

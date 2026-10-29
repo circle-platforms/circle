@@ -298,6 +298,22 @@ export class PreviewRuntime implements RuntimePort {
     });
     return true;
   };
+  /** A command's one-line answer stays where it was asked, as in the live window. */
+  appendNotice = (sessionId: string, text: string): void => {
+    if (!text) return;
+    this.change((state) => {
+      const session = state.sessions.find((item) => item.id === sessionId);
+      if (!session) return;
+      const head = session.messages.at(-1);
+      session.messages.push({
+        id: `command-${crypto.randomUUID()}`,
+        parentId: head?.id ?? null,
+        role: 'notice',
+        text,
+        at: new Date().toISOString(),
+      });
+    });
+  };
   change = (update: (draft: WorkbenchSnapshot) => void) => {
     const next = structuredClone(this.snapshot);
     update(next);

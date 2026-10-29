@@ -107,7 +107,13 @@ export function RuntimeProvider({
     perform(async () => {
       const result = await action();
       const selected = runtime.getSnapshot().activeSessionId === sessionId;
-      if (result.notice && selected) notify(result.notice);
+      // The answer belongs to the conversation that asked, whatever the window
+      // moved on to while it was sought: record it there, and say it in passing
+      // only while that conversation is still the one on screen (#302).
+      if (result.notice) {
+        runtime.appendNotice(sessionId, result.notice);
+        if (selected) notify(result.notice);
+      }
       if (selected || result.openSession) router.handler(result);
     });
   };
