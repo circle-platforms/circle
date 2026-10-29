@@ -6,8 +6,12 @@ import type { Server as HttpsServer } from 'node:https';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { approveHookFile, loadHooks } from '../src/hooks.js';
+import { loopbackEvidence } from './browser-port.mjs';
 interface TestContext {
   after(fn: () => void | Promise<void>): void;
+  /** By its cleanup, node:test's own context says whether the test failed. */
+  readonly passed?: boolean;
+  diagnostic?(message: string): void;
 }
 interface Resources {
   roots: string[];
@@ -135,6 +139,10 @@ export function cleanupServer(
   };
   server.on('connection', connected);
   cleanup(t, async () => {
+    // A failed test says what its server saw of the browser, if a browser opened it.
+    if (t.passed === false)
+      for (const evidence of loopbackEvidence(server))
+        t.diagnostic?.(JSON.stringify({ loopback: evidence }));
     const errors: unknown[] = [];
     const stopped = new Promise<void>((resolve, reject) => {
       server.close((error) => {

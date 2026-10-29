@@ -24,6 +24,48 @@ const bind = (server, port) =>
 const close = (server) =>
   new Promise((resolve) => server.close(() => resolve()));
 
+// What each server a browser opens has seen while it listens: the browser's connections, its
+// requests and when each was answered. A failed test prints it, so a page that did not load
+// says whether its request never came (the runner), came and was not answered (the fixture),
+// or was answered in time (the page's load).
+const seen = new Map();
+
+function watch(server, port) {
+  const since = Date.now();
+  const events = [];
+  const add = (event) => {
+    events.push({ at: Date.now() - since, ...event });
+    if (events.length > 50) events.shift();
+  };
+  server.on('connection', (socket) =>
+    add({ event: 'connection', from: socket.remotePort }),
+  );
+  server.on('request', (request, response) => {
+    const path = String(request.url ?? '').split('?')[0];
+    add({ event: 'request', method: request.method, path });
+    response.once('finish', () =>
+      add({ event: 'answered', path, status: response.statusCode }),
+    );
+    response.once('close', () => {
+      if (!response.writableFinished) add({ event: 'closed unanswered', path });
+    });
+  });
+  server.once('close', () => seen.delete(server));
+  seen.set(server, { port, since, events });
+}
+
+/** What the listening servers a browser opens have seen, or what one of them has. */
+export function loopbackEvidence(server) {
+  const servers = server
+    ? [seen.get(server)].filter(Boolean)
+    : [...seen.values()];
+  return servers.map(({ port, since, events }) => ({
+    port,
+    since: new Date(since).toISOString(),
+    events: [...events],
+  }));
+}
+
 /**
  * Listens on a loopback port a browser will open and returns it. A refused port
  * stays held by a placeholder until then, so the OS cannot hand it out again.
@@ -33,7 +75,10 @@ export async function listenForBrowser(server, refused = REFUSED_PORTS) {
   try {
     for (;;) {
       const port = await bind(server, 0);
-      if (!refused.has(port)) return port;
+      if (!refused.has(port)) {
+        watch(server, port);
+        return port;
+      }
       await close(server);
       const placeholder = createServer();
       // Someone else may take the port in between; then it is held anyway
