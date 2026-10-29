@@ -1,30 +1,43 @@
 # Changelog
 
-All notable changes to Circle are listed here, newest first. Circle follows [Semantic Versioning](https://semver.org) from 1.0 on.
+All notable changes to Circle are listed here, newest first. Circle generally follows [Semantic Versioning](https://semver.org) from 1.0 on; version 1.13.0 includes the breaking changes listed below.
 
 ## Unreleased
 
+### Fixed
+
+- **Desktop controls respond after a drawer closes.** In 1.13.0, a control whose tooltip was open could ignore the next click or keyboard activation after its press closed the drawer. This could prevent the browser from opening in a separate window again after it was returned to the drawer.
+
 ## 1.13.0 - 2026-10-28
+
+### Breaking changes
+
+- **The bundled Hub integration has been removed.** Circle no longer ships the `hub` extension, its `/hub` commands or its desktop Hub and platform pages. Its saved extension data and secrets are left on disk; removal does not revoke tokens at the service that issued them.
+- **MCP tool approval follows the server's annotations by default.** A tool the server marks read-only can run without asking. A call that sends a local file or a secret's value follows the normal approval rules and is refused in read-only and plan mode. Set `trust_annotations: false` on a server to treat its tools as unannotated, as in 1.12.0; the session's approval mode still applies. Only configure servers you trust.
+- **Existing skill outputs no longer receive a separate overwrite approval.** In `accept-edits` mode, changes to files inside the workspace can proceed without a card even when they are existing skill-run outputs.
 
 ### Added
 
-- **MCP servers and extensions load in print, line and rpc modes with `--extensions`.** Their tools are there from the first turn, as in the full-screen interface. MCP header secrets, server instructions, file arguments, read-only and destructive annotations, cancellation and result invalidation now go through the same approval and redaction rules everywhere.
-- **Device connections can be saved as profiles.** `terminal_profile_save` stores a device's address, port and login with the *name* of a saved secret, never its value.
+- **Headless runs can connect MCP servers.** Print, line and RPC modes load configured MCP servers before the first prompt when started with `--extensions`, alongside extensions. Server instructions are available from the first turn, and tools follow the same approval, cancellation and redaction rules as in the full-screen interface.
+- **MCP headers can use a saved secret.** Configure `${secret:NAME}` in an HTTP server's headers instead of writing the value in settings; Circle substitutes it when connecting and redacts it where the server quotes it back.
+- **MCP tools can take local files.** For a tool that declares a base64 file argument, Circle reads the named file under its normal file-access rules and shows its path, size and digest on the approval card before sending it.
+- **Circle can save a device profile.** The `terminal_profile_save` tool saves a device's address, port, user and sign-in reference; a password is stored by the name of a saved secret, never by its value.
 
 ### Changed
 
-- **Desktop settings open in a searchable dialog over your work.** Each group has a direct link, the sidebar is simpler, and closing the dialog brings back the view and the keyboard focus you had.
-- **Routine hook approvals no longer appear in tool results.** A hook that simply allows a call stays quiet; denials, questions, failures and after-tool output are still shown. `show_hook_allow` (in `/settings` and Settings → hooks) brings the allow notices back.
-- **The bundled Hub extension and the Hub pages of the desktop are gone.** A hub is now an ordinary MCP server entry.
+- **Desktop settings open over your work.** Settings and capability management are collected in one searchable dialog, with a simpler sidebar and direct links to each group. Closing settings returns to the view and keyboard focus you were using.
+- **Some MCP file calls can reuse a result.** When a server marks a tool idempotent, repeated calls with the same file contents and other arguments can return an earlier successful result until Circle sends a call that may change that server. Changes by other clients are not observed; set `trust_annotations: false` to send every call.
+- **Routine hook allows stay quiet by default.** New tool results no longer carry the routine allow prefix, and older prefixes are hidden in the interface without changing stored history. Set `show_hook_allow` to show routine allow notices; denials, questions, failures and after-tool output remain visible.
 
 ### Fixed
 
-- **Search says which files it could not look at.** A file over 10 MB, one that is not UTF-8 text or one that cannot be read is now named under the results instead of ending in a bare `No matches found`, and searches for plain text skip files that cannot match without decoding them.
-- **Accepting an unknown SSH host key continues the login you started** instead of opening a new connection, and rejecting one closes the waiting connection at once rather than leaving it open for up to a minute.
-- **A browser shortcut closes the tab you are looking at.** Opening a tab and closing it straight away with a shortcut could close the page behind it and leave a blank tab.
-- **A sidebar row stays in place when conversations reorder** while you are scrolling.
-- **The work drawer's controls stay visible in a narrow window**; the conversation title is shortened instead.
+- **Browser shortcuts close the active tab.** Closing a newly opened browser tab keeps the page you were already using, even when the interface has not yet caught up with the new tab.
 - **The changes list catches up after a slow Git read.** Reopening the list, or a change arriving, while Git was still answering could leave it showing the older state.
+- **The work drawer's controls stay visible in a narrow window**; the conversation title is shortened instead.
+- **The sidebar keeps its position while sessions move.** When the list has room to scroll, the row you were looking at stays in place even if a scroll notification is still pending.
+- **The editor uses its updated HTML sanitizer.** The application now uses the patched sanitizer in the editor itself, as well as in its dependency list.
+- **An approved SSH host key resumes the paused login.** Rejecting a key closes the paused connection, and a connection that has already ended starts a fresh login instead.
+- **Grep reports files it did not search.** Files over the size limit, non-UTF-8 files and unreadable files are counted in the result, so a search with no matches no longer implies they were searched. Literal ASCII searches also avoid decoding files that cannot match.
 
 ## 1.12.0 - 2026-10-23
 
