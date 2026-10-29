@@ -9,7 +9,9 @@ import {
   BrowserFixtureDeadline,
   type BrowserFixtureRecord,
 } from './browser-fixture.js';
-import { cleanup, scratch } from './helpers.js';
+import { createServer as createHttp } from 'node:http';
+import { cleanup, cleanupServer, scratch } from './helpers.js';
+import { listenForBrowser } from './browser-port.mjs';
 
 const childProgram = `
 process.on('message', () => {});
@@ -51,6 +53,44 @@ function fixture(
     records,
   };
 }
+
+// A page's own server says whether the browser's request came at all: a phase that times
+// out records it, so its failure tells the runner, the fixture and the page's load apart.
+test('a phase deadline records what the loopback servers saw of the browser', async (t) => {
+  const site = createHttp(() => {});
+  cleanupServer(t, site);
+  const port = await listenForBrowser(site);
+  const { value, records } = fixture(async () => {});
+  await assert.rejects(
+    value.run(
+      { phase: 'home', action: 'navigate' },
+      () => new Promise(() => {}),
+      50,
+    ),
+    (error) => {
+      assert(error instanceof BrowserFixtureDeadline);
+      const page = error.fixturePhase.loopback?.find(
+        (server) => server.port === port,
+      );
+      // No connection: the request never reached the page's server
+      assert.deepEqual(page?.events, []);
+      return true;
+    },
+  );
+  // Only the failure's records carry it
+  assert.deepEqual(
+    Object.fromEntries(
+      records.map((record) => [record.status, record.loopback !== undefined]),
+    ),
+    {
+      before: false,
+      timeout: true,
+      'cleanup-before': false,
+      'cleanup-after': false,
+      error: true,
+    },
+  );
+});
 
 test('a failed browser fixture close disposes each owned real root and still rejects the original error', async (t) => {
   const first = await ownedChild(t);

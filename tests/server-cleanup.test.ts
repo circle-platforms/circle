@@ -8,6 +8,7 @@ import { createConnection } from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { cleanup, cleanupServer, scratch } from './helpers.js';
+import { listenForBrowser } from './browser-port.mjs';
 
 function context() {
   const hooks: (() => void | Promise<void>)[] = [];
@@ -72,6 +73,49 @@ for (const protocol of ['http', 'https'] as const)
       await close(site);
     }
   });
+
+// A page that did not load fails its test; the test's own report then says whether the
+// browser's request reached the page's server and when it was answered.
+test('the cleanup of a failed test reports what its browser-facing server saw, and only then', async () => {
+  for (const passed of [false, true]) {
+    const said: string[] = [];
+    const hooks = {
+      ...context(),
+      passed,
+      diagnostic: (message: string) => said.push(message),
+    };
+    const site = createHttp((_req, res) => res.end('page'));
+    const plain = createHttp();
+    cleanupServer(hooks, site);
+    cleanupServer(hooks, plain);
+    const port = await listenForBrowser(site);
+    await listen(plain);
+    const answered = new Promise<void>((resolve, reject) =>
+      request({ host: '127.0.0.1', port, path: '/home', agent: false }, (res) =>
+        res.resume().once('end', resolve),
+      )
+        .once('error', reject)
+        .end(),
+    );
+    await answered;
+    await hooks.finish();
+    assert.equal(site.listening, false);
+    if (passed) {
+      assert.deepEqual(said, []);
+      continue;
+    }
+    // Only the server a browser opens has a record; the plain one adds nothing
+    assert.equal(said.length, 1);
+    const { loopback } = JSON.parse(said[0]!);
+    assert.equal(loopback.port, port);
+    assert.deepEqual(
+      loopback.events.map((event: { event: string }) => event.event),
+      ['connection', 'request', 'answered'],
+    );
+    assert.equal(loopback.events[1].path, '/home');
+    assert.equal(loopback.events[2].status, 200);
+  }
+});
 
 test('server cleanup accepts an already closed listener and does not affect another server', async () => {
   const t = context();

@@ -1,4 +1,5 @@
 import { ChildProcess } from 'node:child_process';
+import { loopbackEvidence, type LoopbackEvidence } from './browser-port.mjs';
 
 export interface BrowserFixturePhase {
   phase: string;
@@ -11,6 +12,8 @@ export interface BrowserFixtureRecord extends BrowserFixturePhase {
   status: string;
   elapsed: number;
   state: Record<string, unknown>;
+  /** On a timeout or an error: what the test's loopback servers saw of the browser. */
+  loopback?: LoopbackEvidence[];
 }
 
 export class BrowserFixtureDeadline extends Error {
@@ -131,6 +134,9 @@ export class BrowserFixture {
       status,
       elapsed: Date.now() - this.started,
       state: this.options.state(),
+      ...(status === 'timeout' || status === 'error'
+        ? { loopback: loopbackEvidence() }
+        : {}),
     };
     this.options.report(record);
     return record;
