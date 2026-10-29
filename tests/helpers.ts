@@ -61,8 +61,12 @@ export function approveProjectHooks(
     .projectChanged)
     approveHookFile(home, change);
 }
-export function scratch(t: TestContext, prefix = 'circle-test-'): string {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+export function scratch(
+  t: TestContext,
+  prefix = 'circle-test-',
+  parent = tmpdir(),
+): string {
+  const root = mkdtempSync(join(parent, prefix));
   owned(t).roots.push(root);
   return root;
 }

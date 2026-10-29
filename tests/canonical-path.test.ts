@@ -132,7 +132,13 @@ test(
   'Windows 8.3 temporary paths preserve root identity, workspace hashes and future file writes',
   { skip: process.platform !== 'win32' },
   async (t) => {
-    const temporary = scratch(t),
+    // CI keeps TEMP on a Dev Drive, which has no 8.3 names, and names the runner's own TEMP on the
+    // system disk for this test, so that a short-name alias is still exercised there (#348)
+    const temporary = scratch(
+        t,
+        undefined,
+        process.env.CIRCLE_TEST_SHORT_NAME_TEMP || undefined,
+      ),
       workspace = join(temporary, 'workspace with a long native name');
     mkdirSync(workspace);
     writeFileSync(join(workspace, 'source.txt'), 'source');
