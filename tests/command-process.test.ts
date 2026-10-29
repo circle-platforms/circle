@@ -31,7 +31,7 @@ import type {
   CommandLauncher,
   CommandLaunchRequest,
 } from '../src/command_process.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 import { signalProcessGroup } from '../src/process_group.js';
 
 const exec = promisify(execFile);
@@ -41,14 +41,6 @@ function deferred<T>() {
     resolve = done;
   });
   return { promise, resolve };
-}
-async function until(check: () => boolean, label: string) {
-  const end = Date.now() + 8000;
-  while (!check()) {
-    if (Date.now() > end)
-      throw Error('actual transport fixture timed out: ' + label);
-    await delay(5);
-  }
 }
 function command(root: string, body: string, name = 'program') {
   const file = join(root, name + '.cjs');
@@ -156,10 +148,10 @@ function pipeLauncher(
     });
     const settled = (async () => {
       await shellExit.promise;
-      await until(
-        () => shellClosed && (!child.pid || !groupAlive(child.pid)),
-        'owned tree exit',
-      );
+      await until(() => shellClosed && (!child.pid || !groupAlive(child.pid)), {
+        timeout: 8000,
+        label: 'owned tree exit',
+      });
       if (options.flush) {
         await options.flush;
         await writeFile(request.outputPath, await readFile(producer));
@@ -238,7 +230,7 @@ test('optional real pipe transport keeps one execution, PID and log across foreg
     () =>
       f.launches.length === 1 &&
       readFileSync(f.launches[0]!.request.outputPath, 'utf8').includes('READY'),
-    'actual ready output',
+    { timeout: 8000, label: 'actual ready output' },
   );
   const before = f.jobs.executionFor('child', 'execute-1')!;
   assert.equal(before.ownerSessionId, 'parent');
@@ -290,11 +282,11 @@ test('custom transport final output waits for real log flush even after the orig
       returned = true;
       return value;
     });
-  await until(() => f.launches.length === 1, 'spawn');
-  await until(
-    () => f.launches[0]!.child.exitCode !== null,
-    'native process exit',
-  );
+  await until(() => f.launches.length === 1, { timeout: 8000, label: 'spawn' });
+  await until(() => f.launches[0]!.child.exitCode !== null, {
+    timeout: 8000,
+    label: 'native process exit',
+  });
   await delay(160); // Cross an actual Registry monitor tick while the log is incomplete.
   assert.equal(returned, false);
   assert.equal(f.jobs.executionFor('one', 'flush')!.status, 'running');
@@ -346,7 +338,10 @@ test('cancellation after allocation waits for the late owned handle and stops it
       returned = true;
       throw error;
     });
-  await until(() => f.launches.length === 1, 'allocated process');
+  await until(() => f.launches.length === 1, {
+    timeout: 8000,
+    label: 'allocated process',
+  });
   signal.abort(new Error('cancel-after-spawn'));
   await delay(30);
   assert.equal(
@@ -537,13 +532,16 @@ test(
     assert.equal(result.job!.execution!.executionId, execution.executionId);
     const portPath = join(f.root, 'port'),
       observedPortValues: string[] = [];
-    await until(() => {
-      if (existsSync(portPath)) {
-        const raw = readFileSync(portPath, 'utf8');
-        if (observedPortValues.at(-1) !== raw) observedPortValues.push(raw);
-      }
-      return readFixturePort(portPath) !== undefined;
-    }, 'grandchild complete actual listener record');
+    await until(
+      () => {
+        if (existsSync(portPath)) {
+          const raw = readFileSync(portPath, 'utf8');
+          if (observedPortValues.at(-1) !== raw) observedPortValues.push(raw);
+        }
+        return readFixturePort(portPath) !== undefined;
+      },
+      { timeout: 8000, label: 'grandchild complete actual listener record' },
+    );
     const port = readFixturePort(portPath)!;
     const listener = JSON.parse(
       readFileSync(join(f.root, 'listener.json'), 'utf8'),
@@ -736,7 +734,7 @@ test('transport log failure plus an unconfirmed stop rejects the original call w
       readFileSync(transport.launches[0]!.request.outputPath, 'utf8').includes(
         'READY',
       ),
-    'actual process before log failure',
+    { timeout: 8000, label: 'actual process before log failure' },
   );
   trigger.resolve();
   const outcome = await Promise.race([
@@ -849,7 +847,7 @@ test('a genuinely unwritable original log cannot prevent transport failure from 
         transport.launches[0]!.request.outputPath + '.producer',
         'utf8',
       ).includes('READY'),
-    'actual ready before original log corruption',
+    { timeout: 8000, label: 'actual ready before original log corruption' },
   );
   const path = transport.launches[0]!.request.outputPath;
   const initialProcessIdentity =
@@ -989,7 +987,10 @@ test('a startup error still finishes its entry when its diagnostic log is a dire
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-  await until(() => !!outputPath, 'launcher entry allocated');
+  await until(() => !!outputPath, {
+    timeout: 8000,
+    label: 'launcher entry allocated',
+  });
   await rm(outputPath);
   await mkdir(outputPath);
   trigger.resolve();
@@ -1047,7 +1048,10 @@ test('an actual ScriptedModel background launch cancelled before ready cannot sp
   runtime.policy.setYolo(runtime.session.id, true);
   const running = runtime.harness.run('start a background command');
   const interrupted = assert.rejects(running, /Interrupted/);
-  await until(() => requested, 'background startup held before actual spawn');
+  await until(() => requested, {
+    timeout: 8000,
+    label: 'background startup held before actual spawn',
+  });
   const cancelled = runtime.cancel();
   ready.resolve();
   await cancelled;
@@ -1080,7 +1084,7 @@ test('only the actual execution session can stop the same foreground process, wi
     () =>
       f.launches.length === 1 &&
       readFileSync(f.launches[0]!.request.outputPath, 'utf8').includes('READY'),
-    'actual foreground before handoff stop',
+    { timeout: 8000, label: 'actual foreground before handoff stop' },
   );
   const before = f.jobs.executionFor('child', 'foreground-handoff')!;
   await assert.rejects(

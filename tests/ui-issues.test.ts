@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { SessionApp } from '../src/tui/session_app.js';
 import { defaultSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -18,16 +17,12 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 import { PlanCompletionTracker, planVisible } from '../src/plan_state.js';
 import { nextAgentActivity } from '../src/session_activity.js';
 import { loadRemap } from '../src/keybindings.js';
 import { PLAN_CHOICES } from '../src/plan_file.js';
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 500 && !check(); i++) await delay(5);
-  assert.ok(check(), 'the scripted runtime reaches the expected state');
-}
 const reply = (
   id: string,
   content: string,

@@ -1328,7 +1328,27 @@ try {
     'the keys after the click reached the shell',
   );
   assert.equal(await message.inputValue(), 'stays in the composer');
-  await live.evaluate(async (sessionId) => {
+  // This conversation's terminals as the main process lists them, for every window.
+  const terminalRows = () =>
+    live.evaluate(async (sessionId) => {
+      const listed = await window.circleDesktop.runtimeCommand({
+        id: crypto.randomUUID(),
+        name: 'workspace-service',
+        sessionId,
+        payload: { service: 'terminal', method: 'list', params: {} },
+      });
+      if (!listed.ok) throw Error(listed.error || 'terminal list failed');
+      return listed.data.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        status: item.status,
+        hidden: item.hidden === true,
+        managed: Boolean(item.managedCommand),
+        tabNumber: item.tabNumber,
+        restartOf: item.restartOf,
+      }));
+    }, liveSession);
+  const killed = await live.evaluate(async (sessionId) => {
     const listed = await window.circleDesktop.runtimeCommand({
       id: crypto.randomUUID(),
       name: 'workspace-service',
@@ -1352,6 +1372,7 @@ try {
       },
     });
     if (!signalled.ok) throw Error(signalled.error || 'terminal signal failed');
+    return shell.id;
   }, liveSession);
   await live.getByText('this terminal has exited', { exact: true }).waitFor({
     timeout: patience(15000),
@@ -1369,23 +1390,26 @@ try {
     await live.getByRole('tab', { name: 'terminal 2', exact: true }).count(),
     0,
   );
+  // The window takes the old tab out as soon as its replacement is announced. The main
+  // process lists the old row until its restart has finished, when the row has left (#359).
+  const restarted = await until(
+    async () => {
+      const listed = await terminalRows();
+      return listed.find((row) => row.id === killed)?.hidden
+        ? listed
+        : undefined;
+    },
+    "the restarted shell's old row leaves the list",
+    undefined,
+    terminalRows,
+  );
+  // One shell is in the row: the replacement, with the old tab's number.
   assert.deepEqual(
-    await live.evaluate(async (sessionId) => {
-      const listed = await window.circleDesktop.runtimeCommand({
-        id: crypto.randomUUID(),
-        name: 'workspace-service',
-        sessionId,
-        payload: { service: 'terminal', method: 'list', params: {} },
-      });
-      if (!listed.ok) throw Error(listed.error || 'terminal list failed');
-      return listed.data
-        .filter(
-          (item) =>
-            item.kind === 'shell' && !item.hidden && !item.managedCommand,
-        )
-        .map((item) => item.tabNumber);
-    }, liveSession),
-    [1],
+    restarted
+      .filter((row) => row.kind === 'shell' && !row.hidden && !row.managed)
+      .map((row) => ({ tabNumber: row.tabNumber, restartOf: row.restartOf })),
+    [{ tabNumber: 1, restartOf: killed }],
+    JSON.stringify(restarted),
   );
   await live
     .getByRole('button', { name: 'stop terminal 1', exact: true })

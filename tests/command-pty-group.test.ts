@@ -33,7 +33,7 @@ import {
   type CommandDescendantCoverage,
   type CommandPtyGroupProcessHandle,
 } from '../src/command_process.js';
-import { scratch, cleanup } from './helpers.js';
+import { scratch, cleanup, until } from './helpers.js';
 import { signalProcessGroup } from '../src/process_group.js';
 
 function deferred<T>() {
@@ -42,14 +42,6 @@ function deferred<T>() {
     resolve = yes;
   });
   return { promise, resolve };
-}
-async function until(check: () => boolean | Promise<boolean>, label: string) {
-  const end = Date.now() + 8000;
-  while (!(await check())) {
-    if (Date.now() > end)
-      throw Error('bounded command fixture timed out: ' + label);
-    await delay(5);
-  }
 }
 function command(root: string, body: string, name = 'program') {
   const path = join(root, name + '.cjs');
@@ -229,10 +221,10 @@ function transport(
     );
     const actualEmpty = (async () => {
       await exit.promise;
-      await until(
-        () => !child.pid || !groupAlive(child.pid),
-        'actual controlled group empty',
-      );
+      await until(() => !child.pid || !groupAlive(child.pid), {
+        timeout: 8000,
+        label: 'actual controlled group empty',
+      });
     })();
     const controlledGroupEmpty = (async () => {
       await actualEmpty;
@@ -339,10 +331,10 @@ test(
       ),
       true,
     );
-    await until(
-      () => existsSync(join(root, 'quiet-human-ready')),
-      'quiet human process started',
-    );
+    await until(() => existsSync(join(root, 'quiet-human-ready')), {
+      timeout: 8000,
+      label: 'quiet human process started',
+    });
     const quietView = runtime.userShells.views.at(-1)!;
     const original = structuredClone(quietView.execution!);
     assert.equal(original.userShellId, quietView.id);
@@ -352,7 +344,10 @@ test(
     assert.equal(background.execution!.executionId, original.executionId);
     assert.equal(background.job!.execution!.userShellId, quietView.id);
     writeFileSync(join(root, 'quiet-human-release'), 'release');
-    await until(() => quietView.status === 'done', 'quiet human completion');
+    await until(() => quietView.status === 'done', {
+      timeout: 8000,
+      label: 'quiet human completion',
+    });
     assert.equal(quietView.execution!.executionId, original.executionId);
     assert.equal(quietView.execution!.epoch, original.epoch);
     assert.ok(quietView.output.includes('QUIET_HUMAN_PRIVATE'));
@@ -455,7 +450,7 @@ test(
       () =>
         !!f.jobs.executionFor('one', 'four-facts')?.completion
           ?.controlledGroupEmpty,
-      'actual root exit and actual group empty',
+      { timeout: 8000, label: 'actual root exit and actual group empty' },
     );
     const before = f.jobs.executionFor('one', 'four-facts')!;
     assert.equal(before.completion!.rootExit!.exitCode, 0);
@@ -508,7 +503,7 @@ test(
           f.host.launches[0]!.outputPath + '.producer',
           'utf8',
         ).includes('READY'),
-      'real running root',
+      { timeout: 8000, label: 'real running root' },
     );
     const id = f.jobs.executionFor('one', 'stop-facts')!.executionId;
     let stopped = false;
@@ -518,13 +513,13 @@ test(
     });
     await until(
       () => f.jobs.execution(id)!.completion!.rootExit !== undefined,
-      'actual signalled root exit',
+      { timeout: 8000, label: 'actual signalled root exit' },
     );
     assert.equal(stopped, false);
     group.resolve();
     await until(
       () => !!f.jobs.execution(id)!.completion!.controlledGroupEmpty,
-      'group close event',
+      { timeout: 8000, label: 'group close event' },
     );
     assert.equal(stopped, false);
     assert.equal(
@@ -554,10 +549,10 @@ test(
     cleanup(t, async () => {
       if (pid) {
         process.kill(pid, 'SIGKILL');
-        await until(
-          async () => !(await portOpen(port)),
-          'fixture-owned outside daemon exit',
-        );
+        await until(async () => !(await portOpen(port)), {
+          timeout: 8000,
+          label: 'fixture-owned outside daemon exit',
+        });
       }
     });
     const running = f.jobs.execute(
@@ -571,10 +566,10 @@ test(
       },
       new AbortController().signal,
     );
-    await until(
-      () => existsSync(join(f.root, 'daemon-port')),
-      'actual detached listener',
-    );
+    await until(() => existsSync(join(f.root, 'daemon-port')), {
+      timeout: 8000,
+      label: 'actual detached listener',
+    });
     pid = Number(readFileSync(join(f.root, 'daemon-pid'), 'utf8'));
     port = Number(readFileSync(join(f.root, 'daemon-port'), 'utf8'));
     assert.equal(await portOpen(port), true);
@@ -635,7 +630,7 @@ test(
           f.host.launches[0]!.outputPath + '.producer',
           'utf8',
         ).includes('READY'),
-      'actual process before failed stop',
+      { timeout: 8000, label: 'actual process before failed stop' },
     );
     const id = f.jobs.executionFor('one', 'stop-failed')!.executionId;
     await assert.rejects(f.jobs.stopExecution('one', id), /stop unconfirmed/);
@@ -653,7 +648,10 @@ test(
     await f.host.launches[0]!.actualStop();
     await until(
       () => !!f.jobs.execution(id)!.completion!.transportAndLogClosed,
-      'fixture-owned physical close after refused stop',
+      {
+        timeout: 8000,
+        label: 'fixture-owned physical close after refused stop',
+      },
     );
     assert.equal(
       f.jobs.execution(id)!.status,
@@ -698,7 +696,7 @@ test(
       () =>
         !!jobs.executionFor('one', 'log-closure')?.completion
           ?.controlledGroupEmpty,
-      'actual group exit before rejected log closure',
+      { timeout: 8000, label: 'actual group exit before rejected log closure' },
     );
     const launch = host.launches[0]!;
     unlinkSync(launch.outputPath);
@@ -720,7 +718,7 @@ test(
       () =>
         jobs.executionFor('one', 'log-closure')?.reason ===
         'transport cleanup failed',
-      'actual failed log cleanup status',
+      { timeout: 8000, label: 'actual failed log cleanup status' },
     );
     const execution = jobs.executionFor('one', 'log-closure')!;
     assert.equal(execution.status, 'failed');
@@ -898,10 +896,10 @@ test(
         origin: { executionSessionId: 'child', toolCallId: 'background-call' },
       },
     );
-    await until(
-      () => f.jobs.get(job.id)?.status === 'done',
-      'actual background completion',
-    );
+    await until(() => f.jobs.get(job.id)?.status === 'done', {
+      timeout: 8000,
+      label: 'actual background completion',
+    });
     assert.deepEqual(f.jobs.takeNotices('child'), []);
     const notices = f.jobs.takeNotices('parent');
     assert.equal(notices.length, 1);

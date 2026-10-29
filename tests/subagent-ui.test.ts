@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { setTimeout as delay } from 'node:timers/promises';
 import { SessionApp } from '../src/tui/session_app.js';
 import {
   renderScreen,
@@ -30,15 +29,8 @@ import {
   type ModelResponse,
 } from '../src/types.js';
 import type { Job } from '../src/jobs.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
-async function until(check: () => boolean, ms = 5000): Promise<void> {
-  const end = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await delay(5);
-  }
-}
 const reply = (
   content: string,
   calls: Message['tool_calls'] = [],

@@ -72,15 +72,28 @@ export function cleanup(
 /**
  * Poll until `predicate` holds; a test waits on state instead of a fixed sleep.
  * The timeout only bounds a failure, so keep it well above the expected time.
+ * A label given as a function is read on failure, so it can show the state the
+ * wait saw last. An aborted `signal` ends the wait with its reason.
  */
 export async function until(
   predicate: () => boolean | Promise<boolean>,
-  { timeout = 5000, label = 'the expected state' } = {},
+  {
+    timeout = 5000,
+    label = 'the expected state',
+    signal,
+  }: {
+    timeout?: number;
+    label?: string | (() => string);
+    signal?: AbortSignal;
+  } = {},
 ): Promise<void> {
   const deadline = Date.now() + timeout;
   while (!(await predicate())) {
+    signal?.throwIfAborted();
     if (Date.now() >= deadline)
-      throw new Error(`timed out after ${timeout} ms waiting for ${label}`);
+      throw new Error(
+        `timed out after ${timeout} ms waiting for ${typeof label === 'function' ? label() : label}`,
+      );
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }

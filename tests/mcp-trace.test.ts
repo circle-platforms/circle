@@ -11,7 +11,7 @@ import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message, ModelResponse } from '../src/types.js';
-import { scratch, cleanup } from './helpers.js';
+import { scratch, cleanup, until } from './helpers.js';
 import { mcpStub } from './mcp-stub.js';
 
 const TRACE = /^00-([0-9a-f]{32})-([0-9a-f]{16})-01$/;
@@ -198,14 +198,7 @@ test("the cancellation sent for an interrupted tool call carries that call's tra
     {},
     { sessionId: 'one', signal: controller.signal },
   );
-  const until = async (check: () => boolean) => {
-    const deadline = performance.now() + 10_000;
-    while (!check()) {
-      assert.ok(performance.now() < deadline, 'timed out');
-      await new Promise((done) => setTimeout(done, 5));
-    }
-  };
-  await until(() => stub.calls().length === 1);
+  await until(() => stub.calls().length === 1, { timeout: 10_000 });
   // From outside the call, as a key press is
   controller.abort(new Error('interrupted'));
   await assert.rejects(running);
@@ -213,7 +206,7 @@ test("the cancellation sent for an interrupted tool call carries that call's tra
     stub.requests.find(
       (request) => request.message?.method === 'notifications/cancelled',
     );
-  await until(() => cancelled() !== undefined);
+  await until(() => cancelled() !== undefined, { timeout: 10_000 });
   const call = stub.calls()[0]!;
   assert.match(String(call.headers.traceparent), TRACE);
   assert.equal(

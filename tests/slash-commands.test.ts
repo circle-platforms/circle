@@ -38,18 +38,11 @@ import {
   type CircleSettings,
 } from '../src/settings.js';
 import { emptyUsage, type Message, type ModelResponse } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 const answer = (content: string): { message: Message } => ({
   message: { id: crypto.randomUUID(), role: 'assistant', content },
 });
-async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('timed out');
-    await delay(10);
-  }
-}
 // A full-screen session without a terminal: the real runtime, store and event handling, with
 // ScriptedModel in place of the endpoint and a clipboard of its own.
 async function session(
