@@ -10,7 +10,8 @@ import {
 // A terminal tab's right-click menu, its name and the row's order, as a person uses them:
 // a name is the tab's own, a name the main process refuses keeps the dialog open with why,
 // a drag works both ways and the order is the one the main process keeps for every window,
-// and a restart keeps the tab's place and name.
+// a restart keeps the tab's place and name, and a new or restarted shell whose answer
+// arrives after the person picked a tab leaves that tab in front.
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0, hmr: false, watch: null },
@@ -48,6 +49,15 @@ try {
       method,
     );
   const tab = (name) => page.getByRole('tab', { name, exact: true });
+  const inFront = () =>
+    page
+      .locator('.term-tabs [role="tab"][aria-selected="true"]')
+      .getAttribute('aria-controls');
+  const fixture = (name) =>
+    page.evaluate((name) => {
+      const value = window.tabMenuFixture[name];
+      return typeof value === 'function' ? value() : value;
+    }, name);
   const until = async (check, what) => {
     const deadline = Date.now() + 5000;
     while (!(await check())) {
@@ -151,6 +161,71 @@ try {
     "the new shell took the old one's tab",
   );
   assert.deepEqual(await names(), ['terminal 3', 'terminal 1', 'build logs']);
+  await until(
+    async () => (await inFront()) === 'terminal-term-4',
+    'with no other tab picked, the restarted shell is in front',
+  );
+
+  // A new shell's tab is in the row before its create answers. The person picks the tab
+  // in front again before the answer: it stays in front, and what they ask of the row next
+  // is done to it. The copy waits for the create, as its menu item does.
+  await tab('terminal 1').click();
+  await until(
+    async () => (await inFront()) === 'terminal-term-1',
+    'terminal 1 is in front',
+  );
+  await fixture('hold');
+  await page
+    .getByRole('button', { name: 'new terminal or device', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: /^new local terminal/ }).click();
+  await until(
+    async () => (await fixture('held')) === 'create',
+    'the new shell is announced and its answer is held',
+  );
+  await tab('terminal 4').waitFor();
+  assert.equal(await inFront(), 'terminal-term-1');
+  await tab('terminal 1').click();
+  await fixture('release');
+  await chooseTerminalMenu(page, 'copy complete output');
+  await until(
+    async () => (await fixture('copied')).length === 1,
+    'the complete output is copied',
+  );
+  assert.match((await fixture('copied'))[0], /^output of term-1\s*$/);
+  assert.equal(await inFront(), 'terminal-term-1');
+
+  // A restart answers the same way: its new shell takes the old tab's place at once, and
+  // a tab the person picks before the answer stays in front.
+  await fixture('hold');
+  await chooseTerminalMenu(page, 'restart terminal');
+  await until(
+    async () => (await fixture('held')) === 'restart',
+    'the restarted shell is announced and its answer is held',
+  );
+  await until(
+    async () =>
+      (await page.locator('[aria-controls="terminal-term-6"]').count()) === 1 &&
+      (await page.locator('[aria-controls="terminal-term-1"]').count()) === 0,
+    "the restarted shell took the old one's tab",
+  );
+  await tab('terminal 3').click();
+  await until(
+    async () => (await inFront()) === 'terminal-term-3',
+    'terminal 3 is in front',
+  );
+  await fixture('release');
+  await chooseTerminalMenu(page, 'copy complete output');
+  await until(
+    async () => (await fixture('copied')).length === 2,
+    'the complete output is copied again',
+  );
+  assert.match((await fixture('copied'))[1], /^output of term-3\s*$/);
+  assert.equal(await inFront(), 'terminal-term-3');
+  assert.deepEqual(await calls('restart'), [
+    { id: 'term-2' },
+    { id: 'term-1' },
+  ]);
 
   // close others leaves only the tab it was chosen on
   await tab('terminal 1').click({ button: 'right' });

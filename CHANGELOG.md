@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Fixed
+
+- **A new desktop terminal leaves the tab you picked in front.** If you added or restarted a terminal and chose a tab before the new shell had started, the new terminal could take the front back, and the next action from the terminal menu, such as copy complete output, went to it instead. It still comes to the front when you have not picked a tab meanwhile.
+
 ## 1.13.1 - 2026-10-29
 
 ### Fixed

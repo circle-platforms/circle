@@ -317,6 +317,13 @@ export async function runNativeTerminalJourney({
     phase = 'independent terminal buffers';
     await select(first.id);
     await chooseTerminalAction(page, panel, 'copy complete output');
+    // The item waited for the second terminal's create to answer, which can come after
+    // the tab switch: the tab the person picked stays in front, and is the one copied.
+    assert.equal(
+      await selectedTab(first.id).getAttribute('aria-selected'),
+      'true',
+      'the first tab stays in front when the second terminal answers after the switch',
+    );
     await until(
       async () => (await clipboard.readText()).includes(line(600)),
       'first terminal retains its output after tab switch',
