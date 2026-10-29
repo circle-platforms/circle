@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { setTimeout as delay } from 'node:timers/promises';
 import { InputParser } from '../src/ink/parse_keypress.js';
 import { stripAnsi, stringWidth } from '../src/ink/string_width.js';
 import {
@@ -18,7 +17,7 @@ import { cursorRow, visualLines } from '../src/tui/composer.js';
 import { renderScreen } from '../src/tui/render.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import type { ModelResponse } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 function session(
   t: Parameters<typeof scratch>[0],
@@ -82,10 +81,6 @@ function session(
 }
 function key(ui: any, name: string, char = ''): void {
   ui.handle({ type: 'key', key: name, char });
-}
-async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 200 && !check(); i++) await delay(10);
-  assert.ok(check());
 }
 const answer = (content: string): Partial<ModelResponse> => ({
   message: { id: crypto.randomUUID(), role: 'assistant', content },

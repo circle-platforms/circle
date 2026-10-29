@@ -43,7 +43,7 @@ import {
   type ModelResponse,
   type ToolCall,
 } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 type Reply =
   Partial<ModelResponse> | ((request: ModelRequest) => Promise<ModelResponse>);
@@ -53,13 +53,6 @@ const calls = (id: string, ...toolCalls: ToolCall[]): Reply => ({
 const answer = (id: string, content: string): Reply => ({
   message: { id, role: 'assistant', content },
 });
-async function until(check: () => boolean, ms = 5000): Promise<void> {
-  const end = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await delay(5);
-  }
-}
 /** A SessionApp whose runtime asks through the app's own card hooks, driven by keys. */
 function session(t: Parameters<typeof scratch>[0], replies: Reply[]) {
   const root = scratch(t);
@@ -437,7 +430,7 @@ test('a card waits until typing has paused for a second, keys typed meanwhile st
   s.type('y');
   assert.equal(s.app.state.draft, 'helnylo');
   assert.match(s.screen(), /› helny▏lo/);
-  await until(() => Boolean(s.app.state.dialog), 3000);
+  await until(() => Boolean(s.app.state.dialog), { timeout: 3000 });
   assert.ok(Date.now() - last >= 950, `${Date.now() - last}ms`);
   // the card has the frame; the draft is set aside, not lost
   assert.equal(s.app.state.draft, '');
@@ -822,7 +815,7 @@ test('a folded paste in the draft survives a card and reaches the model whole', 
   (s.app as any).handle({ type: 'paste', text: pasted });
   assert.equal(s.app.state.draft, '[Pasted text #1 +11 lines]');
   const run = s.runtime.harness.run('write it');
-  await until(() => Boolean(s.app.state.dialog), 3000);
+  await until(() => Boolean(s.app.state.dialog), { timeout: 3000 });
   assert.equal(s.app.state.draft, '');
   s.key('y');
   await run;

@@ -12,7 +12,7 @@ import { telnetConnector } from '../src/terminal/telnet.js';
 import { TrustedHostKeys } from '../src/terminal/hostkeys.js';
 import type { TerminalProfile } from '../src/terminal/profiles.js';
 import type { ConnectEnv } from '../src/terminal/transport.js';
-import { scratch } from './helpers.js';
+import { scratch, until } from './helpers.js';
 
 // Default-imported: ssh2 is CommonJS with loop-copied exports.
 const { Server } = ssh2;
@@ -159,17 +159,6 @@ const signal = new AbortController().signal;
 
 // The runner is busy when the whole suite goes at once: wait for what actually happened,
 // never for a guessed number of milliseconds.
-async function until(
-  what: () => boolean,
-  message: string,
-  ms = 8000,
-): Promise<void> {
-  const stop = Date.now() + ms;
-  while (!what()) {
-    if (Date.now() >= stop) throw Error(message);
-    await new Promise((done) => setTimeout(done, 25));
-  }
-}
 
 function profile(port: number, name = 'LAB-DEVICE-01'): TerminalProfile {
   return {
@@ -268,7 +257,11 @@ test('a first SSH login stops at an unknown host key; trusting it lets the same 
   sessions.resize('c1', 't1', 100, 30);
   await until(
     () => device.windowChanges.some((w) => w.cols === 100 && w.rows === 30),
-    `no window-change in ${JSON.stringify(device.windowChanges)}`,
+    {
+      timeout: 8000,
+      label: () =>
+        `a 100x30 window-change (saw ${JSON.stringify(device.windowChanges)})`,
+    },
   );
   // A second conversation trusts the stored key: nobody is asked again
   const again = await sessions.request(
@@ -344,10 +337,10 @@ test('an approved host key resumes the paused login: the device sees one handsha
   assert.equal(ask.approval?.kind, 'hostkey');
   assert.deepEqual(device.authed, []);
   // The question stands on a live wire: the login waits mid-handshake, unauthenticated
-  await until(
-    () => device.open() === 1,
-    'the paused login did not keep its wire',
-  );
+  await until(() => device.open() === 1, {
+    timeout: 8000,
+    label: 'the paused login to keep its wire',
+  });
   const done = await sessions.request(
     'c1',
     'connect',
@@ -384,20 +377,20 @@ test('a refused host key drops the paused login and retires its question', async
     signal,
   );
   assert.equal(ask.approval?.kind, 'hostkey');
-  await until(
-    () => device.open() === 1,
-    'the paused login did not keep its wire',
-  );
+  await until(() => device.open() === 1, {
+    timeout: 8000,
+    label: 'the paused login to keep its wire',
+  });
   await sessions.request(
     'c1',
     'decline-host-key',
     { token: ask.approval!.token },
     signal,
   );
-  await until(
-    () => device.open() === 0,
-    'the refused login kept its wire open',
-  );
+  await until(() => device.open() === 0, {
+    timeout: 8000,
+    label: 'the refused login to close its wire',
+  });
   // Answering after a refusal says so rather than signing in behind it
   await assert.rejects(
     sessions.request(
@@ -426,14 +419,17 @@ test('a paused login the device hung up on still connects on one answer', async 
     signal,
   );
   assert.equal(ask.approval?.kind, 'hostkey');
-  await until(
-    () => device.open() === 1,
-    'the paused login did not keep its wire',
-  );
+  await until(() => device.open() === 1, {
+    timeout: 8000,
+    label: 'the paused login to keep its wire',
+  });
   // The device grows tired of the wait and cuts the wire: the answer cannot resume
   // it, so it logs in from scratch - the person still only clicks once.
   device.hangUp();
-  await until(() => device.open() === 0, 'the device wire stayed open');
+  await until(() => device.open() === 0, {
+    timeout: 8000,
+    label: 'the device wire to close',
+  });
   const done = await sessions.request(
     'c1',
     'connect',
@@ -574,17 +570,18 @@ test('the person holds a console: the model parks, and the events name the act, 
       parked = true;
       return result;
     });
-  await until(
-    () => (sessions.session('c1', 't1')?.wakers.size ?? 0) > 0,
-    'the action never parked on the holder',
-  );
+  await until(() => (sessions.session('c1', 't1')?.wakers.size ?? 0) > 0, {
+    timeout: 8000,
+    label: 'the action to park on the holder',
+  });
   assert.equal(parked, false);
   sessions.detach('c1', 't1');
   const resumed = await pending;
-  await until(
-    () => device.input.includes('later'),
-    `device saw only ${JSON.stringify(device.input)}`,
-  );
+  await until(() => device.input.includes('later'), {
+    timeout: 8000,
+    label: () =>
+      `the device to see the later line (saw ${JSON.stringify(device.input)})`,
+  });
   assert.deepEqual(device.input, ['secret words', 'later']);
   assert.match(resumed.text, /the user typed/);
   assert.match(resumed.text, /took the terminal/);

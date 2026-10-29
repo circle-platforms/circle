@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { setTimeout as delay } from 'node:timers/promises';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings } from '../src/settings.js';
 import { emptyUsage, type ModelResponse } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 const incompleteText = '✖ model output limit reached; response incomplete';
 const legacyText = '✖ model ended without an answer';
@@ -32,15 +31,6 @@ function complete(id: string, content: string): ModelResponse {
     message: { id, role: 'assistant', content, completion: { reason: 'stop' } },
     usage: { ...emptyUsage(), input_tokens: 3, output_tokens: 5 },
   };
-}
-
-async function until(predicate: () => boolean): Promise<void> {
-  const end = Date.now() + 5000;
-  while (!predicate()) {
-    if (Date.now() >= end)
-      throw new Error('timed out waiting for model request');
-    await delay(5);
-  }
 }
 
 async function appFor(
@@ -171,7 +161,9 @@ for (const kind of ['typed', 'legacy'] as const) {
     cleanup(t, () => release());
     const a = app.runtime!;
     const turnA = app.submit('A fails in background');
-    await until(() => model.requests.length === 1);
+    await until(() => model.requests.length === 1, {
+      label: 'the model request',
+    });
     await app.command('new', '');
     const b = app.runtime!;
     await app.submit('B completes in foreground');

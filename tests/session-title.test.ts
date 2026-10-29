@@ -30,7 +30,7 @@ import { ScriptedModel } from '../src/testing.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import type { ChatModel, ModelRequest, ModelResponse } from '../src/types.js';
 import { emptyUsage } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 test('fallback titles stay short and drop a leading please', () => {
   assert.equal(fallbackTitle('hello'), 'hello');
@@ -846,14 +846,7 @@ function anthropicStream(text: string): string {
     .join('');
 }
 
-async function until(check: () => boolean, ms = 8000): Promise<void> {
-  const start = Date.now();
-  while (!check()) {
-    if (Date.now() - start > ms)
-      throw new Error('timed out waiting for the session title');
-    await delay(20);
-  }
-}
+const titleWait = { timeout: 8000, label: 'the session title' };
 
 test('an Anthropic title request through the terminal replaces the fallback', async (t) => {
   const bodies: Record<string, unknown>[] = [];
@@ -944,6 +937,7 @@ test('an Anthropic title request through the terminal replaces the fallback', as
   const first = runtime.session.id;
   await until(
     () => runtime.store.get(first)?.title === 'Workspace File Overview',
+    titleWait,
   );
   const title = bodies.find((body) =>
     String(body.system).includes('title generator'),
@@ -966,8 +960,9 @@ test('an Anthropic title request through the terminal replaces the fallback', as
   const failed = 'please explain how the workspace build is wired together';
   await app.submit(failed);
   const second = app.runtime!;
-  await until(() =>
-    app.state.notices.some((line) => line.includes('title failed')),
+  await until(
+    () => app.state.notices.some((line) => line.includes('title failed')),
+    titleWait,
   );
   assert.match(app.state.flash, /title failed/);
   assert.match(app.state.notices.join('\n'), /title failed/);
@@ -1114,8 +1109,9 @@ test('an Anthropic title reply that is only thinking keeps the fallback', async 
   const prompt = 'look at @README.md and tell me what the first heading is';
   await app.submit(prompt);
   const runtime = app.runtime!;
-  await until(() =>
-    app.state.notices.some((line) => line.includes('title failed')),
+  await until(
+    () => app.state.notices.some((line) => line.includes('title failed')),
+    titleWait,
   );
   const title = bodies.find((body) =>
     String(body.system).includes('title generator'),
@@ -1202,14 +1198,20 @@ test('Chinese prompts are titled from the model over a real HTTP server', async 
   await app.submit(rome);
   const first = app.runtime!;
   const firstId = first.session.id;
-  await until(() => first.store.get(firstId)?.title === '罗马帝国兴衰');
+  await until(
+    () => first.store.get(firstId)?.title === '罗马帝国兴衰',
+    titleWait,
+  );
   assert.notEqual(first.store.get(firstId)?.title, fallbackTitle(rome));
   assert.equal(first.store.get(firstId)?.title?.includes('用大约200字'), false);
   await app.submit('/new');
   await app.submit(go);
   const second = app.runtime!;
   const secondId = second.session.id;
-  await until(() => second.store.get(secondId)?.title === '你好世界 Go 程序');
+  await until(
+    () => second.store.get(secondId)?.title === '你好世界 Go 程序',
+    titleWait,
+  );
   assert.notEqual(second.store.get(secondId)?.title, fallbackTitle(go));
   const titles = bodies.filter((body) =>
     String(body.system).includes('title generator'),
@@ -1575,7 +1577,7 @@ test('startup repairs a visible title and the resume line follows it', async (t)
     model.requests.filter(
       (request) => request.maxTokens === Harness.titleOutputTokens,
     );
-  await until(() => titleCalls().length >= 1);
+  await until(() => titleCalls().length >= 1, titleWait);
   assert.equal(
     app.runtime!.store.get(cut.id)!.title,
     'please explain to me briefly in two',
@@ -1590,9 +1592,11 @@ test('startup repairs a visible title and the resume line follows it', async (t)
   model.releaseTitle();
   await until(
     () => app.runtime!.store.get(cut.id)!.title === 'Brief explanation',
+    titleWait,
   );
-  await until(() =>
-    (app.state.notices.at(-1) ?? '').includes('Brief explanation'),
+  await until(
+    () => (app.state.notices.at(-1) ?? '').includes('Brief explanation'),
+    titleWait,
   );
   assert.deepEqual(
     app.runtime!.store.list().map((session) => session.id),

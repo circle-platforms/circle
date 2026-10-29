@@ -17,13 +17,9 @@ import {
   saveSettings,
   trustFolder,
 } from '../src/settings.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 type Context = Parameters<typeof scratch>[0];
-async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 500 && !check(); i++) await delay(5);
-  assert.ok(check(), 'the real connection form reaches the expected step');
-}
 function streamed(protocol: string, model: string, text: string): string {
   if (protocol === 'openai')
     return (
@@ -205,14 +201,16 @@ for (const entry of ['setup', 'login'] as const)
       await s.key('enter');
       s.paste('local-key');
       await s.key('enter');
-      await until(() =>
-        entry === 'setup'
-          ? s.app.state.dialog?.title === 'Which model?'
-          : Boolean(
-              s.app.state.picker?.items.some(
-                (item) => item.key === 'qwen3.8-max',
+      await until(
+        () =>
+          entry === 'setup'
+            ? s.app.state.dialog?.title === 'Which model?'
+            : Boolean(
+                s.app.state.picker?.items.some(
+                  (item) => item.key === 'qwen3.8-max',
+                ),
               ),
-            ),
+        { label: 'the expected connection form step' },
       );
       assert.equal(seen.length, 0, 'presets do not trigger online discovery');
       assert.equal(
@@ -235,7 +233,9 @@ for (const entry of ['setup', 'login'] as const)
         });
       } else {
         await done;
-        await until(() => s.app.state.picker === undefined);
+        await until(() => s.app.state.picker === undefined, {
+          label: 'the expected connection form step',
+        });
       }
       assert.equal(loadSettings(s.home).auth.base_url, endpoint);
       assert.equal(loadSettings(s.home).auth.protocol, protocol);
@@ -291,10 +291,12 @@ for (const entry of ['setup', 'login'] as const)
       await s.key('enter');
       const detail =
         failure === 'failed' ? 'http 503' : 'invalid model pagination';
-      await until(() =>
-        entry === 'setup'
-          ? s.app.state.dialog?.title === 'Which model?'
-          : Boolean(s.app.state.picker?.options.hint?.includes(detail)),
+      await until(
+        () =>
+          entry === 'setup'
+            ? s.app.state.dialog?.title === 'Which model?'
+            : Boolean(s.app.state.picker?.options.hint?.includes(detail)),
+        { label: 'the expected connection form step' },
       );
       if (entry === 'setup') {
         assert.deepEqual(

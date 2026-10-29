@@ -23,7 +23,7 @@ import { defaultSettings, saveSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import { emptyUsage, type Message, type ModelResponse } from '../src/types.js';
 import type { Job } from '../src/jobs.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 const PALETTES: [string, Palette][] = [
   ['dark', buildPalette(...DEFAULT_DARK)],
@@ -118,13 +118,6 @@ function reply(
     },
     usage,
   };
-}
-async function until(check: () => boolean, timeout = 5000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error('timed out');
-    await delay(10);
-  }
 }
 // A screen big enough that nothing the test reads scrolls away or gives way.
 function bigScreen(t: Parameters<typeof scratch>[0]): void {

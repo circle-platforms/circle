@@ -8,7 +8,6 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { PNG } from 'pngjs';
 import { Clipboard, type OutputRunner } from '../src/ink/clipboard.js';
@@ -31,7 +30,7 @@ import { ScriptedModel } from '../src/testing.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import type { CircleEvent } from '../src/events.js';
 import type { ModelResponse } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 type Context = Parameters<typeof scratch>[0];
 
@@ -48,13 +47,6 @@ const answer = (content: string): Partial<ModelResponse> => ({
 const escaped = (path: string) => path.replace(/([ '"\\])/g, '\\$1');
 const dropped = (path: string) =>
   process.platform === 'win32' ? `"${path}"` : escaped(path);
-async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('timed out');
-    await delay(5);
-  }
-}
 
 /** The input box and the real runtime, without a terminal. */
 function session(t: Context, model: ScriptedModel) {

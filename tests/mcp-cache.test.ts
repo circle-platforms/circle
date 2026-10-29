@@ -12,7 +12,7 @@ import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message, ModelResponse, ToolCall } from '../src/types.js';
-import { scratch, cleanup } from './helpers.js';
+import { scratch, cleanup, until } from './helpers.js';
 import { mcpStub, type StubRequest, type StubTool } from './mcp-stub.js';
 
 const fileSchema = {
@@ -99,13 +99,6 @@ async function documents(t: TestContext) {
     },
   });
   return { stub, held };
-}
-async function until(check: () => boolean): Promise<void> {
-  const deadline = performance.now() + 10_000;
-  while (!check()) {
-    assert.ok(performance.now() < deadline, 'timed out');
-    await new Promise((done) => setTimeout(done, 5));
-  }
 }
 const reply = (
   text: string,
@@ -370,7 +363,7 @@ test("nothing kept for a server outlives its connection: once the server's progr
   const pid = Number(/8 bytes read by (\d+)$/.exec(first)![1]);
   assert.match(await checksum.run({ file: 'a.bin' }, context), /^cached/);
   process.kill(pid);
-  await until(() => manager.status[0]!.error !== '');
+  await until(() => manager.status[0]!.error !== '', { timeout: 10_000 });
   assert.match(manager.status[0]!.error, /the connection ended/);
   await assert.rejects(checksum.run({ file: 'a.bin' }, context));
 });

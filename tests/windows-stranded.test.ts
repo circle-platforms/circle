@@ -14,7 +14,7 @@ import {
   type WindowsChildrenApi,
   type WindowsJobApi,
 } from '../src/windows_stranded.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 const shell = { pid: 100, started: 10_000, ended: 20_000 };
 interface Row {
@@ -340,13 +340,6 @@ function trees(left: boolean) {
   };
   return { made, factory };
 }
-async function until(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('timed out waiting');
-    await delay(20);
-  }
-}
 function registry(
   t: TestContext,
   factory: (shell: { pid: number; started: number }) => CommandTree | undefined,
@@ -368,7 +361,9 @@ test('what a finished command left running is ended when its job is stopped, its
   const { made, factory } = trees(true);
   const { jobs } = registry(t, factory);
   const job = await jobs.startShell(quick, { sessionId: 'one' });
-  await until(() => jobs.get(job.id)!.status !== 'running');
+  await until(() => jobs.get(job.id)!.status !== 'running', {
+    timeout: 10_000,
+  });
   assert.equal(jobs.get(job.id)!.status, 'done');
   assert.deepEqual(made[0]!.calls, ['record']);
   // Stopping a finished job no longer returns at once: it ends what its shell left.
@@ -387,6 +382,7 @@ test('what a finished command left running is ended when its job is stopped, its
     () =>
       jobs.get(owned.id)!.status !== 'running' &&
       jobs.get(other.id)!.status !== 'running',
+    { timeout: 10_000 },
   );
   await jobs.stopOwned('agent-1');
   const callsOf = (id: string) =>
@@ -410,7 +406,9 @@ test('a command that leaves nothing lets its tree go, and a stopped command ends
   const { made, factory } = trees(false);
   const { jobs, root } = registry(t, factory);
   const job = await jobs.startShell(quick, { sessionId: 'one' });
-  await until(() => jobs.get(job.id)!.status !== 'running');
+  await until(() => jobs.get(job.id)!.status !== 'running', {
+    timeout: 10_000,
+  });
   assert.deepEqual(made[0]!.calls, ['record', 'dispose']);
   await jobs.stop(job.id, 'user');
   assert.deepEqual(made[0]!.calls, ['record', 'dispose']);
@@ -457,6 +455,7 @@ function orphanScript(t: TestContext, root: string) {
       await until(
         () =>
           existsSync(pidFile) && /^\d+$/.test(readFileSync(pidFile, 'utf8')),
+        { timeout: 10_000 },
       );
       pid = Number(readFileSync(pidFile, 'utf8'));
       return pid;
@@ -513,7 +512,7 @@ test(
     assert.equal(tree.record(ended), true);
     // Only the command's program is ended.
     assert.deepEqual(await tree.end(ended), [orphan], names);
-    await until(() => !alive(orphan));
+    await until(() => !alive(orphan), { timeout: 10_000 });
   },
 );
 
@@ -528,11 +527,13 @@ test(
     const orphan = orphanScript(t, root);
     const job = await jobs.startShell(orphan.command, { sessionId: 'one' });
     const pid = await orphan.pid();
-    await until(() => jobs.get(job.id)!.status !== 'running');
+    await until(() => jobs.get(job.id)!.status !== 'running', {
+      timeout: 10_000,
+    });
     assert.equal(jobs.get(job.id)!.status, 'done');
     assert.ok(alive(pid), 'the program outlived both cmds');
     await jobs.stop(job.id, 'user');
-    await until(() => !alive(pid));
+    await until(() => !alive(pid), { timeout: 10_000 });
   },
 );
 
@@ -558,6 +559,6 @@ test(
     assert.ok(alive(pid));
     controller.abort(new Error('Interrupted'));
     await assert.rejects(run, /Interrupted/);
-    await until(() => !alive(pid));
+    await until(() => !alive(pid), { timeout: 10_000 });
   },
 );

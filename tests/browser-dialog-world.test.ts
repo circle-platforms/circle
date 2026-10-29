@@ -4,19 +4,11 @@ import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ChildProcess } from 'node:child_process';
 import { ChromeBrowser, findBrowser } from '../src/browser/chrome.js';
-import { cleanup, cleanupServer } from './helpers.js';
+import { cleanup, cleanupServer, until } from './helpers.js';
 import { listenForBrowser } from './browser-port.mjs';
 import { BrowserFixture } from './browser-fixture.js';
 
 const executable = findBrowser();
-async function until(check: () => boolean, signal: AbortSignal) {
-  const end = Date.now() + 2000;
-  while (!check()) {
-    signal.throwIfAborted();
-    if (Date.now() > end) throw Error('actual browser dialog did not open');
-    await delay(10, undefined, { signal });
-  }
-}
 
 test(
   'a real dialog opening while an isolated world is pending returns the tab dialog and never executes a late page command',
@@ -101,7 +93,11 @@ test(
           },
           session,
         );
-        await until(() => tab.dialogs.length > 0, signal);
+        await until(() => tab.dialogs.length > 0, {
+          timeout: 2000,
+          label: 'the actual browser dialog to open',
+          signal,
+        });
       }
       return send(method, params, session, options);
     };

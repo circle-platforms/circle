@@ -25,15 +25,7 @@ import {
 } from '../src/ink/theme.js';
 import { stripAnsi } from '../src/ink/string_width.js';
 import { emptyUsage, type Message } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
-
-async function until(check: () => boolean, ms = 5000): Promise<void> {
-  const end = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await delay(5);
-  }
-}
+import { cleanup, scratch, until } from './helpers.js';
 
 const user = (id: string, content: string): Message => ({
   id,

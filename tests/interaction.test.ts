@@ -27,7 +27,7 @@ import {
   type ModelResponse,
 } from '../src/types.js';
 import { sessionOccupied } from '../src/session_lock.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 type Reply =
   Partial<ModelResponse> | ((request: ModelRequest) => Promise<ModelResponse>);
@@ -35,13 +35,6 @@ const answer = (content: string, input = 0): Reply => ({
   message: { id: crypto.randomUUID(), role: 'assistant', content },
   usage: { ...emptyUsage(), input_tokens: input, output_tokens: input && 5 },
 });
-async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('timed out');
-    await delay(10);
-  }
-}
 // A full-screen session without a terminal: the real runtime, store and key handling, with
 // ScriptedModel for the endpoint and the terminal and process calls recorded in `log`.
 async function session(
