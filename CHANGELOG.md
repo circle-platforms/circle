@@ -7,6 +7,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ### Fixed
 
 - **A new desktop terminal leaves the tab you picked in front.** If you added or restarted a terminal and chose a tab before the new shell had started, the new terminal could take the front back, and the next action from the terminal menu, such as copy complete output, went to it instead. It still comes to the front when you have not picked a tab meanwhile.
+- **New session answers the keyboard after an unfinished press.** On the desktop sidebar and the sessions page, pressing new session and releasing the pointer outside the button could leave the next Enter on that button doing nothing. A keyboard activation now always starts a new session, and a cancelled press no longer counts as one.
 - **Saving on Windows waits out a refusal Windows gives no name.** Some refusals to replace a file that another program briefly holds reach Circle as `UNKNOWN` rather than as a busy or denied file. The desktop editor's save now waits up to two seconds for those too, checking each time that nothing else changed the file, instead of failing at once.
 
 ## 1.13.1 - 2026-10-29

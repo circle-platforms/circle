@@ -50,7 +50,6 @@ import { EFFORT_TEXT, MODE_TEXT } from './Composer';
 import { settingsSectionOf } from '../model/settings-sections';
 import { shownTime } from '../model/time';
 import { armComposerFocus } from '../model/composer-focus';
-import { runControlAction } from '../model/session-row';
 import { workspaceLabel } from '../model/workspace-label';
 import type {
   DialogId,
@@ -73,6 +72,7 @@ import {
   Facts,
   PreviewNotice,
   EmptyState,
+  usePressAction,
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { SessionMenu } from '../components/SessionMenus';
@@ -110,7 +110,10 @@ function SessionsPage({ onSession, onDialog }: Props) {
   });
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
-  const openedOnPress = useRef(false);
+  const newSessionPress = usePressAction(() => {
+    armComposerFocus();
+    openHome(navigate, `${location.pathname}${location.search}`);
+  });
   // Task conversations are reached from the conversation that started them.
   const sessions = visibleSessions(
     topLevelSessions(snapshot.sessions, snapshot.agents),
@@ -129,32 +132,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
         'Reopen a conversation or continue from an earlier point.',
       )}
       action={
-        <Button
-          onPointerDown={(event) => {
-            if (
-              !runControlAction({
-                kind: 'press',
-                button: event.button,
-                actedOnPress: false,
-              })
-            )
-              return;
-            openedOnPress.current = true;
-            armComposerFocus();
-            openHome(navigate, `${location.pathname}${location.search}`);
-          }}
-          onClick={() => {
-            const again = runControlAction({
-              kind: 'click',
-              button: 0,
-              actedOnPress: openedOnPress.current,
-            });
-            openedOnPress.current = false;
-            if (!again) return;
-            armComposerFocus();
-            openHome(navigate, `${location.pathname}${location.search}`);
-          }}
-        >
+        <Button {...newSessionPress}>
           <Plus size={14} />
           {t('new session')}
         </Button>

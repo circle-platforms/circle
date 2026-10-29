@@ -24,6 +24,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'tool-text-output-ui.mjs',
   'keyboard-navigation-ui.mjs',
   'icon-button-press-ui.mjs',
+  'press-action-ui.mjs',
   'paste-default-ui.mjs',
   'native-editable-shortcuts-ui.mjs',
   'terminal-window-keys-ui.mjs',

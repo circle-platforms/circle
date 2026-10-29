@@ -2,7 +2,15 @@ import { useId, type InputHTMLAttributes, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, FileText, Search, X } from 'lucide-react';
 import { Button, IconButton } from './ui';
 import { t } from '../i18n';
-export { Button, IconButton, Modal, Badge, DataBlock, EmptyState } from './ui';
+export {
+  Button,
+  IconButton,
+  Modal,
+  Badge,
+  DataBlock,
+  EmptyState,
+  usePressAction,
+} from './ui';
 export function Page({
   title,
   description,

@@ -51,13 +51,12 @@ import {
   afterSidebarChromeMove,
   afterSidebarPointerLeave,
   pointerOnSidebarChrome,
-  runControlAction,
   selectRenameText,
   sessionCardVisible,
   sessionMenuTipOpen,
   shouldOpenSession,
 } from '../model/session-row';
-import { IconButton } from './common';
+import { IconButton, usePressAction } from './common';
 import { t, tn } from '../i18n';
 import { UpdateChip } from '../features/Update';
 import { SessionMenu, WorkspaceMenu } from './SessionMenus';
@@ -206,7 +205,6 @@ export function Sidebar({
   const routeHold = useRef(false);
   const pressOutside = useRef(false);
   const pointerOpening = useRef(false);
-  const openedOnPress = useRef(false);
   // Pointer leave, and moving onto the controls above the list, hide the
   // hover card without counting as a scroll, so a focused session ⋯ button
   // can still show its tip.
@@ -320,6 +318,7 @@ export function Sidebar({
     openHome(navigate, `${location.pathname}${location.search}`, workspaceId);
     onNavigate?.();
   };
+  const newSessionPress = usePressAction(() => newSession());
   const activityAt = (session: Session) =>
     Date.parse(sessionActivityAt(session)) || 0;
   // A home composer open for a project is that project's pending new session:
@@ -690,30 +689,7 @@ export function Sidebar({
         <strong>circle</strong>
       </header>
       <nav className="sidebar-primary" aria-label={t('navigation')}>
-        <button
-          className="sidebar-item"
-          onPointerDown={(event) => {
-            if (
-              !runControlAction({
-                kind: 'press',
-                button: event.button,
-                actedOnPress: false,
-              })
-            )
-              return;
-            openedOnPress.current = true;
-            newSession();
-          }}
-          onClick={() => {
-            const again = runControlAction({
-              kind: 'click',
-              button: 0,
-              actedOnPress: openedOnPress.current,
-            });
-            openedOnPress.current = false;
-            if (again) newSession();
-          }}
-        >
+        <button className="sidebar-item" {...newSessionPress}>
           <Plus size={15} />
           <span>{t('new session')}</span>
         </button>
