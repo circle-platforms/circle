@@ -6,12 +6,49 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type MouseEvent,
+  type PointerEvent,
   type ReactNode,
   type Ref,
 } from 'react';
 import { runControlAction } from '../model/session-row';
 import { focusMarkedField } from '../model/dialog-focus';
 import { t } from '../i18n';
+/** Handlers for a button that acts as soon as it is pressed and must not act
+ * again on that press's click. A press whose click never comes, because the
+ * pointer left before the release or the press was cancelled, must not swallow
+ * the next activation, and keyboard activation (`detail` 0) is its own action. */
+export function usePressAction(action: () => void) {
+  const actedOnPress = useRef(false);
+  return {
+    onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
+      if (
+        !runControlAction({
+          kind: 'press',
+          button: event.button,
+          actedOnPress: false,
+        })
+      )
+        return;
+      actedOnPress.current = true;
+      action();
+    },
+    onPointerCancel: () => {
+      actedOnPress.current = false;
+    },
+    onClick: (event: MouseEvent<HTMLButtonElement>) => {
+      const again =
+        event.detail === 0 ||
+        runControlAction({
+          kind: 'click',
+          button: 0,
+          actedOnPress: actedOnPress.current,
+        });
+      actedOnPress.current = false;
+      if (again) action();
+    },
+  };
+}
+
 export function Button({
   children,
   className = '',
