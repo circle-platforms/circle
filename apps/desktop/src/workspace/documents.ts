@@ -123,7 +123,10 @@ const TORN_READ_ATTEMPTS = 5;
 const TORN_READ_PAUSE_MS = 20;
 // How long a save waits on Windows for another program to let go of the file.
 const HELD_FILE_WAIT_MS = 2000;
-const HELD_FILE_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+// Node reports a Windows error that has no POSIX name as UNKNOWN, as it does for a file
+// another program has mapped into memory, which a virus scan or an indexer may do for a
+// moment after a save. The wait is the same as for a file held open.
+const HELD_FILE_CODES = new Set(['EBUSY', 'EPERM', 'EACCES', 'UNKNOWN']);
 export class TornReadError extends Error {}
 
 export class DocumentConflictError extends Error {
@@ -540,8 +543,8 @@ export class WorkspaceDocuments {
 
   // Replace or delete the file while its revision still matches. On Windows a
   // program that has the file open, as a virus scan or Git reading it does,
-  // makes that fail with EBUSY, EPERM or EACCES until it lets go: wait for it a
-  // moment, checking the revision before each attempt so no write is lost.
+  // makes that fail with EBUSY, EPERM, EACCES or UNKNOWN until it lets go: wait
+  // for it a moment, checking the revision before each attempt so no write is lost.
   private async commitChecked(
     edit: WorkspaceDocumentChange,
     staged: { full: string; temporary?: string },
