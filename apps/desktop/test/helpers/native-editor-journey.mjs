@@ -6,6 +6,7 @@ import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { patience } from './patience.mjs';
 import { saveWithShortcut } from './native-editor-save.mjs';
+import { writeOutside } from './outside-write.mjs';
 const main = 'editor-main.ts',
   library = 'editor-lib.ts';
 const source =
@@ -138,7 +139,8 @@ export async function runNativeEditorJourney({
     'Undo then CmdS actual disk effect',
   );
   checks.push('native UI edit, CmdS and retained Undo');
-  await writeFile(join(workspace, main), source + '// external clean\n');
+  // Another program writes the file. A refusal says what Windows refused and who held it.
+  await writeOutside(join(workspace, main), source + '// external clean\n');
   await until(
     () =>
       page
@@ -150,7 +152,7 @@ export async function runNativeEditorJourney({
   );
   await page.getByText('all changes saved', { exact: true }).waitFor();
   await append('// protected human draft\n');
-  await writeFile(join(workspace, main), source + '// competing external\n');
+  await writeOutside(join(workspace, main), source + '// competing external\n');
   await page
     .getByRole('button', { name: 'review disk changes', exact: true })
     .waitFor();
