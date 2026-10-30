@@ -118,7 +118,7 @@ Code pushes do not publish a new version: the release workflow publishes when a 
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) for coding agents, and the [architecture](https://circle-platforms.github.io/circle/development/architecture/). Report security problems as described in [SECURITY.md](SECURITY.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-Circle is one of three repositories. [circle-hub](https://github.com/circle-platforms/circle-hub) is the team hub a Circle signs in to, and [circle-packs](https://github.com/circle-platforms/circle-packs) holds the skill packs and product-line packs installed on it. The [compatibility matrix](https://github.com/circle-platforms/circle-hub/blob/main/docs/compatibility.md) says what each expects of the others.
+[circle-hub](https://github.com/circle-platforms/circle-hub) is the team hub a Circle connects to as an MCP server. The [compatibility matrix](https://github.com/circle-platforms/circle-hub/blob/main/docs/compatibility.md) says what each expects of the other.
 
 ## License
 
