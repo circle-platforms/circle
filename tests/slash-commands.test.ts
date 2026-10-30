@@ -759,7 +759,7 @@ test('/skill loads a skill into the conversation without starting a turn', async
   assert.equal(model.requests[0]!.messages.at(-1)!.content, 'write a poem');
 });
 
-test('/skill lists the skill that ships with Circle as built-in, loads it, and lists a project skill of the same name in its place', async (t) => {
+test('/skill lists the skills that ship with Circle as built-in, loads one, and lists a project skill of the same name in its place', async (t) => {
   const workspace = scratch(t);
   const userHome = scratch(t);
   const shipped = parseFrontmatter(
@@ -823,7 +823,24 @@ test('/skill lists the skill that ships with Circle as built-in, loads it, and l
     list,
     /\n {2}create-pr {12}Our own pull requests \(Project Circle\)\n/,
   );
-  assert.equal(list.includes('(Built-in)'), false);
+  // Only one skill of the two still ships with Circle: the project folder's row
+  // is not built-in, and the block grouping keeps a wrapped row with its name.
+  const left: string[][] = [];
+  for (const row of list.split('\n').slice(2, -2)) {
+    if (row[2] !== ' ') left.push([row]);
+    else left.at(-1)!.push(row);
+  }
+  assert.deepEqual(
+    left.map((block) => [
+      block[0]!.trim().split(/\s+/)[0],
+      block.at(-1)!.endsWith('(Built-in)'),
+    ]),
+    [
+      ['create-pr', false],
+      ['pr-review', true],
+    ],
+    list,
+  );
 });
 
 test('/name, /session, /approvals, /themes and /effort answer in the transcript', async (t) => {
