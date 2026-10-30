@@ -1391,7 +1391,7 @@ export class LiveRuntime implements RuntimePort {
       return {
         panel: 'agents',
         notice: t(
-          'subagents of this conversation · definitions come from .circle/agents',
+          'subagents of this conversation · file definitions: /agents in the terminal',
         ),
       };
     if (name === 'copy') return { effect: 'copy' };

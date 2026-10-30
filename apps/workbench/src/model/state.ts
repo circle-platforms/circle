@@ -709,7 +709,8 @@ export class PreviewRuntime implements RuntimePort {
     if (name === 'agents')
       return {
         panel: 'agents',
-        notice: 'general-purpose and explore, plus the folders and extensions',
+        notice:
+          'subagents of this conversation · file definitions: /agents in the terminal',
       };
     if (name === 'undo') {
       this.change((state) => {
