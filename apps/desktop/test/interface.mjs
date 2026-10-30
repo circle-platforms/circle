@@ -808,12 +808,12 @@ try {
           .first()
           .waitFor();
       } else if (command.name === 'agents')
-      // /agents opens the subagents panel and says where the definitions come from.
+        // /agents opens the subagents panel and says what the window lists. The
+        // journey runs the preview runtime, so this is the wording the preview and
+        // the live window share.
         await page
           .getByRole('status')
-          .filter({
-            hasText: 'definitions come from .circle/agents',
-          })
+          .filter({ hasText: 'subagents of this conversation' })
           .waitFor();
       else throw Error('missing UI assertion for ' + command.name);
     }
