@@ -58,7 +58,7 @@ import {
   type PickerItem,
   type PickerOptions,
 } from '../ink/components/picker.js';
-import { welcomeRows } from '../ink/components/welcome.js';
+import { logoCellsFor, welcomeRows } from '../ink/components/welcome.js';
 import type { WhatsNewNotice } from '../whats_new.js';
 import { dismissWhatsNew, pendingWhatsNew } from '../whats_new_state.js';
 import { whatsNewRows } from './whats_new_rows.js';
@@ -849,6 +849,7 @@ export class SessionApp {
         trusted,
         settingUp: this.settingUp,
       }),
+      logoCellsFor(),
     );
     this.state.welcome.splice(
       -1,

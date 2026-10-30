@@ -20,6 +20,7 @@ import { stringWidth, stripAnsi } from '../src/ink/string_width.js';
 import { loopFrame } from '../src/ink/components/loop_frame.js';
 import {
   LOGO_MIN_WIDTH,
+  logoCellsFor,
   logoRows,
   welcomeRows,
   type WelcomeInfo,
@@ -546,6 +547,50 @@ test('the welcome block draws the ring in its own colours, lamps that follow the
   }
 });
 const LOGO_ROWS_SKIP = 4;
+
+test('in Terminal.app the ring is drawn in quadrants, which its fonts have, and in sextants elsewhere', (t) => {
+  assert.equal(logoCellsFor({ TERM_PROGRAM: 'Apple_Terminal' }), 'quadrants');
+  for (const program of ['otty', 'ghostty', 'iTerm.app', 'WezTerm', 'vscode'])
+    assert.equal(logoCellsFor({ TERM_PROGRAM: program }), 'sextants');
+  assert.equal(logoCellsFor({}), 'sextants');
+  const rows = logoRows('quadrants');
+  // logo.svg's ring in three rows of quadrants (two by two sub-cells a cell).
+  assert.deepEqual(rows.map(stripAnsi), ['▗▞▀▀▀▚▖', '█     █', '▝▚▄▄▄▞▘']);
+  for (const glyph of rows.map(stripAnsi).join('').replaceAll(' ', ''))
+    assert.ok(
+      glyph.codePointAt(0)! >= 0x2580 && glyph.codePointAt(0)! <= 0x259f,
+      `${glyph} is a Block Element`,
+    );
+  // In the logo's own colours, as the sextants are: blue at the top, red at the bottom
+  const colour = (row: number, cell: number): number[] =>
+    [...rows[row]!.matchAll(/38;2;(\d+);(\d+);(\d+)m/g)]
+      [cell]!.slice(1, 4)
+      .map(Number);
+  const [topR, , topB] = colour(0, 3);
+  assert.ok(topB! > topR!, 'blue at the top');
+  const [bottomR, , bottomB] = colour(2, 3);
+  assert.ok(bottomR! > bottomB!, 'red at the bottom');
+  assert.ok(
+    stripAnsi(welcomeRows(90, welcomeInfo(), 'quadrants')[0]!).includes(
+      '▗▞▀▀▀▚▖',
+    ),
+  );
+  // The full-screen interface asks for the terminal it runs in
+  const root = scratch(t);
+  const app = new SessionApp(root, root, defaultSettings());
+  const before = process.env.TERM_PROGRAM;
+  cleanup(t, () => {
+    if (before === undefined) delete process.env.TERM_PROGRAM;
+    else process.env.TERM_PROGRAM = before;
+  });
+  const top = (program: string): string => {
+    process.env.TERM_PROGRAM = program;
+    (app as any).syncStatus();
+    return stripAnsi(app.state.welcome[0]!);
+  };
+  assert.ok(top('Apple_Terminal').includes('▗▞▀▀▀▚▖'));
+  assert.ok(top('otty').includes('🬞🬚🬆🬂🬊🬩🬏'));
+});
 
 test('the welcome lists what the folder brings, unlit until trusted, blinking while it loads and green once loaded', (t) => {
   const root = scratch(t);
