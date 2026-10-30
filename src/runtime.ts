@@ -60,7 +60,8 @@ import { discoverSkills, loadSkillBody, type SkillInfo } from './skills.js';
 import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
 import { McpManager } from './mcp_loader.js';
-import { ExtensionHost } from './extensions.js';
+import { ExtensionHost, type SubagentSpec } from './extensions.js';
+import { discoverSubagents, type SubagentFileInfo } from './subagent_files.js';
 import { abortable } from './watch.js';
 import {
   isFolderTrusted,
@@ -397,6 +398,9 @@ export class AgentRuntime {
   private activeCompaction?: Promise<string>;
   extensions: ExtensionHost;
   private integrationsReady?: Promise<void>;
+  /** The subagents the agent folders define, read again with every system prompt. */
+  private fileAgents: SubagentFileInfo[] = [];
+  private fileAgentProblems: string[] = [];
   private extensionChanges = new Map<string, Promise<void>>();
   private extensionChangeListeners = new Set<() => void>();
   private readonly integrationLifetime = new AbortController();
@@ -732,9 +736,9 @@ export class AgentRuntime {
         const parentHarness = this.harness;
         const parentSessionId = context.sessionId;
         const name = String(args.subagent_type || 'general-purpose');
-        const custom = this.extensions
-          .subagents(this.allTools)
-          .find((agent) => agent.spec.name === name);
+        const custom = this.customSubagents().find(
+          (agent) => agent.spec.name === name,
+        );
         if (!custom && !['general-purpose', 'explore'].includes(name))
           throw new Error('unknown subagent type');
         const childModel = custom?.spec.model
@@ -1162,7 +1166,123 @@ export class AgentRuntime {
    * session, a model switch, /reload, /mcp reload, /extensions reload, /plan and a change
    * of thinking depth. Skills are read again each time, so the list and the `skill` tool
    * see the same skills. */
+  private loadSubagentFiles(): void {
+    const found =
+      this.options.localContext === false
+        ? { agents: [], problems: [] }
+        : discoverSubagents(
+            this.options.workspace,
+            this.options.home,
+            this.options.userHome,
+          );
+    this.fileAgents = found.agents;
+    this.fileAgentProblems = found.problems;
+  }
+  /**
+   * The subagents a person or an extension defined. Folders first, so an extension of the
+   * same name wins, as it already does over a built-in. A file naming a tool that does not
+   * exist is passed over and `problems` says so, rather than running with a broken set.
+   */
+  private customSubagents(
+    problems: string[] = [],
+  ): { spec: SubagentSpec; tools?: Tool[]; source: string; path?: string }[] {
+    const byName = new Map<
+      string,
+      { spec: SubagentSpec; tools?: Tool[]; source: string; path?: string }
+    >();
+    for (const agent of this.fileAgents) {
+      const missing = (agent.tools ?? []).filter(
+        (name) => !this.allTools.some((tool) => tool.name === name),
+      );
+      if (missing.length) {
+        problems.push(
+          `${agent.spec.name} names tools that do not exist: ${missing.join(', ')} · not offered`,
+        );
+        continue;
+      }
+      byName.set(agent.spec.name, {
+        spec: agent.spec,
+        source: agent.source_label,
+        path: agent.path,
+        ...(agent.tools
+          ? {
+              tools: agent.tools.map((name) =>
+                this.allTools.find((tool) => tool.name === name)!,
+              ),
+            }
+          : {}),
+      });
+    }
+    for (const agent of this.extensions.subagents(this.allTools))
+      byName.set(agent.spec.name, {
+        spec: agent.spec,
+        tools: agent.tools,
+        source: 'Extension',
+      });
+    return [...byName.values()];
+  }
+  /**
+   * Everything `task` may choose, for `/agents`: the two that ship with Circle, then the
+   * folders and extensions, with the reason any definition was passed over. The folders are
+   * read again here, as `task` will see them.
+   */
+  inspectSubagents(): {
+    agents: {
+      name: string;
+      description: string;
+      source: string;
+      model?: string;
+      tools?: string[];
+      path?: string;
+    }[];
+    problems: string[];
+  } {
+    this.loadSubagentFiles();
+    const problems = [...this.fileAgentProblems];
+    const byName = new Map([
+      [
+        'general-purpose',
+        {
+          name: 'general-purpose',
+          description: 'General coding tasks.',
+          source: 'Circle',
+          tools: undefined,
+          model: undefined,
+        },
+      ],
+      [
+        'explore',
+        {
+          name: 'explore',
+          description: 'Read-only project exploration.',
+          source: 'Circle',
+          tools: undefined,
+          model: undefined,
+        },
+      ],
+    ] as [
+      string,
+      {
+        name: string;
+        description: string;
+        source: string;
+        model?: string;
+        tools?: string[];
+      },
+    ][]);
+    for (const agent of this.customSubagents(problems))
+      byName.set(agent.spec.name, {
+        name: agent.spec.name,
+        description: agent.spec.description,
+        source: agent.source,
+        ...(agent.spec.model ? { model: agent.spec.model } : {}),
+        ...(agent.tools ? { tools: agent.tools.map((tool) => tool.name) } : {}),
+        ...(agent.path ? { path: agent.path } : {}),
+      });
+    return { agents: [...byName.values()], problems };
+  }
   private systemPrompt(model: string): string {
+    this.loadSubagentFiles();
     this.skills =
       this.options.localContext === false
         ? []
@@ -1248,7 +1368,7 @@ export class AgentRuntime {
       ['general-purpose', 'General coding tasks.'],
       ['explore', 'Read-only project exploration.'],
     ]);
-    for (const agent of this.extensions.subagents(this.allTools))
+    for (const agent of this.customSubagents())
       subagents.set(agent.spec.name, agent.spec.description);
     task.description =
       readFileSync(

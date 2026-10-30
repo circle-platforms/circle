@@ -29,6 +29,7 @@ const SLASH_TEXT: Record<string, () => string> = {
   fork: () => t('New session from before one of your messages: /fork [words]'),
   clone: () => t('Clone the active branch into a new session'),
   undo: () => t('Undo the last turn on screen'),
+  agents: () => t('List the subagents task can use: /agents [name]'),
   redo: () => t('Restore after /undo'),
   thinking: () => t('Hide or show thinking; /thinking <level> sets the depth'),
   effort: () =>

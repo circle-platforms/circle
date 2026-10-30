@@ -1,4 +1,6 @@
 export const taskPanel: Record<string, string> = {
+  'subagents of this conversation · definitions come from .circle/agents':
+    '本会话的子代理 · 定义来自 .circle/agents',
   'recorded checks are separate from the worker completion claim':
     '已记录的检查与执行代理的完成声明分别展示',
   'no recorded verification checks': '没有已记录的验证检查',

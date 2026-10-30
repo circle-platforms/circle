@@ -47,7 +47,7 @@ When the conversation passes 85% of the model's context window (from models.dev 
 
 ## Subagents
 
-`task` starts a subagent with its own fresh context and returns its answer. Circle has two, and extensions can add more:
+`task` starts a subagent with its own fresh context and returns its answer. Circle has two, extensions can add more, and a folder of markdown files can define them — see [Subagents](agents.md).
 
 | Subagent | What it can do |
 |---|---|

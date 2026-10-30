@@ -778,6 +778,14 @@ try {
         await copied.waitFor({ state: 'hidden' });
       } else if (command.name === 'unshare')
         assert.equal(snapshot.sessions[0].shared, false);
+      // /agents opens the subagents panel and says where the definitions come from.
+      else if (command.name === 'agents')
+        await page
+          .getByRole('status')
+          .filter({
+            hasText: 'definitions come from .circle/agents',
+          })
+          .waitFor();
       else throw Error('missing UI assertion for ' + command.name);
     }
     checks.push('/' + command.name);

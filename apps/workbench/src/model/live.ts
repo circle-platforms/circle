@@ -1385,6 +1385,15 @@ export class LiveRuntime implements RuntimePort {
     // Background commands are tabs of the terminal, beside its shells and device consoles.
     if (name === 'jobs' || name === 'terminals')
       return { panel: 'terminal', selection: args };
+    // The window shows the subagents of this conversation; the folder definitions it
+    // cannot list yet are the terminal's /agents.
+    if (name === 'agents')
+      return {
+        panel: 'agents',
+        notice: t(
+          'subagents of this conversation · definitions come from .circle/agents',
+        ),
+      };
     if (name === 'copy') return { effect: 'copy' };
     if (name === 'import') return { effect: 'import' };
     if (name === 'init') {

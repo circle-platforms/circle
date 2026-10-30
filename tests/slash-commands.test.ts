@@ -1847,3 +1847,44 @@ test('/help and /hotkeys hang continuations under the description column at 80 c
     });
   }
 });
+
+// The folders of agent definitions, as the full-screen interface reports them.
+test('/agents lists the subagents, a single one, and what is wrong with a file', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  const userHome = join(root, 'user');
+  mkdirSync(join(home, 'agents'), { recursive: true });
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(userHome, { recursive: true });
+  writeFileSync(
+    join(home, 'agents', 'inspector.md'),
+    '---\nname: inspector\ndescription: Reads the project and reports.\nmodel: other-model\ntools: read_file, grep\n---\n\nprompt body\n',
+  );
+  writeFileSync(
+    join(home, 'agents', 'broken.md'),
+    '---\nname: not a name\ndescription: x\n---\n\nbody\n',
+  );
+  const { app } = await session(t, [], { home, workspace, userHome });
+  await app.submit('/agents');
+  const listed = app.state.notices.join('\n');
+  assert.match(listed, /general-purpose\s+General coding tasks\. \(Circle\)/);
+  assert.match(
+    listed,
+    /inspector\s+Reads the project and reports\. \(Circle\)/,
+  );
+  assert.match(listed, /Not offered:/);
+  assert.match(listed, /broken\.md: 'not a name' is not a name/);
+  assert.match(listed, /Add one as a markdown file in \.circle\/agents/);
+  assert.ok(
+    !listed.includes('prompt body'),
+    'the list does not print the prompts',
+  );
+  await app.submit('/agents inspector');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /source: Circle[\s\S]*model: other-model[\s\S]*tools: read_file, grep/,
+  );
+  await app.submit('/agents nobody');
+  assert.match(app.state.notices.at(-1)!, /No subagent nobody/);
+});
