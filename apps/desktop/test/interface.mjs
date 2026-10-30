@@ -778,6 +778,15 @@ try {
         await copied.waitFor({ state: 'hidden' });
       } else if (command.name === 'unshare')
         assert.equal(snapshot.sessions[0].shared, false);
+      // The application undoes a turn's files from that message, so the command names
+      // where to do it rather than pretending there is a list in the composer.
+      else if (command.name === 'rewind')
+        await page
+          .getByRole('status')
+          .filter({
+            hasText: 'undo files from the message that changed them',
+          })
+          .waitFor();
       else throw Error('missing UI assertion for ' + command.name);
     }
     checks.push('/' + command.name);
