@@ -114,6 +114,7 @@ export const COMMAND_UI: Record<string, string> = {
   clone: 'sessions',
   bridge: 'transcript',
   memory: 'transcript',
+  agents: 'transcript',
   undo: 'transcript',
   redo: 'transcript',
   thinking: 'transcript',
@@ -724,6 +725,11 @@ export class PreviewRuntime implements RuntimePort {
           : 'memory lives in MEMORY.md · the next session reads what that file holds',
       };
     }
+    if (name === 'agents')
+      return {
+        panel: 'agents',
+        notice: 'general-purpose and explore, plus the folders and extensions',
+      };
     if (name === 'undo') {
       this.change((state) => {
         const target = currentSession(state);

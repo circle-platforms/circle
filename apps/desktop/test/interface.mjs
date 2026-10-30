@@ -807,7 +807,15 @@ try {
           .filter({ hasText: 'prefers pnpm' })
           .first()
           .waitFor();
-      } else throw Error('missing UI assertion for ' + command.name);
+      } else if (command.name === 'agents')
+      // /agents opens the subagents panel and says where the definitions come from.
+        await page
+          .getByRole('status')
+          .filter({
+            hasText: 'definitions come from .circle/agents',
+          })
+          .waitFor();
+      else throw Error('missing UI assertion for ' + command.name);
     }
     checks.push('/' + command.name);
   }
