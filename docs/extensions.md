@@ -68,6 +68,8 @@ The desktop build compiles each shipped extension to `extension.js` and emits `e
 
 The desktop starts loading integrations for its trusted startup workspace without a prompt or a manual reload. The first window remains available while configured MCP servers connect; discovery failures appear in the runtime status and an explicit reload can retry. An untrusted workspace is not initialized until you trust it. Closing the application cancels pending integration startup, including an extension still registering.
 
+The GitHub connection is the shipped example of a page like this. Its `github_*` tools read a task's checks and failed logs and publish its draft pull request through the connection given in the plugin. They carry no review threads: reading and answering a review runs the GitHub CLI in the conversation, the way the built-in [skills](skills.md#built-in-skills) do, and the terminal has no connection backend at all.
+
 ## The `api` object
 
 | Member | Purpose |

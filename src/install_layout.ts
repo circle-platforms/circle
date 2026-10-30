@@ -105,6 +105,7 @@ export function validateRelease(
     'app/dist/data/provider_profiles.json.gz',
     'app/dist/prompts/circle_guidelines.md',
     'app/dist/builtin_skills/create-pr/SKILL.md',
+    'app/dist/builtin_skills/pr-review/SKILL.md',
     'app/package.json',
   ])
     if (!actual[required]) throw new Error(`release is missing ${required}`);

@@ -1,4 +1,10 @@
-import { chmodSync, cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import {
   fileInventory,
@@ -8,13 +14,15 @@ import {
 // A small release directory whose program prints its version, for installer tests.
 export function fixture(base: string, version: string): string {
   const root = join(base, 'release-' + version);
+  // Every skill folder the checkout ships, so a new one is in the fixture too.
+  const shipped = readdirSync(join(process.cwd(), 'src', 'builtin_skills'));
   for (const directory of [
-    'runtime',
-    'app/dist/data',
-    'app/dist/prompts',
-    'app/dist/builtin_skills/create-pr',
+    'data',
+    'prompts',
+    ...shipped.map((name) => `builtin_skills/${name}`),
   ])
-    mkdirSync(join(root, directory), { recursive: true });
+    mkdirSync(join(root, 'app/dist', directory), { recursive: true });
+  mkdirSync(join(root, 'runtime'), { recursive: true });
   cpSync(
     process.execPath,
     join(root, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node'),
@@ -45,10 +53,11 @@ export function fixture(base: string, version: string): string {
     join(root, 'app/dist/prompts/circle_guidelines.md'),
     'fixture guidelines',
   );
-  writeFileSync(
-    join(root, 'app/dist/builtin_skills/create-pr/SKILL.md'),
-    '---\nname: create-pr\ndescription: fixture skill\n---\n',
-  );
+  for (const name of shipped)
+    writeFileSync(
+      join(root, 'app/dist/builtin_skills', name, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: fixture skill\n---\n`,
+    );
   const manifest: ReleaseManifest = {
     schema: 'circle-release/v1',
     version,

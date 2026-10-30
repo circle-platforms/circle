@@ -35,6 +35,20 @@ const text = readFileSync(source, 'utf8');
 const { meta, body } = parseFrontmatter(text);
 // How the system prompt lists it (system_prompt.ts skillLine).
 const line = `- create-pr: ${meta.description}`;
+// The other skill that ships with Circle.
+const prReviewSource = join(
+  repo,
+  'src',
+  'builtin_skills',
+  'pr-review',
+  'SKILL.md',
+);
+const prReviewText = readFileSync(prReviewSource, 'utf8');
+const prReview = parseFrontmatter(prReviewText);
+// Built-in skills reach the prompt sorted by name, one line each.
+const skillLines = [line, `- pr-review: ${prReview.meta.description}`].join(
+  '\n',
+);
 // A data folder, a workspace and a user home with no skill folder in any of them.
 function folders(root: string) {
   return {
@@ -44,7 +58,7 @@ function folders(root: string) {
   };
 }
 
-test('create-pr ships with Circle and is found when there is no skill folder at all', (t) => {
+test('the skills that ship with Circle are found when there is no skill folder at all', (t) => {
   const { home, workspace, userHome } = folders(scratch(t));
   const skills = discoverSkills(workspace, home, userHome);
   const skill = skills.find((found) => found.name === 'create-pr');
@@ -52,13 +66,22 @@ test('create-pr ships with Circle and is found when there is no skill folder at 
   assert.equal(skill.source_label, BUILTIN_SKILL_SOURCE);
   assert.equal(skill.description, meta.description);
   assert.equal(skill.path, realpathSync(source));
+  const other = skills.find((found) => found.name === 'pr-review');
+  assert.ok(other, 'pr-review was not found');
+  assert.equal(other.source_label, BUILTIN_SKILL_SOURCE);
+  assert.equal(other.description, prReview.meta.description);
+  assert.equal(other.path, realpathSync(prReviewSource));
   assert.equal(
     realpathSync(builtinSkillsRoot()),
     realpathSync(join(repo, 'src', 'builtin_skills')),
   );
-  // With no folder of anyone's, every skill there is is one that ships with Circle.
+  // With no folder of anyone's, every skill there is one that ships with Circle.
   assert.ok(
     skills.every((found) => found.source_label === BUILTIN_SKILL_SOURCE),
+  );
+  assert.deepEqual(
+    skills.map((found) => found.name),
+    ['create-pr', 'pr-review'],
   );
   assert.match(
     loadSkillBody('create-pr', skills),
@@ -113,7 +136,7 @@ test('a create-pr skill in any user or project skill folder replaces the one tha
   }
 });
 
-test('the next model request lists create-pr when there is no other skill, and the skill tool loads it', async (t) => {
+test('the next model request lists the skills that ship with Circle, and the skill tool loads one', async (t) => {
   const { home, workspace, userHome } = folders(scratch(t));
   for (const folder of [home, workspace, userHome]) mkdirSync(folder);
   const settings = trustFolder(defaultSettings(), workspace);
@@ -143,8 +166,8 @@ test('the next model request lists create-pr when there is no other skill, and t
   const system = model.requests[0]!.system;
   assert.equal(
     system.split('Available skills:\n')[1]?.split('\n\n')[0],
-    line,
-    'the skill list is the create-pr line alone',
+    skillLines,
+    'the skill list is the two lines of the skills that ship with Circle',
   );
   assert.ok(
     model.requests[0]!.tools.some((tool) => tool.name === 'skill'),
@@ -209,7 +232,55 @@ test('create-pr is short, says what it does and when, and suggests only commands
     );
 });
 
-test('a dist build carries create-pr, and the compiled program finds it beside itself and lists it to the model', async (t) => {
+test('pr-review says what it does and when, and suggests only commands every shell runs', () => {
+  assert.equal(prReview.meta.name, 'pr-review');
+  // The system prompt cuts a description after 160 characters.
+  assert.ok(
+    prReview.meta.description!.length <= 160,
+    prReview.meta.description,
+  );
+  assert.match(prReview.meta.description!, /pull request/);
+  assert.match(prReview.meta.description!, /Use when /);
+  assert.ok(prReviewText.split('\n').length < 80, 'readable in one go');
+  const review = prReview.body;
+  // The four things to read, the answer path, and the state at the end.
+  for (const step of [
+    'git branch --show-current',
+    'gh pr view --json number,state,url,isDraft,reviewDecision,mergeable',
+    'gh pr checks',
+    'gh run view <run-id> --log-failed',
+    'gh pr diff',
+    'gh pr view --json reviews,comments',
+    'gh pr comment <number> --reply-to <comment-id> --body-file <file>',
+    'gh pr review <number> --comment --body-file <file>',
+    'gh pr view --json state,mergeable,reviewDecision',
+    'AGENTS.md',
+    'CONTRIBUTING.md',
+  ])
+    assert.ok(review.includes(step), step);
+  for (const never of ['git add -A', 'git commit -a', '--no-verify'])
+    assert.match(
+      review,
+      new RegExp(`Never[^\\n]*${never}|${never}[^\\n]*unless`),
+    );
+  // A review is the reviewer's: Circle answers it and does not lift it.
+  for (const refused of ['Never merge', 'ready for review'])
+    assert.ok(review.includes(refused), refused);
+  // PowerShell, cmd and POSIX shells all run these: no chaining, no command
+  // substitution, no pipes or redirection, and only double quotes (cmd has no
+  // single quotes). A placeholder such as <number> is not a redirection.
+  const commands = [...review.matchAll(/`((?:git|gh) [^`]+)`/g)].map(
+    (match) => match[1]!,
+  );
+  assert.ok(commands.length >= 12, commands.join('\n'));
+  for (const command of commands)
+    assert.doesNotMatch(
+      command.replace(/<[a-z-]+>/g, 'x'),
+      /&&|\||\$\(|[<>]|'|;|\\$/,
+      command,
+    );
+});
+test('a dist build carries both built-in skills, and the compiled program finds them beside itself and lists them to the model', async (t) => {
   const root = scratch(t);
   const dist = join(root, 'dist');
   // An installed program finds its packages in the folder above dist, as app/ in a release.
@@ -243,6 +314,11 @@ test('a dist build carries create-pr, and the compiled program finds it beside i
   assert.equal(assets.status, 0, assets.stdout + assets.stderr);
   const shipped = join(dist, 'builtin_skills', 'create-pr', 'SKILL.md');
   assert.equal(readFileSync(shipped, 'utf8'), text);
+  const alsoShipped = join(dist, 'builtin_skills', 'pr-review', 'SKILL.md');
+  assert.equal(
+    readFileSync(alsoShipped, 'utf8'),
+    readFileSync(prReviewSource, 'utf8'),
+  );
   // The compiled module looks beside itself, not in the checkout's src/.
   const compiled = (await import(
     pathToFileURL(join(dist, 'skills.js')).href
@@ -254,6 +330,12 @@ test('a dist build carries create-pr, and the compiled program finds it beside i
       .discoverSkills(workspace, home, userHome)
       .find((skill) => skill.name === 'create-pr')?.path,
     realpathSync(shipped),
+  );
+  assert.equal(
+    compiled
+      .discoverSkills(workspace, home, userHome)
+      .find((skill) => skill.name === 'pr-review')?.path,
+    realpathSync(alsoShipped),
   );
 
   // The compiled program in print mode, against a local endpoint.
@@ -338,6 +420,6 @@ test('a dist build carries create-pr, and the compiled program finds it beside i
   assert.equal(system.role, 'system');
   assert.equal(
     String(system.content).split('Available skills:\n')[1]?.split('\n\n')[0],
-    line,
+    skillLines,
   );
 });
