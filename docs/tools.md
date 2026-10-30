@@ -135,10 +135,10 @@ When you ask Circle to record what it did in the browser, or to do it again, it 
   "name": "SLB list cases",
   "description": "optional",
   "steps": [
-    { "navigate": "https://%APV_HOST%/login" },
+    { "navigate": "https://%DEVICE_HOST%/login" },
     { "proceed": "certificate" },
-    { "type": { "role": "textbox", "name": "用户名" }, "text": "%APV_USER%" },
-    { "type": { "role": "password", "name": "密码" }, "text": "%APV_PASSWORD%", "submit": true },
+    { "type": { "role": "textbox", "name": "用户名" }, "text": "%DEVICE_USER%" },
+    { "type": { "role": "password", "name": "密码" }, "text": "%DEVICE_PASSWORD%", "submit": true },
     { "click": { "role": "link", "name": "服务器负载均衡" } },
     { "click": { "role": "button", "name": "删除", "nth": 2 }, "note": "the second 删除 on the page" },
     { "select": { "role": "combobox", "name": "类型" }, "values": ["TCP"] },
