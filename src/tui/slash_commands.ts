@@ -78,7 +78,8 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   },
   {
     name: 'approvals',
-    description: 'Session approvals: /approvals [add P|remove P|revoke N]',
+    description:
+      'Approval rules: /approvals [allow P|deny P|project deny P|forget N|revoke N]',
   },
   {
     name: 'jobs',
