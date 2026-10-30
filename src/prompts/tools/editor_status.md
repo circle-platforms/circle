@@ -1,0 +1,3 @@
+Report what the editor has told the bridge: the file it has open and the selection it last reported, each with how many seconds ago. Use it before asking the person where they are, and before reading a file the editor already has.
+
+Only present while the person opened the bridge with /bridge start. Nothing is pushed at you: the editor reports when it changes, and an answer to a diff request comes back as a tool result of its own. An age of a few seconds means the person is looking at it now.

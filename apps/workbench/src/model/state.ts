@@ -111,6 +111,7 @@ export const COMMAND_UI: Record<string, string> = {
   tree: 'tree',
   fork: 'fork',
   clone: 'sessions',
+  bridge: 'transcript',
   undo: 'transcript',
   redo: 'transcript',
   thinking: 'transcript',
@@ -705,6 +706,11 @@ export class PreviewRuntime implements RuntimePort {
       });
       return { notice: 'session renamed' };
     }
+    if (name === 'bridge')
+      return {
+        notice:
+          'the editor bridge is the terminal’s · run /bridge start in circle',
+      };
     if (name === 'undo') {
       this.change((state) => {
         const target = currentSession(state);
