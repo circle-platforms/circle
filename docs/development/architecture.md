@@ -171,7 +171,7 @@ handled as signature errors, and signature errors do not disable thinking.
 
 - `src/prompts/`: the system prompts per model family, the tool descriptions, the subagent and summary prompts, and the `/init` template.
 - `src/data/`: the models.dev snapshot and the provider profiles, compressed.
-- `src/builtin_skills/`: the skills that ship with Circle, one folder each (`create-pr`). `scripts/copy-assets.ts` copies them to `dist/builtin_skills`, and the desktop build (`apps/desktop/scripts/runtime-assets.mjs`) puts them beside its bundled runtime, inside `app.asar` once packaged. A release without them fails its check (`install_layout.ts`).
+- `src/builtin_skills/`: the skills that ship with Circle, one folder each (`create-pr`, `pr-review`). `scripts/copy-assets.ts` copies them to `dist/builtin_skills`, and the desktop build (`apps/desktop/scripts/runtime-assets.mjs`) puts them beside its bundled runtime, inside `app.asar` once packaged. A release without them fails its check (`install_layout.ts`).
 - `scripts/`: building and smoke-testing release packages, the release script, copying assets into `dist/`, and `update-models-dev.ts` (refreshes `src/data/models_dev.json.gz`; run it before a release).
 - `tests/`: one `*.test.ts` file per area, run with Node's test runner through `tsx`. They drive `ScriptedModel` or a local HTTP gateway and need no network.
 
