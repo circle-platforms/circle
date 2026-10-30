@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.14.0 - 2026-10-30
+
 ### Added
 
 - **The terminal reports its turn state.** The full-screen interface keeps one state for the terminal — a turn runs, a card waits for you, or the last turn failed until the next one starts (stopping with `esc` is not a failure) — and reports changes to every terminal as `OSC 9;4`, and to an Otty pane as an `otty state:circle` line, so Otty shows its agent badges and notifications. With several conversations open, the most urgent state counts.
