@@ -1399,7 +1399,9 @@ export class LiveRuntime implements RuntimePort {
               'add this line to MEMORY.md, and the next session reads it: {line}',
               { line: entryLine(today(), note) },
             )
-          : t('memory lives in MEMORY.md · the next session reads what that file holds'),
+          : t(
+              'memory lives in MEMORY.md · the next session reads what that file holds',
+            ),
       };
     }
     if (name === 'copy') return { effect: 'copy' };
