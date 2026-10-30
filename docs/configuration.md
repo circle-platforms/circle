@@ -72,6 +72,7 @@ Inside a project, Circle looks in these folders. Circle works only in a folder y
 | Folder                                                      | What                                                                                                          |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `.circle/skills`, `.agent/skills`, `.agents/skills`         | Skills. See [Skills](skills.md) for all locations and their order.                                            |
+| `.circle/agents`, `.agents/agents`, `.claude/agents`           | [Subagents](agents.md) the model can call with `task`.                                                        |
 | `.circle/commands`, `.circle/prompts`                       | Custom commands                                                                                               |
 | `.circle/extensions/<name>/extension.ts` (or `.mjs`, `.js`) | Extensions                                                                                                    |
 | `.circle/AGENTS.md`, `.agent/AGENTS.md`                     | Instructions                                                                                                  |

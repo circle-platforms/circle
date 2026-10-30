@@ -91,7 +91,7 @@ The desktop starts loading integrations for its trusted startup workspace withou
 | `unregisterTool(name)` | Remove a tool this extension added; returns `false` if it has none of that name. The model stops seeing it from its next turn. |
 | `registerCommand(name, description, handler)` | Add a slash command. |
 | `registerMiddleware(handler, slot)` | Wrap model calls or tool calls. `slot` defaults to `tool_boundary`. |
-| `registerSubagent(spec, tools)` | Add a subagent for `task`. |
+| `registerSubagent(spec, tools)` | Add a subagent for `task`. A [subagent file](agents.md) of the same name is replaced by it. |
 | `registerRenderer('tool_result:<tool>', renderer)` | Change how a tool's result is shown. |
 | `on(event, handler)` | React to `session_start`, `turn_start`, `turn_end` or `tool_result`. |
 

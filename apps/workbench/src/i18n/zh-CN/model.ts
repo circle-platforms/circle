@@ -169,6 +169,8 @@ export const model: Record<string, string> = {
     '从你的某条消息之前分出新会话：/fork [关键词]',
   'Clone the active branch into a new session': '把当前分支克隆为新会话',
   'Undo the last turn on screen': '在界面上撤销上一轮',
+  'List the subagents task can use: /agents [name]':
+    '列出 task 可用的子代理：/agents [名称]',
   'Restore after /undo': '恢复 /undo 撤销的内容',
   'Hide or show thinking; /thinking <level> sets the depth':
     '隐藏或显示思考；/thinking <级别> 设置思考深度',

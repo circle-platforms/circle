@@ -127,6 +127,11 @@ export const BUILTIN_SLASH: SlashCommand[] = [
     aliases: ['skills'],
   },
   {
+    name: 'agents',
+    description: 'List the subagents task can use: /agents [name]',
+    aliases: ['subagents'],
+  },
+  {
     name: 'tree',
     description: 'Go back to an earlier point of the session: /tree [words]',
   },

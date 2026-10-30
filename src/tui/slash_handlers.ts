@@ -136,6 +136,7 @@ const BUSY_OK = new Set([
   'settings',
   'session',
   'themes',
+  'agents',
   'mcp',
   'hooks',
   'copy',
@@ -904,6 +905,52 @@ async function init(host: CommandHost, args: string): Promise<void> {
     return;
   }
   await host.send(template.replaceAll('$ARGUMENTS', args.trim() || '(none)'));
+}
+
+// The subagents `task` may choose: the two that ship with Circle, the ones the folders
+// define and the ones extensions register. A definition that cannot be used is named
+// with its reason rather than left out in silence.
+function agents(host: CommandHost, args: string): void {
+  const { agents: list, problems } = host.runtime.inspectSubagents();
+  const token = args.trim().split(/\s/, 1)[0] ?? '';
+  if (token) {
+    const one = list.find((agent) => agent.name === token);
+    if (!one) {
+      host.fail(`No subagent ${token} · /agents lists them`);
+      return;
+    }
+    host.notice(
+      [
+        `${one.name} · ${one.description}`,
+        `  source: ${one.source}`,
+        one.model ? `  model: ${one.model}` : '  model: the conversation’s',
+        one.tools
+          ? `  tools: ${one.tools.join(', ')}`
+          : '  tools: every tool a subagent may have',
+        one.path ? `  file: ${shortPath(one.path)}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+    return;
+  }
+  host.notice(
+    [
+      'Subagents:',
+      '',
+      ...list.map((agent) =>
+        aligned(
+          `  ${pad(agent.name, 18)} `,
+          `${agent.description} (${agent.source})`,
+        ),
+      ),
+      ...(problems.length
+        ? ['', 'Not offered:', ...problems.map((line) => `  ${line}`)]
+        : []),
+      '',
+      'Add one as a markdown file in .circle/agents · /agents <name> for one',
+    ].join('\n'),
+  );
 }
 
 // The conversation as Markdown, as it is on screen, under a few lines that say what it is.
@@ -2165,5 +2212,6 @@ const HANDLERS: Record<string, Handler> = {
   jobs,
   terminals,
   skill,
+  agents,
   compact,
 };

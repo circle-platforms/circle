@@ -111,6 +111,7 @@ export const COMMAND_UI: Record<string, string> = {
   tree: 'tree',
   fork: 'fork',
   clone: 'sessions',
+  agents: 'transcript',
   undo: 'transcript',
   redo: 'transcript',
   thinking: 'transcript',
@@ -705,6 +706,12 @@ export class PreviewRuntime implements RuntimePort {
       });
       return { notice: 'session renamed' };
     }
+    if (name === 'agents')
+      return {
+        panel: 'agents',
+        notice:
+          'subagents of this conversation · file definitions: /agents in the terminal',
+      };
     if (name === 'undo') {
       this.change((state) => {
         const target = currentSession(state);
