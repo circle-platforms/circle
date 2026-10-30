@@ -24,6 +24,12 @@ export const model: Record<string, string> = {
   'Ask your editor to show a diff': '请编辑器展示差异',
   'Ask the editor to show a diff of a file against the proposed text. Nothing is written until you accept there.':
     '请编辑器把文件与提议文本的差异展示出来；只有你在那里接受才会写入。',
+  'What Circle remembers: /memory [add <note>|remove N]':
+    'Circle 记住的内容：/memory [add <备注>|remove N]',
+  'memory lives in MEMORY.md · the next session reads what that file holds':
+    '记忆保存在 MEMORY.md · 下一个会话会读取该文件的内容',
+  'add this line to MEMORY.md, and the next session reads it: {line}':
+    '把这一行加入 MEMORY.md，下一个会话就会读取：{line}',
   disconnected: '已断开',
   'Circle runtime disconnected': 'Circle 运行时已断开',
   'Circle runtime ran out of memory': 'Circle 运行时内存不足',

@@ -123,6 +123,9 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   {
     name: 'bridge',
     description: 'Editor bridge on localhost: /bridge [start|stop|token]',
+    name: 'memory',
+    description:
+      'What Circle remembers: /memory [add [account] <note>|remove N]',
   },
   {
     name: 'skill',

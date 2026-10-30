@@ -36,6 +36,7 @@ import {
 } from '../../../../src/tui/slash_commands';
 import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
+import { entryLine, today } from '../../../../src/memory_line';
 import { t } from '../i18n/index.ts';
 import { presentHostError } from './host-error.ts';
 import { SessionActionError } from './action-error';
@@ -1393,6 +1394,22 @@ export class LiveRuntime implements RuntimePort {
           'the editor bridge is the terminal’s · run /bridge start in circle',
         ),
       };
+    // The window reads MEMORY.md into every prompt; a line is written by the
+    // terminal's /memory add, or by the person in the file itself.
+    if (name === 'memory') {
+      const note = args
+        .trim()
+        .replace(/^add\s+(account\s+)?/, '')
+        .trim();
+      return {
+        notice: note
+          ? t(
+              'add this line to MEMORY.md, and the next session reads it: {line}',
+              { line: entryLine(today(), note) },
+            )
+          : t('memory lives in MEMORY.md · the next session reads what that file holds'),
+      };
+    }
     if (name === 'copy') return { effect: 'copy' };
     if (name === 'import') return { effect: 'import' };
     if (name === 'init') {

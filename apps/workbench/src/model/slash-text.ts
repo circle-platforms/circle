@@ -15,6 +15,7 @@ const SLASH_TEXT: Record<string, () => string> = {
   extensions: () => t('List extensions: /extensions [reload]'),
   approvals: () => t('Session approvals: /approvals [revoke N]'),
   bridge: () => t('Editor bridge on localhost: /bridge [start|stop|token]'),
+  memory: () => t('What Circle remembers: /memory [add <note>|remove N]'),
   jobs: () => t('Background jobs: open one, or stop it'),
   new: () => t('Start a new session'),
   resume: () => t('Choose a session to open: /resume [n|id]'),
