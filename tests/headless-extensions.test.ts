@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
 import {
   mkdirSync,
@@ -365,4 +366,48 @@ test('in RPC mode --extensions connects the MCP servers and loads the extensions
   );
   ranBoth(f, session.events, output);
   homeKeepsNoToken(f.home);
+});
+
+// Issue #319: installs older than 1.13.0 gave MCP servers no session id, so a
+// service that must observe the run's own session could not start its work.
+// A print run is the shape such a service sees: every request names the session
+// the run opened, and each tool call carries a fresh W3C trace.
+test('a print run names its own session to every MCP request, and each tool call its own trace', async (t) => {
+  const f = await fixture(t);
+  const printed = await run(
+    f.home,
+    ['--extensions', '-p', 'list the manuals', f.workspace],
+    f.env,
+  );
+  assert.equal(printed.code, 0, printed.stderr + printed.stdout);
+  assert.match(printed.stdout, /listed the manuals and counted the notes/);
+  assert.ok(f.stub.requests.length > 0, 'the server was reached');
+  // The run opened exactly one session: that id, and no other, is on every request.
+  const db = new DatabaseSync(join(f.home, 'circle.sqlite'));
+  cleanup(t, () => db.close());
+  const rows = db.prepare('SELECT id FROM sessions').all() as { id: string }[];
+  assert.equal(rows.length, 1, printed.stdout);
+  assert.deepEqual(
+    [
+      ...new Set(
+        f.stub.requests.map((request) => request.headers['circle-session-id']),
+      ),
+    ],
+    [rows[0]!.id],
+  );
+  // A trace rides each tool call, a new one every time, and nothing else.
+  const traced = f.stub.requests.filter(
+    (request) => request.headers.traceparent,
+  );
+  assert.deepEqual(traced, f.stub.calls());
+  for (const call of traced)
+    assert.match(
+      String(call.headers.traceparent),
+      /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/,
+    );
+  assert.equal(
+    new Set(traced.map((call) => call.headers.traceparent)).size,
+    traced.length,
+    'a new trace id for every call',
+  );
 });
