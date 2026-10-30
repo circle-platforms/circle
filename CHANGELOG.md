@@ -4,11 +4,20 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.14.0 - 2026-10-30
+
+### Added
+
+- **The terminal reports its turn state.** The full-screen interface keeps one state for the terminal — a turn runs, a card waits for you, or the last turn failed until the next one starts (stopping with `esc` is not a failure) — and reports changes to every terminal as `OSC 9;4`, and to an Otty pane as an `otty state:circle` line, so Otty shows its agent badges and notifications. With several conversations open, the most urgent state counts.
+
 ### Fixed
 
 - **A new desktop terminal leaves the tab you picked in front.** If you added or restarted a terminal and chose a tab before the new shell had started, the new terminal could take the front back, and the next action from the terminal menu, such as copy complete output, went to it instead. It still comes to the front when you have not picked a tab meanwhile.
 - **New session answers the keyboard after an unfinished press.** On the desktop sidebar and the sessions page, pressing new session and releasing the pointer outside the button could leave the next Enter on that button doing nothing. A keyboard activation now always starts a new session, and a cancelled press no longer counts as one.
 - **Saving on Windows waits out a refusal Windows gives no name.** Some refusals to replace a file that another program briefly holds reach Circle as `UNKNOWN` rather than as a busy or denied file. The desktop editor's save now waits up to two seconds for those too, checking each time that nothing else changed the file, instead of failing at once.
+- **Resizing redraws every row.** A terminal that gets shorter drops rows at the top of the alternate screen and moves the rest up, but the full-screen view only wrote rows whose text had changed, so the welcome could go missing after a pane split and stay missing when the height came back. A resize now invalidates the previous frame first, as `ctrl+l` does, but without clearing the screen.
+- **Leaving the interface no longer leaks terminal answers into the shell.** The full-screen interface asks the terminal for its colours when it starts, and when it left it restored the screen and stopped reading at once, so answers that arrived after that stayed in the input and the shell read them as typed text. Leaving now asks for the primary device attributes once the screen is restored and keeps reading until that answer arrives or 500 ms pass.
+- **The welcome ring draws in Terminal.app.** The monospace fonts macOS gives Terminal.app have no sextant characters, so the ring's top and bottom rows showed as missing glyphs. When `TERM_PROGRAM` is `Apple_Terminal`, the ring is now drawn in quadrant block characters, sampled again at that size; everywhere else it is the same sextant ring as before.
 
 ## 1.13.1 - 2026-10-29
 
