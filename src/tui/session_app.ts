@@ -1,5 +1,5 @@
 import { QuestionCard } from '../ink/components/question_card.js';
-import { flushTerminalWrite } from './terminal_write.js';
+import { flushTerminalWrite, settleTerminalInput } from './terminal_write.js';
 import { completionFailure } from '../model_completion.js';
 import { ApprovalCard } from '../ink/components/approval_card.js';
 import { SecretCard } from '../ink/components/secret_card.js';
@@ -386,7 +386,13 @@ export class SessionApp {
   private resizeListener = (): void => this.repaint();
   // The terminal and the process as lending the screen out uses them (ctrl+z to the shell,
   // /editor to $EDITOR). Tests put their own in place.
-  terminal = {
+  terminal: {
+    platform: NodeJS.Platform;
+    write(text: string, flush?: boolean): void | Promise<void>;
+    input(on: boolean): void;
+    kill(signal: NodeJS.Signals): void;
+    settle?(): Promise<void>;
+  } = {
     platform: process.platform as NodeJS.Platform,
     write: (text: string, flush = false): void | Promise<void> => {
       if (!flush) {
@@ -409,6 +415,13 @@ export class SessionApp {
     },
     kill: (signal: NodeJS.Signals): void => {
       process.kill(process.pid, signal);
+    },
+    // Leaving: what the terminal still owes is read in, with keys no longer handled, before
+    // the shell gets the input (terminal_write.ts).
+    settle: async (): Promise<void> => {
+      process.stdin.off('data', this.dataListener);
+      if (process.stdin.isTTY)
+        await settleTerminalInput(process.stdin, process.stdout);
     },
   };
   private signalListener = (): void => {
@@ -4118,6 +4131,11 @@ export class SessionApp {
         '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[23;0t',
         true,
       );
+    } catch (error) {
+      terminalErrors.push(error);
+    }
+    try {
+      await this.terminal.settle?.();
     } catch (error) {
       terminalErrors.push(error);
     }
