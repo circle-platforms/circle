@@ -169,7 +169,7 @@ const BUSY_WORDS: Record<string, string> = {
 // The view-only screen shows a session another terminal runs, and cannot change it.
 // These would: they write its name, its messages, its approvals or its branch. A list
 // or a copy (/fork, /clone, /export) is still fine.
-const VIEW_ONLY_REFUSED = new Set(['compact', 'import', 'approvals']);
+const VIEW_ONLY_REFUSED = new Set(['compact', 'import', 'approvals', 'rewind']);
 const VIEW_ONLY_REFUSED_WITH_ARGS = new Set(['name', 'skill']);
 const VIEW_ONLY_WORDS = 'view only · another terminal runs this session';
 const THEMES = ['auto', 'dark', 'light'] as const;
@@ -895,6 +895,99 @@ async function redo(host: CommandHost): Promise<void> {
   host.notice('Redid the turn');
 }
 
+// The files one turn changed, put back. The terminal keeps its journal in the
+// conversation's own database, so a turn from before a restart is still here. What a
+// shell command changed is not, and both the list and the answer say so.
+function rewind(host: CommandHost): void {
+  const journal = host.runtime.fileRewind;
+  if (!journal) {
+    host.fail(
+      'this conversation has no file journal · the desktop undoes files from the message',
+    );
+    return;
+  }
+  const tree = host.runtime.store.tree(host.runtime.session.id);
+  // The message that opened the turn, as one line.
+  const said = (turnId: string): string => {
+    const text = (tree.find((row) => row.id === turnId)?.message?.content ?? '')
+      .replace(/\s+/gu, ' ')
+      .trim();
+    return text ? text.slice(0, 48) : `turn ${turnId.slice(-8)}`;
+  };
+  const rows = (): PickerItem[] =>
+    journal
+      .availableTurns()
+      .reverse()
+      .map((turnId) => {
+        const paths = journal.recordedPaths(turnId);
+        return {
+          key: turnId,
+          label: said(turnId),
+          meta: `${paths.length} ${paths.length === 1 ? 'file' : 'files'}`,
+          search: paths.join(' '),
+        };
+      });
+  if (!rows().length) {
+    host.flash('Nothing to rewind');
+    return;
+  }
+  const read = (turnId: string) =>
+    journal.preview(turnId, new AbortController().signal).catch((error) => {
+      host.fail(reason(error));
+      return undefined;
+    });
+  // One action per row: it asks in the list first, as /jobs asks before it stops a job.
+  // enter is bound as a list key so the list stays open for the turn after it.
+  const change = async (item: PickerItem | undefined): Promise<void> => {
+    const list = host.state.picker;
+    if (!item || !list) return;
+    if (host.runtime.harness.planMode) {
+      host.fail('read-only: leave the plan before rewinding files');
+      return;
+    }
+    const preview = await read(item.key);
+    if (!preview) return;
+    if (preview.conflicts.length) {
+      host.fail(
+        `${pathTail(preview.conflicts[0]!)} changed since that turn · nothing rewound`,
+      );
+      return;
+    }
+    const named = preview.paths
+      .slice(0, 2)
+      .map((path) => pathTail(path))
+      .join(', ');
+    const more =
+      preview.paths.length > 2 ? ` +${preview.paths.length - 2}` : '';
+    list.confirm(
+      `Rewind ${preview.paths.length} ${
+        preview.paths.length === 1 ? 'file' : 'files'
+      }: ${named}${more}?`,
+      async () => {
+        try {
+          const receipt = await journal.restore(
+            preview.id,
+            new AbortController().signal,
+          );
+          host.notice(
+            `Rewound ${receipt.paths.length} file(s) to before that turn.\n` +
+              'Shell commands, external services and unrecorded edits stay as they are.',
+          );
+        } catch (error) {
+          host.fail(reason(error));
+          return;
+        }
+        // The turn leaves the list; the ones before it stay.
+        list.setItems(rows());
+      },
+    );
+  };
+  host.picker('Rewind files', rows(), (item) => void change(item), {
+    hint: 'enter rewinds after asking',
+    empty: 'Nothing to rewind',
+    keys: { enter: (item) => void change(item) },
+  });
+}
 async function init(host: CommandHost, args: string): Promise<void> {
   let template: string;
   try {
@@ -2151,6 +2244,7 @@ const HANDLERS: Record<string, Handler> = {
   trust,
   undo,
   redo,
+  rewind,
   init,
   export: exportSession,
   share,

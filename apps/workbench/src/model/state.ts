@@ -113,6 +113,7 @@ export const COMMAND_UI: Record<string, string> = {
   clone: 'sessions',
   undo: 'transcript',
   redo: 'transcript',
+  rewind: 'file-undo',
   thinking: 'transcript',
   effort: 'models',
   details: 'transcript',
@@ -721,6 +722,11 @@ export class PreviewRuntime implements RuntimePort {
       });
       return { notice: 'last turn hidden; history and files are unchanged' };
     }
+    // The application has no rewind list: it undoes files from that message.
+    if (name === 'rewind')
+      return {
+        notice: 'undo files from the message that changed them',
+      };
     if (name === 'redo') {
       if (!session.undoStack.length) return { notice: 'nothing to redo' };
       this.change((state) => {

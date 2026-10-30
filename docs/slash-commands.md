@@ -30,6 +30,7 @@ Going back with `/tree` while a turn runs stops the turn first. A [custom comman
 | `/clone` | | Start a new session with the current branch of this one. |
 | `/undo` | | Undo the last turn on screen. |
 | `/redo` | | Bring it back. |
+| `/rewind` | | List the turns whose file changes Circle recorded and put one back, asking first: `enter` asks, `esc` at the question changes nothing. Commands and other writers are outside the journal. See [Rewind a turn's files](sessions.md#rewind-a-turns-files). |
 | `/compact [hint]` | `/summarize` | Summarize older messages now. |
 | `/jobs [id]` | `/tasks` | List the session's [background jobs](background-jobs.md), running ones first, or open one's page. `enter` opens a job's page: a band with its lamp, id and command, state and time, and the file its output goes to, then the end of the output. `ctrl+k` stops a running job (after asking in the list) or removes one that has ended. |
 | `/terminals [id]` | | List this conversation's [device terminals](tools.md#device-terminals), live ones first then the saved profiles, or open one console's page. `enter` opens a terminal's page or connects a profile; `ctrl+d` cuts a live console after asking. On the page `enter` attaches and `esc` leaves. |

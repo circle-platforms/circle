@@ -11,6 +11,8 @@ import {
   type SessionLease,
 } from './session_lock.js';
 import { InputOutbox } from './input_outbox.js';
+import type { FileMutationSnapshot } from './file_mutations.js';
+import type { RewindEntry } from './file_rewind.js';
 import {
   validateSessionGraph,
   orderedCheckpoints,
@@ -108,6 +110,9 @@ export function databaseOpenError(error: unknown): Error {
   return friendly;
 }
 
+/** How many turns of file changes one session keeps for /rewind, as /undo keeps 40 turns. */
+const REWIND_TURNS = 40;
+
 function openDatabase(
   path: string,
   onBusy?: () => void,
@@ -201,6 +206,14 @@ function openDatabase(
       // it, a held lock exits with "database is locked" again.
       db.exec(
         `CREATE TABLE IF NOT EXISTS open_turns (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, head TEXT, started REAL NOT NULL)`,
+      );
+      // One turn's recorded file changes, so /rewind still offers them after a restart.
+      // The rows leave with the session; only the newest turns are kept (REWIND_TURNS).
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS file_rewind (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, turn_id TEXT NOT NULL, path TEXT NOT NULL, before_image TEXT NOT NULL, after_image TEXT NOT NULL, recorded REAL NOT NULL, PRIMARY KEY(session_id, turn_id, path))`,
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS file_rewind_turn ON file_rewind(session_id, turn_id, recorded)`,
       );
       if (home) sweepStaleSessionLocks(home);
       return db;
@@ -851,6 +864,74 @@ export class CheckpointStore {
       this.db
         .prepare('DELETE FROM labels WHERE session_id = ? AND message_id = ?')
         .run(sessionId, messageId);
+  }
+  /** One turn's recorded file changes, oldest turn first, as `/rewind` needs them. */
+  rewindLoad(sessionId: string): { turnId: string; entries: RewindEntry[] }[] {
+    const turns = new Map<string, { turnId: string; entries: RewindEntry[] }>();
+    for (const row of this.db
+      .prepare(
+        'SELECT turn_id, before_image, after_image FROM file_rewind WHERE session_id = ? ORDER BY recorded, turn_id, path',
+      )
+      .all(sessionId)) {
+      const turnId = String(row.turn_id);
+      let turn = turns.get(turnId);
+      if (!turn) {
+        turn = { turnId, entries: [] };
+        turns.set(turnId, turn);
+      }
+      try {
+        turn.entries.push({
+          before: JSON.parse(String(row.before_image)) as FileMutationSnapshot,
+          after: JSON.parse(String(row.after_image)) as FileMutationSnapshot,
+        });
+      } catch {
+        // A row that is not a snapshot cannot be restored; the turn's other files still can.
+      }
+    }
+    return [...turns.values()];
+  }
+  /** Replace one turn's rows, then let turns older than the cap go. */
+  rewindSave(
+    sessionId: string,
+    turnId: string,
+    entries: RewindEntry[],
+    recorded = Date.now(),
+  ): void {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare('DELETE FROM file_rewind WHERE session_id = ? AND turn_id = ?')
+        .run(sessionId, turnId);
+      const insert = this.db.prepare(
+        'INSERT INTO file_rewind (session_id, turn_id, path, before_image, after_image, recorded) VALUES (?, ?, ?, ?, ?, ?)',
+      );
+      for (const entry of entries)
+        insert.run(
+          sessionId,
+          turnId,
+          entry.after.path,
+          JSON.stringify(entry.before),
+          JSON.stringify(entry.after),
+          recorded,
+        );
+      this.db
+        .prepare(
+          `DELETE FROM file_rewind WHERE session_id = ? AND turn_id NOT IN (
+             SELECT turn_id FROM file_rewind WHERE session_id = ?
+             GROUP BY turn_id ORDER BY MAX(recorded) DESC, turn_id LIMIT ?)`,
+        )
+        .run(sessionId, sessionId, REWIND_TURNS);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  /** A rewound turn has nothing left to offer. */
+  rewindDrop(sessionId: string, turnId: string): void {
+    this.db
+      .prepare('DELETE FROM file_rewind WHERE session_id = ? AND turn_id = ?')
+      .run(sessionId, turnId);
   }
   requireBalancedTools(messages: Message[]): void {
     const pending = new Set<string>();

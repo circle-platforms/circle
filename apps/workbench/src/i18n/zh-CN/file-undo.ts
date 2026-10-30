@@ -2,6 +2,8 @@ export const fileUndo: Record<string, string> = {
   'file restore was not confirmed': '文件恢复结果未确认',
   'file undo preview is unavailable': '文件撤销预览不可用',
   'file changes restored': '文件改动已恢复',
+  'undo files from the message that changed them':
+    '请在改动文件的那条消息处撤销文件',
   'undo file changes': '撤销文件改动',
   'file undo preview': '文件撤销预览',
   'only recorded text-tool file changes will be restored. shell commands and external effects remain.':
