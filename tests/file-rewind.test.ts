@@ -218,10 +218,13 @@ test('a file that cannot be brought back byte for byte costs only its rewind', a
   const store = new CheckpointStore(home);
   cleanup(t, () => store.close());
   const session = store.create(workspace, 'test-model');
-  const journal = new FileRewindJournal(new FileSystemFileMutations(new Sandbox(workspace)), {
-    session: () => session.id,
-    ledger: () => store,
-  });
+  const journal = new FileRewindJournal(
+    new FileSystemFileMutations(new Sandbox(workspace)),
+    {
+      session: () => session.id,
+      ledger: () => store,
+    },
+  );
   const { run } = journalTools(workspace, journal);
   const plain = join(workspace, 'a.txt');
   const binary = join(workspace, 'blob.bin');
