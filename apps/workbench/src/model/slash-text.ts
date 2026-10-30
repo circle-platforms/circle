@@ -14,6 +14,7 @@ const SLASH_TEXT: Record<string, () => string> = {
   mcp: () => t('List / reload MCP servers and tools'),
   extensions: () => t('List extensions: /extensions [reload]'),
   approvals: () => t('Session approvals: /approvals [revoke N]'),
+  memory: () => t('What Circle remembers: /memory [add <note>|remove N]'),
   jobs: () => t('Background jobs: open one, or stop it'),
   new: () => t('Start a new session'),
   resume: () => t('Choose a session to open: /resume [n|id]'),

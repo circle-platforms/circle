@@ -8,6 +8,12 @@ export const model: Record<string, string> = {
   // what the live runtime says
   'UI preferences could not be saved': '无法保存界面偏好',
   'runtime action failed': '运行时操作失败',
+  'What Circle remembers: /memory [add <note>|remove N]':
+    'Circle 记住的内容：/memory [add <备注>|remove N]',
+  'memory lives in MEMORY.md · the next session reads what that file holds':
+    '记忆保存在 MEMORY.md · 下一个会话会读取该文件的内容',
+  'add this line to MEMORY.md, and the next session reads it: {line}':
+    '把这一行加入 MEMORY.md，下一个会话就会读取：{line}',
   disconnected: '已断开',
   'Circle runtime disconnected': 'Circle 运行时已断开',
   'Circle runtime ran out of memory': 'Circle 运行时内存不足',

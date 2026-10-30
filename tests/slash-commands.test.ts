@@ -1847,3 +1847,78 @@ test('/help and /hotkeys hang continuations under the description column at 80 c
     });
   }
 });
+
+test('/memory writes a dated line to the workspace, lists both files, and takes a line back', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  const projectFile = join(workspace, 'MEMORY.md');
+  const accountFile = join(home, 'MEMORY.md');
+  const DATE = '\\d{4}-\\d{2}-\\d{2}';
+
+  await app.submit('/memory');
+  const first = app.state.notices.at(-1)!;
+  assert.match(first, /^What Circle remembers between sessions:/);
+  assert.ok(first.includes('none yet'), first);
+  assert.match(first, /--no-context-files \(-nc\) does not leave these out/);
+
+  await app.submit('/memory add');
+  assert.equal(app.state.flash, 'Usage: /memory add [account] <note>');
+  await app.submit('/memory remove x');
+  assert.equal(app.state.flash, 'Usage: /memory remove <number>');
+  await app.submit('/memory rename it');
+  assert.equal(
+    app.state.flash,
+    'Usage: /memory [add [account] <note>|remove <number>]',
+  );
+  assert.equal(existsSync(projectFile), false, 'a usage flash writes nothing');
+
+  await app.submit('/memory add the release branch is 9.3');
+  const wrote = app.state.notices.at(-1)!;
+  assert.match(wrote, /^Remembered \u00b7 project \u00b7 /);
+  assert.match(wrote, /remove 1 takes it back/);
+  assert.match(
+    readFileSync(projectFile, 'utf8'),
+    new RegExp(
+      '^# Memory\\n\\n- ' + DATE + ' \\u00b7 the release branch is 9\\.3\\n$',
+    ),
+  );
+
+  await app.submit('/memory add account always check --stat first');
+  assert.match(app.state.notices.at(-1)!, /^Remembered \u00b7 account \u00b7 /);
+  assert.ok(existsSync(accountFile), 'the data folder copy was made');
+
+  await app.submit('/memory');
+  const both = app.state.notices.at(-1)!;
+  assert.match(
+    both,
+    new RegExp(' 1\\. ' + DATE + ' \u00b7 the release branch is 9\\.3'),
+    both,
+  );
+  assert.match(
+    both,
+    new RegExp(' 2\\. ' + DATE + ' \u00b7 always check --stat first'),
+    both,
+  );
+
+  // The first line was all the file Circle made: it goes with it.
+  await app.submit('/memory remove 1');
+  assert.match(
+    app.state.notices.at(-1)!,
+    new RegExp('^Forgotten \u00b7 project \u00b7 line 3 of '),
+  );
+  assert.equal(existsSync(projectFile), false);
+  await app.submit('/memory remove 1');
+  assert.match(app.state.notices.at(-1)!, /^Forgotten \u00b7 account \u00b7/);
+  assert.equal(existsSync(accountFile), false);
+
+  await app.submit('/memory remove 1');
+  assert.equal(app.state.flash, 'there are only 0 memory lines now');
+});
