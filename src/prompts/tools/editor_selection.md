@@ -1,0 +1,1 @@
+The text the person selected, with its file and its line range, as one block: `path:start-end` then the text. Treat it as the thing they mean when they say "this" or "here". The bridge refuses a selection older than ten minutes, because a leftover from a scroll is not context; say so and ask them to select it again.

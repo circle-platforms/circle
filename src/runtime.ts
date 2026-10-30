@@ -24,6 +24,7 @@ import {
   type SessionMode,
 } from './approvals.js';
 import { Sandbox } from './sandbox.js';
+import { EditorBridge } from './editor_bridge.js';
 import { buildTools, type Todo } from './tools.js';
 import { browserToolsWanted } from './browser/tools.js';
 import {
@@ -353,6 +354,8 @@ export class AgentRuntime {
   readonly store: CheckpointStore;
   readonly bus = new EventBus();
   readonly sandbox: Sandbox;
+  /** What the editor the person uses knows, once the bridge is open. */
+  readonly editorBridge: EditorBridge;
   readonly jobs: JobRegistry;
   /** Hides secrets' values in what the model reads, from calls and background jobs. */
   readonly redact: Redactor;
@@ -498,6 +501,13 @@ export class AgentRuntime {
           ...options.settings.credential_files,
         ]),
       ],
+    );
+    // The editor bridge: a localhost MCP server that stays closed until the
+    // person opens it with /bridge start. It writes only through the sandbox.
+    this.editorBridge = new EditorBridge(
+      options.home,
+      options.workspace,
+      this.sandbox,
     );
     this.policy = defaultPolicy(
       options.workspace,
@@ -997,6 +1007,11 @@ export class AgentRuntime {
     tools.push(this.lsp.tool());
     tools = this.classifyCoreTools(tools);
     tools.push(...(this.options.extraTools ?? []));
+    // The editor tools are in the list when the person turned them on, not when
+    // the listener happens to be open: a closed bridge says so in its answer, and
+    // opening or closing it changes nothing else about the session.
+    if (this.options.settings.editor_bridge)
+      tools.push(...this.editorBridge.modelTools());
     this.coreTools = tools;
     tools = this.withIntegrationTools(
       tools.filter((tool) => tool.name !== 'wait_jobs'),
@@ -2237,6 +2252,9 @@ export class AgentRuntime {
       });
     await this.harness.finishTitle();
     await this.userShells.cancel();
+    // A listener this session opened dies with it: nobody is left able to reach
+    // the bridge of a session that has gone, and no stale file names a port.
+    await this.editorBridge.stop();
     const stopped = await this.jobs.close();
     if (!this.ownershipError) this.userShells.flush();
     for (const sessionId of saveJobNotes && !this.ownershipError

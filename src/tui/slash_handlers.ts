@@ -158,19 +158,20 @@ const BUSY_OK = new Set([
 // These only show a list when they have no argument. With one they change what the turn
 // works with: `/skill <name>` writes into the conversation the turn is writing, and
 // `/extensions reload` replaces the tools it may be calling. That form waits.
-const BUSY_OK_BARE = new Set(['skill', 'extensions']);
+const BUSY_OK_BARE = new Set(['skill', 'extensions', 'bridge']);
 const BUSY_WORDS: Record<string, string> = {
   models: 'Busy · switch models when the turn has finished',
   skill: 'Busy · load the skill when the turn has finished',
   extensions: 'Busy · reload extensions when the turn has finished',
   effort: 'Busy · change the thinking depth when the turn has finished',
   resume: 'Busy · switch sessions when the turn has finished',
+  bridge: 'Busy · open the bridge when the turn has finished',
 };
 // The view-only screen shows a session another terminal runs, and cannot change it.
 // These would: they write its name, its messages, its approvals or its branch. A list
 // or a copy (/fork, /clone, /export) is still fine.
 const VIEW_ONLY_REFUSED = new Set(['compact', 'import', 'approvals']);
-const VIEW_ONLY_REFUSED_WITH_ARGS = new Set(['name', 'skill']);
+const VIEW_ONLY_REFUSED_WITH_ARGS = new Set(['name', 'skill', 'bridge']);
 const VIEW_ONLY_WORDS = 'view only · another terminal runs this session';
 const THEMES = ['auto', 'dark', 'light'] as const;
 const DOUBLE_ESCAPE = ['tree', 'fork', 'none'] as const;
@@ -2166,4 +2167,59 @@ const HANDLERS: Record<string, Handler> = {
   terminals,
   skill,
   compact,
+  bridge,
 };
+// /bridge: open the localhost bridge so the editor the person already uses can
+// tell Circle what is open and what is selected, and answer a diff request.
+async function bridge(host: CommandHost, args: string): Promise<void> {
+  const runtime = host.runtime;
+  const verb = args.trim().split(/\s+/)[0] ?? '';
+  if (!verb || verb === 'status') {
+    host.notice(runtime.editorBridge.statusText());
+    return;
+  }
+  if (verb === 'start') {
+    if (runtime.editorBridge.running) {
+      host.flash('the bridge is already open \u00b7 /bridge shows where');
+      return;
+    }
+    try {
+      const info = await runtime.editorBridge.start();
+      host.notice(
+        [
+          `Bridge open at ${info.url}`,
+          `Token for the editor side: ${info.token}`,
+          `Written where an editor can find it: ${info.file}`,
+          host.settings.editor_bridge
+            ? 'The conversation has four tools: editor_status, editor_active_file, editor_selection and editor_open_diff.'
+            : 'editor_bridge is off in your settings, so the model has no editor tools yet: set it to true and /reload.',
+          'Nothing reaches disk until you accept in the editor \u00b7 /bridge stop closes it again',
+        ].join('\n'),
+      );
+    } catch (error) {
+      host.fail(`Bridge failed to start: ${(error as Error).message}`);
+    }
+    return;
+  }
+  if (verb === 'stop') {
+    if (!runtime.editorBridge.running) {
+      host.flash('the bridge is not open');
+      return;
+    }
+    await runtime.editorBridge.stop();
+    host.notice(
+      'Bridge closed \u00b7 nothing more reaches the editor, and no request of yours is waiting',
+    );
+    return;
+  }
+  if (verb === 'token') {
+    const info = runtime.editorBridge.info;
+    if (!info) {
+      host.flash('the bridge is not open \u00b7 /bridge start opens it');
+      return;
+    }
+    host.notice(`Token: ${info.token}`);
+    return;
+  }
+  host.flash('Usage: /bridge [start|stop|token]');
+}

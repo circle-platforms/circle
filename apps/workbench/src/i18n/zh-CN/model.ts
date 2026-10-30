@@ -8,6 +8,22 @@ export const model: Record<string, string> = {
   // what the live runtime says
   'UI preferences could not be saved': '无法保存界面偏好',
   'runtime action failed': '运行时操作失败',
+  'Editor bridge on localhost: /bridge [start|stop|token]':
+    '本机编辑器桥：/bridge [start|stop|token]',
+  'the editor bridge is the terminal’s · run /bridge start in circle':
+    '编辑器桥属于终端 · 请在 circle 里运行 /bridge start',
+  'What your editor reports': '你的编辑器报告的内容',
+  'What your editor reported: its file, the selection, how old each is, and how many diff requests wait.':
+    '你的编辑器报告的：当前文件、所选内容、各自多久之前，以及有几个差异请求在等待。',
+  'The file your editor has open': '编辑器打开的文件',
+  'The path of the file the editor has open, or that nobody reported one.':
+    '编辑器当前打开文件的路径，或没有人报告过文件。',
+  'The text you selected in your editor': '你在编辑器中选中的文本',
+  'The selected text with its file and line range. A selection older than ten minutes is refused as context.':
+    '所选文本及其文件和行范围。超过十分钟的选区不作为上下文。',
+  'Ask your editor to show a diff': '请编辑器展示差异',
+  'Ask the editor to show a diff of a file against the proposed text. Nothing is written until you accept there.':
+    '请编辑器把文件与提议文本的差异展示出来；只有你在那里接受才会写入。',
   disconnected: '已断开',
   'Circle runtime disconnected': 'Circle 运行时已断开',
   'Circle runtime ran out of memory': 'Circle 运行时内存不足',

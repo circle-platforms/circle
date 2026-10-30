@@ -1847,3 +1847,61 @@ test('/help and /hotkeys hang continuations under the description column at 80 c
     });
   }
 });
+
+test('/bridge opens the localhost editor bridge, says what is missing, and closes again', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  await app.submit('/bridge');
+  assert.equal(
+    app.state.notices.at(-1),
+    'bridge: not running \u00b7 /bridge start opens it',
+  );
+  await app.submit('/bridge bogus');
+  assert.equal(app.state.flash, 'Usage: /bridge [start|stop|token]');
+  await app.submit('/bridge token');
+  assert.equal(
+    app.state.flash,
+    'the bridge is not open \u00b7 /bridge start opens it',
+  );
+  await app.submit('/bridge stop');
+  assert.equal(app.state.flash, 'the bridge is not open');
+
+  await app.submit('/bridge start');
+  const opened = app.state.notices.at(-1)!;
+  assert.match(opened, /^Bridge open at http:\/\/127\.0\.0\.1:\d+\/mcp\n/);
+  assert.match(opened, /Token for the editor side: [0-9a-f]{48}/);
+  // The default settings give the model no editor tools: that is the person's call.
+  assert.match(opened, /editor_bridge is off in your settings/);
+  assert.ok(
+    existsSync(join(home, 'bridge.json')),
+    'an editor can find the port',
+  );
+
+  await app.submit('/bridge');
+  assert.match(app.state.notices.at(-1)!, /^bridge: running at http:/);
+  assert.match(
+    app.state.notices.at(-1)!,
+    /no editor has reported anything yet/,
+  );
+  await app.submit('/bridge start');
+  assert.equal(
+    app.state.flash,
+    'the bridge is already open \u00b7 /bridge shows where',
+  );
+
+  await app.submit('/bridge stop');
+  assert.match(app.state.notices.at(-1)!, /^Bridge closed \u00b7/);
+  assert.equal(
+    existsSync(join(home, 'bridge.json')),
+    false,
+    'the file goes with it',
+  );
+});
