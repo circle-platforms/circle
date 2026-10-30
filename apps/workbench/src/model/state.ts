@@ -4,6 +4,7 @@ import {
   commandWord,
   parseSlash,
 } from '../../../../src/tui/slash_commands.ts';
+import { entryLine, today } from '../../../../src/memory_line.ts';
 import type {
   BeginResult,
   CommandResult,
@@ -111,6 +112,7 @@ export const COMMAND_UI: Record<string, string> = {
   tree: 'tree',
   fork: 'fork',
   clone: 'sessions',
+  memory: 'transcript',
   undo: 'transcript',
   redo: 'transcript',
   thinking: 'transcript',
@@ -704,6 +706,14 @@ export class PreviewRuntime implements RuntimePort {
         currentSession(state).title = args.trim().slice(0, 100);
       });
       return { notice: 'session renamed' };
+    }
+    if (name === 'memory') {
+      const note = args.trim().replace(/^add\s+(account\s+)?/, '').trim();
+      return {
+        notice: note
+          ? `add this line to MEMORY.md, and the next session reads it: ${entryLine(today(), note)}`
+          : 'memory lives in MEMORY.md · the next session reads what that file holds',
+      };
     }
     if (name === 'undo') {
       this.change((state) => {

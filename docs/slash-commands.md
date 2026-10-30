@@ -80,6 +80,7 @@ See [Choose a model](models.md).
 
 | Command | Aliases | What it does |
 |---|---|---|
+| `/memory [add [account] <note>\|remove N]` | | List the dated lines Circle keeps in `MEMORY.md`, the workspace's first and the data folder's after, and write or take back one. `add` writes in the workspace and `add account` in the data folder; a line about an untrusted folder waits for `/trust`. Only the lines Circle wrote are listed and removable. The list answers while a turn runs; a write waits for it to finish. See [Configuration](configuration.md#memory-circle-writes). |
 | `/skill [name] [args]` | `/skills` | List skills, or load one into the conversation for your next message. `/skill:name` also works. |
 | `/mcp [reload]` | | List MCP servers and tools, or reconnect them. |
 | `/extensions [reload]` | `/ext` | List extensions, or reload them. |

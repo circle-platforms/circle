@@ -53,6 +53,16 @@ import { EFFORT_LEVELS } from '../model.js';
 import { exportKind, toHtml } from '../session_export.js';
 import { discoverCustomCommands, expandCommandTemplate } from '../commands.js';
 import { discoverSkills, loadSkillBody } from '../skills.js';
+import { CONTEXT_FILE_CAP } from '../memory_sources.js';
+import {
+  addMemory,
+  allMemoryEntries,
+  memoryEntries,
+  memoryState,
+  memoryTargetFor,
+  memoryTargets,
+  removeMemory,
+} from '../memory_write.js';
 import { readPrompt } from '../system_prompt.js';
 import { formatHotkeys } from './hotkeys_text.js';
 import { BUILTIN_SLASH, variableCopy } from './slash_commands.js';
@@ -158,19 +168,20 @@ const BUSY_OK = new Set([
 // These only show a list when they have no argument. With one they change what the turn
 // works with: `/skill <name>` writes into the conversation the turn is writing, and
 // `/extensions reload` replaces the tools it may be calling. That form waits.
-const BUSY_OK_BARE = new Set(['skill', 'extensions']);
+const BUSY_OK_BARE = new Set(['skill', 'extensions', 'memory']);
 const BUSY_WORDS: Record<string, string> = {
   models: 'Busy · switch models when the turn has finished',
   skill: 'Busy · load the skill when the turn has finished',
   extensions: 'Busy · reload extensions when the turn has finished',
   effort: 'Busy · change the thinking depth when the turn has finished',
   resume: 'Busy · switch sessions when the turn has finished',
+  memory: 'Busy · write the memory line when the turn has finished',
 };
 // The view-only screen shows a session another terminal runs, and cannot change it.
 // These would: they write its name, its messages, its approvals or its branch. A list
 // or a copy (/fork, /clone, /export) is still fine.
 const VIEW_ONLY_REFUSED = new Set(['compact', 'import', 'approvals']);
-const VIEW_ONLY_REFUSED_WITH_ARGS = new Set(['name', 'skill']);
+const VIEW_ONLY_REFUSED_WITH_ARGS = new Set(['name', 'skill', 'memory']);
 const VIEW_ONLY_WORDS = 'view only · another terminal runs this session';
 const THEMES = ['auto', 'dark', 'light'] as const;
 const DOUBLE_ESCAPE = ['tree', 'fork', 'none'] as const;
@@ -2166,4 +2177,110 @@ const HANDLERS: Record<string, Handler> = {
   terminals,
   skill,
   compact,
+  memory,
 };
+// The memory Circle keeps for itself: one dated line per fact, in a file the
+// system prompt already reads whole. Nothing is captured on its own: a line is
+// written when the person says so, and taken back the same way.
+function memoryTargetsOf(host: CommandHost) {
+  return memoryTargets(host.workspace, host.home);
+}
+
+function memoryList(host: CommandHost): void {
+  const lines = ['What Circle remembers between sessions:'];
+  let number = 0;
+  for (const target of memoryTargetsOf(host)) {
+    const state = memoryState(target.path);
+    lines.push('');
+    lines.push(
+      state.exists
+        ? `${target.scope}: ${target.path} · ${state.bytes} of ${CONTEXT_FILE_CAP} bytes read whole`
+        : `${target.scope}: ${target.path} · none yet`,
+    );
+    if (state.overCap)
+      lines.push(
+        `  past the cap: the rest of this file is not read · trim it, or /memory remove`,
+      );
+    for (const entry of memoryEntries(target))
+      lines.push(`  ${++number}. ${entry.date} · ${entry.note}`);
+  }
+  lines.push('');
+  lines.push(
+    number
+      ? `/memory remove <number> takes one back`
+      : `/memory add <note> writes one line here`,
+  );
+  lines.push(
+    '/memory add account <note> writes to the data folder, for anything you work on',
+  );
+  lines.push(
+    '--no-context-files (-nc) does not leave these out: they are memory, not instructions',
+  );
+  host.notice(lines.join('\n'));
+}
+
+function memory(host: CommandHost, args: string): void {
+  const trimmed = args.trim();
+  if (!trimmed) {
+    memoryList(host);
+    return;
+  }
+  const verb = trimmed.split(/\s+/)[0]!;
+  if (verb === 'add') {
+    let rest = trimmed.slice(verb.length).trim();
+    const account = /^account(\s|$)/.test(rest);
+    if (account) rest = rest.slice('account'.length).trim();
+    if (!rest) {
+      host.flash('Usage: /memory add [account] <note>');
+      return;
+    }
+    // A line about this project waits for the folder to be trusted, as every
+    // other write into it does. The account file sits in Circle's own folder.
+    if (!account && !isFolderTrusted(host.settings, host.workspace)) {
+      host.flash('Trust this folder first: /trust');
+      return;
+    }
+    const target = memoryTargetFor(
+      account ? 'account' : 'project',
+      host.workspace,
+      host.home,
+    );
+    const added = addMemory(target, rest);
+    if (!added.ok) {
+      host.flash(added.why);
+      return;
+    }
+    const entry = added.entry!;
+    // The number the list would show, so the notice can say what removes it.
+    const position =
+      allMemoryEntries(host.workspace, host.home).findIndex(
+        (found) => found.path === entry.path && found.line === entry.line,
+      ) + 1;
+    host.notice(
+      [
+        `Remembered · ${entry.scope} · ${entry.path}`,
+        `  ${entry.text}`,
+        `It reaches the model with the next session's prompt · /memory remove ${position} takes it back`,
+      ].join('\n'),
+    );
+    return;
+  }
+  if (verb === 'remove') {
+    const target = trimmed.slice(verb.length).trim();
+    if (!/^\d+$/.test(target)) {
+      host.flash('Usage: /memory remove <number>');
+      return;
+    }
+    const removed = removeMemory(host.workspace, host.home, Number(target));
+    if (!removed.ok) {
+      host.flash(removed.why);
+      return;
+    }
+    const entry = removed.entry!;
+    host.notice(
+      `Forgotten · ${entry.scope} · line ${entry.line} of ${entry.path}\n  ${entry.text}`,
+    );
+    return;
+  }
+  host.flash('Usage: /memory [add [account] <note>|remove <number>]');
+}

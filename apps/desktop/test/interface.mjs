@@ -778,7 +778,28 @@ try {
         await copied.waitFor({ state: 'hidden' });
       } else if (command.name === 'unshare')
         assert.equal(snapshot.sessions[0].shared, false);
-      else throw Error('missing UI assertion for ' + command.name);
+      // /memory answers where memory lives; the line it offers is the shape the
+      // terminal's /memory add writes.
+      else if (command.name === 'memory') {
+        // Bare: where memory lives. With a note: the exact line to put in the
+        // file, which is the same shape the terminal writes.
+        await page
+          .getByRole('status')
+          .filter({ hasText: 'MEMORY.md' })
+          .first()
+          .waitFor();
+        await page
+          .getByRole('textbox', { name: 'message', exact: true })
+          .fill('/memory add prefers pnpm');
+        await page
+          .getByRole('textbox', { name: 'message', exact: true })
+          .press('Enter');
+        await page
+          .getByRole('status')
+          .filter({ hasText: 'prefers pnpm' })
+          .first()
+          .waitFor();
+      } else throw Error('missing UI assertion for ' + command.name);
     }
     checks.push('/' + command.name);
   }

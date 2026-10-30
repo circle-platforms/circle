@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CheckpointStore } from '../src/checkpoint_store.js';
@@ -401,6 +401,24 @@ test('/logout waits for running sessions while read-only /skill remains availabl
   );
   assert.ok(
     !app.state.notices.some((note) => note.startsWith('Extensions reloaded')),
+  );
+  // The memory list is a read: answered mid-turn. Writing a line is not.
+  await app.command('memory', '');
+  assert.ok(
+    app.state.notices.some((note) =>
+      note.startsWith('What Circle remembers between sessions:'),
+    ),
+    'the memory list is answered while the turn runs',
+  );
+  await app.command('memory', 'add later');
+  assert.equal(
+    app.state.flash,
+    'Busy \u00b7 write the memory line when the turn has finished',
+  );
+  assert.equal(
+    existsSync(join(root, 'MEMORY.md')),
+    false,
+    'nothing was written',
   );
   await runtime.cancel();
   await turn;
