@@ -223,6 +223,63 @@ test('/undo and /redo put the screen back; the model keeps every turn', async (t
   assert.ok(screen().includes('answer one'));
 });
 
+// The terminal's own file journal: /rewind lists a turn, asks in the list before it
+// changes anything, and puts the text back. esc at the question answers nothing.
+test('/rewind lists the turn, asks once, and puts the file back', async (t) => {
+  const workspace = scratch(t);
+  writeFileSync(join(workspace, 'note.txt'), 'before\n');
+  const { app } = await session(
+    t,
+    [
+      {
+        message: {
+          id: 'write-note',
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'note-write',
+              name: 'write_file',
+              args: { file_path: 'note.txt', content: 'after\n' },
+            },
+          ],
+        },
+      },
+      answer('done'),
+    ],
+    { workspace },
+  );
+  const note = join(workspace, 'note.txt');
+  await app.submit('/yolo');
+  await app.submit('rewrite the note');
+  assert.equal(readFileSync(note, 'utf8'), 'after\n');
+  await app.submit('/rewind');
+  const list = app.state.picker!;
+  assert.equal(list.title, 'Rewind files');
+  assert.deepEqual(
+    list.items.map((item) => [item.label, item.meta]),
+    [['rewrite the note', '1 file']],
+  );
+  // The question names the files before anything changes.
+  list.handle('enter', '');
+  await until(() => list.asking);
+  assert.match(list.rows(90).join('\n'), /Rewind 1 file: note\.txt\?/);
+  // esc there is the conservative answer: the file stays as the model left it.
+  list.handle('escape', '');
+  assert.equal(readFileSync(note, 'utf8'), 'after\n');
+  list.handle('enter', '');
+  await until(() => list.asking);
+  list.handle('enter', '');
+  await until(() => list.items.length === 0);
+  assert.equal(readFileSync(note, 'utf8'), 'before\n');
+  assert.ok(
+    app.state.notices.some((line) => line.startsWith('Rewound 1 file(s)')),
+  );
+  // Nothing is left to offer, so the list says so instead of opening empty.
+  await app.submit('/rewind');
+  assert.equal(app.state.flash, 'Nothing to rewind');
+});
+
 test('a command of a shipped extension that is still off names the switch and clears the box', async (t) => {
   // Shipped extensions are off until enabled; extension.json names the command.
   const bundled = scratch(t);

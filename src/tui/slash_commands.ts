@@ -153,6 +153,10 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   { name: 'undo', description: 'Undo the last turn on screen' },
   { name: 'redo', description: 'Restore after /undo' },
   {
+    name: 'rewind',
+    description: 'Put back the files one turn changed: /rewind',
+  },
+  {
     name: 'thinking',
     description: 'Hide or show thinking; /thinking <level> sets the depth',
   },

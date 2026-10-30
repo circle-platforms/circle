@@ -1421,6 +1421,9 @@ export class LiveRuntime implements RuntimePort {
           'subagents of this conversation · file definitions: /agents in the terminal',
         ),
       };
+    // The application undoes a turn's files from that message, not from the composer.
+    if (name === 'rewind')
+      return { notice: t('undo files from the message that changed them') };
     if (name === 'copy') return { effect: 'copy' };
     if (name === 'import') return { effect: 'import' };
     if (name === 'init') {

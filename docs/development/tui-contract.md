@@ -21,7 +21,7 @@ nav_order: 3
 | 常驻 | 正在成立的状态：页眉、页脚、模式词、忙碌词、在途条（子代理与后台任务） | 状态成立 | 状态消失即撤，不进历史 | 页眉在顶，页脚与在途条在底 |
 | 计划区 | 模型维护的活文档（write_todos） | 计划未全部完成，或 plan-exit 卡等确认 | 全部完成时撤下并在转录落一次通知；plan-exit 卡等确认时保留供审阅，转录让出高度；`/new` 清空 | 对话框上方一个封闭块：方角、标题嵌上沿、默认 5 个完整行、窗口跟随当前项、滚轮翻看；`alt+p` 或点击进入计划焦点，↑↓翻看，esc 回输入；下沿右角标 `2–6 / 14`、内部不铺底；普通框线、标题、角标用 `faint`，焦点用 `em`（标题里的灯自带重置，灯后补回框线色） |
 | 对话框 | 阻塞回合、必须由你回答的问题：审批、提问、机密；后台子代理的审批与提问（标题以任务开头，`j3 general-purpose · Bash needs your permission`）；本回合子代理的卡，标题以在途条里的子代理名开头（`general-purpose·1a2b3c4d · Bash needs your permission`）；首次运行的 setup 与 trust（会话连接之前） | 中断到达，且你 1 秒内没在打字；后台的卡排在本回合的卡之后，有回合与否都会出现；setup、trust 在会话画面一出来时 | 答完框恢复，草稿还原；trust 答完会话原地连接 | 唯一的那个框换内容：标题行（青灯）、正文、空行、竖排选项 |
-| 弹窗 | 不阻塞回合的选择列表：`/approvals`，`Picker`（`src/ink/components/picker.ts`）画的 `/models`、`/effort`、`/resume`、`/tree`、`/fork`、`/login`、`/jobs`，以及打 `/`、`@` 时的补全列表（↑↓、tab 取、enter 取，命令还会执行，esc 关） | 命令或键触发（alt+l、esc esc） | 选完或 esc | 框上方，panel 底，无边框；打字过滤（每个词都要出现）、↑↓ 循环、enter、esc 先清搜索再关 |
+| 弹窗 | 不阻塞回合的选择列表：`/approvals`，`Picker`（`src/ink/components/picker.ts`）画的 `/models`、`/effort`、`/resume`、`/tree`、`/fork`、`/login`、`/jobs`、`/rewind`，以及打 `/`、`@` 时的补全列表（↑↓、tab 取、enter 取，命令还会执行，esc 关） | 命令或键触发（alt+l、esc esc） | 选完或 esc | 框上方，panel 底，无边框；打字过滤（每个词都要出现）、↑↓ 循环、enter、esc 先清搜索再关 |
 | 页面 | 整屏接管的只读视图：子代理详情；后台任务页（任务输出的尾巴，跑着时随之刷新） | 你主动进入 | esc 回主视图 | 转录区被接管，顶栏一行（任务页两行：灯、编号与命令、状态与时长；输出文件的路径）；底部栈不动 |
 | 一闪 | 操作回执：已复制、排队、忙、用法、切换 ctrl+o / ctrl+t | 操作瞬间 | 1–2 秒；重试、压缩这类要等的可到数秒 | 页脚右侧（计量留在左侧，放不下时计量的尾巴让位），不进历史 |
 
@@ -99,6 +99,7 @@ nav_order: 3
 | 压缩进行中 `auto-compacting · ████░░░░ summarizing · 12s`（`/compact` 为 `compacting`；不写触发条件；自动的那种随回合被 esc 中止，行撤下、不落失败行） | 压缩开始到结束 | 常驻，输入框上方，排在插话之前；结束撤下，转录落一条淡色 `auto-compacted · …` 或 `compacted · …`（失败红色 `✖`），回合进行中则等回合结束、落在用量行之下 |
 | 子代理详情 | 在途条 enter / 点名字 | 页面 |
 | `/jobs` 任务列表（跑着的在前，状态 `running · 1m 12s` / `waiting for you` / `exit 1 · 4s` / `stopped`，别的对话的 `· other session`） | `/jobs`、`/tasks` | 弹窗 |
+| `/rewind` 文件回退列表（回合的首句 + 文件数，最新的在前） | `/rewind` | 弹窗 |
 | 后台任务页 | `/jobs` 里 enter | 页面 |
 | 已复制、已排队、`Press ctrl+c again to exit`（有任务在跑时 `· stops 2 jobs`）、`Moved to the background`、`Nothing to move` | 操作瞬间 | 一闪 |
 | `N background jobs stopped` | 退出时停了任务 | 退出后的终端，在恢复提示之前 |
@@ -117,7 +118,7 @@ nav_order: 3
 | 拒绝并说明 | 卡片，最后一行是输入 | enter 发送 | 进那一行 | 回到选项 | 中断回合 |
 | 提问 | 卡片 | 数字 · ↑↓ · 空格多选 · `o` 自填 · enter | 吞掉 | 取消，两步确认 | 中断回合 |
 | /approvals | 弹窗 | ↑↓（或 j k）· 数字 · enter 撤销一条 | 吞 j k 和数字，其余不吞 | 关闭 | 关闭并按当前档 |
-| 列表（Picker） | 弹窗 | ↑↓ · pageup/pagedown · enter · 各列表自带键（alt+d 存为默认、tab 切范围、ctrl+r 改名且旧名被选中、ctrl+k 删除（`/jobs` 里是停止，问一次；已结束的是移除）、L 标签、ctrl+u 只看你的）· 焦点行以 `>` 起头 | 进搜索；列表在问一行字（新名字、URL、key）时进那一行，ctrl+u 清空。粘贴同打字，不进输入框 | 先清搜索，再关；问一行字时回到列表 | 交给会话（中断回合） |
+| 列表（Picker） | 弹窗 | ↑↓ · pageup/pagedown · enter · 各列表自带键（alt+d 存为默认、tab 切范围、ctrl+r 改名且旧名被选中、ctrl+k 删除（`/jobs` 里是停止，问一次；已结束的是移除）、`/rewind` 里 enter 是回退一个回合（问一次，esc 不改）、L 标签、ctrl+u 只看你的）· 焦点行以 `>` 起头 | 进搜索；列表在问一行字（新名字、URL、key）时进那一行，ctrl+u 清空。粘贴同打字，不进输入框 | 先清搜索，再关；问一行字时回到列表 | 交给会话（中断回合） |
 
 ## 8 尚未落地的部分
 

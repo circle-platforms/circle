@@ -33,6 +33,7 @@ const SLASH_TEXT: Record<string, () => string> = {
   undo: () => t('Undo the last turn on screen'),
   agents: () => t('List the subagents task can use: /agents [name]'),
   redo: () => t('Restore after /undo'),
+  rewind: () => t('Put back the files one turn changed: /rewind'),
   thinking: () => t('Hide or show thinking; /thinking <level> sets the depth'),
   effort: () =>
     t('Choose the thinking depth: /effort [minimal|low|medium|high|xhigh|max]'),
