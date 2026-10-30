@@ -67,17 +67,34 @@ const READ_GIT = new Set(
     ' ',
   ),
 );
-export function wildcard(pattern: string, value: string): boolean {
-  return matchPattern(pattern, value, process.platform === 'win32');
+export function wildcard(
+  pattern: string,
+  value: string,
+  insensitive = process.platform === 'win32',
+): boolean {
+  return matchPattern(pattern, value, insensitive);
 }
-export function commandTokens(command: string): string[] | null {
+export function commandTokens(
+  command: string,
+  platform: string = process.platform,
+): string[] | null {
   const out: string[] = [];
   let word = '';
   let quote = '';
   let started = false;
+  // A POSIX shell escapes whatever follows a backslash. cmd.exe has no such rule: there
+  // a backslash separates folders, and only a quote is escaped (the rule PowerShell and
+  // the C runtime use). So `C:\proj\.env` names the file `.env` here, and is not read as
+  // the single word `C:proj.env`.
+  const escapes = (next: string | undefined): boolean =>
+    next === undefined
+      ? false
+      : platform === 'win32'
+        ? next === '"' || next === "'"
+        : true;
   for (let i = 0; i < command.length; i++) {
     const char = command[i]!;
-    if (char === '\\' && quote !== "'") {
+    if (char === '\\' && quote !== "'" && escapes(command[i + 1])) {
       if (++i >= command.length) return null;
       word += command[i];
       started = true;
@@ -117,16 +134,16 @@ export function commandTokens(command: string): string[] | null {
   if (started) out.push(word);
   return out;
 }
-function program(token: string): string {
+function program(token: string, platform: string = process.platform): string {
   const name = basename(token.replace(/\\/g, '/'));
-  return process.platform === 'win32'
+  return platform === 'win32'
     ? name.toLowerCase().replace(/\.(exe|com|cmd|bat)$/, '')
     : name;
 }
-function unwrap(words: string[]): string[] {
+function unwrap(words: string[], platform: string): string[] {
   let i = 0;
   while (i < words.length) {
-    const head = program(words[i]!);
+    const head = program(words[i]!, platform);
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!)) i++;
     else if (head === 'env') {
       i++;
@@ -220,13 +237,31 @@ function destructiveGit(args: string[]): boolean {
     return !flag(rest, 'S', '--staged') || flag(rest, 'W', '--worktree');
   return ['rm', 'filter-branch', 'filter-repo'].includes(sub ?? '');
 }
+const SYSTEM_STATE: Record<string, string[]> = {
+  reg: ['delete'],
+  sc: ['delete'],
+  vssadmin: ['delete', 'delete-shadows'],
+  wevtutil: ['cl', 'clear-log'],
+};
+
+/** Deleting registry keys, services, scheduled tasks, shadow copies or the event log. */
+function destroysSystemState(head: string, args: string[]): boolean {
+  // An own lookup: a program named `toString` must not reach Object.prototype here.
+  const verbs = Object.hasOwn(SYSTEM_STATE, head)
+    ? SYSTEM_STATE[head]
+    : undefined;
+  if (verbs) return verbs.includes((args[0] ?? '').toLowerCase());
+  return head === 'schtasks' && args.some((word) => /^\/delete$/i.test(word));
+}
+
 export function classifyCommand(
   command: string,
   patterns = DEFAULT_CREDENTIAL_FILES,
   depth = 0,
+  platform: string = process.platform,
 ): Review {
   if (depth > 3) return review('ASK_FORCED', 'nested too deep to read');
-  const tokens = commandTokens(command);
+  const tokens = commandTokens(command, platform);
   if (!tokens) return review('ASK_FORCED', 'command could not be parsed');
   let forced: Review | undefined;
   let readOnly = tokens.length > 0 && !/\$\(|`|[<>]/.test(command);
@@ -237,14 +272,18 @@ export function classifyCommand(
         token.includes('=') ? token.split('=').slice(1).join('=') : '',
       ]) {
         const name = basename(candidate.replace(/\\/g, '/'));
-        if (patterns.some((pattern) => wildcard(pattern, name)))
+        if (
+          patterns.some((pattern) =>
+            wildcard(pattern, name, platform === 'win32'),
+          )
+        )
           return review('DENY', `credential file ${name}`, {
             message: `Denied by approval policy: '${name}' is a credential file; commands may not read, copy or change it.`,
           });
       }
     }
-    const words = unwrap(raw);
-    const head = program(words[0] ?? '');
+    const words = unwrap(raw, platform);
+    const head = program(words[0] ?? '', platform);
     const args = words.slice(1);
     if (PRIVILEGED.has(head))
       return review('DENY', 'privilege escalation', {
@@ -256,14 +295,23 @@ export function classifyCommand(
       codeAt >= 0 &&
       args[codeAt + 1]
     ) {
-      const nested = classifyCommand(args[codeAt + 1]!, patterns, depth + 1);
+      const nested = classifyCommand(
+        args[codeAt + 1]!,
+        patterns,
+        depth + 1,
+        platform,
+      );
       if (nested.verdict === 'DENY') return nested;
       if (nested.verdict === 'ASK_FORCED') forced = nested;
     }
     if (/^python\d*(?:\.\d+)*$/.test(head) && codeAt >= 0) {
       const code = args[codeAt + 1] ?? '';
       for (const match of code.matchAll(/['"]([^'"\n]+)['"]/g))
-        if (patterns.some((pattern) => wildcard(pattern, basename(match[1]!))))
+        if (
+          patterns.some((pattern) =>
+            wildcard(pattern, basename(match[1]!), platform === 'win32'),
+          )
+        )
           return review('DENY', 'credential file in Python code');
       if (
         /\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs))\s*\(|\.(?:unlink|rmdir)\s*\(/.test(
@@ -279,7 +327,8 @@ export function classifyCommand(
       DISK.has(head) ||
       head.startsWith('mkfs') ||
       (head === 'git' && destructiveGit(args)) ||
-      (head === 'find' && args.includes('-delete'))
+      (head === 'find' && args.includes('-delete')) ||
+      destroysSystemState(head, args)
     )
       forced = review('ASK_FORCED', 'destructive operation', {
         warn_delete: true,
@@ -295,6 +344,7 @@ export function classifyCommand(
               .join(' '),
             patterns,
             depth + 1,
+            platform,
           );
           if (nested.verdict === 'DENY') return nested;
           if (nested.verdict === 'ASK_FORCED') forced = nested;
@@ -307,6 +357,7 @@ export function classifyCommand(
           [args[index]!.slice(2), ...args.slice(index + 1)].join(' '),
           patterns,
           depth + 1,
+          platform,
         );
         if (nested.verdict === 'DENY') return nested;
         if (nested.verdict === 'ASK_FORCED') forced = nested;
@@ -323,6 +374,7 @@ export function classifyCommand(
           args.slice(index + 1).join(' '),
           patterns,
           depth + 1,
+          platform,
         );
         if (nested.verdict === 'DENY') return nested;
         if (nested.verdict === 'ASK_FORCED') forced = nested;
@@ -376,7 +428,7 @@ export function classifyCommand(
       readOnly = false;
   }
   for (const match of command.matchAll(/\$\(([^()]*)\)/g)) {
-    const nested = classifyCommand(match[1]!, patterns, depth + 1);
+    const nested = classifyCommand(match[1]!, patterns, depth + 1, platform);
     if (nested.verdict === 'DENY') return nested;
     if (nested.verdict === 'ASK_FORCED') forced = nested;
   }
@@ -388,15 +440,18 @@ export function classifyCommand(
       })
     : review('ASK', 'runs a shell command');
 }
-export function commandPrefix(command: string): string[] {
-  const words = commandTokens(command);
+export function commandPrefix(
+  command: string,
+  platform: string = process.platform,
+): string[] {
+  const words = commandTokens(command, platform);
   if (
     !words?.length ||
     /\$|`|[;&|<>\n(){}]/.test(command) ||
-    unwrap(words).length !== words.length
+    unwrap(words, platform).length !== words.length
   )
     return [];
-  const head = program(words[0]!);
+  const head = program(words[0]!, platform);
   const rest = words.slice(1);
   if (/^python\d*(?:\.\d+)*$/.test(head))
     return rest[0] === '-m' && rest[1]
