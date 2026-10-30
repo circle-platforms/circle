@@ -861,7 +861,7 @@ test('/name, /session, /approvals, /themes and /effort answer in the transcript'
   await app.submit('/approvals revoke 4');
   assert.equal(app.state.flash, 'No rule number 4');
   await app.submit('/approvals');
-  assert.equal(app.state.picker!.title, 'Session approvals');
+  assert.equal(app.state.picker!.title, 'Approval rules');
   assert.deepEqual(
     app.state.picker!.items.map((item) => item.label),
     ['1. Revoke: npm …', '2. Close'],
@@ -872,7 +872,7 @@ test('/name, /session, /approvals, /themes and /effort answer in the transcript'
   await app.submit('/approvals list');
   assert.match(
     app.state.notices.at(-1)!,
-    /^No always-allow rules this session\.\nRecent approvals:\n {2}allowed for session · execute\n {2}rejected · write_file\n {2}revoked · execute$/,
+    /^Your own rules \(approvals\.json in the data folder\): none\nThis project's rules \(\.circle\/approvals\.json\): none\nNo always-allow rules this session\.\nRecent approvals:\n {2}allowed for session · execute\n {2}rejected · write_file\n {2}revoked · execute$/,
   );
   await app.submit('/themes');
   assert.equal(
@@ -961,7 +961,9 @@ test('/approvals add and remove keep command patterns in the settings and on the
   await app.submit('/approvals list');
   assert.equal(
     app.state.notices.at(-1),
-    'No always-allow rules this session.\nCommand patterns from settings:\n  1. npm *\nRemove one: /approvals remove <pattern|number>',
+    'Your own rules (approvals.json in the data folder): none\n' +
+      "This project's rules (.circle/approvals.json): none\n" +
+      'No always-allow rules this session.\nCommand patterns from settings:\n  1. npm *\nRemove one: /approvals remove <pattern|number>',
   );
   await app.submit('/approvals');
   assert.deepEqual(
@@ -1846,4 +1848,120 @@ test('/help and /hotkeys hang continuations under the description column at 80 c
       value: savedColumns,
     });
   }
+});
+
+test('/approvals deny writes your own rule, project deny the project, list numbers them and forget takes one away', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app, runtime } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  const thread = runtime.session.id;
+  const userFile = join(home, 'approvals.json');
+  const projectFile = join(workspace, '.circle', 'approvals.json');
+
+  await app.submit('/approvals deny');
+  assert.equal(
+    app.state.flash,
+    'Usage: /approvals deny [tool <name>] <pattern>',
+  );
+
+  await app.submit('/approvals deny npm publish *');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^Denied · execute "npm publish \*" · your own rules · /,
+  );
+  assert.deepEqual(JSON.parse(readFileSync(userFile, 'utf8')).rules, [
+    {
+      tool: 'execute',
+      pattern: 'npm publish *',
+      effect: 'deny',
+      label: 'npm publish *',
+    },
+  ]);
+  assert.equal(
+    runtime.policy.review('execute', { command: 'npm publish --tag next' })
+      .verdict,
+    'DENY',
+    'the rule answers for the next call',
+  );
+
+  // A rule of the project can only tighten.
+  await app.submit('/approvals project allow git status *');
+  assert.equal(
+    app.state.flash,
+    'a project rule can only deny · to allow, write it as your own: /approvals allow <pattern>',
+  );
+  assert.equal(existsSync(projectFile), false, 'nothing was written');
+  await app.submit('/approvals project deny make deploy *');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^Denied · execute "make deploy \*" · the project rules · /,
+  );
+
+  // The list of both layers, each line carrying the number forget wants.
+  await app.submit('/approvals list');
+  const list = app.state.notices.at(-1)!;
+  assert.match(
+    list,
+    /Your own rules \(approvals\.json in the data folder\):\n {2}forget 1: deny · execute · npm publish \*\n/,
+    list,
+  );
+  assert.match(
+    list,
+    /This project's rules \(\.circle\/approvals\.json\):\n {2}forget 2: deny · execute · make deploy \*\n/,
+    list,
+  );
+
+  await app.submit('/approvals forget 2');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^Forgot · execute "make deploy \*" · the project's file/,
+  );
+  assert.deepEqual(JSON.parse(readFileSync(projectFile, 'utf8')).rules, []);
+  assert.equal(
+    runtime.policy.review('execute', { command: 'make deploy --dry-run' })
+      .verdict,
+    'ASK',
+    'the call asks again once the rule is gone',
+  );
+  assert.equal(
+    runtime.policy.review('execute', { command: 'npm publish --tag next' })
+      .verdict,
+    'DENY',
+    'the other layer still stands',
+  );
+
+  // An allow of your own answers the card; a project rule never grants one.
+  await app.submit('/approvals allow git status *');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^Allowed · execute "git status \*" · your own rules · .* · forget 2 takes it away/m,
+    app.state.notices.at(-1)!,
+  );
+  assert.equal(
+    runtime.policy.needsApproval(
+      'execute',
+      { command: 'git status --short' },
+      thread,
+    ),
+    false,
+  );
+
+  // A rule written by hand for another tool is read the same way.
+  writeFileSync(
+    userFile,
+    JSON.stringify({
+      rules: [{ tool: 'browser', pattern: '*', effect: 'deny' }],
+    }),
+  );
+  assert.equal(
+    runtime.policy.review('browser_click', { site: 'example.com' }).verdict,
+    'DENY',
+  );
 });

@@ -46,6 +46,13 @@ import {
   SESSION_MODES,
   type SessionMode,
 } from '../approvals.js';
+import {
+  addFileRule,
+  dropFileRule,
+  ruleFileFor,
+  ruleSources,
+  type RuleEffect,
+} from '../approval_rules.js';
 import { transcriptRows, type ScreenState } from './render.js';
 import { elapsed, type Job } from '../jobs.js';
 import { emptyUsage } from '../types.js';
@@ -599,6 +606,113 @@ function refreshAllowedPatterns(host: CommandHost): void {
   host.settings.allowed_commands = merged;
   host.runtime.policy.setAllowedCommands(merged);
 }
+// The rule of a file, not of settings: a tool, what it matches, and what to do.
+// A bare pattern is a command rule; "tool <name>" names another tool.
+function parseRuleArgument(
+  rest: string,
+): { tool: string; pattern: string } | undefined {
+  const words = rest.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return undefined;
+  if (words[0] !== 'tool') return { tool: 'execute', pattern: rest.trim() };
+  const tool = words[1];
+  const pattern = words.slice(2).join(' ');
+  return tool && pattern ? { tool, pattern } : undefined;
+}
+
+// /approvals allow|deny [tool <name>] <pattern>: a rule in the person's own file.
+// /approvals project deny <pattern>: the same rule in the project's file, which
+// can only deny. A repository you did not write cannot hand out your approvals.
+function approvalsRule(
+  host: CommandHost,
+  layer: 'user' | 'project',
+  effect: RuleEffect,
+  rest: string,
+): void {
+  const where = layer === 'project' ? 'the project' : 'your own';
+  if (layer === 'project' && effect === 'allow') {
+    host.flash(
+      'a project rule can only deny · to allow, write it as your own: /approvals allow <pattern>',
+    );
+    return;
+  }
+  const parsed = parseRuleArgument(rest);
+  if (!parsed) {
+    host.flash('Usage: /approvals ' + effect + ' [tool <name>] <pattern>');
+    return;
+  }
+  const path = ruleFileFor(layer, host.home, host.workspace);
+  const wrote = addFileRule(path, {
+    tool: parsed.tool,
+    pattern: parsed.pattern,
+    effect,
+    label: parsed.pattern,
+  });
+  if (!wrote.ok) {
+    host.flash(
+      parsed.tool +
+        ' ' +
+        JSON.stringify(parsed.pattern) +
+        ' is already ' +
+        effect +
+        'ed for ' +
+        where +
+        ' rules',
+    );
+    return;
+  }
+  // The list counts your own rules first, so a project rule's number starts
+  // after them: say the number that forget wants.
+  const number =
+    layer === 'project'
+      ? ruleSources(host.home, host.workspace).find(
+          (source) => source.layer === 'user',
+        )!.rules.length + wrote.count
+      : wrote.count;
+  host.notice(
+    [
+      effect === 'deny' ? 'Denied' : 'Allowed',
+      parsed.tool + ' ' + JSON.stringify(parsed.pattern),
+      where + ' rules · ' + path,
+      'forget ' + number + ' takes it away',
+      effect === 'deny'
+        ? "a deny wins over auto and over the settings' patterns"
+        : 'an allow answers the card; a call that always asks still shows one',
+    ].join(' · '),
+  );
+}
+
+// /approvals forget <number>: drop a rule of the printed list. The rules a card
+// kept in this conversation are revoked with /approvals revoke, and a settings
+// pattern is taken away with /approvals remove.
+function approvalsForget(host: CommandHost, target: string): void {
+  if (!/^\d+$/.test(target)) {
+    host.flash('Usage: /approvals forget <number>');
+    return;
+  }
+  const dropped = dropFileRule(
+    ruleSources(host.home, host.workspace),
+    Number(target),
+  );
+  if (!dropped) {
+    host.flash('No rule number ' + target + ' in the files');
+    return;
+  }
+  host.notice(
+    'Forgot · ' +
+      dropped.rule.tool +
+      ' ' +
+      JSON.stringify(dropped.rule.pattern) +
+      ' · ' +
+      (dropped.layer === 'project'
+        ? "the project's file"
+        : 'your approvals.json') +
+      ' · ' +
+      (dropped.rule.effect === 'deny'
+        ? 'the call asks again, or runs if another rule allows it'
+        : 'the call asks again'),
+  );
+}
+
 // /approvals add <pattern>: a wildcard rule in the user's settings.json;
 // matching commands run without asking, in every session.
 function approvalsAdd(host: CommandHost, pattern: string): void {
@@ -666,6 +780,33 @@ function approvals(host: CommandHost, args: string): void {
     approvalsRemove(host, trimmed.slice(6).trim());
     return;
   }
+  if (parts[0] === 'allow' || parts[0] === 'deny') {
+    approvalsRule(
+      host,
+      'user',
+      parts[0] as RuleEffect,
+      trimmed.slice(parts[0].length + 1).trim(),
+    );
+    return;
+  }
+  if (parts[0] === 'project') {
+    const effect = parts[1];
+    if (effect !== 'allow' && effect !== 'deny') {
+      host.flash('Usage: /approvals project deny [tool <name>] <pattern>');
+      return;
+    }
+    approvalsRule(
+      host,
+      'project',
+      effect as RuleEffect,
+      trimmed.slice('project'.length + effect.length + 2).trim(),
+    );
+    return;
+  }
+  if (parts[0] === 'forget') {
+    approvalsForget(host, trimmed.slice(6).trim());
+    return;
+  }
   if (parts[0] === 'revoke') {
     if (parts.length !== 2 || !/^\d+$/.test(parts[1]!)) {
       host.flash('Usage: /approvals revoke <number>');
@@ -678,8 +819,29 @@ function approvals(host: CommandHost, args: string): void {
     }
     host.notice(`Revoked · ${rule.tool} · ${rule.label}`);
   }
+  const files = ruleSources(host.home, host.workspace);
+  let numbered = 0;
+  const lines: string[] = [];
+  for (const [layer, title] of [
+    ['user', 'Your own rules (approvals.json in the data folder):'],
+    ['project', "This project's rules (.circle/approvals.json):"],
+  ] as const) {
+    const source = files.find((found) => found.layer === layer)!;
+    lines.push(source.rules.length ? title : title.replace(':', ': none'));
+    for (const rule of source.rules)
+      lines.push(
+        `  forget ${++numbered}: ${rule.effect} · ${rule.tool} · ${rule.pattern}`,
+      );
+    if (
+      layer === 'project' &&
+      source.rules.some((rule) => rule.effect === 'allow')
+    )
+      lines.push(
+        '  an allow of the project does not grant: only your own rules and this session do',
+      );
+  }
   const rules = store.rules(thread);
-  const lines = [
+  lines.push(
     rules.length
       ? 'Always-allow rules this session:'
       : 'No always-allow rules this session.',
@@ -687,7 +849,7 @@ function approvals(host: CommandHost, args: string): void {
       (rule, index) =>
         `  ${index + 1}. ${rule.tool} · ${rule.label || rule.pattern}`,
     ),
-  ];
+  );
   const patterns = host.settings.allowed_commands;
   if (patterns.length)
     lines.push(
@@ -703,6 +865,7 @@ function approvals(host: CommandHost, args: string): void {
           `  ${APPROVAL_WORDS[entry.kind] ?? entry.kind} · ${entry.tool}`,
       ),
     );
+  if (numbered) lines.push('Forget one: /approvals forget <number>');
   if (rules.length) lines.push('Revoke one: /approvals revoke <number>');
   if (patterns.length)
     lines.push('Remove one: /approvals remove <pattern|number>');
@@ -716,18 +879,39 @@ function approvalsList(host: CommandHost): void {
   const rules = store.rules(thread);
   const recent = store.log(thread).slice(-5);
   const patterns = host.settings.allowed_commands;
-  const items: PickerItem[] = rules.map((rule, index) => {
+  const files = ruleSources(host.home, host.workspace);
+  const fileCount = files.reduce(
+    (each, source) => each + source.rules.length,
+    0,
+  );
+  const items: PickerItem[] = [];
+  let position = 0;
+  for (const source of files)
+    for (const rule of source.rules)
+      items.push({
+        key: `forget:${++position}`,
+        label:
+          `${position}. Forget: ${rule.effect} ${rule.tool} ${rule.pattern}`.slice(
+            0,
+            60,
+          ),
+        meta:
+          source.layer === 'project'
+            ? 'project · .circle/approvals.json'
+            : 'yours · ~/.circle/approvals.json',
+      });
+  rules.forEach((rule, index) => {
     const label = rule.label || rule.pattern;
-    return {
+    items.push({
       key: `revoke:${index}`,
-      label: `${index + 1}. Revoke: ${label.slice(0, 40)}`,
+      label: `${index + 1 + fileCount}. Revoke: ${label.slice(0, 40)}`,
       meta: `always · ${rule.tool}`,
-    };
+    });
   });
   patterns.forEach((pattern, index) => {
     items.push({
       key: `pattern:${index}`,
-      label: `${rules.length + index + 1}. Allow: ${pattern}`,
+      label: `${fileCount + rules.length + index + 1}. Allow: ${pattern}`,
       meta: 'settings · execute',
     });
   });
@@ -744,7 +928,10 @@ function approvalsList(host: CommandHost): void {
     if (item.key.startsWith('pattern:')) {
       const pattern = patterns[Number(item.key.slice(8))];
       if (pattern) approvalsRemove(host, pattern);
+      return;
     }
+    if (item.key.startsWith('forget:'))
+      approvalsForget(host, item.key.slice(7));
   };
   const move = (step: number) => (): void => {
     const picker = host.state.picker;
@@ -760,7 +947,7 @@ function approvalsList(host: CommandHost): void {
       choose(item);
     };
   });
-  host.picker('Session approvals', items, choose, {
+  host.picker('Approval rules', items, choose, {
     hint: [
       rules.length ? '' : 'No always-allow rules this session.',
       recent.length
@@ -772,7 +959,7 @@ function approvalsList(host: CommandHost): void {
             )
             .join(' · ')
         : '',
-      '/approvals add <pattern> allows commands by pattern',
+      "/approvals deny <pattern> writes your own rule; project deny writes the project's",
     ]
       .filter(Boolean)
       .join(' · '),

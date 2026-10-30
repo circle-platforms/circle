@@ -1,9 +1,27 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { canonicalPath, circleHome, normalizeWorkspace } from './paths.js';
 import { isRecord, readJson, writePrivateJson } from './settings.js';
 import { DEFAULT_CREDENTIAL_FILES, matchPattern } from './file_patterns.js';
+import {
+  decideRule,
+  ruleFileFor,
+  ruleSources,
+  ruleWhere,
+  sessionSource,
+  type RuleDecision,
+  type RuleEffect,
+  type RuleSource,
+} from './approval_rules.js';
 
 export type Verdict = 'DENY' | 'ASK' | 'ASK_FORCED';
 export interface Review {
@@ -527,7 +545,8 @@ interface StoreData {
 }
 export class ApprovalStore {
   constructor(readonly root: string) {}
-  private path(thread: string): string {
+  /** The file this conversation's rules live in. */
+  path(thread: string): string {
     return join(
       this.root,
       createHash('sha256').update(thread).digest('hex').slice(0, 32) + '.json',
@@ -565,14 +584,6 @@ export class ApprovalStore {
   }
   remove(thread: string): void {
     rmSync(this.path(thread), { force: true });
-  }
-  matchesAny(thread: string, tool: string, patterns: string[]): boolean {
-    return this.rules(thread).some(
-      (rule) =>
-        rule.tool === tool &&
-        Boolean(rule.pattern) &&
-        patterns.includes(rule.pattern),
-    );
   }
   record(
     thread: string,
@@ -708,7 +719,103 @@ export class ApprovalPolicy {
     readonly credentialFiles = DEFAULT_CREDENTIAL_FILES,
     private readonly resolvePath?: (path: string) => string,
     private allowed: readonly string[] = [],
+    // The data folder the person's own rules live in. The store lives under it,
+    // so a policy built from a scratch folder reads scratch rules.
+    readonly home = dirname(store.root),
   ) {}
+  /** The rule files and this conversation's rules, read now, not cached. */
+  ruleLayers(thread: string): RuleSource[] {
+    return [
+      ...ruleSources(this.home, this.workspace),
+      sessionSource(this.store.path(thread), this.store.rules(thread)),
+    ];
+  }
+  /**
+   * What a rule is matched against for one call: the command's segments, each
+   * with its own words, and the patterns the card would offer to keep.
+   */
+  private ruleMatch(
+    tool: string,
+    args: Record<string, unknown>,
+    found: Review,
+  ): { name: string; words: string[]; patterns: string[] } {
+    // A rule is kept under the name the card uses: `browser` for every browser
+    // action, and `execute` for a line typed into a terminal tab.
+    const name = ruleToolFor(tool, args);
+    const patterns = [found.pattern, ...found.covered_by].filter(Boolean);
+    if (name !== 'execute') return { name, words: [], patterns };
+    const tokens = commandTokens(
+      stripLeadingCd(String(args.command || ''), this.workspace),
+    );
+    return {
+      name,
+      words: tokens ? segments(tokens).map((w) => w.join(' ')) : [],
+      patterns,
+    };
+  }
+  /** The rule of this effect that covers the call, and the layer it came from. */
+  decide(
+    effect: RuleEffect,
+    tool: string,
+    args: Record<string, unknown>,
+    thread: string,
+  ): RuleDecision | undefined {
+    const found = this.reviewBase(tool, args);
+    if (effect === 'allow' && found.verdict === 'DENY') return undefined;
+    // A deny is written in a file. The rules a card kept only ever allow, so
+    // this conversation is read for an allow alone.
+    const sources =
+      effect === 'deny'
+        ? ruleSources(this.home, this.workspace)
+        : this.ruleLayers(thread);
+    const match = this.ruleMatch(tool, args, found);
+    return decideRule(effect, match.name, match.words, match.patterns, sources);
+  }
+
+  // The allow read of needsApproval(): the person's file and this conversation.
+  private allowDecision(
+    tool: string,
+    args: Record<string, unknown>,
+    found: Review,
+    thread: string,
+  ): RuleDecision | undefined {
+    const match = this.ruleMatch(tool, args, found);
+    return decideRule(
+      'allow',
+      match.name,
+      match.words,
+      match.patterns,
+      this.ruleLayers(thread),
+    );
+  }
+
+  // The deny read of review(): the files only, no thread, no recursion.
+  private denyDecision(
+    tool: string,
+    args: Record<string, unknown>,
+    found: Review,
+  ): RuleDecision | undefined {
+    const match = this.ruleMatch(tool, args, found);
+    return decideRule(
+      'deny',
+      match.name,
+      match.words,
+      match.patterns,
+      ruleSources(this.home, this.workspace),
+    );
+  }
+  /** Why a rule refuses, in the words the model and the card see. */
+  static deniedBy(decision: RuleDecision): string {
+    return (
+      'refused by ' +
+      ruleWhere(decision.layer) +
+      ': ' +
+      decision.rule.tool +
+      ' ' +
+      JSON.stringify(decision.rule.pattern) +
+      ' is denied'
+    );
+  }
   get allowedCommands(): readonly string[] {
     return this.allowed;
   }
@@ -759,6 +866,17 @@ export class ApprovalPolicy {
     return this.mode(thread) === 'auto';
   }
   review(tool: string, args: Record<string, unknown>): Review {
+    const found = this.reviewBase(tool, args);
+    // A rule of any layer that denies this call refuses it, before the approval
+    // mode, the settings' patterns and any rule that allows it: a deny always
+    // wins, and a project can only ever add one.
+    if (found.verdict !== 'DENY') {
+      const denied = this.denyDecision(tool, args, found);
+      if (denied) return review('DENY', ApprovalPolicy.deniedBy(denied));
+    }
+    return found;
+  }
+  reviewBase(tool: string, args: Record<string, unknown>): Review {
     // Always asks, as Circle's own deletes do: no rule is kept or covers it, a hook's allow
     // does not skip the card, and a run that cannot show one does not run it. The card is
     // headed with the tool's name, so the reason is the same words for every tool.
@@ -934,6 +1052,9 @@ export class ApprovalPolicy {
     const mode = this.mode(thread);
     if (allowYolo && mode === 'auto') return false;
     if (found.verdict === 'ASK_FORCED') return true;
+    // A rule that allows this call answers for it: the person's own file, or what
+    // this conversation kept from a card. A project's rule never grants one.
+    if (this.allowDecision(tool, args, found, thread)) return false;
     // accept-edits answers only for file changes that stay in the workspace;
     // deletes are ASK_FORCED above, and commands still ask.
     if (
@@ -943,10 +1064,8 @@ export class ApprovalPolicy {
       found.pattern === 'workspace'
     )
       return false;
-    return !this.store.matchesAny(thread, ruleToolFor(tool, args), [
-      found.pattern,
-      ...found.covered_by,
-    ]);
+    // No rule of any layer covers it: the card asks.
+    return true;
   }
   remember(
     thread: string,
