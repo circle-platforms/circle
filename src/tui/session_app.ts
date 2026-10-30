@@ -395,7 +395,13 @@ export class SessionApp {
       if (open && !this.state.dialog && event.type === 'key') drop = true;
     }
   };
-  private resizeListener = (): void => this.repaint();
+  // A terminal that gets shorter drops rows at the top and moves the rest up, and a width
+  // change rewraps them: the previous frame no longer says what is where, so every row is
+  // written again, as ctrl+l does, without clearing, which would flicker during a drag.
+  private resizeListener = (): void => {
+    this.screen.invalidate();
+    this.repaint();
+  };
   // The terminal and the process as lending the screen out uses them (ctrl+z to the shell,
   // /editor to $EDITOR). Tests put their own in place.
   terminal = {

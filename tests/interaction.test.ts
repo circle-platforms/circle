@@ -246,6 +246,37 @@ test('ctrl+z gives the shell the terminal with SIGTSTP and takes it back with th
   );
 });
 
+test('a terminal that changes height gets every row written again, also the rows whose text did not change', async (t) => {
+  const { ui, log } = await session(t);
+  const before = Object.getOwnPropertyDescriptor(process.stdout, 'rows');
+  cleanup(t, () => {
+    if (before) Object.defineProperty(process.stdout, 'rows', before);
+    else delete (process.stdout as { rows?: number }).rows;
+  });
+  const height = (rows: number): void => {
+    Object.defineProperty(process.stdout, 'rows', {
+      value: rows,
+      configurable: true,
+      writable: true,
+    });
+  };
+  height(26);
+  ui.repaint();
+  // Shorter, the terminal dropped rows at the top and moved the rest up; taller again, it
+  // added blank rows. The welcome did not change, so only a full paint puts it back.
+  for (const rows of [17, 26]) {
+    log.length = 0;
+    height(rows);
+    ui.resizeListener();
+    const frame = log
+      .filter(([kind]) => kind === 'screen')
+      .map(([, text]) => String(text))
+      .join('');
+    for (let row = 1; row <= rows; row++)
+      assert.ok(frame.includes(`\x1b[${row};1H`), `${rows} rows: row ${row}`);
+  }
+});
+
 test('ctrl+z on Windows only says suspending is not supported', async (t) => {
   const { app, log, key, type } = await session(t);
   app.terminal.platform = 'win32';
