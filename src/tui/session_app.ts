@@ -81,6 +81,11 @@ import { networkSummary } from '../net.js';
 import { terminalText } from '../ink/components/markdown_renderer.js';
 import { WelcomeState } from './welcome_state.js';
 import { contextInputOf, windowTitle } from './status_rows.js';
+import {
+  runInBackground,
+  TerminalStatus,
+  type TerminalState,
+} from './terminal_status.js';
 import { loadRemap } from '../keybindings.js';
 import { emptyUsage, type ToolCall } from '../types.js';
 import { ScreenRenderer } from '../ink/screen.js';
@@ -168,6 +173,8 @@ interface SessionView {
   terminalsList?: { list: Picker; rows: () => PickerItem[] };
   // The handoff's own card: unlike any other card, it does not drop the attached page.
   handoffDialog?: NonNullable<ScreenState['dialog']>;
+  // The last turn ended with an error, not a stop; the next turn clears it.
+  failed?: boolean;
 }
 export class SessionApp {
   private view!: SessionView;
@@ -367,6 +374,11 @@ export class SessionApp {
   private started = false;
   private title = '';
   private titleAt = 0;
+  // A turn running, a card waiting or a failure, for the terminal outside the screen.
+  private terminalStatus = new TerminalStatus({
+    write: (text) => void this.terminal.write(text),
+    run: runInBackground,
+  });
   private get undo() {
     return this.view.undo;
   }
@@ -868,6 +880,11 @@ export class SessionApp {
         blank,
       );
     }
+    if (this.started && !this.ended && !this.externalEditor)
+      this.terminalStatus.report(
+        this.terminalState(),
+        this.runtime?.session.id ?? '',
+      );
     if (!this.started || Date.now() - this.titleAt < 1000) return;
     this.titleAt = Date.now();
     const runtime = this.runtime;
@@ -877,8 +894,25 @@ export class SessionApp {
     );
     if (title !== this.title) {
       this.title = title;
-      process.stdout.write(`\x1b]0;${title}\x07`);
+      void this.terminal.write(`\x1b]0;${title}\x07`);
     }
+  }
+  // One state for all the conversations open here, the most urgent first: a card waiting
+  // for you in any of them, this conversation's failed turn, a turn running in any of them.
+  private terminalState(): TerminalState {
+    const views = [...this.views.entries()]
+      .filter(([runtime]) => !runtime.isClosing)
+      .map(([, view]) => view);
+    if (
+      this.state.dialog ||
+      views.some(
+        (view) => view.state.waiting || view.interactions.pendingCount > 0,
+      )
+    )
+      return 'waiting';
+    if (this.view.failed) return 'failed';
+    if (views.some((view) => view.runtime?.busy)) return 'working';
+    return 'idle';
   }
   private flash(text: string, ttl = 1800): void {
     const view = this.view;
@@ -1327,6 +1361,7 @@ export class SessionApp {
             return;
           }
           if (event.kind === 'run_start') {
+            view.failed = false;
             this.plan.follow();
             this.state.started = Date.now();
             // The stop mark belongs to the turn that was stopped. Snapshot it for /undo,
@@ -1375,6 +1410,7 @@ export class SessionApp {
           } else if (event.kind === 'run_error') {
             // A stop is a dim marker. A key the endpoint turned down (401, 403)
             // says where to change it.
+            view.failed = !event.payload.interrupted;
             this.state.streaming = '';
             this.state.thinking = '';
             const assistant = event.payload.completion_message_id
@@ -2910,6 +2946,7 @@ export class SessionApp {
   private lendTerminal(): void {
     this.externalEditor = true;
     this.input.reset();
+    this.terminalStatus.pause();
     this.terminal.write(
       '\x1b[?2031l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[23;0t',
     );
@@ -2924,6 +2961,7 @@ export class SessionApp {
         (this.title ? `\x1b]0;${this.title}\x07` : '') +
         '\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[?2031h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[2J',
     );
+    this.terminalStatus.resume();
     this.screen.invalidate();
     this.repaint();
   }
@@ -4113,6 +4151,7 @@ export class SessionApp {
     // Windows cooked reads retain the current screen buffer. Finish restoring
     // the main buffer before enabling line input; Windows TTY writes are async.
     const terminalErrors: unknown[] = [];
+    this.terminalStatus.close();
     try {
       await this.terminal.write(
         '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[23;0t',
