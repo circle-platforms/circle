@@ -30,6 +30,9 @@ export const model: Record<string, string> = {
     '记忆保存在 MEMORY.md · 下一个会话会读取该文件的内容',
   'add this line to MEMORY.md, and the next session reads it: {line}':
     '把这一行加入 MEMORY.md，下一个会话就会读取：{line}',
+  'Tell a running subagent one thing': '向正在运行的子代理说一件事',
+  'Tell a running subagent of this conversation one thing; it reads it before its next model request. It answers no approval card.':
+    '向本会话正在运行的子代理说一件事；它会在下一次模型请求前读到。消息不代替审批卡。',
   disconnected: '已断开',
   'Circle runtime disconnected': 'Circle 运行时已断开',
   'Circle runtime ran out of memory': 'Circle 运行时内存不足',

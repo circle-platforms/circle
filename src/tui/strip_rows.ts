@@ -187,10 +187,17 @@ export function agentRows(
   return rows;
 }
 
-// What a job is doing: waiting on you, an agent's step, a command's last line.
+// What a job is doing: waiting on you, an agent's step, a command's last line. A
+// subagent with a message it has not read says so in this same column, which is
+// the one that gives way first when the row runs out of room.
 export function jobActivity(job: Job): string {
-  if (job.detail === 'waiting for you') return 'waiting for you';
-  if (job.kind === 'agent' || job.kind === 'watch') return job.detail || '—';
+  const waiting = job.pending
+    ? ` · ${job.pending} message${job.pending === 1 ? '' : 's'} waiting`
+    : '';
+  if (job.detail === 'waiting for you')
+    return `waiting for you${job.kind === 'agent' ? waiting : ''}`;
+  if (job.kind === 'agent' || job.kind === 'watch')
+    return `${job.detail || '—'}${job.kind === 'agent' ? waiting : ''}`;
   try {
     return plainJobOutput(outputTail(job.outputPath, 2048, 1)).trim() || '—';
   } catch {

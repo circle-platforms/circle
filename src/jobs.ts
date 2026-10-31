@@ -67,7 +67,20 @@ export interface Job extends JobOwner {
   execution?: CommandExecution;
   /** The session a background subagent runs in. The job keeps it after the subagent ends. */
   agent?: string;
+  /** Messages sent to this subagent that it has not reached yet. */
+  pending?: number;
 }
+/**
+ * Whose hand may reach one job. A conversation owns every job of its own session;
+ * a subagent of a turn may reach only the job it is running as, so a sibling is out of
+ * reach and so is the parent's other work. An id is not a permission.
+ */
+export function jobReachable(owner: JobOwner, job: Job): boolean {
+  if (owner.parent)
+    return job.id === owner.parent || job.agent === owner.parent;
+  return job.sessionId === owner.sessionId;
+}
+
 interface Entry {
   execution?: CommandExecution;
   ready?: Promise<void>;
@@ -1169,10 +1182,20 @@ export class JobRegistry {
     void entry.stopPromise.catch(() => {});
     return entry.stopPromise;
   }
-  async stop(id: string, reason = 'model'): Promise<void> {
+  async stop(id: string, reason = 'model', owner?: JobOwner): Promise<void> {
     const entry = this.jobs.get(id);
-    if (!entry) throw new Error(`there is no job ${id}`);
+    // The same words as no job at all: another conversation's work is not there
+    // to be found, let alone stopped, by guessing an id.
+    if (!entry || (owner && !jobReachable(owner, entry.job!)))
+      throw new Error(`there is no job ${id}`);
     await this.stopEntry(entry, reason);
+  }
+  /** One message more, or none: the strip counts what the subagent has not read. */
+  pending(id: string, count: number): void {
+    const entry = this.jobs.get(id);
+    if (!entry?.job) return;
+    entry.job.pending = count;
+    this.emit('job_updated', entry.job);
   }
   async stopOwned(parent: string): Promise<void> {
     await Promise.all(

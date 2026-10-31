@@ -1,0 +1,3 @@
+Tell a subagent you started something while it runs: its job id and the one thing to say. It reads the message before its next model request, never in the middle of one, and it answers no approval card for it.
+
+Refused when the message is empty, over 4000 characters, when eight already wait for that job, or when the job is not a running subagent of this conversation. A subagent cannot be sent to, and cannot send to itself.
