@@ -1385,6 +1385,9 @@ export class LiveRuntime implements RuntimePort {
     // Background commands are tabs of the terminal, beside its shells and device consoles.
     if (name === 'jobs' || name === 'terminals')
       return { panel: 'terminal', selection: args };
+    // The application undoes a turn's files from that message, not from the composer.
+    if (name === 'rewind')
+      return { notice: t('undo files from the message that changed them') };
     if (name === 'copy') return { effect: 'copy' };
     if (name === 'import') return { effect: 'import' };
     if (name === 'init') {

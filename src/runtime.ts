@@ -77,6 +77,8 @@ import { discoverCustomCommands } from './commands.js';
 import { LspManager } from './lsp_tool.js';
 import type { Tool, ToolContext } from './types.js';
 import { FileMutationTools, type FileMutations } from './file_mutations.js';
+import { FileRewindJournal } from './file_rewind.js';
+import { FileSystemFileMutations } from './file_mutations_fs.js';
 import { readFileBytes } from './file_access.js';
 import {
   ContextManager,
@@ -351,6 +353,18 @@ export class AgentRuntime {
   }
   readonly options: RuntimeOptions;
   readonly store: CheckpointStore;
+  /**
+   * The conversation's file journal, for a Circle that writes straight to the host
+   * filesystem: the terminal, line mode, print mode and RPC. The desktop brings its own
+   * backend and its own journal, so this stays unset there.
+   */
+  readonly fileRewind?: FileRewindJournal;
+  /** How `buildTools` records a direct write into the journal. */
+  private readonly captures?: <T>(
+    paths: string[],
+    signal: AbortSignal,
+    write: () => T | Promise<T>,
+  ) => Promise<T>;
   readonly bus = new EventBus();
   readonly sandbox: Sandbox;
   readonly jobs: JobRegistry;
@@ -581,6 +595,18 @@ export class AgentRuntime {
       notice: (event) =>
         this.bus.emit('info', { payload: { model_notice: event } }),
     });
+    // Without a native backend the tools write to the host filesystem, so this runtime
+    // keeps the journal itself, in the conversation's own database: /rewind still knows
+    // the turn after Circle restarts.
+    this.fileRewind = options.fileMutations
+      ? undefined
+      : new FileRewindJournal(new FileSystemFileMutations(this.sandbox), {
+          session: () => this.session.id,
+          ledger: () => this.store,
+        });
+    this.captures = this.fileRewind
+      ? (paths, signal, write) => this.fileRewind!.capture(paths, signal, write)
+      : undefined;
     this.extensions = this.extensionHost(new Set());
     if (this.runOptions.session_name)
       this.store.rename(this.session.id, this.runOptions.session_name, true);
@@ -620,6 +646,19 @@ export class AgentRuntime {
           session_id: event.run_id,
         });
     });
+    // A turn's file changes are recorded under the message that started it, as on the
+    // desktop. A subagent's runs belong to its own conversation, and a background job
+    // that ends after its turn finds none open, so nothing is recorded for it.
+    this.bus.subscribe((event) => {
+      if (!this.fileRewind || event.tags.subagent) return;
+      if (event.kind === 'run_start') {
+        const user = this.store
+          .tree(this.session.id)
+          .findLast((node) => node.message?.role === 'user');
+        if (user) this.fileRewind.beginTurn(user.id);
+      } else if (event.kind === 'run_end' || event.kind === 'run_error')
+        this.fileRewind.endTurn();
+    });
   }
   private wrapModel(model: ChatModel): ChatModel {
     if (!this.options.wrapModel || this.wrappedModels.has(model)) return model;
@@ -644,6 +683,7 @@ export class AgentRuntime {
     const vision = this.visionForRun();
     let tools = buildTools(this.sandbox, {
       fileMutations: this.options.fileMutations,
+      captures: this.captures,
       jobs: this.jobs,
       ...(vision
         ? {
@@ -826,6 +866,7 @@ export class AgentRuntime {
         );
         const jobTools = buildTools(this.sandbox, {
           fileMutations: this.options.fileMutations,
+          captures: this.captures,
           jobs: this.jobs,
           ...(vision
             ? {

@@ -68,7 +68,7 @@ The message's **undo file changes** action uses [SafeFileUndo](../../apps/workbe
 
 The journal records before/after versions only for text-tool mutations attached to an actual turn in the current runtime. The user first previews the affected paths, then explicitly confirms restoration. The host checks every current revision again before restoring. External changes, an incomplete journal or an unsupported backend prevent restoration. Plan mode allows preview but refuses restoration.
 
-The journal is in memory and bound to its runtime. It is not reconstructed from historical messages after restart. Shell commands, Git commands, external services and other unrecorded effects are not covered. This is not full historical rollback or general Bash undo. The original conversation remains intact after a file restore.
+The journal is in memory and bound to its runtime. It is not reconstructed from historical messages after restart. Shell commands, Git commands, external services and other unrecorded effects are not covered. This is not full historical rollback or general Bash undo. The original conversation remains intact after a file restore. The terminal uses the same journal class with its receipts in the session's database, so `/rewind` there survives a restart; the application's journal above is still the in-memory one.
 
 ## Exact external text-file grants
 
