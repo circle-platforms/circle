@@ -8,6 +8,9 @@ export const model: Record<string, string> = {
   // what the live runtime says
   'UI preferences could not be saved': '无法保存界面偏好',
   'runtime action failed': '运行时操作失败',
+  'Tell a running subagent one thing': '向正在运行的子代理说一件事',
+  'Tell a running subagent of this conversation one thing; it reads it before its next model request. It answers no approval card.':
+    '向本会话正在运行的子代理说一件事；它会在下一次模型请求前读到。消息不代替审批卡。',
   disconnected: '已断开',
   'Circle runtime disconnected': 'Circle 运行时已断开',
   'Circle runtime ran out of memory': 'Circle 运行时内存不足',

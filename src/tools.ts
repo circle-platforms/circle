@@ -29,6 +29,12 @@ export interface Todo {
 export interface ToolHooks {
   fileMutations?: FileMutations;
   jobs?: JobRegistry;
+  /** One message to a running subagent, or the reason it did not go. */
+  sendToJob?: (
+    context: ToolContext,
+    jobId: string,
+    message: string,
+  ) => string | Promise<string>;
   jobOwner?: (context: ToolContext) => import('./jobs.js').JobOwner;
   /** Only the runtime may turn original arguments into public command display. */
   displayCommand?: (rawCommand: string, context: ToolContext) => string;
@@ -412,12 +418,38 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       'stop_job',
       'read',
       schema({ job_id: text('Job id, such as j3') }, ['job_id']),
-      async (args) => {
+      async (args, context) => {
         const id = string(args, 'job_id');
-        await hooks.jobs!.stop(id);
+        const owner = hooks.jobOwner?.(context) ?? {
+          sessionId: context.sessionId,
+        };
+        await hooks.jobs!.stop(id, 'model', owner);
         return `Stopped ${id}.`;
       },
     );
+    tools.at(-1)!.approval = false;
+    add(
+      'send_to_job',
+      'write',
+      schema(
+        {
+          job_id: text('Job id of a running subagent, such as j3'),
+          message: text('The one thing to tell it'),
+        },
+        ['job_id', 'message'],
+      ),
+      async (args, context) =>
+        hooks.sendToJob
+          ? await hooks.sendToJob(
+              context,
+              string(args, 'job_id'),
+              String(args.message ?? ''),
+            )
+          : 'no subagent of this conversation can be sent to',
+    );
+    // No card: a message carries no effect, and a card per correction would train
+    // people to click through it. Its effect is a write, so read-only mode still
+    // refuses it: a plan session may look at a job, not steer one.
     tools.at(-1)!.approval = false;
     add(
       'wait_jobs',

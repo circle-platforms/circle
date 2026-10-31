@@ -231,6 +231,11 @@ Without the full-screen interface, a `question` call returns the questions as te
 
 See [Background jobs](background-jobs.md).
 
+### Sending to a running subagent
+
+| `send_to_job` | Tell a running subagent of this conversation one thing, and it reads it before its next model request. Eight may wait, and one is at most 4000 characters. It answers no approval card: only you can answer one. | no |
+
+
 | Tool | What it does | Asks |
 |---|---|---|
 | `list_jobs` | List this conversation's jobs: id, kind, state, time, what, and the file their output goes to. | no |
