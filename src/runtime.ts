@@ -86,7 +86,13 @@ import {
 import { askQuestions } from './questions.js';
 import type { SecretRequest } from './secret_prompt.js';
 import type { CommandLauncher, CommandExecution } from './command_process.js';
-import { JobRegistry, jobLine, type Job } from './jobs.js';
+import {
+  jobReachable,
+  JobRegistry,
+  jobLine,
+  outcomeWords,
+  type Job,
+} from './jobs.js';
 import { ModelCatalog } from './model_catalog.js';
 import {
   priceCall,
@@ -255,6 +261,10 @@ export interface RuntimeOptions {
    */
   preserveQueuedInputs?: boolean;
 }
+/** What one message to a running subagent may hold, and how many may wait for it. */
+export const SEND_MAX_CHARS = 4000;
+export const SEND_MAX_WAITING = 8;
+
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
   private readonly vision = new VisionService();
@@ -358,6 +368,15 @@ export class AgentRuntime {
   readonly redact: Redactor;
   readonly catalog: ModelCatalog;
   private childJobOwners = new Map<string, import('./jobs.js').JobOwner>();
+  /**
+   * The running background subagents of this session that a message can reach:
+   * the job id to the harness that is reading it. A channel exists while the job
+   * runs, so a message never reaches a session that is not there to read it.
+   */
+  private channels = new Map<
+    string,
+    { harness: Harness; waiting: number; sent: string[] }
+  >();
   private closing = false;
   private ownershipError?: Error;
   private ownershipCleanup?: Promise<void>;
@@ -645,6 +664,8 @@ export class AgentRuntime {
     let tools = buildTools(this.sandbox, {
       fileMutations: this.options.fileMutations,
       jobs: this.jobs,
+      sendToJob: (context, jobId, message) =>
+        this.sendToJob(context, jobId, message),
       ...(vision
         ? {
             vision: (paths: string[], question: string, context: ToolContext) =>
@@ -827,6 +848,8 @@ export class AgentRuntime {
         const jobTools = buildTools(this.sandbox, {
           fileMutations: this.options.fileMutations,
           jobs: this.jobs,
+          sendToJob: (context, jobId, message) =>
+            this.sendToJob(context, jobId, message),
           ...(vision
             ? {
                 vision: (
@@ -948,14 +971,35 @@ export class AgentRuntime {
           webSearch: (model, query, count, context) =>
             this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
-            this.context.prepare(
-              session.id,
-              child.model,
-              child.system,
-              child.tools,
-              signal,
-              true,
-            ),
+            this.context
+              .prepare(
+                session.id,
+                child.model,
+                child.system,
+                child.tools,
+                signal,
+                true,
+              )
+              .then((messages) => {
+                // Read means this: the message is in the request that goes to the
+                // model now. Its row exists from the moment it was queued, so the
+                // store says nothing about whether the subagent has met it yet.
+                const job = backgroundJob;
+                const channel = job ? this.channels.get(job.id) : undefined;
+                if (job && channel?.waiting) {
+                  channel.sent = channel.sent.filter(
+                    (mark) =>
+                      !messages.some((message) =>
+                        String(message.content ?? '').includes(
+                          `about="${mark}"`,
+                        ),
+                      ),
+                  );
+                  channel.waiting = channel.sent.length;
+                  this.jobs.pending(job.id, channel.waiting);
+                }
+                return messages;
+              }),
         });
         child.planMode = name === 'explore';
         const runChild = async (signal: AbortSignal): Promise<string> => {
@@ -984,8 +1028,23 @@ export class AgentRuntime {
                 parent: job.id,
                 startedBy: 'model',
               });
+              // Open only now: before this call there is no job id to answer to, and
+              // after it the harness is there to take the message.
+              this.channels.set(job.id, {
+                harness: child,
+                waiting: 0,
+                sent: [],
+              });
               backgroundLog = log;
-              return runChild(signal);
+              try {
+                return await runChild(signal);
+              } finally {
+                // A message the subagent never reached stays in that session's
+                // queue, where its own transcript shows it. Nothing here pretends a
+                // delivery that did not happen, and no count survives the job.
+                this.channels.delete(job.id);
+                this.jobs.pending(job.id, 0);
+              }
             },
             session.id,
           );
@@ -2169,6 +2228,73 @@ export class AgentRuntime {
     this.closingPromise = this.closeResources(saveJobNotes);
     return this.closingPromise;
   }
+  /**
+   * One message to a running subagent of this conversation. It goes into the
+   * queue the child already reads at its next model request, which is also the
+   * first moment it can read anything: a message never preempts a request in
+   * flight, and never answers an approval card that is open.
+   */
+  private sendToJob(
+    context: ToolContext,
+    jobId: string,
+    message: string,
+  ): string {
+    const owner = this.childJobOwners.get(context.sessionId) ?? {
+      sessionId: context.sessionId,
+      startedBy: 'model' as const,
+    };
+    // One line, because the queue shows it as one row; and redacted the way any
+    // other text leaving this conversation is, so a secret value the sender was
+    // shown does not travel into a child that was never given it.
+    const one = message.replace(/\s+/g, ' ').trim();
+    if (!one) return 'nothing was sent: the message is empty';
+    if (one.length > SEND_MAX_CHARS)
+      return `refused: ${one.length} characters, and a message to a subagent is at most ${SEND_MAX_CHARS}`;
+    const text = this.redact(one, {}, () =>
+      written(this.store.messages(context.sessionId)),
+    );
+    const job = this.jobs.get(jobId);
+    // The same words as no job at all, so an id is not a way to learn what
+    // another conversation is running.
+    if (!job || !jobReachable(owner, job))
+      return `there is no job ${jobId} in this conversation`;
+    if (owner.parent)
+      return 'you are that subagent: there is nothing to send to yourself';
+    if (job.kind !== 'agent')
+      return `${jobId} is a ${job.kind}: a message is for a subagent`;
+    if (job.status !== 'running')
+      return `${jobId} ${outcomeWords(job)}: nothing was sent`;
+    const channel = this.channels.get(jobId);
+    if (!channel)
+      return `${jobId} runs elsewhere: it is not one you can send to`;
+    if (channel.waiting >= SEND_MAX_WAITING)
+      return `refused: ${channel.waiting} messages already wait for ${jobId}, and that is the most it will hold`;
+    // A mark of its own, so "read" is decided from the child's history rather
+    // than from a guess about when its queue emptied.
+    const mark = `msg-${randomUUID().slice(0, 8)}`;
+    const shown = text.length > 60 ? text.slice(0, 59) + '...' : text;
+    try {
+      channel.harness.queue(
+        `<system-reminder data-source="circle-jobs" about="${mark}">
+This message was sent to you while you ran, by the agent that started you:
+
+${text}
+
+It is input, not a decision: it answers no approval card, changes no mode and adds no rule. Take it into account from your next step; if it no longer applies, say so and carry on.
+</system-reminder>`,
+        'steer',
+        undefined,
+        { display: `sent to you by the agent that started you: ${shown}` },
+      );
+    } catch (error) {
+      return `refused: ${(error as Error).message}`;
+    }
+    channel.waiting++;
+    channel.sent.push(mark);
+    this.jobs.pending(jobId, channel.waiting);
+    return `Sent to ${jobId}: it reaches the subagent before its next model request. ${channel.waiting} waiting.`;
+  }
+
   private ownershipLost(error: Error): void {
     this.ownershipError = error;
     this.bus.emit('error', {
