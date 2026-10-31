@@ -4,9 +4,11 @@ parent: Development
 
 # Messages to a running subagent
 
-A design note, not documentation of a feature: nothing here works yet. Issue #373, box 7. The rule is that this note is agreed first and the code follows it, so the boxes stay unchecked until both halves exist.
+A design note that came before the code, written while none of it worked. Issue #373, box 7. The rule is that this note is agreed first and the code follows it, so the boxes stay unchecked until both halves exist.
 
 This is a working note under the same Apache License 2.0 as the code and the rest of `docs/`, not one of the four documents indexed in [Design specifications](../design/README.md).
+
+**Agreed, and built.** The owner's answer on 2026-10-31 was to take the recommendations in this note, including the three at the foot of it. The code is [#395](https://github.com/circle-platforms/circle/pull/395); where it ended up differing from this text, the three corrections are marked below and the code is what the rest of `docs/` describes.
 
 ## What exists today
 
@@ -50,7 +52,7 @@ The authorization is the owner check, and it has to be checked before the messag
 
 | Surface | What appears |
 | --- | --- |
-| The child's model request | A `user` message, `internal: job_message`, content wrapped in `<system-reminder data-source="circle-jobs">` with the sender named as `job <id> of this conversation` or `you, the parent agent`. Same shape as a notice, so nothing new has to be taught to a model. |
+| The child's model request | A queued user message wrapped in `<system-reminder data-source="circle-jobs" about="msg-…">`, naming the sender as the agent that started it. **As built, this differs from the first draft of this note:** there is no `internal: job_message` kind. The queue is store-backed input that becomes the child's user message with its own display row, and the special handling of `internal` belongs to notices. The `about` mark is what lets "read" mean *in the request that went to the model*, which the store cannot say: the row exists from the moment a message is queued. |
 | The child's transcript | A row in the transcript with the text, marked as an incoming message, so a resumed conversation shows what it was told. |
 | The parent's transcript | The `send_to_job` call's result: `Sent to j3; it reaches the subagent before its next request.` Nothing else: the child's steps are already in its output file. |
 | The job strip | Its row keeps its shape (`src/tui/strip_rows.ts`: lamp, name, what it is doing, a meter). A waiting count goes in the activity column, which is the one that gives way first: `1 message waiting`, `2 messages waiting`. The row is text and the strip already caps what it shows (`JOB_ROWS`), so no new line, no new colour, and nothing may hold a colour past a repaint (`docs/development/tui-contract.md`, `src/ink/theme_watch.ts`). |
@@ -69,9 +71,9 @@ What must not happen, and is what a careless implementation does: a message canc
 ## How it dies with the job
 
 - A message is queued against the child's session, in the same store the steering queue uses, so it survives a crash of the *parent turn* - the job is what owns it, not a turn.
-- A job that ends with messages waiting loses them, and the sender is told in the report it already gets: `2 messages you sent were not read.` A message that arrives after the end is refused at the call.
+- A message that arrives while the subagent is still running is read before it ends: the queue drains first, and the subagent answers once more with the message in front of it - which a test now shows on the requests rather than on a hope. **As built, this differs from the first draft:** the promised `2 messages you sent were not read.` line in the report is not there, because the case it described does not happen. What is true: a message that is never reached stays in that subagent's own queue and is shown in its conversation, and a message sent to a job that has ended is refused at the call, saying so.
 - Ending the conversation, `stop_job`, the parent session ending (`stopOwned(..., 'parent ended')`), and leaving Circle all take the job down; undelivered messages go with it and are never replayed to a later job, because ids are per run.
-- A restart does not offer them again. A message whose job is gone is dropped at load, saying why in the transcript row it left behind. This is the deliberate difference from the person's steering queue, which does survive a restart: a steering message is input to a conversation that continues; a message to a dead child is input to nothing.
+- The waiting count goes with the job: `send_to_job` clears it, the child's request that carries the text clears it, and the job ending clears it, so no row keeps saying a message is wanted after the fact. **As built, this differs from the first draft:** nothing is deleted at load. A message the child never took into a request stays where the queue put it, in that subagent's session, where opening that conversation shows it like any other queued row. Dropping it there would hide the one trace that it was sent.
 
 ## The API
 
@@ -99,19 +101,21 @@ The message does not go through the notice queue. A notice is pulled by the owne
 
 ## What decides it is done
 
-The box says: a test shows a message sent to a running background subagent arriving before its next model request. Held as:
+The box asks for one thing - a test showing a message sent to a running background subagent arriving before its next model request. #395 has that, and these beside it:
 
-1. A child whose first request is parked, a message sent, the request released: the child's second request carries the message as a `user` message with `internal: job_message`, and it carries it **before** anything else the child would see. `ScriptedModel`, a local gateway, scratch `CIRCLE_HOME`.
-2. A card open when the message arrives: the card is still open, the message is still waiting, and after the person answers, the message is in the next request. Rejecting the card tells the child both, in the order the person chose them.
-3. A job that ended, a job of another conversation, a job id nobody owns: refused, with the refusal naming which, and no store row left behind.
-4. The caps: a ninth message and a 5 KB message are refused before anything is written.
-5. `stop_job` gains the owner check, and a test shows a job of another conversation cannot be stopped by id.
-6. Read-only mode refuses `send_to_job`.
-7. A render test at 80 columns for the strip line and the transcript row, on both palettes, using `palette()` only.
-8. A restart while a message waits: nothing is delivered later and the row says so.
+1. Done: a parked child, a message sent, the queue released - the child's next request carries the reminder, worded as input that answers no card. The row that says who sent it is in the child's own session, and the waiting count comes back to zero.
+2. Done: sent while its approval card is open - one card, one request so far, and the message waits behind it; after the person answers, it is in the next request.
+3. Done: the refusals each say which rule stopped them - an empty line, 4104 characters, an id that is not this conversation's, a job that is not a subagent, a subagent addressing itself, and read-only mode.
+4. Done: eight waiting and a ninth refused, with nothing written for the refused ones.
+5. Done: `stop_job` resolves an owner now, like `list_jobs` and `wait_jobs` did, and a job of another conversation cannot be stopped by id.
+6. Done: read-only mode refuses `send_to_job`, because its effect is a write.
+7. Not done: the strip text is tested as a string (`jobActivity`, singular and plural, and not for a command), not as a rendered frame at 80 columns on both palettes. It uses no colour of its own, so the contract is met by construction, but the render check is still owed.
+8. Changed, as written above: no message is dropped at load, so there is no test of a drop. What is tested instead is that a late message is read before the child ends, and that the count does not outlive the job.
 
-## For the owner to answer
+## The owner's answers (2026-10-31)
 
-1. Is closing `stop_job`'s missing owner check part of this slice, or a separate issue?
-2. Is `send_to_job` card-free as proposed, or should the first message to a job ask once and the rest go through for that job?
-3. Does typing into a running job belong to the person in this slice (a key on the job's row), or is the model tool enough until the window has a place for it?
+The three questions this note ended with were answered by taking what the note recommended:
+
+1. `stop_job`'s owner check went into the same pull request as the message tool, because a message tool that checks its owner next to a stop that does not is worse than two open issues.
+2. `send_to_job` is card-free, with the transcript row as the audit and a `write` effect so `/plan` refuses it. The first-message-asks variant was not taken: it would ask once per job for something that carries no effect.
+3. The person's keyboard route is out of this slice. The mechanism takes a message from a person as easily as from a model - the queue does not care who filled it - so the affordance and the window can be designed together, once there is a place in the window to put it.
