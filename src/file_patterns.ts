@@ -59,6 +59,7 @@ export const DEFAULT_CREDENTIAL_FILES = [
   'secrets.json',
   '*.secrets.json',
   'token.json',
+  'mcp-auth.json',
   'id_rsa',
   'id_dsa',
   'id_ecdsa',

@@ -5,6 +5,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import type {
   FetchLike,
   Transport,
@@ -21,6 +22,8 @@ import { isRecord } from './settings.js';
 import { Sandbox, secretLookingName, shellEnvironment } from './sandbox.js';
 import { readFileBytes } from './file_access.js';
 import { abortable } from './watch.js';
+import { McpAuthProvider, redirectPort, startRedirect } from './mcp_auth.js';
+import { openInBrowser } from './open_url.js';
 
 export interface McpConnection {
   name: string;
@@ -58,7 +61,11 @@ export interface McpStatus {
   headers?: string[];
   /** Configured headers that are not sent, since Circle sets them itself. */
   notSent?: string[];
+  /** The server's sign-in page, while Circle waits for the browser to come back from it. */
+  authorize?: string;
 }
+/** What a server waiting for its browser sign-in says in place of its tools. */
+export const SIGN_IN_WAITING = 'waiting for sign-in in the browser';
 /** The headers Circle sends of its own; lowercase, as compared. */
 const OWN_HEADERS = new Set(['circle-session-id', 'traceparent']);
 /** What the manager needs from the runtime it serves. */
@@ -69,6 +76,13 @@ export interface McpServices {
   onChange?: () => void;
   /** The Circle session the runtime is in now; it can change while the runtime lives. */
   sessionId?: () => string;
+  /**
+   * Circle's home, where a server's sign-in is kept (mcp-auth.json). Without it a server that asks for a sign-in only
+   * fails, as before.
+   */
+  home?: string;
+  /** Opens a sign-in page in the system browser; by default the platform's opener. */
+  openUrl?: (url: string) => Promise<void>;
   /**
    * Reads the file a file parameter names, under read_file's rules; at most `limit` bytes.
    * Without it, the terminal's rules for the workspace apply.
@@ -438,6 +452,7 @@ function transportFor(
   workspace: string,
   headers: Record<string, string>,
   fetch: FetchLike,
+  authProvider?: McpAuthProvider,
 ): Transport {
   if (connection.transport === 'stdio')
     return new StdioClientTransport({
@@ -459,14 +474,22 @@ function transportFor(
     throw new Error('invalid MCP server URL');
   const requestInit = Object.keys(headers).length ? { headers } : undefined;
   if (connection.transport === 'streamable_http')
-    return new StreamableHTTPClientTransport(url, { requestInit, fetch });
+    return new StreamableHTTPClientTransport(url, {
+      requestInit,
+      fetch,
+      ...(authProvider ? { authProvider } : {}),
+    });
   if (connection.transport === 'websocket') {
     if (requestInit)
       throw new Error('a websocket server cannot be sent headers');
     return new WebSocketClientTransport(url);
   }
   // A `url` entry without a known transport is reached over HTTP with server-sent events
-  return new SSEClientTransport(url, { requestInit, fetch });
+  return new SSEClientTransport(url, {
+    requestInit,
+    fetch,
+    ...(authProvider ? { authProvider } : {}),
+  });
 }
 /** A tool result as the model reads it: its text, and the pictures and PDFs it carries. */
 function resultText(
@@ -628,6 +651,12 @@ export class McpManager {
   private results = new SentResults();
   // For file parameters when the runtime gives no reader: the workspace, as the terminal reads
   private files?: Sandbox;
+  // The tool names a server may not take (Circle's own tools), as the last load was given them
+  private reserved = new Set<string>();
+  // Ends the sign-ins under way when the manager closes
+  private lifetime = new AbortController();
+  // A sign-in under way, by server address: its page
+  private signingIn = new Map<string, string>();
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
   // is given: a tool may wait minutes (a login), and an interrupt cancels it.
   constructor(
@@ -852,125 +881,20 @@ export class McpManager {
     try {
       const { connections, skipped } = buildMcpConnections(servers);
       status.push(...skipped);
+      this.reserved = reserved;
       for (const connection of connections) {
         signal?.throwIfAborted();
-        const headerNames = Object.keys(connection.headers ?? {});
-        const state: McpStatus = {
-          name: connection.name,
-          connection: connection.command || connection.url || '',
-          tools: [],
-          error: '',
-          ...(headerNames.length ? { headers: headerNames } : {}),
-          ...(connection.notSent ? { notSent: connection.notSent } : {}),
-        };
-        status.push(state);
-        const client = new Client({
-          name: 'circle',
-          version: '0.1.0-dev',
-        });
-        let transport: Transport | undefined;
-        const timeout = AbortSignal.timeout(this.timeout);
-        const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
-        const stop = () => {
-          void client.close().catch(() => {});
-          void transport?.close().catch(() => {});
-        };
-        combined.addEventListener('abort', stop, { once: true });
-        // What the server sends back names a header's secret, never its value
-        let hide = (text: string): string => text;
-        try {
-          const filled = fillHeaders(
-            connection.headers,
-            process.env,
-            this.services.secrets?.() ?? {},
-          );
-          hide = hideFilled(filled.filled);
-          transport = transportFor(
-            connection,
-            this.workspace,
-            filled.headers,
-            requestFetch(this.services.sessionId),
-          );
-          if (transport instanceof StdioClientTransport)
-            transport.stderr?.on('data', () => {});
-          await abortable(
-            client.connect(transport, {
-              signal: combined,
-              timeout: this.timeout,
-            }),
-            combined,
-          );
-          const registered: Tool[] = [];
-          const said = new Map<string, ToolHint>();
-          let cursor: string | undefined;
-          const cursors = new Set<string>();
-          do {
-            const listed = await client.listTools(
-              cursor ? { cursor } : undefined,
-              { signal: combined, timeout: this.timeout },
-            );
-            for (const spec of listed.tools) {
-              const name = mcpToolName(connection.name, spec.name);
-              if (
-                reserved.has(name) ||
-                tools.some((tool) => tool.name === name) ||
-                registered.some((tool) => tool.name === name)
-              )
-                throw new Error(`tool '${name}' already exists`);
-              const hints = toolHints(
-                spec.annotations,
-                connection.trustAnnotations !== false,
-              );
-              if (hints.destructive) said.set(name, 'destructive');
-              else if (hints.readOnly) said.set(name, 'read-only');
-              registered.push(
-                this.serverTool(
-                  connection,
-                  client,
-                  spec,
-                  name,
-                  hints,
-                  filled.filled,
-                ),
-              );
-            }
-            cursor = listed.nextCursor;
-            if (cursor) {
-              if (cursors.has(cursor))
-                throw new Error('MCP tools pagination repeated a cursor');
-              cursors.add(cursor);
-            }
-          } while (cursor);
-          combined.throwIfAborted();
-          const server: Connected = {
-            name: connection.name,
-            client,
-            instructions: serverInstructions(client.getInstructions(), hide),
-            open: true,
-          };
-          // The server went away: its instructions leave the prompt, /mcp says so, and no
-          // result it gave earlier is given again
-          client.onclose = () => {
-            if (!server.open) return;
-            server.open = false;
-            state.error = 'the connection ended; reload to connect again';
-            this.results.forget(connection.name);
-            this.services.onChange?.();
-          };
-          connected.push(server);
-          tools.push(...registered);
-          for (const [name, hint] of said) hinted.set(name, hint);
-          state.tools = registered.map((tool) => tool.name);
-        } catch (error) {
-          state.error = hide(
-            error instanceof Error ? error.message : String(error),
-          );
-          await client.close().catch(() => {});
-          await transport?.close().catch(() => {});
-          if (signal?.aborted) throw signal.reason;
-        } finally {
-          combined.removeEventListener('abort', stop);
-        }
+        const outcome = await this.connectServer(
+          connection,
+          reserved,
+          (name) => tools.some((tool) => tool.name === name),
+          signal,
+        );
+        status.push(outcome.state);
+        if (!outcome.server) continue;
+        connected.push(outcome.server);
+        tools.push(...outcome.tools);
+        for (const [name, hint] of outcome.said) hinted.set(name, hint);
       }
       signal?.throwIfAborted();
       const previous = this.servers;
@@ -985,6 +909,260 @@ export class McpManager {
       await McpManager.disconnect(connected);
       throw error;
     }
+  }
+  /**
+   * One server: connected, with its tools, or why not. A server reached by URL that asks for a sign-in gets one in the
+   * browser, which ends without holding up the others.
+   */
+  private async connectServer(
+    connection: McpConnection,
+    reserved: Set<string>,
+    taken: (name: string) => boolean,
+    signal?: AbortSignal,
+  ): Promise<{
+    state: McpStatus;
+    server?: Connected;
+    tools: Tool[];
+    said: Map<string, ToolHint>;
+  }> {
+    const headerNames = Object.keys(connection.headers ?? {});
+    const state: McpStatus = {
+      name: connection.name,
+      connection: connection.command || connection.url || '',
+      tools: [],
+      error: '',
+      ...(headerNames.length ? { headers: headerNames } : {}),
+      ...(connection.notSent ? { notSent: connection.notSent } : {}),
+    };
+    const client = new Client({
+      name: 'circle',
+      version: '0.1.0-dev',
+    });
+    let transport: Transport | undefined;
+    let provider: McpAuthProvider | undefined;
+    const timeout = AbortSignal.timeout(this.timeout);
+    const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
+    const stop = () => {
+      void client.close().catch(() => {});
+      void transport?.close().catch(() => {});
+    };
+    combined.addEventListener('abort', stop, { once: true });
+    // What the server sends back names a header's secret, never its value
+    let hide = (text: string): string => text;
+    try {
+      const filled = fillHeaders(
+        connection.headers,
+        process.env,
+        this.services.secrets?.() ?? {},
+      );
+      hide = hideFilled(filled.filled);
+      provider = await this.authProvider(connection);
+      transport = transportFor(
+        connection,
+        this.workspace,
+        filled.headers,
+        requestFetch(this.services.sessionId),
+        provider,
+      );
+      if (transport instanceof StdioClientTransport)
+        transport.stderr?.on('data', () => {});
+      await abortable(
+        client.connect(transport, {
+          signal: combined,
+          timeout: this.timeout,
+        }),
+        combined,
+      );
+      const registered: Tool[] = [];
+      const said = new Map<string, ToolHint>();
+      let cursor: string | undefined;
+      const cursors = new Set<string>();
+      do {
+        const listed = await client.listTools(cursor ? { cursor } : undefined, {
+          signal: combined,
+          timeout: this.timeout,
+        });
+        for (const spec of listed.tools) {
+          const name = mcpToolName(connection.name, spec.name);
+          if (
+            reserved.has(name) ||
+            taken(name) ||
+            registered.some((tool) => tool.name === name)
+          )
+            throw new Error(`tool '${name}' already exists`);
+          const hints = toolHints(
+            spec.annotations,
+            connection.trustAnnotations !== false,
+          );
+          if (hints.destructive) said.set(name, 'destructive');
+          else if (hints.readOnly) said.set(name, 'read-only');
+          registered.push(
+            this.serverTool(
+              connection,
+              client,
+              spec,
+              name,
+              hints,
+              filled.filled,
+            ),
+          );
+        }
+        cursor = listed.nextCursor;
+        if (cursor) {
+          if (cursors.has(cursor))
+            throw new Error('MCP tools pagination repeated a cursor');
+          cursors.add(cursor);
+        }
+      } while (cursor);
+      combined.throwIfAborted();
+      const server: Connected = {
+        name: connection.name,
+        client,
+        instructions: serverInstructions(client.getInstructions(), hide),
+        open: true,
+      };
+      // The server went away: its instructions leave the prompt, /mcp says so, and no
+      // result it gave earlier is given again
+      client.onclose = () => {
+        if (!server.open) return;
+        server.open = false;
+        state.error = 'the connection ended; reload to connect again';
+        this.results.forget(connection.name);
+        this.services.onChange?.();
+      };
+      state.tools = registered.map((tool) => tool.name);
+      return { state, server, tools: registered, said };
+    } catch (error) {
+      if (
+        error instanceof UnauthorizedError &&
+        provider?.authorizationUrl &&
+        !signal?.aborted
+      )
+        this.signIn(connection, provider, state);
+      else
+        state.error = hide(
+          error instanceof Error ? error.message : String(error),
+        );
+      await client.close().catch(() => {});
+      await transport?.close().catch(() => {});
+      if (signal?.aborted) throw signal.reason;
+      return { state, tools: [], said: new Map() };
+    } finally {
+      combined.removeEventListener('abort', stop);
+    }
+  }
+  /**
+   * Circle as an OAuth client of a server reached by URL, kept in the Circle home; none for a server whose entry sends
+   * a credential header (that credential is used as written), or without a home to keep it in.
+   */
+  private async authProvider(
+    connection: McpConnection,
+  ): Promise<McpAuthProvider | undefined> {
+    const home = this.services.home;
+    if (
+      !home ||
+      !connection.url ||
+      (connection.transport !== 'streamable_http' &&
+        connection.transport !== 'sse') ||
+      Object.keys(connection.headers ?? {}).some(credentialHeader)
+    )
+      return undefined;
+    const server = new URL(connection.url).href;
+    return new McpAuthProvider(home, server, await redirectPort(home, server));
+  }
+  /**
+   * The browser sign-in of a server that answered 401: the page opens in the system browser (and /mcp shows its address
+   * in case none opens), Circle waits on its loopback address for the redirect, exchanges the code for tokens and
+   * connects the server again. One sign-in per server at a time; a reload meanwhile shows the one under way.
+   */
+  private signIn(
+    connection: McpConnection,
+    provider: McpAuthProvider,
+    state: McpStatus,
+  ): void {
+    state.error = SIGN_IN_WAITING;
+    const pending = this.signingIn.get(provider.server);
+    if (pending) {
+      state.authorize = pending;
+      return;
+    }
+    const url = provider.authorizationUrl!.href;
+    state.authorize = url;
+    this.signingIn.set(provider.server, url);
+    const lifetime = this.lifetime.signal;
+    void (async () => {
+      const redirect = startRedirect(
+        provider.port,
+        () => provider.expectedState,
+        lifetime,
+      );
+      // Handled from now: a refusal may come while the browser is being opened
+      redirect.code.catch(() => {});
+      await redirect.ready;
+      await (this.services.openUrl ?? openInBrowser)(url).catch(() => {});
+      const code = await redirect.code;
+      const exchange = transportFor(
+        connection,
+        this.workspace,
+        {},
+        requestFetch(this.services.sessionId),
+        provider,
+      ) as StreamableHTTPClientTransport | SSEClientTransport;
+      try {
+        await exchange.finishAuth(code);
+      } finally {
+        await exchange.close().catch(() => {});
+      }
+      await this.connectAgain(connection, lifetime);
+    })()
+      .catch((error: unknown) => {
+        if (lifetime.aborted) return;
+        const current =
+          this.status.find((item) => item.name === connection.name) ?? state;
+        current.error = `sign-in failed: ${error instanceof Error ? error.message : String(error)}`;
+        delete current.authorize;
+        this.services.onChange?.();
+      })
+      .finally(() => this.signingIn.delete(provider.server));
+  }
+  /** After a sign-in: the server connected again with its tokens; its status, connection and tools replace the old. */
+  private async connectAgain(
+    connection: McpConnection,
+    lifetime: AbortSignal,
+  ): Promise<void> {
+    const before = this.status.find((item) => item.name === connection.name);
+    const own = new Set(before?.tools ?? []);
+    const outcome = await this.connectServer(
+      connection,
+      this.reserved,
+      (name) => this.tools.some((tool) => tool.name === name && !own.has(name)),
+      lifetime,
+    );
+    if (lifetime.aborted) {
+      if (outcome.server) await McpManager.disconnect([outcome.server]);
+      return;
+    }
+    const index = this.status.findIndex(
+      (item) => item.name === connection.name,
+    );
+    if (index >= 0) this.status[index] = outcome.state;
+    else this.status.push(outcome.state);
+    const replaced = this.servers.filter(
+      (item) => item.name === connection.name,
+    );
+    this.servers = [
+      ...this.servers.filter((item) => item.name !== connection.name),
+      ...(outcome.server ? [outcome.server] : []),
+    ];
+    this.tools = [
+      ...this.tools.filter((tool) => !own.has(tool.name)),
+      ...outcome.tools,
+    ];
+    for (const name of own) this.hinted.delete(name);
+    for (const [name, hint] of outcome.said) this.hinted.set(name, hint);
+    this.results.forget(connection.name);
+    await McpManager.disconnect(replaced);
+    this.services.onChange?.();
   }
   private static async disconnect(servers: Connected[]): Promise<void> {
     for (const server of servers) server.open = false;
@@ -1006,7 +1184,7 @@ export class McpManager {
       this.status
         .map(
           (server) =>
-            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
+            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.authorize ? '\n    ' + server.error + ': ' + server.authorize : server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
         )
         .join('\n')
     );
@@ -1016,6 +1194,10 @@ export class McpManager {
     return this.hinted.get(tool);
   }
   async close(): Promise<void> {
+    // A sign-in under way stops waiting; the manager can load again afterwards
+    this.lifetime.abort();
+    this.lifetime = new AbortController();
+    this.signingIn.clear();
     const servers = this.servers.splice(0);
     this.tools = [];
     this.hinted = new Map();
