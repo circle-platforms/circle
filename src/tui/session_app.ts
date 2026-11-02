@@ -873,6 +873,31 @@ export class SessionApp {
     this.state.branch = this.welcomeState.branch();
     this.state.thinkingDepth = this.runtime?.thinkingLevel;
     this.state.extensionStatus = this.runtime?.extensions.statuses() ?? [];
+    const knowledge = this.runtime?.knowledge.status();
+    if (knowledge?.server)
+      this.state.extensionStatus.push({
+        text: (
+          {
+            synced: 'synced',
+            pending: 'sync pending',
+            conflicted: 'sync conflicts',
+            offline: 'sync offline',
+            'login-required': 'sync sign-in required',
+            paused: 'sync paused',
+            local: 'local only',
+            capacity: 'sync capacity full',
+            invalid: 'sync needs attention',
+          } as const
+        )[knowledge.condition],
+        lamp:
+          knowledge.condition === 'synced'
+            ? 'ok'
+            : ['pending', 'paused', 'conflicted'].includes(knowledge.condition)
+              ? 'wait'
+              : knowledge.condition === 'local'
+                ? 'none'
+                : 'error',
+      });
     this.state.otherSessions = [...this.views.entries()].flatMap(
       ([runtime, view]) => {
         if (runtime === this.runtime || runtime.isClosing) return [];
@@ -3207,6 +3232,8 @@ export class SessionApp {
   // once per error; the entry stays in memory and is retried with the next one.
   private historyFailures = new Set<string>();
   private remember(text: string): void {
+    // Structured proposals may be refused for credentials or size; keep their bodies out of input history.
+    if (/^\/(?:memory\s+(?:write|edit)|knowledge\s+edit)\b/.test(text)) return;
     if (this.history.add(text)) return;
     const error =
       this.history.persistenceError ??

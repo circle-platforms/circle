@@ -131,20 +131,25 @@ export class KnowledgeSync {
     return value;
   }
   /** A host must explicitly confirm a changed account/server or epoch before initialization. No model tool exposes this. */
-  async confirmBinding(): Promise<void> {
+  async confirmBinding(allowLocal = false): Promise<void> {
     await this.exclusive(async () => {
       const state = await this.request<SyncState>('state', {
         schema: 'personal-sync-state@1',
       });
-      if (state.mode !== 'hub' || state.status === 'purging')
+      if (!allowLocal && (state.mode !== 'hub' || state.status === 'purging'))
         throw Error('sync is not enabled on the server');
       this.save({
         binding: this.options.binding,
         epoch: state.epoch,
         base: null,
         state: null,
-        paused: false,
-        condition: 'pending',
+        paused: state.mode !== 'hub' || state.status === 'purging',
+        condition:
+          state.mode === 'local'
+            ? 'local'
+            : state.status === 'purging'
+              ? 'paused'
+              : 'pending',
         failures: 0,
         nextAt: 0,
       });
@@ -220,9 +225,9 @@ export class KnowledgeSync {
     }, 15000);
     this.timer.unref();
   }
-  runOnce(): Promise<void> {
+  runOnce(force = false): Promise<void> {
     if (this.running) return this.running;
-    return this.exclusive(() => this.cycle());
+    return this.exclusive(() => this.cycle(force));
   }
 
   private async observe(j: Journal, state: SyncState): Promise<boolean> {
@@ -241,7 +246,7 @@ export class KnowledgeSync {
     }
     return !j.paused;
   }
-  private async cycle(): Promise<void> {
+  private async cycle(force = false): Promise<void> {
     let j = this.store.syncRead<Journal>('active');
     if (
       j &&
@@ -250,7 +255,10 @@ export class KnowledgeSync {
           (j.pending?.route !== 'mode' ||
             j.condition === 'login-required' ||
             j.condition === 'invalid')) ||
-        j.nextAt > this.now())
+        (j.nextAt > this.now() &&
+          !(
+            force && ['synced', 'pending', 'conflicted'].includes(j.condition)
+          )))
     )
       return;
     if (!j) {
@@ -775,6 +783,30 @@ export class KnowledgeSync {
       }
     });
     return true;
+  }
+  /** Host-confirmed retry after authorization; retain the exact pending operation and common base. */
+  async resumeAuthorization(): Promise<void> {
+    await this.exclusive(async () => {
+      const j = this.store.syncRead<Journal>('active');
+      if (!j || j.binding !== this.options.binding)
+        throw Error('confirm the selected connection first');
+      const state = await this.request<SyncState>('state', {
+        schema: 'personal-sync-state@1',
+      });
+      if (
+        j.pending?.route !== 'mode' &&
+        (state.mode !== 'hub' ||
+          state.status === 'purging' ||
+          state.epoch !== j.epoch)
+      ) {
+        await this.observe(j, state);
+        return;
+      }
+      j.paused = false;
+      j.condition = 'pending';
+      j.nextAt = 0;
+      this.save(j);
+    });
   }
   /** Explicitly abandon a transfer; local objects and revisions are retained. */
   async abortTransfer(): Promise<void> {

@@ -1,0 +1,113 @@
+{
+  "schema": "personal-sync-exchange@1",
+  "clients": [
+    "77777777-7777-4777-8777-777777777777",
+    "88888888-8888-4888-8888-888888888888"
+  ],
+  "objects": {
+    "directory": {
+      "id": "3d09bd09b239949839df579aba1a50c9f932bae76756a5edd3d8c3da954f5ec2",
+      "canonical": "{\"body\":{\"item_id\":\"22222222-2222-4222-8222-222222222222\",\"name\":\"\",\"parent_directory\":null,\"parents\":[]},\"kind\":\"directory_revision\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-base-page": {
+      "id": "0c30d78c183243545f83c579ea4295e9a9d6d79aaf10dc0bb85f6b5ab619be26",
+      "canonical": "{\"body\":{\"items\":[{\"heads\":[\"3d09bd09b239949839df579aba1a50c9f932bae76756a5edd3d8c3da954f5ec2\"],\"item_id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"directory_revision\"},{\"heads\":[\"defd049a620e2add532fa8549025918215fe5fd3ed27da8cff01d7a92ae4b602\"],\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"kind\":\"memory_revision\"}]},\"kind\":\"inventory_page\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-base": {
+      "id": "0ce064d56b1da762807e038ae090dad87442db437d62983f847e5d25dddf4526",
+      "canonical": "{\"body\":{\"pages\":[\"0c30d78c183243545f83c579ea4295e9a9d6d79aaf10dc0bb85f6b5ab619be26\"],\"parents\":[]},\"kind\":\"snapshot\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-left-page": {
+      "id": "77fb23ba50b1ac4dfe31c14b894c873f160037ea6cace285422b510309a3b1f1",
+      "canonical": "{\"body\":{\"items\":[{\"heads\":[\"3d09bd09b239949839df579aba1a50c9f932bae76756a5edd3d8c3da954f5ec2\"],\"item_id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"directory_revision\"},{\"heads\":[\"ad875014dcab9c08adcdb260ca9352827026d15506ba53679d1d1023e4b8fa52\"],\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"kind\":\"memory_revision\"}]},\"kind\":\"inventory_page\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-left": {
+      "id": "1df002c05f3ef1ff8c330566d63304811cf4028d7329a10d69586569b15bed5f",
+      "canonical": "{\"body\":{\"pages\":[\"77fb23ba50b1ac4dfe31c14b894c873f160037ea6cace285422b510309a3b1f1\"],\"parents\":[\"0ce064d56b1da762807e038ae090dad87442db437d62983f847e5d25dddf4526\"]},\"kind\":\"snapshot\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-right-page": {
+      "id": "24905cb986952f4e6476bd378acc0b979eb0558f3e7a36490d662e16f7523cb1",
+      "canonical": "{\"body\":{\"items\":[{\"heads\":[\"3d09bd09b239949839df579aba1a50c9f932bae76756a5edd3d8c3da954f5ec2\"],\"item_id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"directory_revision\"},{\"heads\":[\"2cc431369fe5a9ef6d2d72d3d4c9df0248c62c9ddc65a5e3ca014b83927692b6\"],\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"kind\":\"memory_revision\"}]},\"kind\":\"inventory_page\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-right": {
+      "id": "188a329bda0ddc7b91ae1c7601f61469883583b39d7ef59196eaf9fc10d68184",
+      "canonical": "{\"body\":{\"pages\":[\"24905cb986952f4e6476bd378acc0b979eb0558f3e7a36490d662e16f7523cb1\"],\"parents\":[\"0ce064d56b1da762807e038ae090dad87442db437d62983f847e5d25dddf4526\"]},\"kind\":\"snapshot\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-conflict-page": {
+      "id": "f3c644ed915d0b3579b3afb75d9764516926847fc8906fe40874b6b731d6b534",
+      "canonical": "{\"body\":{\"items\":[{\"heads\":[\"3d09bd09b239949839df579aba1a50c9f932bae76756a5edd3d8c3da954f5ec2\"],\"item_id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"directory_revision\"},{\"heads\":[\"2cc431369fe5a9ef6d2d72d3d4c9df0248c62c9ddc65a5e3ca014b83927692b6\",\"ad875014dcab9c08adcdb260ca9352827026d15506ba53679d1d1023e4b8fa52\"],\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"kind\":\"memory_revision\"}]},\"kind\":\"inventory_page\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-conflict": {
+      "id": "6bd1f4b133cedf137155e403172e0f6bdea31273aa8b52c24873b320038d9f58",
+      "canonical": "{\"body\":{\"pages\":[\"f3c644ed915d0b3579b3afb75d9764516926847fc8906fe40874b6b731d6b534\"],\"parents\":[\"188a329bda0ddc7b91ae1c7601f61469883583b39d7ef59196eaf9fc10d68184\",\"1df002c05f3ef1ff8c330566d63304811cf4028d7329a10d69586569b15bed5f\"]},\"kind\":\"snapshot\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-resolved-page": {
+      "id": "38921bb4be7051e0d9768a1fc49d57f58156877c9649e86ceac41b86cb6352cd",
+      "canonical": "{\"body\":{\"items\":[{\"heads\":[\"3d09bd09b239949839df579aba1a50c9f932bae76756a5edd3d8c3da954f5ec2\"],\"item_id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"directory_revision\"},{\"heads\":[\"dbc3e415adb746caa46bc2196caf1097258b3517375a221378585adabf158388\"],\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"kind\":\"memory_revision\"}]},\"kind\":\"inventory_page\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "memory-resolved": {
+      "id": "33c4b0ca4a10fe58c1ccc2331f9d9029ea2c65aa716a0ae28b26b487ebac5749",
+      "canonical": "{\"body\":{\"pages\":[\"38921bb4be7051e0d9768a1fc49d57f58156877c9649e86ceac41b86cb6352cd\"],\"parents\":[\"6bd1f4b133cedf137155e403172e0f6bdea31273aa8b52c24873b320038d9f58\"]},\"kind\":\"snapshot\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "source-bytes": {
+      "id": "30061abe8958ee9017262499445d0668aa9e5435ee60c319c5a1a9c8498ca735",
+      "canonical": "{\"body\":{\"bytes_base64\":\"77u/5ZCI5oiQ5Y6f5paHDQrmr4/mrKHkv53nlZnkuKTku73jgIINCg==\"},\"kind\":\"bytes\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "quotation": {
+      "id": "00f8c32528f6ce067bf887887b51723546e4293ab509a5949f8124027be3c54f",
+      "canonical": "{\"body\":{\"bytes_base64\":\"5q+P5qyh5L+d55WZ5Lik5Lu9\"},\"kind\":\"bytes\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "wrong-quotation": {
+      "id": "f0fd77f9ad976fc47ab95ec0daef1e9fcbbb65831f79e4e5b92bf44a56b59f9b",
+      "canonical": "{\"body\":{\"bytes_base64\":\"5ZCI5oiQ5LiN5a2Y5Zyo55qE5byV5paH\"},\"kind\":\"bytes\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "source": {
+      "id": "213e7bcf2d5081bff70bf34aebbf3c2c0dd05d2312a2e5dc2911364fa465b8fb",
+      "canonical": "{\"body\":{\"chunks\":[\"30061abe8958ee9017262499445d0668aa9e5435ee60c319c5a1a9c8498ca735\"],\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"item_id\":\"55555555-5555-4555-8555-555555555555\",\"media_type\":\"text/plain\",\"name\":\"synthetic.txt\",\"parents\":[],\"raw_sha256\":\"e0f45a48b2543cdbb34f4a95711fb38462f8a0a825d0c1f4277be26adb6f2dfc\",\"size\":40},\"kind\":\"source_revision\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "verified-entry": {
+      "id": "9691038cc16a301e5d29e350b05d847be33745560f74fff799f6e0982d900ecf",
+      "canonical": "{\"body\":{\"content\":{\"applicability\":null,\"data\":{},\"kind\":\"observation\",\"statement\":\"合成保留两份\\n尾随  \"},\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"grounds\":[{\"parser\":\"text@1\",\"quotation\":\"00f8c32528f6ce067bf887887b51723546e4293ab509a5949f8124027be3c54f\",\"selector\":\"l/2\",\"source\":\"213e7bcf2d5081bff70bf34aebbf3c2c0dd05d2312a2e5dc2911364fa465b8fb\"}],\"item_id\":\"44444444-4444-4444-8444-444444444444\",\"parents\":[]},\"kind\":\"entry_revision\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "unverified-entry": {
+      "id": "a4cf6f56b9dc0838c8dded4e7744256b8636b8fbf06e1b336817b319495ed9c6",
+      "canonical": "{\"body\":{\"content\":{\"applicability\":null,\"data\":{},\"kind\":\"observation\",\"statement\":\"合成保留两份\\n尾随  \"},\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"grounds\":[{\"parser\":\"text@1\",\"quotation\":\"f0fd77f9ad976fc47ab95ec0daef1e9fcbbb65831f79e4e5b92bf44a56b59f9b\",\"selector\":\"l/2\",\"source\":\"213e7bcf2d5081bff70bf34aebbf3c2c0dd05d2312a2e5dc2911364fa465b8fb\"}],\"item_id\":\"44444444-4444-4444-8444-444444444444\",\"parents\":[\"9691038cc16a301e5d29e350b05d847be33745560f74fff799f6e0982d900ecf\"]},\"kind\":\"entry_revision\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "knowledge-verified-page": {
+      "id": "c30996483caef767d083d5cff8843d22ef604280f181fc38dd330ebb9f2a1c21",
+      "canonical": "{\"body\":{\"items\":[{\"heads\":[\"3d09bd09b239949839df579aba1a50c9f932bae76756a5edd3d8c3da954f5ec2\"],\"item_id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"directory_revision\"},{\"heads\":[\"9691038cc16a301e5d29e350b05d847be33745560f74fff799f6e0982d900ecf\"],\"item_id\":\"44444444-4444-4444-8444-444444444444\",\"kind\":\"entry_revision\"},{\"heads\":[\"213e7bcf2d5081bff70bf34aebbf3c2c0dd05d2312a2e5dc2911364fa465b8fb\"],\"item_id\":\"55555555-5555-4555-8555-555555555555\",\"kind\":\"source_revision\"}]},\"kind\":\"inventory_page\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "knowledge-verified": {
+      "id": "314ca1575bc2a16635f86ac63db7dfca79624f9080c192c6aad301f5ecc16362",
+      "canonical": "{\"body\":{\"pages\":[\"c30996483caef767d083d5cff8843d22ef604280f181fc38dd330ebb9f2a1c21\"],\"parents\":[]},\"kind\":\"snapshot\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "knowledge-unverified-page": {
+      "id": "2cb963b9296436d624e06437b430a6f9f00ae9a95edc18b4ba7a30509cad8bf4",
+      "canonical": "{\"body\":{\"items\":[{\"heads\":[\"3d09bd09b239949839df579aba1a50c9f932bae76756a5edd3d8c3da954f5ec2\"],\"item_id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"directory_revision\"},{\"heads\":[\"a4cf6f56b9dc0838c8dded4e7744256b8636b8fbf06e1b336817b319495ed9c6\"],\"item_id\":\"44444444-4444-4444-8444-444444444444\",\"kind\":\"entry_revision\"},{\"heads\":[\"213e7bcf2d5081bff70bf34aebbf3c2c0dd05d2312a2e5dc2911364fa465b8fb\"],\"item_id\":\"55555555-5555-4555-8555-555555555555\",\"kind\":\"source_revision\"}]},\"kind\":\"inventory_page\",\"schema\":\"personal-sync-object@1\"}"
+    },
+    "knowledge-unverified": {
+      "id": "8e609d5777e0214ca95b3abc11d58de0f99ec2d5a6a6d315924c084d71a83707",
+      "canonical": "{\"body\":{\"pages\":[\"2cb963b9296436d624e06437b430a6f9f00ae9a95edc18b4ba7a30509cad8bf4\"],\"parents\":[\"314ca1575bc2a16635f86ac63db7dfca79624f9080c192c6aad301f5ecc16362\"]},\"kind\":\"snapshot\",\"schema\":\"personal-sync-object@1\"}"
+    }
+  },
+  "memory": {
+    "base": "defd049a620e2add532fa8549025918215fe5fd3ed27da8cff01d7a92ae4b602",
+    "left": "ad875014dcab9c08adcdb260ca9352827026d15506ba53679d1d1023e4b8fa52",
+    "right": "2cc431369fe5a9ef6d2d72d3d4c9df0248c62c9ddc65a5e3ca014b83927692b6",
+    "resolved": "dbc3e415adb746caa46bc2196caf1097258b3517375a221378585adabf158388",
+    "expected_heads": [
+      "2cc431369fe5a9ef6d2d72d3d4c9df0248c62c9ddc65a5e3ca014b83927692b6",
+      "ad875014dcab9c08adcdb260ca9352827026d15506ba53679d1d1023e4b8fa52"
+    ],
+    "expected_markdown": "客户端甲修改",
+    "stale_code": "SYNC_VERSION_CONFLICT"
+  },
+  "knowledge": {
+    "raw_sha256": "e0f45a48b2543cdbb34f4a95711fb38462f8a0a825d0c1f4277be26adb6f2dfc",
+    "raw_base64": "77u/5ZCI5oiQ5Y6f5paHDQrmr4/mrKHkv53nlZnkuKTku73jgIINCg==",
+    "statement": "合成保留两份\n尾随  ",
+    "verified_status": "verified",
+    "wrong_quote_status": "unverified",
+    "wrong_quote_code": "REFERENCE_UNRESOLVED"
+  }
+}

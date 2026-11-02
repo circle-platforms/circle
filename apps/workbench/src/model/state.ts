@@ -95,6 +95,7 @@ export const COMMAND_UI: Record<string, string> = {
   secrets: 'variables',
   hooks: 'hooks',
   mcp: 'mcp',
+  knowledge: 'transcript',
   extensions: 'extensions',
   approvals: 'approvals',
   jobs: 'terminal',
@@ -731,7 +732,21 @@ export class PreviewRuntime implements RuntimePort {
         notice:
           'the editor bridge is the terminal’s · run /bridge start in circle',
       };
+    if (name === 'knowledge')
+      return {
+        notice:
+          'knowledge commands are available in the terminal; desktop pages are not connected yet',
+      };
     if (name === 'memory') {
+      if (
+        /^(team|personal|loaded|refresh|write|edit|enable|disable|delete)(?:\s|$)/.test(
+          args.trim(),
+        )
+      )
+        return {
+          notice:
+            'structured memory commands are available in the terminal; desktop pages are not connected yet',
+        };
       const note = args
         .trim()
         .replace(/^add\s+(account\s+)?/, '')

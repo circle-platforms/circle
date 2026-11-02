@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/circle-platforms/circle-hub",
-  "commit": "5509e84724b9def17839aaf5cebbd28178cc3d94",
+  "commit": "eef4ca121fa673a8067d32d74c05f923a93fd42b",
   "license": "Apache-2.0",
   "files": [
     {
@@ -106,7 +106,7 @@
     {
       "source": "contracts/test-fixtures/sync/v1/README.md",
       "path": "tests/fixtures/knowledge-sync/v1/README.md",
-      "sha256": "2679461fa43ded24ec19093dac685b6c802b54c47dca1ac494613a1d0d40731d"
+      "sha256": "75a6a4d9e9edb38996d34c75be5baee4955b1896120aff34ec27292babe69664"
     },
     {
       "source": "contracts/test-fixtures/sync/v1/encoding.json",
@@ -142,6 +142,11 @@
       "source": "contracts/generated/schemas/personal-sync-mode-result.v1.schema.json",
       "path": "src/data/knowledge-sync/v1/personal-sync-mode-result.v1.schema.json",
       "sha256": "1bbbbb637ca87b6de3b4f22248b488112c2f14e46f3970293bd53f1324d2b5b0"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1/exchange.json",
+      "path": "tests/fixtures/knowledge-sync/v1/exchange.json",
+      "sha256": "9f71c6bee0a411ad49a1de612b4a0ee5ff93f310f7287fe74b1e80611f8e8546"
     }
   ],
   "references": [
@@ -175,7 +180,7 @@
     },
     {
       "source": "contracts/generated/vocabulary.ts",
-      "sha256": "15e0cb94529db3a080db7f8a71f297010dc9a8c1eebd5c3c65d6607567028d2a"
+      "sha256": "e8286df349beb8b7c2b52775bb53888b14fcd8ad3847f47f91f3e01dde169351"
     },
     {
       "source": "contracts/generated/protocol.ts",
@@ -271,7 +276,7 @@
     },
     {
       "source": "hub/server/personal-sync.ts",
-      "sha256": "ee0fbb681886d7a937e6e37532f61f971b88f50595c96dd4f6c2ca27a051e4c1"
+      "sha256": "5cbe4de606551b6c83eeb3059d1869b2efa590468edff5b5b41577aee4aaf700"
     },
     {
       "source": "hub/records/personal-sync.ts",
@@ -284,6 +289,18 @@
     {
       "source": "hub/knowledge/personal-sync/graph.ts",
       "sha256": "301ce094c0ea46622aaa98747c02795d19c7feb6c155683c48abad38f3ed7af7"
+    },
+    {
+      "source": "contracts/src/memory.ts",
+      "sha256": "2d6e347612ae9eab3dcb744d56383dc29531548132479980133f38a4dd510512"
+    },
+    {
+      "source": "contracts/src/tools.ts",
+      "sha256": "1fdf955b59abcc94811f1655a76caac3f2cb1c7f83d21c111568981039513956"
+    },
+    {
+      "source": "hub/knowledge/memory.ts",
+      "sha256": "fbb2277c998a4d4f00bf099d3d5e91a86239a88900c4da56de550d9cc58bd05e"
     }
   ],
   "derived": [

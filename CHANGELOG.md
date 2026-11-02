@@ -6,7 +6,9 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Added
 
-- **A resumable personal sync engine.** The host API preserves offline revisions and conflicts, recovers lost replies and fences concurrent local processes. It currently uses an explicitly supplied connection; automatic startup, account authorization and desktop pages remain unfinished.
+- **Personal knowledge commands and session preferences.** The terminal can browse and confirm local edits, select one existing MCP authorization for background sync, and load bounded team then personal preferences before memory files. Token refresh is shared with MCP; account changes pause old queues. Desktop knowledge pages and real test-Hub validation remain unfinished.
+
+- **A resumable personal sync engine.** The host API preserves offline revisions and conflicts, recovers lost replies and fences concurrent local processes. The runtime uses an explicitly selected MCP connection; desktop pages remain unfinished.
 
 - **Confirmed personal knowledge and memory tools.** Local search and exact quotation checks support proposed writes that always ask for person approval; credentials and oversized memories are refused before persistence. Explicit personal pack installation validates selected files without importing hooks or enabling network sync.
 

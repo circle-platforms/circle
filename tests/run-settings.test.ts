@@ -219,3 +219,16 @@ test('show_hook_allow is a user preference, not a project setting', (t) => {
     `${join(workspace, '.circle', 'settings.json')}: 'show_hook_allow' is not a project setting`,
   ]);
 });
+
+test('personal sync selection is global and cannot be replaced by trusted project settings', (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const settings = defaultSettings();
+  settings.knowledge_sync = { server: 'chosen', binding: 'a'.repeat(64) };
+  saveSettings(trustFolder(settings, workspace), home);
+  project(workspace, {
+    knowledge_sync: { server: 'project-controlled', binding: 'b'.repeat(64) },
+  });
+  const run = settingsForRun(home, workspace);
+  assert.deepEqual(run.settings.knowledge_sync, settings.knowledge_sync);
+});

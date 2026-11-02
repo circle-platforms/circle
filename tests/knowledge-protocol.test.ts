@@ -17,6 +17,9 @@ import {
 } from '../src/knowledge/protocol.js';
 import { parseStrictJson } from '../src/knowledge/strict-json.js';
 import { verifyKnowledgeSync } from '../scripts/verify-knowledge-sync.js';
+import { KnowledgeStore } from '../src/knowledge/store.js';
+import { mergeSnapshots } from '../src/knowledge/merge.js';
+import { verifyLocal } from '../src/knowledge/verification.js';
 import { scratch } from './helpers.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -79,7 +82,7 @@ test('the shared scenario objects decode independently and the HTTP routes match
 
 test('the offline mirror matches every recorded byte without pretending to check an absent upstream', (t) => {
   const checked = verifyKnowledgeSync(root);
-  assert.equal(checked.mirrored, 45);
+  assert.equal(checked.mirrored, 46);
   assert.equal(checked.upstream, 0);
   assert.throws(() => verifyKnowledgeSync(root, join(scratch(t), 'absent')));
 });
@@ -475,4 +478,70 @@ test('a pack manifest is metadata with required, ordered, safe, case-unique file
     { pack: 'synthetic-other' },
   ];
   assert.throws(() => encodeSyncObject(pack), /dependencies/);
+});
+
+test('the frozen exchange fixture retains both memory branches, resolves ancestry and verifies exact original-byte grounds', (t) => {
+  const data = fixture('exchange'),
+    store = new KnowledgeStore(scratch(t));
+  t.after(() => store.close());
+  const objects = [
+    ...fixture('scenarios').objects,
+    ...(Object.values(data.objects) as any[]),
+  ];
+  for (const object of objects) {
+    const value = decodeSyncObject(Buffer.from(object.canonical), object.id);
+    assert.equal(store.put(value), object.id);
+  }
+  const id = (label: string) => data.objects[label].id;
+  for (const [left, right] of [
+    ['memory-left', 'memory-right'],
+    ['memory-right', 'memory-left'],
+  ]) {
+    const merged = mergeSnapshots(
+      store,
+      id(left!),
+      id(right!),
+      id('memory-base'),
+    );
+    assert.equal(merged, id('memory-conflict'));
+    assert.deepEqual(
+      store.graph(merged).items.find((i) => i.kind === 'memory_revision')!
+        .heads,
+      data.memory.expected_heads,
+    );
+  }
+  const resolved = mergeSnapshots(
+    store,
+    id('memory-conflict'),
+    id('memory-resolved'),
+    id('memory-conflict'),
+  );
+  assert.equal(resolved, id('memory-resolved'));
+  assert.equal(
+    (store.read(data.memory.resolved) as any).body.markdown,
+    data.memory.expected_markdown,
+  );
+  assert.deepEqual(
+    store.sourceBytes(id('source')),
+    Buffer.from(data.knowledge.raw_base64, 'base64'),
+  );
+  assert.equal(
+    sha256(store.sourceBytes(id('source'))),
+    data.knowledge.raw_sha256,
+  );
+  assert.equal(
+    verifyLocal(store.graph(id('knowledge-verified'))).find(
+      (v) => v.object === id('verified-entry'),
+    )!.status,
+    data.knowledge.verified_status,
+  );
+  const wrong = verifyLocal(store.graph(id('knowledge-unverified'))).find(
+    (v) => v.object === id('unverified-entry'),
+  )!;
+  assert.equal(wrong.status, data.knowledge.wrong_quote_status);
+  assert.equal(wrong.outcome, 'mismatch');
+  assert.equal(
+    (store.read(id('verified-entry')) as any).body.content.statement,
+    data.knowledge.statement,
+  );
 });
