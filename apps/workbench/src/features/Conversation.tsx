@@ -1,4 +1,8 @@
 import { SafeFileUndo } from './SafeFileUndo';
+import { CircleMark } from '../components/CircleMark';
+import { TurnClock } from '../components/TurnClock';
+import { ConversationPlan, ConversationStatus } from './ConversationChrome';
+import { composerState } from '../model/composer-state';
 import { CompactionStatus } from './CompactionStatus';
 import {
   preserveNativeCopy,
@@ -413,7 +417,11 @@ export function Conversation({
     if (input.current && !CSS.supports('field-sizing', 'content')) {
       input.current.style.height = 'auto';
       input.current.style.height =
-        Math.min(input.current.scrollHeight, 180) + 'px';
+        Math.min(
+          input.current.scrollHeight,
+          Number.parseFloat(getComputedStyle(input.current).lineHeight) * 12 +
+            24,
+        ) + 'px';
     }
     setDismissed(false);
     setCompletionIndex(0);
@@ -681,6 +689,15 @@ export function Conversation({
       agent.task.role !== 'reviewer' &&
       agent.resourceSessionId === session.id,
   );
+  const requestCount =
+    pending.length +
+    (session.turn
+      ? (browser?.dialogs?.length ?? 0) +
+        (browser?.certificateChoices?.length ?? 0) +
+        (browser?.control === 'user' ? 1 : 0)
+      : 0) +
+    (taskAgent?.task?.state === 'needs_review' ? 1 : 0);
+  const visualState = composerState(session, requestCount);
   const loose = pending.filter(
     (item) =>
       !(item.kind === 'approval' && item.callId && toolIds.has(item.callId)),
@@ -724,7 +741,7 @@ export function Conversation({
   );
   const showRequest = () => {
     const box = scroller.current;
-    const target = box?.querySelector('.inline-request');
+    const target = box?.querySelector('.inline-request, .task-review-card');
     if (box && target) revealIn(box, target);
   };
   return (
@@ -775,7 +792,7 @@ export function Conversation({
         <div className="transcript-column" ref={column}>
           {messages.length === 0 ? (
             <div className="welcome">
-              <span className="circle-logo large" />
+              <CircleMark className="large" />
               <h2>{t('what are we working on?')}</h2>
               <button
                 onClick={() => onDialog('trust')}
@@ -1006,26 +1023,29 @@ export function Conversation({
       )}
       {!composerWritable && session.compaction?.status === 'running' && (
         <div className="composer-area">
+          <ConversationPlan session={session} />
           <CompactionStatus state={session.compaction} />
         </div>
       )}
       {composerWritable && (
         <div className="composer-area">
+          <ConversationPlan session={session} />
           <CompactionStatus state={session.compaction} />
           {snapshot.runtime?.connected && (
             <RecoveredInputs key={session.id} sessionId={session.id} />
           )}
-          {pending.length > 0 && (
+          {requestCount > 0 && (
             <button className="interaction-summary" onClick={showRequest}>
               {/* The line already says it waits; a second "waiting" word repeated it. */}
               <i className="attention-dot" />
               <span>
                 {tn(
-                  pending.length,
+                  requestCount,
                   '{n} request waiting for you',
                   '{n} requests waiting for you',
                 )}
               </span>
+              <span className="request-view">{t('view')}</span>
               <ArrowRight size={13} />
             </button>
           )}
@@ -1191,6 +1211,7 @@ export function Conversation({
             className="composer"
             data-mode={sessionMode(session)}
             data-state={session.state}
+            data-composer-state={visualState}
             onDragOver={(event) => {
               if (Array.from(event.dataTransfer.types).includes('Files'))
                 event.preventDefault();
@@ -1410,95 +1431,108 @@ export function Conversation({
                 ))}
               </div>
             )}
-            <div className="composer-send">
-              {session.state === 'waiting' ? (
-                <IconButton
-                  label={t('pause conversation')}
-                  onClick={() => {
-                    perform(() =>
-                      runtime.change((state) => {
-                        currentSession(state).state = 'paused';
-                      }),
-                    );
-                    runtime.request('abort');
-                  }}
-                >
-                  <Square size={13} />
+            <div className="composer-footbar">
+              {visualState === 'working' && (
+                <span className="composer-working-label" role="status">
+                  {t('waiting for Circle to finish')}
+                  {session.turn && (
+                    <>
+                      {' '}
+                      · <TurnClock turn={session.turn} elapsedOnly />
+                    </>
+                  )}
+                </span>
+              )}
+              <div>
+                <IconButton label={t('attach files')} onClick={onAttach}>
+                  <Plus size={16} />
                 </IconButton>
-              ) : session.state === 'paused' ? (
-                <IconButton
-                  label={t('resume conversation')}
-                  onClick={() => {
-                    perform(() =>
-                      runtime.change((state) => {
-                        currentSession(state).state = 'waiting';
-                      }),
-                    );
-                    runtime.request('resume');
-                  }}
-                >
-                  <Play size={14} />
-                </IconButton>
-              ) : null}
-              <button
-                className="send"
-                aria-label={t('send message')}
-                disabled={!session.draft.trim()}
-                onClick={() => act(() => runtime.send())}
-              >
-                <ArrowUp size={16} />
-              </button>
-            </div>
-          </div>
-          {/* Under the box, as Claude has it: attach and mode on the left, model and
-            thinking depth on the right. Nothing else sits above or below the box. */}
-          <div className="composer-footbar">
-            <div>
-              <IconButton label={t('attach files')} onClick={onAttach}>
-                <Plus size={16} />
-              </IconButton>
-              <ModeMenu session={session} onMode={setMode} />
-              {contributions.map(({ plugin, widget }) => (
-                <PluginBoundary key={widget.id} name={plugin.title}>
-                  <widget.component sessionId={session.id} />
-                </PluginBoundary>
-              ))}
-            </div>
-            <div>
-              {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
-                <button
-                  className="footbar-button attention"
-                  onClick={() => onDialog('connect')}
-                >
-                  {t('connect a model')}
-                </button>
-              ) : (
-                <ModelMenu
+
+                {contributions.map(({ plugin, widget }) => (
+                  <PluginBoundary key={widget.id} name={plugin.title}>
+                    <widget.component sessionId={session.id} />
+                  </PluginBoundary>
+                ))}
+              </div>
+              <div>
+                {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
+                  <button
+                    className="footbar-button attention"
+                    onClick={() => onDialog('connect')}
+                  >
+                    {t('connect a model')}
+                  </button>
+                ) : (
+                  <ModelMenu
+                    session={session}
+                    models={snapshot.models}
+                    enabled={snapshot.settings.enabledModels}
+                    onModel={(id) =>
+                      perform(() =>
+                        runtime.change((state) => {
+                          currentSession(state).model = id;
+                        }),
+                      )
+                    }
+                    onManage={() => act(() => runtime.command('models'))}
+                  />
+                )}
+                <EffortMenu
                   session={session}
-                  models={snapshot.models}
-                  enabled={snapshot.settings.enabledModels}
-                  onModel={(id) =>
+                  onEffort={(effort) =>
                     perform(() =>
                       runtime.change((state) => {
-                        currentSession(state).model = id;
+                        currentSession(state).effort = effort;
                       }),
                     )
                   }
-                  onManage={() => act(() => runtime.command('models'))}
                 />
-              )}
-              <EffortMenu
-                session={session}
-                onEffort={(effort) =>
-                  perform(() =>
-                    runtime.change((state) => {
-                      currentSession(state).effort = effort;
-                    }),
-                  )
-                }
-              />
+              </div>
+              <ModeMenu session={session} onMode={setMode} />
+              <div className="composer-send">
+                {visualState === 'working' || session.state === 'waiting' ? (
+                  <IconButton
+                    label={t('stop conversation')}
+                    onClick={() => {
+                      perform(() =>
+                        runtime.change((state) => {
+                          currentSession(state).state = 'paused';
+                        }),
+                      );
+                      runtime.request('abort');
+                    }}
+                  >
+                    <Square size={13} />
+                  </IconButton>
+                ) : session.state === 'paused' ? (
+                  <IconButton
+                    label={t('resume conversation')}
+                    onClick={() => {
+                      perform(() =>
+                        runtime.change((state) => {
+                          currentSession(state).state = 'waiting';
+                        }),
+                      );
+                      runtime.request('resume');
+                    }}
+                  >
+                    <Play size={14} />
+                  </IconButton>
+                ) : null}
+                {visualState !== 'working' && (
+                  <button
+                    className="send"
+                    aria-label={t('send message')}
+                    disabled={!session.draft.trim()}
+                    onClick={() => act(() => runtime.send())}
+                  >
+                    <ArrowUp size={16} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
+          <ConversationStatus session={session} jobs={snapshot.jobs} />
         </div>
       )}
     </section>

@@ -7,6 +7,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ### Changed
 
 - **The desktop uses the shared graphite palette.** Dark and light surfaces, text, controls and status colours now follow the Circle design tokens; terminal defaults stay unchanged.
+- **The desktop shares one three-pane layout.** Overview and drawer modes share the right pane, conversation elements follow the graphite design, and the composer distinguishes idle, plan, working and response states with text and frames.
 
 ### Fixed
 

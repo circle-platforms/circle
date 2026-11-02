@@ -367,7 +367,7 @@ try {
   const input = page.getByRole('textbox', { name: 'message', exact: true });
   await input.fill('keep this draft');
   await page
-    .getByRole('button', { name: 'pause conversation', exact: true })
+    .getByRole('button', { name: 'stop conversation', exact: true })
     .click();
   await until(
     async () =>
@@ -418,7 +418,7 @@ try {
   );
   assert.equal((await selected()).compaction.status, 'running');
   await page
-    .getByRole('button', { name: 'pause conversation', exact: true })
+    .getByRole('button', { name: 'stop conversation', exact: true })
     .click();
   await until(
     async () => (await selected()).compaction?.status === 'cancelled',

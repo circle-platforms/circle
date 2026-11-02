@@ -109,7 +109,6 @@ import {
   clusterWidth,
   drawerKey,
   drawerRoom,
-  makeRoomForOverview,
   MIN_CONVERSATION,
   MIN_DRAWER,
   openingWidth,
@@ -166,14 +165,14 @@ function writeStored(key: string, value: string) {
     // The choice only lasts for this window then.
   }
 }
-function useNarrow() {
+function useNarrow(query = '(max-width: 1179px)') {
   return useSyncExternalStore(
     (listener) => {
-      const media = matchMedia('(max-width: 1050px)');
+      const media = matchMedia(query);
       media.addEventListener('change', listener);
       return () => media.removeEventListener('change', listener);
     },
-    () => matchMedia('(max-width: 1050px)').matches,
+    () => matchMedia(query).matches,
   );
 }
 export function App() {
@@ -215,6 +214,7 @@ export function App() {
     (item) => item.id === session.workspaceId,
   )!;
   const narrow = useNarrow();
+  const compactNavigation = useNarrow('(max-width: 759px)');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // The sidebar folded by itself to give a document drawer its room, to unfold with it.
@@ -227,7 +227,7 @@ export function App() {
   const toggleSidebar = () => {
     sidebarFoldedForDrawer.current = false;
     sidebarChosen.current = true;
-    if (narrow) setSidebarOpen((open) => !open);
+    if (compactNavigation) setSidebarOpen((open) => !open);
     else setSidebarCollapsed((closed) => !closed);
   };
   // The mode drawer is closed at first; the top bar's icons open it.
@@ -236,6 +236,9 @@ export function App() {
     if (narrow) setInspectorOpen(false);
     else setOverviewOverlay(false);
   }, [narrow]);
+  useEffect(() => {
+    if (!compactNavigation) setSidebarOpen(false);
+  }, [compactNavigation]);
   const [panel, setPanel] = useState<PanelId>('files');
   // The browser and the terminal can be in windows of their own, one for each conversation.
   const popped = usePopouts();
@@ -504,6 +507,7 @@ export function App() {
     });
   const overviewShown =
     clusterActive &&
+    !drawerSplit &&
     (narrow
       ? overviewOverlay
       : overviewWanted && (groupWidth > 0 ? overviewByRoom : !overviewAside));
@@ -614,18 +618,8 @@ export function App() {
     setOverviewWanted(true);
     writeStored(OVERVIEW_STORAGE, '1');
     setOverviewAside(false);
-    // It stepped aside for want of room: the drawer gives way, or closes.
-    if (drawerSplit && groupWidth > 0) {
-      const room = makeRoomForOverview({
-        group: groupWidth,
-        drawer: drawerNow,
-      });
-      if (room.drawer === null) setInspectorOpen(false);
-      else {
-        drawerWidths.current.set(modeKey, room.drawer);
-        setDrawerNow(room.drawer);
-      }
-    }
+    // Both views share the right pane; selecting overview closes the mode.
+    if (drawerSplit) setInspectorOpen(false);
   };
   // The person drags the drawer's edge, or uses the keys on it.
   const resizeDrawer = (width: number) => {
@@ -1566,7 +1560,7 @@ export function App() {
     <SourceNavigation onFile={onFile}>
       <Tooltip.Provider delayDuration={300}>
         <div
-          className={`workbench${(sidebarCollapsed && !narrow) || narrowFolded ? ' sidebar-collapsed' : ''}`}
+          className={`workbench${(sidebarCollapsed && !compactNavigation) || narrowFolded ? ' sidebar-collapsed' : ''}`}
         >
           {desktopHost() && <div className="desktop-drag-region" />}
           <div className="desktop-sidebar" ref={sidebarElement}>

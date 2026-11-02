@@ -1,5 +1,6 @@
 import { formatRuntimeNotice } from '../model/runtime-notice';
 import { Brain, ChevronRight, Copy } from 'lucide-react';
+import { CircleMark } from './CircleMark';
 import { useRuntime } from '../app/context';
 import { copyText } from '../host';
 import type { Message } from '../model/types';
@@ -54,6 +55,12 @@ export function MessageView({
   const preview = message.thinking?.trim().split('\n')[0]?.slice(0, 120);
   return (
     <article className={`message ${message.role}`}>
+      {message.role === 'assistant' && (
+        <header className="assistant-heading">
+          <CircleMark className="small" />
+          <strong>circle</strong>
+        </header>
+      )}
       {message.thinking && showThinking && (
         <details className="thinking" open={thinkingOpen}>
           <summary

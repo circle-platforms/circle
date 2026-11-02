@@ -41,7 +41,13 @@ function retryText(retry: string) {
  * (`12.4s · ↓ 1.9k tokens`), on its tools' row as Claude's desktop application shows it.
  * Time spent waiting for you is left out.
  */
-export function TurnClock({ turn }: { turn: NonNullable<Session['turn']> }) {
+export function TurnClock({
+  turn,
+  elapsedOnly = false,
+}: {
+  turn: NonNullable<Session['turn']>;
+  elapsedOnly?: boolean;
+}) {
   const [now, setNow] = useState(Date.now());
   const floor = useRef(0);
   const turnId = useRef(turn.startedAt);
@@ -59,11 +65,13 @@ export function TurnClock({ turn }: { turn: NonNullable<Session['turn']> }) {
   return (
     <span className="turn-clock" aria-live="off" data-testid="turn-clock">
       {[
-        ...(turn.verb ? [VERBS[turn.verb.toLowerCase()]?.() ?? turn.verb] : []),
+        ...(!elapsedOnly && turn.verb
+          ? [VERBS[turn.verb.toLowerCase()]?.() ?? turn.verb]
+          : []),
         ...(turn.retry ? [retryText(turn.retry)] : []),
         formatBusyElapsed(seconds),
         // An endpoint gives a request's tokens when it ends: none until then
-        ...(turn.tokens
+        ...(!elapsedOnly && turn.tokens
           ? [t('↓ {tokens} tokens', { tokens: formatTokens(turn.tokens) })]
           : []),
       ].join(' · ')}

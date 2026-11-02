@@ -1,4 +1,5 @@
 import { taskWorkspaceIds } from '../model/session-management';
+import { CircleMark } from '../components/CircleMark';
 import { workspaceHint } from '../model/workspace-label';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -308,7 +309,7 @@ export function Home({
   return (
     <section className="home">
       <div className="welcome">
-        <span className="circle-logo large" />
+        <CircleMark className="large" />
         <h2>
           {project && nameAt >= 0 ? (
             <>
@@ -326,6 +327,8 @@ export function Home({
           className="composer"
           data-mode={mode}
           data-state={submitting ? 'waiting' : 'idle'}
+          data-composer-state={mode === 'plan' ? 'plan' : 'default'}
+          aria-busy={submitting}
         >
           {!dismissed && completions.length > 0 && (
             <div
@@ -351,7 +354,8 @@ export function Home({
           <textarea
             ref={message}
             autoFocus
-            rows={3}
+            rows={2}
+            style={{ fieldSizing: 'content' }}
             aria-label={t('message')}
             placeholder={t('ask anything, or describe a change…')}
             value={draft}
@@ -419,153 +423,153 @@ export function Home({
               ))}
             </div>
           )}
-          <div className="composer-send">
-            <button
-              className="send"
-              aria-label={t('send message')}
-              disabled={!draft.trim() || submitting}
-              onClick={send}
-            >
-              <ArrowUp size={16} />
-            </button>
-          </div>
-        </div>
-        <div className="composer-footbar">
-          <div>
-            <IconButton
-              label={t('attach files')}
-              onClick={() =>
-                onAttach((attachment) =>
-                  setAttachments((current) =>
-                    current.length >= 16 ? current : [...current, attachment],
-                  ),
-                )
-              }
-            >
-              <Plus size={16} />
-            </IconButton>
-            <ModeMenu
-              session={controls}
-              onMode={setMode}
-              side="bottom"
-              onCloseFocus={focusComposer}
-            />
-            <DropdownMenu.Root
-              open={projectsOpen}
-              modal={false}
-              onOpenChange={(open) => {
-                setProjectsOpen(open);
-                if (!open) setQuery('');
-              }}
-            >
-              <DropdownMenu.Trigger asChild>
-                <button
-                  className="footbar-button"
-                  aria-label={t('choose a project')}
-                  title={project?.path}
-                >
-                  <Folder size={13} />
-                  <span>{project ? project.name : t('no project')}</span>
-                  <ChevronDown size={11} />
-                </button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  className="dropdown composer-menu project-menu home-menu"
-                  side="bottom"
-                  avoidCollisions={false}
-                  collisionPadding={8}
-                  align="start"
-                  sideOffset={7}
-                  onCloseAutoFocus={(event) => {
-                    // The trigger would take the click that dismissed the menu,
-                    // and the search box would keep what was typed next.
-                    event.preventDefault();
-                    focusComposer();
-                  }}
-                >
-                  <div
-                    className="project-picker-search"
-                    onKeyDown={(event) => {
-                      if (event.key === 'Escape') return;
-                      event.stopPropagation();
-                    }}
-                  >
-                    <Search size={14} />
-                    <input
-                      ref={search}
-                      aria-label={t('search projects')}
-                      placeholder={t('search projects')}
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                    />
-                  </div>
-                  {query.trim() && projects.length === 0 && (
-                    <p className="project-picker-empty" role="status">
-                      {t('no matching projects')}
-                    </p>
-                  )}
-                  {projects.map((item) => {
-                    const hint = workspaceHint(item, everyProject);
-                    return (
-                      <DropdownMenu.Item
-                        key={item.id}
-                        title={item.path}
-                        onSelect={() => choose(item.id)}
-                      >
-                        <Folder size={14} />
-                        <span>
-                          {item.name}
-                          {hint && (
-                            <small className="project-hint">{hint}</small>
-                          )}
-                        </span>
-                        {item.id === project?.id && <Check size={14} />}
-                      </DropdownMenu.Item>
-                    );
-                  })}
-                  <DropdownMenu.Separator className="dropdown-separator" />
-                  <DropdownMenu.Item
-                    disabled={!desktopHost()}
-                    onSelect={openProject}
-                  >
-                    <Plus size={14} />
-                    <span>{t('open folder')}</span>
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item onSelect={() => choose(null)}>
-                    <X size={14} />
-                    <span>{t('no project')}</span>
-                    {!project && <Check size={14} />}
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          </div>
-          <div>
-            {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
-              <button
-                className="footbar-button attention"
-                onClick={() => onDialog('connect')}
+          <div className="composer-footbar">
+            <div>
+              <IconButton
+                label={t('attach files')}
+                onClick={() =>
+                  onAttach((attachment) =>
+                    setAttachments((current) =>
+                      current.length >= 16 ? current : [...current, attachment],
+                    ),
+                  )
+                }
               >
-                {t('connect a model')}
-              </button>
-            ) : (
-              <ModelMenu
+                <Plus size={16} />
+              </IconButton>
+              <ModeMenu
                 session={controls}
-                models={snapshot.models}
-                enabled={snapshot.settings.enabledModels}
-                onModel={setModelId}
-                onManage={() => navigate('/page/models')}
+                onMode={setMode}
                 side="bottom"
                 onCloseFocus={focusComposer}
               />
-            )}
-            <EffortMenu
-              session={controls}
-              onEffort={setEffort}
-              side="bottom"
-              onCloseFocus={focusComposer}
-            />
+              <DropdownMenu.Root
+                open={projectsOpen}
+                modal={false}
+                onOpenChange={(open) => {
+                  setProjectsOpen(open);
+                  if (!open) setQuery('');
+                }}
+              >
+                <DropdownMenu.Trigger asChild>
+                  <button
+                    className="footbar-button"
+                    aria-label={t('choose a project')}
+                    title={project?.path}
+                  >
+                    <Folder size={13} />
+                    <span>{project ? project.name : t('no project')}</span>
+                    <ChevronDown size={11} />
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    className="dropdown composer-menu project-menu home-menu"
+                    side="bottom"
+                    avoidCollisions={false}
+                    collisionPadding={8}
+                    align="start"
+                    sideOffset={7}
+                    onCloseAutoFocus={(event) => {
+                      // The trigger would take the click that dismissed the menu,
+                      // and the search box would keep what was typed next.
+                      event.preventDefault();
+                      focusComposer();
+                    }}
+                  >
+                    <div
+                      className="project-picker-search"
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') return;
+                        event.stopPropagation();
+                      }}
+                    >
+                      <Search size={14} />
+                      <input
+                        ref={search}
+                        aria-label={t('search projects')}
+                        placeholder={t('search projects')}
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                      />
+                    </div>
+                    {query.trim() && projects.length === 0 && (
+                      <p className="project-picker-empty" role="status">
+                        {t('no matching projects')}
+                      </p>
+                    )}
+                    {projects.map((item) => {
+                      const hint = workspaceHint(item, everyProject);
+                      return (
+                        <DropdownMenu.Item
+                          key={item.id}
+                          title={item.path}
+                          onSelect={() => choose(item.id)}
+                        >
+                          <Folder size={14} />
+                          <span>
+                            {item.name}
+                            {hint && (
+                              <small className="project-hint">{hint}</small>
+                            )}
+                          </span>
+                          {item.id === project?.id && <Check size={14} />}
+                        </DropdownMenu.Item>
+                      );
+                    })}
+                    <DropdownMenu.Separator className="dropdown-separator" />
+                    <DropdownMenu.Item
+                      disabled={!desktopHost()}
+                      onSelect={openProject}
+                    >
+                      <Plus size={14} />
+                      <span>{t('open folder')}</span>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item onSelect={() => choose(null)}>
+                      <X size={14} />
+                      <span>{t('no project')}</span>
+                      {!project && <Check size={14} />}
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            </div>
+            <div>
+              {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
+                <button
+                  className="footbar-button attention"
+                  onClick={() => onDialog('connect')}
+                >
+                  {t('connect a model')}
+                </button>
+              ) : (
+                <ModelMenu
+                  session={controls}
+                  models={snapshot.models}
+                  enabled={snapshot.settings.enabledModels}
+                  onModel={setModelId}
+                  onManage={() => navigate('/page/models')}
+                  side="bottom"
+                  onCloseFocus={focusComposer}
+                />
+              )}
+              <EffortMenu
+                session={controls}
+                onEffort={setEffort}
+                side="bottom"
+                onCloseFocus={focusComposer}
+              />
+            </div>
+            <div className="composer-send">
+              <button
+                className="send"
+                aria-label={t('send message')}
+                disabled={!draft.trim() || submitting}
+                onClick={send}
+              >
+                <ArrowUp size={16} />
+              </button>
+            </div>
           </div>
         </div>
       </div>

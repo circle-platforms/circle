@@ -355,7 +355,7 @@ try {
     'model waiting',
   );
   await page
-    .getByRole('button', { name: 'pause conversation', exact: true })
+    .getByRole('button', { name: 'stop conversation', exact: true })
     .click();
   await waitFor(
     async () =>
