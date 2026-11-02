@@ -1,0 +1,1 @@
+The path of the file the editor has open, or a line saying nobody reported one. Prefer it over guessing from the conversation, and read it with read_file when you need its text: this says where the person is working, not what is in it.

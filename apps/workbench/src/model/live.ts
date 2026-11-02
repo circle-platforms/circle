@@ -1385,6 +1385,14 @@ export class LiveRuntime implements RuntimePort {
     // Background commands are tabs of the terminal, beside its shells and device consoles.
     if (name === 'jobs' || name === 'terminals')
       return { panel: 'terminal', selection: args };
+    // The bridge is Circle's own listener in the terminal: the window has no
+    // editor of that kind to open or close.
+    if (name === 'bridge')
+      return {
+        notice: t(
+          'the editor bridge is the terminal’s · run /bridge start in circle',
+        ),
+      };
     if (name === 'copy') return { effect: 'copy' };
     if (name === 'import') return { effect: 'import' };
     if (name === 'init') {

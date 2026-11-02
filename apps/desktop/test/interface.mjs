@@ -778,6 +778,14 @@ try {
         await copied.waitFor({ state: 'hidden' });
       } else if (command.name === 'unshare')
         assert.equal(snapshot.sessions[0].shared, false);
+      // /bridge says where the bridge lives; the check runs the preview runtime,
+      // so this is the wording the preview and the live window share.
+      else if (command.name === 'bridge')
+        await page
+          .getByRole('status')
+          .filter({ hasText: 'the editor bridge is the terminal' })
+          .first()
+          .waitFor();
       else throw Error('missing UI assertion for ' + command.name);
     }
     checks.push('/' + command.name);

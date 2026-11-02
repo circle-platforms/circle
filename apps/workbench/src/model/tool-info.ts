@@ -556,6 +556,54 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'agent / job',
   },
   {
+    name: 'editor_status',
+    get description() {
+      return t('What your editor reports');
+    },
+    get detail() {
+      return t(
+        'What your editor reported: its file, the selection, how old each is, and how many diff requests wait.',
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'editor_active_file',
+    get description() {
+      return t('The file your editor has open');
+    },
+    get detail() {
+      return t(
+        'The path of the file the editor has open, or that nobody reported one.',
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'editor_selection',
+    get description() {
+      return t('The text you selected in your editor');
+    },
+    get detail() {
+      return t(
+        'The selected text with its file and line range. A selection older than ten minutes is refused as context.',
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'editor_open_diff',
+    get description() {
+      return t('Ask your editor to show a diff');
+    },
+    get detail() {
+      return t(
+        'Ask the editor to show a diff of a file against the proposed text. Nothing is written until you accept there.',
+      );
+    },
+    kind: 'interaction',
+  },
+  {
     name: 'compact_conversation',
     get description() {
       return t('Summarize older messages now');

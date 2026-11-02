@@ -166,6 +166,20 @@ Circle works only in folders you have trusted: the first time, it asks, and it d
 
 Instruction files and skills are read from the workspace folder you trusted, not from the folders above it. Your personal instruction files still apply. Do not trust a folder you have not read.
 
+## The editor bridge
+
+`/bridge start` opens a small MCP server on this machine so the editor you already use can tell Circle what you are looking at. Circle listens on `127.0.0.1` only, on a free port, and every call needs the token it was given when it started; the address and token are written to `bridge.json` in the data folder so an editor plugin can find them. A request that does not come from this machine is refused, and so is a `Host` or `Origin` that names anywhere else: a page on another site, or a name that resolves to this machine through DNS rebinding, cannot reach it.
+
+What crosses it, in each direction:
+
+| From the editor | From Circle to the model |
+|---|---|
+| The file you have open, and the text you selected, reported when they change. | `editor_status`, `editor_active_file`, `editor_selection`: where you are, and what you selected. A selection older than ten minutes is refused as context. |
+| The answer to a diff request: accept or reject. | `editor_open_diff`: ask your editor to show a diff of a file against the text the model proposes. |
+
+**Nothing reaches disk until you accept in your editor.** `editor_open_diff` only asks: the model is told the request id and that nothing was written, and the file changes when the bridge is told you accepted. A write goes through the same checks as Circle's own: inside the workspace, never a credential file, never a job's output. An editor cannot make Circle write outside the workspace, and the model cannot answer its own request.
+
+Four things to know. The listener is closed when the session ends, with its file. The tools appear only with `editor_bridge` on in your settings, which a project cannot turn on for you. What the editor reports goes into the conversation as a tool result, so treat the selection as text your editor sent, not as an instruction. And the bridge has nothing to push: an editor asks for pending diff requests, it does not receive them.
 ## Hooks
 
 A hook is a shell command. Your own hooks, in `hooks.json` in the data folder, run in every session. A project's `.circle/hooks.json`, and a `hooks.json` next to a project skill, run only after you trust that folder and approve that version of the file. Editing the file asks again. See [Hooks](hooks.md).

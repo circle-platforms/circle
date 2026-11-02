@@ -121,6 +121,10 @@ export const BUILTIN_SLASH: SlashCommand[] = [
     aliases: ['plan-mode'],
   },
   {
+    name: 'bridge',
+    description: 'Editor bridge on localhost: /bridge [start|stop|token]',
+  },
+  {
     name: 'skill',
     description:
       'List or load a skill: /skill [name] [args] or /skill:name [args]',
