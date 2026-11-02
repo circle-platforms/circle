@@ -12,18 +12,18 @@ export const model: Record<string, string> = {
     '本机编辑器桥：/bridge [start|stop|token]',
   'the editor bridge is the terminal’s · run /bridge start in circle':
     '编辑器桥属于终端 · 请在 circle 里运行 /bridge start',
-  'What your editor reports': '你的编辑器报告的内容',
+  'What your editor reports': '编辑器报告的内容',
   'What your editor reported: its file, the selection, how old each is, and how many diff requests wait.':
-    '你的编辑器报告的：当前文件、所选内容、各自多久之前，以及有几个差异请求在等待。',
+    '编辑器报告的当前文件、所选内容、各自距今多久，以及待处理差异请求数量。',
   'The file your editor has open': '编辑器打开的文件',
   'The path of the file the editor has open, or that nobody reported one.':
     '编辑器当前打开文件的路径，或没有人报告过文件。',
-  'The text you selected in your editor': '你在编辑器中选中的文本',
+  'The text you selected in your editor': '编辑器中选中的文本',
   'The selected text with its file and line range. A selection older than ten minutes is refused as context.':
     '所选文本及其文件和行范围。超过十分钟的选区不作为上下文。',
   'Ask your editor to show a diff': '请编辑器展示差异',
   'Ask the editor to show a diff of a file against the proposed text. Nothing is written until you accept there.':
-    '请编辑器把文件与提议文本的差异展示出来；只有你在那里接受才会写入。',
+    '让编辑器显示文件与提议文本的差异，仅在编辑器中明确接受后才会写入。',
   'What Circle remembers: /memory [add <note>|remove N]':
     'Circle 记住的内容：/memory [add <备注>|remove N]',
   'memory lives in MEMORY.md · the next session reads what that file holds':
@@ -42,7 +42,7 @@ export const model: Record<string, string> = {
   'use a native session operation': '请使用原生会话操作',
   'queue messages through the composer': '请通过输入框把消息加入队列',
   'history can only be imported through the native runtime':
-    '历史只能通过原生运行时导入',
+    '会话记录只能通过原生运行时导入',
   'choose a workspace through the native folder dialog':
     '请通过系统文件夹对话框选择工作区',
   'open the workspace through the native folder dialog':
@@ -63,7 +63,7 @@ export const model: Record<string, string> = {
   'unknown thinking depth': '未知的思考深度',
   'skill added to the next message': '技能已添加到下一条消息',
   'last turn hidden; saved history and files remain':
-    '已隐藏上一轮；已保存的历史和文件仍然保留',
+    '已隐藏上一轮；已保存的会话记录和文件仍然保留',
   'transcript restored': '对话记录已恢复',
   'rule not found': '未找到规则',
   'Circle integrations reloaded': 'Circle 集成已重新加载',
@@ -117,7 +117,7 @@ export const model: Record<string, string> = {
   'Click an element in the browser': '点击浏览器中的元素',
   'Type text into a browser element': '在浏览器元素中输入文本',
   'Replace text in an element, optionally submitting with Enter. Password fields require you to type in the browser panel.':
-    '替换元素中的文本，可选择回车提交。密码框需要你在浏览器面板中亲自输入。',
+    '替换元素中的文本，可选择回车提交。密码须在浏览器面板中由人工输入。',
   'Choose options in a browser element': '选择浏览器元素中的选项',
   'Choose options in a select element by their text or value.':
     '按文本或值选择下拉框中的选项。',
@@ -132,16 +132,16 @@ export const model: Record<string, string> = {
     '在工作区中运行 shell 命令。设置 `background: true` 时作为后台任务运行并立即返回。标准输出和标准错误按写入顺序一起返回。',
   'Keep the plan shown in the plan box.': '维护计划框中显示的计划。',
   'Ask you one or more questions with options, or ask for a secret':
-    '向你提出一个或多个带选项的问题，或者请你提供密钥',
+    '提出一个或多个带选项的问题，或请求密钥',
   'Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. See Answer a question and Secrets.':
-    '向你提出一个或多个带选项的问题，或者请你提供密钥。你的回答会成为工具结果。参见文档中的 Answer a question 和 Secrets。',
+    '提出一个或多个带选项的问题，或请求密钥。人工回答将成为工具结果。参见文档中的Answer a question和Secrets。',
   'Switch to read-only mode, as /plan does.': '切换到只读模式，与 /plan 相同。',
   'Switch to `read-only` mode, as `/plan` does.':
     '切换到只读（`read-only`）模式，与 `/plan` 相同。',
   'Ask you whether to leave read-only mode and implement the plan':
-    '询问你是否离开只读模式并实施计划',
+    '询问是否离开只读模式并实施计划',
   'Ask you whether to leave `read-only` mode and implement the plan. Only you can say yes, so it fails without the full-screen interface.':
-    '询问你是否离开只读（`read-only`）模式并实施计划。只有你能同意，所以没有全屏界面时它会失败。',
+    '询问是否离开只读（`read-only`）模式并实施计划。必须经人工同意；没有全屏界面时操作会失败。',
   "List this conversation's jobs: id, kind, state, time, what, and the file their output goes to.":
     '列出这个对话的任务：id、类型、状态、时间、内容，以及输出写入的文件。',
   'Stop a running job with everything it started.':
@@ -191,7 +191,7 @@ export const model: Record<string, string> = {
   'Go back to an earlier point of the session: /tree [words]':
     '回到会话中更早的位置：/tree [关键词]',
   'New session from before one of your messages: /fork [words]':
-    '从你的某条消息之前分出新会话：/fork [关键词]',
+    '从某条用户消息之前分出新会话：/fork [关键词]',
   'Clone the active branch into a new session': '把当前分支克隆为新会话',
   'Undo the last turn on screen': '在界面上撤销上一轮',
   'List the subagents task can use: /agents [name]':
@@ -222,30 +222,30 @@ export const model: Record<string, string> = {
     '切换到下一个审批模式，或 /mode manual|accept-edits|plan|auto',
   'Quit Circle': '退出 Circle',
   "Open an HTTP or HTTPS page, or go back, forward or reload. An untrusted certificate shows the browser's warning in the tab; passing it needs your approval.":
-    '打开 HTTP 或 HTTPS 页面，或者后退、前进、重新加载。证书不受信任时，标签页里会显示浏览器的警告；越过警告需要你批准。',
+    '打开HTTP或HTTPS页面，或后退、前进、重新加载。证书不受信任时，标签页显示浏览器警告；继续访问须经批准。',
   'Read the page, its waiting dialogs, tabs and what happened since the last look. Refs stay with their elements; password values are omitted.':
     '读取页面、等待回答的对话框、标签页，以及上次查看以来发生的事。元素编号跟随元素不变；不输出密码值。',
   'Click an element by its ref with the visible pointer, then read the updated page. Covered elements cannot be clicked.':
     '用可见的指针按编号点击元素，然后读取更新后的页面。被遮挡的元素无法点击。',
   "Accept or dismiss a page's alert, confirm, prompt or leave-page question, as you can in the panel or the conversation.":
-    '接受或拒绝网页的提示、确认、输入或离开页面询问，和你在面板或对话里能做的一样。',
+    '接受或拒绝网页的提示、确认、输入或离开页面询问；与面板或对话中的人工操作相同。',
   'List, open, show or close browser tabs':
     '列出、打开、切换或关闭浏览器标签页',
   'Pages that open a new window or tab appear as tabs; you and Circle see the same shown tab.':
-    '网页打开的新窗口或标签页会成为标签页；你和 Circle 看到的是同一个当前标签页。',
+    '网页打开的新窗口或标签页会成为标签页；Circle与操作人员看到同一个当前标签页。',
   "Record the conversation's browser actions as a script":
     '把对话中的浏览器操作录制为脚本',
   "Write this conversation's browser actions to a script file in Circle's own format, each element kept by its role and name. Writing the file asks as writing any file does.":
     '把这个对话中的浏览器操作写成 Circle 自己格式的脚本文件，每个元素按角色和名称记录。写入文件时和写其他文件一样需要审批。',
   'Replay a recorded browser script': '回放录制的浏览器脚本',
   "Run a script's steps in the conversation's browser without the model in between, waiting for each element. It acts only on the site it starts on, which you allow as for other browser actions, and stops at the first step that cannot be done.":
-    '在会话浏览器中逐步执行脚本，中间不经过模型，每一步都会等待它的元素出现。它只在开始时所在的站点上操作，你像批准其他浏览器操作一样批准这个站点；遇到第一个无法完成的步骤时停止。',
+    '在会话浏览器中逐步执行脚本，中间不经过模型，每步均等待对应元素出现。仅在开始时所在的站点操作，须先按浏览器操作规则批准该站点；遇到第一个无法完成的步骤时停止。',
   'Give a page files from this computer': '把这台电脑上的文件交给网页',
-  'Hand you the browser and wait for it back': '把浏览器交给你，等你交还',
+  'Hand you the browser and wait for it back': '交出浏览器，等待人工操作后交还',
   'For what only you should do in the page, such as a security key or a CAPTCHA. Circle sees nothing while you have it, and learns only where the tabs went.':
-    '用于只该由你在网页上完成的事，比如安全密钥或验证码。浏览器在你手上时 Circle 什么也看不到，只会知道标签页去了哪些地址。',
+    '用于须由人工在网页上完成的操作，例如安全密钥或验证码。人工控制浏览器时，Circle无法查看页面内容，仅获知标签页地址变化。',
   'For a file input, or for the file chooser one of its clicks opened. Circle asks you every time, with the files and the site.':
-    '用于文件输入框，或它的点击打开的文件选择框。Circle 每次都会问你，并列出文件和站点。',
+    '用于文件输入框或点击后打开的文件选择框。Circle每次均询问，并列出文件和站点。',
   'Named values Circle fills in: /variables [NAME=value]':
     'Circle 会填入的命名值：/variables [NAME=value]',
   'Named values Circle fills in unseen: /secrets [NAME]':
@@ -257,13 +257,13 @@ export const model: Record<string, string> = {
     '列出本对话的设备终端及其状态，以及使用者保存的设备档案。',
   'Open an SSH or Telnet console': '打开 SSH 或 Telnet 控制台',
   'Open a device console by a saved profile or a bare host. SSH sign-in comes only from a profile, whose password is a saved secret; an unknown device host key stops the login and asks you.':
-    '按已保存的档案或主机地址打开设备控制台。SSH 登录只能来自档案，其密码是已保存的秘密；陌生的设备主机密钥会中止登录并询问你。',
+    '按已保存的档案或主机地址打开设备控制台。SSH登录只能来自档案，密码取自已保存的密钥；遇到未知设备主机密钥时中止登录并请求确认。',
   'Save a device profile so SSH can sign in': '保存设备档案，供 SSH 登录',
   'Save a device under a profile name so terminal_connect can sign in to it: the password comes from the NAME of a secret the user saved, never its value; a save replaces the profile of the same name.':
     '把设备保存为档案，terminal_connect 即可按名登录：密码只引用用户保存的秘密名，绝不写入其值；同名档案会被替换。',
   'Type text to a device console': '向设备控制台输入文本',
   'Type text to a device, Enter when asked; a word that can destroy device state in the line asks you every time. %NAME% puts in a secret whose value you never see back.':
-    '向设备输入文本，需要时按下回车；行内含有会破坏设备状态的词时每次都要询问你。%NAME% 填入秘密，其值不会再出现在结果里。',
+    '向设备输入文本，需要时按回车；输入包含可能破坏设备状态的词时，每次均请求确认。%NAME%填入密钥，其值不会出现在返回结果中。',
   'Read a device screen and its prompt': '读取设备画面与提示符',
   "Read a device terminal's last lines and the line the cursor sits on, as plain text.":
     '以纯文本读取设备终端的最后几行，以及光标所在的提示符行。',
@@ -278,5 +278,5 @@ export const model: Record<string, string> = {
     '关闭本对话的一个设备控制台；它最后的画面仍可读。',
   'Hand a device console to the user': '把设备控制台交给使用者',
   'Give the person a console to type on; the model waits until they give it back and then sees the screen as they left it, never what they typed.':
-    '把控制台交给人来输入；模型会等到对方交还，然后看到他们留下的画面，而不会看到他们输入的内容。',
+    '交出控制台供人工输入；模型等待交还后读取最终画面，不读取人工输入过程。',
 };

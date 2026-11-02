@@ -47,14 +47,14 @@ test('manual desktop compaction renders without a normal turn in both interface 
         },
       }),
     ),
-    /正在压缩/,
+    /等待压缩中/,
   );
   const chinese = renderToStaticMarkup(
     createElement(CompactionStatus, {
       state: { ...progress, trigger: 'auto' },
     }),
   );
-  assert.match(chinese, /正在合并 2\/3/);
+  assert.match(chinese, /等待合并中 · 2\/3/);
   assert.doesNotMatch(chinese, /自动|↑|↓|用量/);
   assert.match(
     renderToStaticMarkup(
@@ -62,7 +62,7 @@ test('manual desktop compaction renders without a normal turn in both interface 
         state: { ...progress, stage: 'summarizing' },
       }),
     ),
-    /正在压缩 2\/3/,
+    /等待压缩中 · 2\/3/,
   );
   assert.match(
     compactionOutcomeText({

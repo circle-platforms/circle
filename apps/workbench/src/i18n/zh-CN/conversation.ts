@@ -5,6 +5,8 @@ export const conversation: Record<string, string> = {
   'stop conversation': '停止当前回合',
   usage: '用量',
   'background jobs': '后台任务',
+  'waiting for runtime connection': '等待连接运行时中',
+  'connection settings': '连接设置…',
   hook: '钩子',
   'hook denied {tool}': '钩子拒绝了 {tool}',
   'hook asked {tool}': '钩子要求确认 {tool}',
@@ -32,7 +34,7 @@ export const conversation: Record<string, string> = {
   'Hook allowed this call.': '钩子允许了此次调用。',
   'Hook session_start output:': '钩子会话开始输出：',
   'Hook output ({name}):': '钩子输出（{name}）：',
-  'stopping work before deletion…': '停止任务后删除中…',
+  'stopping work before deletion…': '等待停止任务并删除中…',
   'open in another terminal; view only': '已在其他终端打开，仅可查看',
   'no model connected': '未连接模型',
   // the heading and the session actions
@@ -55,12 +57,12 @@ export const conversation: Record<string, string> = {
   // the transcript
   'what are we working on?': '我们要做什么？',
   'work without a project': '不在项目中工作',
-  'what should we build in {name}?': '你想让我们在 {name} 中构建什么？',
+  'what should we build in {name}?': '准备在 {name} 中做什么？',
   'search projects': '搜索项目',
   'no matching projects': '没有匹配的项目',
   'no project': '无项目',
   'choose a project': '选择项目',
-  you: '你',
+  you: '我',
   thinking: '思考',
   'thinking {time}': '思考 {time}',
   'could not reach the endpoint': '无法连接端点',
@@ -73,7 +75,7 @@ export const conversation: Record<string, string> = {
     '模型达到输出上限，响应未完成',
   'model context window exhausted; response incomplete':
     '模型上下文已满，响应未完成',
-  'merging {done}/{total}': '正在合并 {done}/{total}',
+  'merging {done}/{total}': '等待合并中 · {done}/{total}',
   'compacted · ~{before} → ~{after} · {n} messages':
     '已压缩 · ~{before} → ~{after} · {n} 条消息',
   'auto-compacted · ~{before} → ~{after} · {n} messages':
@@ -83,9 +85,9 @@ export const conversation: Record<string, string> = {
   'compaction recovery budget exhausted': '压缩恢复次数已用尽',
   'summary did not complete': '摘要未完成',
   'compaction failed: {message}': '压缩失败：{message}',
-  compacting: '正在压缩',
-  'compacting {done}/{total}': '正在压缩 {done}/{total}',
-  'recovering {done}/{total}': '正在恢复 {done}/{total}',
+  compacting: '等待压缩中',
+  'compacting {done}/{total}': '等待压缩中 · {done}/{total}',
+  'recovering {done}/{total}': '等待恢复中 · {done}/{total}',
   'some usage unreported': '部分用量未返回',
   'request does not fit the model context budget': '请求无法放入模型上下文预算',
   'requested output exceeds the model output limit':
@@ -94,7 +96,7 @@ export const conversation: Record<string, string> = {
   'model context leaves no room for a usable summary':
     '模型上下文没有足够空间生成可用摘要',
   'model context cannot fit the summary instructions and one history fragment':
-    '模型上下文无法容纳摘要指令和一段历史',
+    '模型上下文无法容纳摘要指令和一段会话记录',
   'model context cannot fit the summary instructions':
     '模型上下文无法容纳摘要指令',
   'summary did not shrink to its target': '摘要未缩减到目标长度',
@@ -103,7 +105,7 @@ export const conversation: Record<string, string> = {
   'conversation changed during compaction': '压缩期间会话发生变化',
   'summary boundary is no longer on the active branch':
     '摘要边界已不在当前分支',
-  'summary history does not match raw conversation': '摘要历史与原始会话不一致',
+  'summary history does not match raw conversation': '摘要记录与原始会话不一致',
   'session changed in another process': '会话已被其他进程更改',
   'model response ended without a complete finish signal':
     '模型响应缺少完整的结束信号',
@@ -129,7 +131,7 @@ export const conversation: Record<string, string> = {
   'input completions': '输入补全',
   message: '消息',
   'ask anything, or describe a change…': '问任何问题，或描述一个改动…',
-  'attach files': '附加文件',
+  'attach files': '附加文件…',
   'pause conversation': '暂停对话',
   'resume conversation': '继续对话',
   'send message': '发送消息',

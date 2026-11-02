@@ -80,7 +80,7 @@ test('legacy failure and interruption activity retains priority over a completed
       );
       assert.equal(
         agentActivityText(taskAgent('waiting')),
-        language === 'en' ? 'waiting for you' : '等待你处理',
+        language === 'en' ? 'waiting for you' : '等待回应中',
       );
     }
   } finally {
@@ -137,7 +137,7 @@ test('legacy activity fallback follows status without replacing actual event tex
     );
     assert.equal(
       agentActivityText({ ...agent, status: 'waiting' }),
-      language === 'zh-CN' ? '等待你处理' : 'waiting for you',
+      language === 'zh-CN' ? '等待回应中' : 'waiting for you',
     );
   }
   setLanguage('en');

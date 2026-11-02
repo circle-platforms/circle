@@ -411,7 +411,7 @@ try {
       const frame = page.getByTestId('browser-operating');
       await frame.waitFor();
       const expected =
-        language === 'en' ? 'Circle is operating' : 'Circle 正在操作';
+        language === 'en' ? 'Circle is operating' : '等待Circle完成操作中';
       assert.equal(await frame.getAttribute('aria-label'), expected);
       assert.equal(await frame.getAttribute('title'), expected);
       const ring = await frame.evaluate((node) => {

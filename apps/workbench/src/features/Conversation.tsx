@@ -970,10 +970,10 @@ export function Conversation({
           {session.state === 'waiting' && runtime.mode !== 'live' && (
             <div className="pending-message">
               <i />
-              waiting for runtime connection
+              {t('waiting for runtime connection')}
               {runtime.mode === 'preview' && (
                 <button onClick={() => onDialog('connect')}>
-                  connection settings
+                  {t('connection settings')}
                   <ArrowRight size={12} />
                 </button>
               )}

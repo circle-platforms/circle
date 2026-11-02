@@ -16,7 +16,7 @@ export const externalFileAccess: Record<string, string> = {
     '文件授权需要连接桌面运行时',
   'native file selection is unavailable': '原生文件选择暂不可用',
   'this session cannot grant new file access': '此会话无法添加文件授权',
-  'loading file access…': '正在读取文件授权…',
+  'loading file access…': '等待读取文件访问权限中…',
   'no external files authorized': '未授权外部文件',
   'read and write': '可读写',
   'revoke access': '撤销授权',

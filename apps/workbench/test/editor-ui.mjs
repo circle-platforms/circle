@@ -1023,7 +1023,7 @@ try {
     await notice.waitFor();
     await batch
       .getByRole('button', {
-        name: zh ? '正在保存文件' : 'saving file',
+        name: zh ? '等待保存文件中' : 'saving file',
         exact: true,
       })
       .waitFor({ state: 'hidden' });

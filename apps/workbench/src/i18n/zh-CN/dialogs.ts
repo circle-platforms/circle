@@ -7,7 +7,7 @@ export const dialogs: Record<string, string> = {
   'restart runtime': '重启运行时',
   provider: '提供商',
   'Use a Bedrock API key and choose your region in the base URL.':
-    '请使用 Bedrock API 密钥，并在 API 地址中选择你的地域。',
+    '使用Bedrock API密钥，并在API地址中选择对应地域。',
   'custom endpoint': '自定义端点',
   'Choose from provider presets next, or type a model id. The key and model are not checked.':
     '下一步可选择提供商预设，或填写模型 ID。密钥和模型未经验证。',
@@ -23,7 +23,7 @@ export const dialogs: Record<string, string> = {
     '请填写提供商控制台中的部署名。',
   'API URL, key and model': 'API 地址、密钥和模型',
   'Circle answers with your own model endpoint. Enter its API URL, key and model to start.':
-    'Circle 使用你自己的模型端点来回答。填写它的 API 地址、密钥和模型即可开始。',
+    'Circle通过配置的模型端点回答。填写API地址、密钥和模型后即可开始。',
   'base url': 'API 地址',
   protocol: '协议',
   'api key': 'API 密钥',
@@ -39,7 +39,7 @@ export const dialogs: Record<string, string> = {
   // the connection form's two steps: the URL and key, then the model
   next: '下一步',
   back: '返回',
-  'looking for models…': '正在查找模型…',
+  'looking for models…': '等待查找模型中…',
   'discovered {n} model ({protocol})': '发现 {n} 个模型（{protocol}）',
   'discovered {n} models ({protocol})': '发现 {n} 个模型（{protocol}）',
   'the endpoint listed no models': '端点没有列出模型',
@@ -124,7 +124,7 @@ export const dialogs: Record<string, string> = {
   // export
   'Export the saved Circle conversation. JSONL includes its native checkpoint graph and receipts.':
     '导出已保存的 Circle 对话。JSONL 包含原生的检查点图和回执。',
-  'export {kind}': '导出 {kind}',
+  'export {kind}': '导出{kind}…',
   'session exported': '会话已导出',
   'export cancelled': '已取消导出',
   // workspace trust
@@ -142,7 +142,7 @@ export const dialogs: Record<string, string> = {
   'what should the summary preserve?': '摘要应该保留什么？',
   'request compaction': '请求压缩',
   'compaction requested; raw history is unchanged':
-    '已请求压缩；原始历史保持不变',
+    '已请求压缩；原始会话记录保持不变',
   // keyboard shortcuts
   "Circle's terminal bindings are listed below. Browser-reserved keys and process suspension need a desktop host; the same features have clickable controls here.":
     '下面列出 Circle 在终端里的按键绑定。浏览器保留的按键和挂起进程需要桌面宿主；同样的功能在这里都有可点击的控件。',

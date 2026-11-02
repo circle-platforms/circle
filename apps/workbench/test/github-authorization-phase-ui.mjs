@@ -94,7 +94,7 @@ try {
             .getByText(
               label(
                 'preparing GitHub authorization code',
-                '正在准备 GitHub 授权码…',
+                '等待生成GitHub授权码中…',
               ),
               { exact: true },
             )
@@ -145,7 +145,7 @@ try {
         await page.evaluate(() => window.githubFixture.authorizationCode());
         await card
           .getByText(
-            label('waiting for GitHub authorization', '等待 GitHub 授权'),
+            label('waiting for GitHub authorization', '等待GitHub授权中'),
             { exact: true },
           )
           .waitFor();
@@ -183,7 +183,7 @@ try {
         );
         await card
           .getByText(
-            label('verifying GitHub account', '正在核验 GitHub 账户…'),
+            label('verifying GitHub account', '等待验证GitHub账户中…'),
             { exact: true },
           )
           .waitFor();
@@ -228,7 +228,7 @@ try {
           .getByText(
             label(
               'preparing GitHub authorization code',
-              '正在准备 GitHub 授权码…',
+              '等待生成GitHub授权码中…',
             ),
             { exact: true },
           )

@@ -49,7 +49,7 @@ try {
         assert.notEqual(palette, 'rgba(0, 0, 0, 0)');
         const turnOn = label(
           'Turn on GitHub to connect your account.',
-          '开启 GitHub 后即可连接你的账户。',
+          '开启GitHub后即可连接账户。',
         );
         const tryName = label('try in a conversation', '在对话中试用');
         const overflow = () =>
@@ -95,7 +95,7 @@ try {
         await page.evaluate(() => window.githubPluginFixture.reply(0));
         await detail
           .getByText(
-            label('loading GitHub integration', '正在加载 GitHub 集成…'),
+            label('loading GitHub integration', '等待加载GitHub集成中…'),
             { exact: true },
           )
           .waitFor();

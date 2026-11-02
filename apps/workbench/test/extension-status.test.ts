@@ -24,7 +24,7 @@ test('only known owned GitHub state enums are localized and remain live to local
   assert.equal(extensionStatusText(extension), '需要登录 GitHub');
   for (const [state, expected] of [
     ['connected', '已连接 GitHub'],
-    ['authorizing', '等待 GitHub 授权'],
+    ['authorizing', '等待GitHub授权中'],
     ['error', 'GitHub 连接出错'],
   ])
     assert.equal(extensionStatusText(github(state)), expected);

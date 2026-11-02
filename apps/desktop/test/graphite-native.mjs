@@ -15,11 +15,9 @@ import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
 const packaged = Boolean(process.env.CIRCLE_DESKTOP_EXECUTABLE);
-const output = join(
-  root,
-  'artifacts/graphite',
-  packaged ? 'packaged' : 'development',
-);
+const output =
+  process.env.CIRCLE_GRAPHITE_EVIDENCE_DIR ??
+  join(root, 'artifacts/graphite', packaged ? 'packaged' : 'development');
 await mkdir(output, { recursive: true });
 const temp = await mkdtemp(join(tmpdir(), 'circle-graphite-native-'));
 const env = {
@@ -34,6 +32,7 @@ const env = {
   CIRCLE_NO_UPDATE_CHECK: '1',
   CIRCLE_NO_MODELS_REFRESH: '1',
 };
+const chinese = env.CIRCLE_WORKBENCH_LANGUAGE.startsWith('zh');
 await mkdir(join(temp, 'project'));
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
@@ -200,8 +199,37 @@ try {
           assert.match(sample.ring, /conic-gradient/);
           if (!sample.reduced) assert.equal(sample.animation, '3.6s');
         }
-        if (state === 'attention')
+        if (state === 'working' || state === 'attention') {
+          const hint = page.locator('.pending-message').filter({
+            has: page.locator('button'),
+          });
+          sample.connectionHint = await hint.innerText();
+          assert.ok(
+            sample.connectionHint.includes(
+              chinese ? '等待连接运行时中' : 'waiting for runtime connection',
+            ),
+          );
+          assert.equal(
+            await hint.locator('button').innerText(),
+            chinese ? '连接设置…' : 'connection settings',
+          );
+          if (chinese)
+            assert.doesNotMatch(
+              sample.connectionHint,
+              /waiting for runtime connection|connection settings/,
+            );
+        }
+        if (state === 'attention') {
           assert.equal(await page.locator('.interaction-summary').count(), 1);
+          sample.requestSummary = await page
+            .locator('.interaction-summary')
+            .innerText();
+          assert.ok(
+            sample.requestSummary.includes(
+              chinese ? '1 个请求等待处理' : '1 request waiting for you',
+            ),
+          );
+        }
         assert.match(sample.brand, /circle/);
         assert.equal(await page.locator('.conversation-jobs li').count(), 1);
         const name = `${theme}-${width}-${state}.png`;
@@ -215,6 +243,15 @@ try {
   }
   checks.push(
     'sixteen native theme/width/state samples keep the footer inside a bounded composer and show the correct action',
+    'connection hints and request counts follow the selected interface language in both themes and widths',
+  );
+  await seed('dark', 'working');
+  await page.locator('.pending-message button').click();
+  await page.locator('.dialog-content').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.composer[data-composer-state="working"]').waitFor();
+  checks.push(
+    'the translated connection-settings action still opens its dialog',
   );
   await seed('light', 'default');
   await setViewport(app, page, { width: 1440, height: 980 });
@@ -400,6 +437,7 @@ try {
         testedAt: new Date().toISOString(),
         platform: process.platform,
         arch: process.arch,
+        language: env.CIRCLE_WORKBENCH_LANGUAGE,
         packaged,
         viewport: await readViewport(page),
         checks,
