@@ -1,0 +1,100 @@
+<!-- @dsCard group="数据" height=420 width=960 subtitle="单系列柱状图 · 多系列折线图，均可悬停并以表格查看" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Chart — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; padding: 24px; align-items: start; }
+</style>
+</head>
+<body>
+<div id="root" class="pv area-knowledge">
+  <figure class="ch-figure" id="bars">
+    <div><h3 class="ch-figure-title">近 14 天新增知识</h3><div class="ch-figure-note">我的 · 共 46 条 · 截至今天 10:30</div></div>
+    <div class="ch-plot"><svg class="ch-chart" viewBox="0 0 420 220" role="img" aria-label="近 14 天每天新增的知识数量，柱状图"></svg><div class="ch-chart-tip" hidden></div></div>
+    <details class="ch-tableview"><summary>以表格查看</summary><div class="ch-table-wrap"><table class="ch-table"><thead><tr><th scope="col">日期</th><th scope="col" class="num">新增</th></tr></thead><tbody></tbody></table></div></details>
+  </figure>
+  <figure class="ch-figure" id="lines">
+    <div><h3 class="ch-figure-title">近 30 天被引用</h3><div class="ch-figure-note">按范围 · 截至今天 10:30</div></div>
+    <div class="ch-legend is-line"><span class="s1">我的</span><span class="s2">与我共享</span><span class="s3">团队</span></div>
+    <div class="ch-plot"><svg class="ch-chart" viewBox="0 0 420 220" role="img" aria-label="近 30 天每天被引用的次数，按范围分三条折线" tabindex="0"></svg><div class="ch-chart-tip" hidden></div></div>
+    <details class="ch-tableview"><summary>以表格查看</summary><div class="ch-table-wrap"><table class="ch-table"><thead><tr><th scope="col">日期</th><th scope="col" class="num">我的</th><th scope="col" class="num">与我共享</th><th scope="col" class="num">团队</th></tr></thead><tbody></tbody></table></div></details>
+  </figure>
+</div>
+<script>
+(function () {
+  var NS = 'http://www.w3.org/2000/svg', W = 420, H = 220;
+  function el(name, attrs, parent) { var n = document.createElementNS(NS, name); for (var k in attrs) n.setAttribute(k, attrs[k]); if (parent) parent.appendChild(n); return n; }
+  function text(parent, x, y, cls, s, anchor) { var t = el('text', { x: x, y: y, 'class': cls, 'text-anchor': anchor || 'start' }, parent); t.textContent = s; return t; }
+  function days(n) { var out = [], end = Date.UTC(2026, 10, 2); for (var i = n - 1; i >= 0; i--) { var d = new Date(end - i * 86400000); out.push(String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0')); } return out; }
+  function fmt(v) { return v.toLocaleString('en-US'); }
+  function fillTip(tip, when, rows) {
+    tip.textContent = '';
+    var w = document.createElement('div'); w.className = 'when'; w.textContent = when; tip.appendChild(w);
+    rows.forEach(function (r) { var row = document.createElement('div'); row.className = 'row' + (r.s ? ' ' + r.s : ''); var b = document.createElement('b'); b.textContent = fmt(r.v); var n = document.createElement('span'); n.textContent = r.name; row.appendChild(b); row.appendChild(n); tip.appendChild(row); });
+  }
+  function placeTip(tip, svg, x, y) {
+    var box = svg.getBoundingClientRect(), k = box.width / W; tip.hidden = false;
+    var left = x * k + 12; if (left + tip.offsetWidth > box.width) left = x * k - tip.offsetWidth - 12;
+    tip.style.left = Math.max(0, left) + 'px'; tip.style.top = Math.max(0, y * k - tip.offsetHeight - 8) + 'px';
+  }
+  function tableRows(fig, rows) { var tb = fig.querySelector('tbody'); rows.forEach(function (cells) { var tr = document.createElement('tr'); cells.forEach(function (c, i) { var td = document.createElement('td'); if (i) td.className = 'num'; else td.className = 'nowrap'; td.textContent = i ? fmt(c) : c; tr.appendChild(td); }); tb.appendChild(tr); }); }
+
+  // Single series: the page's area color, no legend; label only the peak and the latest bar.
+  (function bars() {
+    var fig = document.getElementById('bars'), svg = fig.querySelector('svg'), tip = fig.querySelector('.ch-chart-tip');
+    var values = [2, 4, 3, 0, 5, 6, 3, 2, 4, 7, 3, 1, 4, 2], labels = days(values.length);
+    var L = 28, R = 8, T = 18, B = 26, max = 8, pw = W - L - R, ph = H - T - B, band = pw / values.length, bw = 16;
+    [0, 4, 8].forEach(function (v) { var y = T + ph - v / max * ph; el('line', { x1: L, x2: W - R, y1: y, y2: y, 'class': 'grid' }, svg); text(svg, L - 8, y + 4, 'tick', String(v), 'end'); });
+    var peak = values.indexOf(Math.max.apply(null, values)), last = values.length - 1;
+    values.forEach(function (v, i) {
+      var x = L + i * band + (band - bw) / 2, h = v / max * ph, y = T + ph - h, r = Math.min(4, h), bar = null;
+      if (v > 0) bar = el('path', { 'class': 'bar', d: 'M' + x + ',' + (y + h) + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y + 'H' + (x + bw - r) + 'Q' + (x + bw) + ',' + y + ' ' + (x + bw) + ',' + (y + r) + 'V' + (y + h) + 'Z' }, svg);
+      if (i === peak || i === last) text(svg, x + bw / 2, y - 6, 'value', String(v), 'middle');
+      if (i === 0 || i === 7 || i === last) text(svg, x + bw / 2, H - 8, 'tick', labels[i], 'middle');
+      var hit = el('rect', { 'class': 'hit', x: L + i * band, y: T, width: band, height: ph, tabindex: '0', role: 'img', 'aria-label': labels[i] + '，新增 ' + v + ' 条' }, svg);
+      function show() { svg.classList.add('is-dim'); if (bar) bar.classList.add('is-hot'); fillTip(tip, labels[i], [{ v: v, name: '条新增' }]); placeTip(tip, svg, x + bw / 2, y); }
+      function hide() { svg.classList.remove('is-dim'); if (bar) bar.classList.remove('is-hot'); tip.hidden = true; }
+      hit.addEventListener('pointerenter', show); hit.addEventListener('focus', show);
+      hit.addEventListener('pointerleave', hide); hit.addEventListener('blur', hide);
+    });
+    tableRows(fig, values.map(function (v, i) { return [labels[i], v]; }));
+  })();
+
+  // Several series: fixed slot order, a legend, names at the line ends, one crosshair readout for every series.
+  (function lines() {
+    var fig = document.getElementById('lines'), svg = fig.querySelector('svg'), tip = fig.querySelector('.ch-chart-tip');
+    var series = [
+      { name: '我的', s: 's1', v: [3, 4, 2, 5, 4, 6, 5, 4, 7, 6, 5, 8, 6, 7, 9, 8, 7, 9, 10, 8, 9, 11, 10, 9, 12, 11, 10, 12, 13, 12] },
+      { name: '与我共享', s: 's2', v: [1, 2, 1, 2, 3, 2, 2, 3, 2, 4, 3, 3, 4, 3, 5, 4, 4, 5, 4, 6, 5, 5, 6, 5, 6, 7, 6, 7, 6, 7] },
+      { name: '团队', s: 's3', v: [8, 9, 10, 9, 11, 12, 11, 13, 12, 14, 13, 15, 14, 16, 15, 17, 16, 18, 17, 19, 18, 20, 19, 21, 20, 22, 21, 23, 22, 24] }
+    ];
+    var n = 30, labels = days(n), L = 28, R = 84, T = 12, B = 26, max = 25, pw = W - L - R, ph = H - T - B, step = pw / (n - 1);
+    function X(i) { return L + i * step; } function Y(v) { return T + ph - v / max * ph; }
+    [0, 10, 20].forEach(function (v) { el('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), 'class': 'grid' }, svg); text(svg, L - 8, Y(v) + 4, 'tick', String(v), 'end'); });
+    [0, 14, n - 1].forEach(function (i) { text(svg, X(i), H - 8, 'tick', labels[i], i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'); });
+    var cross = el('line', { 'class': 'crosshair', x1: 0, x2: 0, y1: T, y2: T + ph }, svg), marks = [];
+    series.forEach(function (s) {
+      el('path', { 'class': 'line ' + s.s, d: s.v.map(function (v, i) { return (i ? 'L' : 'M') + X(i).toFixed(1) + ',' + Y(v).toFixed(1); }).join('') }, svg);
+      el('circle', { 'class': 'dot ' + s.s, cx: X(n - 1), cy: Y(s.v[n - 1]), r: 4 }, svg);
+      var t = text(svg, X(n - 1) + 10, Y(s.v[n - 1]) + 4, 'name', s.name + ' '); var tv = el('tspan', { 'class': 'value' }, t); tv.textContent = s.v[n - 1];
+      marks.push(el('circle', { 'class': 'dot ' + s.s, r: 4, visibility: 'hidden' }, svg));
+    });
+    var hit = el('rect', { 'class': 'hit', x: L, y: T, width: pw, height: ph }, svg), cur = n - 1;
+    function show(i) {
+      cur = Math.max(0, Math.min(n - 1, i)); cross.setAttribute('x1', X(cur)); cross.setAttribute('x2', X(cur)); cross.style.visibility = 'visible';
+      series.forEach(function (s, k) { marks[k].setAttribute('cx', X(cur)); marks[k].setAttribute('cy', Y(s.v[cur])); marks[k].setAttribute('visibility', 'visible'); });
+      fillTip(tip, labels[cur], series.map(function (s) { return { v: s.v[cur], name: s.name, s: s.s }; }));
+      placeTip(tip, svg, X(cur), T + 24);
+    }
+    function hide() { cross.style.visibility = 'hidden'; marks.forEach(function (m) { m.setAttribute('visibility', 'hidden'); }); tip.hidden = true; }
+    hit.addEventListener('pointermove', function (e) { var box = svg.getBoundingClientRect(); show(Math.round(((e.clientX - box.left) * W / box.width - L) / step)); });
+    hit.addEventListener('pointerleave', hide);
+    svg.addEventListener('focus', function () { show(cur); }); svg.addEventListener('blur', hide);
+    svg.addEventListener('keydown', function (e) { if (e.key === 'ArrowLeft') { show(cur - 1); e.preventDefault(); } if (e.key === 'ArrowRight') { show(cur + 1); e.preventDefault(); } });
+    tableRows(fig, labels.map(function (d, i) { return [d].concat(series.map(function (s) { return s.v[i]; })); }));
+  })();
+})();
+</script>
+</body>
+</html>

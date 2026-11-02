@@ -8,6 +8,7 @@ Circle's architecture and design are written down in a few documents. This page 
 | The TUI contract | [docs/development/tui-contract.md](../development/tui-contract.md) | The zones of the screen, what belongs in each, when it appears and who removes it, and the terms for everything on screen. Written in Chinese. |
 | Desktop workbench architecture | [docs/workbench/architecture.md](../workbench/architecture.md) | The ownership between Electron main, preload and renderer, the capability bridge and the boundaries of the native runtime. |
 | How Circle works | [docs/how-circle-works.md](../how-circle-works.md) | The design of the agent loop, approvals, context assembly and session storage, as the user meets it. |
+| Circle design system | [docs/design/circle-design-system/](circle-design-system/README.md) | The visual design the desktop workbench shares with the circle-hub console: the Graphite theme's dark and light tokens, the three-pane structure, the components and how they behave, charts and interface wording. Written in Chinese, with [screenshots](circle-design-system-screens.md). |
 
 Each of these documents ends with a line that names this license. The rest of `docs/`, the guides and the reference, and the code are under the [Apache License 2.0](../../LICENSE).
 

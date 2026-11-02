@@ -1,0 +1,35 @@
+<!-- @dsCard group="数据" height=300 width=860 subtitle="文字左对齐、数字右对齐、可排序的列" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Table — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { padding: 24px; }
+</style>
+</head>
+<body>
+<div id="root" class="pv area-knowledge">
+  <div class="ch-table-wrap">
+    <table class="ch-table">
+      <thead>
+        <tr>
+          <th scope="col">成员</th>
+          <th scope="col">角色</th>
+          <th scope="col" class="num">知识</th>
+          <th scope="col" class="num">工作流</th>
+          <th scope="col" class="num" aria-sort="descending">近 30 天提交</th>
+          <th scope="col">状态</th>
+          <th scope="col">上次活动</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="is-selected"><td>张三</td><td>管理员</td><td class="num">338</td><td class="num">12</td><td class="num">1,284</td><td class="nowrap"><span class="ch-dot ch-dot--pass"></span> 已启用</td><td class="nowrap">今天 10:24</td></tr>
+        <tr><td>李四</td><td>成员</td><td class="num">96</td><td class="num">4</td><td class="num">412</td><td class="nowrap"><span class="ch-dot ch-dot--pass"></span> 已启用</td><td class="nowrap">昨天</td></tr>
+        <tr><td>王五</td><td>成员</td><td class="num">24</td><td class="num">1</td><td class="num">37</td><td class="nowrap"><span class="ch-dot ch-dot--info"></span> 等待首次登录中</td><td class="nowrap">10-30</td></tr>
+        <tr><td>赵六</td><td>成员</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="nowrap"><span class="ch-dot ch-dot--pending"></span> 已停用</td><td class="nowrap">2025-12-01</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

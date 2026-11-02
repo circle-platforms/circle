@@ -1,0 +1,75 @@
+<!-- @dsCard group="框架" height=660 width=820 subtitle="选中对象 · 没有选中时的区域概况" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Inspector — preview</title>
+<style>
+  .pv { display: grid; grid-template-columns: 380px 380px; gap: 24px; padding: 20px; align-items: start; }
+  .pv > .ch-inspector { min-height: 600px; border-radius: 10px; }
+</style>
+</head>
+<body>
+<div id="root" class="pv area-knowledge">
+  <aside class="ch-inspector" aria-label="详情">
+    <div class="ch-section">
+      <div class="ch-actions"><span class="ch-tag">接口行为</span><span class="ch-badge ch-badge--pass"><span class="ch-dot ch-dot--pass"></span>已验证</span></div>
+      <h2 class="ch-panel-title">登录接口在会话过期时返回 401</h2>
+      <div class="ch-meta">接口规范 › 认证 · 今天 10:24 更新</div>
+    </div>
+    <section class="ch-section">
+      <h3 class="ch-section-label">来源 · 2</h3>
+      <div class="ch-source">
+        <div class="ch-source-head"><span>错误码对照表.xlsx · 第 12–14 行</span><a href="#">打开原文</a></div>
+        <p class="ch-quote">「会话过期时，服务端返回 401 Unauthorized，并在响应头中携带 WWW-Authenticate。」</p>
+      </div>
+      <div class="ch-source">
+        <div class="ch-source-head"><span>知识：会话的有效期</span><a href="#">查看</a></div>
+      </div>
+    </section>
+    <section class="ch-section">
+      <h3 class="ch-section-label">分享</h3>
+      <div class="ch-share"><span class="ch-avatars"><span class="ch-avatar">李</span><span class="ch-avatar">王</span></span>已分享给李四、王五</div>
+      <div class="ch-meta">同文件夹设置 · <a href="#">管理分享</a></div>
+    </section>
+    <section class="ch-section">
+      <h3 class="ch-section-label">版本记录</h3>
+      <ul class="ch-feed">
+        <li>张三更新了来源<span class="ch-time">今天 10:24</span></li>
+        <li>张三新建<span class="ch-time">10-28</span></li>
+      </ul>
+    </section>
+    <div class="ch-inspector-actions">
+      <button class="ch-btn ch-btn--ghost">版本记录</button>
+      <button class="ch-btn ch-btn--secondary">分享到团队…</button>
+      <button class="ch-btn ch-btn--primary">编辑</button>
+    </div>
+  </aside>
+
+  <aside class="ch-inspector" aria-label="接口规范概况">
+    <div class="ch-section">
+      <h2 class="ch-panel-title">接口规范</h2>
+      <div class="ch-meta">我的 · 已分享给 2 人</div>
+    </div>
+    <div class="ch-stats">
+      <div class="ch-stat"><span class="ch-stat-label">知识</span><span class="ch-stat-value">24</span></div>
+      <div class="ch-stat"><span class="ch-stat-label">近 30 天被引用</span><span class="ch-stat-value">61</span></div>
+    </div>
+    <section class="ch-section">
+      <h3 class="ch-section-label">验证情况</h3>
+      <div class="ch-parts" role="img" aria-label="已验证 19 条，待验证 5 条">
+        <span class="pass" style="flex:19" title="已验证 19 条（79%）"></span>
+        <span style="flex:5" title="待验证 5 条（21%）"></span>
+      </div>
+      <div class="ch-legend"><span style="--s: var(--status-pass)">已验证 19</span><span style="--s: var(--status-muted)">待验证 5</span></div>
+    </section>
+    <section class="ch-section">
+      <h3 class="ch-section-label">最近变化</h3>
+      <ul class="ch-feed">
+        <li>更新了“登录接口在会话过期时返回 401”的来源<span class="ch-time">今天 10:24</span></li>
+        <li>新建“令牌过期后重新登录的步骤”<span class="ch-time">昨天</span></li>
+        <li>分享给王五<span class="ch-time">10-30</span></li>
+      </ul>
+    </section>
+  </aside>
+</div>
+</body>
+</html>

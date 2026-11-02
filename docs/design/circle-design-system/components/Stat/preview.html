@@ -1,0 +1,52 @@
+<!-- @dsCard group="数据" height=230 width=760 subtitle="统计数字、迷你柱状图、组成分段条" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Stat — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: flex; flex-direction: column; gap: 22px; padding: 24px; }
+</style>
+</head>
+<body>
+<div id="root" class="pv area-knowledge">
+  <div class="ch-stats">
+    <div class="ch-stat">
+      <span class="ch-stat-label">知识</span>
+      <span class="ch-stat-value">338</span>
+      <span class="ch-stat-note">其中 291 条已验证</span>
+    </div>
+    <div class="ch-stat">
+      <span class="ch-stat-label">近 30 天被引用</span>
+      <span class="ch-stat-value">1,284</span>
+      <svg class="ch-spark" viewBox="0 0 160 28" role="img" aria-label="近 12 周每周被引用次数，最近一周 142 次">
+        <rect class="base" x="0" y="14" width="10" height="14" rx="2"/>
+        <rect class="base" x="13.5" y="11" width="10" height="17" rx="2"/>
+        <rect class="base" x="27" y="16" width="10" height="12" rx="2"/>
+        <rect class="base" x="40.5" y="9" width="10" height="19" rx="2"/>
+        <rect class="base" x="54" y="12" width="10" height="16" rx="2"/>
+        <rect class="base" x="67.5" y="8" width="10" height="20" rx="2"/>
+        <rect class="base" x="81" y="10" width="10" height="18" rx="2"/>
+        <rect class="base" x="94.5" y="6" width="10" height="22" rx="2"/>
+        <rect class="base" x="108" y="9" width="10" height="19" rx="2"/>
+        <rect class="base" x="121.5" y="5" width="10" height="23" rx="2"/>
+        <rect class="base" x="135" y="7" width="10" height="21" rx="2"/>
+        <rect class="now" x="148.5" y="2" width="10" height="26" rx="2"/>
+      </svg>
+    </div>
+    <div class="ch-stat">
+      <span class="ch-stat-label">待验证</span>
+      <span class="ch-stat-value">47</span>
+      <span class="ch-stat-note">比上周少 6 条</span>
+    </div>
+  </div>
+  <div class="ch-figure">
+    <div class="ch-figure-title">验证情况</div>
+    <div class="ch-parts" role="img" aria-label="已验证 291 条，待验证 47 条">
+      <span class="pass" style="flex:291" title="已验证 291 条（86%）"></span>
+      <span style="flex:47" title="待验证 47 条（14%）"></span>
+    </div>
+    <div class="ch-legend"><span style="--s: var(--status-pass)">已验证 291</span><span style="--s: var(--status-muted)">待验证 47</span></div>
+  </div>
+</div>
+</body>
+</html>

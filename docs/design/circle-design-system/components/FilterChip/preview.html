@@ -1,0 +1,45 @@
+<!-- @dsCard group="输入" height=150 subtitle="筛选标签与分段选择" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>FilterChip — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: flex; flex-direction: column; gap: 18px; padding: 24px; }
+  .pv > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+</style>
+</head>
+<body>
+<div id="root" class="pv">
+  <div role="group" aria-label="按状态筛选">
+    <button class="ch-chip" aria-pressed="true">全部</button>
+    <button class="ch-chip" aria-pressed="false">已验证</button>
+    <button class="ch-chip" aria-pressed="false">待验证</button>
+    <button class="ch-chip" aria-pressed="false">被引用</button>
+  </div>
+  <div>
+    <div class="ch-seg" role="tablist" aria-label="时间范围">
+      <button role="tab" aria-selected="false">近 7 天</button>
+      <button role="tab" aria-selected="true">近 14 天</button>
+      <button role="tab" aria-selected="false">近 30 天</button>
+    </div>
+    <div class="ch-seg" role="tablist" aria-label="范围">
+      <button role="tab" aria-selected="true">我的</button>
+      <button role="tab" aria-selected="false">与我共享</button>
+      <button role="tab" aria-selected="false">团队</button>
+    </div>
+  </div>
+</div>
+<script>
+  document.querySelectorAll('.ch-chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      chip.parentNode.querySelectorAll('.ch-chip').forEach(function (c) { c.setAttribute('aria-pressed', String(c === chip)); });
+    });
+  });
+  document.querySelectorAll('.ch-seg button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      b.parentNode.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-selected', String(x === b)); });
+    });
+  });
+</script>
+</body>
+</html>
