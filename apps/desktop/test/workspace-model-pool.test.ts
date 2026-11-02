@@ -861,63 +861,77 @@ test('integration reload and a custom model child cannot escape completion wrapp
   assert.deepEqual(endpoint.requests, ['child-special']);
 });
 
-test(
-  'scheduled task already holding the agent lease can use the same model wrapper',
-  { timeout: 5000 },
-  async (t) => {
-    const home = scratch(t),
-      workspace = scratch(t),
-      data = scratch(t),
-      resources = new CollaborationResources({ agents: 1 });
-    const git = (...args: string[]) =>
-      execFileSync('git', ['-C', workspace, ...args], { stdio: 'pipe' });
-    git('init', '--initial-branch=main');
-    await writeFile(join(workspace, 'source.txt'), 'source');
-    git('add', 'source.txt');
-    git(
-      '-c',
-      'user.name=Fixture',
-      '-c',
-      'user.email=fixture@example.invalid',
-      'commit',
-      '-m',
-      'Create fixture',
-    );
-    const model = new ScriptedModel([{ message: message('completed') }]);
-    const scheduler = new CollaborationScheduler({
-      dataDir: data,
-      resources,
-      executor: createAgentTaskExecutor({
-        createRuntime: async (_task, ctx) =>
-          new AgentRuntime({
-            home,
-            workspace: ctx.worktree,
-            userHome: home,
-            settings: trustFolder(defaultSettings(), ctx.worktree),
-            model,
-            wrapModel: poolWrapper(resources),
-            headless: true,
-            bundledExtensions: false,
-            screenshot: false,
+test('scheduled task already holding the agent lease can use the same model wrapper', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t),
+    data = scratch(t),
+    resources = new CollaborationResources({ agents: 1 });
+  const acquire = resources.pools.agent.acquire.bind(resources.pools.agent);
+  let selfAcquisitions = 0,
+    calledWithHeldLease = false;
+  // A nested acquisition would wait on the scheduler's own only lease.
+  // Reject it immediately, independently of Git and runtime setup time.
+  resources.pools.agent.acquire = (signal) => {
+    if (resources.pools.agent.active === resources.pools.agent.capacity) {
+      selfAcquisitions++;
+      return Promise.reject(
+        Error('the scheduled model tried to acquire its own agent lease'),
+      );
+    }
+    return acquire(signal);
+  };
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-C', workspace, ...args], { stdio: 'pipe' });
+  git('init', '--initial-branch=main');
+  await writeFile(join(workspace, 'source.txt'), 'source');
+  git('add', 'source.txt');
+  git(
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit',
+    '-m',
+    'Create fixture',
+  );
+  const model = new ScriptedModel([{ message: message('completed') }]);
+  const scheduler = new CollaborationScheduler({
+    dataDir: data,
+    resources,
+    executor: createAgentTaskExecutor({
+      createRuntime: async (_task, ctx) =>
+        new AgentRuntime({
+          home,
+          workspace: ctx.worktree,
+          userHome: home,
+          settings: trustFolder(defaultSettings(), ctx.worktree),
+          model,
+          wrapModel: poolWrapper(resources, () => {
+            calledWithHeldLease = resources.pools.agent.active === 1;
           }),
-      }),
-    });
-    cleanup(t, () => scheduler.close());
-    await scheduler.enqueue(
-      [
-        {
-          id: 'scheduled',
-          workspace,
-          access: 'readonly',
-          prompt: 'inspect',
-          acceptanceCriteria: ['inspect source'],
-        },
-      ],
-      { operationId: 'scheduled' },
-    );
-    scheduler.start();
-    await scheduler.waitForIdle();
-    assert.equal(model.requests.length, 1);
-    assert.equal(scheduler.get('scheduled')!.state, 'needs_review');
-  },
-);
+          headless: true,
+          bundledExtensions: false,
+          screenshot: false,
+        }),
+    }),
+  });
+  cleanup(t, () => scheduler.close());
+  await scheduler.enqueue(
+    [
+      {
+        id: 'scheduled',
+        workspace,
+        access: 'readonly',
+        prompt: 'inspect',
+        acceptanceCriteria: ['inspect source'],
+      },
+    ],
+    { operationId: 'scheduled' },
+  );
+  scheduler.start();
+  await scheduler.waitForIdle();
+  assert.equal(selfAcquisitions, 0);
+  assert.equal(calledWithHeldLease, true);
+  assert.equal(model.requests.length, 1);
+  assert.equal(scheduler.get('scheduled')!.state, 'needs_review');
+});
