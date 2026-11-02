@@ -22,6 +22,7 @@ try {
       : {}),
   });
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   page.setDefaultTimeout(8000);
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
@@ -66,6 +67,32 @@ try {
   assert.equal(await actionError(), 'skill not found');
   await send('/unrecognized-fixture-command');
   await page.locator('.toast').filter({ hasText: notice }).waitFor();
+  const motion = await page.locator('.toast').evaluate((toast) => {
+    const name = getComputedStyle(toast).animationName;
+    toast.style.animationName = 'none';
+    void toast.offsetWidth;
+    toast.style.animationPlayState = 'paused';
+    toast.style.animationName = name;
+    const animation = toast.getAnimations()[0];
+    if (!animation) throw Error('expected notice entry motion');
+    const samples = [];
+    for (const progress of [0, 0.5, 0.99]) {
+      animation.currentTime =
+        Number(animation.effect.getTiming().duration) * progress;
+      const box = toast.getBoundingClientRect();
+      samples.push({ left: box.left, right: box.right, width: innerWidth });
+    }
+    toast.style.animationName = '';
+    toast.style.animationPlayState = '';
+    return samples;
+  });
+  for (const box of motion)
+    assert.ok(
+      Math.abs((box.left + box.right) / 2 - box.width / 2) <= 1 &&
+        box.left >= 0 &&
+        box.right <= box.width + 1,
+      `notice stays centred and inside the window throughout entry: ${JSON.stringify(box)}`,
+    );
   await page.clock.runFor(1800);
   // The same words again: text alone cannot tell the newer notice from the older one.
   await send('/unrecognized-fixture-command');

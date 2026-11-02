@@ -4,11 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 
-// The right-hand column: the overview pinned beside the conversation and the drawer's mode
-// beside the overview, the drawer's edge dragged, the overview stepping aside when the
-// conversation would be squeezed and coming back when there is room, and the same in a
-// narrow window, where each lies over the conversation. The composer and the modes keep
-// their DOM, and the conversation its reading position, through all of it.
+// The shared third pane: a drawer mode replaces overview, its edge can be dragged,
+// and overview returns when the mode closes. Narrow windows overlay that same pane.
+// The composer and modes keep their DOM, and the conversation its reading position.
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
@@ -68,23 +66,31 @@ try {
       });
     // The layout settles over a frame or two: wait for what is asked, then look.
     const settled = async (what, check) => {
-      await page
-        .waitForFunction(
-          ([source]) => new Function('g', `return (${source})(g)`),
-          [check.toString()],
-        )
-        .catch(() => {});
       const stop = Date.now() + 6000;
       for (;;) {
         const actual = await geometry();
-        if (check(actual)) return actual;
+        if (check(actual)) {
+          // Entry intentionally slides 6px. Measure settled edges after the actual
+          // animation finishes, rather than treating its first frame as final layout.
+          await page
+            .locator('.inspector-overlay')
+            .evaluateAll((nodes) =>
+              Promise.all(
+                nodes
+                  .flatMap((node) => node.getAnimations())
+                  .map((animation) => animation.finished.catch(() => {})),
+              ),
+            );
+          const final = await geometry();
+          if (check(final)) return final;
+        }
         if (Date.now() > stop)
           throw Error(`${what}: ${JSON.stringify(actual)}`);
         await page.waitForTimeout(40);
       }
     };
     const tight = (g) => {
-      // The conversation, the overview and the drawer fill the group with no gap
+      // Conversation plus either overview or a drawer fill the group without a gap
       const used =
         g.main.width +
         (g.overview?.width ?? 0) +
@@ -119,7 +125,7 @@ try {
     });
     const reading = await transcript.evaluate((el) => el.scrollTop);
 
-    // 1680 wide: the overview is there from the start, and a mode opens beside it.
+    // 1680 wide: overview and the selected mode occupy the same third pane.
     const first = await settled(
       'the overview alone',
       (g) => g.overview && !g.drawer && g.main.width >= MIN_CONVERSATION,
@@ -130,19 +136,21 @@ try {
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })
       .click();
-    const both = await settled(
-      'the overview and the terminal',
-      (g) => g.overview && g.drawer && tight(g),
+    const terminal = await settled(
+      'the terminal replaces overview',
+      (g) => !g.overview && g.drawer && tight(g),
     );
-    assert.ok(both.drawer.width >= 500 && both.drawer.width <= 545);
-    assert.ok(both.main.width >= MIN_CONVERSATION);
+    assert.ok(
+      Math.abs(terminal.cluster.width - 380) <= 1,
+      'the mode opens at the shared 380px width',
+    );
+    assert.ok(terminal.main.width >= MIN_CONVERSATION);
     const resource = await page
       .locator('[data-inspector-resource="terminal"] .term-tabbar')
       .elementHandle();
-    await page.screenshot({ path: `${output}/${theme}-1680-both.png` });
+    await page.screenshot({ path: `${output}/${theme}-1680-terminal.png` });
 
-    // The drawer's own edge is dragged. Widened past what the conversation can spare beside
-    // the overview, it takes the overview's room: the overview steps aside.
+    // Resize that one pane across its usable range; it never adds a fourth column.
     const handle = page.getByRole('separator', {
       name: 'resize drawer',
       exact: true,
@@ -158,31 +166,38 @@ try {
     };
     await dragBy(-60);
     const wider = await settled(
-      'a wider drawer',
-      (g) => g.drawer && g.overview && g.drawer.width > both.drawer.width + 40,
+      'a wider shared pane',
+      (g) =>
+        g.drawer &&
+        !g.overview &&
+        tight(g) &&
+        g.drawer.width > terminal.drawer.width + 40,
     );
     assert.ok(wider.main.width >= MIN_CONVERSATION - 1);
-    await dragBy(-400);
-    const aside = await settled(
-      'the overview steps aside',
-      (g) => g.drawer && !g.overview && g.main.width >= MIN_CONVERSATION - 1,
+    await dragBy(-700);
+    const widest = await settled(
+      'the widest pane preserves the conversation',
+      (g) =>
+        g.drawer &&
+        !g.overview &&
+        tight(g) &&
+        Math.abs(g.main.width - MIN_CONVERSATION) <= 1,
     );
     assert.ok(
-      aside.drawer.width > wider.drawer.width,
-      'the drawer took the room',
+      widest.drawer.width > wider.drawer.width,
+      'the pane took the available room',
     );
-    assert.ok(
-      aside.main.width <= MIN_CONVERSATION + 40,
-      'the conversation keeps its least',
+    await page.screenshot({ path: `${output}/${theme}-1680-widest.png` });
+    await dragBy(800);
+    const minimum = await settled(
+      'the pane stops at its design minimum',
+      (g) =>
+        g.drawer &&
+        !g.overview &&
+        tight(g) &&
+        Math.abs(g.cluster.width - 300) <= 1,
     );
-    await page.screenshot({ path: `${output}/${theme}-1680-aside.png` });
-    // Narrowed again, with room and a little over, the overview comes back by itself.
-    await dragBy(450);
-    const back = await settled(
-      'the overview comes back',
-      (g) => g.drawer && g.overview && tight(g),
-    );
-    assert.ok(back.main.width >= MIN_CONVERSATION - 1);
+    assert.ok(minimum.main.width >= MIN_CONVERSATION - 1);
     // Keys move the edge too.
     await handle.focus();
     const before = (await geometry()).drawer.width;
@@ -213,7 +228,7 @@ try {
         .click();
       const reopened = await settled(
         'the mode again',
-        (g) => g.drawer && g.overview && tight(g),
+        (g) => g.drawer && !g.overview && tight(g),
       );
       assert.ok(
         Math.abs(reopened.drawer.width - width) <= 2,
@@ -248,8 +263,7 @@ try {
       .click();
     await settled('the overview asked for', (g) => g.overview && !g.drawer);
 
-    // 1280 wide, with the sidebar: the conversation, the overview and a mode do not all fit,
-    // so the mode wins, and the overview that stepped aside returns with the room.
+    // The same replacement at 1280px, with the sidebar still beside the conversation.
     await page.setViewportSize({ width: 1280, height: 950 });
     await settled('the overview alone at 1280', (g) => g.overview && !g.drawer);
     await page
@@ -280,7 +294,7 @@ try {
       .getByRole('button', { name: 'terminal panel', exact: true })
       .click();
     await settled('the overview is back', (g) => g.overview && !g.drawer);
-    // Asking for the overview beside a mode that is too wide gives the mode room or closes it.
+    // Asking for overview replaces the mode, even when both would fit.
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })
       .click();
@@ -289,8 +303,12 @@ try {
       .getByRole('button', { name: 'overview panel', exact: true })
       .click();
     await settled(
-      'the overview beside what fits, or alone',
-      (g) => g.overview && tight(g) && g.main.width >= MIN_CONVERSATION - 1,
+      'overview replaces the mode',
+      (g) =>
+        g.overview &&
+        !g.drawer &&
+        tight(g) &&
+        g.main.width >= MIN_CONVERSATION - 1,
     );
 
     // A file that is open takes 760 pixels: where the sidebar's room gives it that beside the
@@ -466,9 +484,13 @@ try {
     await search.press('Enter');
     const narrowFile = await settled(
       'the file over the conversation, with the sidebar folded',
-      (g) => g.mode === 'overlay' && g.drawer && g.drawer.width >= 890,
+      (g) =>
+        g.mode === 'overlay' && g.drawer && Math.abs(g.drawer.width - 760) <= 1,
     );
-    assert.ok(narrowFile.drawer.right <= 901);
+    assert.ok(
+      Math.abs(narrowFile.drawer.right - 900) <= 1,
+      'the 760px overlay is right aligned',
+    );
     assert.equal(
       await page.locator('.workbench.sidebar-collapsed').count(),
       1,
@@ -496,7 +518,15 @@ try {
       [3, 11],
     );
     assert.deepEqual(errors, []);
-    receipts.push({ theme, first, both, aside, back, overlays, passed: true });
+    receipts.push({
+      theme,
+      first,
+      terminal,
+      widest,
+      minimum,
+      overlays,
+      passed: true,
+    });
     await page.close();
   }
   await writeFile(

@@ -427,6 +427,7 @@ svg.circle-logo.large {
 .popover,
 .toast,
 .completion-list {
+  --graphite-position: translate(0, 0);
   background: var(--surface-3);
   box-shadow: var(--shadow-popover);
   border-radius: 8px;
@@ -435,6 +436,11 @@ svg.circle-logo.large {
   background: var(--surface-3);
   box-shadow: var(--shadow-dialog);
   border-radius: 14px;
+  /* Keep centring in the animated transform; production CSS also preserves it. */
+  --graphite-position: translate(-50%, -50%);
+}
+.toast {
+  --graphite-position: translateX(-50%);
 }
 .dropdown[data-state='open'],
 .popover[data-state='open'],
@@ -450,17 +456,18 @@ svg.circle-logo.large {
 @keyframes graphite-enter {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.985);
+    transform: var(--graphite-position, translate(0, 0)) translateY(6px)
+      scale(0.985);
   }
   to {
     opacity: 1;
-    transform: none;
+    transform: var(--graphite-position, translate(0, 0));
   }
 }
 @keyframes graphite-exit {
   to {
     opacity: 0;
-    transform: translateY(4px);
+    transform: var(--graphite-position, translate(0, 0)) translateY(4px);
   }
 }
 .page-heading h1 {

@@ -5,6 +5,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
+import { holdMenuExit } from '../../desktop/test/helpers/menu-exit.mjs';
 
 // The terminal mode: shells, a command Circle runs and device consoles are tabs of one
 // row, with a menu to make a terminal or reach a device, and what the tab in front can be
@@ -24,6 +25,7 @@ const open = async (browser, theme, locale) => {
     viewport: { width: 1680, height: 900 },
   });
   page.setDefaultTimeout(8000);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.goto(
@@ -141,13 +143,111 @@ try {
     await page.getByRole('menuitem', { name: /new local terminal/ }).waitFor();
     await page.getByRole('menuitem', { name: /edge-router/ }).waitFor();
     await page.screenshot({ path: `${output}/plus-light-en.png` });
+    const finishExit = await holdMenuExit(
+      page,
+      '.term-menu[data-state="open"]',
+    );
     await page.getByRole('menuitem', { name: /new local terminal/ }).click();
-    await page.getByRole('tab', { name: 'terminal 3' }).waitFor();
+    // The exiting modal menu still aria-hides the background; the tab itself is already drawn.
+    const created = page.getByRole('tab', {
+      name: 'terminal 3',
+      includeHidden: true,
+    });
+    await created.waitFor();
     assert.equal(
       (await calls(page, 'terminal.create')).length,
       1,
       'one shell was made',
     );
+    const target = await created.getAttribute('aria-controls');
+    const input = page.locator(`#${target} .xterm-helper-textarea`);
+    await input.focus();
+    await page.keyboard.type('MENU_EXIT_');
+    const closed = await finishExit();
+    assert.equal(
+      closed.terminal,
+      target,
+      'menu exit keeps the new terminal focused',
+    );
+    await page.getByRole('tab', { name: 'terminal 3' }).waitFor();
+    await page.keyboard.type('RETAIN');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(
+      ({ id, expected }) =>
+        window.terminalModeFixture.calls
+          .filter((entry) => entry.call === 'terminal.write')
+          .flatMap((entry) => entry.args)
+          .filter((args) => args.id === id)
+          .map((args) => args.data)
+          .join('') === expected,
+      { id: target.slice('terminal-'.length), expected: 'MENU_EXIT_RETAIN\r' },
+    );
+
+    // A menu can open a service form before its exit finishes. A late dialog
+    // fallback must not select the first field after the person chose another.
+    await page
+      .getByRole('button', { name: 'terminal menu', exact: true })
+      .click();
+    const finishServiceExit = await holdMenuExit(
+      page,
+      '.term-menu[data-state="open"]',
+    );
+    await page
+      .getByRole('menuitem', { name: 'start service', exact: true })
+      .click();
+    const serviceDialog = page.getByRole('dialog', {
+      name: 'start service',
+      exact: true,
+    });
+    const serviceName = serviceDialog.getByLabel('service name', {
+      exact: true,
+    });
+    const executable = serviceDialog.getByLabel('service executable', {
+      exact: true,
+    });
+    await serviceName.fill('retained service name');
+    // With no interaction, an initial rename/name field still selects its value.
+    await page.evaluate(async () => {
+      const { focusDialogField } = await import('/src/model/dialog-focus.ts');
+      focusDialogField(
+        document.querySelector('[role="dialog"][data-state="open"]'),
+      );
+    });
+    assert.deepEqual(
+      await serviceName.evaluate((node) => [
+        node.selectionStart,
+        node.selectionEnd,
+      ]),
+      [0, 'retained service name'.length],
+    );
+    await executable.fill('/synthetic/bin/node');
+    await executable.evaluate((node) =>
+      node.setSelectionRange(node.value.length, node.value.length),
+    );
+    await page.evaluate(async () => {
+      const { focusDialogField } = await import('/src/model/dialog-focus.ts');
+      focusDialogField(
+        document.querySelector('[role="dialog"][data-state="open"]'),
+      );
+    });
+    assert.equal(
+      await executable.evaluate((node) => node === document.activeElement),
+      true,
+      'late dialog focus keeps the chosen executable field',
+    );
+    await finishServiceExit();
+    assert.equal(
+      await executable.evaluate((node) => node === document.activeElement),
+      true,
+      'menu exit keeps input in the service form',
+    );
+    await page.keyboard.type(' --kept');
+    assert.equal(await executable.inputValue(), '/synthetic/bin/node --kept');
+    assert.equal(await serviceName.inputValue(), 'retained service name');
+    await serviceDialog
+      .getByRole('button', { name: 'cancel', exact: true })
+      .click();
+    await serviceDialog.waitFor({ state: 'detached' });
 
     // A new device, by address: nothing is saved, and a failure is said in the form.
     await page.getByRole('button', { name: 'new terminal or device' }).click();

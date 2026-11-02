@@ -72,6 +72,16 @@ import { currentSession } from '../model/state';
 import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
 
+// A terminal action may already have handed input to xterm or its form before menu exit.
+function keepTerminalActionFocus(event: Event): void {
+  if (
+    document.activeElement?.closest(
+      '.native-terminal-surface, [role="dialog"]:not([data-state="closed"])',
+    )
+  )
+    event.preventDefault();
+}
+
 type Controls = {
   search: (
     text: string,
@@ -1103,6 +1113,7 @@ export function NativeTerminal({
             // Find opens once the menu has handed the keyboard back to its button: opened
             // while the menu closes, the keyboard would land on the button after it.
             onCloseAutoFocus={(event) => {
+              keepTerminalActionFocus(event);
               if (!wantsFind.current) return;
               event.preventDefault();
               wantsFind.current = false;
@@ -1263,6 +1274,7 @@ export function NativeTerminal({
                         // The form opens once the menu has let go of the focus: opened
                         // while the menu closes, it would be dismissed by that hand-over.
                         onCloseAutoFocus={(event) => {
+                          keepTerminalActionFocus(event);
                           if (!wantsConnect.current) return;
                           event.preventDefault();
                           wantsConnect.current = false;

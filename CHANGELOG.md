@@ -12,6 +12,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Fixed
 
+- **Desktop overlays keep their position and keyboard focus through animations.** Dialogs and notices stay centred, search can reopen while its previous dialog closes, and a terminal menu cannot steal input from a newly opened shell.
 - **Closing a desktop panel menu keeps the panel open.** Escape dismisses the menu without also closing its drawer or leaving full view.
 - **Long model identifiers stay usable in the desktop.** The model menu fits the window and reveals the complete identifier on hover.
 - **Moving between desktop composer menus preserves focus.** A menu finishing its exit animation cannot dismiss a menu or dialog opened after it.

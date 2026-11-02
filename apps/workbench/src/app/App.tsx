@@ -1254,7 +1254,9 @@ export function App() {
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
       if (document.documentElement.dataset.keyCapture) return;
-      if (document.querySelector('[role="dialog"]')) return;
+      // A dialog retained only for its exit animation no longer owns shortcuts.
+      if (document.querySelector('[role="dialog"]:not([data-state="closed"])'))
+        return;
       // Keys typed in a terminal are the shell's: Ctrl+K there is ^K, not search.
       if (terminalOwnsKey(event)) return;
       if (isDesktopSearch(event)) {

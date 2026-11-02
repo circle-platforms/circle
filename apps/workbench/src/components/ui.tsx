@@ -11,7 +11,7 @@ import {
   type Ref,
 } from 'react';
 import { runControlAction } from '../model/session-row';
-import { focusMarkedField } from '../model/dialog-focus';
+import { focusDialogField, focusMarkedField } from '../model/dialog-focus';
 import { t } from '../i18n';
 /** Handlers for a button that acts as soon as it is pressed and must not act
  * again on that press's click. A press whose click never comes, because the
@@ -138,46 +138,6 @@ export function IconButton({
     </Tooltip.Root>
   );
 }
-function placeFocus(node: HTMLElement) {
-  node.focus({ focusVisible: true });
-}
-function focusDialogField(content: HTMLElement) {
-  // A dialog can name the field that starts with the keyboard (search).
-  const marked = content.querySelector('[data-initial-focus]');
-  if (marked instanceof HTMLElement) {
-    placeFocus(marked);
-    return;
-  }
-  const field = content.querySelector(
-    'input:not([type="hidden"]), textarea, select',
-  );
-  if (
-    field instanceof HTMLInputElement ||
-    field instanceof HTMLTextAreaElement
-  ) {
-    placeFocus(field);
-    // A rename box should start with the current name selected.
-    if (field instanceof HTMLInputElement) field.select();
-    return;
-  }
-  if (field instanceof HTMLSelectElement) {
-    placeFocus(field);
-    return;
-  }
-  const primary = content.querySelector('button.primary');
-  if (primary instanceof HTMLButtonElement && !primary.disabled) {
-    placeFocus(primary);
-    return;
-  }
-  const button = [...content.querySelectorAll('button')].find(
-    (item) =>
-      item instanceof HTMLButtonElement &&
-      !item.disabled &&
-      item.getAttribute('aria-label') !== 'close dialog',
-  );
-  if (button instanceof HTMLButtonElement) placeFocus(button);
-  else content.focus();
-}
 export function Modal({
   open,
   onOpenChange,
@@ -204,6 +164,15 @@ export function Modal({
   onEscapeKeyDown?: (event: KeyboardEvent) => void;
 }) {
   const content = useRef<HTMLDivElement>(null);
+  const interactedField = useRef<HTMLElement | null>(null);
+  const rememberField = (target: EventTarget | null) => {
+    if (
+      target instanceof HTMLElement &&
+      target.matches('input, textarea, select, [contenteditable="true"]')
+    )
+      interactedField.current = target;
+  };
+
   // A nested dialog, or one that opts in, returns the keyboard to its opener.
   const opener = useRef<HTMLElement | null>(null);
   // An autofocus field can take focus during mounting, before Radix reports that the
@@ -234,13 +203,17 @@ export function Modal({
     return () => document.removeEventListener('focusin', onFocus, true);
   }, [restoreFocus]);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      interactedField.current = null;
+      return;
+    }
     // A menu that opened the dialog restores its trigger in a timeout. A nested
     // timeout runs after that, so the field keeps the focus and the keystrokes.
     let nested = 0;
     const timer = window.setTimeout(() => {
       nested = window.setTimeout(() => {
-        if (content.current) focusDialogField(content.current);
+        if (content.current)
+          focusDialogField(content.current, interactedField.current);
       }, 0);
     }, 0);
     return () => {
@@ -313,6 +286,9 @@ export function Modal({
             if (event.currentTarget instanceof Element)
               focusMarkedField(event.currentTarget, event);
           }}
+          onInputCapture={(event) => rememberField(event.target)}
+          onPointerDownCapture={(event) => rememberField(event.target)}
+          onKeyDownCapture={(event) => rememberField(event.target)}
           onKeyDown={(event) => {
             if (event.key !== 'Escape') event.stopPropagation();
           }}

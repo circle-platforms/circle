@@ -50,6 +50,7 @@ let mainReads = 0;
 let interruptNextBatch = false;
 let holdNextSaveResponse = false;
 let releaseSaveResponse;
+let releaseSavesOnClose = false;
 const batchCalls = [];
 const batchCommitCounts = new Map();
 let seq = 0,
@@ -285,6 +286,7 @@ const server = await createServer({
                   holdNextSaveResponse = false;
                   await new Promise((resolve) => {
                     releaseSaveResponse = resolve;
+                    if (releaseSavesOnClose) resolve();
                   });
                 }
                 await new Promise((resolve) => setTimeout(resolve, 400));
@@ -596,6 +598,7 @@ try {
   holdNextSaveResponse = true;
   let observedWritten = false;
   let helperFinished = false;
+  let heldSaveError;
   const heldSave = saveWithShortcut(
     switched,
     modifier,
@@ -608,13 +611,18 @@ try {
     },
     'wait for the completed save',
     switched.locator('.file-view:visible'),
-  ).then(() => {
-    helperFinished = true;
-  });
-  await settle(
-    () => !!releaseSaveResponse && observedWritten,
-    'save is held after the disk write',
+  ).then(
+    () => {
+      helperFinished = true;
+    },
+    (error) => {
+      heldSaveError = error;
+    },
   );
+  await settle(() => {
+    if (heldSaveError) throw heldSaveError;
+    return !!releaseSaveResponse && observedWritten;
+  }, 'save is held after the disk write');
   await switched
     .getByRole('button', { name: 'saving file', exact: true })
     .waitFor();
@@ -625,6 +633,7 @@ try {
   );
   releaseSaveResponse();
   await heldSave;
+  if (heldSaveError) throw heldSaveError;
   assert.equal(
     readFileSync(join(workspace, 'main.ts'), 'utf8'),
     initial + '// held save\n',
@@ -1235,6 +1244,11 @@ try {
       );
   throw error;
 } finally {
+  // A failed check must not leave a fixture response held or hide its error behind
+  // a detached background helper rejecting while the browser closes.
+  releaseSavesOnClose = true;
+  releaseSaveResponse?.();
+  releaseHeldRead?.();
   await browser?.close();
   for (const stream of streams) stream.end();
   await server.close();

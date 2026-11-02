@@ -177,6 +177,54 @@ const stored = (page) =>
     () =>
       JSON.parse(localStorage.getItem('circle.workbench.preview.v1')).settings,
   );
+// Sample the actual CSS entry and exit at fixed progress, independently of CPU speed.
+async function dialogMotionInsideWindow(page) {
+  const samples = await settings(page).evaluate((dialog) => {
+    const original = {
+      name: dialog.style.animationName,
+      play: dialog.style.animationPlayState,
+    };
+    const samples = [];
+    for (const state of ['open', 'closed']) {
+      dialog.style.animationName = '';
+      dialog.dataset.state = state;
+      const name = getComputedStyle(dialog).animationName;
+      dialog.style.animationName = 'none';
+      void dialog.offsetWidth;
+      dialog.style.animationPlayState = 'paused';
+      dialog.style.animationName = name;
+      const animation = dialog.getAnimations()[0];
+      if (!animation) throw Error('expected dialog motion');
+      const duration = Number(animation.effect.getTiming().duration);
+      for (const progress of [0, 0.25, 0.5, 0.75, 0.99]) {
+        animation.currentTime = duration * progress;
+        const box = dialog.getBoundingClientRect();
+        samples.push({
+          state,
+          progress,
+          x: box.x,
+          y: box.y,
+          right: box.right,
+          bottom: box.bottom,
+          width: innerWidth,
+          height: innerHeight,
+        });
+      }
+    }
+    dialog.dataset.state = 'open';
+    dialog.style.animationName = original.name;
+    dialog.style.animationPlayState = original.play;
+    return samples;
+  });
+  for (const box of samples)
+    assert.ok(
+      box.x >= 0 &&
+        box.y >= 0 &&
+        box.right <= box.width + 1 &&
+        box.bottom <= box.height + 1,
+      `dialog motion stays inside window: ${JSON.stringify(box)}`,
+    );
+}
 async function openFromSidebar(page) {
   await page
     .locator('.sidebar-footer')
@@ -699,10 +747,12 @@ try {
     [640, 'dark', 'zh-CN'],
   ]) {
     const { page, problems } = await open(width, theme, language);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.evaluate(() => {
       location.hash = '/page/settings';
     });
     await settings(page).waitFor();
+    await dialogMotionInsideWindow(page);
     const narrow = width <= 720;
     if (language === 'zh-CN')
       assert.deepEqual(await labelsOf(page), ZH_LABELS, 'the list in Chinese');

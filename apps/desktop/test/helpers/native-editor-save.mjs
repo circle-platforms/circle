@@ -16,7 +16,10 @@ export async function saveWithShortcut(
   scope = page,
 ) {
   const editor = scope.locator('.native-code-editor').first();
-  const saveButton = scope.getByRole('button', { name: 'save', exact: true });
+  // One action changes its accessible name while it is pending; keep observing it.
+  const saveButton = scope.getByRole('button', {
+    name: /^(?:save|saving file)$/,
+  });
   const unsaved = scope.getByText('unsaved changes', { exact: true });
   const saved = scope.getByText('all changes saved', { exact: true });
   const deadline = Date.now() + patience(15000);

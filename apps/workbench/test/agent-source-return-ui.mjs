@@ -140,13 +140,33 @@ try {
   }, process.env.CIRCLE_AGENT_SOURCE_THEME ?? 'dark');
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
-  const openBySearch = async () => {
+  // Certificate/update dialogs do not use Radix's data-state; they still own keys.
+  await page.evaluate(() => {
+    const dialog = document.createElement('div');
+    dialog.id = 'non-radix-dialog';
+    dialog.setAttribute('role', 'dialog');
+    document.body.append(dialog);
+  });
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  assert.equal(
+    await page.locator('.dialog-content[data-state="open"]').count(),
+    0,
+  );
+  await page.evaluate(() =>
+    document.getElementById('non-radix-dialog').remove(),
+  );
+  const openBySearch = async ({ holdExit = false } = {}) => {
     await page.keyboard.press('ControlOrMeta+p');
     const input = page.getByRole('textbox', {
       name: 'global search',
       exact: true,
     });
     await input.fill('README.md');
+    if (holdExit)
+      await input.evaluate((field) => {
+        field.closest('[role="dialog"]').style.animationPlayState = 'paused';
+      });
     await input.press('Enter');
     await page
       .locator('.file-view-heading strong')
@@ -194,6 +214,12 @@ try {
   // conversation, a task's own included.
   const searchSession = async (title, id) => {
     await page.keyboard.press('ControlOrMeta+k');
+    // A new search is usable while the previous quick-open is still exiting.
+    const dialog = page.locator('.dialog-content[data-state="open"]');
+    await dialog.waitFor();
+    await dialog.evaluate((node) => {
+      node.style.animationPlayState = '';
+    });
     await page
       .getByRole('textbox', { name: 'global search', exact: true })
       .fill(title);
@@ -309,7 +335,7 @@ try {
     await closeAgent();
   }
   await openAgent('source-child');
-  await openBySearch();
+  await openBySearch({ holdExit: true });
   await searchSession(second.title, second.id);
   assert.equal(
     await record.count(),
