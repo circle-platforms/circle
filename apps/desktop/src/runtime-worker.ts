@@ -2,9 +2,10 @@ import {
   createRuntimePerformanceDiagnostics,
   runtimeCommandDiagnosticMetadata,
 } from './runtime-performance-diagnostics.js';
-import { readFileSync } from 'node:fs';
+import { close as closeFile, open, readFileSync, stat } from 'node:fs';
 import { dirname } from 'node:path';
 import { RuntimeController } from './runtime-controller';
+import { pendingResources, ThreadPoolWatch } from './thread-pool-watch';
 import { BrowserBridge } from '../../../src/browser/tools.js';
 import type { BrowserReply } from '../../../src/browser/protocol.js';
 import { RuntimeFixtureModel } from './runtime-fixture';
@@ -24,6 +25,7 @@ type Port = {
 };
 const port = (process as unknown as { parentPort: Port }).parentPort;
 if (!port) throw Error('Circle runtime needs its native parent process');
+watchThreadPool();
 const home = process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
 if (!home) throw Error('Circle runtime home is missing');
 const workspaceTools = workspaceToolsForWorker(import.meta.url);
@@ -196,3 +198,37 @@ process.on('SIGINT', () => {
 });
 controller.publish();
 void controller.initialize();
+
+/**
+ * Tells the supervisor when libuv's thread pool stops taking work, as macOS has been seen to
+ * cause (thread-pool-watch.ts): every file, DNS and crypto operation here would then wait for
+ * ever, and the supervisor ends and restarts this process. On by default on macOS only. The
+ * test profile can shorten the interval and point the probe at a FIFO, whose open waits for a
+ * writer, to stand for a pool that stopped.
+ */
+function watchThreadPool() {
+  const test = Boolean(process.env.CIRCLE_WORKBENCH_TEST_PROFILE);
+  const interval = test
+    ? Number(process.env.CIRCLE_RUNTIME_POOL_WATCH_MS) || undefined
+    : undefined;
+  const fifo = test
+    ? process.env.CIRCLE_RUNTIME_POOL_PROBE_FIFO || undefined
+    : undefined;
+  if (process.platform !== 'darwin' && !interval) return;
+  new ThreadPoolWatch({
+    probe: fifo
+      ? (done) =>
+          open(fifo, 'r', (error, fd) =>
+            error ? done() : closeFile(fd, () => done()),
+          )
+      : (done) => stat('/', () => done()),
+    intervalMs: interval,
+    stallMs: interval && interval * 3,
+    onStall: ({ waitedMs }) =>
+      port.postMessage({
+        type: 'thread-pool-stalled',
+        waitedMs,
+        pending: pendingResources(),
+      }),
+  }).start();
+}
