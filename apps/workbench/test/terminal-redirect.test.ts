@@ -128,7 +128,7 @@ test('a tab the person named is called by its name on the card and in why nothin
       'Circle is using the tab; nothing was typed in build',
       moved!,
     ),
-    'Circle控制“build”',
+    'Circle 正在使用“build”',
   );
   setLanguage('en', storage);
   assert.equal(

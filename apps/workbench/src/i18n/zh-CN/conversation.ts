@@ -34,7 +34,7 @@ export const conversation: Record<string, string> = {
   'Hook allowed this call.': '钩子允许了此次调用。',
   'Hook session_start output:': '钩子会话开始输出：',
   'Hook output ({name}):': '钩子输出（{name}）：',
-  'stopping work before deletion…': '等待停止任务并删除中…',
+  'stopping work before deletion…': '正在停止任务以便删除…',
   'open in another terminal; view only': '已在其他终端打开，仅可查看',
   'no model connected': '未连接模型',
   // the heading and the session actions
@@ -75,7 +75,7 @@ export const conversation: Record<string, string> = {
     '模型达到输出上限，响应未完成',
   'model context window exhausted; response incomplete':
     '模型上下文已满，响应未完成',
-  'merging {done}/{total}': '等待合并中 · {done}/{total}',
+  'merging {done}/{total}': '正在合并 {done}/{total}',
   'compacted · ~{before} → ~{after} · {n} messages':
     '已压缩 · ~{before} → ~{after} · {n} 条消息',
   'auto-compacted · ~{before} → ~{after} · {n} messages':
@@ -85,9 +85,9 @@ export const conversation: Record<string, string> = {
   'compaction recovery budget exhausted': '压缩恢复次数已用尽',
   'summary did not complete': '摘要未完成',
   'compaction failed: {message}': '压缩失败：{message}',
-  compacting: '等待压缩中',
-  'compacting {done}/{total}': '等待压缩中 · {done}/{total}',
-  'recovering {done}/{total}': '等待恢复中 · {done}/{total}',
+  compacting: '正在压缩',
+  'compacting {done}/{total}': '正在压缩 {done}/{total}',
+  'recovering {done}/{total}': '正在恢复 {done}/{total}',
   'some usage unreported': '部分用量未返回',
   'request does not fit the model context budget': '请求无法放入模型上下文预算',
   'requested output exceeds the model output limit':
@@ -125,7 +125,7 @@ export const conversation: Record<string, string> = {
   'restore conversation': '恢复对话',
   steering: '插话',
   'follow-up': '追加消息',
-  'remove queued {kind}': '移除排队中的{kind}',
+  'remove queued {kind}': '移除排队中的 {kind}',
   'return queued messages to draft': '把排队的消息放回草稿',
   // the composer
   'input completions': '输入补全',

@@ -288,11 +288,11 @@ try {
   }, sessionId);
   await page
     .getByTestId('compaction-progress')
-    .filter({ hasText: '等待压缩中' })
+    .filter({ hasText: '正在压缩' })
     .waitFor();
   assert.match(
     await page.getByTestId('compaction-progress').innerText(),
-    /等待压缩中 · \d+\/\d+/,
+    /正在压缩 \d+\/\d+/,
   );
   for (const theme of ['dark', 'light']) {
     assert.equal(

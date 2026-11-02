@@ -221,7 +221,7 @@ try {
               .waitFor({ state: 'attached' });
           previousWidth = width;
           const browserPanel = page.getByRole('button', {
-            name: language === 'en' ? 'browser panel' : '浏览器面板',
+            name: language === 'en' ? 'browser panel' : '浏览器 面板',
             exact: true,
           });
           if ((await browserPanel.getAttribute('aria-pressed')) !== 'true')
@@ -250,14 +250,20 @@ try {
                 .filter((button) => button.getClientRects().length)
                 .map((button) => {
                   const box = button.getBoundingClientRect();
-                  return [
-                    box.width,
-                    box.height,
-                    getComputedStyle(button).borderRadius,
-                  ];
+                  const style = getComputedStyle(button);
+                  return {
+                    width: box.width,
+                    height: box.height,
+                    css: [style.width, style.height, style.borderRadius],
+                  };
                 }),
             );
-          for (const size of iconSizes) assert.deepEqual(size, [26, 26, '6px']);
+          for (const size of iconSizes) {
+            assert.deepEqual(size.css, ['26px', '26px', '6px']);
+            // Transformed DOMRects can differ by a few float ULPs at fractional coordinates.
+            assert.ok(Math.abs(size.width - 26) < 0.001, JSON.stringify(size));
+            assert.ok(Math.abs(size.height - 26) < 0.001, JSON.stringify(size));
+          }
           // However narrow the field, the address fits it: the path gives way, then the
           // host with an ellipsis, and nothing runs past the field's edge.
           const address = await page
@@ -402,7 +408,7 @@ try {
         { language, theme },
       );
       const toggle = page.getByRole('button', {
-        name: language === 'en' ? 'browser panel' : '浏览器面板',
+        name: language === 'en' ? 'browser panel' : '浏览器 面板',
         exact: true,
       });
       if ((await toggle.getAttribute('aria-pressed')) !== 'true')
@@ -411,7 +417,7 @@ try {
       const frame = page.getByTestId('browser-operating');
       await frame.waitFor();
       const expected =
-        language === 'en' ? 'Circle is operating' : '等待Circle完成操作中';
+        language === 'en' ? 'Circle is operating' : 'Circle 正在操作';
       assert.equal(await frame.getAttribute('aria-label'), expected);
       assert.equal(await frame.getAttribute('title'), expected);
       const ring = await frame.evaluate((node) => {

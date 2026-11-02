@@ -2149,10 +2149,10 @@ try {
             name:
               kind === 'service'
                 ? zh
-                  ? '终端面板'
+                  ? '终端 面板'
                   : 'terminal panel'
                 : zh
-                  ? '浏览器面板'
+                  ? '浏览器 面板'
                   : 'browser panel',
             exact: true,
           });

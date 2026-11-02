@@ -204,7 +204,7 @@ try {
     });
   const openBrowser = async (language = 'en') => {
     const toggle = page.getByRole('button', {
-      name: language === 'en' ? 'browser panel' : '浏览器面板',
+      name: language === 'en' ? 'browser panel' : '浏览器 面板',
       exact: true,
     });
     if ((await toggle.getAttribute('aria-pressed')) !== 'true')

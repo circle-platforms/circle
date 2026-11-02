@@ -1,26 +1,26 @@
 export const githubConnection: Record<string, string> = {
-  'loading…': '等待加载中…',
+  'loading…': '正在加载…',
   'inspect the exact commit and files before publishing':
     '检查待发布的提交和文件',
   'local draft storage is unavailable; keep this panel open and copy your text before leaving':
     '本地草稿暂时无法保存；请保持面板打开，离开前复制文字。',
   'GitHub disconnected': 'GitHub 已断开连接',
-  'GitHub authorization in progress': '等待GitHub授权中',
+  'GitHub authorization in progress': '等待 GitHub 授权中',
   'Resources belong to {name}. Start a conversation in the selected project to make changes.':
     '这些资源属于 {name}。在所选项目中开始会话后即可修改。',
-  'verifying GitHub account': '等待验证GitHub账户中…',
+  'verifying GitHub account': '正在验证 GitHub 账户…',
   'GitHub authorization was cancelled before a code was ready. No new connection was established.':
     'GitHub 授权已在授权码生成前取消，尚未建立新连接。',
   'GitHub authorization was cancelled.': 'GitHub 授权已取消。',
 
-  'preparing GitHub authorization code': '等待生成GitHub授权码中…',
+  'preparing GitHub authorization code': '正在准备 GitHub 授权码…',
   'GitHub account': 'GitHub 账户',
   'GitHub authorization has expired.': 'GitHub 授权已失效。',
   'GitHub denied access to this repository.': 'GitHub 拒绝访问此仓库。',
   'GitHub could not be reached or the request failed.':
     '无法连接 GitHub 或请求失败。',
   'Reconnect this GitHub account here. Your edits are kept.':
-    '在此重新连接GitHub账户，编辑内容已保留。',
+    '在此重新连接 GitHub 账户，编辑内容已保留。',
   'Review the account permissions and allowed repositories before retrying. Your edits are kept.':
     '检查账户权限与允许的仓库后重试，编辑内容已保留。',
   'Check your network and retry the read when ready. Your edits are kept.':
@@ -64,7 +64,7 @@ export const githubConnection: Record<string, string> = {
     '在对话中管理 GitHub 连接、已审阅的拉取请求和 CI。',
 
   'GitHub connection error': 'GitHub 连接出错',
-  'loading GitHub integration': '等待加载GitHub集成中…',
+  'loading GitHub integration': '正在加载 GitHub 集成…',
   'GitHub integration could not be loaded.': '无法加载 GitHub 集成。',
   'Secure credential storage is unavailable.': '安全凭据存储暂不可用。',
   'GitHub action could not be completed.': '未能完成 GitHub 操作。',
@@ -79,7 +79,7 @@ export const githubConnection: Record<string, string> = {
   'GitHub connection is unavailable; enable the bundled GitHub extension in Circle desktop.':
     'GitHub 连接不可用；请在 Circle 桌面版启用内置 GitHub 扩展。',
   'connected as {account}': '已连接：{account}',
-  'waiting for GitHub authorization': '等待GitHub授权中',
+  'waiting for GitHub authorization': '等待 GitHub 授权中',
   'GitHub connection lasts only for this Circle session.':
     'GitHub 连接仅在本次 Circle 会话中有效。',
   'sign-in': '登录方式',
@@ -91,12 +91,12 @@ export const githubConnection: Record<string, string> = {
   'turned off': '已关闭',
   'not available': '不可用',
   'needs attention': '需要处理',
-  'connecting…': '等待连接中…',
-  'Turn on GitHub to connect your account.': '开启GitHub后即可连接账户。',
+  'connecting…': '正在连接…',
+  'Turn on GitHub to connect your account.': '开启 GitHub 后即可连接账户。',
   'Circle uses this account only for the repositories you allow.':
-    'Circle仅在已允许的仓库中使用此账户。',
+    'Circle 仅在已允许的仓库中使用此账户。',
   'Connect your GitHub account to read pull request checks and CI, and to publish reviewed changes after your approval.':
-    '连接GitHub账户后，可读取拉取请求检查和CI结果；发布已审阅的修改仍需批准。',
+    '连接 GitHub 账户后，可读取拉取请求检查和 CI 结果；发布已审阅的修改仍需批准。',
   'open GitHub': '打开 GitHub',
   'copy code': '复制代码',
   'try in a conversation': '在对话中试用',
@@ -104,7 +104,7 @@ export const githubConnection: Record<string, string> = {
   'connect GitHub': '连接 GitHub',
   repositories: '仓库',
   'Circle works only with the repositories listed here. This does not change what your GitHub account allows.':
-    'Circle仅使用此处列出的仓库，不会改变GitHub账户权限。',
+    'Circle 仅使用此处列出的仓库，不会改变 GitHub 账户权限。',
   'add repository': '添加仓库',
   add: '添加',
   'Write it as owner/repository, for example octo-org/app.':

@@ -33,7 +33,7 @@ export const pages: Record<string, string> = {
   'Whether the commits and pull requests Circle makes credit Circle.':
     'Circle 创建的提交和 PR 是否署名 Circle。',
   'When enabled in a Git repository, Circle asks the model to credit Circle in commits and pull requests. The commit author follows your attribution settings.':
-    '在Git仓库中启用后，Circle会要求模型在提交和PR中署名Circle。提交作者取决于署名设置。',
+    '在 Git 仓库中启用后，Circle 会要求模型在提交和 PR 中署名 Circle。提交作者取决于署名设置。',
   'Files a session may read outside a project, and name-based protections for sensitive files.':
     '会话可以读取的项目外文件，以及基于文件名的敏感文件保护。',
   'Values you name once and use in a tool call as %NAME%.':
@@ -58,10 +58,10 @@ export const pages: Record<string, string> = {
   'no matching settings': '没有匹配的设置',
   navigation: '导航',
   'invalid extension setting': '扩展设置无效',
-  'saving extension enable request': '等待保存启用请求中',
-  'saving extension disable request': '等待保存停用请求中',
-  'enabling extension': '等待启用扩展中',
-  'disabling extension': '等待停用扩展中',
+  'saving extension enable request': '正在保存启用请求',
+  'saving extension disable request': '正在保存停用请求',
+  'enabling extension': '正在启用扩展',
+  'disabling extension': '正在停用扩展',
   'extension setting saved; reload required': '扩展设置已保存，需要重新加载',
   'preview setting updated; no extension code was loaded':
     '预览设置已更新，未加载扩展代码',
@@ -145,15 +145,15 @@ export const pages: Record<string, string> = {
   'search commands': '搜索命令',
   'edit template': '编辑模板',
   'command template': '命令模板',
-  'saving command template': '等待保存命令模板中',
+  'saving command template': '正在保存命令模板',
   'save template': '保存模板',
   'Shell snippets remain plain text in this frontend. A connected runtime must expand and execute a custom command.':
     '在这个前端里，shell 片段只是纯文本。自定义命令需要由已连接的运行时展开并执行。',
   'command added to the message draft': '命令已加入消息草稿',
   'insert into draft': '插入草稿',
   // mcp servers
-  'reloading MCP servers': '等待重新加载MCP服务器中',
-  'reloading skills': '等待重新加载技能中',
+  'reloading MCP servers': '正在重新加载 MCP 服务器',
+  'reloading skills': '正在重新加载技能',
   reload: '重新加载',
   'add server': '添加服务器',
   configure: '配置',
@@ -182,7 +182,7 @@ export const pages: Record<string, string> = {
     '运行时工具和界面组件的生命周期彼此独立。',
   'extension reload recorded; no code was loaded':
     '已记录扩展重新加载请求；没有加载任何代码',
-  'reloading extensions': '等待重新加载扩展中',
+  'reloading extensions': '正在重新加载扩展',
   bundled: '内置',
   'runtime extension {name} is not installed': '运行时扩展 {name} 未安装',
   'runtime extension {name} failed to load': '运行时扩展 {name} 加载失败',
@@ -271,7 +271,7 @@ export const pages: Record<string, string> = {
   'UI controls are local; no runtime effects are implied.':
     '界面控件只在本地生效；不代表会影响运行时。',
   '{amount} per million tokens': '{amount} / 百万 token',
-  'models.dev and your settings': 'models.dev与当前设置',
+  'models.dev and your settings': 'models.dev 与当前设置',
   'key preferences saved': '按键偏好已保存',
   'open the session tree': '打开会话树',
   'fork the session': '分叉会话',
@@ -295,10 +295,10 @@ export const pages: Record<string, string> = {
   'no decisions in this session yet': '这个会话还没有审批记录',
   'Circle is up to date': 'Circle 已是最新版本',
   'Circle {version} is available': '有新版本 Circle {version}',
-  'checking…': '等待检查中…',
+  'checking…': '正在检查…',
   'Circle was updated to {version}': 'Circle 已更新到 {version}',
   'downloading Circle {version} · {percent}%':
-    '等待下载Circle{version}完成中 · {percent}%',
+    '正在下载 Circle {version} · {percent}%',
   'Circle {version} is ready to install': 'Circle {version} 已下载，重启后更新',
   'restarting…': '等待重启中…',
   'update failed: {error}': '更新失败：{error}',
@@ -322,7 +322,7 @@ export const pages: Record<string, string> = {
   'This copy will quit and replace {folder}. It will not start again until chrome-sandbox belongs to root.':
     'Circle 会退出并替换 {folder}。在 chrome-sandbox 重新属于 root 之前，它不会自己启动。',
   'quit and replace': '退出并替换',
-  'downloading {percent}%': '等待下载完成中 · {percent}%',
+  'downloading {percent}%': '正在下载 {percent}%',
   'reads only': '只读取',
   'changes files': '修改文件',
   'runs commands': '运行命令',
@@ -363,7 +363,7 @@ export const pages: Record<string, string> = {
   'skill instructions': '技能正文',
   'skill added': '已添加技能',
   'use a name like review-diff': '用 review-diff 这样的名字',
-  viewing: '查看中',
+  viewing: '正在查看',
   'show or hide the sidebar': '显示或隐藏侧边栏',
   'background the turn': '把这一轮放到后台',
   'press the new key': '按下新的按键',
@@ -381,9 +381,9 @@ export const pages: Record<string, string> = {
   suspend: '暂停进程',
   // settings: workspace trust, protected files, network trust, keyboard
   'Circle reads a folder and runs in it only after you trust it. Trusting a folder lets Circle load the instructions, skills, commands and extensions that live in it.':
-    '文件夹经明确信任后，Circle才会读取并在其中运行。信任后会加载该文件夹中的指令、技能、命令和扩展。',
+    '文件夹经明确信任后，Circle 才会读取并在其中运行。信任后会加载该文件夹中的指令、技能、命令和扩展。',
   'remove…': '删除…',
-  'Circle is working in this folder now': 'Circle在此文件夹工作',
+  'Circle is working in this folder now': 'Circle 正在这个文件夹里工作',
   'remove {name}?': '删除 {name}？',
   'remove workspace': '删除工作区',
   'Circle stops trusting this folder and hides its conversations from the sidebar. The files stay where they are, and so does the history: archived sessions stay under all sessions, and opening the folder again trusts it once you confirm.':
@@ -414,7 +414,7 @@ export const pages: Record<string, string> = {
   'Circle reads these when it starts, so restart the application for a change to take effect.':
     'Circle 启动时读取这些设置，改动后要重启应用才会生效。',
   'check a file name': '检查一个文件名',
-  '{name} is protected by {pattern}': '{name}受{pattern}保护',
+  '{name} is protected by {pattern}': '{name} 受 {pattern} 保护',
   '{name} is not protected': '{name} 不受保护',
   'always protected · {n} patterns': '一直受保护 · {n} 个样式',
   "Circle's own list. An extra pattern adds to it and can never take a name away from it.":
@@ -445,9 +445,9 @@ export const pages: Record<string, string> = {
   'Circle adds these to the roots it already trusts, and hands the whole set to every command and tool it starts.':
     'Circle 把这些加进本来就信任的根证书，并把它信任的整套交给它启动的每个命令和工具。',
   'Nothing of your own is trusted yet beyond the defaults. Name a PEM file in trust_cert_files, or set SSL_CERT_FILE, and restart Circle to add your own.':
-    '尚未添加默认列表之外的受信任证书。在trust_cert_files中指定PEM文件，或设置SSL_CERT_FILE，然后重启Circle。',
+    '尚未添加默认列表之外的受信任证书。在 trust_cert_files 中指定 PEM 文件，或设置 SSL_CERT_FILE，然后重启 Circle。',
   'Every action starts on its default key. Choose change… and press the keys you want instead; esc gives up. These keys belong to this application; the terminal reads keybindings.json.':
-    '每个动作默认使用原按键。选择“更改…”后按下新按键，按esc放弃。这些设置仅适用于桌面应用；终端读取keybindings.json。',
+    '每个动作默认使用原按键。选择“更改…”后按下新按键，按 esc 放弃。这些设置仅适用于桌面应用；终端读取 keybindings.json。',
   key: '按键',
   'press a key…': '请按一个键…',
   'change the key for {action}': '更改 {action} 的按键',

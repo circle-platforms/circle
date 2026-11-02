@@ -250,7 +250,7 @@ try {
         document
           .querySelector(`.drawer-mode-button[aria-label="${name}"]`)
           ?.getAttribute('aria-pressed') === 'true',
-      w('terminal panel', '终端面板'),
+      w('terminal panel', '终端 面板'),
     );
     assert.deepEqual(errors, []);
     await page.close();

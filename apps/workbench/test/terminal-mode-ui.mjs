@@ -31,7 +31,7 @@ const open = async (browser, theme, locale) => {
   );
   await page
     .getByRole('button', {
-      name: locale === 'zh-CN' ? '终端面板' : 'terminal panel',
+      name: locale === 'zh-CN' ? '终端 面板' : 'terminal panel',
       exact: true,
     })
     .click();

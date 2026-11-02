@@ -136,7 +136,7 @@ test('actual bundled command stores notice provenance while identical user/model
       rows.filter((m) => ids.includes(m.id)).map(formatRuntimeNotice),
       [
         'GitHub 已断开连接',
-        '等待GitHub授权中',
+        '等待 GitHub 授权中',
         '已连接 GitHub',
         'GitHub 连接出错',
       ],

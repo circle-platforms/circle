@@ -13,11 +13,11 @@ export const editor: Record<string, string> = {
   'exit code': '退出码',
   'open possible moved file: {path}': '打开可能移动的文件：{path}',
 
-  'loading file': '等待加载文件中',
+  'loading file': '正在加载文件',
   'file changed on disk': '磁盘上的文件已改变',
   'review disk changes': '审阅磁盘改动',
   'saved: {saved}; not saved: {unsaved}': '已保存：{saved}；未保存：{unsaved}',
-  'saving file': '等待保存文件中',
+  'saving file': '正在保存文件',
   'file deleted on disk; your changes are kept':
     '磁盘上的文件已删除，编辑内容仍保留',
   'file changed on disk; your changes are kept':

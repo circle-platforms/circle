@@ -19,7 +19,7 @@ export const terminal: Record<string, string> = {
   'managed commands cannot be restarted': '受管理的命令不能从终端重新启动',
 
   'open in terminal': '在终端打开',
-  'opening terminal…': '等待打开终端中…',
+  'opening terminal…': '正在打开终端…',
   'command terminal could not be opened; try again': '无法打开命令终端，请重试',
 
   'copy selected text': '复制选中文字',
@@ -34,7 +34,7 @@ export const terminal: Record<string, string> = {
   'terminal selection could not be saved': '无法保存终端选区，请重试',
   'terminal selection added to draft': '终端选区已放进输入框',
   optional: '可选',
-  stopping: '等待停止中',
+  stopping: '正在停止',
   'previous match': '上一个匹配',
   'no matches': '没有匹配项',
   'interactive terminal': '交互终端',
@@ -52,7 +52,7 @@ export const terminal: Record<string, string> = {
     '代理继续工作时，也能在这里运行命令',
   'retry output': '重新加载输出',
   'ended by signal {signal}': '因信号 {signal} 结束',
-  'service starting': '等待服务启动中',
+  'service starting': '服务正在启动',
   'service ready': '服务已就绪',
   'service running': '服务运行中',
   'readiness failed': '就绪检查失败',

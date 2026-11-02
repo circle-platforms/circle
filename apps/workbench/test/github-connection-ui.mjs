@@ -294,7 +294,7 @@ try {
         await page.evaluate(() => window.githubFixture.integrationLoading());
         await card
           .getByText(
-            label('loading GitHub integration', '等待加载GitHub集成中…'),
+            label('loading GitHub integration', '正在加载 GitHub 集成…'),
             { exact: true },
           )
           .waitFor();

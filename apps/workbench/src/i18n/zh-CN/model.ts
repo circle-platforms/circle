@@ -134,7 +134,7 @@ export const model: Record<string, string> = {
   'Ask you one or more questions with options, or ask for a secret':
     '提出一个或多个带选项的问题，或请求密钥',
   'Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. See Answer a question and Secrets.':
-    '提出一个或多个带选项的问题，或请求密钥。人工回答将成为工具结果。参见文档中的Answer a question和Secrets。',
+    '提出一个或多个带选项的问题，或请求密钥。人工回答将成为工具结果。参见文档中的 Answer a question 和 Secrets。',
   'Switch to read-only mode, as /plan does.': '切换到只读模式，与 /plan 相同。',
   'Switch to `read-only` mode, as `/plan` does.':
     '切换到只读（`read-only`）模式，与 `/plan` 相同。',
@@ -222,7 +222,7 @@ export const model: Record<string, string> = {
     '切换到下一个审批模式，或 /mode manual|accept-edits|plan|auto',
   'Quit Circle': '退出 Circle',
   "Open an HTTP or HTTPS page, or go back, forward or reload. An untrusted certificate shows the browser's warning in the tab; passing it needs your approval.":
-    '打开HTTP或HTTPS页面，或后退、前进、重新加载。证书不受信任时，标签页显示浏览器警告；继续访问须经批准。',
+    '打开 HTTP 或 HTTPS 页面，或后退、前进、重新加载。证书不受信任时，标签页显示浏览器警告；继续访问须经批准。',
   'Read the page, its waiting dialogs, tabs and what happened since the last look. Refs stay with their elements; password values are omitted.':
     '读取页面、等待回答的对话框、标签页，以及上次查看以来发生的事。元素编号跟随元素不变；不输出密码值。',
   'Click an element by its ref with the visible pointer, then read the updated page. Covered elements cannot be clicked.':
@@ -232,7 +232,7 @@ export const model: Record<string, string> = {
   'List, open, show or close browser tabs':
     '列出、打开、切换或关闭浏览器标签页',
   'Pages that open a new window or tab appear as tabs; you and Circle see the same shown tab.':
-    '网页打开的新窗口或标签页会成为标签页；Circle与操作人员看到同一个当前标签页。',
+    '网页打开的新窗口或标签页会成为标签页；Circle 与操作人员看到同一个当前标签页。',
   "Record the conversation's browser actions as a script":
     '把对话中的浏览器操作录制为脚本',
   "Write this conversation's browser actions to a script file in Circle's own format, each element kept by its role and name. Writing the file asks as writing any file does.":
@@ -243,9 +243,9 @@ export const model: Record<string, string> = {
   'Give a page files from this computer': '把这台电脑上的文件交给网页',
   'Hand you the browser and wait for it back': '交出浏览器，等待人工操作后交还',
   'For what only you should do in the page, such as a security key or a CAPTCHA. Circle sees nothing while you have it, and learns only where the tabs went.':
-    '用于须由人工在网页上完成的操作，例如安全密钥或验证码。人工控制浏览器时，Circle无法查看页面内容，仅获知标签页地址变化。',
+    '用于须由人工在网页上完成的操作，例如安全密钥或验证码。人工控制浏览器时，Circle 无法查看页面内容，仅获知标签页地址变化。',
   'For a file input, or for the file chooser one of its clicks opened. Circle asks you every time, with the files and the site.':
-    '用于文件输入框或点击后打开的文件选择框。Circle每次均询问，并列出文件和站点。',
+    '用于文件输入框或点击后打开的文件选择框。Circle 每次均询问，并列出文件和站点。',
   'Named values Circle fills in: /variables [NAME=value]':
     'Circle 会填入的命名值：/variables [NAME=value]',
   'Named values Circle fills in unseen: /secrets [NAME]':
@@ -257,13 +257,13 @@ export const model: Record<string, string> = {
     '列出本对话的设备终端及其状态，以及使用者保存的设备档案。',
   'Open an SSH or Telnet console': '打开 SSH 或 Telnet 控制台',
   'Open a device console by a saved profile or a bare host. SSH sign-in comes only from a profile, whose password is a saved secret; an unknown device host key stops the login and asks you.':
-    '按已保存的档案或主机地址打开设备控制台。SSH登录只能来自档案，密码取自已保存的密钥；遇到未知设备主机密钥时中止登录并请求确认。',
+    '按已保存的档案或主机地址打开设备控制台。SSH 登录只能来自档案，密码取自已保存的密钥；遇到未知设备主机密钥时中止登录并请求确认。',
   'Save a device profile so SSH can sign in': '保存设备档案，供 SSH 登录',
   'Save a device under a profile name so terminal_connect can sign in to it: the password comes from the NAME of a secret the user saved, never its value; a save replaces the profile of the same name.':
     '把设备保存为档案，terminal_connect 即可按名登录：密码只引用用户保存的秘密名，绝不写入其值；同名档案会被替换。',
   'Type text to a device console': '向设备控制台输入文本',
   'Type text to a device, Enter when asked; a word that can destroy device state in the line asks you every time. %NAME% puts in a secret whose value you never see back.':
-    '向设备输入文本，需要时按回车；输入包含可能破坏设备状态的词时，每次均请求确认。%NAME%填入密钥，其值不会出现在返回结果中。',
+    '向设备输入文本，需要时按回车；输入包含可能破坏设备状态的词时，每次均请求确认。%NAME% 填入密钥，其值不会出现在返回结果中。',
   'Read a device screen and its prompt': '读取设备画面与提示符',
   "Read a device terminal's last lines and the line the cursor sits on, as plain text.":
     '以纯文本读取设备终端的最后几行，以及光标所在的提示符行。',
