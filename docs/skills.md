@@ -88,3 +88,13 @@ For a skill only you use, copy it into `~/.circle/skills/<name>/`.
 ## A skill can ship hooks
 
 `hooks.json` in the skill folder does not run just because the skill is installed. Those commands run only after this session loads the skill, with `/skill` or the `skill` tool, and only for that session. A project skill's hooks also wait until the folder is trusted and that file's bytes are approved. A skill without that file is unchanged. See [Hooks](hooks.md#a-skill-can-ship-hooks).
+
+## Hub local skills
+
+A circle-hub task pack can ship client tools under its `tools/` directory (for example `case-compile`'s `fetch-run.ts` and `generate-workbook.ts`). Circle installs them with the `hub_skill_install` tool and runs them with `hub_skill_run`; the Hub only verifies and serves the original bytes.
+
+- `hub_skill_install` takes the `<id>@<version>` and digest from the `list_task_packs` or `start_run` answer, downloads the pack manifest and every file from the Hub's `/local-tools` endpoint, verifies size and SHA-256, and installs into `~/.agents/skills/<pack>/`. That root is the universal Agent Skills folder, so DeepSeek Harness and other agents that read `~/.agents/skills` see the same installation.
+- `hub_skill_run` runs a script only under the installed pack's `tools/`, with the current Node. `%HUB_URL%` (the Hub MCP endpoint base), `%HUB_TOKEN%` (the Hub token) and configured `%NAME%` variables expand at execution, and the output shows every secret value as its `%NAME%`. The token never appears in arguments, results, logs or Git.
+- `hub_skill_list` shows what is installed and the digest each pack was installed from.
+
+Installing and running a pack executes the publisher's Node code; the Hub's static scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the Hub's recomputation is the evidence. Packs and skills are supported on macOS and Linux only.
