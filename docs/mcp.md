@@ -61,6 +61,12 @@ A header value can name a saved [secret](security.md#secrets-by-name) as `${secr
 
 `/mcp` lists the names of the headers a server is sent, not their values. Where a server's answer, error, instructions or tool description quotes a secret value Circle put in, Circle shows its reference in its place: `%NAME%` for a saved secret, and `${env:NAME}` for an environment variable whose name looks secret, by the rule of [the shell environment](security.md#the-shell-environment) (`KEY`, `TOKEN`, `SECRET`, `PASSWORD` and the like), or that goes into `Authorization`, `Proxy-Authorization` or a header whose name looks secret by the same rule, such as `X-Api-Key`. That holds in what the model reads, in the conversation, and in the server's status that `/mcp` and the desktop show. Such a value is replaced wherever it stands, also inside a longer word or number, as a secret's value is in other tool output (see [Known issues](known-issues.md#desktop-application)). Any other environment variable's value, such as a region or an API version, is no secret and is not replaced, and neither is a value written into `settings.json` as it is, without a reference. Where a server quotes a file it was sent and a secret value lies inside that file's encoding, the model reads the file's path, size and digest, not the encoding.
 
+### Signing in to a server
+
+A server reached by `url` over `streamable_http` or `sse` that answers that it needs a sign-in, by the MCP authorization (OAuth 2.1 with PKCE), is signed in to in the system browser. Circle finds the server's sign-in service from its answer, registers itself there as `Circle on <this computer's name>`, and opens the sign-in page; `/mcp` shows `waiting for sign-in in the browser` with the page's address, in case no browser opens. Other servers connect meanwhile. The browser comes back to Circle on a `127.0.0.1` address; Circle checks that it brings back the state of this sign-in, exchanges the code for tokens, connects the server and offers its tools. If no sign-in comes back within ten minutes, or the server refuses it, `/mcp` says why.
+
+The registration and the tokens are kept per server in `mcp-auth.json` in Circle's home, readable by you only, so the next start connects without a sign-in. A server that stops taking its token is signed in to again at the next connection. An entry whose `headers` send a credential, such as `Authorization` or a header whose name looks secret, is never signed in to: its header is used as written.
+
 ## What you get
 
 Each tool is offered to the model as `<name>_<tool>`, for example `memory_create_entities`. Circle connects when the full-screen interface starts or the desktop application opens a trusted folder, and again on `/reload`, `/mcp reload` and `/extensions reload`. In [print mode, line mode](cli.md#print-mode) and [RPC mode](rpc.md) it connects only with `--extensions`, before the first prompt. It waits up to 30 seconds for each server. A server that fails is listed by `/mcp` with the reason, and the other servers' tools still load.
@@ -99,10 +105,10 @@ Circle's own `screenshot` tool only looks at the screen. To let the model open a
 
 ## Commands
 
-| Command       | What it does                                                                                                                                   |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/mcp`        | List the servers, the names of the headers each is sent and of the configured ones Circle does not send, their tools, and why a server failed. |
-| `/mcp reload` | Re-read `settings.json` and reconnect every server. Not while a turn runs.                                                                     |
+| Command       | What it does                                                                                                                                                                       |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/mcp`        | List the servers, the names of the headers each is sent and of the configured ones Circle does not send, their tools, the sign-in page a server waits on, and why a server failed. |
+| `/mcp reload` | Re-read `settings.json` and reconnect every server. Not while a turn runs.                                                                                                         |
 
 In print mode, line mode and RPC mode MCP servers load only with `--extensions` (`circle --extensions -p "…"`, `circle --mode rpc --extensions`). Closing Circle closes the connections and stops the programs it started.
 

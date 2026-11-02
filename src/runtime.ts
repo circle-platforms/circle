@@ -566,6 +566,8 @@ export class AgentRuntime {
     this.mcp = new McpManager(options.workspace, undefined, undefined, {
       secrets: () => loadSecrets(this.options.home),
       sessionId: () => this.session.id,
+      // A server that asks for a sign-in gets one in the browser; what it gives is kept in this home
+      home: this.options.home,
       readFile: (path, context, limit) =>
         readFileBytes(this.sandbox, fileReads, path, context, limit),
       // A server that went away leaves the system prompt between turns, as tools do
