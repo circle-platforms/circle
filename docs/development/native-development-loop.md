@@ -54,7 +54,7 @@ npm ci
 npm run check
 ```
 
-Desktop checks require the desktop/workbench dependencies. Preparing pinned developer tools may download their archives once; after that a build reuses the tools in `apps/desktop/dist/tools` while their receipts match the folder, and says for each tool whether it reused it or downloads it and why. A download that cannot connect, or gets a busy answer, is tried six times over about a minute; CI keeps the folder between runs. Native UI checks share a foreground desktop and must run serially:
+Desktop checks require the desktop/workbench dependencies. Preparing pinned developer tools may download their archives once; after that a build reuses the tools in `apps/desktop/dist/tools` while their receipts match the folder, and says for each tool whether it reused it or downloads it and why. A download that cannot connect, or gets a busy answer, is tried six times over about a minute; CI keeps the folder between runs. On macOS, `npm --prefix apps/desktop ci` also builds node-pty from source for arm64 and x64 (`scripts/node-pty-macos.mjs`): node-pty 1.1.0 leaks three descriptors each time it starts a terminal there, and the fixes from node-pty#882 and #931 are applied to its source first. This needs the Xcode Command Line Tools and npm's node-gyp, which may download Node's headers once; the script refuses any other node-pty version or source, so an upgrade has to drop or update it. Native UI checks share a foreground desktop and must run serially:
 
 ```sh
 npm --prefix apps/desktop ci
