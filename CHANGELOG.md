@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Added
+
+- **A separate local knowledge storage foundation.** Versioned objects, atomic snapshots and Chinese full-text search use their own private database; model tools, desktop pages and network sync are not connected yet, and existing memory files are unchanged.
+
 ### Changed
 
 - **The desktop uses the shared graphite palette.** Dark and light surfaces, text, controls and status colours now follow the Circle design tokens; terminal defaults stay unchanged.

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "snapshot": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "objects": {
+      "maxItems": 500,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bytes",
+              "source_revision",
+              "entry_revision",
+              "directory_revision",
+              "memory_revision",
+              "pack_manifest",
+              "inventory_page",
+              "snapshot",
+              "deletion"
+            ]
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "bytes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "next": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 4000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "snapshot",
+    "objects",
+    "next"
+  ],
+  "additionalProperties": false
+}

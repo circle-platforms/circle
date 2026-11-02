@@ -1,0 +1,193 @@
+{
+  "repository": "https://github.com/circle-platforms/circle-hub",
+  "commit": "19525b436b8250b8d7f8de8e8d5293014f7d84f3",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "source": "contracts/generated/schemas/personal-sync-abort.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-abort.v1.schema.json",
+      "sha256": "221c6b3dbbb7f3cbf9d1cc82957189411d45dafc0f3e9d75a28c4f5fd944ed33"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-client.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-client.v1.schema.json",
+      "sha256": "1bdac5d8cef486af6bacdb3098ff5c3dd61ab38df63c5888bbb82ece050bb955"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-commit.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-commit.v1.schema.json",
+      "sha256": "acc410d81204afa9560a35adbfa4af22142e3396a7782624693e2ca6478b2690"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-download.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-download.v1.schema.json",
+      "sha256": "781cfbf10a2fd4dd5ef2e9ce8b0a9079eaa625e07b89c2f6aaf35173844fc330"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-error.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-error.v1.schema.json",
+      "sha256": "0d7fb365b645bc8852b5efcdf6eb751fab12108fec5ed7369216cbaaa59a5138"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-http.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-http.v1.schema.json",
+      "sha256": "fefe59bea6be6608077f0ba9f37887c1d0a88d9156bc3acf1863880a859f51a6"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-inventory.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-inventory.v1.schema.json",
+      "sha256": "942ac24c8c94fec6413092a33661e7419db5688a9248ccd3c7d5f2abeabdf492"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-missing.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-missing.v1.schema.json",
+      "sha256": "781cfbf10a2fd4dd5ef2e9ce8b0a9079eaa625e07b89c2f6aaf35173844fc330"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-mode-change.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-mode-change.v1.schema.json",
+      "sha256": "6e465d4bbba166948309acb5ea1d8d31a79b367bf772d881a0f0418d0c9b3b18"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-mode-check.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-mode-check.v1.schema.json",
+      "sha256": "289001ea0c25c6dc47a6ccb8171637ac382c117cffb442b4252535fe61a870f5"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-mode-impact.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-mode-impact.v1.schema.json",
+      "sha256": "9469bbdd3b8acd71e8e2dc139f2debd8e1743a57a15b73fb818589a74aa0b1e4"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-object.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-object.v1.schema.json",
+      "sha256": "2dd17a7524b08607fedab8895363cec4242da4cc44c651d62953f4d7cce83496"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-receipt.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-receipt.v1.schema.json",
+      "sha256": "4e2b1fc9f2396bfd3b30f083887d1b021144c5dc8c3887e4a8a641486404e404"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-result.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-result.v1.schema.json",
+      "sha256": "406c7417e786b8072fd68a846acbc0e4a9c74ef4b70863a11d51b2d921f3ff31"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-session-reply.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-session-reply.v1.schema.json",
+      "sha256": "3df10a134183632efa82a0e95337e87fef5a223496e61ae94f764ac01fbecb68"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-session.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-session.v1.schema.json",
+      "sha256": "42c6b18128c126050271792047ca3e5dc3c7f7edfa483c40757112802d8c2584"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-state.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-state.v1.schema.json",
+      "sha256": "865b806c58cfb44e2615772e7226117ee712f8988f668b256eabf99cb104b0c6"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-transfer.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-transfer.v1.schema.json",
+      "sha256": "340594244f58937d7f5cc6e62b9a992f6c91965fd4516e52924ce9d2e12ea328"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-upload.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-upload.v1.schema.json",
+      "sha256": "48f6837ca08c0442f0b0192aa3f1fd5dd3a9ba693888ae4d28a0d4d3cfcb0187"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-verification.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-verification.v1.schema.json",
+      "sha256": "6ac2dfb7f8ffbf0616ec996389cbd4287de88285a57445ab5262367de1674ac2"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1/README.md",
+      "path": "tests/fixtures/knowledge-sync/v1/README.md",
+      "sha256": "682b44356b6704e96459f3dc1c741289f598db48a9cbab8a94557818b67e6c5b"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1/encoding.json",
+      "path": "tests/fixtures/knowledge-sync/v1/encoding.json",
+      "sha256": "838f5ea2726972f1cf8dc58e3c8833a32d05de299ddc3ea21d56589050a725c7"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1/http.json",
+      "path": "tests/fixtures/knowledge-sync/v1/http.json",
+      "sha256": "1ec8ebaf910ad93f0c8a4942978cbcddcfeb0ada6ac2f03a75a7eddef8e9d9e6"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1/scenarios.json",
+      "path": "tests/fixtures/knowledge-sync/v1/scenarios.json",
+      "sha256": "5c72d53b283dc86076c2b4547c903b0e109b7f1a8388e29364e6e8024b3e46c7"
+    },
+    {
+      "source": "LICENSE",
+      "path": "src/data/knowledge-sync/v1/UPSTREAM_LICENSE",
+      "sha256": "4169dd742a7abaad68e5e218117680fc5410d9cca4c295a4bc24688d5b579a97"
+    },
+    {
+      "source": "NOTICE",
+      "path": "src/data/knowledge-sync/v1/UPSTREAM_NOTICE",
+      "sha256": "15cfa8b20ba54d1efb6b7d5d4f836d912922ccd50cf9ee93823d6f01b92ba333"
+    }
+  ],
+  "references": [
+    {
+      "source": "contracts/src/sync.ts",
+      "sha256": "ef2d4f3b03506e2e7cc40fb0c3355f6d583ae4167688d9c0ec15a7662a89b95b"
+    },
+    {
+      "source": "contracts/src/sync-canonical.ts",
+      "sha256": "0dab40c9a407ef5e993df6436104b02a1214b3e246e97b743a3f26684047324e"
+    },
+    {
+      "source": "contracts/src/sync-json.ts",
+      "sha256": "e010426a6471a6790e4cff458615079e8761b1386908df4a210527001f443377"
+    },
+    {
+      "source": "contracts/src/common.ts",
+      "sha256": "23fedbdd56050287a9af46bb3b1b8234a596306226c23a0f8c1b812860cd4020"
+    },
+    {
+      "source": "contracts/src/pack.ts",
+      "sha256": "ad7a1efb0f958e54a6670c9f93f6b79004c8a9cc7e3e1d088bcf5e3cccc41b5a"
+    },
+    {
+      "source": "contracts/src/skills.ts",
+      "sha256": "178bb49bdaf8322f159697ec74944ab889f212981944c2df89aed3b795f9f661"
+    },
+    {
+      "source": "contracts/src/spaces.ts",
+      "sha256": "a48f7edb97981f79f99500b10bf18a1c8c4bfc771be0f2e2ff0fe4c5c88619db",
+      "workingTreeObservation": true,
+      "committedSha256": "26a88d26e3bceb4d289f30d7498b7da0c61cebfeaaf042a9d6e0b904a5ef2d91"
+    },
+    {
+      "source": "contracts/generated/vocabulary.ts",
+      "sha256": "15e0cb94529db3a080db7f8a71f297010dc9a8c1eebd5c3c65d6607567028d2a"
+    },
+    {
+      "source": "contracts/generated/protocol.ts",
+      "sha256": "11cebb53b81221b5bfab8902151a32d81727f0595bad705dc10633d814a5da58"
+    },
+    {
+      "source": "hub/records/space-index.ts",
+      "sha256": "e05bb06275cf55571bfcba9416856f415abe4aae5abb58227846b062493324e0"
+    }
+  ],
+  "derived": [
+    {
+      "path": "src/data/knowledge-sync/v1/protocol.json",
+      "sha256": "4c60c65be4a93ad62978d2b89f4ca69addb53df98171ee2df3d9badc8fd3f8ff",
+      "sources": [
+        "contracts/src/sync.ts",
+        "contracts/generated/vocabulary.ts",
+        "contracts/generated/protocol.ts",
+        "contracts/test-fixtures/sync/v1/http.json"
+      ]
+    }
+  ]
+}

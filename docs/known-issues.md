@@ -6,6 +6,10 @@ nav_order: 23
 
 This page lists what does not work as you might expect in the current version, with a way around each where there is one. It is written from the code and from running it, and it is updated as things are fixed.
 
+## Local knowledge and personal sync
+
+- **The local knowledge store is a backend foundation.** Its protocol mirror, canonical encoding, separate SQLite database and Chinese search index are implemented, but model tools, desktop pages, memory loading and the HTTP sync client are not connected yet. Existing memory files and skills still work as before; nothing is automatically migrated or uploaded. See [the current storage boundary](development/local-knowledge.md).
+
 ## Install and release
 
 - **A desktop update from 1.10.2 or earlier can stall forever when the runtime cannot stop.** Those versions wait for the runtime to close before quitting, with no bound, and the macOS and Linux installers then wait for the process without one either: **restart to update** says `restarting…` and nothing more happens, and after a restart the old copy reports `update failed: Circle <version> was not installed`. Force-quit Circle (Activity Monitor, or `kill` its process): the already-waiting installer finishes the swap and starts the new version. If the machine was restarted, the installer is gone with it — start the update again from settings. Updates from this release on bound both waits.

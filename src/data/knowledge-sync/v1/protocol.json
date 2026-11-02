@@ -1,0 +1,204 @@
+{
+  "schema": "circle-personal-sync-mirror@1",
+  "limits": {
+    "objectBytes": 8388608,
+    "chunkBytes": 1048576,
+    "batchObjects": 64,
+    "pageItems": 500,
+    "sessionSeconds": 86400
+  },
+  "defaultMode": "hub",
+  "routes": {
+    "state": {
+      "method": "GET",
+      "path": "/api/sync/v1/state"
+    },
+    "client": {
+      "method": "POST",
+      "path": "/api/sync/v1/clients"
+    },
+    "session": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions"
+    },
+    "inventory": {
+      "method": "GET",
+      "path": "/api/sync/v1/sessions/{id}/inventory"
+    },
+    "missing": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/missing"
+    },
+    "upload": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/upload"
+    },
+    "download": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/download"
+    },
+    "commit": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/commit"
+    },
+    "operation": {
+      "method": "GET",
+      "path": "/api/sync/v1/operations/{id}"
+    },
+    "abort": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/abort"
+    },
+    "modeCheck": {
+      "method": "POST",
+      "path": "/api/sync/v1/mode/check"
+    },
+    "mode": {
+      "method": "POST",
+      "path": "/api/sync/v1/mode"
+    }
+  },
+  "kinds": [
+    "bytes",
+    "source_revision",
+    "entry_revision",
+    "directory_revision",
+    "memory_revision",
+    "pack_manifest",
+    "inventory_page",
+    "snapshot",
+    "deletion"
+  ],
+  "modes": [
+    "local",
+    "hub"
+  ],
+  "statuses": [
+    "idle",
+    "syncing",
+    "conflicted",
+    "purging",
+    "complete"
+  ],
+  "entryKinds": [
+    "definition",
+    "behaviour",
+    "case",
+    "defect",
+    "observation",
+    "procedure",
+    "pitfall"
+  ],
+  "codes": [
+    "SUBMISSION_SCHEMA_VIOLATION",
+    "REFERENCE_UNRESOLVED",
+    "REFERENCE_AMBIGUOUS",
+    "QUOTE_MISMATCH",
+    "SOURCE_UNPARSEABLE",
+    "SOURCE_UNAVAILABLE",
+    "IDEMPOTENCY_MISMATCH",
+    "IDENTITY_UNMAPPED",
+    "RUN_SUPERSEDED",
+    "RUN_ABANDONED",
+    "CREDENTIAL_IN_UPLOAD",
+    "LEASE_UNAVAILABLE",
+    "LEASE_EXPIRED",
+    "FENCING_STALE",
+    "SOURCE_RETRYABLE",
+    "SOURCE_INTEGRITY_UNPROVEN",
+    "SOURCE_READ_FAILED",
+    "SOURCE_READ_LIMIT",
+    "SOURCE_REDIRECT_REFUSED",
+    "SOURCE_ABSENT",
+    "EFFECT_NOT_ALLOWED",
+    "EFFECT_PARAMETER_OUT_OF_RANGE",
+    "EFFECT_RELEASE_UNMET",
+    "EFFECT_UNKNOWN_DISPOSED",
+    "EFFECT_BUDGET_EXHAUSTED",
+    "BOUNDARY_POLICY_DENIED",
+    "PACK_POLICY_DENIED",
+    "EFFECT_CONTENT_UNVERIFIED",
+    "AUDIENCE_VISIBILITY_EXCEEDED",
+    "SPACE_CAPACITY_EXCEEDED",
+    "SPACE_ENTRY_INVALID",
+    "SPACE_CREDENTIALS_DETECTED",
+    "SPACE_SEARCH_IN_RUN",
+    "SPACE_VERSION_CONFLICT",
+    "SPACE_RESULT_GROUNDS_PRIVATE",
+    "SPACE_CONTENT_UNINSPECTABLE",
+    "SPACE_INDEX_LIMIT",
+    "SHARE_UNVERIFIED",
+    "SHARE_GROUND_UNRESOLVED",
+    "SHARE_QUOTE_MISMATCH",
+    "SHARE_PERSONAL_SOURCE",
+    "SHARE_UPLOAD_UNSIGNED",
+    "SHARE_GROUND_UNREADABLE",
+    "SHARE_DUPLICATE",
+    "SHARE_CREDENTIALS",
+    "RESULT_GROUNDS_UNREADABLE",
+    "GROUNDS_WITHDRAWN",
+    "PACK_SPACE_DENIED",
+    "PACK_PERSONAL_PUBLICATION_DENIED",
+    "PACK_PERSONAL_CAPABILITY_DENIED",
+    "TEAM_PARSER_REQUIRED",
+    "MEMORY_DOCUMENT_LIMIT",
+    "MEMORY_SPACE_LIMIT",
+    "MEMORY_CREDENTIALS_DETECTED",
+    "MEMORY_VERSION_CONFLICT",
+    "MEMORY_RUN_FORBIDDEN",
+    "MEMORY_TEAM_DISABLED",
+    "MEMORY_CURSOR_STALE",
+    "SYNC_VERSION_CONFLICT",
+    "SYNC_OBJECT_HASH_MISMATCH",
+    "SYNC_OBJECT_INVALID",
+    "SYNC_OBJECT_MISSING",
+    "SYNC_BATCH_LIMIT",
+    "SYNC_SESSION_EXPIRED",
+    "SYNC_MODE_LOCAL",
+    "SYNC_EPOCH_CHANGED",
+    "SYNC_RATE_LIMITED"
+  ],
+  "packPaths": [
+    "pack.json",
+    "requirements.json",
+    "SKILL.md",
+    "slots.schema.json",
+    "checks.json",
+    "knowledge.json",
+    "policies/",
+    "capabilities.json",
+    "functions/",
+    "samples/positive/",
+    "samples/negative/",
+    "examples/",
+    "tools/",
+    "tables/",
+    "product.json",
+    "workflow.json",
+    "system.json",
+    "ledger.json",
+    "skill.json"
+  ],
+  "schemas": [
+    "personal-sync-abort.v1.schema.json",
+    "personal-sync-client.v1.schema.json",
+    "personal-sync-commit.v1.schema.json",
+    "personal-sync-download.v1.schema.json",
+    "personal-sync-error.v1.schema.json",
+    "personal-sync-http.v1.schema.json",
+    "personal-sync-inventory.v1.schema.json",
+    "personal-sync-missing.v1.schema.json",
+    "personal-sync-mode-change.v1.schema.json",
+    "personal-sync-mode-check.v1.schema.json",
+    "personal-sync-mode-impact.v1.schema.json",
+    "personal-sync-object.v1.schema.json",
+    "personal-sync-receipt.v1.schema.json",
+    "personal-sync-result.v1.schema.json",
+    "personal-sync-session-reply.v1.schema.json",
+    "personal-sync-session.v1.schema.json",
+    "personal-sync-state.v1.schema.json",
+    "personal-sync-transfer.v1.schema.json",
+    "personal-sync-upload.v1.schema.json",
+    "personal-sync-verification.v1.schema.json"
+  ]
+}

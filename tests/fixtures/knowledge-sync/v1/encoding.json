@@ -1,0 +1,98 @@
+{
+  "schema": "personal-sync-encoding-fixtures@1",
+  "cases": [
+    {
+      "name": "lf",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "memory_revision",
+        "body": {
+          "item_id": "11111111-1111-4111-8111-111111111111",
+          "parents": [],
+          "directory_id": "22222222-2222-4222-8222-222222222222",
+          "title": "合成记忆",
+          "markdown": "café\n中文 😀\n",
+          "state": "enabled"
+        }
+      },
+      "canonical": "{\"body\":{\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"markdown\":\"café\\n中文 😀\\n\",\"parents\":[],\"state\":\"enabled\",\"title\":\"合成记忆\"},\"kind\":\"memory_revision\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "46cb7f6cb1d9080b98c477a89c3f8e5b39bc7012f98d50d4277f304970026596"
+    },
+    {
+      "name": "crlf-bom-nfd",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "memory_revision",
+        "body": {
+          "item_id": "11111111-1111-4111-8111-111111111111",
+          "parents": [],
+          "directory_id": "22222222-2222-4222-8222-222222222222",
+          "title": "合成记忆",
+          "markdown": "﻿café\r\n中文 😀\r\n",
+          "state": "enabled"
+        }
+      },
+      "canonical": "{\"body\":{\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"markdown\":\"café\\n中文 😀\\n\",\"parents\":[],\"state\":\"enabled\",\"title\":\"合成记忆\"},\"kind\":\"memory_revision\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "46cb7f6cb1d9080b98c477a89c3f8e5b39bc7012f98d50d4277f304970026596"
+    },
+    {
+      "name": "lone-cr",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "memory_revision",
+        "body": {
+          "item_id": "11111111-1111-4111-8111-111111111111",
+          "parents": [],
+          "directory_id": "22222222-2222-4222-8222-222222222222",
+          "title": "合成记忆",
+          "markdown": "a\rb",
+          "state": "enabled"
+        }
+      },
+      "canonical": "{\"body\":{\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"markdown\":\"a\\nb\",\"parents\":[],\"state\":\"enabled\",\"title\":\"合成记忆\"},\"kind\":\"memory_revision\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "852f34bc11f870dba6ee423b8c27a8ebe6775097abeb3ea8b562506e34d1c4f4"
+    },
+    {
+      "name": "spaces-internal-bom",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "memory_revision",
+        "body": {
+          "item_id": "11111111-1111-4111-8111-111111111111",
+          "parents": [],
+          "directory_id": "22222222-2222-4222-8222-222222222222",
+          "title": "合成记忆",
+          "markdown": "a  \n﻿b\n",
+          "state": "enabled"
+        }
+      },
+      "canonical": "{\"body\":{\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"markdown\":\"a  \\n﻿b\\n\",\"parents\":[],\"state\":\"enabled\",\"title\":\"合成记忆\"},\"kind\":\"memory_revision\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "a44b4a6e6189ba57866e2f624c6622d3256a237c4be57e008b9aa7bc03ae80bd"
+    },
+    {
+      "name": "verbatim-source-and-quote",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "bytes",
+        "body": {
+          "bytes_base64": "77u/6K+B5o2uDQplzIENCg=="
+        }
+      },
+      "canonical": "{\"body\":{\"bytes_base64\":\"77u/6K+B5o2uDQplzIENCg==\"},\"kind\":\"bytes\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "5d4f4506ac96576556f6eac6ca6a6551f92334f6fcef459164603166c5aa5519"
+    },
+    {
+      "name": "empty-bytes",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "bytes",
+        "body": {
+          "bytes_base64": ""
+        }
+      },
+      "canonical": "{\"body\":{\"bytes_base64\":\"\"},\"kind\":\"bytes\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "017b34492ae245584b6b92d6391516104ac991583859167889e09725fb9b27be"
+    }
+  ],
+  "raw_source_sha256": "787bed613cf208dd41b0ffa9173884a982f832346c8367f22b563fe401d42755"
+}

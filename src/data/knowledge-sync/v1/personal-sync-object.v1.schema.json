@@ -1,0 +1,677 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "bytes"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "bytes_base64": {
+              "type": "string",
+              "maxLength": 12582912
+            }
+          },
+          "required": [
+            "bytes_base64"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "source_revision"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "parents": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "directory_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "media_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "raw_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "chunks": {
+              "maxItems": 4096,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "required": [
+            "item_id",
+            "parents",
+            "directory_id",
+            "name",
+            "media_type",
+            "raw_sha256",
+            "size",
+            "chunks"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "entry_revision"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "parents": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "directory_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "content": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "definition",
+                    "behaviour",
+                    "case",
+                    "defect",
+                    "observation",
+                    "procedure",
+                    "pitfall"
+                  ]
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 262144
+                },
+                "data": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                },
+                "applicability": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "statement",
+                "data",
+                "applicability"
+              ],
+              "additionalProperties": false
+            },
+            "grounds": {
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "parser": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_.-]*@(?:0|[1-9][0-9]*)$"
+                  },
+                  "selector": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "quotation": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "source",
+                  "parser",
+                  "selector",
+                  "quotation"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "item_id",
+            "parents",
+            "directory_id",
+            "content",
+            "grounds"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "directory_revision"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "parents": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "parent_directory": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          "required": [
+            "item_id",
+            "parents",
+            "parent_directory",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "memory_revision"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "parents": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "directory_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "markdown": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "enabled",
+                "disabled"
+              ]
+            }
+          },
+          "required": [
+            "item_id",
+            "parents",
+            "directory_id",
+            "title",
+            "markdown",
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "pack_manifest"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "parents": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "manifest": {
+              "type": "object",
+              "properties": {
+                "schema": {
+                  "type": "string",
+                  "const": "pack@1"
+                },
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{1,40}$"
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "workflow",
+                    "skill"
+                  ]
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "dependencies": {
+                  "maxItems": 64,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "pack": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{1,40}$"
+                      },
+                      "space": {
+                        "type": "string",
+                        "pattern": "^usr_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+                      },
+                      "version": {
+                        "type": "string",
+                        "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                      }
+                    },
+                    "required": [
+                      "pack"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "size": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "sha256",
+                      "size"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "every file of the pack except pack.json, sorted by path"
+                }
+              },
+              "required": [
+                "schema",
+                "id",
+                "version",
+                "kind",
+                "title",
+                "description",
+                "files"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "item_id",
+            "parents",
+            "manifest"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "inventory_page"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "source_revision",
+                      "entry_revision",
+                      "directory_revision",
+                      "memory_revision",
+                      "pack_manifest"
+                    ]
+                  },
+                  "item_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "heads": {
+                    "maxItems": 500,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "item_id",
+                  "heads"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "snapshot"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "parents": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "pages": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "required": [
+            "parents",
+            "pages"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "personal-sync-object@1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "deletion"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "parents": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "target_kind": {
+              "type": "string",
+              "enum": [
+                "source_revision",
+                "entry_revision",
+                "directory_revision",
+                "memory_revision",
+                "pack_manifest"
+              ]
+            }
+          },
+          "required": [
+            "item_id",
+            "parents",
+            "target_kind"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "body"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}
