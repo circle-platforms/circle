@@ -25,6 +25,7 @@ New here? Start with the [Quickstart](quickstart.md).
 | Steer, stop, copy, find | [Use Circle in the terminal](usage.md) |
 | Keep, reopen or branch a conversation | [Sessions and context](sessions.md) |
 | Run a server, a watcher or a subagent while I keep working | [Background jobs](background-jobs.md) |
+| Wake Circle on a clock and run a standing prompt | [Scheduled tasks](scheduled-tasks.md) |
 | Drive Circle from a script or an editor | [CLI: print mode and JSON events](cli.md), [RPC mode](rpc.md) |
 | Teach Circle my project's rules | [Configuration](configuration.md#instruction-files) |
 | Run a command of my own before a tool or before a turn ends | [Hooks](hooks.md) |
@@ -49,6 +50,7 @@ New here? Start with the [Quickstart](quickstart.md).
 - [Choose a model](models.md)
 - [Sessions and context](sessions.md)
 - [Background jobs](background-jobs.md)
+- [Scheduled tasks](scheduled-tasks.md)
 - [Run Circle safely](security.md)
 - [Configuration](configuration.md)
 - [Skills](skills.md)
