@@ -36,9 +36,16 @@ export type SettingsSectionId =
   | 'files'
   | 'variables'
   | 'network'
-  | 'launch';
+  | 'launch'
+  | 'sync';
 /** `settings` opens the dialog at its first group; every group also has its own page id. */
-export type PageId = 'sessions' | 'settings' | SettingsSectionId;
+export type PageId =
+  | 'sessions'
+  | 'knowledge'
+  | 'memory'
+  | 'workflows'
+  | 'settings'
+  | SettingsSectionId;
 export type DialogId =
   | 'rename'
   | 'delete-session'
@@ -484,6 +491,7 @@ export interface HookSetting {
   active?: boolean;
 }
 export interface WorkbenchSnapshot {
+  knowledgeSync?: import('../../../../src/knowledge/desktop-contract').KnowledgeSyncView;
   tools?: {
     name: string;
     description: string;

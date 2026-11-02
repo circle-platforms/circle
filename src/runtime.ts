@@ -1,3 +1,4 @@
+import { prepareKnowledgeShare } from './knowledge/sharing.js';
 import {
   deferredKnowledgeTool,
   knowledgeToolsWanted,
@@ -820,6 +821,21 @@ export class AgentRuntime {
         this.options.home,
         this.options.knowledgeAccess,
       ),
+      knowledgeShare: (args, signal) =>
+        prepareKnowledgeShare({
+          service: new KnowledgeService(
+            this.options.home,
+            this.options.knowledgeAccess,
+          ),
+          connection: this.knowledge,
+          binding: () => this.options.settings.knowledge_sync.binding,
+          snapshot: String(args.snapshot),
+          object: String(args.object),
+          ...(typeof args.team_path === 'string'
+            ? { teamPath: args.team_path }
+            : {}),
+          signal,
+        }),
       fileMutations: this.options.fileMutations,
       captures: this.captures,
       jobs: this.jobs,

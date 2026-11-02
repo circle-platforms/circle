@@ -1,5 +1,7 @@
 # Native frontend validation
 
+Decision 90 stage-5 knowledge desktop validation is recorded in [knowledge-validation.md](knowledge-validation.md), with native screenshots and source/build receipts. Packaged and actual test-Hub acceptance remain stage 6.
+
 Decision 93 graphite validation on 2026-11-03 is recorded in [graphite-validation.md](graphite-validation.md), with development and packaged native matrices, current command results, retained screenshots and byte receipts. The earlier receipts below remain historical evidence.
 
 This page preserves the frontend-phase receipts. After the user authorized Circle runtime integration, new checks and package receipts are described in [native-runtime.md](native-runtime.md). The totals and unchanged-core statement below apply to the earlier inspected build, not to the current native runtime changes.

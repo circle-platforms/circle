@@ -13,5 +13,13 @@ export function extensionErrorText(error: string): string {
  * id. Every other page is a group of the settings dialog, which has no top bar of its own.
  */
 export function shellPageTitle(page: string): string {
-  return page === 'sessions' ? t('sessions') : page;
+  return page === 'sessions'
+    ? t('sessions')
+    : page === 'knowledge'
+      ? t('knowledge')
+      : page === 'memory'
+        ? t('memory')
+        : page === 'workflows'
+          ? t('workflows')
+          : page;
 }

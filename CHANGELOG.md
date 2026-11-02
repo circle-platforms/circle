@@ -6,13 +6,15 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Added
 
-- **Personal knowledge commands and session preferences.** The terminal can browse and confirm local edits, select one existing MCP authorization for background sync, and load bounded team then personal preferences before memory files. Token refresh is shared with MCP; account changes pause old queues. Desktop knowledge pages and real test-Hub validation remain unfinished.
+- **Desktop knowledge, memory and workflows.** Browse sources, edit personal content, resolve conflicts and explicitly install workflow files; sync settings show actual pre-check impact before switching modes, and confirmed team sharing uses the selected connection.
 
-- **A resumable personal sync engine.** The host API preserves offline revisions and conflicts, recovers lost replies and fences concurrent local processes. The runtime uses an explicitly selected MCP connection; desktop pages remain unfinished.
+- **Personal knowledge commands and session preferences.** The terminal can browse and confirm local edits, select one existing MCP authorization for background sync, and load bounded team then personal preferences before memory files. Token refresh is shared with MCP; account changes pause old queues. Real test-Hub validation remains unfinished.
+
+- **A resumable personal sync engine.** The host API preserves offline revisions and conflicts, recovers lost replies and fences concurrent local processes. The runtime uses an explicitly selected MCP connection; desktop settings use the same host operations.
 
 - **Confirmed personal knowledge and memory tools.** Local search and exact quotation checks support proposed writes that always ask for person approval; credentials and oversized memories are refused before persistence. Explicit personal pack installation validates selected files without importing hooks or enabling network sync.
 
-- **A separate local knowledge storage foundation.** Versioned objects, atomic snapshots and Chinese full-text search use their own private database; desktop pages and network sync remain unfinished, and existing memory files are unchanged.
+- **A separate local knowledge storage foundation.** Versioned objects, atomic snapshots and Chinese full-text search use their own private database; existing memory files are unchanged.
 
 ### Changed
 

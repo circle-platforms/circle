@@ -46,7 +46,7 @@ export const BUILTIN_TOOL_INFO = [
     },
     get detail() {
       return t(
-        'Unavailable until Sync to Hub and an authorized entry mapping are configured. Open sync settings to switch mode; this tool never changes it.',
+        'Share the current synced, qualified knowledge or memory as an independent team copy. Always requires person confirmation; local-only mode and missing mappings refuse sharing.',
       );
     },
     kind: 'write',

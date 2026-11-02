@@ -1,6 +1,8 @@
+import { validateKnowledgeRequest } from '../../../src/knowledge/desktop-contract';
 import type { WorkbenchSnapshot } from '../../workbench/src/model/types';
 
 export type RuntimeCommandName =
+  | 'knowledge'
   | 'workspace-service'
   | 'state'
   | 'prompt'
@@ -110,6 +112,7 @@ export interface RuntimeTokenDelta {
   compaction?: import('../../../src/compaction').CompactionSnapshot;
 }
 export const runtimeCommands = new Set<RuntimeCommandName>([
+  'knowledge',
   'workspace-service',
   'state',
   'prompt',
@@ -177,7 +180,10 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
 // a few full-size ones together. Every other command is small.
 export const MAX_PROMPT_PAYLOAD = 64_000_000;
 export const MAX_COMMAND_PAYLOAD = 5_000_000;
-export function validateRuntimeCommand(value: unknown): RuntimeCommand {
+export function validateRuntimeCommand(
+  value: unknown,
+  nativeSelection = false,
+): RuntimeCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw Error('invalid runtime command');
   const command = value as RuntimeCommand;
@@ -204,5 +210,7 @@ export function validateRuntimeCommand(value: unknown): RuntimeCommand {
         ? 'the message and its files are over 64 MB; remove some pictures or PDFs'
         : 'invalid runtime payload',
     );
+  if (command.name === 'knowledge')
+    validateKnowledgeRequest(command.payload, nativeSelection);
   return command;
 }

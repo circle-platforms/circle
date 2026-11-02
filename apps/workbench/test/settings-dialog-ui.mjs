@@ -87,6 +87,7 @@ const GROUPS = [
   [
     'capabilities',
     [
+      ['sync', 'sync', 'sync'],
       ['skills', 'skills', 'skills'],
       ['commands', 'commands', 'commands'],
       ['mcp servers', 'mcp', 'mcp servers'],
@@ -119,6 +120,7 @@ const ZH_LABELS = [
   '关于与更新',
   '启动选项',
   '模型与连接',
+  '同步',
   '技能',
   '命令',
   'MCP 服务器',
@@ -796,6 +798,7 @@ try {
     // Every group fits the dialog: nothing makes the window scroll sideways, and the
     // chosen group's name is in view in the list.
     for (const id of [
+      'sync',
       'models',
       'extensions',
       'hooks',

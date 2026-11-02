@@ -1,3 +1,4 @@
+import { KnowledgeSyncSettings } from './KnowledgeSyncSettings';
 import { Modal } from '../components/common';
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
@@ -43,6 +44,8 @@ function Section({
   onClose: () => void;
 }) {
   switch (id) {
+    case 'sync':
+      return <KnowledgeSyncSettings />;
     case 'appearance':
       return <AppearanceSection />;
     case 'behavior':

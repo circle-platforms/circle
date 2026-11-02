@@ -86,6 +86,8 @@ export function mcpSyncHttp(port: McpBearerConnection): SyncHttp {
 }
 export interface KnowledgeConnectionStatus {
   condition: SyncCondition;
+  mode: 'hub' | 'local' | null;
+  clearing: boolean;
   lastSyncedAt: string | null;
   server: string;
 }
@@ -108,6 +110,8 @@ export class KnowledgeConnection {
     return {
       ...(this.client?.status ?? {
         condition: this.unavailable,
+        mode: null,
+        clearing: false,
         lastSyncedAt: null,
       }),
       server: this.settings().knowledge_sync.server,
@@ -262,6 +266,33 @@ export class KnowledgeConnection {
       async (current) => requestJson(current) === requestJson(preview),
       signal,
     );
+  }
+  async currentState(
+    signal: AbortSignal,
+  ): Promise<import('./sync-types.js').SyncState> {
+    if (!this.http) throw new McpLoginRequired();
+    return this.http.request('state', {
+      schema: 'personal-sync-state@1',
+      signal,
+    });
+  }
+  async callForPerson(
+    tool: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+    write = false,
+  ): Promise<unknown> {
+    const saved = this.settings().knowledge_sync;
+    this.checkAuthorization();
+    if (!this.client || !saved.server) throw new McpLoginRequired();
+    const port = this.port(saved.server);
+    if (port.binding !== saved.binding) throw new McpLoginRequired();
+    const result = write
+      ? await this.mcp.personCall(saved.server, tool, args, signal)
+      : await this.mcp.readOnly(saved.server, tool, args, signal);
+    port.assertActive();
+    if (!this.client) throw new McpLoginRequired();
+    return result;
   }
   reader(): MemoryReader | undefined {
     const saved = this.settings().knowledge_sync;

@@ -1,3 +1,4 @@
+import { DesktopKnowledge } from './knowledge-service';
 import { FileRewindJournal } from '../../../src/file_rewind.js';
 import { ExternalFileGrants } from './workspace/external-file-grants';
 import { homedir } from 'node:os';
@@ -348,6 +349,10 @@ export interface ControllerOptions {
 
 /** The IPC adapter delegates execution and persistence to the existing Circle core. */
 export class RuntimeController {
+  private readonly desktopKnowledge = new DesktopKnowledge(() => [
+    this.home,
+    this.options.dataFolder ?? this.home,
+  ]);
   readonly home: string;
   private metadata: SessionMetadata;
   private planCompletions = new Map<string, PlanCompletionTracker>();
@@ -3041,6 +3046,7 @@ export class RuntimeController {
       });
     return {
       version: 1,
+      knowledgeSync: this.desktopKnowledge.status(runtime),
       activeSessionId: this.selectedSessionId,
       previousSessionId: this.previous,
       runtime: {
@@ -4157,7 +4163,7 @@ export class RuntimeController {
   async dispatch(input: unknown): Promise<RuntimeReply> {
     let command: RuntimeCommand;
     try {
-      command = validateRuntimeCommand(input);
+      command = validateRuntimeCommand(input, true);
     } catch (error) {
       return {
         id: String((input as RuntimeCommand)?.id ?? 'invalid'),
@@ -4584,6 +4590,18 @@ export class RuntimeController {
         this.cancelling.delete(owner.session.id);
       }
       return {};
+    }
+    if (command.name === 'knowledge') {
+      if (command.sessionId && command.sessionId !== this.selectedSessionId)
+        throw Error('knowledge-changed');
+      if (
+        this.viewedSessionId &&
+        !['list', 'detail', 'source', 'history', 'settings'].includes(
+          String(command.payload.op),
+        )
+      )
+        throw Error('knowledge-read-only');
+      return this.desktopKnowledge.execute(this.active, command.payload, true);
     }
     if (command.name === 'workspace-service')
       return this.workspaceCommand(command);

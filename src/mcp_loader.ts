@@ -1202,6 +1202,30 @@ export class McpManager {
     this.assertNoCredentials(serverName, text);
     return response;
   }
+  /** A trusted host dispatch after an explicit person confirmation, never exposed as a model proxy. */
+  async personCall(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    const server = this.servers.find((s) => s.name === serverName && s.open);
+    if (
+      !server ||
+      !this.tools.some((t) => t.name === mcpToolName(serverName, toolName))
+    )
+      throw Error('MCP tool unavailable');
+    const result = await server.client.callTool(
+      { name: toolName, arguments: args },
+      undefined,
+      { signal, timeout: this.timeout },
+    );
+    const text = JSON.stringify(result);
+    if (Buffer.byteLength(text) > 1024 * 1024)
+      throw Error('MCP host result limit');
+    this.assertNoCredentials(serverName, text);
+    return result;
+  }
   assertNoCredentials(serverName: string, text: string): void {
     const server = this.servers.find((s) => s.name === serverName && s.open);
     if (!server) throw Error('MCP host connection unavailable');

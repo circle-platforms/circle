@@ -2,6 +2,7 @@ import type { Tool, ToolCall, Message, PreparedRun } from '../types.js';
 import { loadToolPrompt } from '../system_prompt.js';
 import { KnowledgeService, type ChangeInput } from './service.js';
 import { knowledgeAsset } from '../knowledge_assets.js';
+import type { PreparedKnowledgeShare } from './sharing.js';
 import { requireClean } from './verification.js';
 
 const schema = (
@@ -16,7 +17,10 @@ const expected = {
 };
 /** Reject sensitive proposals before tool calls enter durable history or event logs. No rejected input is echoed. */
 export function safeKnowledgeCall(call: ToolCall): ToolCall {
-  if (!['knowledge_write', 'memory_write'].includes(call.name)) return call;
+  if (
+    !['knowledge_write', 'memory_write', 'knowledge_share'].includes(call.name)
+  )
+    return call;
   try {
     const serialized = JSON.stringify(call.args);
     if (Buffer.byteLength(serialized) > 8 * 1024 * 1024)
@@ -40,7 +44,13 @@ export function safeKnowledgeCall(call: ToolCall): ToolCall {
     };
   }
 }
-export function knowledgeTools(service: KnowledgeService): Tool[] {
+export function knowledgeTools(
+  service: KnowledgeService,
+  prepareShare?: (
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ) => Promise<PreparedKnowledgeShare>,
+): Tool[] {
   const make = (
     name: string,
     effect: Tool['effect'],
@@ -216,8 +226,23 @@ export function knowledgeTools(service: KnowledgeService): Tool[] {
           'Sharing requires Sync to Hub and an authorized Hub entry mapping. Open knowledge sync settings to switch mode. No sync mode was changed; nothing was uploaded.',
       }),
   );
-  // Sharing remains unavailable until the authorized mapping/connection stage; no temporary sync or invented endpoint.
-  share.approval = false;
+  if (prepareShare) {
+    share.personApproval = true;
+    share.privacy = safeKnowledgeCall;
+    share.prepare = async (args, context) => {
+      const prepared = await prepareShare(args, context.signal);
+      const run: PreparedRun = async () => JSON.stringify(await prepared.run());
+      run.shown = {
+        action: 'share to team',
+        title: prepared.title,
+        replaces: prepared.replaces,
+      };
+      return run;
+    };
+    share.run = async () => {
+      throw Error('sharing requires a prepared person approval');
+    };
+  } else share.approval = false;
   return [search, read, write, memory, share];
 }
 

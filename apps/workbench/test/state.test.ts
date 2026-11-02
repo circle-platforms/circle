@@ -1205,7 +1205,7 @@ test('a new session does not start in the untrusted project that was open', () =
   );
 });
 
-test('unfinished desktop knowledge and structured memory commands offer the real terminal entry instead of file write instructions', () => {
+test('desktop knowledge and structured memory commands open their real pages while retaining file-memory guidance', () => {
   const runtime = new PreviewRuntime(storage());
   for (const [name, args] of [
     ['knowledge', ''],
@@ -1214,7 +1214,11 @@ test('unfinished desktop knowledge and structured memory commands offer the real
     ['memory', 'personal'],
   ]) {
     const result = runtime.command(name!, args);
-    assert.match(result.notice ?? '', /available in the terminal/);
+    assert.equal(result.page, name === 'knowledge' ? 'knowledge' : 'memory');
     assert.doesNotMatch(result.notice ?? '', /add this line/);
   }
+  assert.match(
+    runtime.command('memory', 'add account legacy').notice ?? '',
+    /MEMORY.md/,
+  );
 });

@@ -45,6 +45,12 @@ export class FakeSyncServer {
     page_items: 500,
     session_seconds: 86400,
   };
+  modeImpact = {
+    personal_bytes: 123,
+    directory_grants: 2,
+    pending_shares: null as number | null,
+    team_copies_preserved: 1,
+  };
   dropNext: string | null = null;
   errorNext: {
     route: string;
@@ -53,7 +59,14 @@ export class FakeSyncServer {
     retry?: number;
   } | null = null;
   onRequest: ((route: string, body: any) => void | Promise<void>) | null = null;
+  purging = false;
+  purgingOnLocal = false;
   resultPageSize = 500;
+  project:
+    | ((
+        item: import('../../../src/knowledge/types.js').SyncItem,
+      ) => Record<string, unknown>)
+    | undefined;
   damageDownload = false;
   token = 'synthetic-sync-token';
   origin = '';
@@ -64,7 +77,7 @@ export class FakeSyncServer {
     return {
       epoch: this.epoch,
       mode: this.mode,
-      status: 'idle',
+      status: this.purging ? 'purging' : 'idle',
       state_version: sha256(
         JSON.stringify([this.epoch, this.mode, this.store.head, this.revision]),
       ),
@@ -172,10 +185,7 @@ export class FakeSyncServer {
         check: sha256('checked:' + this.state().state_version),
         expected_state: this.state().state_version,
         mode: body.mode,
-        personal_bytes: 123,
-        directory_grants: 2,
-        pending_shares: null,
-        team_copies_preserved: 1,
+        ...this.modeImpact,
       });
       return;
     }
@@ -195,6 +205,7 @@ export class FakeSyncServer {
       }
       const digest = operationDigest('mode', null, body);
       this.mode = body.mode;
+      this.purging = body.mode === 'local' && this.purgingOnLocal;
       if (body.mode === 'hub' && before.mode === 'local')
         this.epoch = randomUUID();
       this.revision++;
@@ -363,11 +374,14 @@ export class FakeSyncServer {
                 state,
                 receipt,
                 verification: [],
-                projections: this.store.graph(body.snapshot).items.map((i) => ({
-                  kind: i.kind,
-                  item_id: i.item_id,
-                  object: i.heads[0]!,
-                })),
+                projections: this.store.graph(body.snapshot).items.map(
+                  (i) =>
+                    this.project?.(i) ?? {
+                      kind: i.kind,
+                      item_id: i.item_id,
+                      object: i.heads[0]!,
+                    },
+                ),
                 conflicts: this.store.graph(body.snapshot).conflicts,
                 next: null,
               }

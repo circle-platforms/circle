@@ -272,6 +272,22 @@ export class KnowledgeStore {
       .get(key);
     return row ? (JSON.parse(row.value as string) as T) : null;
   }
+  /** Rebuild one mapping from validated version-3 receipt pages when no current projection cache exists. */
+  syncProjection(
+    epoch: string,
+    snapshot: string,
+    state: string,
+    item: string,
+    object: string,
+  ): unknown | null {
+    const rows = this.db
+      .prepare(
+        `SELECT p.value AS projection FROM sync_journal AS j, json_each(j.value,'$.projections') AS p WHERE j.key LIKE 'result:%' AND json_extract(j.value,'$.state.epoch')=? AND json_extract(j.value,'$.state.snapshot')=? AND json_extract(j.value,'$.state.state_version')=? AND json_extract(p.value,'$.item_id')=? AND json_extract(p.value,'$.object')=? LIMIT 2`,
+      )
+      .all(epoch, snapshot, state, item, object);
+    if (rows.length !== 1) return null;
+    return JSON.parse(rows[0]!.projection as string);
+  }
   syncWrite(key: string, value: unknown): void {
     if (value === null)
       this.db.prepare('DELETE FROM sync_journal WHERE key=?').run(key);

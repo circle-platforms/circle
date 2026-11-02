@@ -8,7 +8,7 @@ This page lists what does not work as you might expect in the current version, w
 
 ## Local knowledge and personal sync
 
-- **Local knowledge is not yet a complete synced desktop feature.** Local storage/search/verification, person-confirmed tools and terminal commands, selected MCP OAuth/Bearer sync, frozen team/personal session preferences and explicit personal pack services are implemented. Desktop knowledge pages, authorized sharing and real test-Hub round trips remain unfinished. Validation uses synthetic loopback peers; it does not establish the Hub's server transactions, purge or deployed availability. Pack file selection/installation has a host API, not a new UI entry point. Existing memory files and skills still work; nothing is automatically migrated or uploaded. See [the current boundary](development/local-knowledge.md).
+- **Personal sync still needs packaged and actual test-Hub acceptance.** Local services, terminal commands, selected MCP authorization, session preferences and desktop knowledge/memory/workflow pages are implemented. Client checks use synthetic loopback peers; they do not establish the Hub’s server transactions, purge or deployed availability. Workflow imports require a compatible `pack.json` folder and a separate explicit file installation; arbitrary standalone skills are not converted. Existing memory files and skills work unchanged, with no automatic migration or upload. See [the current boundary](development/local-knowledge.md).
 
 ## Install and release
 

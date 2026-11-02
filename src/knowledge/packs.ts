@@ -99,6 +99,70 @@ function manifestAt(
     throw Error('personal pack is unavailable or conflicted');
   return revision.body.manifest;
 }
+/** Read a native-selected pack folder without importing code or changing its files. */
+export async function inspectPersonalPackFolder(
+  directory: string,
+): Promise<PackManifest> {
+  const manifest = parseStrictJson(
+    fileAt(directory, 'pack.json').toString('utf8'),
+  ) as unknown as PackManifest;
+  const { encodeSyncObject, decodeSyncObject } = await import('./canonical.js');
+  const bytes = encodeSyncObject({
+    schema: 'personal-sync-object@1',
+    kind: 'pack_manifest',
+    body: {
+      item_id: '00000000-0000-4000-8000-000000000000',
+      parents: [],
+      manifest,
+    },
+  });
+  const object = decodeSyncObject(bytes, sha256(bytes));
+  if (object.kind !== 'pack_manifest') throw Error('personal pack unavailable');
+  takeFiles(directory, object.body.manifest);
+  return object.body.manifest;
+}
+/** Native previews validate selected bytes before presenting the person confirmation; install rechecks them. */
+export async function inspectPersonalPack(options: {
+  home: string;
+  snapshot: string;
+  object: string;
+  directory: string;
+  workspace: string;
+  userHome: string;
+}): Promise<PackManifest> {
+  const store = new KnowledgeStore(options.home);
+  try {
+    const manifest = manifestAt(store, options.snapshot, options.object);
+    const { discoverSkills } = await import('../skills.js');
+    if (
+      discoverSkills(options.workspace, options.home, options.userHome).some(
+        (s) => s.name.toLowerCase() === manifest.id.toLowerCase(),
+      )
+    )
+      throw Error('a skill with this name already exists');
+    const supplied = parseStrictJson(
+      fileAt(options.directory, 'pack.json').toString('utf8'),
+    );
+    const { encodeSyncObject } = await import('./canonical.js');
+    const wrap = (m: unknown) => ({
+      schema: 'personal-sync-object@1',
+      kind: 'pack_manifest',
+      body: {
+        item_id: '00000000-0000-4000-8000-000000000000',
+        parents: [],
+        manifest: m,
+      },
+    });
+    if (
+      !encodeSyncObject(wrap(supplied)).equals(encodeSyncObject(wrap(manifest)))
+    )
+      throw Error('personal pack manifest differs from revision');
+    takeFiles(options.directory, manifest);
+    return manifest;
+  } finally {
+    store.close();
+  }
+}
 /** Explicit installation only. A synced manifest alone never installs executable files. */
 export async function installPersonalPack(options: {
   home: string;

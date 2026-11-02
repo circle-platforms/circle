@@ -25,6 +25,7 @@ export interface SettingsContext {
 /** `/page/settings` opens the dialog at this group. */
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = 'appearance';
 export const SETTINGS_SECTION_IDS: readonly SettingsSectionId[] = [
+  'sync',
   'appearance',
   'behavior',
   'shortcuts',
@@ -134,6 +135,11 @@ export function settingsGroups(context: SettingsContext): SettingsGroup[] {
       id: 'capabilities',
       label: t('capabilities'),
       sections: [
+        {
+          id: 'sync',
+          label: t('sync'),
+          keywords: words(t('knowledge'), t('memory'), t('sync mode')),
+        },
         { id: 'skills', label: t('skills'), keywords: '' },
         { id: 'commands', label: t('commands'), keywords: '' },
         {

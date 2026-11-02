@@ -9,8 +9,8 @@ export const agentTools: Record<string, string> = {
   'Propose canonical revisions and byte chunks against expected_head. Inventories are generated locally. Every change needs person confirmation, including auto mode.':
     '对指定版本提出知识变更，每次均须本人确认，自动模式也不例外。',
   'Share knowledge with a team': '分享到团队…',
-  'Unavailable until Sync to Hub and an authorized entry mapping are configured. Open sync settings to switch mode; this tool never changes it.':
-    '需先在同步设置切换为“同步到 Hub”，并建立获授权的条目关联；此工具不会切换方式。',
+  'Share the current synced, qualified knowledge or memory as an independent team copy. Always requires person confirmation; local-only mode and missing mappings refuse sharing.':
+    '将已同步且符合条件的知识或记忆复制到团队，每次须本人确认；仅本机模式或缺少关联时不可分享。',
   'Propose a personal memory change': '提出个人记忆变更',
   'Create, replace, enable, disable or delete personal memory against expected_head. Always requires person confirmation; credential and size checks run before persistence.':
     '按期望版本新增、编辑、启停或删除个人记忆。每次均须本人确认，保存前会检查凭据和大小。',

@@ -92,6 +92,9 @@ export function pairedSwitch(
 }
 // A page of a plugin may not take the address of a group of the settings dialog.
 const reservedPages = new Set<string>([
+  'knowledge',
+  'memory',
+  'workflows',
   'sessions',
   'settings',
   ...SETTINGS_SECTION_IDS,

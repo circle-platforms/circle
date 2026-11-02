@@ -1,1 +1,1 @@
-Unavailable until Sync to Hub and an authorized entry mapping are configured. Open sync settings to switch mode; this tool never changes it.
+Share an exact current, verified entry to team knowledge with person approval. Requires Sync to Hub and its confirmed entry mapping; never changes sync mode. Sources must be readable by every team reader.

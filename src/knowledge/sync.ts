@@ -31,6 +31,8 @@ interface Journal {
   binding: string;
   epoch: string;
   base: string | null;
+  observedMode?: 'hub' | 'local';
+  observedStatus?: string;
   state: string | null;
   paused: boolean;
   session?: SyncSession;
@@ -81,9 +83,18 @@ export class KnowledgeSync {
     this.store = new KnowledgeStore(home);
     this.now = options.now ?? Date.now;
   }
-  get status(): { condition: SyncCondition; lastSyncedAt: string | null } {
+  get status(): {
+    condition: SyncCondition;
+    lastSyncedAt: string | null;
+    mode: 'hub' | 'local' | null;
+    clearing: boolean;
+  } {
     const j = this.store.syncRead<Journal>('active');
     return {
+      mode:
+        j?.binding === this.options.binding ? (j.observedMode ?? null) : null,
+      clearing:
+        j?.binding === this.options.binding && j.observedStatus === 'purging',
       condition:
         j?.binding === this.options.binding
           ? j.condition === 'synced' && this.store.head !== j.base
@@ -141,6 +152,8 @@ export class KnowledgeSync {
       this.save({
         binding: this.options.binding,
         epoch: state.epoch,
+        observedMode: state.mode,
+        observedStatus: state.status,
         base: null,
         state: null,
         paused: state.mode !== 'hub' || state.status === 'purging',
@@ -231,6 +244,8 @@ export class KnowledgeSync {
   }
 
   private async observe(j: Journal, state: SyncState): Promise<boolean> {
+    j.observedMode = state.mode;
+    j.observedStatus = state.status;
     if (
       state.mode === 'local' ||
       state.status === 'purging' ||
@@ -248,6 +263,28 @@ export class KnowledgeSync {
   }
   private async cycle(force = false): Promise<void> {
     let j = this.store.syncRead<Journal>('active');
+    // A checked purge stops transfer work, but its completion still needs a bounded state observation.
+    if (
+      j?.binding === this.options.binding &&
+      j.paused &&
+      j.observedStatus === 'purging' &&
+      !['login-required', 'invalid'].includes(j.condition) &&
+      (j.nextAt <= this.now() || (force && j.condition === 'local'))
+    ) {
+      try {
+        const state = await this.request<SyncState>('state', {
+          schema: 'personal-sync-state@1',
+        });
+        await this.observe(j, state);
+        j.nextAt = this.now() + 15000;
+        j.failures = 0;
+        this.save(j);
+      } catch (error) {
+        this.recordFailure(j, error);
+        throw error;
+      }
+      return;
+    }
     if (
       j &&
       (j.binding !== this.options.binding ||
@@ -624,6 +661,8 @@ export class KnowledgeSync {
         receipt.previous_state !== p.body.expected_state
       )
         throw new TypeError('sync mode receipt mismatch');
+      j.observedMode = result.state.mode;
+      j.observedStatus = result.state.status;
       j.epoch = result.state.epoch;
       j.base = null;
       j.state = null;
@@ -676,6 +715,15 @@ export class KnowledgeSync {
         next = page.next;
       }
       this.store.syncAtomic(this.token!, this.now, () => {
+        this.store.syncWrite('projection', {
+          binding: j.binding,
+          epoch: j.epoch,
+          snapshot: result.state.snapshot,
+          state: result.state.state_version,
+          projections: resultPages.flatMap((p) => p.projections ?? []),
+        });
+        j.observedMode = result.state.mode;
+        j.observedStatus = result.state.status;
         for (let i = 0; i < resultPages.length; i++)
           this.store.syncWrite(
             `result:${receipt.epoch}:${receipt.operation_id}:${i}`,

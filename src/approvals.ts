@@ -935,7 +935,7 @@ export class ApprovalPolicy {
     // Always asks, as Circle's own deletes do: no rule is kept or covers it, a hook's allow
     // does not skip the card, and a run that cannot show one does not run it. The card is
     // headed with the tool's name, so the reason is the same words for every tool.
-    if (['knowledge_write', 'memory_write'].includes(tool))
+    if (['knowledge_write', 'memory_write', 'knowledge_share'].includes(tool))
       return review(
         'ASK_FORCED',
         'changes personal knowledge or memory and always needs your confirmation',
@@ -1109,7 +1109,8 @@ export class ApprovalPolicy {
     if (tab?.firstUse || tab?.uncertain) return true;
     if (tab && tab.command === undefined) return false;
     if (this.allowedBySettings(tool, args)) return false;
-    if (['knowledge_write', 'memory_write'].includes(tool)) return true;
+    if (['knowledge_write', 'memory_write', 'knowledge_share'].includes(tool))
+      return true;
     const mode = this.mode(thread);
     if (allowYolo && mode === 'auto') return false;
     if (found.verdict === 'ASK_FORCED') return true;

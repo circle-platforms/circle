@@ -1,3 +1,4 @@
+import { knowledge } from './knowledge.ts';
 import { externalFileAccess } from './external-file-access.ts';
 import { fileUndo } from './file-undo.ts';
 import { drawerShell } from './drawer-shell.ts';
@@ -21,6 +22,7 @@ import { workspace } from './workspace.ts';
 
 /** Every interface text in Simplified Chinese, keyed by its English. */
 export const ZH_CN: Record<string, string> = {
+  ...knowledge,
   ...externalFileAccess,
   ...drawerShell,
   ...fileUndo,
