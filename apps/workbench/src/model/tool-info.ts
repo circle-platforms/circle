@@ -604,6 +604,18 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'interaction',
   },
   {
+    name: 'send_to_job',
+    get description() {
+      return t('Tell a running subagent one thing');
+    },
+    get detail() {
+      return t(
+        'Tell a running subagent of this conversation one thing; it reads it before its next model request. It answers no approval card.',
+      );
+    },
+    kind: 'write',
+  },
+  {
     name: 'compact_conversation',
     get description() {
       return t('Summarize older messages now');
