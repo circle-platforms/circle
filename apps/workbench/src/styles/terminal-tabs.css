@@ -83,13 +83,13 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--status-muted);
 }
 .term-dot[data-state='run'] {
-  background: var(--accent);
+  background: var(--status-info);
 }
 .term-dot[data-state='wait'] {
-  background: var(--attention);
+  background: var(--status-warn);
 }
 .term-dot[data-state='fail'] {
   background: var(--negative);
@@ -204,7 +204,7 @@
 .term-connect input {
   min-width: 0;
   padding: 7px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 7px;
   background: var(--bg);
   color: var(--fg);
@@ -219,7 +219,7 @@
   color: var(--muted);
 }
 .term-connect-problem {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .term-connect-actions {
   display: flex;

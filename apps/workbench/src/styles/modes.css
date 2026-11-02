@@ -98,10 +98,10 @@
   font-size: var(--ui-small);
 }
 .changes-counts .add {
-  color: var(--accent);
+  color: var(--status-pass-text);
 }
 .changes-counts .del {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .changes-file {
   display: flex;
@@ -303,7 +303,7 @@
   padding: 6px 10px;
   border: 1px solid var(--attention);
   border-radius: 8px;
-  color: var(--attention);
+  color: var(--status-warn-text);
   font-family: var(--mono);
   font-size: var(--ui-small);
   overflow-wrap: anywhere;

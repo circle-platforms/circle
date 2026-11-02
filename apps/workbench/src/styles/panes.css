@@ -188,12 +188,16 @@
   gap: 6px;
   margin-left: 4px;
   padding: 0 3px 0 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--bg);
 }
 .inspector .browser-url:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-color: color-mix(
+    in srgb,
+    var(--focus-ring) 60%,
+    var(--control-border)
+  );
 }
 .inspector .browser-url-field {
   position: relative;
@@ -270,13 +274,17 @@
   gap: 2px;
   width: min(330px, calc(100% + 2px));
   padding: 0 1px 0 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--bg);
   box-shadow: 0 4px 14px color-mix(in srgb, var(--fg) 10%, transparent);
 }
 .inspector .browser-find:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-color: color-mix(
+    in srgb,
+    var(--focus-ring) 60%,
+    var(--control-border)
+  );
 }
 .inspector .browser-find input {
   flex: 1;

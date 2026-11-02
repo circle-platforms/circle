@@ -5,6 +5,7 @@ import {
   buildPalette,
   contrastRatio,
   DEFAULT_DARK,
+  DESKTOP_DARK,
   DEFAULT_LIGHT,
   DESKTOP_LIGHT,
   setPalette,
@@ -257,7 +258,12 @@ test('wrap breaks CJK anywhere and keeps ASCII runs and quoted spans whole', () 
   assert.ok(hung.every((line) => stringWidth(line) <= 24));
 });
 test('palette contrast is readable across panel and all type surfaces in dark and light themes', () => {
-  for (const defaults of [DEFAULT_DARK, DEFAULT_LIGHT, DESKTOP_LIGHT]) {
+  for (const defaults of [
+    DEFAULT_DARK,
+    DEFAULT_LIGHT,
+    DESKTOP_DARK,
+    DESKTOP_LIGHT,
+  ]) {
     const p = buildPalette(...defaults);
     const sgrToHex = (sgr: string) =>
       rgbToHex(

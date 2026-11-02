@@ -46,7 +46,7 @@
   background: var(--active);
 }
 .virtual-file-tree:focus-visible .tree-focused {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: -1px;
 }
 .virtual-file-tree-row small {
@@ -66,16 +66,16 @@
   color: var(--muted);
 }
 .file-listing-status[role='alert'] {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 
 /* A changed file's name takes the colour of its change, with its letter at the end; a
    folder with a changed file somewhere beneath it carries a small dot. */
 .virtual-file-tree-row.changed-M .virtual-file-tree-label {
-  color: var(--attention);
+  color: var(--status-warn-text);
 }
 .virtual-file-tree-row.changed-A .virtual-file-tree-label {
-  color: var(--accent);
+  color: var(--status-pass-text);
 }
 .virtual-file-tree-row .file-letter {
   flex: none;
@@ -86,10 +86,10 @@
   text-align: center;
 }
 .virtual-file-tree-row .file-letter[data-letter='M'] {
-  color: var(--attention);
+  color: var(--status-warn-text);
 }
 .virtual-file-tree-row .file-letter[data-letter='A'] {
-  color: var(--accent);
+  color: var(--status-pass-text);
 }
 .virtual-file-tree-row .file-dot {
   flex: none;

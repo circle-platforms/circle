@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
+import { cssColorHex } from '../../../../src/ink/theme.ts';
 import type { GutterMark } from '../model/gutter-marks';
 import { applyMonacoLocale } from './monaco-locale';
 import * as monaco from 'monaco-editor/editor/editor.api';
@@ -274,19 +275,7 @@ export function NativeCodeEditor({
     const applyTheme = () => {
       const root = getComputedStyle(document.documentElement);
       const dark = document.documentElement.dataset.theme !== 'light';
-      const color = (name: string) => {
-        const raw = root.getPropertyValue(name).trim();
-        if (raw.startsWith('#')) return raw;
-        const channels = raw.match(/\d+(?:\.\d+)?/g)?.slice(0, 3);
-        return channels?.length === 3
-          ? '#' +
-              channels
-                .map((item) =>
-                  Math.round(Number(item)).toString(16).padStart(2, '0'),
-                )
-                .join('')
-          : undefined;
-      };
+      const color = (name: string) => cssColorHex(root.getPropertyValue(name));
       const colors: Record<string, string> = {};
       const tokens: Record<string, string> = {
         'editor.background': '--subtle',
@@ -309,16 +298,16 @@ export function NativeCodeEditor({
         'editorSuggestWidget.selectedBackground': '--active',
         'editorSuggestWidget.selectedForeground': '--fg',
         'editorSuggestWidget.highlightForeground': '--accent',
-        focusBorder: '--accent',
+        focusBorder: '--focus-ring',
         'menu.background': '--surface',
         'menu.foreground': '--fg',
         'menu.border': '--border',
         'menu.selectionBackground': '--active',
         'menu.selectionForeground': '--fg',
         'menu.separatorBackground': '--border',
-        'input.background': '--bg',
+        'input.background': '--input',
         'input.foreground': '--fg',
-        'input.border': '--border',
+        'input.border': '--control-border',
         'inputOption.activeBackground': '--active',
         'inputOption.activeBorder': '--accent',
         'list.hoverBackground': '--hover',
@@ -326,13 +315,13 @@ export function NativeCodeEditor({
         'list.activeSelectionForeground': '--fg',
         'list.focusBackground': '--active',
         'list.focusForeground': '--fg',
-        'editorError.foreground': '--negative',
-        'editorWarning.foreground': '--attention',
-        'editorInfo.foreground': '--accent',
+        'editorError.foreground': '--negative-text',
+        'editorWarning.foreground': '--status-warn-text',
+        'editorInfo.foreground': '--status-info-text',
         'diffEditor.insertedTextBackground': '--added-bg',
         'diffEditor.removedTextBackground': '--removed-bg',
         'diffEditor.insertedLineBackground': '--write-bg',
-        'diffEditor.removedLineBackground': '--think-bg',
+        'diffEditor.removedLineBackground': '--removed-bg',
       };
       for (const [target, source] of Object.entries(tokens)) {
         const value = color(source);

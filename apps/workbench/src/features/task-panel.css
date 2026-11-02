@@ -61,7 +61,7 @@
   font-size: var(--ui-small);
   color: var(--fg);
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   padding: 7px 8px;
   min-width: 0;
@@ -120,7 +120,7 @@
 }
 .task-recovery [role='alert'],
 .task-operations [role='alert'] {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 
 .task-limits-problem small {
@@ -146,7 +146,7 @@
 }
 .settings-block > p.task-limits-problem {
   margin-top: 12px;
-  color: var(--negative);
+  color: var(--negative-text);
   font-size: var(--ui-small);
   line-height: 1.6;
 }

@@ -21,7 +21,7 @@
   width: 100%;
   background: var(--bg);
   color: var(--fg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   padding: 8px;
 }
 .search-results button.selected {
@@ -34,7 +34,7 @@
 .status-preparing i,
 .status-cancelling i,
 .status-stopping i {
-  background: var(--attention);
+  background: var(--status-warn);
 }
 .status-cancelled,
 .status-interrupted,

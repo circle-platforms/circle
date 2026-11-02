@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Changed
+
+- **The desktop uses the shared graphite palette.** Dark and light surfaces, text, controls and status colours now follow the Circle design tokens; terminal defaults stay unchanged.
+
 ### Fixed
 
 - **Desktop command answers stay where they were asked.** A command that answers with one line (`unknown command /name`, `/undo`, `/share`) said it only in a toast that passes in four seconds, and an answer that arrived after the window had moved to another conversation was dropped whole. The line now also stays in the conversation that asked for it, in its place in the transcript, and the toast is still said while that conversation is on screen. (#302)

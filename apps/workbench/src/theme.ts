@@ -1,12 +1,9 @@
 import {
-  buildPalette,
-  DEFAULT_DARK,
-  DESKTOP_LIGHT,
-  hexToRgb,
-  mix,
-  palette,
+  buildDesktopPalette,
+  GRADIENT_STOPS,
+  type DesktopToken,
   setPalette,
-} from '../../../src/ink/theme';
+} from '../../../src/ink/theme.ts';
 import type { TextSize, Theme } from './model/types';
 /** Interface and code text sizes in px for each preset; code is one step smaller. */
 export const TEXT_SIZES: Record<TextSize, [number, number]> = {
@@ -16,65 +13,62 @@ export const TEXT_SIZES: Record<TextSize, [number, number]> = {
   larger: [17, 16],
 };
 export const textSizes = Object.keys(TEXT_SIZES) as TextSize[];
-/** Browser tokens are derived from Circle's existing palette, never a second color table. */
+// Compatibility names map to semantic slots, never to another colour table.
+const aliases = {
+  bg: 'surface-1',
+  fg: 'text-primary',
+  sidebar: 'surface-0',
+  drawer: 'surface-2',
+  surface: 'surface-2',
+  popover: 'surface-3',
+  input: 'surface-sunken',
+  hover: 'surface-hover',
+  active: 'surface-pressed',
+  border: 'line-hairline',
+  'control-border': 'line-control',
+  secondary: 'text-secondary',
+  muted: 'text-tertiary',
+  subtle: 'surface-sunken',
+  accent: 'area-knowledge',
+  violet: 'area-workflow',
+  attention: 'area-task',
+  call: 'area-workflow',
+  positive: 'status-pass',
+  'positive-text': 'status-pass-text',
+  negative: 'status-fail',
+  'negative-text': 'status-fail-text',
+  'read-bg': 'status-info-bg',
+  'write-bg': 'status-pass-bg',
+  'think-bg': 'surface-2',
+  'agent-bg': 'surface-2',
+  'added-bg': 'status-pass-bg',
+  'removed-bg': 'status-fail-bg',
+} as const satisfies Record<string, DesktopToken>;
+
+/** Browser tokens come only from Circle's palette, including translucent overlays. */
 export function applyTheme(choice: Theme, size: TextSize = 'default') {
   const dark =
     choice === 'auto'
       ? matchMedia('(prefers-color-scheme: dark)').matches
       : choice === 'dark';
-  setPalette(buildPalette(...(dark ? DEFAULT_DARK : DESKTOP_LIGHT)));
-  const p = palette();
-  const rgb = (color: string) => `rgb(${hexToRgb(color).join(' ')})`;
-  const values: Record<string, string> = {
-    bg: p.bg_hex,
-    fg: p.fg_hex,
-    // The light theme is one white ground: the sidebar and the drawer are on it too, set
-    // apart by their borders. The dark theme keeps them a shade off its ground.
-    sidebar: dark ? mix(p.bg_hex, p.fg_hex, 0.035) : p.bg_hex,
-    drawer: dark ? mix(p.bg_hex, p.fg_hex, 0.025) : p.bg_hex,
-    surface: mix(p.bg_hex, p.fg_hex, 0.045),
-    hover: mix(p.bg_hex, p.fg_hex, 0.085),
-    active: mix(p.bg_hex, p.fg_hex, 0.12),
-    border: mix(p.bg_hex, p.fg_hex, 0.15),
-    secondary: mix(p.fg_hex, p.bg_hex, 0.22),
-    muted: mix(p.fg_hex, p.bg_hex, 0.39),
-    subtle: mix(p.bg_hex, p.fg_hex, 0.025),
-    'read-bg': p.read_bg_hex,
-    'write-bg': p.write_bg_hex,
-    positive: p.write_hex,
-    'think-bg': p.think_bg_hex,
-    'agent-bg': p.agent_bg_hex,
-  };
+  const p = buildDesktopPalette(dark ? 'dark' : 'light');
+  setPalette(p);
   const root = document.documentElement;
-  for (const [key, value] of Object.entries(values))
-    root.style.setProperty('--' + key, rgb(value));
-  root.style.setProperty(
-    '--accent',
-    `rgb(${p.rainbow_stops[0]![1].join(' ')})`,
-  );
-  root.style.setProperty(
-    '--negative',
-    `rgb(${p.rainbow_stops[2]![1].join(' ')})`,
-  );
-  const stop = (index: number) =>
-    `rgb(${p.rainbow_stops[index]![1].join(' ')})`;
-  const stops = p.rainbow_stops
-    .map(([at, value]) => `rgb(${value.join(' ')}) ${at * 100}%`)
-    .join(',');
+  for (const [name, value] of Object.entries(p.desktop))
+    root.style.setProperty('--' + name, value);
+  for (const [name, token] of Object.entries(aliases))
+    root.style.setProperty('--' + name, p.desktop[token]);
+  const brand = [
+    'brand-blue',
+    'brand-violet',
+    'brand-red',
+    'brand-orange',
+    'brand-blue',
+  ] as const;
+  const stops = GRADIENT_STOPS.map(
+    ([at], index) => `${p.desktop[brand[index]!]} ${at * 100}%`,
+  ).join(',');
   root.style.setProperty('--logo-gradient', `conic-gradient(${stops})`);
-  // Plan mode's colour, for the composer frame and the mode word
-  root.style.setProperty('--violet', stop(1));
-  root.style.setProperty('--call', rgb(p.call_hex));
-  // Your turn: the terminal's frame is yellow; the app takes the rainbow's orange, which
-  // the palette has already darkened to read on a light background.
-  root.style.setProperty('--attention', stop(3));
-  const hex = (index: number) =>
-    '#' +
-    p.rainbow_stops[index]![1].map((value) =>
-      value.toString(16).padStart(2, '0'),
-    ).join('');
-  root.style.setProperty('--removed-bg', rgb(mix(p.bg_hex, hex(2), 0.16)));
-  root.style.setProperty('--added-bg', rgb(p.write_bg_hex));
   const [ui, code] = TEXT_SIZES[size] ?? TEXT_SIZES.default;
   root.style.setProperty('--ui-size', ui + 'px');
   root.style.setProperty('--code-size', code + 'px');

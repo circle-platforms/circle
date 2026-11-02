@@ -105,18 +105,18 @@
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--muted);
+  background: var(--status-muted);
 }
 .task-dot[data-state='running'],
 .task-dot[data-state='preparing'],
 .task-dot[data-state='queued'],
 .task-dot[data-state='cancelling'] {
-  background: var(--accent);
+  background: var(--status-info);
 }
 .task-dot[data-state='waiting'],
 .task-dot[data-state='needs_review'],
 .task-dot[data-state='blocked'] {
-  background: var(--attention);
+  background: var(--status-warn);
 }
 .task-dot[data-state='failed'] {
   background: var(--negative);

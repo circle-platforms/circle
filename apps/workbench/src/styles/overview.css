@@ -200,13 +200,13 @@ button.overview-row:hover .overview-name {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--status-muted);
 }
 .overview-dot[data-state='run'] {
-  background: var(--accent);
+  background: var(--status-info);
 }
 .overview-dot[data-state='wait'] {
-  background: var(--attention);
+  background: var(--status-warn);
 }
 .overview-dot[data-state='fail'] {
   background: var(--negative);
@@ -221,13 +221,13 @@ button.overview-row:hover .overview-name {
   font-weight: 600;
 }
 .overview-letter[data-letter='M'] {
-  color: var(--attention);
+  color: var(--status-warn-text);
 }
 .overview-letter[data-letter='A'] {
-  color: var(--accent);
+  color: var(--status-pass-text);
 }
 .overview-letter[data-letter='D'] {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .overview-facts {
   display: grid;
@@ -287,17 +287,17 @@ button.overview-row:hover .overview-name {
   font-size: var(--ui-small);
 }
 .overview-counts .add {
-  color: var(--accent);
+  color: var(--status-pass-text);
 }
 .overview-counts .del {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .overview-action {
   flex: none;
   margin-left: auto;
   height: 28px;
   padding: 0 11px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 7px;
   background: var(--surface);
   color: var(--fg);
@@ -354,10 +354,10 @@ button.overview-row:hover .overview-name {
   white-space: nowrap;
 }
 .overview-pull-text [data-checks='failing'] {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .overview-pull-text [data-checks='running'] {
-  color: var(--accent);
+  color: var(--status-info-text);
 }
 
 /* In a narrow window the overview lies over the conversation, as a drawer does. */

@@ -87,12 +87,33 @@ button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* Overlays raise dark surfaces and lower light ones. Keep small words and selected
+   control edges readable without changing the shared base tokens. */
+:is(button, a, label, [role='option'], [role='tab'], [role='treeitem'], tr):is(
+  :hover,
+  :active,
+  [aria-selected='true'],
+  [aria-pressed='true'],
+  .active,
+  .selected
+) {
+  --muted: var(--text-secondary);
+}
+:is(button, a, label, [role='option'], [role='tab'], [role='treeitem']):is(
+  :active,
+  [aria-selected='true'],
+  [aria-pressed='true'],
+  .active,
+  .selected
+) {
+  --control-border: var(--focus-ring);
+}
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 a {
@@ -113,8 +134,8 @@ p {
 input,
 select,
 textarea {
-  border: 1px solid var(--border);
-  background: var(--bg);
+  border: 1px solid var(--control-border);
+  background: var(--input);
   border-radius: var(--radius);
   padding: 8px 10px;
   min-width: 0;
@@ -290,7 +311,7 @@ pre {
   align-items: center;
   gap: 10px;
   text-align: left;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   padding: 12px;
   background: var(--bg);
   border-radius: 8px;
@@ -384,7 +405,7 @@ pre {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--status-info);
 }
 .sidebar-nav {
   border-top: 1px solid var(--border);
@@ -428,7 +449,7 @@ pre {
 }
 .extension-lamp-running i,
 .extension-lamp-wait i {
-  background: var(--accent);
+  background: var(--status-info);
 }
 .extension-lamp-ok i {
   background: var(--secondary);
@@ -446,10 +467,10 @@ pre {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--status-muted);
 }
 .sidebar-footer button {
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   width: 19px;
   height: 19px;
   border-radius: 50%;
@@ -527,7 +548,7 @@ pre {
   gap: 7px;
   padding: 7px 11px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   line-height: 1.3;
   font-size: var(--ui-small);
@@ -538,19 +559,19 @@ pre {
 }
 .button.primary,
 .send {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg);
+  background: var(--inverse-surface);
+  border-color: var(--inverse-surface);
+  color: var(--text-inverse);
 }
 .button.primary:disabled {
   opacity: 1;
   background: var(--surface);
-  border-color: var(--border);
+  border-color: var(--control-border);
   color: var(--secondary);
 }
 .button.danger,
 .danger {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .text-button {
   display: inline-flex;
@@ -904,7 +925,7 @@ pre {
 .pending-message i {
   width: 6px;
   height: 6px;
-  background: var(--accent);
+  background: var(--status-info);
   border-radius: 50%;
 }
 .pending-message button {
@@ -942,13 +963,13 @@ pre {
 }
 .composer {
   position: relative;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 9px;
-  background: var(--bg);
+  background: var(--input);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--fg) 2%, transparent);
 }
 .composer:focus-within {
-  border-color: var(--muted);
+  border-color: var(--focus-ring);
 }
 .composer textarea {
   display: block;
@@ -1128,7 +1149,7 @@ pre {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 5px;
   background: var(--subtle);
   font-size: var(--ui-tiny);
@@ -1160,12 +1181,12 @@ pre {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--status-muted);
 }
 .status-running i,
 .status-active i,
 .status-waiting i {
-  background: var(--accent);
+  background: var(--status-info);
 }
 .status-failed i,
 .status-error i {
@@ -1173,13 +1194,13 @@ pre {
 }
 /* Trust is a yes/no the person must read at a glance: green for yes, red for no. */
 .status-trusted {
-  color: var(--positive);
+  color: var(--positive-text);
 }
 .status-trusted i {
   background: var(--positive);
 }
 .status-not-trusted {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .status-not-trusted i {
   background: var(--negative);
@@ -1249,7 +1270,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 7px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   background: var(--bg);
   padding: 0 10px;
@@ -1413,7 +1434,7 @@ pre {
   align-items: center;
   gap: 7px;
   margin: 15px -5px 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   padding: 3px 6px;
   border-radius: 6px;
   background: var(--bg);
@@ -1597,13 +1618,13 @@ pre {
 }
 .code-editor.short {
   min-height: 130px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   margin: 15px 0;
 }
 .code-editor.editor-draft {
   min-height: 330px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 7px;
 }
 
@@ -1842,7 +1863,7 @@ pre {
 .connection-banner i {
   width: 5px;
   height: 5px;
-  background: var(--muted);
+  background: var(--status-muted);
   border-radius: 50%;
 }
 .connection-banner code {
@@ -1994,7 +2015,7 @@ pre {
   flex-wrap: wrap;
 }
 .effort-options button {
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   padding: 8px 12px;
   border-radius: 6px;
   font-size: var(--ui-small);
@@ -2078,7 +2099,7 @@ pre {
   transform: translateX(13px);
 }
 .toggle > input:focus-visible + i {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 .catalog-layout {
@@ -2196,7 +2217,7 @@ pre {
   border-radius: 5px;
   padding: 9px 12px;
   font-size: var(--ui-small);
-  color: var(--negative);
+  color: var(--negative-text);
   margin: 10px 0;
 }
 .tool-catalog {
@@ -2364,7 +2385,7 @@ pre {
 .input {
   width: 100%;
   padding: 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   background: var(--bg);
 }
@@ -2503,7 +2524,7 @@ pre {
   gap: 12px;
   text-align: left;
   width: 100%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 7px;
   padding: 15px;
   margin-bottom: 10px;
@@ -2613,7 +2634,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 9px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   padding: 11px;
   border-radius: 6px;
   font-size: var(--ui-small);
@@ -3057,7 +3078,7 @@ pre {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-  color: var(--attention);
+  color: var(--status-warn-text);
   font-size: var(--ui-tiny);
 }
 .browser-error-page {
@@ -3276,7 +3297,7 @@ pre {
   align-items: flex-start;
   gap: 8px;
   padding: 6px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   cursor: pointer;
 }
@@ -3471,7 +3492,7 @@ pre {
 }
 .session-menu [role='menuitem'].danger,
 .session-menu [role='menuitem'].danger svg {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .session-menu kbd {
   margin-left: auto;
@@ -3558,7 +3579,7 @@ pre {
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 7px;
   cursor: pointer;
 }
@@ -3664,13 +3685,13 @@ pre {
   background: var(--muted);
 }
 .context-meter.high {
-  color: var(--attention);
+  color: var(--status-warn-text);
 }
 .context-meter.high .context-bar > span {
   background: var(--attention);
 }
 .context-meter.full {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .context-meter.full .context-bar > span {
   background: var(--negative);
@@ -3695,16 +3716,16 @@ pre {
 }
 
 .preview-status[data-state='ready'] i {
-  background: var(--accent);
+  background: var(--status-pass);
 }
 .preview-status[data-state='not-configured'] i {
-  background: var(--attention);
+  background: var(--status-warn);
 }
 .preview-status[data-state='stopped'] i {
   background: var(--negative);
 }
 .model-button.attention {
-  color: var(--attention);
+  color: var(--status-warn-text);
 }
 
 /* ── The Claude-style layout ─────────────────────────────────────────────────────
@@ -3833,7 +3854,7 @@ pre {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--attention);
+  background: var(--status-warn);
   flex-shrink: 0;
 }
 .show-more {
@@ -3874,19 +3895,19 @@ pre {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--muted);
+  background: var(--status-muted);
 }
 .connection-status[data-state='ready'] i {
-  background: var(--accent);
+  background: var(--status-pass);
 }
 .connection-status[data-state='not-configured'] i {
-  background: var(--attention);
+  background: var(--status-warn);
 }
 .connection-status[data-state='stopped'] i {
   background: var(--negative);
 }
 .connection-status[data-state='restarting'] i {
-  background: var(--attention);
+  background: var(--status-warn);
 }
 /* Search and settings: icons at the right end, named by their tips. */
 .sidebar-footer .sidebar-footer-actions {
@@ -4129,13 +4150,13 @@ pre {
   font-size: var(--ui-small);
 }
 .diff-count .added {
-  color: var(--accent);
+  color: var(--status-pass-text);
 }
 .diff-count .removed {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .tool-summary .failed {
-  color: var(--negative);
+  color: var(--negative-text);
   font-size: var(--ui-small);
 }
 /* Only the folded line's command. A running card is .tool-call.tool-running and keeps its width. */
@@ -4244,7 +4265,7 @@ pre {
   color: var(--muted);
 }
 .footbar-button.attention {
-  color: var(--attention);
+  color: var(--status-warn-text);
 }
 .footbar-model {
   max-width: 190px;
@@ -4496,7 +4517,7 @@ pre {
   font-size: var(--ui-small);
 }
 .update-control[data-phase='failed'] .update-line {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .update-control progress {
   width: 160px;
@@ -4509,7 +4530,7 @@ pre {
   gap: 8px;
   margin: 0 2px 6px;
   padding: 7px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--surface);
   color: var(--fg);
@@ -4647,7 +4668,7 @@ pre {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .variable-table tbody tr:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 .form-stack label.variable-secret {
@@ -4941,7 +4962,7 @@ pre {
   margin: 9px 0 0;
   font-size: var(--ui-small);
   line-height: 1.7;
-  color: var(--negative);
+  color: var(--negative-text);
 }
 
 /* protected files */
