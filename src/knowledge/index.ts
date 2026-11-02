@@ -31,3 +31,14 @@ export {
   setPersonalPackEnabled,
   installedPersonalPacks,
 } from './packs.js';
+
+export { KnowledgeSync, type SyncOptions } from './sync.js';
+export { SyncHttp, SyncHttpError, type SyncTransport } from './sync-http.js';
+export { mergeSnapshots } from './merge.js';
+export type {
+  SyncState,
+  SyncReceipt,
+  SyncResult,
+  SyncCondition,
+  ModeImpact,
+} from './sync-types.js';

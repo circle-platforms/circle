@@ -191,6 +191,7 @@
     "personal-sync-mode-change.v1.schema.json",
     "personal-sync-mode-check.v1.schema.json",
     "personal-sync-mode-impact.v1.schema.json",
+    "personal-sync-mode-result.v1.schema.json",
     "personal-sync-object.v1.schema.json",
     "personal-sync-receipt.v1.schema.json",
     "personal-sync-result.v1.schema.json",

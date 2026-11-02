@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/circle-platforms/circle-hub",
-  "commit": "071a61250a1b9f4be67823a5bc9d180163b95e26",
+  "commit": "5509e84724b9def17839aaf5cebbd28178cc3d94",
   "license": "Apache-2.0",
   "files": [
     {
@@ -56,7 +56,7 @@
     {
       "source": "contracts/generated/schemas/personal-sync-mode-impact.v1.schema.json",
       "path": "src/data/knowledge-sync/v1/personal-sync-mode-impact.v1.schema.json",
-      "sha256": "9469bbdd3b8acd71e8e2dc139f2debd8e1743a57a15b73fb818589a74aa0b1e4"
+      "sha256": "a111efb9fe11abd4fb71d77b2f3cb90d629e38f18e9bc579bbe3e84836d105fd"
     },
     {
       "source": "contracts/generated/schemas/personal-sync-object.v1.schema.json",
@@ -137,12 +137,17 @@
       "source": "contracts/test-fixtures/sync/v1/native-links.json",
       "path": "tests/fixtures/knowledge-sync/v1/native-links.json",
       "sha256": "9cd12a4fcf155326234b6ff80c29ad36243cee966d2ac08e0e4a290800499b94"
+    },
+    {
+      "source": "contracts/generated/schemas/personal-sync-mode-result.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/personal-sync-mode-result.v1.schema.json",
+      "sha256": "1bbbbb637ca87b6de3b4f22248b488112c2f14e46f3970293bd53f1324d2b5b0"
     }
   ],
   "references": [
     {
       "source": "contracts/src/sync.ts",
-      "sha256": "02dae73a1b3a2ab2e614281999ad6cb11856045244c9607470f36599982cb67f"
+      "sha256": "6e29c83b0529eab4c9f2e6cac237d105604c4b9d16539cc812e5fb9acf1beb50"
     },
     {
       "source": "contracts/src/sync-canonical.ts",
@@ -230,7 +235,7 @@
     },
     {
       "source": "hub/knowledge/personal-sync/service.ts",
-      "sha256": "c2c005b0f33d1b27dae1a5d1b79fa147ade25f9fadc2035446b8e7c73372156c"
+      "sha256": "28bc55796a17715b44bb7c7adaec3a71ba3c8c9b6a028854c6057973c9abe73b"
     },
     {
       "source": "hub/refs/parsers/text.test.ts",
@@ -259,12 +264,32 @@
     {
       "source": "hub/records/memory-index.ts",
       "sha256": "568dc0224bd825bde4a38375a6c9a6434acdca4424d9d7de1fb697d2463151a4"
+    },
+    {
+      "source": "contracts/src/sync-merge.ts",
+      "sha256": "e5210a2d5ae941d9a14fae0240644862d06900747a5b0322f63ca0fdafde3344"
+    },
+    {
+      "source": "hub/server/personal-sync.ts",
+      "sha256": "ee0fbb681886d7a937e6e37532f61f971b88f50595c96dd4f6c2ca27a051e4c1"
+    },
+    {
+      "source": "hub/records/personal-sync.ts",
+      "sha256": "68fcaa983ad272ba3296eac264f102f3b4813036c03c84e25d7638563aff797d"
+    },
+    {
+      "source": "hub/records/canonical.ts",
+      "sha256": "a71da1b01818abd112936fc32d86eda76150706e4974b67ed186c337d4175b9d"
+    },
+    {
+      "source": "hub/knowledge/personal-sync/graph.ts",
+      "sha256": "301ce094c0ea46622aaa98747c02795d19c7feb6c155683c48abad38f3ed7af7"
     }
   ],
   "derived": [
     {
       "path": "src/data/knowledge-sync/v1/protocol.json",
-      "sha256": "4c60c65be4a93ad62978d2b89f4ca69addb53df98171ee2df3d9badc8fd3f8ff",
+      "sha256": "715e0680be8b5117f36ea5f85df092880e7da00c25b3153348b4b11c1a008e7f",
       "sources": [
         "contracts/src/sync.ts",
         "contracts/generated/vocabulary.ts",

@@ -8,7 +8,7 @@ This page lists what does not work as you might expect in the current version, w
 
 ## Local knowledge and personal sync
 
-- **Local knowledge is not yet a complete synced desktop feature.** Storage, search, three deterministic parsers, confirmed knowledge/memory tools and explicit personal pack services are implemented. Desktop pages, slash commands, automatic memory loading, authorized sharing and the HTTP sync client remain unfinished. Pack file selection/installation currently has a host API, not a new UI entry point. Existing memory files and skills still work as before; nothing is automatically migrated or uploaded. See [the current storage boundary](development/local-knowledge.md).
+- **Local knowledge is not yet a complete synced desktop feature.** Storage, search, three deterministic parsers, confirmed knowledge/memory tools, explicit personal pack services and a resumable HTTP sync engine are implemented. Desktop pages, slash commands, automatic memory loading, authorized sharing, MCP authorization reuse and runtime sync startup remain unfinished. The sync engine has only an explicit host API and synthetic loopback validation; real test-Hub round trips remain pending. Pack file selection/installation currently has a host API, not a new UI entry point. Existing memory files and skills still work as before; nothing is automatically migrated or uploaded. See [the current storage boundary](development/local-knowledge.md).
 
 ## Install and release
 

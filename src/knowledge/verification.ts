@@ -95,6 +95,8 @@ export function verifyLocal(graph: KnowledgeGraph): Verification[] {
       observation.reasons.push({ ground, code });
       incomplete ||= missing;
     };
+    if (graph.conflicts.some((c) => c.item_id === entry.body.item_id))
+      reason(null, 'entry conflicted', true);
     if (graph.paths.get(entry.body.directory_id) == null)
       reason(null, 'entry directory unresolved', true);
     try {

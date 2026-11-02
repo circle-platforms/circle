@@ -25,7 +25,7 @@ import {
 } from './verification.js';
 import type { SyncItem, SyncObject } from './types.js';
 
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const APPLICATION_ID = 0x434b4e31;
 // Append migrations; never change an applied version's SQL.
 const MIGRATIONS = [
@@ -39,6 +39,8 @@ const MIGRATIONS = [
   CREATE INDEX search_scope ON search_documents(path,kind,status);
 `,
   `CREATE TABLE verification_observations(snapshot TEXT NOT NULL REFERENCES objects(id), object_id TEXT NOT NULL REFERENCES objects(id), rule TEXT NOT NULL, observation TEXT NOT NULL, PRIMARY KEY(snapshot,object_id,rule)) STRICT; CREATE TABLE personal_pack_installations(object_id TEXT PRIMARY KEY REFERENCES objects(id), path TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))) STRICT;`,
+  `CREATE TABLE sync_journal(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+   CREATE TABLE sync_lease(singleton INTEGER PRIMARY KEY CHECK(singleton=1), token TEXT NOT NULL, expires INTEGER NOT NULL) STRICT;`,
 ];
 export interface SearchOptions {
   path?: string;
@@ -106,7 +108,10 @@ export class KnowledgeStore {
         this.db
           .prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)')
           .run('client_id', randomUUID());
-        return this.files.recover((id) => this.has(id));
+        const recovered = this.files.recover((id) => this.has(id));
+        // New structural-conflict rules must also suppress an existing version-2 search projection.
+        if (version < 3 && this.head) this.project(this.graph(this.head));
+        return recovered;
       });
     } catch (error) {
       this.db.close();
@@ -211,14 +216,14 @@ export class KnowledgeStore {
     return actual;
   }
   graph(snapshot: string): KnowledgeGraph {
-    return validateGraph(snapshot, (id) => this.read(id));
+    return validateGraph(snapshot, (id) => this.read(id), true);
   }
   /** Caller supplies an explicit expected local head; no last-writer-wins default. */
-  commit(snapshot: string, expected: string | null): void {
+  commit(snapshot: string, expected: string | null, sync = false): void {
     this.transaction(() => {
       const current = this.head;
       if (current !== expected) throw new KnowledgeVersionConflict(current);
-      const next = this.graph(snapshot);
+      const next = validateGraph(snapshot, (id) => this.read(id), sync);
       if (current) assertSuccessor(this.graph(current), next);
       this.project(next);
       this.options.onPhase?.('projection-written');
@@ -259,6 +264,85 @@ export class KnowledgeStore {
       this.transaction(() => this.files.recover((id) => this.has(id)));
       throw error;
     }
+  }
+  /** Persistent transport state contains no access or refresh tokens. */
+  syncRead<T>(key: string): T | null {
+    const row = this.db
+      .prepare('SELECT value FROM sync_journal WHERE key=?')
+      .get(key);
+    return row ? (JSON.parse(row.value as string) as T) : null;
+  }
+  syncWrite(key: string, value: unknown): void {
+    if (value === null)
+      this.db.prepare('DELETE FROM sync_journal WHERE key=?').run(key);
+    else
+      this.db
+        .prepare(
+          'INSERT INTO sync_journal VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        )
+        .run(key, JSON.stringify(value));
+  }
+  acquireSyncLease(token: string, now: number, duration: number): boolean {
+    return this.transaction(
+      () =>
+        Number(
+          this.db
+            .prepare(
+              'INSERT INTO sync_lease VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET token=excluded.token,expires=excluded.expires WHERE sync_lease.expires<=?',
+            )
+            .run(token, now + duration, now).changes,
+        ) === 1,
+    );
+  }
+  renewSyncLease(token: string, now: number, duration: number): boolean {
+    return (
+      Number(
+        this.db
+          .prepare(
+            'UPDATE sync_lease SET expires=? WHERE singleton=1 AND token=? AND expires>?',
+          )
+          .run(now + duration, token, now).changes,
+      ) === 1
+    );
+  }
+  assertSyncLease(token: string, now: number): void {
+    if (
+      !this.db
+        .prepare(
+          'SELECT 1 FROM sync_lease WHERE singleton=1 AND token=? AND expires>?',
+        )
+        .get(token, now)
+    )
+      throw Error('knowledge sync lease lost');
+  }
+  releaseSyncLease(token: string): void {
+    this.db
+      .prepare('DELETE FROM sync_lease WHERE singleton=1 AND token=?')
+      .run(token);
+  }
+  /** The ownership fence and local CAS are checked under the same database write lock. */
+  syncAtomic<T>(token: string, now: () => number, action: () => T): T {
+    return this.transaction(() => {
+      this.assertSyncLease(token, now());
+      const result = action();
+      this.assertSyncLease(token, now());
+      return result;
+    });
+  }
+  publishSync(snapshot: string, expected: string | null): void {
+    const graph = this.graph(snapshot);
+    for (const observation of verifyLocal(graph))
+      this.db
+        .prepare(
+          'INSERT OR REPLACE INTO verification_observations VALUES(?,?,?,?)',
+        )
+        .run(
+          snapshot,
+          observation.object,
+          observation.rule,
+          JSON.stringify(observation),
+        );
+    this.commit(snapshot, expected, true);
   }
   installPack(
     expected: string,
@@ -330,7 +414,12 @@ export class KnowledgeStore {
           'INSERT INTO current_items(item_id,kind,heads,path) VALUES(?,?,?,?)',
         )
         .run(item.item_id, item.kind, JSON.stringify(item.heads), path);
-      if (!object || object.kind !== 'entry_revision' || path === null)
+      if (
+        !object ||
+        object.kind !== 'entry_revision' ||
+        path === null ||
+        graph.conflicts.some((c) => c.item_id === item.item_id)
+      )
         continue;
       const quotations: string[] = [];
       for (const ground of object.body.grounds) {

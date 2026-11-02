@@ -555,14 +555,14 @@ test('newer and unrelated databases are rejected without downgrading or changing
     id = store.clientId;
   store.close();
   const db = new DatabaseSync(path);
-  db.exec('PRAGMA user_version=3');
+  db.exec('PRAGMA user_version=4');
   db.close();
   const before = readFileSync(path);
   assert.throws(() => new KnowledgeStore(home), /newer/);
   assert.deepEqual(readFileSync(path), before);
   const check = new DatabaseSync(path);
   t.after(() => check.close());
-  assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 3);
+  assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 4);
   assert.equal(
     check.prepare("SELECT value FROM metadata WHERE key='client_id'").get()!
       .value,
@@ -735,3 +735,33 @@ test(
     assert.equal(readFileSync(outside, 'utf8'), 'synthetic outside sentinel');
   },
 );
+
+test('migration 3 rebuilds an existing projection and preserves identities, current heads and immutable bytes', (t) => {
+  const w = world(t);
+  const entryId = w.store.put(entry('真实陈述'));
+  const head = snapshot(w.store, [...w.rows, row(uuid(2), [entryId])]);
+  w.store.commit(head, null);
+  const client = w.store.clientId,
+    bytes = w.store.readBytes(entryId),
+    path = w.store.databasePath;
+  w.store.close();
+  // Recreate the previous applied schema using a synthetic database, then corrupt only derived search text.
+  const old = new DatabaseSync(path);
+  old.exec(
+    'DROP TABLE sync_journal; DROP TABLE sync_lease; PRAGMA user_version=2;',
+  );
+  old
+    .prepare("UPDATE search_documents SET statement='stale derived text'")
+    .run();
+  old.close();
+  const upgraded = new KnowledgeStore(w.home);
+  t.after(() => upgraded.close());
+  assert.equal(upgraded.clientId, client);
+  assert.equal(upgraded.head, head);
+  assert.deepEqual(upgraded.readBytes(entryId), bytes);
+  assert.equal(upgraded.search('真实').items[0]!.statement, '真实陈述');
+  assert.equal(
+    upgraded.acquireSyncLease('migration-holder', 1000, 30000),
+    true,
+  );
+});

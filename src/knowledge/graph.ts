@@ -13,6 +13,7 @@ export interface KnowledgeGraph {
   objects: ReadonlyMap<string, SyncObject>;
   /** null means that a conflicting/deleted ancestor has no selected path. */
   paths: Map<string, string | null>;
+  conflicts: { item_id: string; heads: string[]; structural?: true }[];
 }
 const MAX_GRAPH_OBJECTS = 100_000;
 const MAX_GRAPH_DEPTH = 512;
@@ -85,7 +86,7 @@ export const itemKey = (item: Pick<SyncItem, 'kind' | 'item_id'>): string =>
 export const objectParents = (object: SyncObject): string[] =>
   'parents' in object.body ? object.body.parents : [];
 function failure(rule: string): never {
-  throw new Error(`invalid knowledge graph: ${rule}`);
+  throw new TypeError(`invalid knowledge graph: ${rule}`);
 }
 
 function references(object: SyncObject): string[] {
@@ -169,6 +170,7 @@ function pathName(name: string): boolean {
 export function validateGraph(
   snapshotId: string,
   read: (id: string) => SyncObject,
+  allowStructuralConflicts = false,
 ): KnowledgeGraph {
   const objects = new GraphObjects(read),
     active = new Set<string>();
@@ -302,7 +304,8 @@ export function validateGraph(
   for (const id of directories.keys()) {
     const path = locate(id);
     if (path !== null) {
-      if (names.has(path)) failure('duplicate directory path');
+      if (names.has(path) && !allowStructuralConflicts)
+        failure('duplicate directory path');
       names.add(path);
     }
   }
@@ -315,7 +318,68 @@ export function validateGraph(
       )
         failure('item directory missing');
     }
-  return { snapshot: snapshotId, items, objects, paths };
+  const conflicted = new Set(
+    items.filter((i) => i.heads.length > 1).map((i) => i.item_id),
+  );
+  const entries = new Map<string, string[]>();
+  for (const item of items)
+    if (item.heads.length === 1) {
+      const object = objects.get(item.heads[0]!)!;
+      if (object.kind === 'entry_revision') {
+        const path = paths.get(object.body.directory_id);
+        if (path !== null && path !== undefined) {
+          const key = path + '\0' + JSON.stringify(object.body.content);
+          entries.set(key, [...(entries.get(key) ?? []), item.item_id]);
+        }
+      }
+    }
+  for (const ids of entries.values())
+    if (ids.length > 1) for (const id of ids) conflicted.add(id);
+  const locations = new Map<string, string[]>();
+  for (const [id, path] of paths)
+    if (path !== null)
+      locations.set(path, [...(locations.get(path) ?? []), id]);
+  for (const ids of locations.values())
+    if (ids.length > 1) for (const id of ids) conflicted.add(id);
+  // Deleting an ancestor never deletes a concurrent child. Suppress the dependent projection.
+  for (let n = 0; n < items.length; n++) {
+    let changed = false;
+    for (const item of items)
+      for (const head of item.heads) {
+        const object = objects.get(head)!;
+        const dependency =
+          'directory_id' in object.body
+            ? object.body.directory_id
+            : object.kind === 'directory_revision'
+              ? object.body.parent_directory
+              : null;
+        if (
+          dependency &&
+          (conflicted.has(dependency) || paths.get(dependency) === null)
+        ) {
+          if (!conflicted.has(item.item_id)) {
+            conflicted.add(item.item_id);
+            changed = true;
+          }
+          if (directories.has(dependency)) conflicted.add(dependency);
+        }
+      }
+    for (const id of conflicted) if (directories.has(id)) paths.set(id, null);
+    if (!changed) break;
+  }
+  return {
+    snapshot: snapshotId,
+    items,
+    objects,
+    paths,
+    conflicts: items
+      .filter((i) => conflicted.has(i.item_id))
+      .map((i) => ({
+        item_id: i.item_id,
+        heads: i.heads,
+        ...(i.heads.length === 1 ? { structural: true as const } : {}),
+      })),
+  };
 }
 
 export function hasAncestor(

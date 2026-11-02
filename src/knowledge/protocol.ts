@@ -289,7 +289,9 @@ export function validateSync(schemaName: string, value: unknown): void {
     if (v.conflicts)
       for (const conflict of v.conflicts)
         requireRule(
-          conflict.heads.length > 1 && sortedUnique(conflict.heads),
+          (conflict.heads.length > 1 || conflict.structural === true) &&
+            conflict.heads.length > 0 &&
+            sortedUnique(conflict.heads),
           'conflict heads',
         );
   }
