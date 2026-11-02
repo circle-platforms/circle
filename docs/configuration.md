@@ -16,7 +16,9 @@ The data folder is `~/.circle`. Set `CIRCLE_HOME` to use another location, and r
 | `credentials.json`        | Your API key. Readable only by you.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `history`                 | Your prompt history, last 1,000 messages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `circle.sqlite`           | Every session: its messages, branches and titles, for `/resume` and `circle -c`. See [Sessions](sessions.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `approvals.json`          | Your own [approval rules](security.md#rules-in-a-file): a tool, a pattern, and `allow` or `deny`. Readable only by you. |
 | `approvals/`              | "Allow for this session" rules, one file per session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `schedules/`              | [Scheduled tasks](scheduled-tasks.md): one folder per schedule (`schedule.json`, run logs under `runs/`, `history.jsonl`), plus the background scheduler's `daemon.json` and `daemon.log`. |
 | `projects/<folder>-<id>/` | Per project: the messages a summary replaced (`conversation_history/`), tool output too long for the conversation (`large_tool_results/`), the output of commands and [background jobs](background-jobs.md) (`background_jobs/`, one folder per run of Circle, removed a day after that run ended), plan mode's plans (`session_plans/`, one per conversation, removed with it), and pictures: screenshots (`screenshots/`), pictures pasted in the terminal (`pasted_images/`) and pictures sent with a message for a model that does not read images (`images/`). See [Images and screenshots](usage.md#images-and-screenshots). |
 | `cache/models-dev.json`   | The copy of models.dev that context windows and prices come from. See [Models](models.md#cost-and-context-in-the-footer).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `update-check.json`       | The answer of the daily [update check](cli.md#the-reminder).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -52,6 +54,30 @@ To have Circle write a starting `AGENTS.md` for a project, run `/init`. It reads
 
 `circle --no-context-files` (`-nc`) leaves out every `AGENTS.md`, `AGENTS.override.md` and `CLAUDE.md` for one run. `MEMORY.md` is still read.
 
+## Memory Circle writes
+
+`MEMORY.md` is read like the files above and, unlike them, Circle can write it too: one dated line per fact, for what a session learns and the next one should not have to find out again.
+
+```text
+# Memory
+
+- 2026-10-30 · the release branch is 9.3
+```
+
+`/memory` lists those lines, `/memory add <note>` writes one, `/memory remove <number>` takes one back. `/memory add account <note>` writes to the data folder's `MEMORY.md`, for what applies to anything you work on rather than this repository alone. The list counts the workspace's lines first and the data folder's after, and only lines Circle wrote: text you put in the same file stays yours, is not offered for removal, and is not rewritten by one. A line about the project waits for the folder to be trusted (`/trust`), the same as any other write into it; the account file needs no trust, being Circle's own folder.
+
+Three limits, each with its reason:
+
+| Limit | Why |
+| --- | --- |
+| one line per `add`, with runs of whitespace and newlines folded to one line | the note has to stay one line, so the list can show it and a removal can find it again |
+| 240 characters at most, counting the date | one fact per line; the refusal says how far over it came |
+| the file is never grown past 24,000 bytes | that is all the prompt reads, so a line past the end would be written and never seen · trim it, or remove a line |
+
+Nothing is captured on its own: a line appears when you say so. The `add` notice carries the number that takes it back, because removing a line moves the ones under it up.
+
+`-nc` does not leave these out. `--no-context-files` is about instructions; a dated note is memory, and both `MEMORY.md` files are still read with it.
+
 ## System prompt
 
 Circle's system prompt starts with its own instructions, then the instruction files, the environment (folder, platform, date) and anything appended. Two files change it, the way pi's do, in a project's `.circle/` folder or in the data folder:
@@ -72,12 +98,14 @@ Inside a project, Circle looks in these folders. Circle works only in a folder y
 | Folder                                                      | What                                                                                                          |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `.circle/skills`, `.agent/skills`, `.agents/skills`         | Skills. See [Skills](skills.md) for all locations and their order.                                            |
+| `.circle/agents`, `.agents/agents`, `.claude/agents`           | [Subagents](agents.md) the model can call with `task`.                                                        |
 | `.circle/commands`, `.circle/prompts`                       | Custom commands                                                                                               |
 | `.circle/extensions/<name>/extension.ts` (or `.mjs`, `.js`) | Extensions                                                                                                    |
 | `.circle/AGENTS.md`, `.agent/AGENTS.md`                     | Instructions                                                                                                  |
 | `.circle/SYSTEM.md`, `.circle/APPEND_SYSTEM.md`             | The [system prompt](#system-prompt) for this project                                                          |
 | `.circle/settings.json`                                     | [Settings for this project](settings.md#project-settings)                                                     |
 | `.circle/hooks.json`                                        | [Hooks for this project](hooks.md). They run after you trust the folder and approve this version of the file. |
+| `.circle/approvals.json`                                    | [Approval rules for this project](security.md#rules-in-a-file). A project's rule can only deny.              |
 
 Trusting a folder writes nothing into it. The trusted folders are listed in `settings.json` in the data folder.
 

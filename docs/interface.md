@@ -111,6 +111,23 @@ Every row that has a state gets one round lamp `●`.
 
 Lamps appear on tool calls, subagents, background jobs, the plan and its steps, the title of a card, the folder's rows in the welcome, and the band of a subagent's page or a job's page. A plan step or a call is lit only while a turn works on it: when nothing runs, a step in progress and a call that an interrupted turn left without a result stay unlit. Cyan, the "waiting for you" lamp, is the one to look for when nothing seems to be happening: something is waiting for your answer.
 
+## Outside the window
+
+The full-screen interface also tells the terminal what the lamps say, so that its tab, taskbar or Dock can show it while you look at another window. With several conversations open, the most urgent counts: a card waiting for you in any of them, then this conversation's failed turn, then a turn running in any of them.
+
+| State | Sent to the terminal |
+|---|---|
+| A turn runs | `OSC 9;4;3`: progress without a number |
+| A card waits for you | `OSC 9;4;4`: paused. The bell rings once if the card has waited 10 seconds. |
+| The last turn failed | `OSC 9;4;2`: error, until the next turn starts. A stop with `esc` is not a failure. |
+| None of these | `OSC 9;4;0`: cleared |
+
+Windows Terminal, Ghostty and other terminals show this progress on the tab or the taskbar; a terminal that does not know the sequence ignores it. What the bell does is the terminal's setting: Terminal.app marks the tab and the Dock icon, Windows Terminal plays a sound or flashes the taskbar, and others can show a notification. While the screen is lent out (`ctrl+z`, `/editor`) the progress is cleared, and it is cleared again when Circle leaves.
+
+In an Otty pane (`OTTY_PANE_ID` is set) Circle reports the state to Otty as an agent instead, with `otty state:circle`: `processing`, `awaiting`, `error` or `idle`, with its process id and the conversation's id. Otty then shows its badges on the tab, notifies when Circle waits for you or is done, and keeps the Mac awake during a turn; Circle sends no progress sequence and rings no bell there. `otty` runs in the background without the variables whose names look secret, and Circle never waits for it; when it cannot be started, Circle sends the progress sequence instead. Otty ignores a report it gets before it has matched Circle's process to the pane, which happens right after Circle starts, so Circle sends its state again 3 and 10 seconds after the first report.
+
+Line mode, print mode and RPC mode tell the terminal nothing.
+
 ## Tints
 
 A tinted background says what kind of work a block is.

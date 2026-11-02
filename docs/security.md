@@ -55,6 +55,30 @@ Option 3 keeps the program and what names the work: the script or module of an i
 
 The rules are kept per conversation in `approvals/` in the data folder. Exact commands are stored as hashes, not text; a rule from option 3 keeps its words. `/approvals` lists the rules and the last five decisions, and lets you revoke one. A revoked rule asks again from the next call. A rule revoked by a Python release (which keeps it with a mark) stays revoked here.
 
+### Rules in a file
+
+Beside the settings' command patterns, Circle reads structured rules: a tool, what it matches, and what to do about it. Each layer is one JSON file holding `{"rules": [...]}`, and every field of a rule is written out below.
+
+| Field | What it says |
+| --- | --- |
+| `tool` | The name the card keeps a rule under: `execute`, `browser` for every browser action, `terminal` for the device tools, `write_file`, `edit_file`, `apply_patch`, `delete`, `screenshot`, an MCP or extension tool's own name, or `*` for any tool. |
+| `pattern` | For `execute`, a wildcard over the whole command line, matched exactly as [command patterns in settings](#command-patterns-in-settings) are: every segment has to match, so `git *` denies `git add . && git status` but not `git status && npm test`. For any other tool, the scope its card offers: `*`, `site:example.com`, `host:router-1`, `workspace`, `sha256:…`, `prefix:["git","status"]`. |
+| `effect` | `allow` answers an ordinary card. `deny` refuses the call and tells the model which rule did it. |
+| `label` | Optional words for the list; the pattern is shown when it is missing. |
+
+| Layer | Where it lives | What it is worth |
+| --- | --- | --- |
+| Yours | `approvals.json` in the [data folder](configuration.md#where-circle-keeps-things) | allows and denies |
+| This project | `.circle/approvals.json` in the workspace | **denies only.** A repository you did not write cannot hand out your approvals, so an `allow` there is listed and changes nothing. |
+| This conversation | one file per conversation under `approvals/` in the data folder | allows: what you answered on a card with "allow for this session" |
+
+**A deny always wins.** It is read before the approval mode, before `allowed_commands`, before any rule that allows and before what a card kept: a denied command does not run in `auto` or `--yolo`, and the model is told, in words, which rule refused it — `refused by your approvals.json: execute "npm publish *" is denied`, or `refused by the project's rule: …`. A command Circle refuses on its own terms (a credential file, `sudo`) keeps that reason: a rule does not get to rewrite the floors.
+
+**An allow is never a way round a floor.** A call that always asks still shows its card — Circle's own deletes, `rm -rf` and a force push, the first line typed into one of your terminal tabs, an MCP tool its server marks destructive, a change outside the workspace. An allow answers the ordinary card, the way a session rule does, and nothing else.
+
+Both files are read again for every call, so a rule you add in another window takes effect on the next one. A file that does not parse, or a rule missing its tool or pattern, is a layer that says nothing: Circle starts, and what it could not read is not applied.
+
+`/approvals` lists the layers with what each rule is worth. `/approvals deny <pattern>` writes a deny of your own, `/approvals allow <pattern>` an allow, `/approvals project deny <pattern>` one for the repository, and the number each line shows is what `/approvals forget <number>` takes away. A bare pattern is a rule for `execute`; write `tool <name> <pattern>` for another tool. Both files are written readable only by you. Committing a project's file is unaffected: git stores the mode it wants, and whoever clones the repository gets the file as their own working copy.
 ### Command patterns in settings
 
 `allowed_commands` in [settings](settings.md) is a list of wildcard patterns (`*` and `?`) for commands that run without a card, in every conversation, in every mode — including print, line and RPC runs and the calls the model makes in the background. `/approvals add <pattern>` writes one to your settings and it takes effect at once; `/approvals remove <pattern|number>` takes it back; `/approvals` lists what is in force. `/reload` re-reads them.
@@ -92,7 +116,7 @@ This reading is textual and it has gaps. `perl -e 'unlink q(a)'`, `mv a /dev/nul
 
 ### Credential files
 
-These file names are refused: `.env`, `.env.*`, `*.env`, `.netrc`, `.pgpass`, `.git-credentials`, `credentials.json`, `secrets.json`, `*.secrets.json` (where [extensions keep secrets](extensions.md#secrets)), `token.json`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.pem`, `*.p12`, `*.pfx`. A shell command that names one is refused, and the file tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `delete`, `grep`, `lsp`) and `@` mentions in the input box refuse or skip such a file. A file you name with `@` on the command line is read, since you named it. Only the name is checked: `ls` and `glob` still list them, and a command that reaches one without naming it is not stopped.
+These file names are refused: `.env`, `.env.*`, `*.env`, `.netrc`, `.pgpass`, `.git-credentials`, `credentials.json`, `secrets.json`, `*.secrets.json` (where [extensions keep secrets](extensions.md#secrets)), `token.json`, `mcp-auth.json` (where [MCP sign-ins are kept](mcp.md#signing-in-to-a-server)), `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.pem`, `*.p12`, `*.pfx`. A shell command that names one is refused, and the file tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `delete`, `grep`, `lsp`) and `@` mentions in the input box refuse or skip such a file. A file you name with `@` on the command line is read, since you named it. Only the name is checked: `ls` and `glob` still list them, and a command that reaches one without naming it is not stopped.
 
 Add names with `credential_files` in [settings](settings.md), or in a project's `.circle/settings.json`. The desktop application edits the same list under settings → file access → protected files ([Protected files and network trust](desktop.md#protected-files-and-network-trust)). Patterns use `*` and `?` and name a file, not a path: `*.key` matches `secrets/app.key`, while `secrets/*.key` matches nothing. What you add comes on top of the list above; it cannot remove a name from it. Circle reads it when it starts; `/reload` does not change it.
 
@@ -166,6 +190,20 @@ Circle works only in folders you have trusted: the first time, it asks, and it d
 
 Instruction files and skills are read from the workspace folder you trusted, not from the folders above it. Your personal instruction files still apply. Do not trust a folder you have not read.
 
+## The editor bridge
+
+`/bridge start` opens a small MCP server on this machine so the editor you already use can tell Circle what you are looking at. Circle listens on `127.0.0.1` only, on a free port, and every call needs the token it was given when it started; the address and token are written to `bridge.json` in the data folder so an editor plugin can find them. A request that does not come from this machine is refused, and so is a `Host` or `Origin` that names anywhere else: a page on another site, or a name that resolves to this machine through DNS rebinding, cannot reach it.
+
+What crosses it, in each direction:
+
+| From the editor | From Circle to the model |
+|---|---|
+| The file you have open, and the text you selected, reported when they change. | `editor_status`, `editor_active_file`, `editor_selection`: where you are, and what you selected. A selection older than ten minutes is refused as context. |
+| The answer to a diff request: accept or reject. | `editor_open_diff`: ask your editor to show a diff of a file against the text the model proposes. |
+
+**Nothing reaches disk until you accept in your editor.** `editor_open_diff` only asks: the model is told the request id and that nothing was written, and the file changes when the bridge is told you accepted. A write goes through the same checks as Circle's own: inside the workspace, never a credential file, never a job's output. An editor cannot make Circle write outside the workspace, and the model cannot answer its own request.
+
+Four things to know. The listener is closed when the session ends, with its file. The tools appear only with `editor_bridge` on in your settings, which a project cannot turn on for you. What the editor reports goes into the conversation as a tool result, so treat the selection as text your editor sent, not as an instruction. And the bridge has nothing to push: an editor asks for pending diff requests, it does not receive them.
 ## Hooks
 
 A hook is a shell command. Your own hooks, in `hooks.json` in the data folder, run in every session. A project's `.circle/hooks.json`, and a `hooks.json` next to a project skill, run only after you trust that folder and approve that version of the file. Editing the file asks again. See [Hooks](hooks.md).

@@ -223,6 +223,63 @@ test('/undo and /redo put the screen back; the model keeps every turn', async (t
   assert.ok(screen().includes('answer one'));
 });
 
+// The terminal's own file journal: /rewind lists a turn, asks in the list before it
+// changes anything, and puts the text back. esc at the question answers nothing.
+test('/rewind lists the turn, asks once, and puts the file back', async (t) => {
+  const workspace = scratch(t);
+  writeFileSync(join(workspace, 'note.txt'), 'before\n');
+  const { app } = await session(
+    t,
+    [
+      {
+        message: {
+          id: 'write-note',
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'note-write',
+              name: 'write_file',
+              args: { file_path: 'note.txt', content: 'after\n' },
+            },
+          ],
+        },
+      },
+      answer('done'),
+    ],
+    { workspace },
+  );
+  const note = join(workspace, 'note.txt');
+  await app.submit('/yolo');
+  await app.submit('rewrite the note');
+  assert.equal(readFileSync(note, 'utf8'), 'after\n');
+  await app.submit('/rewind');
+  const list = app.state.picker!;
+  assert.equal(list.title, 'Rewind files');
+  assert.deepEqual(
+    list.items.map((item) => [item.label, item.meta]),
+    [['rewrite the note', '1 file']],
+  );
+  // The question names the files before anything changes.
+  list.handle('enter', '');
+  await until(() => list.asking);
+  assert.match(list.rows(90).join('\n'), /Rewind 1 file: note\.txt\?/);
+  // esc there is the conservative answer: the file stays as the model left it.
+  list.handle('escape', '');
+  assert.equal(readFileSync(note, 'utf8'), 'after\n');
+  list.handle('enter', '');
+  await until(() => list.asking);
+  list.handle('enter', '');
+  await until(() => list.items.length === 0);
+  assert.equal(readFileSync(note, 'utf8'), 'before\n');
+  assert.ok(
+    app.state.notices.some((line) => line.startsWith('Rewound 1 file(s)')),
+  );
+  // Nothing is left to offer, so the list says so instead of opening empty.
+  await app.submit('/rewind');
+  assert.equal(app.state.flash, 'Nothing to rewind');
+});
+
 test('a command of a shipped extension that is still off names the switch and clears the box', async (t) => {
   // Shipped extensions are off until enabled; extension.json names the command.
   const bundled = scratch(t);
@@ -759,7 +816,7 @@ test('/skill loads a skill into the conversation without starting a turn', async
   assert.equal(model.requests[0]!.messages.at(-1)!.content, 'write a poem');
 });
 
-test('/skill lists the skill that ships with Circle as built-in, loads it, and lists a project skill of the same name in its place', async (t) => {
+test('/skill lists the skills that ship with Circle as built-in, loads one, and lists a project skill of the same name in its place', async (t) => {
   const workspace = scratch(t);
   const userHome = scratch(t);
   const shipped = parseFrontmatter(
@@ -823,7 +880,24 @@ test('/skill lists the skill that ships with Circle as built-in, loads it, and l
     list,
     /\n {2}create-pr {12}Our own pull requests \(Project Circle\)\n/,
   );
-  assert.equal(list.includes('(Built-in)'), false);
+  // Only one skill of the two still ships with Circle: the project folder's row
+  // is not built-in, and the block grouping keeps a wrapped row with its name.
+  const left: string[][] = [];
+  for (const row of list.split('\n').slice(2, -2)) {
+    if (row[2] !== ' ') left.push([row]);
+    else left.at(-1)!.push(row);
+  }
+  assert.deepEqual(
+    left.map((block) => [
+      block[0]!.trim().split(/\s+/)[0],
+      block.at(-1)!.endsWith('(Built-in)'),
+    ]),
+    [
+      ['create-pr', false],
+      ['pr-review', true],
+    ],
+    list,
+  );
 });
 
 test('/name, /session, /approvals, /themes and /effort answer in the transcript', async (t) => {
@@ -861,7 +935,7 @@ test('/name, /session, /approvals, /themes and /effort answer in the transcript'
   await app.submit('/approvals revoke 4');
   assert.equal(app.state.flash, 'No rule number 4');
   await app.submit('/approvals');
-  assert.equal(app.state.picker!.title, 'Session approvals');
+  assert.equal(app.state.picker!.title, 'Approval rules');
   assert.deepEqual(
     app.state.picker!.items.map((item) => item.label),
     ['1. Revoke: npm …', '2. Close'],
@@ -872,7 +946,7 @@ test('/name, /session, /approvals, /themes and /effort answer in the transcript'
   await app.submit('/approvals list');
   assert.match(
     app.state.notices.at(-1)!,
-    /^No always-allow rules this session\.\nRecent approvals:\n {2}allowed for session · execute\n {2}rejected · write_file\n {2}revoked · execute$/,
+    /^Your own rules \(approvals\.json in the data folder\): none\nThis project's rules \(\.circle\/approvals\.json\): none\nNo always-allow rules this session\.\nRecent approvals:\n {2}allowed for session · execute\n {2}rejected · write_file\n {2}revoked · execute$/,
   );
   await app.submit('/themes');
   assert.equal(
@@ -961,7 +1035,9 @@ test('/approvals add and remove keep command patterns in the settings and on the
   await app.submit('/approvals list');
   assert.equal(
     app.state.notices.at(-1),
-    'No always-allow rules this session.\nCommand patterns from settings:\n  1. npm *\nRemove one: /approvals remove <pattern|number>',
+    'Your own rules (approvals.json in the data folder): none\n' +
+      "This project's rules (.circle/approvals.json): none\n" +
+      'No always-allow rules this session.\nCommand patterns from settings:\n  1. npm *\nRemove one: /approvals remove <pattern|number>',
   );
   await app.submit('/approvals');
   assert.deepEqual(
@@ -1846,4 +1922,291 @@ test('/help and /hotkeys hang continuations under the description column at 80 c
       value: savedColumns,
     });
   }
+});
+
+test('/bridge opens the localhost editor bridge, says what is missing, and closes again', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  await app.submit('/bridge');
+  assert.equal(
+    app.state.notices.at(-1),
+    'bridge: not running \u00b7 /bridge start opens it',
+  );
+  await app.submit('/bridge bogus');
+  assert.equal(app.state.flash, 'Usage: /bridge [start|stop|token]');
+  await app.submit('/bridge token');
+  assert.equal(
+    app.state.flash,
+    'the bridge is not open \u00b7 /bridge start opens it',
+  );
+  await app.submit('/bridge stop');
+  assert.equal(app.state.flash, 'the bridge is not open');
+
+  await app.submit('/bridge start');
+  const opened = app.state.notices.at(-1)!;
+  assert.match(opened, /^Bridge open at http:\/\/127\.0\.0\.1:\d+\/mcp\n/);
+  assert.match(opened, /Token for the editor side: [0-9a-f]{48}/);
+  // The default settings give the model no editor tools: that is the person's call.
+  assert.match(opened, /editor_bridge is off in your settings/);
+  assert.ok(
+    existsSync(join(home, 'bridge.json')),
+    'an editor can find the port',
+  );
+
+  await app.submit('/bridge');
+  assert.match(app.state.notices.at(-1)!, /^bridge: running at http:/);
+  assert.match(
+    app.state.notices.at(-1)!,
+    /no editor has reported anything yet/,
+  );
+  await app.submit('/bridge start');
+  assert.equal(
+    app.state.flash,
+    'the bridge is already open \u00b7 /bridge shows where',
+  );
+
+  await app.submit('/bridge stop');
+  assert.match(app.state.notices.at(-1)!, /^Bridge closed \u00b7/);
+  assert.equal(
+    existsSync(join(home, 'bridge.json')),
+    false,
+    'the file goes with it',
+  );
+});
+test('/memory writes a dated line to the workspace, lists both files, and takes a line back', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  const projectFile = join(workspace, 'MEMORY.md');
+  const accountFile = join(home, 'MEMORY.md');
+  const DATE = '\\d{4}-\\d{2}-\\d{2}';
+
+  await app.submit('/memory');
+  const first = app.state.notices.at(-1)!;
+  assert.match(first, /^What Circle remembers between sessions:/);
+  assert.ok(first.includes('none yet'), first);
+  assert.match(first, /--no-context-files \(-nc\) does not leave these out/);
+
+  await app.submit('/memory add');
+  assert.equal(app.state.flash, 'Usage: /memory add [account] <note>');
+  await app.submit('/memory remove x');
+  assert.equal(app.state.flash, 'Usage: /memory remove <number>');
+  await app.submit('/memory rename it');
+  assert.equal(
+    app.state.flash,
+    'Usage: /memory [add [account] <note>|remove <number>]',
+  );
+  assert.equal(existsSync(projectFile), false, 'a usage flash writes nothing');
+
+  await app.submit('/memory add the release branch is 9.3');
+  const wrote = app.state.notices.at(-1)!;
+  assert.match(wrote, /^Remembered \u00b7 project \u00b7 /);
+  assert.match(wrote, /remove 1 takes it back/);
+  assert.match(
+    readFileSync(projectFile, 'utf8'),
+    new RegExp(
+      '^# Memory\\n\\n- ' + DATE + ' \\u00b7 the release branch is 9\\.3\\n$',
+    ),
+  );
+
+  await app.submit('/memory add account always check --stat first');
+  assert.match(app.state.notices.at(-1)!, /^Remembered \u00b7 account \u00b7 /);
+  assert.ok(existsSync(accountFile), 'the data folder copy was made');
+
+  await app.submit('/memory');
+  const both = app.state.notices.at(-1)!;
+  assert.match(
+    both,
+    new RegExp(' 1\\. ' + DATE + ' \u00b7 the release branch is 9\\.3'),
+    both,
+  );
+  assert.match(
+    both,
+    new RegExp(' 2\\. ' + DATE + ' \u00b7 always check --stat first'),
+    both,
+  );
+
+  // The first line was all the file Circle made: it goes with it.
+  await app.submit('/memory remove 1');
+  assert.match(
+    app.state.notices.at(-1)!,
+    new RegExp('^Forgotten \u00b7 project \u00b7 line 3 of '),
+  );
+  assert.equal(existsSync(projectFile), false);
+  await app.submit('/memory remove 1');
+  assert.match(app.state.notices.at(-1)!, /^Forgotten \u00b7 account \u00b7/);
+  assert.equal(existsSync(accountFile), false);
+
+  await app.submit('/memory remove 1');
+  assert.equal(app.state.flash, 'there are only 0 memory lines now');
+});
+test('/approvals deny writes your own rule, project deny the project, list numbers them and forget takes one away', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app, runtime } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  const thread = runtime.session.id;
+  const userFile = join(home, 'approvals.json');
+  const projectFile = join(workspace, '.circle', 'approvals.json');
+
+  await app.submit('/approvals deny');
+  assert.equal(
+    app.state.flash,
+    'Usage: /approvals deny [tool <name>] <pattern>',
+  );
+
+  await app.submit('/approvals deny npm publish *');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^Denied · execute "npm publish \*" · your own rules · /,
+  );
+  assert.deepEqual(JSON.parse(readFileSync(userFile, 'utf8')).rules, [
+    {
+      tool: 'execute',
+      pattern: 'npm publish *',
+      effect: 'deny',
+      label: 'npm publish *',
+    },
+  ]);
+  assert.equal(
+    runtime.policy.review('execute', { command: 'npm publish --tag next' })
+      .verdict,
+    'DENY',
+    'the rule answers for the next call',
+  );
+
+  // A rule of the project can only tighten.
+  await app.submit('/approvals project allow git status *');
+  assert.equal(
+    app.state.flash,
+    'a project rule can only deny · to allow, write it as your own: /approvals allow <pattern>',
+  );
+  assert.equal(existsSync(projectFile), false, 'nothing was written');
+  await app.submit('/approvals project deny make deploy *');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^Denied · execute "make deploy \*" · the project rules · /,
+  );
+
+  // The list of both layers, each line carrying the number forget wants.
+  await app.submit('/approvals list');
+  const list = app.state.notices.at(-1)!;
+  assert.match(
+    list,
+    /Your own rules \(approvals\.json in the data folder\):\n {2}forget 1: deny · execute · npm publish \*\n/,
+    list,
+  );
+  assert.match(
+    list,
+    /This project's rules \(\.circle\/approvals\.json\):\n {2}forget 2: deny · execute · make deploy \*\n/,
+    list,
+  );
+
+  await app.submit('/approvals forget 2');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^Forgot · execute "make deploy \*" · the project's file/,
+  );
+  assert.deepEqual(JSON.parse(readFileSync(projectFile, 'utf8')).rules, []);
+  assert.equal(
+    runtime.policy.review('execute', { command: 'make deploy --dry-run' })
+      .verdict,
+    'ASK',
+    'the call asks again once the rule is gone',
+  );
+  assert.equal(
+    runtime.policy.review('execute', { command: 'npm publish --tag next' })
+      .verdict,
+    'DENY',
+    'the other layer still stands',
+  );
+
+  // An allow of your own answers the card; a project rule never grants one.
+  await app.submit('/approvals allow git status *');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^Allowed · execute "git status \*" · your own rules · .* · forget 2 takes it away/m,
+    app.state.notices.at(-1)!,
+  );
+  assert.equal(
+    runtime.policy.needsApproval(
+      'execute',
+      { command: 'git status --short' },
+      thread,
+    ),
+    false,
+  );
+
+  // A rule written by hand for another tool is read the same way.
+  writeFileSync(
+    userFile,
+    JSON.stringify({
+      rules: [{ tool: 'browser', pattern: '*', effect: 'deny' }],
+    }),
+  );
+  assert.equal(
+    runtime.policy.review('browser_click', { site: 'example.com' }).verdict,
+    'DENY',
+  );
+});
+// The folders of agent definitions, as the full-screen interface reports them.
+test('/agents lists the subagents, a single one, and what is wrong with a file', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  const userHome = join(root, 'user');
+  mkdirSync(join(home, 'agents'), { recursive: true });
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(userHome, { recursive: true });
+  writeFileSync(
+    join(home, 'agents', 'inspector.md'),
+    '---\nname: inspector\ndescription: Reads the project and reports.\nmodel: other-model\ntools: read_file, grep\n---\n\nprompt body\n',
+  );
+  writeFileSync(
+    join(home, 'agents', 'broken.md'),
+    '---\nname: not a name\ndescription: x\n---\n\nbody\n',
+  );
+  const { app } = await session(t, [], { home, workspace, userHome });
+  await app.submit('/agents');
+  const listed = app.state.notices.join('\n');
+  assert.match(listed, /general-purpose\s+General coding tasks\. \(Circle\)/);
+  assert.match(
+    listed,
+    /inspector\s+Reads the project and reports\. \(Circle\)/,
+  );
+  assert.match(listed, /Not offered:/);
+  assert.match(listed, /broken\.md: 'not a name' is not a name/);
+  assert.match(listed, /Add one as a markdown file in \.circle\/agents/);
+  assert.ok(
+    !listed.includes('prompt body'),
+    'the list does not print the prompts',
+  );
+  await app.submit('/agents inspector');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /source: Circle[\s\S]*model: other-model[\s\S]*tools: read_file, grep/,
+  );
+  await app.submit('/agents nobody');
+  assert.match(app.state.notices.at(-1)!, /No subagent nobody/);
 });

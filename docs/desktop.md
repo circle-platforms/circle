@@ -84,6 +84,8 @@ When Circle wants to change a file or run a command, the request appears in the 
 
 A question from the model appears the same way, with its choices and a box for your own answer. While a request waits, the frame around the input box is orange and still, and the bar above the box says how many wait; click it to scroll to the first.
 
+**A command that answers with one line** — an unknown `/name`, `/undo`, `/share` — says it as a toast for a few seconds, and it also stays as a line of the conversation that asked, in its place in the transcript. A missed toast is not a lost answer. Asked in one conversation and answered while the window shows another, the line goes to the conversation that asked; the one on screen keeps its peace. A line an extension appends joins the conversation the same way, straight from the runtime.
+
 ## Modes
 
 The button under the input box, on the left, shows how this session asks. Click it to choose, or press `shift+tab` in the input box to move to the next one.
@@ -234,6 +236,16 @@ A right-click in a text field offers **Cut**, **Copy**, **Paste** and **Select A
 ## Outside the window
 
 While the window is in the background, Circle sends a system notification when a request needs you and when a turn ends or fails. On macOS the Dock icon counts the requests that wait. On Windows and Linux the taskbar shows a busy bar while Circle works.
+
+On Windows and Linux, closing the window keeps Circle running in the tray by the clock.
+The runtime goes on with its sessions. Click the tray icon to bring the window back, with
+the windows that were open beside it; right-click gives the menu, where **Open Circle**
+shows the window and **Quit Circle** ends the application and stops the runtime. The
+first close comes with a system hint saying where Circle went. On the first start a
+missing tray icon falls back to the old behaviour: closing ends the application, so no
+window is ever hidden with no way back. To keep the old behaviour anyway, start the app
+with `CIRCLE_DESKTOP_TRAY=off`. macOS is unchanged: the window closes, the application
+stays in the Dock, and clicking the Dock icon opens a window again.
 
 ## The default workspace
 

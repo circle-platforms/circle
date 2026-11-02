@@ -30,7 +30,22 @@ export interface Todo {
 }
 export interface ToolHooks {
   fileMutations?: FileMutations;
+  /**
+   * The conversation's file journal, for a Circle with no native workspace backend: it
+   * records what a direct write changed, so `/rewind` can bring the older text back.
+   */
+  captures?: <T>(
+    paths: string[],
+    signal: AbortSignal,
+    write: () => T | Promise<T>,
+  ) => Promise<T>;
   jobs?: JobRegistry;
+  /** One message to a running subagent, or the reason it did not go. */
+  sendToJob?: (
+    context: ToolContext,
+    jobId: string,
+    message: string,
+  ) => string | Promise<string>;
   jobOwner?: (context: ToolContext) => import('./jobs.js').JobOwner;
   /** Only the runtime may turn original arguments into public command display. */
   displayCommand?: (rawCommand: string, context: ToolContext) => string;
@@ -89,6 +104,10 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   const mutations = hooks.fileMutations
     ? new FileMutationTools(sandbox, hooks.fileMutations)
     : undefined;
+  const captures = hooks.captures;
+  // Circle's own plan file is a working note, not the person's file: /rewind leaves it.
+  const worthRecording = (path: string): boolean =>
+    captures !== undefined && !sandbox.isPlanFile(path);
   const tools: Tool[] = [];
   // Plan mode's plan is Circle's own file in the data folder, as the offloaded output
   // read_file reads is: it is written directly, and the workspace's file backend, which
@@ -234,8 +253,13 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         return (await mutations.prepareWrite(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, string(args, 'content'));
+      const content = string(args, 'content');
+      const write = (): void => {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, content);
+      };
+      if (worthRecording(path)) await captures!([path], context.signal, write);
+      else write();
       return `Wrote ${path}`;
     },
   );
@@ -268,12 +292,15 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         throw new Error(
           'Found multiple matches for oldString. Provide more surrounding lines or use replaceAll.',
         );
-      writeFileSync(
-        path,
+      const edited =
         args.replace_all || args.replaceAll
           ? content.replaceAll(old, replacement)
-          : content.replace(old, replacement),
-      );
+          : content.replace(old, replacement);
+      if (worthRecording(path))
+        await captures!([path], context.signal, () => {
+          writeFileSync(path, edited);
+        });
+      else writeFileSync(path, edited);
       return `Edited ${path}`;
     },
   );
@@ -283,10 +310,18 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     schema({ patchText: text('Patch in Begin Patch / End Patch format') }, [
       'patchText',
     ]),
-    async (args, context) =>
-      mutations && !writesPlan('apply_patch', args)
-        ? (await mutations.preparePatch(args, context))(args, context)
-        : applyPatch(string(args, 'patchText'), sandbox),
+    async (args, context) => {
+      const patch = string(args, 'patchText');
+      if (mutations && !writesPlan('apply_patch', args))
+        return (await mutations.preparePatch(args, context))(args, context);
+      const paths = patchFilePaths(patch, sandbox);
+      if (paths.length && paths.every((path) => worthRecording(path)))
+        // The journal needs the paths before the patch runs; applyPatch checks them again.
+        return await captures!(paths, context.signal, () =>
+          applyPatch(patch, sandbox),
+        );
+      return applyPatch(patch, sandbox);
+    },
   );
   if (mutations)
     for (const [name, prepare] of [
@@ -499,12 +534,38 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       'stop_job',
       'read',
       schema({ job_id: text('Job id, such as j3') }, ['job_id']),
-      async (args) => {
+      async (args, context) => {
         const id = string(args, 'job_id');
-        await hooks.jobs!.stop(id);
+        const owner = hooks.jobOwner?.(context) ?? {
+          sessionId: context.sessionId,
+        };
+        await hooks.jobs!.stop(id, 'model', owner);
         return `Stopped ${id}.`;
       },
     );
+    tools.at(-1)!.approval = false;
+    add(
+      'send_to_job',
+      'write',
+      schema(
+        {
+          job_id: text('Job id of a running subagent, such as j3'),
+          message: text('The one thing to tell it'),
+        },
+        ['job_id', 'message'],
+      ),
+      async (args, context) =>
+        hooks.sendToJob
+          ? await hooks.sendToJob(
+              context,
+              string(args, 'job_id'),
+              String(args.message ?? ''),
+            )
+          : 'no subagent of this conversation can be sent to',
+    );
+    // No card: a message carries no effect, and a card per correction would train
+    // people to click through it. Its effect is a write, so read-only mode still
+    // refuses it: a plan session may look at a job, not steer one.
     tools.at(-1)!.approval = false;
     add(
       'wait_jobs',

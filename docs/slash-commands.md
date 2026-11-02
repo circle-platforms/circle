@@ -12,7 +12,7 @@ A message that looks like a command but is not one, such as `/modles`, is **not 
 
 Most commands wait until the turn ends and answer `Busy · wait for the current turn to finish`. These work at any time:
 
-`/help`, `/hotkeys`, `/exit`, `/yolo`, `/mode`, `/settings`, `/approvals`, `/jobs`, `/terminals`, `/session`, `/name`, `/tree`, `/themes`, `/thinking`, `/details`, `/copy`, `/export`, `/share`, `/unshare`, `/logout`, `/mcp` (listing only), `/skill` and `/extensions` (listing only: `/skill <name>` and `/extensions reload` wait)
+`/help`, `/hotkeys`, `/exit`, `/yolo`, `/mode`, `/settings`, `/approvals`, `/jobs`, `/terminals`, `/session`, `/name`, `/tree`, `/themes`, `/thinking`, `/details`, `/agents`, `/copy`, `/export`, `/share`, `/unshare`, `/logout`, `/mcp` (listing only), `/skill` and `/extensions` (listing only: `/skill <name>` and `/extensions reload` wait)
 
 Going back with `/tree` while a turn runs stops the turn first. A [custom command](custom-commands.md) also works: its text is queued like any message.
 
@@ -30,9 +30,11 @@ Going back with `/tree` while a turn runs stops the turn first. A [custom comman
 | `/clone` | | Start a new session with the current branch of this one. |
 | `/undo` | | Undo the last turn on screen. |
 | `/redo` | | Bring it back. |
+| `/rewind` | | List the turns whose file changes Circle recorded and put one back, asking first: `enter` asks, `esc` at the question changes nothing. Commands and other writers are outside the journal. See [Rewind a turn's files](sessions.md#rewind-a-turns-files). |
 | `/compact [hint]` | `/summarize` | Summarize older messages now. |
 | `/jobs [id]` | `/tasks` | List the session's [background jobs](background-jobs.md), running ones first, or open one's page. `enter` opens a job's page: a band with its lamp, id and command, state and time, and the file its output goes to, then the end of the output. `ctrl+k` stops a running job (after asking in the list) or removes one that has ended. |
 | `/terminals [id]` | | List this conversation's [device terminals](tools.md#device-terminals), live ones first then the saved profiles, or open one console's page. `enter` opens a terminal's page or connects a profile; `ctrl+d` cuts a live console after asking. On the page `enter` attaches and `esc` leaves. |
+| `/agents [name]` | `/subagents` | List the [subagents](agents.md) `task` may choose: the two that ship with Circle, the markdown files in the agent folders and what extensions register. With a name it shows that one. A definition that could not be used is listed with its reason. |
 
 What these do and do not do is on [Sessions](sessions.md). Several have limits in this version.
 
@@ -57,7 +59,8 @@ What these do and do not do is on [Sessions](sessions.md). Several have limits i
 | `/plan [on\|off]` | `/plan-mode` | Turn `read-only` mode on or off. With no argument it switches. |
 | `/yolo [off]` | `/auto` | Stop asking before commands and file changes in this session. `/yolo off` asks again. Anything else, including no argument, turns it on. |
 | `/mode [manual\|accept-edits\|plan\|auto]` | | Set how this session asks. With no argument it moves to the next mode, as `shift+tab` does. `accept edits` changes files inside the workspace without asking. See [Modes](usage.md#modes). |
-| `/approvals [add P\|remove P\|revoke N]` | | List the "always allow" rules of this session and the command patterns from settings, with the last decisions under the title; `enter` on a row, or its number, revokes a rule or removes a pattern. The list has no search: `k` `j` move, and other keys go to the input box. `revoke N` removes session rule N directly. `add <pattern>` saves a command pattern to your settings and `remove <pattern|N>` takes it back. See [Security](security.md#command-patterns-in-settings). |
+| `/bridge [start\|stop\|token]` | | Open or close the localhost editor bridge and show its address and token. `start` listens on `127.0.0.1` on a free port with a fresh token, and writes `<data>/bridge.json` where an editor can find both; `stop` closes it and removes that file. The model reads the editor only with `editor_bridge` on in your settings. See [Security](security.md#the-editor-bridge). |
+| `/approvals [allow P\|deny P\|project deny P\|forget N\|add P\|remove P\|revoke N]` | | List the rules of every layer - your own file, this project's, this conversation's - and the command patterns from settings, with the last decisions under the title; `enter` on a row, or its number, forgets, revokes or removes it. The list has no search: `k` `j` move, and other keys go to the input box. `deny <pattern>` and `allow <pattern>` write a rule of your own; `project deny <pattern>` writes the repository's, which can only deny; `forget N` takes the Nth rule of the list away; `revoke N` removes session rule N directly; `add <pattern>` saves a command pattern in your settings and `remove <pattern|N>` takes it back. A bare pattern is a rule for `execute`: write `tool <name> <pattern>` for another. See [Security](security.md#rules-in-a-file). |
 | `/trust` | | Trust this folder. It is saved in your settings; nothing is written into the folder. The full-screen interface asks before it opens a folder you have not trusted, so there it only confirms. |
 
 See [Security](security.md).
@@ -80,6 +83,7 @@ See [Choose a model](models.md).
 
 | Command | Aliases | What it does |
 |---|---|---|
+| `/memory [add [account] <note>\|remove N]` | | List the dated lines Circle keeps in `MEMORY.md`, the workspace's first and the data folder's after, and write or take back one. `add` writes in the workspace and `add account` in the data folder; a line about an untrusted folder waits for `/trust`. Only the lines Circle wrote are listed and removable. The list answers while a turn runs; a write waits for it to finish. See [Configuration](configuration.md#memory-circle-writes). |
 | `/skill [name] [args]` | `/skills` | List skills, or load one into the conversation for your next message. `/skill:name` also works. |
 | `/mcp [reload]` | | List MCP servers and tools, or reconnect them. |
 | `/extensions [reload]` | `/ext` | List extensions, or reload them. |

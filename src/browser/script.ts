@@ -287,7 +287,7 @@ export function formatScript(script: BrowserScript): string {
   ];
   return lines.join('\n') + '\n';
 }
-/** A script's name from its file: `apv-slb.circle-browser.json` is `apv-slb`. */
+/** A script's name from its file: `device-slb.circle-browser.json` is `device-slb`. */
 export const nameFromPath = (path: string): string =>
   basename(path)
     .replace(/\.circle-browser\.json$/i, '')

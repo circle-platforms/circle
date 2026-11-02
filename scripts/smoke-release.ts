@@ -146,6 +146,13 @@ try {
     ),
   ).meta;
   assert.equal(builtinSkill.name, 'create-pr');
+  const reviewSkill = parseFrontmatter(
+    readFileSync(
+      join(root, 'app/dist/builtin_skills/pr-review/SKILL.md'),
+      'utf8',
+    ),
+  ).meta;
+  assert.equal(reviewSkill.name, 'pr-review');
   let firstSystem = '';
   let calls = 0;
   let titles = 0;
@@ -271,6 +278,10 @@ try {
   assert.ok(
     firstSystem.includes(`\n- create-pr: ${builtinSkill.description}`),
     'the built-in create-pr skill is listed in the system prompt',
+  );
+  assert.ok(
+    firstSystem.includes(`\n- pr-review: ${reviewSkill.description}`),
+    'the built-in pr-review skill is listed in the system prompt',
   );
   assert.equal(
     readFileSync(join(workspace, 'receipt.txt'), 'utf8'),

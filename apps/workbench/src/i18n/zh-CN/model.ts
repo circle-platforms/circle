@@ -8,6 +8,31 @@ export const model: Record<string, string> = {
   // what the live runtime says
   'UI preferences could not be saved': '无法保存界面偏好',
   'runtime action failed': '运行时操作失败',
+  'Editor bridge on localhost: /bridge [start|stop|token]':
+    '本机编辑器桥：/bridge [start|stop|token]',
+  'the editor bridge is the terminal’s · run /bridge start in circle':
+    '编辑器桥属于终端 · 请在 circle 里运行 /bridge start',
+  'What your editor reports': '你的编辑器报告的内容',
+  'What your editor reported: its file, the selection, how old each is, and how many diff requests wait.':
+    '你的编辑器报告的：当前文件、所选内容、各自多久之前，以及有几个差异请求在等待。',
+  'The file your editor has open': '编辑器打开的文件',
+  'The path of the file the editor has open, or that nobody reported one.':
+    '编辑器当前打开文件的路径，或没有人报告过文件。',
+  'The text you selected in your editor': '你在编辑器中选中的文本',
+  'The selected text with its file and line range. A selection older than ten minutes is refused as context.':
+    '所选文本及其文件和行范围。超过十分钟的选区不作为上下文。',
+  'Ask your editor to show a diff': '请编辑器展示差异',
+  'Ask the editor to show a diff of a file against the proposed text. Nothing is written until you accept there.':
+    '请编辑器把文件与提议文本的差异展示出来；只有你在那里接受才会写入。',
+  'What Circle remembers: /memory [add <note>|remove N]':
+    'Circle 记住的内容：/memory [add <备注>|remove N]',
+  'memory lives in MEMORY.md · the next session reads what that file holds':
+    '记忆保存在 MEMORY.md · 下一个会话会读取该文件的内容',
+  'add this line to MEMORY.md, and the next session reads it: {line}':
+    '把这一行加入 MEMORY.md，下一个会话就会读取：{line}',
+  'Tell a running subagent one thing': '向正在运行的子代理说一件事',
+  'Tell a running subagent of this conversation one thing; it reads it before its next model request. It answers no approval card.':
+    '向本会话正在运行的子代理说一件事；它会在下一次模型请求前读到。消息不代替审批卡。',
   disconnected: '已断开',
   'Circle runtime disconnected': 'Circle 运行时已断开',
   'Circle runtime ran out of memory': 'Circle 运行时内存不足',
@@ -169,7 +194,11 @@ export const model: Record<string, string> = {
     '从你的某条消息之前分出新会话：/fork [关键词]',
   'Clone the active branch into a new session': '把当前分支克隆为新会话',
   'Undo the last turn on screen': '在界面上撤销上一轮',
+  'List the subagents task can use: /agents [name]':
+    '列出 task 可用的子代理：/agents [名称]',
   'Restore after /undo': '恢复 /undo 撤销的内容',
+  'Put back the files one turn changed: /rewind':
+    '回退某一轮改动的文件：/rewind',
   'Hide or show thinking; /thinking <level> sets the depth':
     '隐藏或显示思考；/thinking <级别> 设置思考深度',
   'Choose the thinking depth: /effort [minimal|low|medium|high|xhigh|max]':

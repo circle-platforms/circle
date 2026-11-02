@@ -10,13 +10,14 @@ The model endpoint's key is **not** read from the environment. Circle reads it o
 
 ## Location and mode
 
-| Variable                 | Effect                                                                                       | Default                       |
-| ------------------------ | -------------------------------------------------------------------------------------------- | ----------------------------- |
-| `CIRCLE_HOME`            | Where Circle keeps settings, credentials, history and sessions.                              | `~/.circle`                   |
-| `CIRCLE_HISTORY_PATH`    | The file your prompt history is kept in.                                                     | `history` in the data folder  |
-| `CIRCLE_NO_TUI`          | `1`, `true` or `yes` forces [line mode](cli.md#full-screen-and-line-mode).                   | unset                         |
-| `CIRCLE_NO_UPDATE_CHECK` | `1`, `true`, `yes` or `on` turns off the daily [update reminder](cli.md#the-reminder).       | unset                         |
-| `VISUAL`, `EDITOR`       | Used by `ctrl+g` and `/editor`, in that order. May include arguments, such as `code --wait`. | `vi`, or `notepad` on Windows |
+| Variable                 | Effect                                                                                                                                                                               | Default                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
+| `CIRCLE_HOME`            | Where Circle keeps settings, credentials, history and sessions.                                                                                                                      | `~/.circle`                   |
+| `CIRCLE_HISTORY_PATH`    | The file your prompt history is kept in.                                                                                                                                             | `history` in the data folder  |
+| `CIRCLE_NO_TUI`          | `1`, `true` or `yes` forces [line mode](cli.md#full-screen-and-line-mode).                                                                                                           | unset                         |
+| `CIRCLE_NO_UPDATE_CHECK` | `1`, `true`, `yes` or `on` turns off the daily [update reminder](cli.md#the-reminder).                                                                                               | unset                         |
+| `OTTY_PANE_ID`           | Set by Otty in its panes. The full-screen interface then reports its state with `otty state:circle` instead of `OSC 9;4`; see [outside the window](interface.md#outside-the-window). | unset                         |
+| `VISUAL`, `EDITOR`       | Used by `ctrl+g` and `/editor`, in that order. May include arguments, such as `code --wait`.                                                                                         | `vi`, or `notepad` on Windows |
 
 ## Browser
 

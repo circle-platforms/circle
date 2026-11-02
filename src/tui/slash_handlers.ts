@@ -46,6 +46,13 @@ import {
   SESSION_MODES,
   type SessionMode,
 } from '../approvals.js';
+import {
+  addFileRule,
+  dropFileRule,
+  ruleFileFor,
+  ruleSources,
+  type RuleEffect,
+} from '../approval_rules.js';
 import { transcriptRows, type ScreenState } from './render.js';
 import { elapsed, type Job } from '../jobs.js';
 import { emptyUsage } from '../types.js';
@@ -53,6 +60,16 @@ import { EFFORT_LEVELS } from '../model.js';
 import { exportKind, toHtml } from '../session_export.js';
 import { discoverCustomCommands, expandCommandTemplate } from '../commands.js';
 import { discoverSkills, loadSkillBody } from '../skills.js';
+import { CONTEXT_FILE_CAP } from '../memory_sources.js';
+import {
+  addMemory,
+  allMemoryEntries,
+  memoryEntries,
+  memoryState,
+  memoryTargetFor,
+  memoryTargets,
+  removeMemory,
+} from '../memory_write.js';
 import { readPrompt } from '../system_prompt.js';
 import { formatHotkeys } from './hotkeys_text.js';
 import { BUILTIN_SLASH, variableCopy } from './slash_commands.js';
@@ -136,6 +153,7 @@ const BUSY_OK = new Set([
   'settings',
   'session',
   'themes',
+  'agents',
   'mcp',
   'hooks',
   'copy',
@@ -158,19 +176,26 @@ const BUSY_OK = new Set([
 // These only show a list when they have no argument. With one they change what the turn
 // works with: `/skill <name>` writes into the conversation the turn is writing, and
 // `/extensions reload` replaces the tools it may be calling. That form waits.
-const BUSY_OK_BARE = new Set(['skill', 'extensions']);
+const BUSY_OK_BARE = new Set(['skill', 'extensions', 'bridge', 'memory']);
 const BUSY_WORDS: Record<string, string> = {
   models: 'Busy · switch models when the turn has finished',
   skill: 'Busy · load the skill when the turn has finished',
   extensions: 'Busy · reload extensions when the turn has finished',
   effort: 'Busy · change the thinking depth when the turn has finished',
   resume: 'Busy · switch sessions when the turn has finished',
+  bridge: 'Busy · open the bridge when the turn has finished',
+  memory: 'Busy · write the memory line when the turn has finished',
 };
 // The view-only screen shows a session another terminal runs, and cannot change it.
 // These would: they write its name, its messages, its approvals or its branch. A list
 // or a copy (/fork, /clone, /export) is still fine.
-const VIEW_ONLY_REFUSED = new Set(['compact', 'import', 'approvals']);
-const VIEW_ONLY_REFUSED_WITH_ARGS = new Set(['name', 'skill']);
+const VIEW_ONLY_REFUSED = new Set(['compact', 'import', 'approvals', 'rewind']);
+const VIEW_ONLY_REFUSED_WITH_ARGS = new Set([
+  'name',
+  'skill',
+  'bridge',
+  'memory',
+]);
 const VIEW_ONLY_WORDS = 'view only · another terminal runs this session';
 const THEMES = ['auto', 'dark', 'light'] as const;
 const DOUBLE_ESCAPE = ['tree', 'fork', 'none'] as const;
@@ -599,6 +624,113 @@ function refreshAllowedPatterns(host: CommandHost): void {
   host.settings.allowed_commands = merged;
   host.runtime.policy.setAllowedCommands(merged);
 }
+// The rule of a file, not of settings: a tool, what it matches, and what to do.
+// A bare pattern is a command rule; "tool <name>" names another tool.
+function parseRuleArgument(
+  rest: string,
+): { tool: string; pattern: string } | undefined {
+  const words = rest.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return undefined;
+  if (words[0] !== 'tool') return { tool: 'execute', pattern: rest.trim() };
+  const tool = words[1];
+  const pattern = words.slice(2).join(' ');
+  return tool && pattern ? { tool, pattern } : undefined;
+}
+
+// /approvals allow|deny [tool <name>] <pattern>: a rule in the person's own file.
+// /approvals project deny <pattern>: the same rule in the project's file, which
+// can only deny. A repository you did not write cannot hand out your approvals.
+function approvalsRule(
+  host: CommandHost,
+  layer: 'user' | 'project',
+  effect: RuleEffect,
+  rest: string,
+): void {
+  const where = layer === 'project' ? 'the project' : 'your own';
+  if (layer === 'project' && effect === 'allow') {
+    host.flash(
+      'a project rule can only deny · to allow, write it as your own: /approvals allow <pattern>',
+    );
+    return;
+  }
+  const parsed = parseRuleArgument(rest);
+  if (!parsed) {
+    host.flash('Usage: /approvals ' + effect + ' [tool <name>] <pattern>');
+    return;
+  }
+  const path = ruleFileFor(layer, host.home, host.workspace);
+  const wrote = addFileRule(path, {
+    tool: parsed.tool,
+    pattern: parsed.pattern,
+    effect,
+    label: parsed.pattern,
+  });
+  if (!wrote.ok) {
+    host.flash(
+      parsed.tool +
+        ' ' +
+        JSON.stringify(parsed.pattern) +
+        ' is already ' +
+        effect +
+        'ed for ' +
+        where +
+        ' rules',
+    );
+    return;
+  }
+  // The list counts your own rules first, so a project rule's number starts
+  // after them: say the number that forget wants.
+  const number =
+    layer === 'project'
+      ? ruleSources(host.home, host.workspace).find(
+          (source) => source.layer === 'user',
+        )!.rules.length + wrote.count
+      : wrote.count;
+  host.notice(
+    [
+      effect === 'deny' ? 'Denied' : 'Allowed',
+      parsed.tool + ' ' + JSON.stringify(parsed.pattern),
+      where + ' rules · ' + path,
+      'forget ' + number + ' takes it away',
+      effect === 'deny'
+        ? "a deny wins over auto and over the settings' patterns"
+        : 'an allow answers the card; a call that always asks still shows one',
+    ].join(' · '),
+  );
+}
+
+// /approvals forget <number>: drop a rule of the printed list. The rules a card
+// kept in this conversation are revoked with /approvals revoke, and a settings
+// pattern is taken away with /approvals remove.
+function approvalsForget(host: CommandHost, target: string): void {
+  if (!/^\d+$/.test(target)) {
+    host.flash('Usage: /approvals forget <number>');
+    return;
+  }
+  const dropped = dropFileRule(
+    ruleSources(host.home, host.workspace),
+    Number(target),
+  );
+  if (!dropped) {
+    host.flash('No rule number ' + target + ' in the files');
+    return;
+  }
+  host.notice(
+    'Forgot · ' +
+      dropped.rule.tool +
+      ' ' +
+      JSON.stringify(dropped.rule.pattern) +
+      ' · ' +
+      (dropped.layer === 'project'
+        ? "the project's file"
+        : 'your approvals.json') +
+      ' · ' +
+      (dropped.rule.effect === 'deny'
+        ? 'the call asks again, or runs if another rule allows it'
+        : 'the call asks again'),
+  );
+}
+
 // /approvals add <pattern>: a wildcard rule in the user's settings.json;
 // matching commands run without asking, in every session.
 function approvalsAdd(host: CommandHost, pattern: string): void {
@@ -666,6 +798,33 @@ function approvals(host: CommandHost, args: string): void {
     approvalsRemove(host, trimmed.slice(6).trim());
     return;
   }
+  if (parts[0] === 'allow' || parts[0] === 'deny') {
+    approvalsRule(
+      host,
+      'user',
+      parts[0] as RuleEffect,
+      trimmed.slice(parts[0].length + 1).trim(),
+    );
+    return;
+  }
+  if (parts[0] === 'project') {
+    const effect = parts[1];
+    if (effect !== 'allow' && effect !== 'deny') {
+      host.flash('Usage: /approvals project deny [tool <name>] <pattern>');
+      return;
+    }
+    approvalsRule(
+      host,
+      'project',
+      effect as RuleEffect,
+      trimmed.slice('project'.length + effect.length + 2).trim(),
+    );
+    return;
+  }
+  if (parts[0] === 'forget') {
+    approvalsForget(host, trimmed.slice(6).trim());
+    return;
+  }
   if (parts[0] === 'revoke') {
     if (parts.length !== 2 || !/^\d+$/.test(parts[1]!)) {
       host.flash('Usage: /approvals revoke <number>');
@@ -678,8 +837,29 @@ function approvals(host: CommandHost, args: string): void {
     }
     host.notice(`Revoked · ${rule.tool} · ${rule.label}`);
   }
+  const files = ruleSources(host.home, host.workspace);
+  let numbered = 0;
+  const lines: string[] = [];
+  for (const [layer, title] of [
+    ['user', 'Your own rules (approvals.json in the data folder):'],
+    ['project', "This project's rules (.circle/approvals.json):"],
+  ] as const) {
+    const source = files.find((found) => found.layer === layer)!;
+    lines.push(source.rules.length ? title : title.replace(':', ': none'));
+    for (const rule of source.rules)
+      lines.push(
+        `  forget ${++numbered}: ${rule.effect} · ${rule.tool} · ${rule.pattern}`,
+      );
+    if (
+      layer === 'project' &&
+      source.rules.some((rule) => rule.effect === 'allow')
+    )
+      lines.push(
+        '  an allow of the project does not grant: only your own rules and this session do',
+      );
+  }
   const rules = store.rules(thread);
-  const lines = [
+  lines.push(
     rules.length
       ? 'Always-allow rules this session:'
       : 'No always-allow rules this session.',
@@ -687,7 +867,7 @@ function approvals(host: CommandHost, args: string): void {
       (rule, index) =>
         `  ${index + 1}. ${rule.tool} · ${rule.label || rule.pattern}`,
     ),
-  ];
+  );
   const patterns = host.settings.allowed_commands;
   if (patterns.length)
     lines.push(
@@ -703,6 +883,7 @@ function approvals(host: CommandHost, args: string): void {
           `  ${APPROVAL_WORDS[entry.kind] ?? entry.kind} · ${entry.tool}`,
       ),
     );
+  if (numbered) lines.push('Forget one: /approvals forget <number>');
   if (rules.length) lines.push('Revoke one: /approvals revoke <number>');
   if (patterns.length)
     lines.push('Remove one: /approvals remove <pattern|number>');
@@ -716,18 +897,39 @@ function approvalsList(host: CommandHost): void {
   const rules = store.rules(thread);
   const recent = store.log(thread).slice(-5);
   const patterns = host.settings.allowed_commands;
-  const items: PickerItem[] = rules.map((rule, index) => {
+  const files = ruleSources(host.home, host.workspace);
+  const fileCount = files.reduce(
+    (each, source) => each + source.rules.length,
+    0,
+  );
+  const items: PickerItem[] = [];
+  let position = 0;
+  for (const source of files)
+    for (const rule of source.rules)
+      items.push({
+        key: `forget:${++position}`,
+        label:
+          `${position}. Forget: ${rule.effect} ${rule.tool} ${rule.pattern}`.slice(
+            0,
+            60,
+          ),
+        meta:
+          source.layer === 'project'
+            ? 'project · .circle/approvals.json'
+            : 'yours · ~/.circle/approvals.json',
+      });
+  rules.forEach((rule, index) => {
     const label = rule.label || rule.pattern;
-    return {
+    items.push({
       key: `revoke:${index}`,
-      label: `${index + 1}. Revoke: ${label.slice(0, 40)}`,
+      label: `${index + 1 + fileCount}. Revoke: ${label.slice(0, 40)}`,
       meta: `always · ${rule.tool}`,
-    };
+    });
   });
   patterns.forEach((pattern, index) => {
     items.push({
       key: `pattern:${index}`,
-      label: `${rules.length + index + 1}. Allow: ${pattern}`,
+      label: `${fileCount + rules.length + index + 1}. Allow: ${pattern}`,
       meta: 'settings · execute',
     });
   });
@@ -744,7 +946,10 @@ function approvalsList(host: CommandHost): void {
     if (item.key.startsWith('pattern:')) {
       const pattern = patterns[Number(item.key.slice(8))];
       if (pattern) approvalsRemove(host, pattern);
+      return;
     }
+    if (item.key.startsWith('forget:'))
+      approvalsForget(host, item.key.slice(7));
   };
   const move = (step: number) => (): void => {
     const picker = host.state.picker;
@@ -760,7 +965,7 @@ function approvalsList(host: CommandHost): void {
       choose(item);
     };
   });
-  host.picker('Session approvals', items, choose, {
+  host.picker('Approval rules', items, choose, {
     hint: [
       rules.length ? '' : 'No always-allow rules this session.',
       recent.length
@@ -772,7 +977,7 @@ function approvalsList(host: CommandHost): void {
             )
             .join(' · ')
         : '',
-      '/approvals add <pattern> allows commands by pattern',
+      "/approvals deny <pattern> writes your own rule; project deny writes the project's",
     ]
       .filter(Boolean)
       .join(' · '),
@@ -895,6 +1100,99 @@ async function redo(host: CommandHost): Promise<void> {
   host.notice('Redid the turn');
 }
 
+// The files one turn changed, put back. The terminal keeps its journal in the
+// conversation's own database, so a turn from before a restart is still here. What a
+// shell command changed is not, and both the list and the answer say so.
+function rewind(host: CommandHost): void {
+  const journal = host.runtime.fileRewind;
+  if (!journal) {
+    host.fail(
+      'this conversation has no file journal · the desktop undoes files from the message',
+    );
+    return;
+  }
+  const tree = host.runtime.store.tree(host.runtime.session.id);
+  // The message that opened the turn, as one line.
+  const said = (turnId: string): string => {
+    const text = (tree.find((row) => row.id === turnId)?.message?.content ?? '')
+      .replace(/\s+/gu, ' ')
+      .trim();
+    return text ? text.slice(0, 48) : `turn ${turnId.slice(-8)}`;
+  };
+  const rows = (): PickerItem[] =>
+    journal
+      .availableTurns()
+      .reverse()
+      .map((turnId) => {
+        const paths = journal.recordedPaths(turnId);
+        return {
+          key: turnId,
+          label: said(turnId),
+          meta: `${paths.length} ${paths.length === 1 ? 'file' : 'files'}`,
+          search: paths.join(' '),
+        };
+      });
+  if (!rows().length) {
+    host.flash('Nothing to rewind');
+    return;
+  }
+  const read = (turnId: string) =>
+    journal.preview(turnId, new AbortController().signal).catch((error) => {
+      host.fail(reason(error));
+      return undefined;
+    });
+  // One action per row: it asks in the list first, as /jobs asks before it stops a job.
+  // enter is bound as a list key so the list stays open for the turn after it.
+  const change = async (item: PickerItem | undefined): Promise<void> => {
+    const list = host.state.picker;
+    if (!item || !list) return;
+    if (host.runtime.harness.planMode) {
+      host.fail('read-only: leave the plan before rewinding files');
+      return;
+    }
+    const preview = await read(item.key);
+    if (!preview) return;
+    if (preview.conflicts.length) {
+      host.fail(
+        `${pathTail(preview.conflicts[0]!)} changed since that turn · nothing rewound`,
+      );
+      return;
+    }
+    const named = preview.paths
+      .slice(0, 2)
+      .map((path) => pathTail(path))
+      .join(', ');
+    const more =
+      preview.paths.length > 2 ? ` +${preview.paths.length - 2}` : '';
+    list.confirm(
+      `Rewind ${preview.paths.length} ${
+        preview.paths.length === 1 ? 'file' : 'files'
+      }: ${named}${more}?`,
+      async () => {
+        try {
+          const receipt = await journal.restore(
+            preview.id,
+            new AbortController().signal,
+          );
+          host.notice(
+            `Rewound ${receipt.paths.length} file(s) to before that turn.\n` +
+              'Shell commands, external services and unrecorded edits stay as they are.',
+          );
+        } catch (error) {
+          host.fail(reason(error));
+          return;
+        }
+        // The turn leaves the list; the ones before it stay.
+        list.setItems(rows());
+      },
+    );
+  };
+  host.picker('Rewind files', rows(), (item) => void change(item), {
+    hint: 'enter rewinds after asking',
+    empty: 'Nothing to rewind',
+    keys: { enter: (item) => void change(item) },
+  });
+}
 async function init(host: CommandHost, args: string): Promise<void> {
   let template: string;
   try {
@@ -904,6 +1202,52 @@ async function init(host: CommandHost, args: string): Promise<void> {
     return;
   }
   await host.send(template.replaceAll('$ARGUMENTS', args.trim() || '(none)'));
+}
+
+// The subagents `task` may choose: the two that ship with Circle, the ones the folders
+// define and the ones extensions register. A definition that cannot be used is named
+// with its reason rather than left out in silence.
+function agents(host: CommandHost, args: string): void {
+  const { agents: list, problems } = host.runtime.inspectSubagents();
+  const token = args.trim().split(/\s/, 1)[0] ?? '';
+  if (token) {
+    const one = list.find((agent) => agent.name === token);
+    if (!one) {
+      host.fail(`No subagent ${token} · /agents lists them`);
+      return;
+    }
+    host.notice(
+      [
+        `${one.name} · ${one.description}`,
+        `  source: ${one.source}`,
+        one.model ? `  model: ${one.model}` : '  model: the conversation’s',
+        one.tools
+          ? `  tools: ${one.tools.join(', ')}`
+          : '  tools: every tool a subagent may have',
+        one.path ? `  file: ${shortPath(one.path)}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+    return;
+  }
+  host.notice(
+    [
+      'Subagents:',
+      '',
+      ...list.map((agent) =>
+        aligned(
+          `  ${pad(agent.name, 18)} `,
+          `${agent.description} (${agent.source})`,
+        ),
+      ),
+      ...(problems.length
+        ? ['', 'Not offered:', ...problems.map((line) => `  ${line}`)]
+        : []),
+      '',
+      'Add one as a markdown file in .circle/agents · /agents <name> for one',
+    ].join('\n'),
+  );
 }
 
 // The conversation as Markdown, as it is on screen, under a few lines that say what it is.
@@ -2151,6 +2495,7 @@ const HANDLERS: Record<string, Handler> = {
   trust,
   undo,
   redo,
+  rewind,
   init,
   export: exportSession,
   share,
@@ -2165,5 +2510,167 @@ const HANDLERS: Record<string, Handler> = {
   jobs,
   terminals,
   skill,
+  agents,
   compact,
+  bridge,
+  memory,
 };
+// /bridge: open the localhost bridge so the editor the person already uses can
+// tell Circle what is open and what is selected, and answer a diff request.
+async function bridge(host: CommandHost, args: string): Promise<void> {
+  const runtime = host.runtime;
+  const verb = args.trim().split(/\s+/)[0] ?? '';
+  if (!verb || verb === 'status') {
+    host.notice(runtime.editorBridge.statusText());
+    return;
+  }
+  if (verb === 'start') {
+    if (runtime.editorBridge.running) {
+      host.flash('the bridge is already open \u00b7 /bridge shows where');
+      return;
+    }
+    try {
+      const info = await runtime.editorBridge.start();
+      host.notice(
+        [
+          `Bridge open at ${info.url}`,
+          `Token for the editor side: ${info.token}`,
+          `Written where an editor can find it: ${info.file}`,
+          host.settings.editor_bridge
+            ? 'The conversation has four tools: editor_status, editor_active_file, editor_selection and editor_open_diff.'
+            : 'editor_bridge is off in your settings, so the model has no editor tools yet: set it to true and /reload.',
+          'Nothing reaches disk until you accept in the editor \u00b7 /bridge stop closes it again',
+        ].join('\n'),
+      );
+    } catch (error) {
+      host.fail(`Bridge failed to start: ${(error as Error).message}`);
+    }
+    return;
+  }
+  if (verb === 'stop') {
+    if (!runtime.editorBridge.running) {
+      host.flash('the bridge is not open');
+      return;
+    }
+    await runtime.editorBridge.stop();
+    host.notice(
+      'Bridge closed \u00b7 nothing more reaches the editor, and no request of yours is waiting',
+    );
+    return;
+  }
+  if (verb === 'token') {
+    const info = runtime.editorBridge.info;
+    if (!info) {
+      host.flash('the bridge is not open \u00b7 /bridge start opens it');
+      return;
+    }
+    host.notice(`Token: ${info.token}`);
+    return;
+  }
+  host.flash('Usage: /bridge [start|stop|token]');
+}
+// The memory Circle keeps for itself: one dated line per fact, in a file the
+// system prompt already reads whole. Nothing is captured on its own: a line is
+// written when the person says so, and taken back the same way.
+function memoryTargetsOf(host: CommandHost) {
+  return memoryTargets(host.workspace, host.home);
+}
+
+function memoryList(host: CommandHost): void {
+  const lines = ['What Circle remembers between sessions:'];
+  let number = 0;
+  for (const target of memoryTargetsOf(host)) {
+    const state = memoryState(target.path);
+    lines.push('');
+    lines.push(
+      state.exists
+        ? `${target.scope}: ${target.path} · ${state.bytes} of ${CONTEXT_FILE_CAP} bytes read whole`
+        : `${target.scope}: ${target.path} · none yet`,
+    );
+    if (state.overCap)
+      lines.push(
+        `  past the cap: the rest of this file is not read · trim it, or /memory remove`,
+      );
+    for (const entry of memoryEntries(target))
+      lines.push(`  ${++number}. ${entry.date} · ${entry.note}`);
+  }
+  lines.push('');
+  lines.push(
+    number
+      ? `/memory remove <number> takes one back`
+      : `/memory add <note> writes one line here`,
+  );
+  lines.push(
+    '/memory add account <note> writes to the data folder, for anything you work on',
+  );
+  lines.push(
+    '--no-context-files (-nc) does not leave these out: they are memory, not instructions',
+  );
+  host.notice(lines.join('\n'));
+}
+
+function memory(host: CommandHost, args: string): void {
+  const trimmed = args.trim();
+  if (!trimmed) {
+    memoryList(host);
+    return;
+  }
+  const verb = trimmed.split(/\s+/)[0]!;
+  if (verb === 'add') {
+    let rest = trimmed.slice(verb.length).trim();
+    const account = /^account(\s|$)/.test(rest);
+    if (account) rest = rest.slice('account'.length).trim();
+    if (!rest) {
+      host.flash('Usage: /memory add [account] <note>');
+      return;
+    }
+    // A line about this project waits for the folder to be trusted, as every
+    // other write into it does. The account file sits in Circle's own folder.
+    if (!account && !isFolderTrusted(host.settings, host.workspace)) {
+      host.flash('Trust this folder first: /trust');
+      return;
+    }
+    const target = memoryTargetFor(
+      account ? 'account' : 'project',
+      host.workspace,
+      host.home,
+    );
+    const added = addMemory(target, rest);
+    if (!added.ok) {
+      host.flash(added.why);
+      return;
+    }
+    const entry = added.entry!;
+    // The number the list would show, so the notice can say what removes it.
+    const position =
+      allMemoryEntries(host.workspace, host.home).findIndex(
+        (found) => found.path === entry.path && found.line === entry.line,
+      ) + 1;
+    host.notice(
+      [
+        `Remembered · ${entry.scope} · ${entry.path}`,
+        `  ${entry.text}`,
+        `It reaches the model with the next session's prompt · /memory remove ${position} takes it back`,
+      ].join('\n'),
+    );
+    return;
+  }
+  if (verb === 'remove') {
+    const target = trimmed.slice(verb.length).trim();
+    if (!/^\d+$/.test(target)) {
+      host.flash('Usage: /memory remove <number>');
+      return;
+    }
+    const removed = removeMemory(host.workspace, host.home, Number(target));
+    if (!removed.ok) {
+      host.flash(removed.why);
+      return;
+    }
+    const entry = removed.entry!;
+    host.notice(
+      `Forgotten · ${entry.scope} · line ${entry.line} of ${entry.path}\n  ${entry.text}`,
+    );
+    return;
+  }
+  host.flash('Usage: /memory [add [account] <note>|remove <number>]');
+}

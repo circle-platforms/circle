@@ -24,6 +24,7 @@ import {
   type SessionMode,
 } from './approvals.js';
 import { Sandbox } from './sandbox.js';
+import { EditorBridge } from './editor_bridge.js';
 import { buildTools, type Todo } from './tools.js';
 import { browserToolsWanted } from './browser/tools.js';
 import {
@@ -60,7 +61,8 @@ import { discoverSkills, loadSkillBody, type SkillInfo } from './skills.js';
 import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
 import { McpManager } from './mcp_loader.js';
-import { ExtensionHost } from './extensions.js';
+import { ExtensionHost, type SubagentSpec } from './extensions.js';
+import { discoverSubagents, type SubagentFileInfo } from './subagent_files.js';
 import { abortable } from './watch.js';
 import {
   isFolderTrusted,
@@ -77,6 +79,8 @@ import { discoverCustomCommands } from './commands.js';
 import { LspManager } from './lsp_tool.js';
 import type { Tool, ToolContext } from './types.js';
 import { FileMutationTools, type FileMutations } from './file_mutations.js';
+import { FileRewindJournal } from './file_rewind.js';
+import { FileSystemFileMutations } from './file_mutations_fs.js';
 import { readFileBytes } from './file_access.js';
 import {
   ContextManager,
@@ -86,7 +90,13 @@ import {
 import { askQuestions } from './questions.js';
 import type { SecretRequest } from './secret_prompt.js';
 import type { CommandLauncher, CommandExecution } from './command_process.js';
-import { JobRegistry, jobLine, type Job } from './jobs.js';
+import {
+  jobReachable,
+  JobRegistry,
+  jobLine,
+  outcomeWords,
+  type Job,
+} from './jobs.js';
 import { ModelCatalog } from './model_catalog.js';
 import {
   priceCall,
@@ -255,6 +265,10 @@ export interface RuntimeOptions {
    */
   preserveQueuedInputs?: boolean;
 }
+/** What one message to a running subagent may hold, and how many may wait for it. */
+export const SEND_MAX_CHARS = 4000;
+export const SEND_MAX_WAITING = 8;
+
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
   private readonly vision = new VisionService();
@@ -351,13 +365,36 @@ export class AgentRuntime {
   }
   readonly options: RuntimeOptions;
   readonly store: CheckpointStore;
+  /**
+   * The conversation's file journal, for a Circle that writes straight to the host
+   * filesystem: the terminal, line mode, print mode and RPC. The desktop brings its own
+   * backend and its own journal, so this stays unset there.
+   */
+  readonly fileRewind?: FileRewindJournal;
+  /** How `buildTools` records a direct write into the journal. */
+  private readonly captures?: <T>(
+    paths: string[],
+    signal: AbortSignal,
+    write: () => T | Promise<T>,
+  ) => Promise<T>;
   readonly bus = new EventBus();
   readonly sandbox: Sandbox;
+  /** What the editor the person uses knows, once the bridge is open. */
+  readonly editorBridge: EditorBridge;
   readonly jobs: JobRegistry;
   /** Hides secrets' values in what the model reads, from calls and background jobs. */
   readonly redact: Redactor;
   readonly catalog: ModelCatalog;
   private childJobOwners = new Map<string, import('./jobs.js').JobOwner>();
+  /**
+   * The running background subagents of this session that a message can reach:
+   * the job id to the harness that is reading it. A channel exists while the job
+   * runs, so a message never reaches a session that is not there to read it.
+   */
+  private channels = new Map<
+    string,
+    { harness: Harness; waiting: number; sent: string[] }
+  >();
   private closing = false;
   private ownershipError?: Error;
   private ownershipCleanup?: Promise<void>;
@@ -397,6 +434,9 @@ export class AgentRuntime {
   private activeCompaction?: Promise<string>;
   extensions: ExtensionHost;
   private integrationsReady?: Promise<void>;
+  /** The subagents the agent folders define, read again with every system prompt. */
+  private fileAgents: SubagentFileInfo[] = [];
+  private fileAgentProblems: string[] = [];
   private extensionChanges = new Map<string, Promise<void>>();
   private extensionChangeListeners = new Set<() => void>();
   private readonly integrationLifetime = new AbortController();
@@ -499,6 +539,13 @@ export class AgentRuntime {
         ]),
       ],
     );
+    // The editor bridge: a localhost MCP server that stays closed until the
+    // person opens it with /bridge start. It writes only through the sandbox.
+    this.editorBridge = new EditorBridge(
+      options.home,
+      options.workspace,
+      this.sandbox,
+    );
     this.policy = defaultPolicy(
       options.workspace,
       options.home,
@@ -556,6 +603,8 @@ export class AgentRuntime {
     this.mcp = new McpManager(options.workspace, undefined, undefined, {
       secrets: () => loadSecrets(this.options.home),
       sessionId: () => this.session.id,
+      // A server that asks for a sign-in gets one in the browser; what it gives is kept in this home
+      home: this.options.home,
       readFile: (path, context, limit) =>
         readFileBytes(this.sandbox, fileReads, path, context, limit),
       // A server that went away leaves the system prompt between turns, as tools do
@@ -581,6 +630,18 @@ export class AgentRuntime {
       notice: (event) =>
         this.bus.emit('info', { payload: { model_notice: event } }),
     });
+    // Without a native backend the tools write to the host filesystem, so this runtime
+    // keeps the journal itself, in the conversation's own database: /rewind still knows
+    // the turn after Circle restarts.
+    this.fileRewind = options.fileMutations
+      ? undefined
+      : new FileRewindJournal(new FileSystemFileMutations(this.sandbox), {
+          session: () => this.session.id,
+          ledger: () => this.store,
+        });
+    this.captures = this.fileRewind
+      ? (paths, signal, write) => this.fileRewind!.capture(paths, signal, write)
+      : undefined;
     this.extensions = this.extensionHost(new Set());
     if (this.runOptions.session_name)
       this.store.rename(this.session.id, this.runOptions.session_name, true);
@@ -620,6 +681,19 @@ export class AgentRuntime {
           session_id: event.run_id,
         });
     });
+    // A turn's file changes are recorded under the message that started it, as on the
+    // desktop. A subagent's runs belong to its own conversation, and a background job
+    // that ends after its turn finds none open, so nothing is recorded for it.
+    this.bus.subscribe((event) => {
+      if (!this.fileRewind || event.tags.subagent) return;
+      if (event.kind === 'run_start') {
+        const user = this.store
+          .tree(this.session.id)
+          .findLast((node) => node.message?.role === 'user');
+        if (user) this.fileRewind.beginTurn(user.id);
+      } else if (event.kind === 'run_end' || event.kind === 'run_error')
+        this.fileRewind.endTurn();
+    });
   }
   private wrapModel(model: ChatModel): ChatModel {
     if (!this.options.wrapModel || this.wrappedModels.has(model)) return model;
@@ -644,7 +718,10 @@ export class AgentRuntime {
     const vision = this.visionForRun();
     let tools = buildTools(this.sandbox, {
       fileMutations: this.options.fileMutations,
+      captures: this.captures,
       jobs: this.jobs,
+      sendToJob: (context, jobId, message) =>
+        this.sendToJob(context, jobId, message),
       ...(vision
         ? {
             vision: (paths: string[], question: string, context: ToolContext) =>
@@ -737,9 +814,9 @@ export class AgentRuntime {
         const parentHarness = this.harness;
         const parentSessionId = context.sessionId;
         const name = String(args.subagent_type || 'general-purpose');
-        const custom = this.extensions
-          .subagents(this.allTools)
-          .find((agent) => agent.spec.name === name);
+        const custom = this.customSubagents().find(
+          (agent) => agent.spec.name === name,
+        );
         if (!custom && !['general-purpose', 'explore'].includes(name))
           throw new Error('unknown subagent type');
         const childModel = custom?.spec.model
@@ -831,7 +908,10 @@ export class AgentRuntime {
         );
         const jobTools = buildTools(this.sandbox, {
           fileMutations: this.options.fileMutations,
+          captures: this.captures,
           jobs: this.jobs,
+          sendToJob: (context, jobId, message) =>
+            this.sendToJob(context, jobId, message),
           ...(vision
             ? {
                 vision: (
@@ -953,14 +1033,35 @@ export class AgentRuntime {
           webSearch: (model, query, count, context) =>
             this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
-            this.context.prepare(
-              session.id,
-              child.model,
-              child.system,
-              child.tools,
-              signal,
-              true,
-            ),
+            this.context
+              .prepare(
+                session.id,
+                child.model,
+                child.system,
+                child.tools,
+                signal,
+                true,
+              )
+              .then((messages) => {
+                // Read means this: the message is in the request that goes to the
+                // model now. Its row exists from the moment it was queued, so the
+                // store says nothing about whether the subagent has met it yet.
+                const job = backgroundJob;
+                const channel = job ? this.channels.get(job.id) : undefined;
+                if (job && channel?.waiting) {
+                  channel.sent = channel.sent.filter(
+                    (mark) =>
+                      !messages.some((message) =>
+                        String(message.content ?? '').includes(
+                          `about="${mark}"`,
+                        ),
+                      ),
+                  );
+                  channel.waiting = channel.sent.length;
+                  this.jobs.pending(job.id, channel.waiting);
+                }
+                return messages;
+              }),
         });
         child.planMode = name === 'explore';
         const runChild = async (signal: AbortSignal): Promise<string> => {
@@ -989,8 +1090,23 @@ export class AgentRuntime {
                 parent: job.id,
                 startedBy: 'model',
               });
+              // Open only now: before this call there is no job id to answer to, and
+              // after it the harness is there to take the message.
+              this.channels.set(job.id, {
+                harness: child,
+                waiting: 0,
+                sent: [],
+              });
               backgroundLog = log;
-              return runChild(signal);
+              try {
+                return await runChild(signal);
+              } finally {
+                // A message the subagent never reached stays in that session's
+                // queue, where its own transcript shows it. Nothing here pretends a
+                // delivery that did not happen, and no count survives the job.
+                this.channels.delete(job.id);
+                this.jobs.pending(job.id, 0);
+              }
             },
             session.id,
           );
@@ -1002,6 +1118,11 @@ export class AgentRuntime {
     tools.push(this.lsp.tool());
     tools = this.classifyCoreTools(tools);
     tools.push(...(this.options.extraTools ?? []));
+    // The editor tools are in the list when the person turned them on, not when
+    // the listener happens to be open: a closed bridge says so in its answer, and
+    // opening or closing it changes nothing else about the session.
+    if (this.options.settings.editor_bridge)
+      tools.push(...this.editorBridge.modelTools());
     this.coreTools = tools;
     tools = this.withIntegrationTools(
       tools.filter((tool) => tool.name !== 'wait_jobs'),
@@ -1167,7 +1288,123 @@ export class AgentRuntime {
    * session, a model switch, /reload, /mcp reload, /extensions reload, /plan and a change
    * of thinking depth. Skills are read again each time, so the list and the `skill` tool
    * see the same skills. */
+  private loadSubagentFiles(): void {
+    const found =
+      this.options.localContext === false
+        ? { agents: [], problems: [] }
+        : discoverSubagents(
+            this.options.workspace,
+            this.options.home,
+            this.options.userHome,
+          );
+    this.fileAgents = found.agents;
+    this.fileAgentProblems = found.problems;
+  }
+  /**
+   * The subagents a person or an extension defined. Folders first, so an extension of the
+   * same name wins, as it already does over a built-in. A file naming a tool that does not
+   * exist is passed over and `problems` says so, rather than running with a broken set.
+   */
+  private customSubagents(
+    problems: string[] = [],
+  ): { spec: SubagentSpec; tools?: Tool[]; source: string; path?: string }[] {
+    const byName = new Map<
+      string,
+      { spec: SubagentSpec; tools?: Tool[]; source: string; path?: string }
+    >();
+    for (const agent of this.fileAgents) {
+      const missing = (agent.tools ?? []).filter(
+        (name) => !this.allTools.some((tool) => tool.name === name),
+      );
+      if (missing.length) {
+        problems.push(
+          `${agent.spec.name} names tools that do not exist: ${missing.join(', ')} · not offered`,
+        );
+        continue;
+      }
+      byName.set(agent.spec.name, {
+        spec: agent.spec,
+        source: agent.source_label,
+        path: agent.path,
+        ...(agent.tools
+          ? {
+              tools: agent.tools.map((name) =>
+                this.allTools.find((tool) => tool.name === name)!,
+              ),
+            }
+          : {}),
+      });
+    }
+    for (const agent of this.extensions.subagents(this.allTools))
+      byName.set(agent.spec.name, {
+        spec: agent.spec,
+        tools: agent.tools,
+        source: 'Extension',
+      });
+    return [...byName.values()];
+  }
+  /**
+   * Everything `task` may choose, for `/agents`: the two that ship with Circle, then the
+   * folders and extensions, with the reason any definition was passed over. The folders are
+   * read again here, as `task` will see them.
+   */
+  inspectSubagents(): {
+    agents: {
+      name: string;
+      description: string;
+      source: string;
+      model?: string;
+      tools?: string[];
+      path?: string;
+    }[];
+    problems: string[];
+  } {
+    this.loadSubagentFiles();
+    const problems = [...this.fileAgentProblems];
+    const byName = new Map([
+      [
+        'general-purpose',
+        {
+          name: 'general-purpose',
+          description: 'General coding tasks.',
+          source: 'Circle',
+          tools: undefined,
+          model: undefined,
+        },
+      ],
+      [
+        'explore',
+        {
+          name: 'explore',
+          description: 'Read-only project exploration.',
+          source: 'Circle',
+          tools: undefined,
+          model: undefined,
+        },
+      ],
+    ] as [
+      string,
+      {
+        name: string;
+        description: string;
+        source: string;
+        model?: string;
+        tools?: string[];
+      },
+    ][]);
+    for (const agent of this.customSubagents(problems))
+      byName.set(agent.spec.name, {
+        name: agent.spec.name,
+        description: agent.spec.description,
+        source: agent.source,
+        ...(agent.spec.model ? { model: agent.spec.model } : {}),
+        ...(agent.tools ? { tools: agent.tools.map((tool) => tool.name) } : {}),
+        ...(agent.path ? { path: agent.path } : {}),
+      });
+    return { agents: [...byName.values()], problems };
+  }
   private systemPrompt(model: string): string {
+    this.loadSubagentFiles();
     this.skills =
       this.options.localContext === false
         ? []
@@ -1253,7 +1490,7 @@ export class AgentRuntime {
       ['general-purpose', 'General coding tasks.'],
       ['explore', 'Read-only project exploration.'],
     ]);
-    for (const agent of this.extensions.subagents(this.allTools))
+    for (const agent of this.customSubagents())
       subagents.set(agent.spec.name, agent.spec.description);
     task.description =
       readFileSync(
@@ -2174,6 +2411,73 @@ export class AgentRuntime {
     this.closingPromise = this.closeResources(saveJobNotes);
     return this.closingPromise;
   }
+  /**
+   * One message to a running subagent of this conversation. It goes into the
+   * queue the child already reads at its next model request, which is also the
+   * first moment it can read anything: a message never preempts a request in
+   * flight, and never answers an approval card that is open.
+   */
+  private sendToJob(
+    context: ToolContext,
+    jobId: string,
+    message: string,
+  ): string {
+    const owner = this.childJobOwners.get(context.sessionId) ?? {
+      sessionId: context.sessionId,
+      startedBy: 'model' as const,
+    };
+    // One line, because the queue shows it as one row; and redacted the way any
+    // other text leaving this conversation is, so a secret value the sender was
+    // shown does not travel into a child that was never given it.
+    const one = message.replace(/\s+/g, ' ').trim();
+    if (!one) return 'nothing was sent: the message is empty';
+    if (one.length > SEND_MAX_CHARS)
+      return `refused: ${one.length} characters, and a message to a subagent is at most ${SEND_MAX_CHARS}`;
+    const text = this.redact(one, {}, () =>
+      written(this.store.messages(context.sessionId)),
+    );
+    const job = this.jobs.get(jobId);
+    // The same words as no job at all, so an id is not a way to learn what
+    // another conversation is running.
+    if (!job || !jobReachable(owner, job))
+      return `there is no job ${jobId} in this conversation`;
+    if (owner.parent)
+      return 'you are that subagent: there is nothing to send to yourself';
+    if (job.kind !== 'agent')
+      return `${jobId} is a ${job.kind}: a message is for a subagent`;
+    if (job.status !== 'running')
+      return `${jobId} ${outcomeWords(job)}: nothing was sent`;
+    const channel = this.channels.get(jobId);
+    if (!channel)
+      return `${jobId} runs elsewhere: it is not one you can send to`;
+    if (channel.waiting >= SEND_MAX_WAITING)
+      return `refused: ${channel.waiting} messages already wait for ${jobId}, and that is the most it will hold`;
+    // A mark of its own, so "read" is decided from the child's history rather
+    // than from a guess about when its queue emptied.
+    const mark = `msg-${randomUUID().slice(0, 8)}`;
+    const shown = text.length > 60 ? text.slice(0, 59) + '...' : text;
+    try {
+      channel.harness.queue(
+        `<system-reminder data-source="circle-jobs" about="${mark}">
+This message was sent to you while you ran, by the agent that started you:
+
+${text}
+
+It is input, not a decision: it answers no approval card, changes no mode and adds no rule. Take it into account from your next step; if it no longer applies, say so and carry on.
+</system-reminder>`,
+        'steer',
+        undefined,
+        { display: `sent to you by the agent that started you: ${shown}` },
+      );
+    } catch (error) {
+      return `refused: ${(error as Error).message}`;
+    }
+    channel.waiting++;
+    channel.sent.push(mark);
+    this.jobs.pending(jobId, channel.waiting);
+    return `Sent to ${jobId}: it reaches the subagent before its next model request. ${channel.waiting} waiting.`;
+  }
+
   private ownershipLost(error: Error): void {
     this.ownershipError = error;
     this.bus.emit('error', {
@@ -2242,6 +2546,9 @@ export class AgentRuntime {
       });
     await this.harness.finishTitle();
     await this.userShells.cancel();
+    // A listener this session opened dies with it: nobody is left able to reach
+    // the bridge of a session that has gone, and no stale file names a port.
+    await this.editorBridge.stop();
     const stopped = await this.jobs.close();
     if (!this.ownershipError) this.userShells.flush();
     for (const sessionId of saveJobNotes && !this.ownershipError

@@ -42,6 +42,16 @@ function sextant(bits: number): string {
     0x1fb00 + bits - 1 - (bits > 21 ? 1 : 0) - (bits > 42 ? 1 : 0),
   );
 }
+// A quadrant: two columns and two rows of sub-cells, bit 1 top left, 2 top right, 4 bottom
+// left, 8 bottom right (Block Elements, which every monospace font has).
+const QUADRANTS = ' ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█';
+
+// What the ring's cells are drawn in. Terminal.app draws block characters from its font, and
+// the fonts macOS gives it have no sextants: there the ring is drawn in quadrants, coarser.
+export type LogoCells = 'sextants' | 'quadrants';
+export function logoCellsFor(env: NodeJS.ProcessEnv = process.env): LogoCells {
+  return env.TERM_PROGRAM === 'Apple_Terminal' ? 'quadrants' : 'sextants';
+}
 
 function gradient(u: number): RGB {
   const at = ((u % 1) + 1) % 1;
@@ -56,29 +66,32 @@ function gradient(u: number): RGB {
   return LOGO_STOPS.at(-1)![1];
 }
 
-let ring: { bits: number; colour?: RGB }[][] | undefined;
-// The ring as sextant cells: a sub-cell is lit when the ring covers at least half of it, and
-// a cell takes the mean colour of its lit sub-cells. The colours are the logo's own, so the
-// cells can be kept; nothing here depends on the palette.
-function ringCells(): { bits: number; colour?: RGB }[][] {
-  if (ring) return ring;
+const rings = new Map<LogoCells, { bits: number; colour?: RGB }[][]>();
+// The ring as cells of two sub-cells across and three (sextants) or two (quadrants) down: a
+// sub-cell is lit when the ring covers at least half of it, and a cell takes the mean colour
+// of its lit sub-cells. The colours are the logo's own, so the cells can be kept; nothing here
+// depends on the palette.
+function ringCells(cells: LogoCells): { bits: number; colour?: RGB }[][] {
+  const kept = rings.get(cells);
+  if (kept) return kept;
+  const tall = cells === 'sextants' ? 3 : 2;
   const across = LOGO_COLUMNS * 2;
-  const down = LOGO_ROWS * 3;
+  const down = LOGO_ROWS * tall;
   const samples = 12;
-  ring = [];
+  const ring: { bits: number; colour?: RGB }[][] = [];
   for (let r = 0; r < LOGO_ROWS; r++) {
     const line: { bits: number; colour?: RGB }[] = [];
     for (let c = 0; c < LOGO_COLUMNS; c++) {
       let bits = 0;
       const colours: RGB[] = [];
-      for (let j = 0; j < 3; j++)
+      for (let j = 0; j < tall; j++)
         for (let i = 0; i < 2; i++) {
           let hit = 0;
           const sum = [0, 0, 0];
           for (let sy = 0; sy < samples; sy++)
             for (let sx = 0; sx < samples; sx++) {
               const x = -1 + (2 * (2 * c + i + (sx + 0.5) / samples)) / across;
-              const y = -1 + (2 * (3 * r + j + (sy + 0.5) / samples)) / down;
+              const y = -1 + (2 * (tall * r + j + (sy + 0.5) / samples)) / down;
               const radius = Math.hypot(x, y) * RING_OUTER;
               if (radius >= RING_INNER && radius <= RING_OUTER) {
                 hit++;
@@ -105,17 +118,21 @@ function ringCells(): { bits: number; colour?: RGB }[][] {
     }
     ring.push(line);
   }
+  rings.set(cells, ring);
   return ring;
 }
 
 // The ring, `LOGO_ROWS` rows of `LOGO_COLUMNS` columns.
-export function logoRows(): string[] {
+export function logoRows(cells: LogoCells = 'sextants'): string[] {
   const reset = palette().reset;
-  return ringCells().map(
+  return ringCells(cells).map(
     (line) =>
       line
         .map(({ bits, colour }) =>
-          bits && colour ? rgbSgr(colour) + sextant(bits) : reset + ' ',
+          bits && colour
+            ? rgbSgr(colour) +
+              (cells === 'sextants' ? sextant(bits) : QUADRANTS[bits]!)
+            : reset + ' ',
         )
         .join('') + reset,
   );
@@ -152,7 +169,11 @@ export function age(updated: number, now = Date.now()): string {
 }
 
 // The block's rows for a transcript `width` columns wide, ending in one blank row.
-export function welcomeRows(width: number, info: WelcomeInfo): string[] {
+export function welcomeRows(
+  width: number,
+  info: WelcomeInfo,
+  cells: LogoCells = 'sextants',
+): string[] {
   const p = palette();
   width = Math.max(20, Math.floor(width));
   const withLogo = width >= LOGO_MIN_WIDTH;
@@ -178,7 +199,7 @@ export function welcomeRows(width: number, info: WelcomeInfo): string[] {
   const rows: string[] = [];
   if (withLogo) {
     const beside = identity;
-    logoRows().forEach((logo, index) => {
+    logoRows(cells).forEach((logo, index) => {
       const text = beside[index] ?? '';
       rows.push(text ? `  ${logo}   ${text}` : `  ${logo}`);
     });

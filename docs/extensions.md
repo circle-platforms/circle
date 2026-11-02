@@ -68,6 +68,8 @@ The desktop build compiles each shipped extension to `extension.js` and emits `e
 
 The desktop starts loading integrations for its trusted startup workspace without a prompt or a manual reload. The first window remains available while configured MCP servers connect; discovery failures appear in the runtime status and an explicit reload can retry. An untrusted workspace is not initialized until you trust it. Closing the application cancels pending integration startup, including an extension still registering.
 
+The GitHub connection is the shipped example of a page like this. Its `github_*` tools read a task's checks and failed logs and publish its draft pull request through the connection given in the plugin. They carry no review threads: reading and answering a review runs the GitHub CLI in the conversation, the way the built-in [skills](skills.md#built-in-skills) do, and the terminal has no connection backend at all.
+
 ## The `api` object
 
 | Member | Purpose |
@@ -91,7 +93,7 @@ The desktop starts loading integrations for its trusted startup workspace withou
 | `unregisterTool(name)` | Remove a tool this extension added; returns `false` if it has none of that name. The model stops seeing it from its next turn. |
 | `registerCommand(name, description, handler)` | Add a slash command. |
 | `registerMiddleware(handler, slot)` | Wrap model calls or tool calls. `slot` defaults to `tool_boundary`. |
-| `registerSubagent(spec, tools)` | Add a subagent for `task`. |
+| `registerSubagent(spec, tools)` | Add a subagent for `task`. A [subagent file](agents.md) of the same name is replaced by it. |
 | `registerRenderer('tool_result:<tool>', renderer)` | Change how a tool's result is shown. |
 | `on(event, handler)` | React to `session_start`, `turn_start`, `turn_end` or `tool_result`. |
 

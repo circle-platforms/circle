@@ -78,7 +78,8 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   },
   {
     name: 'approvals',
-    description: 'Session approvals: /approvals [add P|remove P|revoke N]',
+    description:
+      'Approval rules: /approvals [allow P|deny P|project deny P|forget N|revoke N]',
   },
   {
     name: 'jobs',
@@ -121,10 +122,24 @@ export const BUILTIN_SLASH: SlashCommand[] = [
     aliases: ['plan-mode'],
   },
   {
+    name: 'bridge',
+    description: 'Editor bridge on localhost: /bridge [start|stop|token]',
+  },
+  {
+    name: 'memory',
+    description:
+      'What Circle remembers: /memory [add [account] <note>|remove N]',
+  },
+  {
     name: 'skill',
     description:
       'List or load a skill: /skill [name] [args] or /skill:name [args]',
     aliases: ['skills'],
+  },
+  {
+    name: 'agents',
+    description: 'List the subagents task can use: /agents [name]',
+    aliases: ['subagents'],
   },
   {
     name: 'tree',
@@ -137,6 +152,10 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   { name: 'clone', description: 'Clone the active branch into a new session' },
   { name: 'undo', description: 'Undo the last turn on screen' },
   { name: 'redo', description: 'Restore after /undo' },
+  {
+    name: 'rewind',
+    description: 'Put back the files one turn changed: /rewind',
+  },
   {
     name: 'thinking',
     description: 'Hide or show thinking; /thinking <level> sets the depth',

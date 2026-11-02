@@ -135,10 +135,10 @@ When you ask Circle to record what it did in the browser, or to do it again, it 
   "name": "SLB list cases",
   "description": "optional",
   "steps": [
-    { "navigate": "https://%APV_HOST%/login" },
+    { "navigate": "https://%DEVICE_HOST%/login" },
     { "proceed": "certificate" },
-    { "type": { "role": "textbox", "name": "用户名" }, "text": "%APV_USER%" },
-    { "type": { "role": "password", "name": "密码" }, "text": "%APV_PASSWORD%", "submit": true },
+    { "type": { "role": "textbox", "name": "用户名" }, "text": "%DEVICE_USER%" },
+    { "type": { "role": "password", "name": "密码" }, "text": "%DEVICE_PASSWORD%", "submit": true },
     { "click": { "role": "link", "name": "服务器负载均衡" } },
     { "click": { "role": "button", "name": "删除", "nth": 2 }, "note": "the second 删除 on the page" },
     { "select": { "role": "combobox", "name": "类型" }, "values": ["TCP"] },
@@ -216,6 +216,18 @@ Serial ports and file transfer (SFTP, Zmodem) are not in this version; see [Know
 
 In the desktop application the same tools also reach the shells you open as terminal tabs: `terminal_sessions` lists each running one as `local:<id>` with its tab's name (`local:… · terminal 1 · local zsh in /path/to/project · quiet 3s`), never a background command, a service or a closed shell. Reading and waiting ask nothing. The first thing the model types in a tab asks you in every mode, and the card says it will type that command into the tab; once you allowed it, a line it runs there (`terminal_send` with `enter` or a line break, `terminal_press` of `Enter` or `Ctrl_D`) is approved as the same `execute` command would be, under the same rules; typing without Enter and other keys ask nothing, and plan mode refuses every write. Text for a tab takes no control characters. When you take a tab over, the model's read or wait on it ends at once and its typing is refused until you hand it back; `terminal_disconnect` refuses a tab, which only you close. See [Circle in your terminal tabs](desktop.md#circle-in-your-terminal-tabs). The terminal interface has no terminal tabs.
 
+## Your editor
+
+With `/bridge start` in the terminal and `editor_bridge` on in your settings, four tools read what your editor reports about the file you are looking at:
+
+| Tool | What it does | Asks |
+|---|---|---|
+| `editor_status` | What the editor last reported: its file, its selection, how old each is, and how many diff requests wait. | no |
+| `editor_active_file` | The path of the file the editor has open. | no |
+| `editor_selection` | The text you selected, with its file and line range. A selection older than ten minutes is refused: ask you to select it again. | no |
+| `editor_open_diff` | Ask your editor to show a diff of a file against the text the model proposes. It changes nothing: the file is written only if you accept there. | once per session, `auto` aside |
+
+The model still has `read_file`, `edit_file` and `apply_patch` for the work itself; these four tell it where you are, and give you the last word on a change. See [Security](security.md#the-editor-bridge).
 ## Working with you
 
 | Tool | What it does | Asks |
@@ -230,6 +242,11 @@ Without the full-screen interface, a `question` call returns the questions as te
 ## Background jobs
 
 See [Background jobs](background-jobs.md).
+
+### Sending to a running subagent
+
+| `send_to_job` | Tell a running subagent of this conversation one thing, and it reads it before its next model request. Eight may wait, and one is at most 4000 characters. It answers no approval card: only you can answer one. | no |
+
 
 | Tool | What it does | Asks |
 |---|---|---|

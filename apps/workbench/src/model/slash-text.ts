@@ -14,6 +14,8 @@ const SLASH_TEXT: Record<string, () => string> = {
   mcp: () => t('List / reload MCP servers and tools'),
   extensions: () => t('List extensions: /extensions [reload]'),
   approvals: () => t('Session approvals: /approvals [revoke N]'),
+  bridge: () => t('Editor bridge on localhost: /bridge [start|stop|token]'),
+  memory: () => t('What Circle remembers: /memory [add <note>|remove N]'),
   jobs: () => t('Background jobs: open one, or stop it'),
   new: () => t('Start a new session'),
   resume: () => t('Choose a session to open: /resume [n|id]'),
@@ -29,7 +31,9 @@ const SLASH_TEXT: Record<string, () => string> = {
   fork: () => t('New session from before one of your messages: /fork [words]'),
   clone: () => t('Clone the active branch into a new session'),
   undo: () => t('Undo the last turn on screen'),
+  agents: () => t('List the subagents task can use: /agents [name]'),
   redo: () => t('Restore after /undo'),
+  rewind: () => t('Put back the files one turn changed: /rewind'),
   thinking: () => t('Hide or show thinking; /thinking <level> sets the depth'),
   effort: () =>
     t('Choose the thinking depth: /effort [minimal|low|medium|high|xhigh|max]'),

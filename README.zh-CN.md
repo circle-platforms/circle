@@ -116,7 +116,7 @@ CIRCLE_HOME=$(mktemp -d) npm run dev -- ~/code/my-project
 
 参与开发见 [CONTRIBUTING.md](CONTRIBUTING.md)，编程助手见 [AGENTS.md](AGENTS.md)，结构见[架构](https://circle-platforms.github.io/circle/development/architecture/)。安全问题按 [SECURITY.md](SECURITY.md) 报告。参与者请遵守[行为准则](CODE_OF_CONDUCT.md)。
 
-Circle 是三个仓库之一。[circle-hub](https://github.com/circle-platforms/circle-hub) 是 Circle 登录的团队 hub，[circle-packs](https://github.com/circle-platforms/circle-packs) 是装在 hub 上的技能包和产品线包。三者彼此的要求见[兼容矩阵](https://github.com/circle-platforms/circle-hub/blob/main/docs/compatibility.md)。
+[circle-hub](https://github.com/circle-platforms/circle-hub) 是 Circle 作为 MCP 服务器连接的团队 hub。两者彼此的要求见[兼容矩阵](https://github.com/circle-platforms/circle-hub/blob/main/docs/compatibility.md)。
 
 ## 许可
 

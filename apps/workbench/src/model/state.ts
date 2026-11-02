@@ -4,6 +4,7 @@ import {
   commandWord,
   parseSlash,
 } from '../../../../src/tui/slash_commands.ts';
+import { entryLine, today } from '../../../../src/memory_line.ts';
 import type {
   BeginResult,
   CommandResult,
@@ -111,8 +112,12 @@ export const COMMAND_UI: Record<string, string> = {
   tree: 'tree',
   fork: 'fork',
   clone: 'sessions',
+  bridge: 'transcript',
+  memory: 'transcript',
+  agents: 'transcript',
   undo: 'transcript',
   redo: 'transcript',
+  rewind: 'file-undo',
   thinking: 'transcript',
   effort: 'models',
   details: 'transcript',
@@ -297,6 +302,22 @@ export class PreviewRuntime implements RuntimePort {
       if (session) Object.assign(session, structuredClone(patch));
     });
     return true;
+  };
+  /** A command's one-line answer stays where it was asked, as in the live window. */
+  appendNotice = (sessionId: string, text: string): void => {
+    if (!text) return;
+    this.change((state) => {
+      const session = state.sessions.find((item) => item.id === sessionId);
+      if (!session) return;
+      const head = session.messages.at(-1);
+      session.messages.push({
+        id: `command-${crypto.randomUUID()}`,
+        parentId: head?.id ?? null,
+        role: 'notice',
+        text,
+        at: new Date().toISOString(),
+      });
+    });
   };
   change = (update: (draft: WorkbenchSnapshot) => void) => {
     const next = structuredClone(this.snapshot);
@@ -705,6 +726,28 @@ export class PreviewRuntime implements RuntimePort {
       });
       return { notice: 'session renamed' };
     }
+    if (name === 'bridge')
+      return {
+        notice:
+          'the editor bridge is the terminal’s · run /bridge start in circle',
+      };
+    if (name === 'memory') {
+      const note = args
+        .trim()
+        .replace(/^add\s+(account\s+)?/, '')
+        .trim();
+      return {
+        notice: note
+          ? `add this line to MEMORY.md, and the next session reads it: ${entryLine(today(), note)}`
+          : 'memory lives in MEMORY.md · the next session reads what that file holds',
+      };
+    }
+    if (name === 'agents')
+      return {
+        panel: 'agents',
+        notice:
+          'subagents of this conversation · file definitions: /agents in the terminal',
+      };
     if (name === 'undo') {
       this.change((state) => {
         const target = currentSession(state);
@@ -721,6 +764,11 @@ export class PreviewRuntime implements RuntimePort {
       });
       return { notice: 'last turn hidden; history and files are unchanged' };
     }
+    // The application has no rewind list: it undoes files from that message.
+    if (name === 'rewind')
+      return {
+        notice: 'undo files from the message that changed them',
+      };
     if (name === 'redo') {
       if (!session.undoStack.length) return { notice: 'nothing to redo' };
       this.change((state) => {
