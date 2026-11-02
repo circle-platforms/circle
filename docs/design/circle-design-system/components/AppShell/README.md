@@ -14,7 +14,7 @@ circle-hub 控制台每个页面共用的三栏框架：左侧导航、中间列
 | 列表 | `ch-pane` | 自适应 | `surface-1` | 页头、工具栏、列表或表格 |
 | 详情 | `ch-inspector` | `inspector-width` 380px | `surface-2` | 选中对象的全部信息与操作 |
 
-外层是 `ch-app`。页面根元素加区域类：知识库 `area-knowledge`、工作流 `area-workflow`、任务 `area-task`；其他区域不加，强调色回落到中性灰。
+外层是 `ch-app`。页面根元素加区域类：知识库 `area-knowledge`、工作流 `area-workflow`、任务 `area-task`；其他区域不加，强调色（`--area`）回落到中性灰 `text-secondary`，单系列图表用 `chart-1`。
 
 ## 规则
 

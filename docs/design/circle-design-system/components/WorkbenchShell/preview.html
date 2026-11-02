@@ -33,6 +33,7 @@
     <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
     <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
   </defs>
 </svg>
@@ -96,13 +97,11 @@
       </div>
       <div class="ch-request"><span class="ch-dot ch-dot--warn"></span>3 个请求等待处理<a href="#">查看</a></div>
       <div class="ch-composer is-working">
-        <textarea rows="1" placeholder="描述一个改动，或提出问题…" aria-label="输入消息"></textarea>
+        <textarea rows="1" placeholder="补充说明会在这一轮结束后发送" aria-label="输入消息"></textarea>
         <div class="ch-composer-foot">
-          <button class="ch-chip" aria-pressed="true">知识库</button>
-          <button class="ch-btn ch-btn--ghost ch-btn--sm">sample-code-model<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-down"/></svg></button>
-          <button class="ch-btn ch-btn--ghost ch-btn--sm">高<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-down"/></svg></button>
+          <span class="ch-meta">等待 Circle 完成中 · 0:14</span>
           <span class="ch-mode">提问</span>
-          <button class="ch-send" aria-label="发送" title="发送" disabled><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-up"/></svg></button>
+          <button class="ch-send" aria-label="停止" title="停止"><svg width="14" height="14" fill="currentColor" aria-hidden="true"><use href="#i-stop"/></svg></button>
         </div>
       </div>
       <div class="ch-statusline"><span>↑ 4,280</span><span>↓ 684</span><span>上下文 4%</span></div>
