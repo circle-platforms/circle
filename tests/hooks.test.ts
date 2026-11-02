@@ -1366,18 +1366,31 @@ test('a hook entry resolves its command per platform, falling back to command', 
 
 test('a hooks file loads the current platform command and drops bad overrides', (t) => {
   const { home, workspace, userHome } = layout(t);
-  assert.equal(process.platform, 'linux');
+  const perPlatform = {
+    win32: 'powershell -NoProfile -File scripts/check.ps1',
+    darwin: 'sh scripts/check-mac.sh',
+    linux: 'sh scripts/check-linux.sh',
+  } as const;
+  const resolved =
+    (perPlatform as Record<string, string>)[process.platform] ??
+    'sh scripts/check.sh';
+  const windowsOnly =
+    process.platform === 'win32'
+      ? 'powershell -NoProfile -File scripts/check.ps1'
+      : 'sh scripts/check.sh';
   writeJson(join(home, 'hooks.json'), {
     version: 1,
     hooks: {
       before_tool: [
         {
           command: 'sh scripts/check.sh',
-          command_linux: 'node scripts/check-linux.mjs',
+          command_windows: perPlatform.win32,
+          command_darwin: perPlatform.darwin,
+          command_linux: perPlatform.linux,
         },
         {
           command: 'sh scripts/check.sh',
-          command_windows: 'powershell -NoProfile -File scripts/check.ps1',
+          command_windows: perPlatform.win32,
         },
         { name: 'kept', command: 'true' },
         { command: 'sh scripts/check.sh', command_linux: '' },
@@ -1390,11 +1403,11 @@ test('a hooks file loads the current platform command and drops bad overrides', 
   assert.deepEqual(
     loaded.hooks.map((hook) => `${hook.name} · ${hook.command}`),
     [
-      'node scripts/check-linux.mjs · node scripts/check-linux.mjs',
-      'sh scripts/check.sh · sh scripts/check.sh',
+      `${resolved} · ${resolved}`,
+      `${windowsOnly} · ${windowsOnly}`,
       'kept · true',
     ],
-    'the linux entry runs its override and takes its name from it, the windows entry falls back on linux, and the bad overrides drop without taking the valid entries with them',
+    'the entry with every platform field runs this platform command and takes its name from it, the windows-only entry falls back elsewhere, and the bad overrides drop without taking the valid entries with them',
   );
   assert.ok(
     loaded.errors.some((error) => error.message.includes('command_linux')),
