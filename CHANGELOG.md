@@ -12,6 +12,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Fixed
 
+- **The browser address stays editable in a compact drawer.** Its own row keeps security and takeover controls from squeezing the field away with wider system fonts or larger text.
+
 - **Desktop overlays keep their position and keyboard focus through animations.** Dialogs and notices stay centred, search can reopen while its previous dialog closes, and a terminal menu cannot steal input from a newly opened shell.
 - **Closing a desktop panel menu keeps the panel open.** Escape dismisses the menu without also closing its drawer or leaving full view.
 - **Long model identifiers stay usable in the desktop.** The model menu fits the window and reveals the complete identifier on hover.

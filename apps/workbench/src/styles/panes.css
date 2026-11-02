@@ -88,6 +88,7 @@
 
 /* The browser */
 .inspector .native-browser {
+  container: circle-browser / inline-size;
   height: 100%;
   min-height: 0;
   background: var(--bg);
@@ -191,6 +192,24 @@
   border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--bg);
+}
+/* Reserve an address row in a compact pane. System-font metrics, the security
+   label and take over must not compete the editable field down to zero width.
+   This depends on pane width, and stays two rows while control changes hands. */
+@container circle-browser (max-width: 480px) {
+  .inspector .native-browser .browser-address {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  /* Keep this row as tall as the 28px takeover button, including while idle. */
+  .inspector .native-browser .browser-address > .icon-button {
+    margin-block: 1px;
+  }
+  .inspector .browser-url {
+    order: 1;
+    flex-basis: 100%;
+    margin-left: 0;
+  }
 }
 .inspector .browser-url:focus-within {
   border-color: color-mix(
