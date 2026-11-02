@@ -1,7 +1,6 @@
 import { KnowledgeSyncStatus } from '../features/KnowledgePage';
 import '../features/navigation-settings.css';
 import { CircleMark } from './CircleMark';
-import { extensionStatusText } from '../model/extension-status';
 import { openHome } from '../features/home-selection';
 import {
   Component,
@@ -888,7 +887,7 @@ export function Sidebar({
                 title={item.name}
               >
                 <i />
-                {extensionStatusText(item)}
+                {item.status.text}
               </span>
             ) : null,
           )}

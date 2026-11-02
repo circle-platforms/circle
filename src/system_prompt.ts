@@ -160,6 +160,8 @@ export interface PromptCatalog {
   /** What connected MCP servers say of using them, in their own words. */
   mcpInstructions?: { server: string; text: string }[];
   sessionPreferences?: string;
+  /** The desktop can connect GitHub: the model learns where the user sets it up. */
+  githubSetup?: boolean;
 }
 /**
  * One MCP server's instructions, set apart as the server's own words, which rank below the
@@ -175,6 +177,12 @@ export function mcpInstructionsSection(server: string, text: string): string {
     `${body}\n</mcp_server_instructions>`
   );
 }
+/** Where the desktop user turns GitHub on; the app shows no standing GitHub status. */
+export const GITHUB_SETUP =
+  '<github>\n' +
+  'Pull requests and CI checks on GitHub go through the GitHub connection, which only the user can set up: Settings → Capabilities → Extensions → GitHub (设置 → 能力 → 扩展 → GitHub), turn it on, connect an account and allow the repository. ' +
+  'When a task needs GitHub and the github_ tool it needs is missing, or github_connection says the connection is not ready, tell the user in one short line, in their language, where to set it up, then carry on with what local git can do. Do not start the authorization yourself.\n' +
+  '</github>';
 function skillLine(skill: { name: string; description: string }): string {
   const description = skill.description.replace(/\s+/g, ' ').trim();
   const brief =
@@ -248,6 +256,7 @@ export function buildSystemPrompt(
         gitUser(workspace),
       ),
     );
+  if (catalog.githubSetup) sections.push(GITHUB_SETUP);
   for (const { server, text } of catalog.mcpInstructions ?? [])
     sections.push(mcpInstructionsSection(server, text));
   sections.push(...append);

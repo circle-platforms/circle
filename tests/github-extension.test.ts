@@ -277,3 +277,64 @@ test('a bundled extension compiled to extension.js, as the desktop ships it, tur
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('the GitHub extension shows no status line and its connection tool tells the model where the user connects', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-github-setup-'));
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  let current: GitHubConnectionState = {
+    ...state,
+    state: 'disconnected',
+    account: undefined,
+    repositories: [],
+  };
+  let listener: ((value: GitHubConnectionState) => void) | undefined;
+  const backend = {
+    call: async () => current,
+    subscribe: (next: (value: GitHubConnectionState) => void) => {
+      listener = next;
+      return () => {
+        listener = undefined;
+      };
+    },
+  } as unknown as GitHubConnectionBackend;
+  const host = new ExtensionHost({
+    home: path.join(root, 'home'),
+    workspace,
+    trusted: true,
+    bundledRoot: fileURLToPath(new URL('../src/extensions', import.meta.url)),
+    settings: { github: { enabled: true } },
+    githubConnection: backend,
+  });
+  const context = { signal: new AbortController().signal, sessionId: 'x' };
+  const read = async () =>
+    JSON.parse(
+      String(
+        await host
+          .tools()
+          .find((tool) => tool.name === 'github_connection')!
+          .run({}, context),
+      ),
+    ) as { state: string; setup?: string };
+  try {
+    await host.load();
+    assert.deepEqual(host.statuses(), []);
+    const disconnected = await read();
+    assert.equal(disconnected.state, 'disconnected');
+    assert.match(
+      disconnected.setup!,
+      /Settings → Capabilities → Extensions → GitHub/,
+    );
+    current = state;
+    listener!(current);
+    assert.deepEqual(host.statuses(), []);
+    assert.equal((await read()).setup, undefined);
+    assert(host.tools().some((tool) => tool.name === 'github_publish'));
+    current = { ...state, repositories: [] };
+    listener!(current);
+    assert.match((await read()).setup!, /allow this repository/);
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

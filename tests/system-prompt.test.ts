@@ -304,3 +304,44 @@ test('project context stays in the current folder', (t) => {
     ['local'],
   );
 });
+
+test('a runtime that can connect GitHub tells the model where the user sets it up; the terminal does not', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(home);
+  const settings = defaultSettings();
+  const githubConnection = {
+    call: async () => {
+      throw Error('not used');
+    },
+    subscribe: () => () => {},
+  } as unknown as NonNullable<
+    ConstructorParameters<typeof AgentRuntime>[0]['githubConnection']
+  >;
+  const desktopModel = new ScriptedModel([reply('one')]);
+  const desktop = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: desktopModel,
+    githubConnection,
+  });
+  cleanup(t, () => desktop.close());
+  await desktop.harness.run('open a pull request');
+  const system = desktopModel.requests[0]!.system;
+  assert.equal(count(system, '<github>'), 1);
+  assert.match(system, /Settings → Capabilities → Extensions → GitHub/);
+  assert.match(system, /设置 → 能力 → 扩展 → GitHub/);
+  const terminalModel = new ScriptedModel([reply('one')]);
+  const terminal = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: terminalModel,
+  });
+  cleanup(t, () => terminal.close());
+  await terminal.harness.run('open a pull request');
+  assert.equal(count(terminalModel.requests[0]!.system, '<github>'), 0);
+});
