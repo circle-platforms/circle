@@ -732,7 +732,7 @@ export class AgentRuntime {
         this.redact(raw, {}, () =>
           written(this.store.messages(context.sessionId)),
         ),
-      hubSkills: {
+      localSkills: {
         settings: this.options.settings,
         secrets: () => loadSecrets(this.options.home),
         variables: () => this.options.settings.variables ?? {},

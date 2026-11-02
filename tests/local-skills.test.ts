@@ -6,15 +6,15 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  hubBaseUrl,
-  HubSkillsError,
+  LocalSkillsError,
   installPack,
   listInstalled,
   parsePackRef,
-  resolveHub,
+  resolveServer,
   runTool,
+  serverBaseUrl,
   verifyInstalled,
-} from '../src/hub_skills.js';
+} from '../src/local_skills.js';
 import type { CircleSettings } from '../src/settings.js';
 
 const TOKEN = 'synthetic-token-value';
@@ -23,7 +23,7 @@ const sha = (bytes: Uint8Array | string): string =>
 
 const ECHO_TOOL = `const chunks: Buffer[] = []
 for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-console.log(JSON.stringify({ args: process.argv.slice(2), stdin: Buffer.concat(chunks).toString(), hub: process.env.HUB_URL, token: process.env.HUB_TOKEN }))
+console.log(JSON.stringify({ args: process.argv.slice(2), stdin: Buffer.concat(chunks).toString(), url: process.env.API_URL, token: process.env.API_TOKEN }))
 `;
 
 function settingsWith(server: Record<string, unknown>): CircleSettings {
@@ -48,12 +48,12 @@ function manifestFor(id: string, version: string, files: Record<string, string>)
   return { manifest, digest: sha(manifest) };
 }
 
-interface StubHub {
+interface StubServer {
   url: string;
   close(): Promise<void>;
 }
 
-async function stubHub(packs: Map<string, { manifest: Buffer; files: Record<string, string> }>): Promise<StubHub> {
+async function stubServer(packs: Map<string, { manifest: Buffer; files: Record<string, string> }>): Promise<StubServer> {
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     const url = request.url ?? '';
     const reply = (status: number, bytes: Uint8Array | string): void => {
@@ -89,26 +89,27 @@ function pack(id = 'demo-tools', version = '1.0.0', files: Record<string, string
 }
 
 async function tempRoot(): Promise<string> {
-  return await mkdtemp(join(tmpdir(), 'circle-hub-skills-'));
+  return await mkdtemp(join(tmpdir(), 'circle-local-skills-'));
 }
 
-test('resolveHub prefers the circle-hub entry and its saved secret, then HUB_URL/HUB_TOKEN', () => {
+test('resolveServer reads the named MCP server entry, its saved secret or a literal bearer', () => {
   const settings = settingsWith({
-    name: 'circle-hub',
+    name: 'example',
     url: 'http://127.0.0.1:9000/mcp',
-    headers: { Authorization: 'Bearer ${secret:HUB_TOKEN}' },
+    headers: { Authorization: 'Bearer ${secret:EXAMPLE_TOKEN}' },
   });
-  assert.deepEqual(resolveHub(settings, { HUB_TOKEN: 'saved' }), { url: 'http://127.0.0.1:9000/mcp', token: 'saved' });
-  const fallback = settingsWith({ name: 'other', url: 'http://127.0.0.1:9001/mcp' });
-  fallback.variables.HUB_URL = 'http://127.0.0.1:9002/mcp';
-  assert.deepEqual(resolveHub(fallback, { HUB_TOKEN: 'saved' }), { url: 'http://127.0.0.1:9002/mcp', token: 'saved' });
-  const missing = resolveHub(settingsWith({ name: 'circle-hub', url: 'http://127.0.0.1:9000/mcp' }), {});
+  assert.deepEqual(resolveServer(settings, { EXAMPLE_TOKEN: 'saved' }, 'example'), { url: 'http://127.0.0.1:9000/mcp', token: 'saved' });
+  const literal = settingsWith({ name: 'example', url: 'http://127.0.0.1:9001/mcp', headers: { authorization: 'Bearer literal-token' } });
+  assert.deepEqual(resolveServer(literal, {}, 'example'), { url: 'http://127.0.0.1:9001/mcp', token: 'literal-token' });
+  const unknown = resolveServer(settings, { EXAMPLE_TOKEN: 'saved' }, 'other');
+  assert.ok('problem' in unknown && unknown.problem.includes('other'));
+  const missing = resolveServer(settingsWith({ name: 'example', url: 'http://127.0.0.1:9000/mcp' }), {}, 'example');
   assert.ok('problem' in missing && missing.problem.includes('令牌'));
 });
 
-test('hubBaseUrl and parsePackRef keep the shared contract', () => {
-  assert.equal(hubBaseUrl('http://127.0.0.1:8080/mcp'), 'http://127.0.0.1:8080');
-  assert.equal(hubBaseUrl('http://127.0.0.1:8080/mcp/'), 'http://127.0.0.1:8080');
+test('serverBaseUrl and parsePackRef keep the shared contract', () => {
+  assert.equal(serverBaseUrl('http://127.0.0.1:8080/mcp'), 'http://127.0.0.1:8080');
+  assert.equal(serverBaseUrl('http://127.0.0.1:8080/mcp/'), 'http://127.0.0.1:8080');
   assert.deepEqual(parsePackRef('case-compile@3.9.14'), { id: 'case-compile', version: '3.9.14' });
   assert.equal(parsePackRef('case-compile'), null);
   assert.equal(parsePackRef('Case@1.0.0'), null);
@@ -117,9 +118,9 @@ test('hubBaseUrl and parsePackRef keep the shared contract', () => {
 test('installs, verifies and lists a pack under the skills root', async () => {
   const root = await tempRoot();
   const value = pack();
-  const hub = await stubHub(new Map([[value.ref, { manifest: value.manifest, files: value.files }]]));
+  const server = await stubServer(new Map([[value.ref, { manifest: value.manifest, files: value.files }]]));
   try {
-    const result = await installPack({ url: hub.url, token: TOKEN, ref: value.ref, digest: value.digest, root });
+    const result = await installPack({ url: server.url, token: TOKEN, ref: value.ref, digest: value.digest, root });
     assert.equal(result.installed, true);
     assert.equal(result.directory, join(root, 'demo-tools'));
     assert.equal(await readFile(join(result.directory, 'pack.json'), 'utf8'), value.manifest.toString('utf8'));
@@ -131,9 +132,9 @@ test('installs, verifies and lists a pack under the skills root', async () => {
       files: 2,
     });
     assert.deepEqual(await listInstalled(root), [{ pack: 'demo-tools', version: '1.0.0', digest: value.digest, directory: join(root, 'demo-tools') }]);
-    assert.equal((await installPack({ url: hub.url, token: TOKEN, ref: value.ref, digest: value.digest, root })).installed, false);
+    assert.equal((await installPack({ url: server.url, token: TOKEN, ref: value.ref, digest: value.digest, root })).installed, false);
   } finally {
-    await hub.close();
+    await server.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -141,16 +142,16 @@ test('installs, verifies and lists a pack under the skills root', async () => {
 test('refuses a wrong digest, a tampered file and a traversal path, leaving nothing installed', async () => {
   const root = await tempRoot();
   const value = pack();
-  const hub = await stubHub(new Map([[value.ref, { manifest: value.manifest, files: value.files }]]));
+  const server = await stubServer(new Map([[value.ref, { manifest: value.manifest, files: value.files }]]));
   try {
     await assert.rejects(
-      installPack({ url: hub.url, token: TOKEN, ref: value.ref, digest: 'f'.repeat(64), root }),
-      (error: unknown) => error instanceof HubSkillsError && error.message.includes('不符'),
+      installPack({ url: server.url, token: TOKEN, ref: value.ref, digest: 'f'.repeat(64), root }),
+      (error: unknown) => error instanceof LocalSkillsError && error.message.includes('不符'),
     );
-    const tampered = await stubHub(new Map([[value.ref, { manifest: value.manifest, files: { ...value.files, 'tools/echo.ts': 'x' } }]]));
+    const tampered = await stubServer(new Map([[value.ref, { manifest: value.manifest, files: { ...value.files, 'tools/echo.ts': 'x' } }]]));
     await assert.rejects(
       installPack({ url: tampered.url, token: TOKEN, ref: value.ref, root }),
-      (error: unknown) => error instanceof HubSkillsError && error.message.includes('不符'),
+      (error: unknown) => error instanceof LocalSkillsError && error.message.includes('不符'),
     );
     await tampered.close();
     const evil = Buffer.from(
@@ -164,16 +165,16 @@ test('refuses a wrong digest, a tampered file and a traversal path, leaving noth
         files: [{ path: '../outside.ts', sha256: sha('x'), size: 1 }],
       }),
     );
-    const evilHub = await stubHub(new Map([['evil@1.0.0', { manifest: evil, files: {} }]]));
+    const evilServer = await stubServer(new Map([['evil@1.0.0', { manifest: evil, files: {} }]]));
     await assert.rejects(
-      installPack({ url: evilHub.url, token: TOKEN, ref: 'evil@1.0.0', root }),
-      (error: unknown) => error instanceof HubSkillsError && error.message.includes('不安全'),
+      installPack({ url: evilServer.url, token: TOKEN, ref: 'evil@1.0.0', root }),
+      (error: unknown) => error instanceof LocalSkillsError && error.message.includes('不安全'),
     );
-    await evilHub.close();
+    await evilServer.close();
     assert.equal(await stat(join(root, 'demo-tools')).catch(() => null), null);
     assert.equal(await stat(join(root, 'evil')).catch(() => null), null);
   } finally {
-    await hub.close();
+    await server.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -182,52 +183,52 @@ test('a different installed version needs replace, and replace backs the old tre
   const root = await tempRoot();
   const first = pack('demo-tools', '1.0.0');
   const second = pack('demo-tools', '2.0.0', { 'SKILL.md': '# 合成 v2\n', 'tools/echo.ts': ECHO_TOOL });
-  const hub = await stubHub(
+  const server = await stubServer(
     new Map([
       [first.ref, { manifest: first.manifest, files: first.files }],
       [second.ref, { manifest: second.manifest, files: second.files }],
     ]),
   );
   try {
-    await installPack({ url: hub.url, token: TOKEN, ref: first.ref, root });
+    await installPack({ url: server.url, token: TOKEN, ref: first.ref, root });
     await assert.rejects(
-      installPack({ url: hub.url, token: TOKEN, ref: second.ref, root }),
-      (error: unknown) => error instanceof HubSkillsError && error.message.includes('已经装有'),
+      installPack({ url: server.url, token: TOKEN, ref: second.ref, root }),
+      (error: unknown) => error instanceof LocalSkillsError && error.message.includes('已经装有'),
     );
-    assert.equal((await installPack({ url: hub.url, token: TOKEN, ref: second.ref, root, replace: true })).installed, true);
+    assert.equal((await installPack({ url: server.url, token: TOKEN, ref: second.ref, root, replace: true })).installed, true);
     assert.equal((await verifyInstalled(join(root, 'demo-tools'), second.digest)).version, '2.0.0');
-    assert.equal((await verifyInstalled(join(root, '..', '.hub-skills-backup', 'demo-tools@1.0.0'), first.digest)).version, '1.0.0');
+    assert.equal((await verifyInstalled(join(root, '..', '.local-skills-backup', 'demo-tools@1.0.0'), first.digest)).version, '1.0.0');
   } finally {
-    await hub.close();
+    await server.close();
     await rm(root, { recursive: true, force: true });
-    await rm(join(root, '..', '.hub-skills-backup'), { recursive: true, force: true });
+    await rm(join(root, '..', '.local-skills-backup'), { recursive: true, force: true });
   }
 });
 
 test('runTool expands placeholders, runs under the pack and redacts secrets', async () => {
   const root = await tempRoot();
   const value = pack();
-  const hub = await stubHub(new Map([[value.ref, { manifest: value.manifest, files: value.files }]]));
+  const server = await stubServer(new Map([[value.ref, { manifest: value.manifest, files: value.files }]]));
   try {
-    await installPack({ url: hub.url, token: TOKEN, ref: value.ref, root });
+    await installPack({ url: server.url, token: TOKEN, ref: value.ref, root });
     const result = await runTool({
       root,
       pack: 'demo-tools',
       script: 'tools/echo.ts',
-      args: ['--hub', '%HUB_URL%', 'literal'],
-      stdin: '%HUB_TOKEN%\n',
-      variables: { HUB_URL: 'http://127.0.0.1:1' },
-      secrets: { HUB_TOKEN: TOKEN },
+      args: ['--url', '%API_URL%', 'literal'],
+      stdin: '%API_TOKEN%\n',
+      variables: { API_URL: 'http://127.0.0.1:1' },
+      secrets: { API_TOKEN: TOKEN },
     });
     assert.equal(result.exit_code, 0);
-    const printed = JSON.parse(result.stdout) as { args: string[]; stdin: string; hub: string; token: string };
-    assert.deepEqual(printed.args, ['--hub', 'http://127.0.0.1:1', 'literal']);
-    assert.equal(printed.stdin, '%HUB_TOKEN%\n');
-    assert.equal(printed.hub, 'http://127.0.0.1:1');
-    assert.equal(printed.token, '%HUB_TOKEN%');
+    const printed = JSON.parse(result.stdout) as { args: string[]; stdin: string; url: string; token?: string };
+    assert.deepEqual(printed.args, ['--url', 'http://127.0.0.1:1', 'literal']);
+    assert.equal(printed.stdin, '%API_TOKEN%\n');
+    assert.equal(printed.url, 'http://127.0.0.1:1');
+    assert.equal(printed.token, undefined, 'a saved secret never enters the script environment');
     assert.ok(!result.stdout.includes(TOKEN));
   } finally {
-    await hub.close();
+    await server.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -236,15 +237,15 @@ test('runTool refuses scripts outside tools/ and reports a timeout', async () =>
   const root = await tempRoot();
   const files = { 'SKILL.md': '# 合成\n', 'tools/echo.ts': ECHO_TOOL, 'tools/sleep.ts': 'await new Promise((r) => setTimeout(r, 30000))\n' };
   const value = pack('demo-tools', '1.0.0', files);
-  const hub = await stubHub(new Map([[value.ref, { manifest: value.manifest, files: value.files }]]));
+  const server = await stubServer(new Map([[value.ref, { manifest: value.manifest, files: value.files }]]));
   try {
-    await installPack({ url: hub.url, token: TOKEN, ref: value.ref, root });
+    await installPack({ url: server.url, token: TOKEN, ref: value.ref, root });
     await assert.rejects(runTool({ root, pack: 'demo-tools', script: 'functions/x.ts' }), /tools\//);
     const slow = await runTool({ root, pack: 'demo-tools', script: 'tools/sleep.ts', timeoutMs: 200 });
     assert.equal(slow.exit_code, null);
     assert.equal(slow.truncated, true);
   } finally {
-    await hub.close();
+    await server.close();
     await rm(root, { recursive: true, force: true });
   }
 });

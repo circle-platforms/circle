@@ -20,7 +20,7 @@ import { readTextWindow, readTextContentWindow } from './file_read.js';
 import { FileMutationTools, type FileMutations } from './file_mutations.js';
 import { authorizeFileRead } from './file_access.js';
 import { mediaType, readMedia } from './media.js';
-import { HubSkillsError, installPack, listInstalled, resolveHub, runTool, SKILLS_ROOT } from './hub_skills.js';
+import { LocalSkillsError, installPack, listInstalled, resolveServer, runTool, SKILLS_ROOT } from './local_skills.js';
 import type { CircleSettings } from './settings.js';
 import { GREP_SCHEMA, grepSearch } from './grep_tool.js';
 import { takeScreenshot, type ScreenshotOptions } from './screenshot.js';
@@ -61,8 +61,8 @@ export interface ToolHooks {
   ) => Promise<string>;
   skill?: (name: string, signal?: AbortSignal) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
-  /** The Hub local-tool installer/runner: settings and the saved secrets it may use. */
-  hubSkills?: {
+  /** The installer/runner of the local tools an MCP server publishes: settings and the saved secrets it may use. */
+  localSkills?: {
     settings: CircleSettings;
     secrets: () => Record<string, string>;
     variables: () => Record<string, string>;
@@ -135,7 +135,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   const FILE_WRITERS = new Set(['write_file', 'edit_file', 'apply_patch']);
   // These expand %NAME% themselves from the same saved values, so the harness must not
   // expand first (the token must not appear in the arguments or the approval card).
-  const INTERNAL_EXPANSION = new Set(['hub_skill_install', 'hub_skill_run']);
+  const INTERNAL_EXPANSION = new Set(['skill_install', 'skill_run']);
   // What these take becomes a model's input or the conversation's: a secret stays its name
   const MODEL_INPUT = new Set([
     'task',
@@ -434,33 +434,34 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       return `${result.output}\nExit code: ${result.exit_code}`;
     },
   );
-  if (hooks.hubSkills) {
-    const hubSkills = hooks.hubSkills;
-    const hub = (): { url: string; token: string } => {
-      const resolved = resolveHub(hubSkills.settings, hubSkills.secrets());
+  if (hooks.localSkills) {
+    const localSkills = hooks.localSkills;
+    const server = (name: string): { url: string; token: string } => {
+      const resolved = resolveServer(localSkills.settings, localSkills.secrets(), name);
       if ('problem' in resolved) throw new Error(`${resolved.problem}；${resolved.fix}`);
       return resolved;
     };
     const failure = (error: unknown): never => {
-      if (error instanceof HubSkillsError) throw new Error(`${error.message}；${error.fix}`);
+      if (error instanceof LocalSkillsError) throw new Error(`${error.message}；${error.fix}`);
       throw error;
     };
     add(
-      'hub_skill_install',
+      'skill_install',
       'execute',
       schema(
         {
-          pack: text('Pack reference id@version, copied from the list_task_packs or start_run answer'),
-          digest: text('Expected pack digest (SHA-256 of the canonical manifest); refuse when the Hub serves another'),
+          server: text('Name of the MCP server entry that publishes the pack; its url and Authorization header are used'),
+          pack: text('Pack reference id@version, copied from the answer of that server'),
+          digest: text('Expected pack digest (SHA-256 of the canonical manifest); refuse when the server serves another'),
           replace: {
             type: 'boolean',
             description: 'Replace an installed different version, after backing it up outside the skills root',
           },
         },
-        ['pack'],
+        ['server', 'pack'],
       ),
       async (args) => {
-        const { url, token } = hub();
+        const { url, token } = server(string(args, 'server'));
         try {
           return JSON.stringify(
             await installPack({
@@ -476,11 +477,11 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         }
       },
     );
-    add('hub_skill_list', 'read', schema({}), async () =>
+    add('skill_list', 'read', schema({}), async () =>
       JSON.stringify({ skills: await listInstalled(SKILLS_ROOT) }),
     );
     add(
-      'hub_skill_run',
+      'skill_run',
       'execute',
       schema(
         {
@@ -492,7 +493,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         ['pack', 'script'],
       ),
       async (args) => {
-        const { url, token } = hub();
         try {
           return JSON.stringify(
             await runTool({
@@ -500,8 +500,8 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               script: string(args, 'script'),
               ...(Array.isArray(args.args) ? { args: args.args.map(String) } : {}),
               ...(typeof args.stdin === 'string' ? { stdin: args.stdin } : {}),
-              variables: { HUB_URL: url.replace(/\/mcp\/?$/, ''), ...hubSkills.variables() },
-              secrets: { ...hubSkills.secrets(), HUB_TOKEN: token },
+              variables: localSkills.variables(),
+              secrets: localSkills.secrets(),
             }),
           );
         } catch (error) {

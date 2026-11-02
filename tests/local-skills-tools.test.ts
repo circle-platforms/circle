@@ -22,17 +22,17 @@ function settingsWith(server: Record<string, unknown>): CircleSettings {
 test('tools are registered with the shared names and the execute effect when the hooks are present', async () => {
   const { buildTools } = await import('../src/tools.js');
   const { Sandbox } = await import('../src/sandbox.js');
-  const root = await mkdtemp(join(tmpdir(), 'circle-hub-skills-'));
+  const root = await mkdtemp(join(tmpdir(), 'circle-local-skills-'));
   try {
     const sandbox = new Sandbox(root);
     const tools = buildTools(sandbox, {
-      hubSkills: { settings: settingsWith({ name: 'circle-hub', url: 'http://127.0.0.1:1/mcp' }), secrets: () => ({ HUB_TOKEN: 't' }), variables: () => ({}) },
+      localSkills: { settings: settingsWith({ name: 'example', url: 'http://127.0.0.1:1/mcp' }), secrets: () => ({ EXAMPLE_TOKEN: 't' }), variables: () => ({}) },
     });
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
-    assert.equal(byName.get('hub_skill_install')?.effect, 'execute');
-    assert.equal(byName.get('hub_skill_run')?.effect, 'execute');
-    assert.equal(byName.get('hub_skill_list')?.effect, 'read');
-    const list = byName.get('hub_skill_list');
+    assert.equal(byName.get('skill_install')?.effect, 'execute');
+    assert.equal(byName.get('skill_run')?.effect, 'execute');
+    assert.equal(byName.get('skill_list')?.effect, 'read');
+    const list = byName.get('skill_list');
     assert.ok(list !== undefined);
     assert.deepEqual(JSON.parse(String(await list.run({}, { signal: undefined } as never))), { skills: [] });
   } finally {
