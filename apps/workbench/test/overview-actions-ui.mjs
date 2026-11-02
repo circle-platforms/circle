@@ -53,7 +53,7 @@ try {
       );
     const modeButton = (name) =>
       page.getByRole('button', {
-        name: w(`${name} panel`, `${name}面板`),
+        name: w(`${name} panel`, `${name} 面板`),
         exact: true,
       });
     const overviewButton = page.locator(

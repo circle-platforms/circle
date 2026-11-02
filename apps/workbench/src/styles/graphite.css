@@ -67,6 +67,7 @@ svg.circle-logo.large {
   border-bottom: 0;
 }
 .inspector,
+.inspector.work-drawer,
 .inspector-overlay,
 .inspector-full,
 .work-cluster > .overview-column,
@@ -82,6 +83,15 @@ svg.circle-logo.large {
 }
 .drawer-handle {
   background: transparent;
+}
+.model-menu {
+  max-width: min(480px, calc(100vw - 16px));
+}
+.model-menu [role='menuitem'] > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .transcript-column {
   max-width: 816px;

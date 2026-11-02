@@ -12,6 +12,9 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Fixed
 
+- **Closing a desktop panel menu keeps the panel open.** Escape dismisses the menu without also closing its drawer or leaving full view.
+- **Long model identifiers stay usable in the desktop.** The model menu fits the window and reveals the complete identifier on hover.
+- **Moving between desktop composer menus preserves focus.** A menu finishing its exit animation cannot dismiss a menu or dialog opened after it.
 - **Desktop command answers stay where they were asked.** A command that answers with one line (`unknown command /name`, `/undo`, `/share`) said it only in a toast that passes in four seconds, and an answer that arrived after the window had moved to another conversation was dropped whole. The line now also stays in the conversation that asked for it, in its place in the transcript, and the toast is still said while that conversation is on screen. (#302)
 
 ## 1.14.0 - 2026-10-30

@@ -644,9 +644,11 @@ try {
       // The split panel beside the conversation, and the panel in full view
       for (const mode of ['split', 'full']) {
         await page.setViewportSize({
-          width: mode === 'split' ? 1500 : 1060,
+          width: mode === 'split' ? 1500 : 1280,
           height: 820,
         });
+        // Full view is a wide-window action; below 1180 the drawer is already an overlay.
+        await settledLayout(page);
         await page.evaluate(
           async ({ language, theme }) => {
             (await import('/src/i18n/index.ts')).setLanguage(language);

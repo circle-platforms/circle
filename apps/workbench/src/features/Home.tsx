@@ -32,7 +32,7 @@ import {
 import { t, useLocale } from '../i18n';
 import { Button, FileChip, IconButton } from '../components/common';
 import type { WhatsNewNotice } from '../../../../src/whats_new';
-import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
+import { closeMenu, EffortMenu, ModeMenu, ModelMenu } from './Composer';
 import {
   CommandFailureCard,
   RuntimeWaitRow,
@@ -470,12 +470,7 @@ export function Home({
                     collisionPadding={8}
                     align="start"
                     sideOffset={7}
-                    onCloseAutoFocus={(event) => {
-                      // The trigger would take the click that dismissed the menu,
-                      // and the search box would keep what was typed next.
-                      event.preventDefault();
-                      focusComposer();
-                    }}
+                    onCloseAutoFocus={closeMenu(focusComposer)}
                   >
                     <div
                       className="project-picker-search"

@@ -216,11 +216,20 @@ async function checkProgressLayout() {
     Math.abs(inputBox.y - (progressBox.y + progressBox.height) - 8) < 1,
     'progress sits directly above the input',
   );
+  const footerClock = page
+    .locator('.composer-footbar')
+    .getByTestId('turn-clock');
   assert.equal(
     await page.getByTestId('turn-clock').count(),
-    0,
-    'one compaction status, no duplicate turn clock',
+    await footerClock.count(),
+    'one compaction status, no ordinary turn clock outside the composer',
   );
+  assert.ok((await footerClock.count()) <= 1);
+  if (await footerClock.count())
+    assert.doesNotMatch(
+      await footerClock.innerText(),
+      /compacting|merging|recovering|正在压缩|正在合并|正在恢复|↑|↓|tokens/,
+    );
   assert.doesNotMatch(
     await status.innerText(),
     /↑|↓|usage|用量|auto-compacting|自动压缩/,

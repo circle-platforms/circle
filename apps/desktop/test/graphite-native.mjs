@@ -62,14 +62,25 @@ try {
   const baseline = await page.evaluate(() =>
     JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),
   );
-  async function seed(theme, state) {
+  async function seed(theme, state, longLabels = false) {
     await page.evaluate(
-      ({ baseline, theme, state }) => {
+      ({ baseline, theme, state, longLabels }) => {
         const saved = structuredClone(baseline);
         const session = saved.sessions.find(
           (s) => s.id === saved.activeSessionId,
         );
         session.draft = 'synthetic graphite draft';
+        if (longLabels) {
+          const name = 'synthetic-long-project-name-'.repeat(12);
+          const workspace = saved.workspaces.find(
+            (w) => w.id === session.workspaceId,
+          );
+          workspace.name = name;
+          workspace.path = '/synthetic/' + 'nested-folder/'.repeat(24) + name;
+          const model = 'synthetic-long-model-id-'.repeat(18);
+          saved.models[0].id = model;
+          session.model = model;
+        }
         session.mode =
           state === 'plan' || state === 'attention' ? 'plan' : 'manual';
         session.readOnly = session.mode === 'plan';
@@ -139,12 +150,18 @@ try {
         );
         location.hash = '/session/' + session.id;
       },
-      { baseline, theme, state },
+      { baseline, theme, state, longLabels },
     );
     await page.reload();
     await page.locator(`.composer[data-composer-state="${state}"]`).waitFor();
     await page.waitForFunction(
-      (theme) => document.documentElement.dataset.theme === theme,
+      (theme) =>
+        document.documentElement.dataset.theme ===
+        (theme === 'auto'
+          ? matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light'
+          : theme),
       theme,
     );
     await waitAnimationFrames(page, {
@@ -290,7 +307,18 @@ try {
     { label: 'default drawer pixel width', timeoutMs: 15000, stableMs: 100 },
   );
   layout.push({ drawerWidth: drawer.sample.width });
+  const drawerSurface = await page.locator('.work-drawer').evaluate((node) => {
+    const probe = document.createElement('span');
+    probe.style.backgroundColor = 'var(--drawer)';
+    document.body.append(probe);
+    const expected = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { actual: getComputedStyle(node).backgroundColor, expected };
+  });
+  assert.equal(drawerSurface.actual, drawerSurface.expected);
+  layout.push({ drawerSurface });
   assert.equal(await page.locator('.overview-column').count(), 0);
+  await capture('dark-1440-drawer.png');
   checks.push(
     'the mode opens at 380px and never coexists with overview as a fourth pane',
   );
@@ -365,6 +393,129 @@ try {
   checks.push(
     'long drafts scroll within twelve lines and keep the primary action in the native viewport',
   );
+  async function capture(name) {
+    const bytes = await page.screenshot({ path: join(output, name) });
+    shots.push({
+      path: name,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    });
+  }
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await seed('auto', 'default');
+  const automaticTheme = [];
+  for (const theme of ['dark', 'light']) {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.waitForFunction(
+      (theme) => document.documentElement.dataset.theme === theme,
+      theme,
+    );
+    const background = await page
+      .locator('.composer')
+      .evaluate((node) => getComputedStyle(node).backgroundColor);
+    assert.equal(
+      background,
+      observations.find((s) => s.theme === theme && s.state === 'default')
+        .background,
+    );
+    automaticTheme.push({ theme, background });
+  }
+  layout.push({ automaticTheme });
+  checks.push(
+    'auto follows both native renderer media changes without retaining the previous palette',
+  );
+  await page.emulateMedia({ colorScheme: null });
+  await setViewport(app, page, { width: 1024, height: 800 });
+  await seed('light', 'default', true);
+  await page.locator('.footbar-model').click();
+  await page.locator('.composer-menu').waitFor();
+  const modelLabel = page
+    .locator('.model-menu [role="menuitem"] > span')
+    .first();
+  assert.equal(
+    await modelLabel.getAttribute('title'),
+    await modelLabel.textContent(),
+  );
+  for (const selector of ['.composer-send', '.composer-menu']) {
+    const box = await page.locator(selector).boundingBox();
+    const viewport = await readViewport(page);
+    assert.ok(
+      box &&
+        box.x >= -1 &&
+        box.x + box.width <= viewport.width + 1 &&
+        box.y + box.height <= viewport.height + 1,
+      JSON.stringify({ selector, box, viewport }),
+    );
+  }
+  await capture('light-1024-long-labels.png');
+  await page.locator('.model-menu [role="menuitem"]').nth(1).click();
+  await page.waitForFunction(
+    (model) => document.querySelector('.footbar-model')?.textContent === model,
+    baseline.models[1].id,
+  );
+  checks.push(
+    'long synthetic project paths and model identifiers keep the model menu and primary action within a narrow viewport',
+  );
+  await seed('light', 'default');
+  await setViewport(app, page, { width: 1440, height: 980 });
+  await page.locator('.tool-summary').first().click();
+  await page.locator('.tool-head').first().click();
+  await page.locator('.tool-content').first().waitFor();
+  assert.match(
+    await page.locator('.tool-meta').first().innerText(),
+    chinese ? /示例记录$/ : /sample record$/,
+  );
+  const toolBox = await page.locator('.tool-call').first().boundingBox();
+  assert.ok(toolBox && toolBox.width <= 760.5);
+  await capture('light-1440-tool-details.png');
+  checks.push(
+    'tool summaries expand into their original details within the conversation width',
+  );
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await seed('light', 'default');
+  await page
+    .getByRole('button', {
+      name: chinese ? '新会话' : 'new session',
+      exact: true,
+    })
+    .click();
+  await page.locator('.home-composer').waitFor();
+  await page
+    .getByRole('button', {
+      name: chinese ? '思考深度' : 'thinking depth',
+      exact: true,
+    })
+    .click();
+  const effortMenu = page.locator('.effort-menu');
+  await effortMenu
+    .getByRole('menuitem', {
+      name: chinese ? '很高' : 'very high',
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole('button', {
+      name: chinese ? '选择项目' : 'choose a project',
+      exact: true,
+    })
+    .click();
+  const projectMenu = page.locator('.project-menu');
+  await page.waitForFunction(
+    (label) => document.activeElement?.getAttribute('aria-label') === label,
+    chinese ? '搜索项目' : 'search projects',
+  );
+  await projectMenu.getByRole('menuitem').first().focus();
+  await page.keyboard.press('End');
+  await effortMenu.waitFor({ state: 'detached' });
+  await page.waitForFunction(() => {
+    const items = document.querySelectorAll('.project-menu [role="menuitem"]');
+    return (
+      items.length > 0 && document.activeElement === items[items.length - 1]
+    );
+  });
+  await page.keyboard.press('Escape');
+  checks.push(
+    'an old menu finishing its exit cannot steal keyboard focus from a newly opened project menu',
+  );
   await seed('dark', 'working');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   assert.equal(
@@ -411,6 +562,11 @@ try {
     'reduced motion keeps the opening pointer release from selecting a session menu action, while a fresh click still works',
   );
   const info = await page.evaluate(() => window.circleDesktop.info());
+  const versions = await app.evaluate(() => ({
+    node: process.versions.node,
+    electron: process.versions.electron,
+    chromium: process.versions.chrome,
+  }));
   assert.equal(info.packaged, packaged);
   assert.deepEqual(errors, []);
   const designFiles = await Promise.all(
@@ -437,8 +593,24 @@ try {
         testedAt: new Date().toISOString(),
         platform: process.platform,
         arch: process.arch,
+        runnerNode: process.versions.node,
+        versions,
         language: env.CIRCLE_WORKBENCH_LANGUAGE,
         packaged,
+        packagedAsarSha256: packaged
+          ? createHash('sha256')
+              .update(
+                await readFile(
+                  join(
+                    process.env.CIRCLE_DESKTOP_APP_PATH,
+                    process.platform === 'darwin'
+                      ? 'Contents/Resources/app.asar'
+                      : 'resources/app.asar',
+                  ),
+                ),
+              )
+              .digest('hex')
+          : null,
         viewport: await readViewport(page),
         checks,
         errors,

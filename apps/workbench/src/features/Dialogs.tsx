@@ -65,7 +65,7 @@ const NAMES: Record<DialogId, () => string> = {
   editor: () => t('draft editor'),
   connect: () => t('connection'),
   trust: () => t('workspace trust'),
-  preview: () => 'frontend preview',
+  preview: () => t('frontend preview'),
   hotkeys: () => t('keyboard shortcuts'),
   compact: () => t('compact context'),
   exit: () => t('close session'),

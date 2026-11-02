@@ -248,7 +248,8 @@ try {
   assert.equal(info.frontendOnly, false);
   assert.equal(info.name, 'Circle');
   assert.equal(await page.title(), 'Circle');
-  assert.equal(await page.locator('.brand').innerText(), 'circle');
+  assert.equal(await page.locator('.brand strong').innerText(), 'circle');
+  assert.equal(await page.locator('.brand small').innerText(), 'workbench');
   assert.equal(info.runtimeConnected, true);
   const initial = await state();
   assert.equal(initial.sessions.length, 1);

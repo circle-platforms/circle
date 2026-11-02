@@ -482,8 +482,7 @@ export function App() {
         .flatMap((plugin) => plugin.panels ?? [])
         .some((item) => item.id === panel && item.fullView));
   const whole = inspectorVisible && canBeWhole && fullView;
-  // The overview and the drawer, side by side as far as the window allows. A list of
-  // files or of subagents is narrow until one is opened, and a document is wide.
+  // Overview and modes share the right pane. A file or subagent document can widen its mode.
   const drawerOpened =
     (panel === 'files' && !!file) || (panel === 'agents' && !!agent);
   const modeKey = drawerKey(panel, drawerOpened);
@@ -1650,7 +1649,12 @@ export function App() {
                 whole ? 'workspace-content whole' : 'workspace-content'
               }
               onKeyDown={(event) => {
-                if (event.key === 'Escape') {
+                // Portal menus bubble through React, but own Escape outside this panel's DOM.
+                if (
+                  event.key === 'Escape' &&
+                  !event.defaultPrevented &&
+                  event.currentTarget.contains(event.target as Node)
+                ) {
                   if (whole) setFullView(false);
                   else if (inspectorVisible) closeDrawer();
                   else if (narrow && overviewOverlay) setOverviewOverlay(false);
@@ -1758,7 +1762,12 @@ export function App() {
                         className="inspector-resource-host"
                         hidden={!drawerSplit}
                         onKeyDown={(event) => {
-                          if (event.key === 'Escape') closeDrawer();
+                          if (
+                            event.key === 'Escape' &&
+                            !event.defaultPrevented &&
+                            event.currentTarget.contains(event.target as Node)
+                          )
+                            closeDrawer();
                         }}
                       />
                     </div>

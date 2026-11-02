@@ -49,11 +49,18 @@ type MenuPlacement = {
   onCloseFocus?: () => void;
 };
 
-function closeMenu(
+export function closeMenu(
   onCloseFocus?: () => void,
 ): (event: { preventDefault(): void }) => void {
   return (event) => {
     event.preventDefault();
+    // Exit animations can finish after another overlay has already taken focus.
+    if (
+      document.querySelector(
+        '[role="menu"][data-state="open"], [role="dialog"][data-state="open"]',
+      )
+    )
+      return;
     onCloseFocus?.();
   };
 }
@@ -186,13 +193,15 @@ export function ModelMenu({
           aria-label={t('model')}
           onMouseDown={(event) => event.preventDefault()}
         >
-          <span className="footbar-model">{session.model}</span>
+          <span className="footbar-model" title={session.model}>
+            {session.model}
+          </span>
           <ChevronDown size={11} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className={`dropdown composer-menu footbar-menu${side === 'bottom' ? ' home-menu' : ''}`}
+          className={`dropdown composer-menu footbar-menu model-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
           // Home menus always open downward and scroll within the room below;
           // flipping would cover the composer they belong to.
@@ -207,7 +216,7 @@ export function ModelMenu({
               key={model.id}
               onSelect={() => onModel(model.id)}
             >
-              <span>{model.id}</span>
+              <span title={model.id}>{model.id}</span>
               {model.id === session.model && <Check size={13} />}
             </DropdownMenu.Item>
           ))}

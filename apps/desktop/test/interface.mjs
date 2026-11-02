@@ -968,7 +968,7 @@ try {
   // A request waiting for the person is a card in the conversation, counted by the bar
   // above the input box
   await page
-    .getByRole('button', { name: /^\d+ requests? waiting for you$/ })
+    .getByRole('button', { name: /^\d+ requests? waiting for you view$/ })
     .waitFor();
   await page
     .getByRole('region', { name: 'execute', exact: true })
@@ -1055,6 +1055,7 @@ try {
     .getByRole('button', { name: 'cancel', exact: true })
     .click();
   await removeDialog.waitFor({ state: 'hidden' });
+  await docsRow.waitFor({ state: 'visible' });
   assert.equal(await docsRow.count(), 1);
   await docsRow.getByRole('button', { name: 'remove…', exact: true }).click();
   await removeDialog
@@ -1351,6 +1352,7 @@ try {
   );
   await page.keyboard.type('focused');
   assert.equal(await homeMessage.inputValue(), 'focused');
+  await page.locator('.project-menu').waitFor({ state: 'detached' });
   assert.equal(
     await page
       .getByRole('textbox', { name: 'search projects', exact: true })

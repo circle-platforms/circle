@@ -128,6 +128,13 @@ try {
     ])
       await page.getByRole('menuitem', { name: item }).waitFor();
     await page.keyboard.press('Escape');
+    assert.equal(
+      await page
+        .getByRole('button', { name: 'terminal panel', exact: true })
+        .getAttribute('aria-pressed'),
+      'true',
+      'closing the terminal menu keeps its drawer open',
+    );
 
     // + : a local terminal, a saved device, a new device.
     await page.getByRole('button', { name: 'new terminal or device' }).click();
@@ -158,6 +165,7 @@ try {
     assert.deepEqual((await calls(page, 'terminalConnectTarget')).at(-1), [
       { transport: 'ssh', host: '10.0.0.7', user: 'admin' },
     ]);
+    await form.waitFor({ state: 'detached' });
     assert.equal(await form.count(), 0, 'the form closes once connected');
 
     // A device console: take it, give it back, disconnect it.
