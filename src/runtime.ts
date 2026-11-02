@@ -655,6 +655,11 @@ export class AgentRuntime {
         this.redact(raw, {}, () =>
           written(this.store.messages(context.sessionId)),
         ),
+      hubSkills: {
+        settings: this.options.settings,
+        secrets: () => loadSecrets(this.options.home),
+        variables: () => this.options.settings.variables ?? {},
+      },
       screenshot:
         this.options.screenshot === false
           ? undefined
