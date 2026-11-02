@@ -20,6 +20,15 @@ import { readTextWindow, readTextContentWindow } from './file_read.js';
 import { FileMutationTools, type FileMutations } from './file_mutations.js';
 import { authorizeFileRead } from './file_access.js';
 import { mediaType, readMedia } from './media.js';
+import {
+  LocalSkillsError,
+  installPack,
+  listInstalled,
+  resolveServer,
+  runTool,
+  SKILLS_ROOT,
+} from './local_skills.js';
+import type { CircleSettings } from './settings.js';
 import { GREP_SCHEMA, grepSearch } from './grep_tool.js';
 import { takeScreenshot, type ScreenshotOptions } from './screenshot.js';
 export interface Todo {
@@ -59,6 +68,12 @@ export interface ToolHooks {
   ) => Promise<string>;
   skill?: (name: string, signal?: AbortSignal) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
+  /** The installer/runner of the local tools an MCP server publishes: settings and the saved secrets it may use. */
+  localSkills?: {
+    settings: CircleSettings;
+    secrets: () => Record<string, string>;
+    variables: () => Record<string, string>;
+  };
   /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
   /**
@@ -125,6 +140,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     authorizeFileRead(sandbox, mutations, path, context);
   // What these write stays on disk: a %NAME% there is text, never a variable's value.
   const FILE_WRITERS = new Set(['write_file', 'edit_file', 'apply_patch']);
+  // These expand %NAME% themselves from the same saved values, so the harness must not
+  // expand first (the token must not appear in the arguments or the approval card).
+  const INTERNAL_EXPANSION = new Set(['skill_install', 'skill_run']);
   // What these take becomes a model's input or the conversation's: a secret stays its name
   const MODEL_INPUT = new Set([
     'task',
@@ -147,7 +165,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       parameters,
       description: loadToolPrompt(name),
       run,
-      ...(FILE_WRITERS.has(name)
+      ...(FILE_WRITERS.has(name) || INTERNAL_EXPANSION.has(name)
         ? { variables: false }
         : MODEL_INPUT.has(name)
           ? { variables: 'plain' as const }
@@ -423,6 +441,107 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       return `${result.output}\nExit code: ${result.exit_code}`;
     },
   );
+  if (hooks.localSkills) {
+    const localSkills = hooks.localSkills;
+    const server = (name: string): { url: string; token: string } => {
+      const resolved = resolveServer(
+        localSkills.settings,
+        localSkills.secrets(),
+        name,
+      );
+      if ('problem' in resolved)
+        throw new Error(`${resolved.problem}；${resolved.fix}`);
+      return resolved;
+    };
+    const failure = (error: unknown): never => {
+      if (error instanceof LocalSkillsError)
+        throw new Error(`${error.message}；${error.fix}`);
+      throw error;
+    };
+    add(
+      'skill_install',
+      'execute',
+      schema(
+        {
+          server: text(
+            'Name of the MCP server entry that publishes the pack; its url and Authorization header are used',
+          ),
+          pack: text(
+            'Pack reference id@version, copied from the answer of that server',
+          ),
+          digest: text(
+            'Expected pack digest (SHA-256 of the canonical manifest); refuse when the server serves another',
+          ),
+          replace: {
+            type: 'boolean',
+            description:
+              'Replace an installed different version, after backing it up outside the skills root',
+          },
+        },
+        ['server', 'pack'],
+      ),
+      async (args) => {
+        const { url, token } = server(string(args, 'server'));
+        try {
+          return JSON.stringify(
+            await installPack({
+              url,
+              token,
+              ref: string(args, 'pack'),
+              ...(typeof args.digest === 'string' && args.digest.length > 0
+                ? { digest: args.digest }
+                : {}),
+              ...(args.replace === true ? { replace: true } : {}),
+            }),
+          );
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    );
+    add('skill_list', 'read', schema({}), async () =>
+      JSON.stringify({ skills: await listInstalled(SKILLS_ROOT) }),
+    );
+    add(
+      'skill_run',
+      'execute',
+      schema(
+        {
+          pack: text('Installed pack id (folder under the skills root)'),
+          script: text(
+            'Script path relative to the pack, for example tools/fetch-run.ts',
+          ),
+          args: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Arguments; %NAME% placeholders expand at execution',
+          },
+          stdin: text(
+            'Standard input; %NAME% placeholders expand at execution',
+          ),
+        },
+        ['pack', 'script'],
+      ),
+      async (args) => {
+        try {
+          return JSON.stringify(
+            await runTool({
+              pack: string(args, 'pack'),
+              script: string(args, 'script'),
+              ...(Array.isArray(args.args)
+                ? { args: args.args.map(String) }
+                : {}),
+              ...(typeof args.stdin === 'string' ? { stdin: args.stdin } : {}),
+              variables: localSkills.variables(),
+              secrets: localSkills.secrets(),
+            }),
+          );
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    );
+  }
   if (hooks.jobs) {
     add('list_jobs', 'read', schema({}), async (_args, context) => {
       const owner = hooks.jobOwner?.(context) ?? {

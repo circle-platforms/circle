@@ -94,3 +94,13 @@ For a skill only you use, copy it into `~/.circle/skills/<name>/`.
 ## A skill can ship hooks
 
 `hooks.json` in the skill folder does not run just because the skill is installed. Those commands run only after this session loads the skill, with `/skill` or the `skill` tool, and only for that session. A project skill's hooks also wait until the folder is trusted and that file's bytes are approved. A skill without that file is unchanged. A skill's `hooks.json` supports per-platform commands the same way as any other hooks file. See [Hooks](hooks.md#a-skill-can-ship-hooks).
+
+## Local tools from an MCP server
+
+An MCP server can publish client tools for a pack under its `/local-tools` contract: a manifest whose SHA-256 is the pack digest, and every file with its size and SHA-256. Circle installs them with the `skill_install` tool and runs them with `skill_run`; the server only verifies and serves the original bytes.
+
+- `skill_install` takes the name of the MCP server entry and the `<id>@<version>` and digest from that server's answer. It downloads the manifest and every file from the entry's `/local-tools` endpoint with the entry's saved token, verifies size and SHA-256, and installs into `~/.agents/skills/<pack>/`. That root is the universal Agent Skills folder, so other agents that read `~/.agents/skills` see the same install.
+- `skill_run` runs a script only under the installed pack's `tools/`, with the current Node. `%NAME%` placeholders expand at execution from the variables in settings and the secrets saved with `/secrets`; a pack's instructions name the ones it needs, so define those once. The output shows every secret value as its `%NAME%`, and tokens never appear in arguments, results, logs or Git.
+- `skill_list` shows what is installed and the digest each pack was installed from.
+
+Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence. Packs and skills are supported on macOS and Linux only.
