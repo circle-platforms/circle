@@ -7,6 +7,7 @@ import {
   readFileSync,
   existsSync,
   chmodSync,
+  readdirSync,
   rmSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -118,6 +119,29 @@ test('a release without the skills that ship with Circle is refused, even with a
   );
   assert.equal(activeVersion(prefix), undefined);
   assert.equal(existsSync(join(prefix, 'versions', '0.1.0')), false);
+});
+test('a release missing one of the skills that ship with Circle is refused by name', (t) => {
+  const base = scratch(t);
+  const root = fixture(base, '0.3.0');
+  rmSync(join(root, 'app/dist/builtin_skills/pr-review/SKILL.md'));
+  const manifest = JSON.parse(readFileSync(join(root, 'release.json'), 'utf8'));
+  manifest.files = fileInventory(root);
+  writeFileSync(join(root, 'release.json'), JSON.stringify(manifest));
+  assert.throws(
+    () => validateRelease(root),
+    /release is missing app\/dist\/builtin_skills\/pr-review\/SKILL\.md/,
+  );
+});
+test('the release check names every skill that ships with Circle', () => {
+  const layout = readFileSync(
+    join(process.cwd(), 'src', 'install_layout.ts'),
+    'utf8',
+  );
+  for (const name of readdirSync(join(process.cwd(), 'src', 'builtin_skills')))
+    assert.ok(
+      layout.includes(`app/dist/builtin_skills/${name}/SKILL.md`),
+      `${name} is not required of a release`,
+    );
 });
 test('existing version conflicts and invalid pointer values are diagnosed instead of activating another program', (t) => {
   const base = scratch(t);
