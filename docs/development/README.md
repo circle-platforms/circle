@@ -34,5 +34,6 @@ More:
 - [Architecture](architecture.md): the module map.
 - [The TUI contract](https://github.com/circle-platforms/circle/blob/main/docs/development/tui-contract.md): the rules for everything on screen. It is written in Chinese.
 - [Releasing](releasing.md): cutting a release.
+- [Windows acceptance](windows-acceptance.md): what has been tried by hand on Windows, what it showed, and what still has no evidence.
 - [Register Circle in skills.sh](skills-registry.md).
 - [Messages to a running subagent](subagent-messages.md): a design note for #373 box 7, awaiting agreement; nothing in it works yet.

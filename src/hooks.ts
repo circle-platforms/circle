@@ -400,6 +400,36 @@ function pathMatcher(value: unknown): string[] {
     .filter(Boolean);
 }
 
+/**
+ * The command an entry runs on a platform: the entry's platform command when
+ * present, the plain command otherwise. `platform` is a `process.platform`
+ * value; anything without a platform field falls back to the plain command.
+ * Callers validate the platform fields first; a non-string override here
+ * simply does not replace the command.
+ */
+export function resolveHookCommand(
+  entry: {
+    command: string;
+    command_windows?: unknown;
+    command_darwin?: unknown;
+    command_linux?: unknown;
+  },
+  platform: string,
+): string {
+  const field =
+    platform === 'win32'
+      ? 'command_windows'
+      : platform === 'darwin'
+        ? 'command_darwin'
+        : platform === 'linux'
+          ? 'command_linux'
+          : undefined;
+  const override = field ? entry[field] : undefined;
+  return typeof override === 'string' && override.trim()
+    ? override
+    : entry.command;
+}
+
 function readHookFile(
   file: string,
   source: HookSource,
@@ -461,11 +491,36 @@ function readHookFile(
         problems.push(`${event}[${index}] command is not usable`);
         return;
       }
+      const badField = (
+        ['command_windows', 'command_darwin', 'command_linux'] as const
+      ).find((field) => {
+        const override = entry[field];
+        return (
+          override !== undefined &&
+          (typeof override !== 'string' ||
+            !override.trim() ||
+            override.length > 4000 ||
+            override.includes('\0'))
+        );
+      });
+      if (badField) {
+        problems.push(`${event}[${index}] ${badField} is not usable`);
+        return;
+      }
+      const command = resolveHookCommand(
+        {
+          command: entry.command,
+          command_windows: entry.command_windows,
+          command_darwin: entry.command_darwin,
+          command_linux: entry.command_linux,
+        },
+        process.platform,
+      );
       hooks.push({
         id: `${source}:${file}:${event}:${index}`,
         event,
-        name: hookName(entry.name, entry.command),
-        command: entry.command,
+        name: hookName(entry.name, command),
+        command,
         timeoutMs: clampTimeout(entry.timeout_ms),
         loopLimit: clampLoop(entry.loop_limit),
         tools: toolMatcher(entry.tools ?? entry.matcher),

@@ -62,6 +62,11 @@ import type { ModelCompletionFailureCode } from '../../../src/model_completion.j
 import { completionFailure } from '../../../src/model_completion.js';
 import { ModelCompletionFailure } from '../../../src/model_completion.js';
 import {
+  compactionNotice,
+  type CompactionSnapshot,
+  type CompactionEvent,
+} from '../../../src/compaction.js';
+import {
   loadSettings,
   settingsForRun,
   saveSettingsChange,
@@ -2448,6 +2453,35 @@ export class RuntimeController {
       sessionId: this.selectedSessionId,
     });
   }
+  private compactionStates(id: string): CompactionSnapshot[] {
+    const owner =
+      this.runtimes.get(id) ??
+      [...this.taskRuntimes.values()].find((r) => r.session.id === id);
+    if (owner && !owner.isClosing) return owner.compactionHistory();
+    const operations = this.store.compactions.operations(
+      id,
+      this.store.ancestorIds(id),
+    );
+    const interrupted =
+      operations.some((o) => o.snapshot.status === 'running') &&
+      !sessionOccupied(this.home, id);
+    return operations.map((operation) =>
+      this.store.compactions.snapshot(operation.snapshot, interrupted),
+    );
+  }
+  private compactionNotices(id: string) {
+    return this.compactionStates(id)
+      .filter((s) => s.status !== 'running')
+      .map((s) => ({
+        id: 'compaction-' + s.operationId,
+        after: s.branchHead,
+        at: new Date(s.updatedAt).toISOString(),
+        text: (s.status === 'failed' ? '✖ ' : '') + compactionNotice(s),
+        compaction: s,
+        completionFailure: s.failureCode as
+          ModelCompletionFailureCode | undefined,
+      }));
+  }
   private projectMessages(
     runtime: AgentRuntime,
     id: string,
@@ -2584,6 +2618,7 @@ export class RuntimeController {
           ? {
               input: turns[raw.id]!.input,
               output: turns[raw.id]!.output,
+              ...(turns[raw.id]!.unreported ? { unreported: true } : {}),
               cost: turns[raw.id]!.cost ?? null,
               // A stop prices an estimate. The mark follows the amount (`$0.0182~`).
               ...(raw.interrupted ? { estimated: true } : {}),
@@ -2704,6 +2739,7 @@ export class RuntimeController {
     for (const failure of [
       ...(this.failures.get(id) ?? []),
       ...(this.notices.get(id) ?? []),
+      ...this.compactionNotices(id),
     ].filter((failure) => failure.text !== '✖ Interrupted' || !storedStop)) {
       // After the message it followed and that message's tool rows
       const afterIndex = (anchor: string | null) =>
@@ -2739,6 +2775,9 @@ export class RuntimeController {
         role: 'notice',
         text: failure.text,
         at: failure.at,
+        ...('compaction' in failure
+          ? { compaction: failure.compaction as CompactionSnapshot }
+          : {}),
         ...('completionFailure' in failure && failure.completionFailure
           ? { completionFailure: failure.completionFailure }
           : {}),
@@ -2901,6 +2940,7 @@ export class RuntimeController {
       for (const failure of [
         ...(this.failures.get(row.id) ?? []),
         ...(this.notices.get(row.id) ?? []),
+        ...this.compactionNotices(row.id),
       ])
         if (failure.after === null || branchIds.includes(failure.after))
           branchIds.push(failure.id);
@@ -2961,6 +3001,7 @@ export class RuntimeController {
         mode: selected ? owner.mode : 'manual',
         meters: selected && !owner.isClosing ? this.meters(owner) : undefined,
         turn: this.turn(row.id),
+        compaction: this.compactionStates(row.id).at(-1),
         changes: this.changeList(row.id),
         showThinking: !savedSettings.hide_thinking,
         expandTools: false,
@@ -3294,6 +3335,7 @@ export class RuntimeController {
   // cost as formatCosts writes it, and the context of the last answer from this model.
   private meters(runtime: AgentRuntime): NonNullable<Session['meters']> {
     const stats = runtime.stats();
+    const context = runtime.contextMeter();
     const facts =
       runtime.harness.model.modelFacts ??
       runtime.catalog.facts(
@@ -3315,12 +3357,9 @@ export class RuntimeController {
         [stats.costs],
         facts.rates?.input !== undefined && facts.rates.output !== undefined,
       ),
-      contextInput:
-        !last?.request_model ||
-        last.request_model === runtime.harness.model.model
-          ? (last?.usage?.input_tokens ?? null)
-          : null,
-      contextWindow: facts.windowKnown ? facts.contextWindow : null,
+      contextInput: context.input ?? null,
+      contextWindow: context.window ?? null,
+      contextEstimated: context.estimated,
     };
   }
   private turn(id: string): Session['turn'] {
@@ -3564,7 +3603,11 @@ export class RuntimeController {
       });
       this.notices.set(id, rows);
     }
-    if (event.kind === 'run_error' && event.payload.interrupted) {
+    if (
+      event.kind === 'run_error' &&
+      event.payload.interrupted &&
+      !event.payload.compaction_operation_id
+    ) {
       const rows = this.notices.get(id) ?? [];
       if (!rows.some((row) => row.text === '✖ Interrupted')) {
         rows.push({
@@ -3576,7 +3619,11 @@ export class RuntimeController {
         this.notices.set(id, rows);
       }
     }
-    if (event.kind === 'run_error' && !event.payload.interrupted) {
+    if (
+      event.kind === 'run_error' &&
+      !event.payload.interrupted &&
+      !event.payload.compaction_operation_id
+    ) {
       const assistant = event.payload.completion_message_id
         ? runtime.store
             .messages(id)
@@ -3648,6 +3695,38 @@ export class RuntimeController {
       });
     }
     // The bus is observation only. Enforcement remains inside Harness and awaited callbacks.
+    if (
+      event.kind === 'compaction' &&
+      event.tags?.subagent &&
+      event.payload.phase === 'chunks' &&
+      !event.payload.attempt
+    )
+      return;
+    if (
+      publishSnapshot &&
+      event.kind === 'compaction' &&
+      !event.tags?.subagent &&
+      this.options.emitTokenDelta
+    ) {
+      const progress = event.payload as unknown as CompactionEvent;
+      if (
+        progress.phase === 'chunks' &&
+        progress.snapshot?.status === 'running'
+      ) {
+        this.options.emitTokenDelta({
+          epoch: this.tokenEpoch,
+          seq: ++this.tokenSequence,
+          baseSeq: this.sequence,
+          sessionId: id,
+          streamId: 'compaction-' + progress.snapshot.operationId,
+          parentId: progress.snapshot.branchHead,
+          at: event.ts,
+          compaction: progress.snapshot,
+          turn: this.turn(id),
+        });
+        return;
+      }
+    }
     if (
       publishSnapshot &&
       event.kind === 'llm_token' &&
@@ -4041,6 +4120,12 @@ export class RuntimeController {
     this.tasks.add(task);
     void task
       .catch((error) => {
+        if (
+          error &&
+          typeof error === 'object' &&
+          'compactionOperationId' in error
+        )
+          return;
         // Harness already emitted the typed failure and its transcript diagnostic.
         if (error instanceof ModelCompletionFailure && !reportFailure) return;
         if (!this.closing) {
@@ -4101,6 +4186,10 @@ export class RuntimeController {
         if (
           command.sessionId &&
           command.sessionId !== this.selectedSessionId &&
+          !(
+            command.name === 'abort' &&
+            typeof command.payload.compactionOperationId === 'string'
+          ) &&
           ![
             'select-session',
             'delete-session',
@@ -4463,6 +4552,39 @@ export class RuntimeController {
     return { sessionId: runtime.session.id };
   }
   private async execute(command: RuntimeCommand): Promise<unknown> {
+    if (
+      command.name === 'abort' &&
+      typeof command.payload.compactionOperationId === 'string' &&
+      command.sessionId
+    ) {
+      const owner =
+        this.runtimes.get(command.sessionId) ??
+        [...this.taskRuntimes.values()].find(
+          (r) => r.session.id === command.sessionId,
+        );
+      if (!owner || owner.isClosing) return {};
+      if (owner.viewOnly) throw Error('this session is read-only');
+      const operationId = text(
+        command.payload.compactionOperationId,
+        'compaction operation',
+        100,
+      );
+      if (
+        owner.compaction?.operationId !== operationId ||
+        owner.compaction.status !== 'running'
+      )
+        return {};
+      this.cancelling.add(owner.session.id);
+      try {
+        await owner.cancel({
+          keepQueue: true,
+          compactionOperationId: operationId,
+        });
+      } finally {
+        this.cancelling.delete(owner.session.id);
+      }
+      return {};
+    }
     if (command.name === 'workspace-service')
       return this.workspaceCommand(command);
     this.metadata.refresh();
@@ -4617,10 +4739,23 @@ export class RuntimeController {
         return { sessionId: started.sessionId ?? owner.session.id };
       }
       case 'abort': {
+        const operationId =
+          p.compactionOperationId === undefined
+            ? undefined
+            : text(p.compactionOperationId, 'compaction operation', 100);
+        if (
+          operationId &&
+          (runtime.compaction?.operationId !== operationId ||
+            runtime.compaction.status !== 'running')
+        )
+          return {};
         const id = runtime.session.id;
         this.cancelling.add(id);
         try {
-          await runtime.cancel({ keepQueue: false });
+          await runtime.cancel({
+            keepQueue: false,
+            compactionOperationId: operationId,
+          });
         } finally {
           this.cancelling.delete(id);
         }

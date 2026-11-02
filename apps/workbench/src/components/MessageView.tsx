@@ -170,8 +170,8 @@ export function MessageView({
 const usageText = (usage: NonNullable<Message['usage']>) =>
   [
     usage.elapsed,
-    `↑ ${usage.input.toLocaleString()}`,
-    `↓ ${usage.output.toLocaleString()}`,
+    `↑ ${usage.unreported && !usage.input ? 'N/A' : usage.input.toLocaleString() + (usage.unreported ? '+' : '')}`,
+    `↓ ${usage.unreported && !usage.output ? 'N/A' : usage.output.toLocaleString() + (usage.unreported ? '+' : '')}`,
     usage.cost === null || !Number.isFinite(usage.cost)
       ? t('cost N/A')
       : formatUsdAmount(usage.cost, usage.estimated === true),

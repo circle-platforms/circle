@@ -267,6 +267,45 @@ test('explicit display rejection drops only thinking.display once and records th
   );
 });
 
+test('parallel summaries independently retry a parameter each failed request actually sent', async (t) => {
+  const pending: ServerResponse[] = [];
+  const bodies: Record<string, any>[] = [];
+  const base = await gateway(t, (body, response) => {
+    bodies.push(body);
+    if (body.thinking?.display) {
+      pending.push(response);
+      if (pending.length === 2)
+        for (const reply of pending) {
+          reply.writeHead(400, { 'content-type': 'application/json' });
+          reply.end(
+            JSON.stringify({
+              type: 'error',
+              error: {
+                type: 'invalid_request_error',
+                param: 'thinking.display',
+                message: 'unsupported thinking.display',
+              },
+            }),
+          );
+        }
+    } else anthropic(response);
+  });
+  const instance = model(t, base, 'anthropic');
+  const results = await Promise.allSettled([
+    instance.complete(request()),
+    instance.complete(request()),
+  ]);
+  assert.deepEqual(
+    results.map((result) => result.status),
+    ['fulfilled', 'fulfilled'],
+  );
+  assert.equal(bodies.length, 4);
+  assert.equal(bodies.filter((body) => body.thinking?.display).length, 2);
+  assert.ok(
+    bodies.slice(2).every((body) => body.thinking?.display === undefined),
+  );
+});
+
 test('display rejection is retried at most once and later requests retain the narrow downgrade', async (t) => {
   const bodies: Record<string, any>[] = [];
   const base = await gateway(t, (body, response) => {

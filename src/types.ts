@@ -49,6 +49,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'tool' | 'system';
   model?: string;
   request_model?: string;
+  request_budget?: import('./request_budget.js').RequestBudgetSnapshot;
   content: string;
   /** A desktop host-authored notice; content itself remains unchanged in history. */
   runtimeNotice?: import('./runtime_notice.js').GitHubRuntimeNotice;
@@ -202,6 +203,18 @@ export interface ModelRequest {
   effort?: string;
   /** Output cap for this request only. A session title asks for a short reply. */
   maxTokens?: number;
+  /** Enforce the complete provider frame budget after extension/protocol transforms. */
+  enforceBudget?: boolean;
+  /** Shared with compaction-level recovery; ordinary model retry policy is unchanged. */
+  recovery?: import('./request_budget.js').RecoveryBudget;
+  /** Usage snapshots are cumulative for one physical attempt, never deltas. */
+  observeAttempt?: (event: {
+    id: string;
+    phase: 'start' | 'usage' | 'end';
+    budget?: import('./request_budget.js').RequestBudgetSnapshot;
+    usage?: Usage;
+    completion?: ModelCompletion;
+  }) => void;
 }
 export interface ModelNotice {
   event: string;
@@ -210,11 +223,21 @@ export interface ModelNotice {
 export interface ModelResponse {
   message: Message;
   usage: Usage;
+  /** False when an endpoint supplied no usage receipt, not a reported zero. */
+  usageReported?: boolean;
 }
 export interface ChatModel {
   model: string;
   contextWindow?: number;
   outputBudget?: number;
+  inputLimit?: number;
+  outputLimit?: number;
+  /** Opaque connection/model identity; never an API key or URL in a prompt. */
+  budgetIdentity?: string;
+  inputEstimateFactor?: number;
+  estimateInput?: (
+    request: import('./request_budget.js').RequestFrame,
+  ) => number;
   modelFacts?: import('./model_catalog.js').ModelFacts;
   /** Whether the model reads images: false when it is known not to, undefined when unknown. */
   imageInput?: boolean;
@@ -223,6 +246,8 @@ export interface ChatModel {
    * the reply the turn is waiting for. Scripted models leave this unset.
    */
   sideRequests?: boolean;
+  /** Emits physical attempt and usage observations, including transport retries. */
+  reportsAttempts?: boolean;
   complete(request: ModelRequest): Promise<ModelResponse>;
 }
 export const emptyUsage = (): Usage => ({

@@ -201,8 +201,8 @@ await writeFile(
           role: 'assistant',
           content: 'partial manual summary',
           completion: {
-            reason: 'length',
-            provider_reason: 'max_tokens',
+            reason: 'filter',
+            provider_reason: 'refusal',
             output_limit: 32000,
           },
         },
@@ -589,8 +589,8 @@ try {
     return (
       value.sessions
         .find((row) => row.id === value.activeSessionId)
-        .messages.filter((row) => row.completionFailure === 'output_limit')
-        .length === 2
+        .messages.filter((row) => row.compaction?.failureCode === 'filtered')
+        .length === 1
     );
   }, 'typed manual compaction diagnostic');
   expectedRequests += 1;
@@ -615,10 +615,13 @@ try {
     await diagnostics.first().waitFor();
     assert.equal(
       await diagnostics.count(),
-      ['empty_response', 'output_limit'].includes(failure.code) ? 2 : 1,
+      failure.code === 'empty_response' ? 2 : 1,
     );
   }
   assert.equal(await page.getByText(partial, { exact: true }).count(), 1);
+  await page
+    .getByText('✖ 压缩失败：模型响应被过滤 · ↑ 13 · ↓ 3', { exact: true })
+    .waitFor();
   for (const theme of ['dark', 'light']) {
     await command('save-settings', { settings: { theme } });
     await page.waitForFunction(
@@ -648,8 +651,16 @@ try {
     (row) => row.id === restored.activeSessionId,
   );
   assert.equal(
-    restoredSession.messages.filter((row) => row.completionFailure).length,
+    restoredSession.messages.filter(
+      (row) => row.completionFailure && !row.compaction,
+    ).length,
     failures.length,
+  );
+  assert.equal(
+    restoredSession.messages.filter(
+      (row) => row.compaction?.failureCode === 'filtered',
+    ).length,
+    1,
   );
   assert(restoredSession.messages.some((row) => row.text === partial));
   assert.equal(

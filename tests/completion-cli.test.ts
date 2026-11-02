@@ -220,7 +220,10 @@ for (const auto of [false, true]) {
     assert.deepEqual(assistant[0]!.completion, {
       reason: 'length',
       provider_reason: 'length',
+      output_limit: requests[0]!.max_tokens,
     });
+    assert.equal(requests[0]!.max_tokens, 4096);
+    assert.equal(assistant[0]!.request_budget?.output, requests[0]!.max_tokens);
     assert.equal(assistant[0]!.truncated, true);
     assert.deepEqual(assistant[0]!.usage, {
       input_tokens: 7,
@@ -258,6 +261,9 @@ test('actual headless CLI rejects a normally ended thinking-only response withou
   assert.deepEqual(assistant[0]!.completion, {
     reason: 'stop',
     provider_reason: 'stop',
+    output_limit: requests[0]!.max_tokens,
   });
+  assert.equal(requests[0]!.max_tokens, 4096);
+  assert.equal(assistant[0]!.request_budget?.output, requests[0]!.max_tokens);
   assert.equal(assistant[0]!.usage?.output_tokens, 11);
 });
