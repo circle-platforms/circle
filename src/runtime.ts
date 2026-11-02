@@ -1368,6 +1368,7 @@ export class AgentRuntime {
         attribution: this.options.settings.attribution,
         headless: this.options.headless,
         mcpInstructions: this.mcp.instructions(),
+        githubSetup: Boolean(this.options.githubConnection),
       },
     );
   }

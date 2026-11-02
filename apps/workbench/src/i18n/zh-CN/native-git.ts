@@ -34,7 +34,6 @@ export const nativeGit: Record<string, string> = {
     '安全存储不可用；仅在本次会话中登录',
   'checking GitHub connection': '正在检查 GitHub 连接',
   'GitHub connected': '已连接 GitHub',
-  'GitHub login required': '需要登录 GitHub',
   'sign in with browser': '使用浏览器登录',
   'enter this code in your browser': '在浏览器中输入此代码',
   'login cancelled': '登录已取消',

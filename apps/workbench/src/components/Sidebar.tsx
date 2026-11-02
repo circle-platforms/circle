@@ -1,5 +1,4 @@
 import '../features/navigation-settings.css';
-import { extensionStatusText } from '../model/extension-status';
 import { openHome } from '../features/home-selection';
 import {
   Component,
@@ -860,7 +859,7 @@ export function Sidebar({
                 title={item.name}
               >
                 <i />
-                {extensionStatusText(item)}
+                {item.status.text}
               </span>
             ) : null,
           )}
