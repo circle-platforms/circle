@@ -61,12 +61,40 @@ Releases up to 1.9.1 ran a trusted folder's hooks without this approval and kept
 
 | Field        | Meaning                                                                                                                                                                                                                                                                                                                                                                   |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`    | Required. The shell command, at most 4,000 characters. Circle starts it with `shell: true` in the workspace, so `/bin/sh` runs it on macOS and Linux and `cmd.exe` on Windows (write `node script.mjs` for a hook that runs on every system), with the [filtered environment](security.md#the-shell-environment) used for other commands.                                 |
-| `name`       | Optional, at most 80 characters. The transcript and the desktop settings use it. Without one, the command is the name.                                                                                                                                                                                                                                                    |
+| `command`    | Required. The shell command, at most 4,000 characters. Circle starts it with `shell: true` in the workspace, so `/bin/sh` runs it on macOS and Linux and `cmd.exe` on Windows (write `node script.mjs` for a hook that runs on every system, or give each platform its own command below), with the [filtered environment](security.md#the-shell-environment) used for other commands.                                 |
+| `command_windows` | Optional. The command on Windows, at most 4,000 characters. When present it replaces `command` on Windows; on other systems `command` runs. See [Per-platform commands](#per-platform-commands). |
+| `command_darwin` | Optional. The command on macOS, at most 4,000 characters. When present it replaces `command` on macOS; on other systems `command` runs. See [Per-platform commands](#per-platform-commands). |
+| `command_linux` | Optional. The command on Linux, at most 4,000 characters. When present it replaces `command` on Linux; on other systems `command` runs. See [Per-platform commands](#per-platform-commands). |
+| `name`       | Optional, at most 80 characters. The transcript and the desktop settings use it. Without one, the command is the name — the command for the platform that runs, so an unnamed hook shows its platform command.                                                                                                                                                                                                                                                    |
 | `timeout_ms` | Optional. Default 30 seconds. Clamped between 100 milliseconds and 10 minutes. On timeout the process group is stopped (on Windows, `taskkill /T /F`, the same stop Circle uses for other commands).                                                                                                                                                                      |
 | `loop_limit` | Optional, only for `before_stop`. Default 5, clamped from 1 to 20. After this many blocks the hook is not run again for that session, until `/reload` or a new session.                                                                                                                                                                                                   |
 | `tools`      | Optional. A tool name, a list, or several names separated by `\|` or a comma. `*` or omitting it matches every tool. `matcher` is the same field. There is no regular expression. `session_start` and `before_stop` ignore it, so a copied matcher does not disable them.                                                                                                 |
 | `paths`      | Optional globs. Empty matches every call. A call that names no path does not match a hook that has globs. A call names the paths in its `file_path`, `path`, `file` and `paths` arguments, the files of a patch, and those an MCP tool's [file parameters](mcp.md#files-a-tool-takes) take. See [Path globs](#path-globs). Ignored for `session_start` and `before_stop`. |
+
+## Per-platform commands
+
+A hook whose command only works on one system can carry a command per platform instead of rewriting the logic to run everywhere:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "before_tool": [
+      {
+        "command": "sh scripts/check.sh",
+        "command_windows": "powershell -NoProfile -File scripts/check.ps1",
+        "name": "check"
+      }
+    ]
+  }
+}
+```
+
+Circle resolves the command once, when the file loads: Windows runs `command_windows`, macOS runs `command_darwin`, Linux runs `command_linux`, and a platform without its own field runs `command`. A platform field that is present must be a string of 1 to 4,000 characters, like `command`; an empty, overlong or non-string override drops that entry and is reported by field name, while the other entries in the file still load. The resolved command is what the transcript, the approval card, `/hooks` and `hooks.log` show, and an unnamed hook takes its name from it.
+
+The shell does not change: every platform command still starts with `shell: true`, so on Windows `command_windows` runs in `cmd.exe`. A PowerShell script needs the explicit `powershell -NoProfile -File ...` prefix; a `.ps1` suffix alone does not switch shells. A `command_windows` that calls Git Bash outright (`bash scripts/check.sh`) is the author's choice, and on a machine without Git Bash it fails to start like any other missing command.
+
+Approval is unchanged: the trust digest covers the file's bytes, so editing any field makes the file wait for approval again, and the card lists the resolved command, which means a platform command's change shows as changed on that platform and nowhere else.
 
 ## Events
 
