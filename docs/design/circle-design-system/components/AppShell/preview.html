@@ -1,0 +1,127 @@
+<!-- @dsCard group="框架" height=660 width=1280 subtitle="知识库页面：导航 · 列表 · 详情" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>AppShell — preview</title></head>
+<body>
+<div id="root" class="ch-app area-knowledge">
+  <nav class="ch-nav" aria-label="主导航">
+    <div class="ch-brand"><svg class="ch-hubmark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.35"/><circle cx="32" cy="32" r="8" fill="currentColor"/><circle class="s1" cx="32" cy="12" r="6.5"/><circle class="s2" cx="52" cy="32" r="6.5"/><circle class="s3" cx="32" cy="52" r="6.5"/><circle class="s4" cx="12" cy="32" r="6.5"/></svg>circle-hub</div>
+    <label class="ch-input">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+      <input type="search" placeholder="搜索" aria-label="搜索">
+      <span class="ch-kbd">⌘K</span>
+    </label>
+    <div class="ch-nav-list">
+      <a class="ch-nav-item" href="#"><span class="ch-dot"></span>总览</a>
+      <a class="ch-nav-item area-task" href="#"><span class="ch-dot"></span>任务</a>
+      <a class="ch-nav-item area-knowledge" href="#" aria-current="true"><span class="ch-dot"></span>知识库</a>
+      <div class="ch-nav-sub area-knowledge">
+        <a href="#" aria-current="true">我的<span class="ch-count">24</span></a>
+        <div class="ch-nav-tree">
+          <a href="#" aria-current="page">接口规范</a>
+          <a href="#">部署笔记</a>
+          <a href="#">阅读摘录</a>
+        </div>
+        <a href="#">与我共享<span class="ch-count">8</span></a>
+        <a href="#">团队<span class="ch-count">312</span></a>
+      </div>
+      <a class="ch-nav-item area-workflow" href="#"><span class="ch-dot"></span>工作流</a>
+      <a class="ch-nav-item" href="#"><span class="ch-dot"></span>连接</a>
+      <a class="ch-nav-item" href="#"><span class="ch-dot"></span>记录<span class="ch-nav-alert">1 项告警</span></a>
+      <a class="ch-nav-item" href="#"><span class="ch-dot"></span>团队</a>
+      <a class="ch-nav-item" href="#"><span class="ch-dot"></span>设置</a>
+    </div>
+    <div class="ch-nav-foot">
+      <span class="ch-avatar">张</span>
+      <div><div>张三</div><div class="ch-meta">成员</div></div>
+    </div>
+  </nav>
+
+  <main class="ch-pane">
+    <div class="ch-crumbs"><a href="#">知识库</a> › <a href="#">我的</a></div>
+    <div class="ch-page-head">
+      <div>
+        <h1 class="ch-title">接口规范</h1>
+        <div class="ch-meta">已分享给 2 人 · 24 条知识 · 19 条已验证</div>
+      </div>
+      <div class="ch-actions">
+        <button class="ch-btn ch-btn--secondary">分享…</button>
+        <button class="ch-btn ch-btn--secondary">导入文件</button>
+        <button class="ch-btn ch-btn--primary">新建</button>
+      </div>
+    </div>
+    <div class="ch-toolbar">
+      <label class="ch-input" style="flex:1;min-width:200px">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+        <input type="search" placeholder="在接口规范中搜索" aria-label="在接口规范中搜索">
+      </label>
+      <button class="ch-chip" aria-pressed="true">全部</button>
+      <button class="ch-chip" aria-pressed="false">已验证</button>
+      <button class="ch-chip" aria-pressed="false">待验证</button>
+    </div>
+    <ul class="ch-list">
+      <li class="ch-row is-selected">
+        <span class="ch-row-mark"></span>
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">登录接口在会话过期时返回 401</a>
+          <div class="ch-row-meta"><span class="ch-tag">接口行为</span><span class="ch-status"><span class="ch-dot ch-dot--pass"></span>已验证</span><span>来源 2</span><span class="ch-time">今天 10:24</span></div>
+        </div>
+      </li>
+      <li class="ch-row">
+        <span class="ch-row-mark"></span>
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">令牌过期后重新登录的步骤</a>
+          <div class="ch-row-meta"><span class="ch-tag">操作步骤</span><span class="ch-status"><span class="ch-dot ch-dot--pending"></span>待验证</span><span>来源 1</span><span class="ch-time">昨天</span></div>
+        </div>
+      </li>
+      <li class="ch-row">
+        <span class="ch-row-mark"></span>
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">会话的有效期</a>
+          <div class="ch-row-meta"><span class="ch-tag">概念</span><span class="ch-status"><span class="ch-dot ch-dot--pass"></span>已验证</span><span>来源 3</span><span class="ch-time">10-30</span></div>
+        </div>
+      </li>
+      <li class="ch-row">
+        <span class="ch-row-mark"></span>
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">批量导入时超过限额返回 429</a>
+          <div class="ch-row-meta"><span class="ch-tag">接口行为</span><span class="ch-status"><span class="ch-dot ch-dot--pass"></span>已验证</span><span>来源 2</span><span class="ch-time">10-28</span></div>
+        </div>
+      </li>
+    </ul>
+  </main>
+
+  <aside class="ch-inspector" aria-label="详情">
+    <div class="ch-section">
+      <div class="ch-actions"><span class="ch-tag">接口行为</span><span class="ch-badge ch-badge--pass"><span class="ch-dot ch-dot--pass"></span>已验证</span></div>
+      <h2 class="ch-panel-title">登录接口在会话过期时返回 401</h2>
+      <div class="ch-meta">接口规范 › 认证 · 今天 10:24 更新</div>
+    </div>
+    <section class="ch-section">
+      <h3 class="ch-section-label">来源 · 2</h3>
+      <div class="ch-source">
+        <div class="ch-source-head"><span>错误码对照表.xlsx · 第 12–14 行</span><a href="#">打开原文</a></div>
+        <p class="ch-quote">「会话过期时，服务端返回 401 Unauthorized，并在响应头中携带 WWW-Authenticate。」</p>
+      </div>
+      <div class="ch-source">
+        <div class="ch-source-head"><span>知识：会话的有效期</span><a href="#">查看</a></div>
+      </div>
+    </section>
+    <section class="ch-section">
+      <h3 class="ch-section-label">分享</h3>
+      <div class="ch-share"><span class="ch-avatars"><span class="ch-avatar">李</span><span class="ch-avatar">王</span></span>已分享给李四、王五</div>
+      <div class="ch-meta">同文件夹设置 · <a href="#">管理分享</a></div>
+    </section>
+    <section class="ch-section">
+      <h3 class="ch-section-label">近 30 天被引用</h3>
+      <div class="ch-stat-value">3 次</div>
+    </section>
+    <div class="ch-inspector-actions">
+      <button class="ch-btn ch-btn--ghost">版本记录</button>
+      <button class="ch-btn ch-btn--secondary">分享到团队…</button>
+      <button class="ch-btn ch-btn--primary">编辑</button>
+    </div>
+  </aside>
+</div>
+</body>
+</html>

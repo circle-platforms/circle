@@ -1,0 +1,52 @@
+<!-- @dsCard group="框架" height=330 width=900 subtitle="位置、标题、事实行、操作与工具栏" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PageHeader — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: flex; flex-direction: column; gap: 36px; padding: 28px; }
+  .pv > section { display: flex; flex-direction: column; gap: 16px; }
+</style>
+</head>
+<body>
+<div id="root" class="pv">
+  <section class="area-knowledge">
+    <div class="ch-crumbs"><a href="#">知识库</a> › <a href="#">我的</a></div>
+    <div class="ch-page-head">
+      <div>
+        <h1 class="ch-title"><span class="ch-tip ch-tip--start" tabindex="0">接口规范<span class="ch-tip-bubble" role="tooltip">文件夹里的每条知识都附带来源；任务读取时会再次核对来源。</span></span></h1>
+        <div class="ch-meta">已分享给 2 人 · 24 条知识 · 19 条已验证</div>
+      </div>
+      <div class="ch-actions">
+        <button class="ch-btn ch-btn--secondary">分享…</button>
+        <button class="ch-btn ch-btn--secondary">导入文件</button>
+        <button class="ch-btn ch-btn--primary">新建</button>
+      </div>
+    </div>
+    <div class="ch-toolbar">
+      <label class="ch-input" style="flex:1;min-width:220px">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+        <input type="search" placeholder="在接口规范中搜索" aria-label="在接口规范中搜索">
+      </label>
+      <button class="ch-chip" aria-pressed="true">全部</button>
+      <button class="ch-chip" aria-pressed="false">已验证</button>
+      <button class="ch-chip" aria-pressed="false">待验证</button>
+    </div>
+  </section>
+
+  <section class="area-task">
+    <div class="ch-page-head">
+      <div>
+        <h1 class="ch-title">任务</h1>
+        <div class="ch-meta">近 14 天 · 128 个任务 · 截至今天 10:30</div>
+      </div>
+      <div class="ch-seg" role="tablist" aria-label="时间范围">
+        <button role="tab" aria-selected="false">近 7 天</button>
+        <button role="tab" aria-selected="true">近 14 天</button>
+        <button role="tab" aria-selected="false">近 30 天</button>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

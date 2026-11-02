@@ -1,0 +1,43 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Circle 设计规范 — cover</title>
+<style>
+  body { margin: 0; background: var(--surface-0); }
+  .cover { position: relative; width: 960px; height: 288px; overflow: hidden; background: var(--surface-0); }
+  .cover svg { position: absolute; inset: 0; display: block; }
+  .ink { fill: var(--inverse-surface); }
+  .b { fill: var(--brand-blue); }
+  .v { fill: var(--brand-violet); }
+  .r { fill: var(--brand-red); }
+  .o { fill: var(--brand-orange); }
+  .cut { fill: var(--surface-0); }
+  .tile { rx: var(--radius-lg); ry: var(--radius-lg); }
+  .name { position: absolute; left: 40px; bottom: 40px; width: 440px; }
+  .name h1 { margin: 0; font: 600 88px/.95 var(--font-sans); color: var(--text-primary); }
+  .name p { margin: 16px 0 0; font: 400 13px/20px var(--font-sans); color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+<div id="root" class="cover">
+  <svg viewBox="0 0 960 288" width="960" height="288" aria-hidden="true">
+    <!--
+      blocks: brand-blue 248x152, brand-violet 168x140, brand-orange 144x98, brand-red 72x72 (red stays smallest), inverse-surface 48x186 (ink); corners radius-lg 10px.
+      arrangement: the four brand blocks meet at one shared corner in the mark's order - orange top-left, blue top-right, violet bottom-right, red bottom-left - on space-4 16px gutters; blue bleeds off the top and right edges, violet off the bottom; a narrow ink column stands to the left like the navigation pane.
+      pattern: the literal motif - Circle's mark is a ring, so one disc of the ground (r 52) is cut at the shared corner and the four blocks' inner arcs close into the ring.
+      scales: space-4 16px gutters, space-10 40px insets, radius-lg 10px; the cut disc's radius is space-10 + space-3.
+    -->
+    <rect class="ink tile" x="496" y="44" width="48" height="186"/>
+    <rect class="o tile" x="560" y="44" width="144" height="98"/>
+    <rect class="b tile" x="720" y="-10" width="248" height="152"/>
+    <rect class="r tile" x="632" y="158" width="72" height="72"/>
+    <rect class="v tile" x="720" y="158" width="168" height="140"/>
+    <circle class="cut" cx="712" cy="150" r="52"/>
+  </svg>
+  <div class="name">
+    <h1>Circle<br>设计规范</h1>
+    <p>沉稳的仪器感：中性灰分层，颜色只出现在需要注意的地方。</p>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!-- @dsCard group="输入" height=660 width=760 subtitle="默认 · 计划模式 · 工作中 · 等待回应" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Composer — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: flex; flex-direction: column; gap: 14px; padding: 24px; }
+  .pv .cap { font-size: 12px; line-height: 18px; color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 19V5"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  </defs>
+</svg>
+<div id="root" class="pv">
+  <div class="cap">默认</div>
+  <div class="ch-composer">
+    <textarea rows="1" placeholder="描述一个改动，或提出问题…" aria-label="输入消息"></textarea>
+    <div class="ch-composer-foot">
+      <button class="ch-chip" aria-pressed="true">知识库</button>
+      <button class="ch-btn ch-btn--ghost ch-btn--sm">sample-code-model<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-down"/></svg></button>
+      <span class="ch-mode">提问</span>
+      <button class="ch-send" aria-label="发送" title="发送"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-up"/></svg></button>
+    </div>
+  </div>
+
+  <div class="cap">计划模式</div>
+  <div class="ch-composer is-plan">
+    <textarea rows="1" aria-label="输入消息">先列出修改计划，确认后再动手。</textarea>
+    <div class="ch-composer-foot">
+      <button class="ch-chip" aria-pressed="true">知识库</button>
+      <button class="ch-btn ch-btn--ghost ch-btn--sm">sample-code-model<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-down"/></svg></button>
+      <span class="ch-mode">计划</span>
+      <button class="ch-send" aria-label="发送" title="发送"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-up"/></svg></button>
+    </div>
+  </div>
+
+  <div class="cap">工作中</div>
+  <div class="ch-composer is-working">
+    <textarea rows="1" placeholder="补充说明会在这一轮结束后发送" aria-label="输入消息"></textarea>
+    <div class="ch-composer-foot">
+      <span class="ch-meta">等待 Circle 完成中 · 0:14</span>
+      <span class="ch-mode">提问</span>
+      <button class="ch-send" aria-label="停止" title="停止"><svg width="14" height="14" fill="currentColor" aria-hidden="true"><use href="#i-stop"/></svg></button>
+    </div>
+  </div>
+
+  <div class="cap">等待回应</div>
+  <div class="ch-request"><span class="ch-dot ch-dot--warn"></span>1 个请求等待处理：是否允许修改 package.json<a href="#">查看</a></div>
+  <div class="ch-composer is-attention">
+    <textarea rows="1" placeholder="回复这个请求，或描述新的改动…" aria-label="输入消息"></textarea>
+    <div class="ch-composer-foot">
+      <span class="ch-mode">提问</span>
+      <button class="ch-send" aria-label="发送" title="发送"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-up"/></svg></button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

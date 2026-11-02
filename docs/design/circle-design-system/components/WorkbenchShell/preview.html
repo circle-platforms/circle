@@ -1,0 +1,146 @@
+<!-- @dsCard group="框架" height=720 width=1280 subtitle="Circle 工作台：导航 · 会话 · 抽屉" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>WorkbenchShell — preview</title>
+<style>
+  .ch-app { min-height: 720px; }
+  .ch-pane { gap: 18px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M10 8l6 4-6 4z"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></symbol>
+    <symbol id="i-blocks" viewBox="0 0 24 24"><rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 19V5"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-updown" viewBox="0 0 24 24"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65M22 12.65l-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></symbol>
+    <symbol id="i-diff" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M9 10h6M12 13V7M9 17h6"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  </defs>
+</svg>
+<div id="root" class="ch-app area-knowledge">
+  <nav class="ch-nav" aria-label="主导航">
+    <div class="ch-brand"><span class="ch-logo" aria-hidden="true"></span>circle<small>工作台</small></div>
+    <div class="ch-workspace">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-folder"/></svg>
+      <div>orbit-api<small>fix/reconnect</small></div>
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-updown"/></svg>
+    </div>
+    <div class="ch-actions">
+      <button class="ch-btn ch-btn--secondary" style="flex:1"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-plus"/></svg>新会话</button>
+      <button class="ch-icon-btn" aria-label="搜索 Circle" title="搜索 Circle"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-search"/></svg></button>
+    </div>
+    <div class="ch-nav-list">
+      <div class="ch-nav-label">会话<a href="#">全部 ›</a></div>
+      <a class="ch-nav-item" href="#" aria-current="page"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-msg"/></svg>修复重连竞争</a>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-msg"/></svg>检查请求生命周期</a>
+      <div class="ch-nav-label">平台</div>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-book"/></svg>知识库</a>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-play"/></svg>长时任务</a>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-server"/></svg>运行环境</a>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-blocks"/></svg>工作流</a>
+      <div class="ch-nav-label">Circle</div>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-box"/></svg>模型</a>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-plug"/></svg>MCP 服务器</a>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-shield"/></svg>审批</a>
+      <a class="ch-nav-item" href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-sliders"/></svg>设置</a>
+    </div>
+    <div class="ch-nav-foot"><span class="ch-dot ch-dot--pass"></span><span class="ch-meta">已连接到 Hub</span></div>
+  </nav>
+
+  <main class="ch-pane">
+    <div class="ch-convo">
+      <div class="ch-convo-head">
+        <div><h1 class="ch-panel-title">修复重连竞争</h1><div class="ch-meta">orbit-api · fix/reconnect</div></div>
+        <div class="ch-actions">
+          <button class="ch-icon-btn" aria-label="在会话中搜索" title="在会话中搜索"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-search"/></svg></button>
+          <button class="ch-icon-btn" aria-label="分支" title="分支"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-branch"/></svg></button>
+          <button class="ch-icon-btn" aria-label="更多操作" title="更多操作"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#i-more"/></svg></button>
+        </div>
+      </div>
+      <div class="ch-msg ch-msg--user">
+        <div class="ch-msg-head"><b>张三</b><span class="ch-time">10:24</span></div>
+        <p class="ch-msg-body">重连路径仍然会丢掉最后一个响应。查一下改了什么，并补一个回归测试；超时设置保持不变。</p>
+      </div>
+      <div class="ch-msg">
+        <div class="ch-msg-head"><span class="ch-logo ch-logo--sm" style="--logo-ground: var(--surface-1)" aria-hidden="true"></span><b>circle</b><span class="ch-time">10:24</span></div>
+        <p class="ch-think" data-label="思考">超时可能只是表象。先沿着关闭事件跟踪响应缓冲区，再看现有测试。</p>
+        <p class="ch-msg-body">先追踪重连处理函数，对比上一次改动，再检查响应缓冲区如何交给新连接。</p>
+      </div>
+      <div class="ch-toolcall"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-file"/></svg>读取文件 <code>src/connection.ts</code><span class="ch-time">0.2s</span></div>
+      <div class="ch-plan">
+        <div class="ch-plan-head"><span>计划</span><span>1 / 3</span></div>
+        <ol>
+          <li class="is-done">沿重连流程跟踪响应缓冲区</li>
+          <li class="is-current">为关闭边界补回归测试</li>
+          <li>检查改动并运行相关测试</li>
+        </ol>
+      </div>
+      <div class="ch-request"><span class="ch-dot ch-dot--warn"></span>3 个请求等待处理<a href="#">查看</a></div>
+      <div class="ch-composer is-working">
+        <textarea rows="1" placeholder="补充说明会在这一轮结束后发送" aria-label="输入消息"></textarea>
+        <div class="ch-composer-foot">
+          <span class="ch-meta">等待 Circle 完成中 · 0:14</span>
+          <span class="ch-mode">提问</span>
+          <button class="ch-send" aria-label="停止" title="停止"><svg width="14" height="14" fill="currentColor" aria-hidden="true"><use href="#i-stop"/></svg></button>
+        </div>
+      </div>
+      <div class="ch-statusline"><span>↑ 4,280</span><span>↓ 684</span><span>上下文 4%</span></div>
+      <ul class="ch-jobs">
+        <li><span class="ch-dot ch-dot--info"></span>运行中<code>j1</code>npm test -- reconnect<span class="ch-time">14s</span></li>
+        <li><span class="ch-dot ch-dot--pending"></span>等待执行中<code>j2</code>检查回归测试<span class="ch-time">9s</span></li>
+      </ul>
+    </div>
+  </main>
+
+  <aside class="ch-inspector" aria-label="抽屉">
+    <div class="ch-page-head">
+      <div class="ch-drawer-tabs" role="tablist" aria-label="抽屉">
+        <button role="tab" aria-selected="false" aria-label="上下文" title="上下文"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-layers"/></svg></button>
+        <button role="tab" aria-selected="true" aria-label="文件" title="文件"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-folder"/></svg></button>
+        <button role="tab" aria-selected="false" aria-label="改动" title="改动"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-diff"/></svg></button>
+        <button role="tab" aria-selected="false" aria-label="任务" title="任务"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-activity"/></svg></button>
+        <button role="tab" aria-selected="false" aria-label="网页" title="网页"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#i-globe"/></svg></button>
+      </div>
+      <button class="ch-icon-btn" aria-label="关闭抽屉" title="关闭抽屉"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="ch-section">
+      <h2 class="ch-section-title" style="margin:0;font:600 15px/22px var(--font-sans)">文件</h2>
+      <label class="ch-input">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><use href="#i-search"/></svg>
+        <input type="search" placeholder="查找文件" aria-label="查找文件">
+      </label>
+    </div>
+    <ul class="ch-tree" aria-label="orbit-api 的文件">
+      <li><a href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-folder"/></svg>src</a>
+        <ul class="ch-tree"><li><a href="#" aria-current="page"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-file"/></svg>connection.ts<span class="ch-change ch-change--m" title="已修改">M</span></a></li></ul>
+      </li>
+      <li><a href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-folder"/></svg>tests</a>
+        <ul class="ch-tree"><li><a href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-file"/></svg>reconnect.test.ts<span class="ch-change ch-change--a" title="新增">A</span></a></li></ul>
+      </li>
+      <li><a href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-file"/></svg>README.md</a></li>
+      <li><a href="#"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><use href="#i-file"/></svg>package.json</a></li>
+    </ul>
+  </aside>
+</div>
+</body>
+</html>

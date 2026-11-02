@@ -1,0 +1,25 @@
+<!-- @dsCard group="浮层" height=190 subtitle="说明放进悬停提示，页面只留事实" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Tooltip — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 28px; padding: 96px 24px 24px; }
+</style>
+</head>
+<body>
+<div id="root" class="pv">
+  <h3 class="ch-figure-title"><span class="ch-tip ch-tip--start is-open" tabindex="0">近 30 天被引用<span class="ch-tip-bubble" role="tooltip">任务读取这条知识的次数，按天统计。</span></span></h3>
+  <span class="ch-tip">
+    <button class="ch-btn ch-btn--ghost ch-btn--sm" aria-label="复制链接">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 9.5l3-3"/><path d="M7.2 4.6l.9-.9a2.6 2.6 0 0 1 3.7 3.7l-.9.9"/><path d="M8.8 11.4l-.9.9a2.6 2.6 0 0 1-3.7-3.7l.9-.9"/></svg>
+    </button>
+    <span class="ch-tip-bubble" role="tooltip">复制链接</span>
+  </span>
+  <span class="ch-tip" tabindex="0">
+    <span class="ch-meta">今天 10:24</span>
+    <span class="ch-tip-bubble" role="tooltip">2026-11-02 10:24:31</span>
+  </span>
+</div>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!-- @dsCard group="数据" height=520 width=760 subtitle="单选联动详情 · 批量选择" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ListRow — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: flex; flex-direction: column; gap: 28px; padding: 24px; }
+  .pv > section { display: flex; flex-direction: column; gap: 8px; }
+</style>
+</head>
+<body>
+<div id="root" class="pv area-knowledge">
+  <section>
+    <ul class="ch-list" aria-label="接口规范中的知识">
+      <li class="ch-row is-selected" aria-selected="true">
+        <span class="ch-row-mark"></span>
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">登录接口在会话过期时返回 401</a>
+          <div class="ch-row-meta"><span class="ch-tag">接口行为</span><span class="ch-status"><span class="ch-dot ch-dot--pass"></span>已验证</span><span>来源 2</span><span class="ch-time">今天 10:24</span></div>
+        </div>
+      </li>
+      <li class="ch-row">
+        <span class="ch-row-mark"></span>
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">令牌过期后重新登录的步骤</a>
+          <div class="ch-row-meta"><span class="ch-tag">操作步骤</span><span class="ch-status"><span class="ch-dot ch-dot--pending"></span>待验证</span><span>来源 1</span><span class="ch-time">昨天</span></div>
+        </div>
+      </li>
+      <li class="ch-row">
+        <span class="ch-row-mark"></span>
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">会话的有效期</a>
+          <div class="ch-row-meta"><span class="ch-tag">概念</span><span class="ch-status"><span class="ch-dot ch-dot--pass"></span>已验证</span><span>来源 3</span><span class="ch-time">10-30</span></div>
+        </div>
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="ch-bulkbar"><span>已选 2 条</span><button class="ch-btn ch-btn--secondary ch-btn--sm">分享…</button><button class="ch-btn ch-btn--secondary ch-btn--sm">移动到…</button><button class="ch-btn ch-btn--ghost ch-btn--sm">取消选择</button></div>
+    <ul class="ch-list" aria-label="部署笔记中的知识">
+      <li class="ch-row">
+        <input type="checkbox" checked aria-label="选择：回滚部署前先停止定时任务">
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">回滚部署前先停止定时任务</a>
+          <div class="ch-row-meta"><span class="ch-tag">经验</span><span class="ch-status"><span class="ch-dot ch-dot--pass"></span>已验证</span><span class="ch-time">10-29</span></div>
+        </div>
+      </li>
+      <li class="ch-row">
+        <input type="checkbox" checked aria-label="选择：发布窗口内禁止变更数据库结构">
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">发布窗口内禁止变更数据库结构</a>
+          <div class="ch-row-meta"><span class="ch-tag">经验</span><span class="ch-status"><span class="ch-dot ch-dot--pending"></span>待验证</span><span class="ch-time">10-27</span></div>
+        </div>
+      </li>
+      <li class="ch-row">
+        <input type="checkbox" aria-label="选择：部署检查清单">
+        <div class="ch-row-body">
+          <a class="ch-row-title" href="#">部署检查清单</a>
+          <div class="ch-row-meta"><span class="ch-tag">操作步骤</span><span class="ch-status"><span class="ch-dot ch-dot--pass"></span>已验证</span><span class="ch-time">10-21</span></div>
+        </div>
+      </li>
+    </ul>
+  </section>
+</div>
+</body>
+</html>

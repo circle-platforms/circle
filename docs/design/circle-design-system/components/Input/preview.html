@@ -1,0 +1,36 @@
+<!-- @dsCard group="输入" height=330 width=760 subtitle="搜索框、文本框、出错状态、多行文本" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Input — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 28px; padding: 24px; }
+</style>
+</head>
+<body>
+<div id="root" class="pv">
+  <div class="ch-field">
+    <span class="ch-field-label">搜索</span>
+    <label class="ch-input">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+      <input type="search" placeholder="搜索知识、工作流和任务" aria-label="搜索知识、工作流和任务">
+      <span class="ch-kbd">⌘K</span>
+    </label>
+  </div>
+  <div class="ch-field">
+    <label class="ch-field-label" for="t">标题</label>
+    <div class="ch-input"><input id="t" value="登录接口在会话过期时返回 401"></div>
+    <span class="ch-field-hint">写成一句完整的陈述。</span>
+  </div>
+  <div class="ch-field is-invalid">
+    <label class="ch-field-label" for="f">文件夹名称</label>
+    <div class="ch-input"><input id="f" value="接口规范" aria-invalid="true" aria-describedby="fe"></div>
+    <span class="ch-field-error" id="fe">同一位置已有名为“接口规范”的文件夹。</span>
+  </div>
+  <div class="ch-field">
+    <label class="ch-field-label" for="m">说明</label>
+    <div class="ch-input"><textarea id="m" rows="3" placeholder="补充适用范围或例外情况"></textarea></div>
+  </div>
+</div>
+</body>
+</html>

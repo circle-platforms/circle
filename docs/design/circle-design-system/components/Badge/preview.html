@@ -1,0 +1,37 @@
+<!-- @dsCard group="数据" height=210 width=760 subtitle="状态标签、行内状态、类型标签与数量" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Badge — preview</title>
+<style>
+  body { background: var(--surface-1); }
+  .pv { display: flex; flex-direction: column; gap: 18px; padding: 24px; }
+  .pv > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+  .inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div id="root" class="pv">
+  <div>
+    <span class="ch-badge ch-badge--pass"><span class="ch-dot ch-dot--pass"></span>已验证</span>
+    <span class="ch-badge ch-badge--pending"><span class="ch-dot ch-dot--pending"></span>待验证</span>
+    <span class="ch-badge ch-badge--fail"><span class="ch-dot ch-dot--fail"></span>未通过</span>
+    <span class="ch-badge ch-badge--warn"><span class="ch-dot ch-dot--warn"></span>已被取代</span>
+    <span class="ch-badge ch-badge--info"><span class="ch-dot ch-dot--info"></span>等待判定中</span>
+  </div>
+  <div>
+    <span class="inline"><span class="ch-dot ch-dot--pass"></span>已通过</span>
+    <span class="inline"><span class="ch-dot ch-dot--fail"></span>已拒收</span>
+    <span class="inline"><span class="ch-dot ch-dot--info"></span>等待补充材料中</span>
+    <span class="inline"><span class="ch-dot ch-dot--pending"></span>未检查</span>
+  </div>
+  <div>
+    <span class="ch-tag">接口行为</span>
+    <span class="ch-tag">概念</span>
+    <span class="ch-tag">操作步骤</span>
+    <span class="ch-tag">经验</span>
+    <span class="ch-count">24</span>
+    <span class="ch-nav-alert">1 项告警</span>
+  </div>
+</div>
+</body>
+</html>
