@@ -17,6 +17,7 @@ import {
   hookNoticeText,
   loadHooks,
   matchHookPath,
+  resolveHookCommand,
   type HookDefinition,
 } from '../src/hooks.js';
 import { canonicalPath } from '../src/paths.js';
@@ -1328,5 +1329,83 @@ test('a skill hook runs only after that skill is loaded in this session', async 
   assert.equal(
     runtime.hookListing().find((item) => item.hook.skill === 'lint')?.active,
     false,
+  );
+});
+
+test('a hook entry resolves its command per platform, falling back to command', () => {
+  const entry = {
+    command: 'sh scripts/check.sh',
+    command_windows: 'powershell -NoProfile -File scripts/check.ps1',
+    command_darwin: 'sh scripts/check-mac.sh',
+    command_linux: 'sh scripts/check-linux.sh',
+  };
+  assert.equal(
+    resolveHookCommand(entry, 'win32'),
+    'powershell -NoProfile -File scripts/check.ps1',
+  );
+  assert.equal(resolveHookCommand(entry, 'darwin'), 'sh scripts/check-mac.sh');
+  assert.equal(resolveHookCommand(entry, 'linux'), 'sh scripts/check-linux.sh');
+  assert.equal(
+    resolveHookCommand({ command: 'sh scripts/check.sh' }, 'win32'),
+    'sh scripts/check.sh',
+  );
+  assert.equal(
+    resolveHookCommand(entry, 'freebsd'),
+    'sh scripts/check.sh',
+    'a platform without a field runs the plain command',
+  );
+  assert.equal(
+    resolveHookCommand(
+      { command: 'sh scripts/check.sh', command_windows: 7 },
+      'win32',
+    ),
+    'sh scripts/check.sh',
+    'a non-string override does not replace the command',
+  );
+});
+
+test('a hooks file loads the current platform command and drops bad overrides', (t) => {
+  const { home, workspace, userHome } = layout(t);
+  assert.equal(process.platform, 'linux');
+  writeJson(join(home, 'hooks.json'), {
+    version: 1,
+    hooks: {
+      before_tool: [
+        {
+          command: 'sh scripts/check.sh',
+          command_linux: 'node scripts/check-linux.mjs',
+        },
+        {
+          command: 'sh scripts/check.sh',
+          command_windows: 'powershell -NoProfile -File scripts/check.ps1',
+        },
+        { name: 'kept', command: 'true' },
+        { command: 'sh scripts/check.sh', command_linux: '' },
+        { command: 'sh scripts/check.sh', command_windows: 7 },
+        { command: 'sh scripts/check.sh', command_darwin: 'x'.repeat(4001) },
+      ],
+    },
+  });
+  const loaded = loadHooks({ workspace, home, trusted: true, userHome });
+  assert.deepEqual(
+    loaded.hooks.map((hook) => `${hook.name} · ${hook.command}`),
+    [
+      'node scripts/check-linux.mjs · node scripts/check-linux.mjs',
+      'sh scripts/check.sh · sh scripts/check.sh',
+      'kept · true',
+    ],
+    'the linux entry runs its override and takes its name from it, the windows entry falls back on linux, and the bad overrides drop without taking the valid entries with them',
+  );
+  assert.ok(
+    loaded.errors.some((error) => error.message.includes('command_linux')),
+    'an empty override is reported by field name',
+  );
+  assert.ok(
+    loaded.errors.some((error) => error.message.includes('command_windows')),
+    'a non-string override is reported even on a platform that would not run it',
+  );
+  assert.ok(
+    loaded.errors.some((error) => error.message.includes('command_darwin')),
+    'an overlong override is reported by field name',
   );
 });
