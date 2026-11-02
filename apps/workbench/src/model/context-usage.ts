@@ -33,7 +33,7 @@ export function contextUsage(session: Pick<Session, 'meters'>): ContextUsage {
       : 'N/A');
   const fill =
     meters && meters.contextInput !== null
-      ? `${formatTokens(meters.contextInput)} / ${meters.contextWindow ? formatWindow(meters.contextWindow) : 'N/A'}`
+      ? `${meters.contextEstimated ? '~' : ''}${formatTokens(meters.contextInput)} / ${meters.contextWindow ? formatWindow(meters.contextWindow) : 'N/A'}`
       : 'N/A';
   return {
     percent,

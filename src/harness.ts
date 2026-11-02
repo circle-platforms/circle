@@ -1108,6 +1108,7 @@ export class Harness {
           // After the user message is stored, and not for a title or side request.
           this.options.store.noteTurn(this.sessionId);
           const response = await this.model.complete({
+            enforceBudget: true,
             system:
               this.system +
               (this.hookPreface ? `\n\n${this.hookPreface}` : '') +
@@ -1288,8 +1289,18 @@ export class Harness {
       }
       this.flushTitle();
       const failure = signal.aborted ? signal.reason : error;
+      const compactionOperationId =
+        (error as { compactionOperationId?: string })?.compactionOperationId ??
+        (failure as { compactionOperationId?: string })?.compactionOperationId;
+      // A turn and its compactor have separate AbortControllers. Preserve the
+      // operation identity when the turn's cancellation reason replaces its error.
+      if (compactionOperationId && failure instanceof Error)
+        Object.assign(failure, { compactionOperationId });
       this.bus.emit('run_error', {
         payload: {
+          ...(compactionOperationId
+            ? { compaction_operation_id: compactionOperationId }
+            : {}),
           message: redact(
             failure instanceof Error ? failure.message : String(failure),
           ),

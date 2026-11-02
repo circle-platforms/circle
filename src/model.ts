@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import type {
@@ -49,6 +50,18 @@ import {
   anthropicContent,
 } from './model_media.js';
 import { orderModeToolResults } from './tool_history.js';
+import {
+  budgetForEstimate,
+  BudgetExceeded,
+  providerInputEstimate,
+  resolveBudget,
+  type RequestFrame,
+} from './request_budget.js';
+import {
+  isContextLimitError,
+  ModelCompletionFailure,
+  providerErrorRecords,
+} from './model_completion.js';
 // What a Chat Completions tool row says when the tool returned no text. Strict
 // gateways such as DashScope reject a message whose content is empty.
 const EMPTY_TOOL_RESULT = '(no output)';
@@ -111,6 +124,7 @@ export class GatewayModel implements ChatModel {
   readonly model: string;
   /** A title request may call `complete` while a turn is in flight. */
   readonly sideRequests = true;
+  readonly reportsAttempts = true;
   private openai?: OpenAI;
   private anthropic?: Anthropic;
   // How long a request waits for the answer to start (`CIRCLE_LLM_TIMEOUT`)
@@ -118,13 +132,16 @@ export class GatewayModel implements ChatModel {
   effort: string;
   private readonly dropped = new Set<string>();
   /**
-   * Parameters the latest requests sent, newest last. Each request keeps its own set:
-   * a title request beside the turn must not replace the turn's, or a 400 would drop
-   * the wrong field. The guard drops a field after its request returned.
+   * The current physical attempt's parameters, scoped to this asynchronous request.
+   * Titles and parallel summaries must not replace each other's rejection evidence.
    */
-  private readonly sentRecent: Set<string>[] = [];
+  private readonly sentParameters = new AsyncLocalStorage<Set<string>>();
   private readonly thinkingScope: string;
   private readonly rejectedThinking = new Set<string>();
+  private observedContextLimit?: number;
+  private observedInputLimit?: number;
+  private observedOutputLimit?: number;
+  private estimateFactor = 1.5;
   private readonly guard: ModelGuard;
   readonly catalog: ModelCatalog;
   private readonly searchConnection: import('./native_websearch.js').NativeSearchConnection;
@@ -202,13 +219,79 @@ export class GatewayModel implements ChatModel {
       (message.attachments ?? []).some((item) => item.kind === 'image'),
     );
     try {
-      response = await this.guard.execute(request, (current) =>
-        this.anthropic
-          ? this.completeAnthropic(current)
-          : this.completeOpenAI(current),
+      response = await this.sentParameters.run(new Set<string>(), () =>
+        this.guard.execute(request, (current) =>
+          this.anthropic
+            ? this.completeAnthropic(current)
+            : this.completeOpenAI(current),
+        ),
       );
     } catch (error) {
       if (request.signal.aborted) throw error;
+      const records = providerErrorRecords(error);
+      const limit = (name: string) =>
+        records
+          .map((row) => row[name])
+          .find(
+            (value) =>
+              typeof value === 'number' &&
+              Number.isSafeInteger(value) &&
+              value > 0,
+          ) as number | undefined;
+      const output = limit('max_output_tokens');
+      if (output !== undefined)
+        this.observedOutputLimit = Math.min(
+          this.observedOutputLimit ?? Infinity,
+          output,
+        );
+      if (isContextLimitError(error)) {
+        const detail = error as {
+          error?: { max_context_tokens?: number; max_input_tokens?: number };
+          message?: string;
+        };
+        const context =
+          limit('max_context_tokens') ??
+          Number(
+            detail.message?.match(/maximum context length is\s+(\d+)/i)?.[1],
+          );
+        const input = limit('max_input_tokens');
+        if (Number.isSafeInteger(context) && context > 0)
+          this.observedContextLimit = Math.min(
+            this.observedContextLimit ?? Infinity,
+            context,
+          );
+        if (input !== undefined && Number.isSafeInteger(input) && input > 0)
+          this.observedInputLimit = Math.min(
+            this.observedInputLimit ?? Infinity,
+            input,
+          );
+        if (error instanceof ModelCompletionFailure) throw error;
+        const failure = new ModelCompletionFailure('context_limit');
+        failure.providerError = {
+          code: records
+            .map((row) => row.code)
+            .find((code) => typeof code === 'string') as string | undefined,
+          message: detail.message ?? String(error),
+          contextLimit:
+            Number.isSafeInteger(context) && context > 0 ? context : undefined,
+          inputLimit: input,
+          outputLimit: output,
+        };
+        throw failure;
+      }
+      if (
+        output !== undefined &&
+        request.maxTokens &&
+        request.maxTokens > output
+      ) {
+        const failure = new ModelCompletionFailure('output_limit');
+        failure.message = 'requested output exceeds the endpoint limit';
+        failure.providerError = {
+          message: error instanceof Error ? error.message : String(error),
+          outputLimit: output,
+        };
+        throw failure;
+      }
       // A model Circle does not know may not read images; the endpoint says so as a 400
       // the field-dropping guard cannot fix, so say which part of the request that was
       const status =
@@ -243,14 +326,129 @@ export class GatewayModel implements ChatModel {
     return response;
   }
   get modelFacts(): ModelFacts {
-    return this.catalog.facts(
+    const facts = this.catalog.facts(
       this.model,
       this.settings,
       modelProfile(this.settings.auth.protocol, this.model)?.max_input_tokens,
     );
+    return this.observedContextLimit === undefined ||
+      this.observedContextLimit >= facts.contextWindow
+      ? facts
+      : {
+          ...facts,
+          contextWindow: Math.min(
+            facts.contextWindow,
+            this.observedContextLimit,
+          ),
+          windowKnown: true,
+          windowSource: 'provider',
+        };
   }
   get contextWindow(): number {
-    return this.modelFacts.contextWindow;
+    return Math.min(
+      this.modelFacts.contextWindow,
+      this.observedContextLimit ?? Infinity,
+    );
+  }
+  get inputLimit(): number | undefined {
+    const limit = Math.min(
+      this.modelFacts.inputLimit ?? Infinity,
+      this.observedInputLimit ?? Infinity,
+    );
+    return Number.isFinite(limit) ? limit : undefined;
+  }
+  get outputLimit(): number | undefined {
+    const limit = Math.min(
+      this.modelFacts.outputLimit ??
+        modelProfile(this.settings.auth.protocol, this.model)
+          ?.max_output_tokens ??
+        Infinity,
+      this.observedOutputLimit ?? Infinity,
+    );
+    return Number.isFinite(limit) ? limit : undefined;
+  }
+  get budgetIdentity(): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify([
+          this.thinkingScope,
+          this.effort,
+          [...this.dropped].sort(),
+          this.settings.models[this.model],
+        ]),
+      )
+      .digest('hex');
+  }
+  get inputEstimateFactor(): number {
+    return this.estimateFactor;
+  }
+  estimateInput(request: RequestFrame): number {
+    const full = {
+      ...request,
+      signal: new AbortController().signal,
+      token: () => {},
+    };
+    const projected = {
+      ...full,
+      messages: leaveOutImages(
+        orderModeToolResults(full.messages),
+        this.imageInput === false,
+      ),
+    };
+    const body = this.anthropic
+      ? this.anthropicBody(this.projectThinking(projected))
+      : this.openAIBody(projected);
+    return providerInputEstimate({
+      system: 'system' in body ? body.system : undefined,
+      messages: body.messages,
+      tools: body.tools,
+    });
+  }
+  private observeRequest(
+    request: ModelRequest,
+    body: {
+      messages: unknown;
+      tools?: unknown;
+      system?: unknown;
+      max_tokens?: number | null;
+      max_completion_tokens?: number | null;
+    },
+  ) {
+    const estimate = providerInputEstimate({
+      system: body.system,
+      messages: body.messages,
+      tools: body.tools,
+    });
+    const budget = budgetForEstimate(
+      this,
+      resolveBudget(this),
+      estimate,
+      body.max_completion_tokens ??
+        body.max_tokens ??
+        resolveBudget(this).output,
+    );
+    if (request.enforceBudget && !budget.fits) throw new BudgetExceeded(budget);
+    const id = randomUUID();
+    const report = (
+      phase: 'start' | 'usage' | 'end',
+      usage?: import('./types.js').Usage,
+      finish?: ModelCompletion,
+    ) => {
+      if (usage && estimate > 0 && usage.input_tokens > 0)
+        this.estimateFactor = Math.max(
+          this.estimateFactor,
+          (usage.input_tokens / estimate) * 1.1,
+        );
+      request.observeAttempt?.({
+        id,
+        phase,
+        budget,
+        usage,
+        completion: finish,
+      });
+    };
+    report('start');
+    return Object.assign(report, { budget });
   }
   // How long this try waits for the answer to start: longer after a timeout, but no more
   // than the 5 minutes Node.js's fetch waits for an answer anyway
@@ -267,7 +465,15 @@ export class GatewayModel implements ChatModel {
     );
   }
   get outputBudget(): number | undefined {
-    if (!this.anthropic) return undefined;
+    if (!this.anthropic)
+      return Math.max(
+        1,
+        Math.min(
+          this.outputLimit ?? 4096,
+          32000,
+          Math.floor(this.contextWindow / 4),
+        ),
+      );
     const profile = modelProfile('anthropic', this.model);
     const legacy =
       this.model.toLowerCase().split('/').at(-1)?.startsWith('claude') &&
@@ -282,7 +488,7 @@ export class GatewayModel implements ChatModel {
       Math.min(
         desired,
         Math.floor(this.contextWindow / 4),
-        this.modelFacts.outputLimit ?? profile?.max_output_tokens ?? Infinity,
+        this.outputLimit ?? Infinity,
       ),
     );
   }
@@ -293,19 +499,14 @@ export class GatewayModel implements ChatModel {
     return chosen;
   }
   private sent(parameter: string): boolean {
-    return this.sentRecent.some((sent) => sent.has(parameter));
+    return this.sentParameters.getStore()?.has(parameter) ?? false;
   }
   get downgrades(): Record<string, string> {
     return Object.fromEntries(this.guard.downgrades);
   }
   private dropParameter(parameter: string): boolean {
     if (parameter === 'thinking.display') {
-      if (
-        !this.anthropic ||
-        !this.sent(parameter) ||
-        this.dropped.has(parameter)
-      )
-        return false;
+      if (!this.anthropic || !this.sent(parameter)) return false;
       this.dropped.add(parameter);
       return true;
     }
@@ -323,8 +524,7 @@ export class GatewayModel implements ChatModel {
         'parallel_tool_calls',
         'betas',
       ].includes(root) ||
-      !this.sent(root) ||
-      this.dropped.has(root)
+      !this.sent(root)
     )
       return false;
     this.dropped.add(root);
@@ -339,10 +539,13 @@ export class GatewayModel implements ChatModel {
     const sent = new Set(Object.keys(body));
     if (isRecord(body.thinking) && body.thinking.display !== undefined)
       sent.add('thinking.display');
-    this.sentRecent.push(sent);
-    if (this.sentRecent.length > 8) this.sentRecent.shift();
+    const current = this.sentParameters.getStore();
+    current?.clear();
+    for (const parameter of sent) current?.add(parameter);
   }
-  private async completeOpenAI(request: ModelRequest): Promise<ModelResponse> {
+  private openAIBody(
+    request: ModelRequest,
+  ): ChatCompletionCreateParamsStreaming {
     const messages: ChatCompletionMessageParam[] = [
       { role: 'system', content: request.system },
     ];
@@ -432,8 +635,27 @@ export class GatewayModel implements ChatModel {
     if (effort)
       body.reasoning_effort =
         effort as ChatCompletionCreateParamsStreaming['reasoning_effort'];
-    if (request.maxTokens) body.max_tokens = request.maxTokens;
+    const output =
+      request.maxTokens ??
+      (request.enforceBudget ? this.outputBudget : undefined);
+    if (output !== undefined) {
+      const field = this.settings.models[this.model]?.output_parameter;
+      if (
+        field === 'max_completion_tokens' ||
+        (field !== 'max_tokens' &&
+          /^(?:o[1-9](?:-|$)|gpt-(?:5|6)(?:[.-]|$))/i.test(
+            this.model.split('/').at(-1) ?? '',
+          ))
+      )
+        body.max_completion_tokens = output;
+      else body.max_tokens = output;
+    }
+    return body;
+  }
+  private async completeOpenAI(request: ModelRequest): Promise<ModelResponse> {
+    const body = this.openAIBody(request);
     this.configureBody(body as unknown as Record<string, unknown>);
+    const observe = this.observeRequest(request, body);
     const stream = await this.openai!.chat.completions.create(body, {
       signal: request.signal,
       timeout: this.requestTimeout(request),
@@ -453,6 +675,9 @@ export class GatewayModel implements ChatModel {
     let servedModel = this.model;
     const calls = new Map<number, { id: string; name: string; args: string }>();
     const usage = emptyUsage();
+    let usageReported = false;
+    let inputReported = false;
+    let outputReported = false;
     let cacheReported = false;
     let guardedStop = false;
     try {
@@ -460,6 +685,9 @@ export class GatewayModel implements ChatModel {
         if (request.signal.aborted) break;
         if (chunk.model) servedModel = chunk.model;
         if (chunk.usage) {
+          inputReported ||= Number.isFinite(chunk.usage.prompt_tokens);
+          outputReported ||= Number.isFinite(chunk.usage.completion_tokens);
+          usageReported = inputReported && outputReported;
           usage.input_tokens = Math.max(
             usage.input_tokens,
             chunk.usage.prompt_tokens || 0,
@@ -474,6 +702,7 @@ export class GatewayModel implements ChatModel {
             usage.cache_read_tokens = Math.max(usage.cache_read_tokens, cached);
           }
           request.progress?.('usage');
+          observe('usage', { ...usage });
         }
         const choice = chunk.choices[0];
         if (!choice) continue;
@@ -541,13 +770,25 @@ export class GatewayModel implements ChatModel {
         thinking,
         tool_calls,
         ...(cacheReported ? {} : { cache_reported: false }),
-        completion: completion('openai', finish, undefined, guardedStop),
+        completion: completion(
+          'openai',
+          finish,
+          body.max_completion_tokens ?? body.max_tokens ?? undefined,
+          guardedStop,
+        ),
+        ...(request.enforceBudget ? { request_budget: observe.budget } : {}),
         ...(guardedStop || !finish || finish === 'length'
           ? { truncated: true }
           : {}),
       },
       usage,
+      ...(usageReported ? {} : { usageReported: false }),
     };
+    observe(
+      'end',
+      usageReported ? response.usage : undefined,
+      response.message.completion,
+    );
     if (!finish && !guardedStop)
       throw new MissingFinish(
         response,
@@ -575,6 +816,7 @@ export class GatewayModel implements ChatModel {
           message.provider_content?.some(isThinkingBlock),
       );
       if (!signed.length) throw error;
+      request.recovery?.take();
       // Legacy/imported histories have no scope. Only an explicit server rejection
       // authorizes dropping their signed blocks, once, from requests to this model.
       // Keep original checkpoints intact, and keep newly generated thinking intact.
@@ -621,7 +863,9 @@ export class GatewayModel implements ChatModel {
       }),
     };
   }
-  private async sendAnthropic(request: ModelRequest): Promise<ModelResponse> {
+  private anthropicBody(
+    request: ModelRequest,
+  ): MessageCreateParamsNonStreaming {
     const messages: MessageParam[] = [];
     let system = request.system;
     for (const message of request.messages) {
@@ -732,7 +976,12 @@ export class GatewayModel implements ChatModel {
     ) {
       body.thinking.display = 'summarized';
     }
+    return body;
+  }
+  private async sendAnthropic(request: ModelRequest): Promise<ModelResponse> {
+    const body = this.anthropicBody(request);
     this.configureBody(body as unknown as Record<string, unknown>);
+    const observe = this.observeRequest(request, body);
     // Consume the SDK's raw stream so tool JSON cannot throw inside its message
     // accumulator before later usage and stop events have been read.
     const stream = await this.anthropic!.messages.create(
@@ -752,6 +1001,7 @@ export class GatewayModel implements ChatModel {
     request.signal.addEventListener('abort', stopStream, { once: true });
     request.progress?.('connected');
     let snapshot: Anthropic.Message | undefined;
+    let outputUsageReported = false;
     const inputParts = new Map<number, string>();
     let messageStopped = false;
     let guardedStop = false;
@@ -760,6 +1010,14 @@ export class GatewayModel implements ChatModel {
         if (request.signal.aborted) break;
         if (event.type === 'message_start') {
           snapshot = structuredClone(event.message);
+          observe('usage', {
+            input_tokens:
+              (snapshot.usage.input_tokens ?? 0) +
+              (snapshot.usage.cache_read_input_tokens ?? 0) +
+              (snapshot.usage.cache_creation_input_tokens ?? 0),
+            output_tokens: snapshot.usage.output_tokens ?? 0,
+            cache_read_tokens: snapshot.usage.cache_read_input_tokens ?? 0,
+          });
           for (const block of snapshot.content) {
             if (block.type === 'text' && block.text) request.token(block.text);
             else if (block.type === 'thinking' && block.thinking)
@@ -768,6 +1026,7 @@ export class GatewayModel implements ChatModel {
         } else if (!snapshot) {
           throw new Error('Anthropic stream event preceded message_start');
         } else if (event.type === 'message_delta') {
+          outputUsageReported ||= Number.isFinite(event.usage.output_tokens);
           Object.assign(snapshot, event.delta);
           // Usage events are cumulative, including cache categories when present.
           // Null means omitted, not zero; preserve known counters as the SDK does.
@@ -776,6 +1035,26 @@ export class GatewayModel implements ChatModel {
             Object.fromEntries(
               Object.entries(event.usage).filter(([, value]) => value != null),
             ),
+          );
+          observe(
+            'usage',
+            {
+              input_tokens:
+                snapshot.usage.input_tokens +
+                (snapshot.usage.cache_read_input_tokens ?? 0) +
+                (snapshot.usage.cache_creation_input_tokens ?? 0),
+              output_tokens: snapshot.usage.output_tokens,
+              cache_read_tokens: snapshot.usage.cache_read_input_tokens ?? 0,
+              ...(snapshot.usage.cache_creation_input_tokens
+                ? {
+                    cache_write_tokens:
+                      snapshot.usage.cache_creation_input_tokens,
+                  }
+                : {}),
+            },
+            snapshot.stop_reason
+              ? completion('anthropic', snapshot.stop_reason, body.max_tokens)
+              : undefined,
           );
         } else if (event.type === 'content_block_start') {
           const block = structuredClone(event.content_block);
@@ -916,6 +1195,7 @@ export class GatewayModel implements ChatModel {
             : {}),
         },
         thinking_scope: this.thinkingScope,
+        ...(request.enforceBudget ? { request_budget: observe.budget } : {}),
         ...(guardedStop ||
         missingFinish ||
         final.stop_reason === 'max_tokens' ||
@@ -925,10 +1205,10 @@ export class GatewayModel implements ChatModel {
       },
       usage: {
         input_tokens:
-          final.usage.input_tokens +
+          (final.usage.input_tokens ?? 0) +
           (final.usage.cache_read_input_tokens ?? 0) +
           (final.usage.cache_creation_input_tokens ?? 0),
-        output_tokens: final.usage.output_tokens,
+        output_tokens: final.usage.output_tokens ?? 0,
         cache_read_tokens: final.usage.cache_read_input_tokens ?? 0,
         ...(final.usage.cache_creation_input_tokens
           ? { cache_write_tokens: final.usage.cache_creation_input_tokens }
@@ -940,7 +1220,15 @@ export class GatewayModel implements ChatModel {
             }
           : {}),
       },
+      ...(!outputUsageReported || !Number.isFinite(final.usage.input_tokens)
+        ? { usageReported: false }
+        : {}),
     };
+    observe(
+      'end',
+      response.usageReported === false ? undefined : response.usage,
+      response.message.completion,
+    );
     if (missingFinish && !guardedStop)
       throw new MissingFinish(
         response,

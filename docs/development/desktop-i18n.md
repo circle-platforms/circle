@@ -11,6 +11,10 @@ The first start follows the system language: any Chinese system language gives C
 
 Checks and the packaged-app tests run with a test profile, and then the window is English on any machine. `CIRCLE_WORKBENCH_LANGUAGE` (for example `en-US` or `zh-CN`) sets the language for a run.
 
+Compaction state is projected per session from the shared runtime, including manual operations that have no assistant turn. Its status labels and persistent outcomes use `t('…')`; provider and user text remain unchanged. Progress uses the existing ordered delta channel without copying conversation history. A renderer refresh reads the authoritative operation snapshot.
+
+`npm --prefix apps/desktop run test:compaction` exercises the native main process, preload, worker and renderer against a scripted model. It uses an isolated profile and a hidden window; `CIRCLE_WORKBENCH_BACKGROUND_TEST=1` is honored only with an explicit test profile. The test covers both development and packaged executables, cancellation and the normal worker-restart lease delay.
+
 ## How a text is translated
 
 English is the key. In the renderer (`apps/workbench/src`):

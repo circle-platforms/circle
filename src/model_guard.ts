@@ -4,6 +4,7 @@ import type { ModelRequest, ModelResponse, ModelNotice } from './types.js';
 import { RepetitionMonitor } from './text_repetition.js';
 import { isRecord } from './settings.js';
 import { isCertificateError } from './net.js';
+import { isContextLimitError } from './model_completion.js';
 export type RetryKind =
   'rate_limit' | 'server' | 'network' | 'timeout' | 'inband';
 export interface RetryBudget {
@@ -163,6 +164,7 @@ function tlsFailure(error: unknown): boolean {
   return false;
 }
 export function errorKind(error: unknown): RetryKind | undefined {
+  if (isContextLimitError(error)) return undefined;
   if (error instanceof StreamStalled) return 'timeout';
   if (error instanceof TextRepetitionLoop || error instanceof MissingFinish)
     return undefined;
@@ -377,6 +379,7 @@ export class ModelGuard {
     const budgets = this.options.budgets ?? BUDGETS;
     let drops = 0;
     let repeats = 0;
+    let tries = 0;
     let current = request;
     const notice = (event: ModelNotice): void => {
       try {
@@ -387,6 +390,7 @@ export class ModelGuard {
     };
     while (true) {
       request.signal.throwIfAborted();
+      if (tries++ > 0) request.recovery?.take();
       const controller = new AbortController();
       const signal = AbortSignal.any([request.signal, controller.signal]);
       let yielded = false;

@@ -7,6 +7,7 @@ import type { CircleEvent } from '../events.js';
 import type { Message, ToolModelCall } from '../types.js';
 import { pickBusyVerb, type TurnUsage } from './status_rows.js';
 import type { ScreenState } from './render.js';
+import type { CompactionEvent } from '../compaction.js';
 
 // What a retry follows, by the kind of error (`model_guard.ts`)
 const RETRY_CAUSE: Record<string, string> = {
@@ -24,6 +25,9 @@ export class TurnStatus {
   // Characters of the reply still streaming: the busy word and the footer count them
   // before the request reports a usage.
   private liveChars = 0;
+  private compactionTokens = 0;
+  private countedCompactions = new Set<string>();
+  private compactionOutput = new Map<string, number>();
   // The model request being tried again (`timeout 3/10`), until it answers or the turn ends
   retry?: string;
   readonly usage: Record<string, TurnUsage> = {};
@@ -38,6 +42,7 @@ export class TurnStatus {
     input: number;
     output: number;
     cost: number | null;
+    unreported?: boolean;
   };
   constructor(private random = Math.random) {}
 
@@ -51,6 +56,51 @@ export class TurnStatus {
     // A background agent's work is not this turn's.
     if (subagent && event.tags.job_id) return;
     const turn = this.turn;
+    if (event.kind === 'compaction') {
+      const progress = event.payload as unknown as CompactionEvent;
+      if (progress.snapshot?.trigger !== 'tool' && !subagent) {
+        this.verb = 'compacting';
+      }
+      const call = progress.attempt;
+      if (
+        call &&
+        call.status !== 'running' &&
+        !this.countedCompactions.has(call.id) &&
+        progress.trigger !== 'tool'
+      ) {
+        this.countedCompactions.add(call.id);
+        const output = call.usage?.output_tokens ?? 0;
+        this.compactionOutput.set(
+          call.operationId,
+          (this.compactionOutput.get(call.operationId) ?? 0) + output,
+        );
+        this.tokens += output;
+        if (turn) {
+          if (!call.usageComplete) turn.unreported = true;
+          turn.input += call.usage?.input_tokens ?? 0;
+          turn.output += output;
+          const cost = call.cost;
+          turn.cost =
+            turn.cost === null ||
+            !cost ||
+            cost.currency !== 'USD' ||
+            cost.amount === null
+              ? null
+              : turn.cost + Math.max(0, cost.amount);
+        }
+      }
+      if (progress.snapshot?.trigger !== 'tool' && !subagent) {
+        const s = progress.snapshot;
+        this.compactionTokens =
+          s?.status === 'running'
+            ? Math.max(
+                0,
+                s.usage.output_tokens -
+                  (this.compactionOutput.get(s.operationId) ?? 0),
+              ) + s.liveTokens
+            : 0;
+      }
+    }
     if (event.kind === 'tool_waiting' && turn) turn.waitingSince ??= now;
     if (
       (event.kind === 'tool_start' || event.kind === 'tool_result') &&
@@ -116,6 +166,9 @@ export class TurnStatus {
     )
       this.retry = undefined;
     if (event.kind === 'run_start') {
+      this.countedCompactions.clear();
+      this.compactionOutput.clear();
+      this.compactionTokens = 0;
       this.verb = pickBusyVerb(this.random);
       this.tokens = 0;
       this.liveChars = 0;
@@ -157,6 +210,7 @@ export class TurnStatus {
           input: turn.input,
           output: turn.output + this.pendingOutput,
           cost: turn.cost,
+          ...(turn.unreported ? { unreported: true } : {}),
         };
       this.liveChars = 0;
       this.turn = undefined;
@@ -165,7 +219,10 @@ export class TurnStatus {
 
   /** Output tokens of the reply still streaming, estimated from its text. */
   get pendingOutput(): number {
-    return this.liveChars ? Math.max(1, Math.ceil(this.liveChars / 4)) : 0;
+    return (
+      (this.liveChars ? Math.max(1, Math.ceil(this.liveChars / 4)) : 0) +
+      this.compactionTokens
+    );
   }
 
   // A subagent's rounds think too: how long, by the id of the answer, for its page.
