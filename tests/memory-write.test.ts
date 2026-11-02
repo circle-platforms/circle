@@ -55,7 +55,7 @@ test('a remembered line is written to the project MEMORY.md, once, as one line',
     file,
     '# Memory\n\n- 2026-10-30 \u00b7 the release branch is 9.3\n',
   );
-  const again = addMemory(project(workspace), 'the release branch is 9.3');
+  const again = addMemory(project(workspace), 'the release branch is 9.3', DAY);
   assert.equal(again.ok, false);
   assert.match(again.why, /already in/);
   void home;
@@ -67,7 +67,7 @@ test('a note the person wrote stays in the file and is not offered for removal',
     join(workspace, 'MEMORY.md'),
     '# Notes\n\nPrefer pnpm over npm here.\n',
   );
-  const added = addMemory(project(workspace), 'CI is on ubuntu-24.04');
+  const added = addMemory(project(workspace), 'CI is on ubuntu-24.04', DAY);
   assert.equal(added.ok, true, added.why);
   assert.equal(
     readFileSync(join(workspace, 'MEMORY.md'), 'utf8'),
