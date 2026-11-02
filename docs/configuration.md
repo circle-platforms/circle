@@ -52,6 +52,30 @@ To have Circle write a starting `AGENTS.md` for a project, run `/init`. It reads
 
 `circle --no-context-files` (`-nc`) leaves out every `AGENTS.md`, `AGENTS.override.md` and `CLAUDE.md` for one run. `MEMORY.md` is still read.
 
+## Memory Circle writes
+
+`MEMORY.md` is read like the files above and, unlike them, Circle can write it too: one dated line per fact, for what a session learns and the next one should not have to find out again.
+
+```text
+# Memory
+
+- 2026-10-30 · the release branch is 9.3
+```
+
+`/memory` lists those lines, `/memory add <note>` writes one, `/memory remove <number>` takes one back. `/memory add account <note>` writes to the data folder's `MEMORY.md`, for what applies to anything you work on rather than this repository alone. The list counts the workspace's lines first and the data folder's after, and only lines Circle wrote: text you put in the same file stays yours, is not offered for removal, and is not rewritten by one. A line about the project waits for the folder to be trusted (`/trust`), the same as any other write into it; the account file needs no trust, being Circle's own folder.
+
+Three limits, each with its reason:
+
+| Limit | Why |
+| --- | --- |
+| one line per `add`, with runs of whitespace and newlines folded to one line | the note has to stay one line, so the list can show it and a removal can find it again |
+| 240 characters at most, counting the date | one fact per line; the refusal says how far over it came |
+| the file is never grown past 24,000 bytes | that is all the prompt reads, so a line past the end would be written and never seen · trim it, or remove a line |
+
+Nothing is captured on its own: a line appears when you say so. The `add` notice carries the number that takes it back, because removing a line moves the ones under it up.
+
+`-nc` does not leave these out. `--no-context-files` is about instructions; a dated note is memory, and both `MEMORY.md` files are still read with it.
+
 ## System prompt
 
 Circle's system prompt starts with its own instructions, then the instruction files, the environment (folder, platform, date) and anything appended. Two files change it, the way pi's do, in a project's `.circle/` folder or in the data folder:
