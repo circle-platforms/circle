@@ -106,6 +106,10 @@ export interface Tool {
   parameters: Record<string, unknown>;
   effect: Effect;
   approval?: boolean;
+  /** Person confirmation is mandatory, including auto mode and hook allows. */
+  personApproval?: boolean;
+  /** Remove rejected sensitive proposals before durable history/events; must not publish data. */
+  privacy?: (call: ToolCall) => ToolCall;
   /** False keeps the tool from subagents: it belongs to the conversation the user sees. */
   subagents?: boolean;
   /**

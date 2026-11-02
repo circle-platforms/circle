@@ -32,6 +32,57 @@
         }
       ]
     },
+    "positions": {
+      "maxItems": 500,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ground": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ground",
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "parser_locks": {
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "parser": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]*@(?:0|[1-9][0-9]*)$"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "parser",
+          "digest"
+        ],
+        "additionalProperties": false
+      }
+    },
     "codes": {
       "maxItems": 100,
       "type": "array",

@@ -555,14 +555,14 @@ test('newer and unrelated databases are rejected without downgrading or changing
     id = store.clientId;
   store.close();
   const db = new DatabaseSync(path);
-  db.exec('PRAGMA user_version=2');
+  db.exec('PRAGMA user_version=3');
   db.close();
   const before = readFileSync(path);
   assert.throws(() => new KnowledgeStore(home), /newer/);
   assert.deepEqual(readFileSync(path), before);
   const check = new DatabaseSync(path);
   t.after(() => check.close());
-  assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 2);
+  assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 3);
   assert.equal(
     check.prepare("SELECT value FROM metadata WHERE key='client_id'").get()!
       .value,

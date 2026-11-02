@@ -177,11 +177,16 @@ function objectRules(object: SyncObject): void {
       );
       break;
     case 'source_revision':
-      requireRule(wellFormedText(object.body.name), 'source name Unicode');
+      requireRule(
+        object.body.name === null || wellFormedText(object.body.name),
+        'source name Unicode',
+      );
       break;
     case 'entry_revision':
       requireRule(
-        object.body.grounds.every((ground) => wellFormedText(ground.selector)),
+        object.body.grounds.every(
+          (ground) => !('source' in ground) || wellFormedText(ground.selector),
+        ),
         'selector Unicode',
       );
       break;

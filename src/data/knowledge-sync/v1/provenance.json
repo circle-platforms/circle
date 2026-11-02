@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/circle-platforms/circle-hub",
-  "commit": "19525b436b8250b8d7f8de8e8d5293014f7d84f3",
+  "commit": "071a61250a1b9f4be67823a5bc9d180163b95e26",
   "license": "Apache-2.0",
   "files": [
     {
@@ -61,7 +61,7 @@
     {
       "source": "contracts/generated/schemas/personal-sync-object.v1.schema.json",
       "path": "src/data/knowledge-sync/v1/personal-sync-object.v1.schema.json",
-      "sha256": "2dd17a7524b08607fedab8895363cec4242da4cc44c651d62953f4d7cce83496"
+      "sha256": "48f73a55099ba808e5e8407345fef2b49832a5af97210d13eff6c04f6f5dda43"
     },
     {
       "source": "contracts/generated/schemas/personal-sync-receipt.v1.schema.json",
@@ -71,7 +71,7 @@
     {
       "source": "contracts/generated/schemas/personal-sync-result.v1.schema.json",
       "path": "src/data/knowledge-sync/v1/personal-sync-result.v1.schema.json",
-      "sha256": "406c7417e786b8072fd68a846acbc0e4a9c74ef4b70863a11d51b2d921f3ff31"
+      "sha256": "5d75d527b5682f287c14ff65b521dda6afc1a1780d11a8075aef4914b3edb579"
     },
     {
       "source": "contracts/generated/schemas/personal-sync-session-reply.v1.schema.json",
@@ -101,12 +101,12 @@
     {
       "source": "contracts/generated/schemas/personal-sync-verification.v1.schema.json",
       "path": "src/data/knowledge-sync/v1/personal-sync-verification.v1.schema.json",
-      "sha256": "6ac2dfb7f8ffbf0616ec996389cbd4287de88285a57445ab5262367de1674ac2"
+      "sha256": "4f1658c0e192a8dca56d798015190d06cb4d45121178490e41e857782b36b99c"
     },
     {
       "source": "contracts/test-fixtures/sync/v1/README.md",
       "path": "tests/fixtures/knowledge-sync/v1/README.md",
-      "sha256": "682b44356b6704e96459f3dc1c741289f598db48a9cbab8a94557818b67e6c5b"
+      "sha256": "2679461fa43ded24ec19093dac685b6c802b54c47dca1ac494613a1d0d40731d"
     },
     {
       "source": "contracts/test-fixtures/sync/v1/encoding.json",
@@ -132,12 +132,17 @@
       "source": "NOTICE",
       "path": "src/data/knowledge-sync/v1/UPSTREAM_NOTICE",
       "sha256": "15cfa8b20ba54d1efb6b7d5d4f836d912922ccd50cf9ee93823d6f01b92ba333"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1/native-links.json",
+      "path": "tests/fixtures/knowledge-sync/v1/native-links.json",
+      "sha256": "9cd12a4fcf155326234b6ff80c29ad36243cee966d2ac08e0e4a290800499b94"
     }
   ],
   "references": [
     {
       "source": "contracts/src/sync.ts",
-      "sha256": "ef2d4f3b03506e2e7cc40fb0c3355f6d583ae4167688d9c0ec15a7662a89b95b"
+      "sha256": "02dae73a1b3a2ab2e614281999ad6cb11856045244c9607470f36599982cb67f"
     },
     {
       "source": "contracts/src/sync-canonical.ts",
@@ -161,9 +166,7 @@
     },
     {
       "source": "contracts/src/spaces.ts",
-      "sha256": "a48f7edb97981f79f99500b10bf18a1c8c4bfc771be0f2e2ff0fe4c5c88619db",
-      "workingTreeObservation": true,
-      "committedSha256": "26a88d26e3bceb4d289f30d7498b7da0c61cebfeaaf042a9d6e0b904a5ef2d91"
+      "sha256": "4487ccf9cdc4cc5a931c73bf6383270c22fee7130155b8ccf95965fafc51f203"
     },
     {
       "source": "contracts/generated/vocabulary.ts",
@@ -175,7 +178,87 @@
     },
     {
       "source": "hub/records/space-index.ts",
-      "sha256": "e05bb06275cf55571bfcba9416856f415abe4aae5abb58227846b062493324e0"
+      "sha256": "ce4b24b8ea1f4be945d1833b7901d0c6dfefe4683d6c79dcdc464d9efc4aa585"
+    },
+    {
+      "source": "hub/records/scan.ts",
+      "sha256": "772a7310ee83f7941a52386019a940f39b6aeceb4e113433654dc62705638c2a"
+    },
+    {
+      "source": "hub/records/html-entity.ts",
+      "sha256": "65a965cfb53bf75e1c7293554d921ec0acd9cf625fe90ff37b60d967b15c6b7b"
+    },
+    {
+      "source": "hub/records/html-entities.generated.ts",
+      "sha256": "ed6e336f232ca48d9c08bcba931d0c7172e08daa16e10b781ec074ae85d70364"
+    },
+    {
+      "source": "hub/refs/parser.ts",
+      "sha256": "7b08ca57a2f77e65a7fd84b38505cf1989c2b36edb0be1ad1b59cf266833b215"
+    },
+    {
+      "source": "hub/refs/reference.ts",
+      "sha256": "ae7963e944c92d7fb51e8ab00f87bc280b9ce892a949cfd1a4f375676396891e"
+    },
+    {
+      "source": "hub/refs/text-decoding.ts",
+      "sha256": "ac62a1f8c334d7fe71544244dc78e9fe9c5530a73e959c128603c71653995095"
+    },
+    {
+      "source": "hub/refs/parsers/text.ts",
+      "sha256": "45d1fc0c5ece69f3598c7ef1743e9b0ad1b9ca41e1740baa71476c97e93978c5"
+    },
+    {
+      "source": "hub/refs/parsers/json.ts",
+      "sha256": "e6c93acb7864883c384f63365d4fd3222780f6d6459200afa0d0a80f788cfe1c"
+    },
+    {
+      "source": "hub/refs/parsers/json-walk.ts",
+      "sha256": "dad2064bee2e259274c5a94ccaab01bab59109de8de8080360165e5ac970516d"
+    },
+    {
+      "source": "hub/refs/parsers/markdown.ts",
+      "sha256": "ea813507d217c0a6fe624f75e645c2c2250a45de17bf5f4c3abe9fdc613ee576"
+    },
+    {
+      "source": "hub/refs/quote.ts",
+      "sha256": "fcd7cbb6317f0916cd64e9b81e598a1f96757badedd2068d965dfa799b0aa1d4"
+    },
+    {
+      "source": "contracts/src/reference.ts",
+      "sha256": "5bd9b2c03277f7ba362d8b990961c88a577e263d24a76eca1e01a3e61f4067fa"
+    },
+    {
+      "source": "hub/knowledge/personal-sync/service.ts",
+      "sha256": "c2c005b0f33d1b27dae1a5d1b79fa147ade25f9fadc2035446b8e7c73372156c"
+    },
+    {
+      "source": "hub/refs/parsers/text.test.ts",
+      "sha256": "891dd5f879d076085ba53e95608c786b95163e733ff7ef315d1bd59fae74daec"
+    },
+    {
+      "source": "hub/refs/parsers/json.test.ts",
+      "sha256": "136dcfc1224c7cdb372f8a63db76b0dac84445fed8669b19679e5e5e1d8eb190"
+    },
+    {
+      "source": "hub/refs/parsers/markdown.test.ts",
+      "sha256": "c250cdaf215aab6df30be597e045bd2d6202892510e2572159ec857480fd2335"
+    },
+    {
+      "source": "hub/refs/test-support.ts",
+      "sha256": "74c7f9c405a99fcf7199e0de2d4be0cc309fb58c2befc4e22746d938712a5efa"
+    },
+    {
+      "source": "hub/records/scan.test.ts",
+      "sha256": "3a6c08b1889cf6a57d2833257ebb20b4cd34b2d6c9021a43038d7142a2ff751b"
+    },
+    {
+      "source": "hub/refs/fixtures/spec.md",
+      "sha256": "afe335a2480e1e630d65d27867d70e15b00759c7f82e455e43ce985c035798d0"
+    },
+    {
+      "source": "hub/records/memory-index.ts",
+      "sha256": "568dc0224bd825bde4a38375a6c9a6434acdca4424d9d7de1fb697d2463151a4"
     }
   ],
   "derived": [
@@ -188,6 +271,86 @@
         "contracts/generated/protocol.ts",
         "contracts/test-fixtures/sync/v1/http.json"
       ]
+    },
+    {
+      "path": "src/knowledge/portable/html-entities.generated.ts",
+      "sha256": "ba942286d29818a2dd2d1a23c477a702b700f124d8bc3fd75148e8d642916872",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/html-entity.ts",
+      "sha256": "3b19ff68a5e5735cac967e00c06ddc8455fdf043c4d12c9a3c15b2c8bf3611db",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/parser.ts",
+      "sha256": "88d181fed0e08f135535fb298c893f7069e6d3ff0eed6cfb267ae356934f7b42",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/parsers/json-walk.ts",
+      "sha256": "38e1b6c395631f9f722247cf4e0308e9e3efe1a4a3ef2d721b3e5a2f6a8df4d2",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/parsers/json.ts",
+      "sha256": "a59aac71b931303844b2ab92f4a410d17eb8ff67e4476b58e9339e05ce5293c7",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/parsers/markdown.ts",
+      "sha256": "38c8f01057ab921032dc68972699f4d482162f9878037ec4f1ee8b02e5d61292",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/parsers/text.ts",
+      "sha256": "24d1fba2d5e1af98caf9e349cae13058b70e0631cf69f96246ca235cb5b278c5",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/reference.ts",
+      "sha256": "7aca892bdaea4b8e42ddced230b717b74c774e130028a9e9528dc67540e546b8",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/scan.ts",
+      "sha256": "6933d9d207a597a454c6b323f5148f6cde9d7c8adc543ba3dc20eca678fd98f8",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "src/knowledge/portable/text-decoding.ts",
+      "sha256": "87ca5328fdd8fea227ac7c56857e9a8c2c4bc7ed46be56b0aa9abf605f7ebcf1",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "tests/knowledge-json-parser.test.ts",
+      "sha256": "2293319ba978e0b9f1a2f170834e6f0499c30cd18869cea30245730620ee257e",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "tests/knowledge-markdown-parser.test.ts",
+      "sha256": "8d76e05e5d5f9427ec396437e9639c2eefa2e2e3d5866e873a08b06f02eeee04",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "tests/knowledge-text-parser.test.ts",
+      "sha256": "24c13744ae39c7dc703b9f464ba70cdd2ab692a222bebf7fe3acda2384cc8d81",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "tests/knowledge-parser-support.ts",
+      "sha256": "69be5958dbd65543a693a4d2dfc26165a4fce985e98c38fd5c3becc807be4450",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "tests/knowledge-scan.test.ts",
+      "sha256": "d3ceb287e78b0fa8cf65f3d5f6101474ad008dcbf5b2d3154099e432a0914760",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
+    },
+    {
+      "path": "tests/fixtures/knowledge-parsers/spec.md",
+      "sha256": "afe335a2480e1e630d65d27867d70e15b00759c7f82e455e43ce985c035798d0",
+      "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
     }
   ]
 }

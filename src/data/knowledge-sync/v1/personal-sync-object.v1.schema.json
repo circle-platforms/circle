@@ -66,9 +66,16 @@
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             },
             "name": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 300
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "media_type": {
               "type": "string",
@@ -199,33 +206,75 @@
               "maxItems": 100,
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "source": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "parser": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_.-]*@(?:0|[1-9][0-9]*)$"
+                      },
+                      "selector": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4000
+                      },
+                      "quotation": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "parser",
+                      "selector",
+                      "quotation"
+                    ],
+                    "additionalProperties": false
                   },
-                  "parser": {
-                    "type": "string",
-                    "pattern": "^[a-z][a-z0-9_.-]*@(?:0|[1-9][0-9]*)$"
+                  {
+                    "type": "object",
+                    "properties": {
+                      "reference": {
+                        "type": "string",
+                        "maxLength": 8192,
+                        "pattern": "^(?:src:[0-9a-f]{64}(?:\\/[a-z][a-z0-9_.-]{0,63}@(?:0|[1-9][0-9]{0,8})\\/(?:[^%/:\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2})+(?:\\/(?:[^%/:\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2})+)*(?::(?:0|[1-9][0-9]{0,15})-(?:0|[1-9][0-9]{0,15}))?)?|tree:[0-9a-f]{64}\\/(?:(?:[^%/@\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2})+(?:\\/(?:[^%/@\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2})+)*)?(?:@[0-9a-f]{64})?|rec:[0-9a-f]{64}(?:#(?:\\/(?:[^%~/#\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2}|~[01])*)+)?)$",
+                        "description": "reference a claim rests on: src, tree or rec; a knowledge entry is cited by its tree address"
+                      },
+                      "quotation": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "reference",
+                      "quotation"
+                    ],
+                    "additionalProperties": false
                   },
-                  "selector": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 4000
-                  },
-                  "quotation": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
+                  {
+                    "type": "object",
+                    "properties": {
+                      "entry": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "quotation": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "entry",
+                      "quotation"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "required": [
-                  "source",
-                  "parser",
-                  "selector",
-                  "quotation"
-                ],
-                "additionalProperties": false
+                ]
               }
             }
           },

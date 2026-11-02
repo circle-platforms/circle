@@ -3,12 +3,15 @@ export interface Revision {
   item_id: string;
   parents: string[];
 }
-export interface Ground {
-  source: string;
-  parser: string;
-  selector: string;
-  quotation: string;
-}
+export type Ground =
+  | {
+      source: string;
+      parser: string;
+      selector: string;
+      quotation: string;
+    }
+  | { reference: string; quotation: string }
+  | { entry: string; quotation: string };
 export interface EntryContent {
   kind: string;
   statement: string;
@@ -39,7 +42,7 @@ interface Bodies {
   bytes: { bytes_base64: string };
   source_revision: Revision & {
     directory_id: string;
-    name: string;
+    name: string | null;
     media_type: string;
     raw_sha256: string;
     size: number;

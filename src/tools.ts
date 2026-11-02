@@ -1,3 +1,5 @@
+import { knowledgeTools } from './knowledge/tools.js';
+import type { KnowledgeService } from './knowledge/service.js';
 import { webFetch, webSearch } from './websearch.js';
 import {
   mkdirSync,
@@ -36,6 +38,7 @@ export interface Todo {
   status: 'pending' | 'in_progress' | 'completed';
 }
 export interface ToolHooks {
+  knowledge?: KnowledgeService;
   fileMutations?: FileMutations;
   /**
    * The conversation's file journal, for a Circle with no native workspace backend: it
@@ -115,7 +118,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   // Circle's own plan file is a working note, not the person's file: /rewind leaves it.
   const worthRecording = (path: string): boolean =>
     captures !== undefined && !sandbox.isPlanFile(path);
-  const tools: Tool[] = [];
+  const tools: Tool[] = hooks.knowledge ? knowledgeTools(hooks.knowledge) : [];
   // Plan mode's plan is Circle's own file in the data folder, as the offloaded output
   // read_file reads is: it is written directly, and the workspace's file backend, which
   // knows only granted files, has no part in it.

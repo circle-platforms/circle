@@ -6,7 +6,9 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Added
 
-- **A separate local knowledge storage foundation.** Versioned objects, atomic snapshots and Chinese full-text search use their own private database; model tools, desktop pages and network sync are not connected yet, and existing memory files are unchanged.
+- **Confirmed personal knowledge and memory tools.** Local search and exact quotation checks support proposed writes that always ask for person approval; credentials and oversized memories are refused before persistence. Explicit personal pack installation validates selected files without importing hooks or enabling network sync.
+
+- **A separate local knowledge storage foundation.** Versioned objects, atomic snapshots and Chinese full-text search use their own private database; desktop pages and network sync remain unfinished, and existing memory files are unchanged.
 
 ### Changed
 

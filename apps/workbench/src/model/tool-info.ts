@@ -4,6 +4,66 @@ import { t } from '../i18n/index.ts';
 // Descriptions are getters so they follow the interface language; tool names stay as they are.
 export const BUILTIN_TOOL_INFO = [
   {
+    name: 'knowledge_search',
+    get description() {
+      return t('Search personal knowledge');
+    },
+    get detail() {
+      return t(
+        'Search local knowledge for clues; locked tasks require explicit addresses. No network or sync.',
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'knowledge_read',
+    get description() {
+      return t('Read an immutable knowledge object');
+    },
+    get detail() {
+      return t(
+        'Read an object within an explicit local snapshot, with a bounded window and local verification observation.',
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'knowledge_write',
+    get description() {
+      return t('Propose a personal knowledge change');
+    },
+    get detail() {
+      return t(
+        'Propose canonical revisions and byte chunks against expected_head. Inventories are generated locally. Every change needs person confirmation, including auto mode.',
+      );
+    },
+    kind: 'write',
+  },
+  {
+    name: 'knowledge_share',
+    get description() {
+      return t('Share knowledge with a team');
+    },
+    get detail() {
+      return t(
+        'Unavailable until Sync to Hub and an authorized entry mapping are configured. Open sync settings to switch mode; this tool never changes it.',
+      );
+    },
+    kind: 'write',
+  },
+  {
+    name: 'memory_write',
+    get description() {
+      return t('Propose a personal memory change');
+    },
+    get detail() {
+      return t(
+        'Create, replace, enable, disable or delete personal memory against expected_head. Always requires person confirmation; credential and size checks run before persistence.',
+      );
+    },
+    kind: 'write',
+  },
+  {
     name: 'ls',
     get description() {
       return t('List a folder');

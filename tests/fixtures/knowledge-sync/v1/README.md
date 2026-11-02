@@ -16,3 +16,6 @@ The HTTP request/response schemas are generated separately from MCP tools. Route
 `contracts/src/sync.ts`; the contracts tests assert that MCP still has six tools and refuses sync payloads.
 Scenario expectations describe protocol requirements; exercising live CAS, authorization, purge and quotas requires
 step 3–6 service/acceptance tests and is not established by parsing these fixtures.
+
+`native-links.json` adds fixed canonical objects for a nullable source name, a read-only existing ground and an own
+predecessor revision link. `sync-merge.test.ts` executes shared ancestry expectations in both input orders.

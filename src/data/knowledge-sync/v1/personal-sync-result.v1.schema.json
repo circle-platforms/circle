@@ -196,6 +196,57 @@
       ],
       "additionalProperties": false
     },
+    "projections": {
+      "maxItems": 500,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "source_revision",
+              "entry_revision",
+              "directory_revision",
+              "memory_revision",
+              "pack_manifest"
+            ]
+          },
+          "item_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "object": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 8192,
+            "pattern": "^(?:src:[0-9a-f]{64}(?:\\/[a-z][a-z0-9_.-]{0,63}@(?:0|[1-9][0-9]{0,8})\\/(?:[^%/:\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2})+(?:\\/(?:[^%/:\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2})+)*(?::(?:0|[1-9][0-9]{0,15})-(?:0|[1-9][0-9]{0,15}))?)?|tree:[0-9a-f]{64}\\/(?:(?:[^%/@\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2})+(?:\\/(?:[^%/@\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2})+)*)?(?:@[0-9a-f]{64})?|rec:[0-9a-f]{64}(?:#(?:\\/(?:[^%~/#\\u0000-\\u0020\\u007F-\\u00A0\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890-\\u0891\\u08E2\\u1680\\u180E\\u2000-\\u200F\\u2028-\\u202F\\u205F-\\u2064\\u2066-\\u206F\\u3000\\uFEFF\\uFFF9-\\uFFFB]|%[0-9A-F]{2}|~[01])*)+)?)$",
+            "description": "reference a claim rests on: src, tree or rec; a knowledge entry is cited by its tree address"
+          },
+          "document": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "installed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "item_id",
+          "object"
+        ],
+        "additionalProperties": false
+      }
+    },
     "verification": {
       "maxItems": 500,
       "type": "array",
@@ -231,6 +282,57 @@
                 "type": "null"
               }
             ]
+          },
+          "positions": {
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ground": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 99
+                },
+                "code": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ground",
+                "code"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "parser_locks": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "parser": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_.-]*@(?:0|[1-9][0-9]*)$"
+                },
+                "digest": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "parser",
+                "digest"
+              ],
+              "additionalProperties": false
+            }
           },
           "codes": {
             "maxItems": 100,
@@ -275,6 +377,9 @@
               "type": "string",
               "pattern": "^[0-9a-f]{64}$"
             }
+          },
+          "structural": {
+            "type": "boolean"
           }
         },
         "required": [

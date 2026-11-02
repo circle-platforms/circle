@@ -19,3 +19,15 @@ export type {
   EntryContent,
   Ground,
 } from './types.js';
+
+export {
+  KnowledgeService,
+  type KnowledgeAccess,
+  type PreparedKnowledgeChange,
+} from './service.js';
+export { verifyLocal, LOCAL_VERIFIER, exactQuotation } from './verification.js';
+export {
+  installPersonalPack,
+  setPersonalPackEnabled,
+  installedPersonalPacks,
+} from './packs.js';

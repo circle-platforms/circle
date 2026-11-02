@@ -18,9 +18,14 @@ import {
 import { ObjectFiles, privateDirectory } from './objects.js';
 import { decodeBase64, SYNC_LIMITS, SYNC_PROTOCOL } from './protocol.js';
 import { indexTerms, knowledgeTokens, searchExpression } from './search.js';
+import {
+  verifyLocal,
+  LOCAL_VERIFIER,
+  type Verification,
+} from './verification.js';
 import type { SyncItem, SyncObject } from './types.js';
 
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const APPLICATION_ID = 0x434b4e31;
 // Append migrations; never change an applied version's SQL.
 const MIGRATIONS = [
@@ -33,6 +38,7 @@ const MIGRATIONS = [
   CREATE VIRTUAL TABLE search_terms USING fts5(terms, tokenize='ascii');
   CREATE INDEX search_scope ON search_documents(path,kind,status);
 `,
+  `CREATE TABLE verification_observations(snapshot TEXT NOT NULL REFERENCES objects(id), object_id TEXT NOT NULL REFERENCES objects(id), rule TEXT NOT NULL, observation TEXT NOT NULL, PRIMARY KEY(snapshot,object_id,rule)) STRICT; CREATE TABLE personal_pack_installations(object_id TEXT PRIMARY KEY REFERENCES objects(id), path TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))) STRICT;`,
 ];
 export interface SearchOptions {
   path?: string;
@@ -226,11 +232,87 @@ export class KnowledgeStore {
         .run(snapshot);
     });
   }
+  /** Run validation and publication under one write lock, so a stale approval leaves no staged body. */
+  apply(expected: string | null, action: () => string): string {
+    try {
+      return this.transaction(() => {
+        if (this.head !== expected)
+          throw new KnowledgeVersionConflict(this.head);
+        const snapshot = action();
+        const graph = this.graph(snapshot);
+        const observations = verifyLocal(graph);
+        for (const observation of observations)
+          this.db
+            .prepare(
+              'INSERT OR REPLACE INTO verification_observations VALUES(?,?,?,?)',
+            )
+            .run(
+              snapshot,
+              observation.object,
+              observation.rule,
+              JSON.stringify(observation),
+            );
+        this.commit(snapshot, expected);
+        return snapshot;
+      });
+    } catch (error) {
+      this.transaction(() => this.files.recover((id) => this.has(id)));
+      throw error;
+    }
+  }
+  installPack(
+    expected: string,
+    object: string,
+    path: string,
+    publish: () => void,
+    enabled = true,
+  ): void {
+    this.transaction(() => {
+      if (this.head !== expected) throw new KnowledgeVersionConflict(this.head);
+      if (
+        !this.items().some(
+          (row) =>
+            row.kind === 'pack_manifest' &&
+            row.heads.length === 1 &&
+            row.heads[0] === object,
+        )
+      )
+        throw Error('personal pack unavailable or conflicted');
+      publish();
+      this.db
+        .prepare(
+          'INSERT INTO personal_pack_installations VALUES(?,?,?) ON CONFLICT(object_id) DO UPDATE SET path=excluded.path,enabled=excluded.enabled',
+        )
+        .run(object, path, enabled ? 1 : 0);
+    });
+  }
+  packInstallations(): { object: string; path: string; enabled: boolean }[] {
+    return this.db
+      .prepare('SELECT * FROM personal_pack_installations ORDER BY object_id')
+      .all()
+      .map((row) => ({
+        object: row.object_id as string,
+        path: row.path as string,
+        enabled: row.enabled === 1,
+      }));
+  }
+  observations(snapshot = this.head): Verification[] {
+    if (!snapshot) return [];
+    return this.db
+      .prepare(
+        'SELECT observation FROM verification_observations WHERE snapshot=? AND rule=? ORDER BY object_id',
+      )
+      .all(snapshot, LOCAL_VERIFIER)
+      .map((row) => JSON.parse(row.observation as string));
+  }
   private project(graph: KnowledgeGraph): void {
     this.db.exec(
       'DELETE FROM current_items; DELETE FROM search_terms; DELETE FROM search_documents;',
     );
     let indexBytes = 0;
+    const observations = new Map(
+      this.observations(graph.snapshot).map((row) => [row.object, row]),
+    );
     for (const item of graph.items) {
       const object =
         item.heads.length === 1
@@ -275,16 +357,18 @@ export class KnowledgeStore {
       indexBytes += Buffer.byteLength(terms);
       if (indexBytes > 64 * 1024 * 1024)
         throw new RangeError('knowledge space index limit');
-      // Stage 1 has no verifier. Never infer qualification from an object ID or imported claim.
+      const verified = observations.get(item.heads[0]!)?.status === 'verified';
+      // Qualification belongs to this snapshot and local rule version, never an imported flag.
       const result = this.db
         .prepare(
-          "INSERT INTO search_documents(item_id,object_id,path,kind,status,statement) VALUES(?,?,?,?,'unverified',?)",
+          'INSERT INTO search_documents(item_id,object_id,path,kind,status,statement) VALUES(?,?,?,?,?,?)',
         )
         .run(
           item.item_id,
           item.heads[0]!,
           path,
           content.kind,
+          verified ? 'verified' : 'unverified',
           content.statement,
         );
       this.db

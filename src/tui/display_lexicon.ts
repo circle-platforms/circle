@@ -3,6 +3,11 @@
 import type { ToolCall } from '../types.js';
 
 export const TOOL_SHORT_NAMES: Record<string, string> = {
+  knowledge_search: 'KnowledgeSearch',
+  knowledge_read: 'KnowledgeRead',
+  knowledge_write: 'KnowledgeWrite',
+  knowledge_share: 'KnowledgeShare',
+  memory_write: 'MemoryWrite',
   read_file: 'Read',
   write_file: 'Write',
   edit_file: 'Edit',
@@ -29,6 +34,11 @@ export const TOOL_SHORT_NAMES: Record<string, string> = {
 type Style = 'path_tail' | 'first_line' | 'patch_target' | 'text';
 // Tool name → (argument, how to shorten it), the first one with a value wins.
 const TOOL_ARG_SUMMARY: Record<string, [string, Style][]> = {
+  knowledge_search: [['query', 'text']],
+  knowledge_read: [['object', 'text']],
+  knowledge_write: [['expected_head', 'text']],
+  knowledge_share: [['object', 'text']],
+  memory_write: [['title', 'text']],
   read_file: [
     ['file_path', 'path_tail'],
     ['path', 'path_tail'],

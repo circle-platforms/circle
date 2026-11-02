@@ -100,7 +100,10 @@ function references(object: SyncObject): string[] {
     case 'entry_revision':
       return [
         ...parents,
-        ...object.body.grounds.flatMap((g) => [g.source, g.quotation]),
+        ...object.body.grounds.flatMap((g) => [
+          ...('source' in g ? [g.source] : 'entry' in g ? [g.entry] : []),
+          g.quotation,
+        ]),
       ];
     default:
       return parents;
@@ -230,7 +233,10 @@ export function validateGraph(
     if (object.kind === 'snapshot') inventory(object, objects);
     if (object.kind === 'entry_revision')
       for (const ground of object.body.grounds) {
-        requireKind(objects, ground.source, 'source_revision');
+        if ('source' in ground)
+          requireKind(objects, ground.source, 'source_revision');
+        if ('entry' in ground)
+          requireKind(objects, ground.entry, 'entry_revision');
         requireKind(objects, ground.quotation, 'bytes');
       }
   }

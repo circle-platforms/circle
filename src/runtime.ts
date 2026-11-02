@@ -1,3 +1,8 @@
+import {
+  deferredKnowledgeTool,
+  knowledgeToolsWanted,
+} from './knowledge/tools.js';
+import { KnowledgeService, type KnowledgeAccess } from './knowledge/service.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { GitHubConnectionBackend } from './github_connection.js';
 import { join, dirname } from 'node:path';
@@ -125,6 +130,11 @@ import {
   type HookDefinition,
 } from './hooks.js';
 const BUILTIN_TOOL_NAMES = new Set([
+  'knowledge_search',
+  'knowledge_read',
+  'knowledge_write',
+  'knowledge_share',
+  'memory_write',
   'ls',
   'read_file',
   'write_file',
@@ -167,6 +177,7 @@ export interface InteractionContext {
   agent?: string;
 }
 export interface RuntimeOptions {
+  knowledgeAccess?: () => KnowledgeAccess;
   /** Optional host process transport; the CLI keeps its existing pipe launcher. */
   commandLauncher?: CommandLauncher;
   /** Safe process identity projection; never receives expanded command or env. */
@@ -446,11 +457,20 @@ export class AgentRuntime {
   private readonly wrappedModels = new WeakSet<ChatModel>();
   private authFingerprint?: string;
   private coreTools: Tool[] = [];
+  private deferredKnowledgeTools: Tool[] = [];
   // An extension changed its tools after loading; applied between turns, never inside one.
   private toolsStale = false;
   private toolsCheck?: ReturnType<typeof setTimeout>;
   get allTools(): Tool[] {
-    return this.withIntegrationTools(this.coreTools, false);
+    return this.withIntegrationTools(
+      [
+        ...this.coreTools,
+        ...this.deferredKnowledgeTools.filter(
+          (tool) => !this.coreTools.some((have) => have.name === tool.name),
+        ),
+      ],
+      false,
+    );
   }
   todos: Todo[] = [];
   readonly userShells: UserShells;
@@ -734,6 +754,10 @@ export class AgentRuntime {
     const system = this.systemPrompt(model.model);
     const vision = this.visionForRun();
     let tools = buildTools(this.sandbox, {
+      knowledge: new KnowledgeService(
+        this.options.home,
+        this.options.knowledgeAccess,
+      ),
       fileMutations: this.options.fileMutations,
       captures: this.captures,
       jobs: this.jobs,
@@ -1140,6 +1164,8 @@ export class AgentRuntime {
     // opening or closing it changes nothing else about the session.
     if (this.options.settings.editor_bridge)
       tools.push(...this.editorBridge.modelTools());
+    this.deferredKnowledgeTools = tools.filter(deferredKnowledgeTool);
+    tools = tools.filter((tool) => !deferredKnowledgeTool(tool));
     this.coreTools = tools;
     tools = this.withIntegrationTools(
       tools.filter((tool) => tool.name !== 'wait_jobs'),
@@ -1183,9 +1209,15 @@ export class AgentRuntime {
       },
       beforeTurn: (prompt) => {
         this.requireTurnConnection();
+        this.promoteKnowledgeTools(prompt ?? '');
         this.promoteDeferredTools(prompt);
       },
       beforeStep: () => {
+        this.promoteKnowledgeTools('');
+        if (
+          existsSync(join(this.options.home, 'knowledge', 'knowledge.sqlite'))
+        )
+          this.refreshSystemPrompt();
         this.userShells.flush();
         const messages = this.jobs.takeNotices(this.harness.sessionId);
         if (messages.length)
@@ -1480,6 +1512,22 @@ export class AgentRuntime {
     this.harness.system = this.systemPrompt(this.harness.model.model);
   }
   /** Move deferred tools onto the harness once this turn's text asks for them. */
+  private promoteKnowledgeTools(prompt: string): void {
+    if (
+      !this.deferredKnowledgeTools.length ||
+      !knowledgeToolsWanted(this.harness.messages, prompt)
+    )
+      return;
+    const missing = this.deferredKnowledgeTools.filter(
+      (tool) => !this.coreTools.some((have) => have.name === tool.name),
+    );
+    if (!missing.length) return;
+    this.coreTools.push(...missing);
+    this.harness.tools = this.withIntegrationTools(
+      this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+    );
+    this.describeSubagents(this.harness.tools);
+  }
   private promoteDeferredTools(prompt: string | undefined): void {
     const extra = this.options.deferredTools;
     if (!extra?.length) return;
