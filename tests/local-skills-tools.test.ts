@@ -26,7 +26,14 @@ test('tools are registered with the shared names and the execute effect when the
   try {
     const sandbox = new Sandbox(root);
     const tools = buildTools(sandbox, {
-      localSkills: { settings: settingsWith({ name: 'example', url: 'http://127.0.0.1:1/mcp' }), secrets: () => ({ EXAMPLE_TOKEN: 't' }), variables: () => ({}) },
+      localSkills: {
+        settings: settingsWith({
+          name: 'example',
+          url: 'http://127.0.0.1:1/mcp',
+        }),
+        secrets: () => ({ EXAMPLE_TOKEN: 't' }),
+        variables: () => ({}),
+      },
     });
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
     assert.equal(byName.get('skill_install')?.effect, 'execute');
@@ -34,7 +41,10 @@ test('tools are registered with the shared names and the execute effect when the
     assert.equal(byName.get('skill_list')?.effect, 'read');
     const list = byName.get('skill_list');
     assert.ok(list !== undefined);
-    assert.deepEqual(JSON.parse(String(await list.run({}, { signal: undefined } as never))), { skills: [] });
+    assert.deepEqual(
+      JSON.parse(String(await list.run({}, { signal: undefined } as never))),
+      { skills: [] },
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -20,7 +20,14 @@ import { readTextWindow, readTextContentWindow } from './file_read.js';
 import { FileMutationTools, type FileMutations } from './file_mutations.js';
 import { authorizeFileRead } from './file_access.js';
 import { mediaType, readMedia } from './media.js';
-import { LocalSkillsError, installPack, listInstalled, resolveServer, runTool, SKILLS_ROOT } from './local_skills.js';
+import {
+  LocalSkillsError,
+  installPack,
+  listInstalled,
+  resolveServer,
+  runTool,
+  SKILLS_ROOT,
+} from './local_skills.js';
 import type { CircleSettings } from './settings.js';
 import { GREP_SCHEMA, grepSearch } from './grep_tool.js';
 import { takeScreenshot, type ScreenshotOptions } from './screenshot.js';
@@ -437,12 +444,18 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   if (hooks.localSkills) {
     const localSkills = hooks.localSkills;
     const server = (name: string): { url: string; token: string } => {
-      const resolved = resolveServer(localSkills.settings, localSkills.secrets(), name);
-      if ('problem' in resolved) throw new Error(`${resolved.problem}；${resolved.fix}`);
+      const resolved = resolveServer(
+        localSkills.settings,
+        localSkills.secrets(),
+        name,
+      );
+      if ('problem' in resolved)
+        throw new Error(`${resolved.problem}；${resolved.fix}`);
       return resolved;
     };
     const failure = (error: unknown): never => {
-      if (error instanceof LocalSkillsError) throw new Error(`${error.message}；${error.fix}`);
+      if (error instanceof LocalSkillsError)
+        throw new Error(`${error.message}；${error.fix}`);
       throw error;
     };
     add(
@@ -450,12 +463,19 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       'execute',
       schema(
         {
-          server: text('Name of the MCP server entry that publishes the pack; its url and Authorization header are used'),
-          pack: text('Pack reference id@version, copied from the answer of that server'),
-          digest: text('Expected pack digest (SHA-256 of the canonical manifest); refuse when the server serves another'),
+          server: text(
+            'Name of the MCP server entry that publishes the pack; its url and Authorization header are used',
+          ),
+          pack: text(
+            'Pack reference id@version, copied from the answer of that server',
+          ),
+          digest: text(
+            'Expected pack digest (SHA-256 of the canonical manifest); refuse when the server serves another',
+          ),
           replace: {
             type: 'boolean',
-            description: 'Replace an installed different version, after backing it up outside the skills root',
+            description:
+              'Replace an installed different version, after backing it up outside the skills root',
           },
         },
         ['server', 'pack'],
@@ -468,7 +488,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               url,
               token,
               ref: string(args, 'pack'),
-              ...(typeof args.digest === 'string' && args.digest.length > 0 ? { digest: args.digest } : {}),
+              ...(typeof args.digest === 'string' && args.digest.length > 0
+                ? { digest: args.digest }
+                : {}),
               ...(args.replace === true ? { replace: true } : {}),
             }),
           );
@@ -486,9 +508,17 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       schema(
         {
           pack: text('Installed pack id (folder under the skills root)'),
-          script: text('Script path relative to the pack, for example tools/fetch-run.ts'),
-          args: { type: 'array', items: { type: 'string' }, description: 'Arguments; %NAME% placeholders expand at execution' },
-          stdin: text('Standard input; %NAME% placeholders expand at execution'),
+          script: text(
+            'Script path relative to the pack, for example tools/fetch-run.ts',
+          ),
+          args: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Arguments; %NAME% placeholders expand at execution',
+          },
+          stdin: text(
+            'Standard input; %NAME% placeholders expand at execution',
+          ),
         },
         ['pack', 'script'],
       ),
@@ -498,7 +528,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
             await runTool({
               pack: string(args, 'pack'),
               script: string(args, 'script'),
-              ...(Array.isArray(args.args) ? { args: args.args.map(String) } : {}),
+              ...(Array.isArray(args.args)
+                ? { args: args.args.map(String) }
+                : {}),
               ...(typeof args.stdin === 'string' ? { stdin: args.stdin } : {}),
               variables: localSkills.variables(),
               secrets: localSkills.secrets(),
