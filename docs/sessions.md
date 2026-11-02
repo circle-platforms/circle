@@ -65,6 +65,20 @@ A reopened session is drawn again from its saved messages: your messages, the an
 
 `/undo` only changes what the screen shows. **The model still remembers the turn**, and files it changed stay changed. Use it to tidy the view.
 
+## Rewind a turn's files
+
+`/undo` tidies the view. `/rewind` changes the files back: it lists the turns whose text-tool changes Circle recorded, newest first, each labelled with the message that opened it and how many files it touched. `enter` on a turn asks, by name, which files it would put back; `esc` at that question answers nothing and leaves the list as it was.
+
+Only `write_file`, `edit_file` and `apply_patch` are recorded, the last 40 turns of them, in the session's own database. So the list is still there after a restart, and a session another terminal runs is read-only here.
+
+| What happened | What `/rewind` does |
+|---|---|
+| a file changed after that turn — by you, by a later turn, or by another program | says `<file> changed since that turn · nothing rewound` and touches nothing |
+| a turn that touched a binary, or a file over 2 MB | does not offer the turn at all, and keeps nothing for it: half a turn is not a rewind |
+| `read-only` mode, or a session another terminal holds | refuses; leave the plan first |
+
+What is outside the journal stays as it is: commands from `execute`, the `delete` tool, an MCP server or another program, and a background subagent that reports after its turn ended. Rewinding changes files only. The model still remembers the turn, so use `/tree` to go back for the model.
+
 ## Branches
 
 You can go back to an earlier point of a session and continue from there. Nothing is lost: the earlier continuation stays in the session as another branch, and you can go back to it.
@@ -134,9 +148,10 @@ While subagents run, a strip below the footer lists them. Press `↓` in an empt
 
 These are limits of the current version:
 
-- **Going back does not undo file changes.** `/tree` and `/fork` change the conversation, not your files.
+- **Going back does not undo file changes.** `/tree` and `/fork` change the conversation, not your files; [`/rewind`](#rewind-a-turns-files) is the command that changes files back.
 - **`/undo` and `/redo` do not change the model's memory or your files.** Use `/tree` to go back for the model.
-- **The undo history is kept in memory only.** The tree is read from the saved messages, so it survives a restart; `/undo` does not.
+- **The `/undo` history is kept in memory only.** The tree is read from the saved messages, so it survives a restart; `/undo` does not. `/rewind` reads its journal from the session's database, so it does.
+- **`/rewind` covers the text tools only.** `write_file`, `edit_file` and `apply_patch` are recorded; what `execute`, `delete`, an MCP server or another program changed is not, and neither is a subagent that writes after its turn ended. See [Rewind a turn's files](#rewind-a-turns-files).
 - **A session closed while a card was waiting** reopens without the card. Send a message to go on.
 - **`auto` mode is not saved** with the session. See [Security](security.md#auto-mode).
 - **Background jobs end with Circle.** A reopened session has none running; when you left normally, the conversation has a note naming the jobs that were stopped. A job of another session goes on while you switch with `/resume` or `/new`. Its completion stays with the originating session and can continue that session in the background when its queue and input permit; it does not switch the view. See [Background jobs](background-jobs.md).

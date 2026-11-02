@@ -194,6 +194,8 @@ export const model: Record<string, string> = {
   'List the subagents task can use: /agents [name]':
     '列出 task 可用的子代理：/agents [名称]',
   'Restore after /undo': '恢复 /undo 撤销的内容',
+  'Put back the files one turn changed: /rewind':
+    '回退某一轮改动的文件：/rewind',
   'Hide or show thinking; /thinking <level> sets the depth':
     '隐藏或显示思考；/thinking <级别> 设置思考深度',
   'Choose the thinking depth: /effort [minimal|low|medium|high|xhigh|max]':
