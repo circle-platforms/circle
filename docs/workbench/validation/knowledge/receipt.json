@@ -1,0 +1,271 @@
+{
+  "schema": "circle-knowledge-native-compact@1",
+  "sourceHead": "7c4a10793e07af0bcc47153552ac068ce48e9b54",
+  "sourceBase": "169bd3cc37f62cb7d5001561fecf46c0247e6d33",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "electron": "44.9.1",
+  "node": "24.22.0",
+  "appPackaged": false,
+  "synthetic": true,
+  "peer": "loopback fake using pinned protocol contracts; not a real Hub",
+  "nativeSelection": "test-profile selection of scratch originals; public renderer path requests remain forbidden",
+  "checks": [
+    "the actual native worker model request loads escaped team then personal preferences within the byte budget, excludes ineligible memory and keeps legacy file context afterward",
+    "Chinese two-character search reaches the local index through renderer and IPC",
+    "a second runtime process reads the same journal and selected sync state while Electron remains open",
+    "team share requires current native mapping, preview and explicit confirmation",
+    "native-selected original bytes preserve BOM, CRLF and trailing spaces",
+    "folder creation, scoped entry editing, move and deletion preserve revision history through confirmed actions",
+    "create/cancel/edit/history and conflict resolution persist actual approved revisions",
+    "team memory is read-only and disconnect invalidates its visible list and details",
+    "workflow manifest and matching files install separately; original hook stays outside installed files",
+    "local-only switch displays exact loopback pre-check counts, cancel has no effect, confirm changes mode and preserves team copy",
+    "1024 details return to the list; 700 navigation, keyboard selection and reduced motion remain usable",
+    "closing and reopening Electron retains approved revisions and actual installed files",
+    "loading more preserves every appended row across the live five-second refresh interval"
+  ],
+  "errors": [],
+  "sessionPreferences": {
+    "bytes": 851,
+    "sha256": "3130ffbfd8cb0269f9453a478a3132a64c528fe0afc2218d85853d499f1ca019",
+    "order": [
+      "team",
+      "personal"
+    ],
+    "legacyFileFollows": true,
+    "escaped": true,
+    "excluded": [
+      "disabled",
+      "conflicted",
+      "shared"
+    ]
+  },
+  "manifests": {
+    "source": {
+      "count": 1140,
+      "sha256": "192474119ec9fc491d68be70812b501f2e45e50690f2e686ed05ec0598b5b8d4"
+    },
+    "build": {
+      "count": 2645,
+      "sha256": "c692b54fcb367ddbae8ce5395c263557d935c7df13c9915e9939e0d2bea05ef8"
+    },
+    "fullScreenshotLayouts": {
+      "count": 53,
+      "sha256": "e35c7805f21ce9990b400d9952515483d859787a8017c9985c51f972aa85c7c8"
+    }
+  },
+  "manifestEncoding": "SHA-256 of UTF-8 JSON.stringify(records sorted by path or file in code-unit order) plus one LF; record fields/order preserved from the native evidence helper",
+  "fullReceiptSha256": "91f9070774199121a6a02e6ed20d093c56ba5409fe37b2c79b6b3ae17fc2a829",
+  "capture": {
+    "originalScreenshotCount": 53,
+    "savedScreenshotCount": 15,
+    "pixelScale": 1,
+    "transformation": "Uniform integer box-average RGBA downsampling from original device pixels to receipt viewport CSS pixels; no cropping, retouching or content changes",
+    "layout": "All original first-frame and settled-frame containment checks retained and passed"
+  },
+  "supplement": {
+    "purpose": "Chinese local-only impact dialog absent from original matrix",
+    "source": "Untracked copy of the existing native harness with localized original controls and unchanged product/build bytes",
+    "errors": [],
+    "fullReceiptSha256": "b01d1b3afa8468d66c20deba2eb57c381d3c87dc5c0f2a0915d9a903bd21ffbc",
+    "manifests": {
+      "source": {
+        "count": 1140,
+        "sha256": "192474119ec9fc491d68be70812b501f2e45e50690f2e686ed05ec0598b5b8d4"
+      },
+      "build": {
+        "count": 2645,
+        "sha256": "c692b54fcb367ddbae8ce5395c263557d935c7df13c9915e9939e0d2bea05ef8"
+      },
+      "screenshots": {
+        "count": 8,
+        "sha256": "265eb62fb0149e2ce86d58724368ee552c1e266bc79045485d2586b35ec5c030"
+      }
+    },
+    "initialFailure": "The temporary moved harness resolved two child-process imports relative to its new location; corrected absolute imports, then capture passed; product/test source unchanged"
+  },
+  "shots": [
+    {
+      "file": "zh-CN-dark-1440-knowledge.png",
+      "sha256": "e7c70628c2dcead966d0c9a69fdadd658e459dc0b3411282745dbcce6ca709fe",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "37d9f4c0af85f1a396ab48a9a656b6e57120fe9cccc77d805e5a9c3ad52d46a4",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-light-1440-knowledge.png",
+      "sha256": "ae78833334ff2e2d0048f7e6071265f1b59c79cb86f6c05d100c5ca01f1a44f3",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "52d196a63d4dd2ec2a8b61a6000179ab90cc43ec69d68f6177e3b04e8623df86",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "en-dark-1440-knowledge.png",
+      "sha256": "ac4d087358e00a8fcdb27ad6bbd5106fea26bc138f747f42397681f9b872033e",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "b8b9426b823550dda4097eb30da01f4c5ff61b88709904be29c8e7a46dcb018e",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-light-1024-knowledge.png",
+      "sha256": "3d0c69b80e485e2d77bbd566fcb18cd6331fda77b8413f9d4a8ec92741c9dae6",
+      "width": 1024,
+      "height": 900,
+      "sourceSha256": "7c07121511f63fef583d16450040f13c9148caeb9569c3f8c66f6987b1f055bf",
+      "sourcePixelSize": [
+        2048,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-dark-1440-memory.png",
+      "sha256": "1e6b90c84f46f847851d63120a956a94273abff19b217c92f72e6e165ca85489",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "6071a2f0b0bc36a878ee634bdaf20c566d2035bdbfd1fdf67ba364551feac3d6",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-light-1440-workflows.png",
+      "sha256": "2d839152cf01919610fe30baca3974b484a552145d44c84b0b43ed8658e6df4c",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "d85f94ae28c5466698e19a8d85a36e2b96bb43311126987d88dbec64054868f5",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-light-1440-sync.png",
+      "sha256": "571c24afaab239938d22000f3c06398865e51f1f67826a45b9eb059fc418e85a",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "e2fcfc4fc35f38e1662412ea4a77dd33cc4f5f2f0e799d17444d41f7cb901912",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "en-dark-1440-sync.png",
+      "sha256": "69e8a8fd4d4c52ebd1c8295684a25aafc1dea49fbed89ee876aa9c012d4cbe97",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "45f43846cda29a057f04a13d10a0cb5ab2e2fd5f3ae40ef270eb79307262c486",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-dark-1440-local-mode-impact.png",
+      "sha256": "6590db1cdc254c72b2a2def1c66bd3cb95503b378b8e14334e8881ae3b69dfee",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "03f3fb92683888e1f007900c9b71de6ad0b2695b70819b69f2707f77c7c952c4",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "supplement"
+    },
+    {
+      "file": "en-dark-1440-local-mode-impact.png",
+      "sha256": "4364089f0ceed255493d0431a3ddfd48e99c31bea2abfb0aab256f04a213ed78",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "65c0fa7b84e17b4257f6598a5e572c0f373cbbcb981e5998219803f021b14aa3",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "en-dark-1440-local-share-tooltip.png",
+      "sha256": "cc0b84830d1e00b599309bf347e2da4f8635eb5ceae203fb7cf7ef74bdad1940",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "49b610a90a3b6cb138cd493c3dba7b3a0bb60eda127a3a9120e80d2d1b90b912",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "en-dark-1440-conflict-editor.png",
+      "sha256": "f35508ddc4ce49031411869040dc76d303afefddb395dbe56c35a69e879f2065",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "171751e34ef8f83967c0a4e77710d1f8550d80e9a798cfbcd07aca7c4d61fc4e",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "en-dark-1440-source-expanded.png",
+      "sha256": "48dda1512ef475da663ac31304031d6e78b057f3f2855ddc8bacccd7a2f6845a",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "88757e1cf530a37facfd6208259b0506e58c519ca5e6643ff06a7a666864c980",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-light-1024-empty.png",
+      "sha256": "f341f621a97218ad063d7c3d57c36d93fe35bb27e10bf90c53d16a475029eaa3",
+      "width": 1024,
+      "height": 900,
+      "sourceSha256": "399dbdf9e48113d56fd5bfb7938c48838563cddacf8f6bd9c2bed5d540e21b3c",
+      "sourcePixelSize": [
+        2048,
+        1800
+      ],
+      "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-light-700-keyboard-reduced-motion.png",
+      "sha256": "89aa73dd126fce19db9df2cbba92e3688fc1626024e87db4b0e0e5986cbd1492",
+      "width": 700,
+      "height": 900,
+      "sourceSha256": "5cc43c11f480a0ad57db1ad5b0403ca7474dbb2350e7152c8d46777f0b8b585f",
+      "sourcePixelSize": [
+        1400,
+        1800
+      ],
+      "run": "postRebase"
+    }
+  ],
+  "regeneration": "Run the existing knowledge-native.mjs with scratch CIRCLE_HOME and CIRCLE_WORKBENCH_DATA_DIR; full source/build/layout manifests are emitted only to ignored apps/desktop/artifacts/knowledge or CIRCLE_KNOWLEDGE_EVIDENCE_DIR"
+}

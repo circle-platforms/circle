@@ -1,0 +1,317 @@
+{
+  "schema": "circle-knowledge-compact-checks@1",
+  "scope": "macOS arm64, Node 24.22.1, synthetic scratch homes and local resources only; no owner data or deployment",
+  "sourceHead": "7c4a10793e07af0bcc47153552ac068ce48e9b54",
+  "commands": [
+    {
+      "command": "npm run check",
+      "exit": 0,
+      "groups": [
+        {
+          "tests": 1810,
+          "passed": 1800,
+          "failed": 0,
+          "skipped": 10
+        }
+      ],
+      "logSha256": "8f196a1b5982e8e767e82b0b86c14d79cad7857ead6f4aac4dde8d303ad64253",
+      "typechecks": "passed",
+      "builds": "passed",
+      "skippedByGuard": {
+        "SKIP": [
+          "a Windows browser exit queued behind its deadline is observed before reporting failure",
+          "a Windows browser still alive after deadline delivery is not reported as exited",
+          "Windows 8.3 temporary paths preserve root identity, workspace hashes and future file writes",
+          "on Windows a text file on another drive is not added to the message",
+          "on Windows the real PowerShell command runs as far as listing the windows",
+          "on Windows a window that is not DPI aware is taken whole: its picture is its own size with no empty part"
+        ],
+        "runs the script in Windows PowerShell": [
+          "the Windows helper removes the launcher and the running version once their processes end, and keeps a folder that is not empty"
+        ],
+        "uses the Windows process list": [
+          "on Windows a program left running by an ended shell is found and ended",
+          "on Windows stopping a finished job ends a program whose parent cmd had already ended",
+          "on Windows cancelling a running command ends a program whose parent cmd had already ended"
+        ]
+      }
+    },
+    {
+      "command": "npm run check:apps",
+      "groupOrder": [
+        "renderer",
+        "desktop",
+        "runtime"
+      ],
+      "exit": 0,
+      "groups": [
+        {
+          "tests": 343,
+          "passed": 343,
+          "failed": 0,
+          "skipped": 0
+        },
+        {
+          "tests": 163,
+          "passed": 163,
+          "failed": 0,
+          "skipped": 0
+        },
+        {
+          "tests": 837,
+          "passed": 820,
+          "failed": 0,
+          "skipped": 17
+        }
+      ],
+      "logSha256": "ae75247cf1532f394a455dacdeaf2f0d10e3cadfc0e1f57ad587ceb06dfad7ef",
+      "typechecks": "passed",
+      "builds": "passed",
+      "skippedByGuard": {
+        "SKIP": [
+          "on Windows a refused outside write names the process that has the file open",
+          "the Windows installer preserves the relaunched argv through real PowerShell",
+          "real Windows Job controls an assigned quiescent Node and inherited detached child through retained handles",
+          "Windows native adapter fails before allocating a PTY without claiming shell exit proves owned tree exit",
+          "Windows original ConPTY input and resistant inherited service stop use real root exit and Job-empty facts",
+          "Windows natural completion waits for actual root ACK, wrapper exit, Job empty and original log closure",
+          "Windows supervisor cannot preload command Node options before Job assignment",
+          "Windows invalid supervisor authentication never starts a command and the quiescent original PTY closes",
+          "real Windows short-path aliases preserve CAS coordination and native folder boundaries",
+          "a save on Windows waits while another program has the file open without letting it be replaced"
+        ],
+        "requires real Windows ConPTY": [
+          "Windows real ConPTY naturally exits repeated owned sessions without keeping the parent Node process alive",
+          "Windows terminal close waits for the native-exit output-flush window and preserves the complete final log",
+          "Windows TUI dark shutdown restores the main screen and cooked input before a natural exit",
+          "Windows TUI light shutdown restores the main screen and cooked input before a natural exit",
+          "a Windows owned worker transport fault remains a durable failure and stops the real program"
+        ],
+        "requires real Windows kernel process identity and ConPTY": [
+          "Windows session release observes PID birth and real exit without weakening the strict disappearance oracle",
+          "Windows signal cleanup observes the real job descendant and preserves any scratch-folder EBUSY failure"
+        ]
+      }
+    }
+  ],
+  "formats": [
+    {
+      "command": "npm run format:check",
+      "exit": 0,
+      "logSha256": "85a87b781f155bb54b0388a156106a487d0e166e33cd1fe05e7761c18dd54e73"
+    },
+    {
+      "command": "npm --prefix apps/workbench run format:check",
+      "exit": 0,
+      "logSha256": "27adaabe32cbfacd091e62ff85e2f5340556c8793322eeb7a0469e017349f801"
+    },
+    {
+      "command": "npm --prefix apps/desktop run format:check",
+      "exit": 0,
+      "logSha256": "dbdb2672143275241de1e542ccb4edf60bb19f12307ad5e3130205e33ee6d5dd"
+    }
+  ],
+  "native": {
+    "command": "node --import tsx apps/desktop/test/knowledge-native.mjs",
+    "exit": 0,
+    "appPackaged": false,
+    "effectGroups": 13,
+    "originalScreenshots": 53,
+    "retainedScreenshots": 15,
+    "errors": [],
+    "skipped": [],
+    "manifestCounts": {
+      "source": 1140,
+      "build": 2645
+    }
+  },
+  "terminal": {
+    "receipt": "terminal-ax.json",
+    "receiptSha256": "016a08afc2c07475be74b1bfedc0e4315d04b310424cb6100930c80513cf59fc",
+    "finalExit": 0,
+    "effectGroups": 2,
+    "skipped": []
+  },
+  "firstFailures": [
+    {
+      "scope": "packaged terminal AX",
+      "exit": 1,
+      "kind": "driver omitted closing modal Settings",
+      "reason": "A sidebar click was intercepted by the still-open Settings overlay after the former 600-line failure had passed",
+      "fix": "Use closeNativeSettings through the original visible close control before selecting the session",
+      "retainedIn": "terminal-ax.json",
+      "notCountedAsPass": true
+    },
+    {
+      "scope": "development knowledge",
+      "exit": 1,
+      "kind": "product CSS integration overlap",
+      "reason": "The old independent translate compounded the new base animated centring transform, placing the conflict editor outside the window during entry",
+      "fix": "Use the exact #405 app.css transform; retain both original first-frame and settled-frame containment assertions",
+      "logSha256": "9d3b06efb944438460694d04c51f41755f8dc73817a061528012a83ea8037cc0",
+      "failureTextSha256": "96838c49ddc688c59a34c092599b32b3bfeb120c6bb8a0dec6bad2801b39f7ae",
+      "failurePngSha256": "60997ac9797c435e154c2682fc37bce1a9e712ecb7d82b69e1b420e8238de8f4",
+      "rawEvidence": "Retained in ignored local artifacts, not published",
+      "notCountedAsPass": true
+    }
+  ],
+  "packaging": {
+    "exit": 0,
+    "artifactCount": 2579,
+    "asarComparedBuildFiles": 2645,
+    "protocolResourceCopies": 50,
+    "asarSha256": "6135a20046b8f44da9b6981728b3f75eb611e65685b62ee70363542f0652eb10",
+    "changelog": {
+      "unreleasedSections": 1,
+      "knowledgeAddedEntries": 1,
+      "duplicateBullets": 0,
+      "baseBulletsRetained": 9
+    },
+    "comparedAgainAfterFinalApplicationBuild": true,
+    "installed": false,
+    "published": false
+  },
+  "upstream": {
+    "commit": "410c9c44fcedef41bd1755bdbd0bef6600cd904e",
+    "source": "Fresh clean git archive; Hub checkout remains read-only",
+    "mirrored": 46,
+    "upstream": 67,
+    "mirrorChanged": false
+  },
+  "preRebase": {
+    "sourceHead": "5c65dd62de14526b5874727addf9074f524f54dd",
+    "fullChecksSha256": "d7edb8cecc99c16502a9a8d93db878b095ca28afb64d5146dd5295ac537505e4",
+    "terminalSupplement": {
+      "exit": 1,
+      "reason": "Former pre-#405 focus defect stopped the real 600-line PTY assertion; resolved in the separately recorded post-rebase package",
+      "notCountedAsPass": true
+    },
+    "initialFailures": [
+      "Real Hub acceptance first treated a memory catalog as Markdown; changed to exact document/version reads",
+      "Explicit conflict resolution needs full chosen title/state because no branch may be picked automatically",
+      "Epoch changes on local-to-Hub resume, not during purge; the new assertion follows the pinned design",
+      "Desktop source uses its own bundler tsconfig; optional cross-repository runner loads that boundary through a dynamic URL",
+      "A post-login test retained the obsolete settings object; exact mapping reads now use the newly approved persisted binding",
+      "The real Hub refuses unsigned uploaded evidence; refusal is asserted before a separately declared synthetic observed-source case",
+      "Complete interface had no knowledge assertion and expected the old bare memory notice; new pages and preview refusal are checked, while memory add compatibility remains",
+      "New native request assertion incorrectly placed legacy file context inside the structured block; checks now preserve the approved separate legacy mechanism and assert structured escaping with a real literal"
+    ],
+    "packaging": {
+      "asarSha256": "f01e3d7a543a44fa0b308a14141a5e2a3b5d1e44b30f9b1c6d803d63adcbb9dd",
+      "asarComparedBuildFiles": 2645,
+      "protocolResourceCopies": 50,
+      "artifactCount": 2579
+    },
+    "acceptance": [
+      {
+        "name": "desktop",
+        "modes": [
+          "development",
+          "packaged"
+        ],
+        "exit": 0,
+        "helperTests": 17,
+        "effectGroups": 23,
+        "receiptTiming": "Legacy receipt records 22 before the final assertion; completed stdout records 23"
+      },
+      {
+        "name": "interface-wide and interface-1024",
+        "modes": [
+          "development",
+          "packaged"
+        ],
+        "exit": 0,
+        "commandsEach": 48,
+        "effectGroupsEach": 88
+      },
+      {
+        "name": "live",
+        "modes": [
+          "development",
+          "packaged"
+        ],
+        "exit": 0,
+        "effectGroupsEach": 25
+      },
+      {
+        "name": "browser-live",
+        "modes": [
+          "development",
+          "packaged"
+        ],
+        "exit": 0,
+        "effectGroupsEach": 29
+      },
+      {
+        "name": "knowledge",
+        "modes": [
+          "development",
+          "packaged"
+        ],
+        "exit": 0,
+        "effectGroupsEach": 13,
+        "screenshotsEach": 53
+      }
+    ],
+    "packagedSkippedHarnesses": [
+      "browser-page",
+      "browser-lifecycle",
+      "browser-key-race",
+      "terminal-panel",
+      "popout"
+    ],
+    "skipGuard": "Existing development-only guards; terminal-panel/popout also guard on CIRCLE_DESKTOP_EXECUTABLE despite a generic desktop-capability message; browser-live and packaged popout-press ran separately"
+  },
+  "fullPostRebaseChecksSha256": "c00db0c15c618caba5e5564be99575bba4c1173cad0489f4b7a9b48eeb12a11a",
+  "slimming": {
+    "codeChanged": false,
+    "fullSuitesRerun": false,
+    "evidencePathReaders": "No test/script reads the committed evidence paths; no affected path-reading test exists",
+    "formats": [
+      {
+        "command": "npm run format:check",
+        "exit": 0
+      },
+      {
+        "command": "npm --prefix apps/workbench run format:check",
+        "exit": 0
+      },
+      {
+        "command": "npm --prefix apps/desktop run format:check",
+        "exit": 0
+      }
+    ],
+    "docs": {
+      "command": "JEKYLL_ENV=production bundle exec jekyll build",
+      "ruby": "3.3.9",
+      "bundler": "4.0.20",
+      "lockedDependencies": true,
+      "isolatedToolchain": true,
+      "exit": 0,
+      "warnings": "Existing just-the-docs Sass deprecations",
+      "initialBlocker": "System Ruby 2.6 could not activate locked Bundler 4.0.20; used a temporary Ruby and exact Gemfile.lock without changing repository dependencies"
+    },
+    "integrity": {
+      "status": "passed",
+      "pngCount": 15,
+      "pngBytes": 2477271,
+      "localDocumentationLinks": 53,
+      "sourceFiles": 1140,
+      "buildFiles": 2645,
+      "allImagesAreExactCssPixels": true,
+      "allTransformedPixelsVerified": true,
+      "hubReceiptUnchanged": true,
+      "allReplayedCommitsHaveNoEvidence": true,
+      "nonEvidenceDiff": [
+        "docs/known-issues.md",
+        "docs/workbench/knowledge-validation.md",
+        "docs/workbench/validation.md"
+      ]
+    },
+    "supplement": {
+      "exit": 0,
+      "scope": "Chinese local-only impact dialog with unchanged source/build bytes; receipt.json records its initial moved-harness import failure and correction"
+    },
+    "diffCheck": "passed"
+  }
+}

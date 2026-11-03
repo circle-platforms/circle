@@ -1,0 +1,318 @@
+{
+  "schema": "circle-isolated-hub-acceptance@1",
+  "hubCommit": "410c9c44fcedef41bd1755bdbd0bef6600cd904e",
+  "archiveSha256": "15216cdd772bacf151a57c1273c4438c1338a223a00f52bd4f7e4d3902314bfd",
+  "upstream": {
+    "mirrored": 46,
+    "upstream": 67
+  },
+  "synthetic": true,
+  "loopback": true,
+  "livePortsExcluded": [
+    7420,
+    7443
+  ],
+  "temporaryPostgres": true,
+  "vault": "temporary FileKeyProvider from Hub testing tools",
+  "authorization": "real password login and OAuth code exchange through Circle loopback callbacks",
+  "authorizationPages": 2,
+  "fixtureProvenance": "Synthetic observed team capture seeded through Hub artifacts.ingest after asserting unsigned-upload refusal; no real connector executed",
+  "rejections": [
+    "SHARE_UPLOAD_UNSIGNED"
+  ],
+  "testedAt": "2026-11-03T00:22:34.894Z",
+  "versions": {
+    "node": "24.22.1",
+    "platform": "darwin",
+    "architecture": "arm64"
+  },
+  "checks": [
+    "first sync crosses real OAuth, HTTP, PostgreSQL and MCP and returns the exact personal memory",
+    "independent Circle and Hub edits preserve both conflict revisions without auto-resolution",
+    "an exact accepted mapping enables checked and explicitly confirmed sharing to an independently readable team copy",
+    "the real Hub rejects unsigned local-upload grounds with SHARE_UPLOAD_UNSIGNED and keeps its refusal receipt",
+    "locally and remotely verified source-backed knowledge shares only through its exact mapping and is readable by another account",
+    "local-only mode really purges personal Hub payloads, retains local and team copies, and resumes into a new epoch",
+    "a revoked OAuth token produces a real 401, pauses without background login, and explicit password/consent re-login resumes sync"
+  ],
+  "requests": [
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/clients",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/missing",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/upload",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/commit",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/clients",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/inventory",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/missing",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/upload",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/commit",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/clients",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/inventory",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/download",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/missing",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/upload",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/commit",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/clients",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/inventory",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/missing",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/upload",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/commit",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/mode/check",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/mode/check",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/mode",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/mode/check",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/mode/check",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/mode",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/clients",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/missing",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/upload",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/commit",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 401
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/clients",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/inventory",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/missing",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/state",
+      "status": 200
+    },
+    {
+      "route": "/api/sync/v1/sessions/:id/commit",
+      "status": 200
+    }
+  ],
+  "packaged": false,
+  "runnerSha256": "42d99cb02670d3c62af31bd4cbff64c6d7641bf7af235f33549972673f4feaed"
+}

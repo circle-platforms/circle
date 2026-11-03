@@ -1,0 +1,26 @@
+{
+  "builtAt": "2026-11-03T01:16:25.490Z",
+  "version": "1.14.0",
+  "electron": "44.9.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "artifacts": [
+    {
+      "path": "Circle-darwin-arm64/Circle.app/Contents/Resources/app.asar",
+      "sha256": "6135a20046b8f44da9b6981728b3f75eb611e65685b62ee70363542f0652eb10"
+    },
+    {
+      "path": "circle-desktop-1.14.0-darwin-arm64.dmg",
+      "sha256": "45d78865e44ac376291996a1f16ee46aff24177b044b034587e165abcd9ccb05"
+    }
+  ],
+  "manifest": {
+    "count": 2579,
+    "sha256": "a437dae132eb04a1d3a14a05d349b2a916808daf2dd0cf44d6aa4b3bf3a6310f"
+  },
+  "manifestEncoding": "SHA-256 of UTF-8 JSON.stringify(all artifact records sorted by path in code-unit order) plus one LF",
+  "fullReceiptSha256": "38bad398af34bfcb23c2e73e538edd4da6ac6f5fd7bc148422030a921c15b6bc",
+  "comparedBuildFiles": 2645,
+  "comparedProtocolResources": 50,
+  "scope": "Post-rebase package used for terminal AX; complete packaged knowledge acceptance below predates the rebase"
+}
