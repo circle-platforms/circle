@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { NativeGitHubConnection } from '../src/workspace/github-connection.ts';
+import { CREDENTIAL_REENTRY } from '../src/runtime-private-channel.ts';
 import { githubWorkspaceBackend } from '../src/workspace/github-backend.ts';
 import { OperationLedger } from '../src/workspace/operation-ledger.ts';
 import { createHash } from 'node:crypto';
@@ -2148,5 +2149,49 @@ test('an old cancellation cleanup failure reports to its caller without overwrit
   } finally {
     release();
     await f.close();
+  }
+});
+
+test('a saved sign-in the earlier encrypted store could not hand over asks for sign-in again', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-github-reentry-'));
+  const dataDir = path.join(root, 'profile');
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(
+    path.join(dataDir, 'github-connection.json'),
+    JSON.stringify({ epoch: 3, repositories: [], resume: true }),
+  );
+  let commands = 0;
+  const connection = new NativeGitHubConnection({
+    dataDir,
+    ghPath: 'synthetic-gh',
+    credentialStore: {
+      // What the private channel rejects with for a key marked during the move
+      get: async () => {
+        throw Error(CREDENTIAL_REENTRY);
+      },
+      put: async () => {},
+      delete: async () => {},
+    },
+    credentialCommand: async () => ({ stdout: TOKEN }),
+    spawn: () => {
+      throw Error('must not start a login');
+    },
+    command: async () => {
+      commands++;
+      return '';
+    },
+  });
+  try {
+    const states: { state: string; error?: string }[] = [];
+    connection.subscribe((state) => states.push(state));
+    const failed = await until(
+      async () => states.find((state) => state.state === 'error') ?? false,
+    );
+    assert.equal(failed.error, 'saved GitHub sign-in must be entered again');
+    assert.equal(commands, 0);
+    assert.equal((await connection.status()).account, undefined);
+  } finally {
+    await connection.dispose();
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { CREDENTIAL_REENTRY } from '../runtime-private-channel';
 import {
   GITHUB_ADDITIONAL_SCOPES,
   type GitHubConnectionState,
@@ -152,13 +153,18 @@ export class NativeGitHubConnection {
       delete this.state.error;
       this.active = true;
       this.emit();
-    } catch {
+    } catch (error) {
       if (epoch === this.state.epoch && !this.disposed) {
         this.active = false;
         this.state.state = 'error';
         delete this.state.authorizationPhase;
         this.state.lastAuthorizationOutcome = 'failed';
-        this.state.error = 'saved GitHub connection could not be verified';
+        // A sign-in the earlier encrypted store held but could not hand over is asked
+        // for again in the sign-in form below the message.
+        this.state.error =
+          error instanceof Error && error.message === CREDENTIAL_REENTRY
+            ? 'saved GitHub sign-in must be entered again'
+            : 'saved GitHub connection could not be verified';
         this.emit();
       }
     }
