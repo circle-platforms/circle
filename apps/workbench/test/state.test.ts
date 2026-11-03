@@ -1204,3 +1204,21 @@ test('a new session does not start in the untrusted project that was open', () =
     undefined,
   );
 });
+
+test('desktop knowledge and structured memory commands open their real pages while retaining file-memory guidance', () => {
+  const runtime = new PreviewRuntime(storage());
+  for (const [name, args] of [
+    ['knowledge', ''],
+    ['memory', 'refresh'],
+    ['memory', 'write title | body'],
+    ['memory', 'personal'],
+  ]) {
+    const result = runtime.command(name!, args);
+    assert.equal(result.page, name === 'knowledge' ? 'knowledge' : 'memory');
+    assert.doesNotMatch(result.notice ?? '', /add this line/);
+  }
+  assert.match(
+    runtime.command('memory', 'add account legacy').notice ?? '',
+    /MEMORY.md/,
+  );
+});

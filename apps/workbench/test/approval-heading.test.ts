@@ -46,6 +46,12 @@ test("an MCP or extension tool's reason is the same words for every tool, shown 
   assert.equal(requestReason('can change state'), '可能改变状态');
   assert.equal(
     requestReason(
+      'changes personal knowledge or memory and always needs your confirmation',
+    ),
+    '变更个人知识或记忆，每次均须本人确认',
+  );
+  assert.equal(
+    requestReason(
       'its MCP server says it only reads; the call sends it a local file or a secret',
     ),
     '它的 MCP 服务器说它只读取；这次调用会把本地文件或密钥发给它',

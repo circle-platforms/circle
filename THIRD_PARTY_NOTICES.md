@@ -1,5 +1,18 @@
 # Third-party notices
 
+## Circle Hub personal sync contracts
+
+The protocol schemas in `src/data/knowledge-sync/v1/`, the shared vectors in
+`tests/fixtures/knowledge-sync/v1/`, and the adapted strict JSON, canonical encoding
+and search-token algorithms in `src/knowledge/` derive from
+[Circle Hub](https://github.com/circle-platforms/circle-hub).
+
+Copyright (c) 2026 qingshanfeihu and the Circle contributors.
+Licensed under Apache License 2.0. The original license and notice are retained in
+`src/data/knowledge-sync/v1/UPSTREAM_LICENSE` and `UPSTREAM_NOTICE`.
+`provenance.json` records the exact upstream files, digests and observed revision;
+the adapted implementation uses Circle's existing dependencies and storage.
+
 ## models.dev
 
 The compressed model catalogs in `src/data/` contain metadata derived from [models.dev](https://models.dev).

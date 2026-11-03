@@ -1,3 +1,4 @@
+import { installedPersonalPacks } from './knowledge/packs.js';
 import {
   existsSync,
   readFileSync,
@@ -14,6 +15,7 @@ export interface SkillInfo {
   description: string;
   path: string;
   source_label: string;
+  personal_home?: string;
 }
 export function parseFrontmatter(text: string): {
   meta: Record<string, string>;
@@ -118,7 +120,19 @@ export function discoverSkills(
   userHome = homedir(),
   builtin: string | false = builtinSkillsRoot(),
 ): SkillInfo[] {
-  const byName = new Map<string, SkillInfo>();
+  // Explicit personal installations precede existing sources, preserving their established priority.
+  const byName = new Map<string, SkillInfo>(
+    installedPersonalPacks(home).map((pack) => [
+      pack.name,
+      {
+        name: pack.name,
+        description: pack.manifest.description,
+        path: pack.path,
+        source_label: 'Personal pack',
+        personal_home: home,
+      },
+    ]),
+  );
   for (const [root, label] of skillSources(
     workspace,
     home,
@@ -172,5 +186,12 @@ export function loadSkillBody(name: string, catalog: SkillInfo[]): string {
     throw new Error(
       `skill '${name}' not found. Available: ${catalog.map((skill) => skill.name).join(', ') || '(none)'}`,
     );
+  if (
+    skill.source_label === 'Personal pack' &&
+    !installedPersonalPacks(skill.personal_home!).some(
+      (pack) => pack.path === skill.path,
+    )
+  )
+    throw new Error('personal pack changed, disabled or unavailable');
   return `<skill_content name="${skill.name}">\n${readFileSync(skill.path, 'utf8').trim()}\n\nBase directory for this skill: ${dirname(skill.path)}\nRelative paths in this skill are relative to this base directory.\n</skill_content>`;
 }

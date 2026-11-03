@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { test } from 'node:test';
 import { once } from 'node:events';
+import { DatabaseSync } from 'node:sqlite';
 import { createServer } from 'node:http';
 import { createConnection, type AddressInfo } from 'node:net';
 import { cleanup, cleanupServer, scratch, until } from './helpers.js';
@@ -22,6 +23,23 @@ function context(): {
     },
   };
 }
+
+test('owned SQLite cleanup closes the database before removing its scratch directory', async () => {
+  const t = context();
+  const root = scratch(t);
+  const database = new DatabaseSync(join(root, 'knowledge.sqlite'));
+  database.exec('PRAGMA journal_mode=WAL; CREATE TABLE sample(id INTEGER)');
+  cleanup(t, () => {
+    // macOS allows unlinking an open database; Windows does not. Pin the
+    // ownership order on both rather than relying on unlink succeeding.
+    assert.equal(existsSync(join(root, 'knowledge.sqlite')), true);
+    assert.equal(database.isOpen, true);
+    database.close();
+  });
+  await t.finish();
+  assert.equal(database.isOpen, false);
+  assert.equal(existsSync(root), false);
+});
 
 test('scratch cleanup yields to pending process callbacks and removes every owned directory', async () => {
   const t = context();

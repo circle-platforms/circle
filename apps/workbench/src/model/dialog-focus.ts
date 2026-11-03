@@ -50,7 +50,7 @@ export function focusDialogField(
     placeFocus(field);
     return;
   }
-  const primary = content.querySelector('button.primary');
+  const primary = content.querySelector('button.primary, button.danger');
   if (primary instanceof HTMLButtonElement && !primary.disabled) {
     placeFocus(primary);
     return;

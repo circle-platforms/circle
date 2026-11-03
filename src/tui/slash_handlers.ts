@@ -1,3 +1,7 @@
+import {
+  knowledgeCommand,
+  structuredMemoryCommand,
+} from './knowledge_commands.js';
 // The slash commands of the full-screen interface. SessionApp keeps /models, /login, /reload
 // and /editor, which use its own state, and routes every command through runCommand.
 import { randomUUID } from 'node:crypto';
@@ -176,7 +180,13 @@ const BUSY_OK = new Set([
 // These only show a list when they have no argument. With one they change what the turn
 // works with: `/skill <name>` writes into the conversation the turn is writing, and
 // `/extensions reload` replaces the tools it may be calling. That form waits.
-const BUSY_OK_BARE = new Set(['skill', 'extensions', 'bridge', 'memory']);
+const BUSY_OK_BARE = new Set([
+  'skill',
+  'extensions',
+  'bridge',
+  'memory',
+  'knowledge',
+]);
 const BUSY_WORDS: Record<string, string> = {
   models: 'Busy · switch models when the turn has finished',
   skill: 'Busy · load the skill when the turn has finished',
@@ -195,6 +205,7 @@ const VIEW_ONLY_REFUSED_WITH_ARGS = new Set([
   'skill',
   'bridge',
   'memory',
+  'knowledge',
 ]);
 const VIEW_ONLY_WORDS = 'view only · another terminal runs this session';
 const THEMES = ['auto', 'dark', 'light'] as const;
@@ -2520,6 +2531,7 @@ const HANDLERS: Record<string, Handler> = {
   compact,
   bridge,
   memory,
+  knowledge: knowledgeCommand,
 };
 // /bridge: open the localhost bridge so the editor the person already uses can
 // tell Circle what is open and what is selected, and answer a diff request.
@@ -2612,10 +2624,14 @@ function memoryList(host: CommandHost): void {
   lines.push(
     '--no-context-files (-nc) does not leave these out: they are memory, not instructions',
   );
+  lines.push(
+    'structured preferences: /memory team · /memory personal · /memory loaded · /memory refresh',
+  );
   host.notice(lines.join('\n'));
 }
 
-function memory(host: CommandHost, args: string): void {
+async function memory(host: CommandHost, args: string): Promise<void> {
+  if (await structuredMemoryCommand(host, args)) return;
   const trimmed = args.trim();
   if (!trimmed) {
     memoryList(host);

@@ -348,3 +348,36 @@ test('legacy fixtures retain streaming and abort behavior without routed task id
   await assert.rejects(pending, /fixture cancelled/);
   assert.equal(model.requests.length, 2);
 });
+
+test('native scripted model records tool data without executable privacy or host callbacks', async () => {
+  const model = new RuntimeFixtureModel({
+    replies: [
+      { message: { id: 'data-only', role: 'assistant', content: 'ready' } },
+    ],
+  });
+  const input = request('knowledge');
+  input.tools = [
+    {
+      name: 'knowledge_share',
+      description: 'confirmed sharing',
+      effect: 'write',
+      personApproval: true,
+      parameters: { type: 'object' },
+      privacy: (call) => call,
+      paths: () => [],
+      callEffect: () => 'write',
+      prepare: async () => async () => '',
+      run: async () => '',
+    },
+  ];
+  await model.complete(input);
+  assert.deepEqual(model.requests[0]!.tools, [
+    {
+      name: 'knowledge_share',
+      description: 'confirmed sharing',
+      effect: 'write',
+      personApproval: true,
+      parameters: { type: 'object' },
+    },
+  ]);
+});

@@ -21,6 +21,8 @@ const WAIT_SUFFIX = '  waiting for you';
 // Shown by the plan box, never as a tool row.
 export const HIDDEN_TOOLS = new Set(['write_todos']);
 const READ_TOOLS = new Set([
+  'knowledge_search',
+  'knowledge_read',
   'read_file',
   'ls',
   'glob',
@@ -31,6 +33,9 @@ const READ_TOOLS = new Set([
   'websearch',
 ]);
 const WRITE_TOOLS = new Set([
+  'knowledge_write',
+  'knowledge_share',
+  'memory_write',
   'write_file',
   'edit_file',
   'apply_patch',

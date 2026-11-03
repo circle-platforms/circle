@@ -1,3 +1,9 @@
+import { prepareKnowledgeShare } from './knowledge/sharing.js';
+import {
+  deferredKnowledgeTool,
+  knowledgeToolsWanted,
+} from './knowledge/tools.js';
+import { KnowledgeService, type KnowledgeAccess } from './knowledge/service.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { GitHubConnectionBackend } from './github_connection.js';
 import { join, dirname } from 'node:path';
@@ -61,6 +67,13 @@ import type { CircleSettings } from './settings.js';
 import { discoverSkills, loadSkillBody, type SkillInfo } from './skills.js';
 import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
+import { KnowledgeConnection } from './knowledge/connection.js';
+import {
+  loadSessionMemory,
+  formatSessionMemory,
+  SESSION_MEMORY_BYTES,
+  type SessionMemory,
+} from './knowledge/session-memory.js';
 import { McpManager } from './mcp_loader.js';
 import { ExtensionHost, type SubagentSpec } from './extensions.js';
 import { discoverSubagents, type SubagentFileInfo } from './subagent_files.js';
@@ -125,6 +138,11 @@ import {
   type HookDefinition,
 } from './hooks.js';
 const BUILTIN_TOOL_NAMES = new Set([
+  'knowledge_search',
+  'knowledge_read',
+  'knowledge_write',
+  'knowledge_share',
+  'memory_write',
   'ls',
   'read_file',
   'write_file',
@@ -167,6 +185,7 @@ export interface InteractionContext {
   agent?: string;
 }
 export interface RuntimeOptions {
+  knowledgeAccess?: () => KnowledgeAccess;
   /** Optional host process transport; the CLI keeps its existing pipe launcher. */
   commandLauncher?: CommandLauncher;
   /** Safe process identity projection; never receives expanded command or env. */
@@ -429,6 +448,29 @@ export class AgentRuntime {
     return this.ensureHooks().listing();
   }
   readonly mcp: McpManager;
+  readonly knowledge: KnowledgeConnection;
+  private sessionMemory?: SessionMemory;
+  private memorySession?: string;
+  private memoryLoading?: Promise<void>;
+  private memoryPrompt = '';
+  get sessionMemoryContext(): string {
+    return this.memoryPrompt;
+  }
+  get sessionMemoryStatus() {
+    return {
+      bytes: Buffer.byteLength(this.memoryPrompt),
+      truncated:
+        !!this.sessionMemory?.documents.length &&
+        (!this.memoryPrompt ||
+          /memory truncated|memory omitted/.test(this.memoryPrompt)),
+    };
+  }
+  get knowledgeSignal(): AbortSignal {
+    return this.integrationLifetime.signal;
+  }
+  get loadedSessionMemory(): SessionMemory | undefined {
+    return this.sessionMemory ? structuredClone(this.sessionMemory) : undefined;
+  }
   readonly lsp: LspManager;
   readonly context: ContextManager;
   private compactionController?: AbortController;
@@ -446,11 +488,20 @@ export class AgentRuntime {
   private readonly wrappedModels = new WeakSet<ChatModel>();
   private authFingerprint?: string;
   private coreTools: Tool[] = [];
+  private deferredKnowledgeTools: Tool[] = [];
   // An extension changed its tools after loading; applied between turns, never inside one.
   private toolsStale = false;
   private toolsCheck?: ReturnType<typeof setTimeout>;
   get allTools(): Tool[] {
-    return this.withIntegrationTools(this.coreTools, false);
+    return this.withIntegrationTools(
+      [
+        ...this.coreTools,
+        ...this.deferredKnowledgeTools.filter(
+          (tool) => !this.coreTools.some((have) => have.name === tool.name),
+        ),
+      ],
+      false,
+    );
   }
   todos: Todo[] = [];
   readonly userShells: UserShells;
@@ -606,6 +657,7 @@ export class AgentRuntime {
       sessionId: () => this.session.id,
       // A server that asks for a sign-in gets one in the browser; what it gives is kept in this home
       home: this.options.home,
+      openUrl: this.options.openUrl,
       readFile: (path, context, limit) =>
         readFileBytes(this.sandbox, fileReads, path, context, limit),
       // A server that went away leaves the system prompt between turns, as tools do
@@ -615,6 +667,37 @@ export class AgentRuntime {
         this.scheduleToolRefresh();
       },
     });
+    this.knowledge = new KnowledgeConnection(
+      this.options.home,
+      () => this.options.settings,
+      () => loadSecrets(this.options.home),
+      this.mcp,
+      (authorizationChanged) => {
+        if (this.closing) return;
+        if (
+          (authorizationChanged ||
+            this.knowledge.status().condition === 'login-required') &&
+          this.sessionMemory?.documents.some((d) => d.scope === 'team')
+        ) {
+          this.sessionMemory = {
+            ...this.sessionMemory,
+            documents: this.sessionMemory.documents.filter(
+              (d) => d.scope !== 'team',
+            ),
+            warnings: [
+              ...this.sessionMemory.warnings,
+              'team memory authorization changed; it was removed',
+            ],
+          };
+          this.toolsStale = true;
+          this.scheduleToolRefresh();
+        }
+        if (!this.closing)
+          this.bus.emit('info', {
+            payload: { knowledge_sync: this.knowledge.status().condition },
+          });
+      },
+    );
     this.policy.declareHints((tool) => this.mcp.hint(tool));
     this.lsp = new LspManager(this.sandbox);
     this.context = new ContextManager(this.store, this.sandbox.offloadRoot!, {
@@ -734,6 +817,25 @@ export class AgentRuntime {
     const system = this.systemPrompt(model.model);
     const vision = this.visionForRun();
     let tools = buildTools(this.sandbox, {
+      knowledge: new KnowledgeService(
+        this.options.home,
+        this.options.knowledgeAccess,
+      ),
+      knowledgeShare: (args, signal) =>
+        prepareKnowledgeShare({
+          service: new KnowledgeService(
+            this.options.home,
+            this.options.knowledgeAccess,
+          ),
+          connection: this.knowledge,
+          binding: () => this.options.settings.knowledge_sync.binding,
+          snapshot: String(args.snapshot),
+          object: String(args.object),
+          ...(typeof args.team_path === 'string'
+            ? { teamPath: args.team_path }
+            : {}),
+          signal,
+        }),
       fileMutations: this.options.fileMutations,
       captures: this.captures,
       jobs: this.jobs,
@@ -1140,6 +1242,8 @@ export class AgentRuntime {
     // opening or closing it changes nothing else about the session.
     if (this.options.settings.editor_bridge)
       tools.push(...this.editorBridge.modelTools());
+    this.deferredKnowledgeTools = tools.filter(deferredKnowledgeTool);
+    tools = tools.filter((tool) => !deferredKnowledgeTool(tool));
     this.coreTools = tools;
     tools = this.withIntegrationTools(
       tools.filter((tool) => tool.name !== 'wait_jobs'),
@@ -1183,9 +1287,17 @@ export class AgentRuntime {
       },
       beforeTurn: (prompt) => {
         this.requireTurnConnection();
+        this.promoteKnowledgeTools(prompt ?? '');
         this.promoteDeferredTools(prompt);
       },
       beforeStep: () => {
+        this.knowledge.checkAuthorization();
+        this.promoteKnowledgeTools('');
+        if (
+          this.sessionMemory ||
+          existsSync(join(this.options.home, 'knowledge', 'knowledge.sqlite'))
+        )
+          this.refreshSystemPrompt();
         this.userShells.flush();
         const messages = this.jobs.takeNotices(this.harness.sessionId);
         if (messages.length)
@@ -1430,28 +1542,58 @@ export class AgentRuntime {
             this.options.home,
             this.options.userHome,
           );
-    return buildSystemPrompt(
-      this.options.workspace,
-      model,
-      this.options.settings.auth.protocol,
-      this.runOptions,
-      this.options.home,
-      {
-        skills: this.skills,
-        onContextFiles: (files) => {
-          this.promptInstructions = files.map((file) => ({ ...file }));
+    const build = (sessionPreferences: string) =>
+      buildSystemPrompt(
+        this.options.workspace,
+        model,
+        this.options.settings.auth.protocol,
+        this.runOptions,
+        this.options.home,
+        {
+          sessionPreferences,
+          skills: this.skills,
+          onContextFiles: (files) => {
+            this.promptInstructions = files.map((file) => ({ ...file }));
+          },
+          extensionTools: this.extensions.tools(),
+          userHome: this.options.userHome,
+          localContext: this.options.localContext,
+          variables: this.options.settings.variables,
+          secrets: secretNames(this.options.home),
+          attribution: this.options.settings.attribution,
+          headless: this.options.headless,
+          mcpInstructions: this.mcp.instructions(),
         },
-        extensionTools: this.extensions.tools(),
-        userHome: this.options.userHome,
-        localContext: this.options.localContext,
-        variables: this.options.settings.variables,
-        secrets: secretNames(this.options.home),
-        attribution: this.options.settings.attribution,
-        headless: this.options.headless,
-        mcpInstructions: this.mcp.instructions(),
-      },
-    );
+      );
+    let cap = SESSION_MEMORY_BYTES;
+    let preferences = this.sessionMemory
+      ? formatSessionMemory(this.sessionMemory, cap)
+      : '';
+    const base = build(''),
+      actual = this.baseModel;
+    if (preferences && actual) {
+      const frame = (system: string) => ({
+        system,
+        messages: this.harness?.messages ?? [],
+        tools: this.harness?.tools ?? this.coreTools,
+      });
+      if (!requestBudget(actual, frame(build(preferences))).fits) {
+        let low = 0,
+          high = cap;
+        while (low < high) {
+          const mid = Math.ceil((low + high) / 2),
+            text = formatSessionMemory(this.sessionMemory!, mid);
+          if (requestBudget(actual, frame(build(text))).fits) low = mid;
+          else high = mid - 1;
+        }
+        cap = low;
+        preferences = formatSessionMemory(this.sessionMemory!, cap);
+      }
+    }
+    this.memoryPrompt = preferences;
+    return preferences ? build(preferences) : base;
   }
+
   /** The variables or the secrets changed: the next request tells the model. */
   refreshPrompt(): void {
     this.refreshSystemPrompt();
@@ -1480,6 +1622,22 @@ export class AgentRuntime {
     this.harness.system = this.systemPrompt(this.harness.model.model);
   }
   /** Move deferred tools onto the harness once this turn's text asks for them. */
+  private promoteKnowledgeTools(prompt: string): void {
+    if (
+      !this.deferredKnowledgeTools.length ||
+      !knowledgeToolsWanted(this.harness.messages, prompt)
+    )
+      return;
+    const missing = this.deferredKnowledgeTools.filter(
+      (tool) => !this.coreTools.some((have) => have.name === tool.name),
+    );
+    if (!missing.length) return;
+    this.coreTools.push(...missing);
+    this.harness.tools = this.withIntegrationTools(
+      this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+    );
+    this.describeSubagents(this.harness.tools);
+  }
   private promoteDeferredTools(prompt: string | undefined): void {
     const extra = this.options.deferredTools;
     if (!extra?.length) return;
@@ -1563,7 +1721,12 @@ export class AgentRuntime {
   async initialize(signal?: AbortSignal): Promise<void> {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
-    if (this.options.headless && !this.options.integrations) return;
+    if (this.options.headless && !this.options.integrations) {
+      await this.prepareSessionMemory(
+        signal ?? this.integrationLifetime.signal,
+      );
+      return;
+    }
     const active = signal
       ? AbortSignal.any([signal, this.integrationLifetime.signal])
       : this.integrationLifetime.signal;
@@ -1616,12 +1779,65 @@ export class AgentRuntime {
         // The extensions loaded before end: what they still did on their own stops, and the
         // old host is waited for up to two seconds, as a watch's on_stop is.
         await previous.close(2000);
+        if (this.options.localContext !== false)
+          await this.knowledge.configure();
       })().catch((error) => {
         this.integrationsReady = undefined;
         throw error;
       });
     }
     await this.integrationsReady;
+    await this.prepareSessionMemory(active);
+  }
+  private async prepareSessionMemory(signal: AbortSignal): Promise<void> {
+    if (
+      this.options.localContext === false ||
+      this.memorySession === this.session.id
+    )
+      return;
+    if (this.memoryLoading) {
+      await this.memoryLoading;
+      if (this.memorySession === this.session.id) return;
+    }
+    const session = this.session.id;
+    const work = (async () => {
+      const read =
+        this.options.headless && !this.options.integrations
+          ? undefined
+          : this.knowledge.reader();
+      const snapshot = await loadSessionMemory(this.options.home, read, signal);
+      signal.throwIfAborted();
+      if (this.session.id !== session || this.closing) return;
+      this.sessionMemory = snapshot;
+      this.memorySession = session;
+      this.refreshSystemPrompt();
+      if (snapshot.warnings.length || snapshot.conflicts)
+        this.bus.emit('info', {
+          payload: {
+            message: [
+              ...snapshot.warnings,
+              ...(snapshot.conflicts
+                ? [
+                    `${snapshot.conflicts} personal memory conflicts were not loaded`,
+                  ]
+                : []),
+            ].join('; '),
+            session_memory: true,
+          },
+        });
+    })();
+    this.memoryLoading = work;
+    try {
+      await work;
+    } finally {
+      if (this.memoryLoading === work) this.memoryLoading = undefined;
+    }
+  }
+  async refreshSessionMemory(): Promise<void> {
+    if (this.busy) throw Error('refresh memory after the current turn');
+    this.sessionMemory = undefined;
+    this.memorySession = undefined;
+    await this.prepareSessionMemory(this.integrationLifetime.signal);
   }
   /** Change one bundled extension without restarting unrelated integrations. */
   setBundledExtensionEnabled(name: string, enabled: boolean): Promise<void> {
@@ -1695,12 +1911,18 @@ export class AgentRuntime {
     this.refreshSystemPrompt();
   }
   private scheduleToolRefresh(): void {
-    if (this.toolsCheck) return;
+    if (this.closing || this.toolsCheck) return;
     // A macrotask later: several changes in a row become one rebuild, and a turn that just
     // ended has let go of the harness.
     this.toolsCheck = setTimeout(() => {
       this.toolsCheck = undefined;
-      if (!this.toolsStale || !this.integrationsReady || this.busy) return;
+      if (
+        this.closing ||
+        !this.toolsStale ||
+        !this.integrationsReady ||
+        this.busy
+      )
+        return;
       this.toolsStale = false;
       this.harness.tools = this.withIntegrationTools(
         this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
@@ -1832,6 +2054,9 @@ export class AgentRuntime {
     this.policy.setAllowedCommands(this.options.settings.allowed_commands);
     this.reloadHooks();
     this.integrationsReady = undefined;
+    this.sessionMemory = undefined;
+    this.memorySession = undefined;
+    await this.knowledge.close();
     await this.initialize();
   }
   /** This conversation's plan file: the path the model writes, and where it is kept. */
@@ -2370,6 +2595,8 @@ export class AgentRuntime {
     );
     this.store.claimSession(session.id, (error) => this.ownershipLost(error));
     this.session = session;
+    this.sessionMemory = undefined;
+    this.memorySession = undefined;
     this.todos = [];
     this.armedSkills.clear();
     this.hookRunner = undefined;
@@ -2393,6 +2620,8 @@ export class AgentRuntime {
     const previous = this.session.id;
     this.store.claimSession(session.id, (error) => this.ownershipLost(error));
     this.session = session;
+    this.sessionMemory = undefined;
+    this.memorySession = undefined;
     this.store.repairStaleTitles();
     const repaired = this.store.get(session.id);
     if (repaired) this.session = repaired;
@@ -2623,6 +2852,7 @@ It is input, not a decision: it answers no approval card, changes no mode and ad
     results.push(
       ...(await Promise.allSettled([
         this.extensions.close(2000, { requireSettled: true }),
+        this.knowledge.close(),
         this.mcp.close(),
         this.lsp.close(),
       ])),
@@ -2686,6 +2916,7 @@ It is input, not a decision: it answers no approval card, changes no mode and ad
     }
     await this.integrationsReady?.catch(() => {});
     await this.extensions.close(2000, { requireSettled: deleteSession });
+    await this.knowledge.close();
     await this.mcp.close();
     await this.lsp.close();
     if (deleteSession) await this.options.beforeDelete?.();

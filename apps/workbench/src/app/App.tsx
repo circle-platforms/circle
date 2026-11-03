@@ -1,3 +1,4 @@
+import { KnowledgePage } from '../features/KnowledgePage';
 import { CommandTerminalNavigation } from '../components/CommandTerminalNavigation';
 import type {
   CommandTerminalResolution,
@@ -1357,6 +1358,11 @@ export function App() {
         {t('manage interface components')}
       </Button>
     </div>
+  ) : page && ['knowledge', 'memory', 'workflows'].includes(page) ? (
+    <KnowledgePage
+      key={page}
+      section={page as 'knowledge' | 'memory' | 'workflows'}
+    />
   ) : page ? (
     <ManagementPage
       page={page}

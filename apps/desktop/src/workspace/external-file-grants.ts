@@ -47,6 +47,50 @@ const inside = (root: string, path: string) => {
   );
 };
 
+export function assertExternalSelectionPath(
+  path: string,
+  options: ExternalFileGrantOptions = {},
+): void {
+  const patterns = [
+    ...DEFAULT_CREDENTIAL_FILES,
+    ...(options.credentialFiles ?? []),
+  ];
+  const portable = path.split(sep).join('/').toLowerCase();
+  if (
+    patterns.some((pattern) => {
+      const configured = pattern.replace(/\\/g, '/').toLowerCase();
+      return (
+        wildcard(configured, portable) ||
+        (!isAbsolute(pattern) && wildcard('*/' + configured, portable))
+      );
+    })
+  )
+    throw new DocumentPathError('configured credential path cannot be granted');
+  const parts = path.split(sep);
+  for (const part of parts)
+    if (
+      ['.git', '.circle', '.ssh', '.aws', '.gnupg'].includes(
+        part.toLowerCase(),
+      ) ||
+      patterns.some((pattern) =>
+        wildcard(pattern.toLowerCase(), part.toLowerCase()),
+      )
+    )
+      throw new DocumentPathError(
+        'credential or private application files cannot be granted',
+      );
+  for (const root of options.protectedRoots ?? []) {
+    let canonical: string;
+    try {
+      canonical = realpathSync.native(resolve(root));
+    } catch {
+      canonical = resolve(root);
+    }
+    if (inside(canonical, path))
+      throw new DocumentPathError('private application data cannot be granted');
+  }
+}
+
 /** Main-process exact-file capabilities. Only the native OS-picker path may call mint. */
 export class ExternalFileGrants {
   private entries = new Map<string, Entry>();
@@ -56,48 +100,7 @@ export class ExternalFileGrants {
   constructor(private options: ExternalFileGrantOptions = {}) {}
 
   private credentials(path: string): void {
-    const patterns = [
-      ...DEFAULT_CREDENTIAL_FILES,
-      ...(this.options.credentialFiles ?? []),
-    ];
-    const portable = path.split(sep).join('/').toLowerCase();
-    if (
-      patterns.some((pattern) => {
-        const configured = pattern.replace(/\\/g, '/').toLowerCase();
-        return (
-          wildcard(configured, portable) ||
-          (!isAbsolute(pattern) && wildcard('*/' + configured, portable))
-        );
-      })
-    )
-      throw new DocumentPathError(
-        'configured credential path cannot be granted',
-      );
-    const parts = path.split(sep);
-    for (const part of parts)
-      if (
-        ['.git', '.circle', '.ssh', '.aws', '.gnupg'].includes(
-          part.toLowerCase(),
-        ) ||
-        patterns.some((pattern) =>
-          wildcard(pattern.toLowerCase(), part.toLowerCase()),
-        )
-      )
-        throw new DocumentPathError(
-          'credential or private application files cannot be granted',
-        );
-    for (const root of this.options.protectedRoots ?? []) {
-      let canonical: string;
-      try {
-        canonical = realpathSync.native(resolve(root));
-      } catch {
-        canonical = resolve(root);
-      }
-      if (inside(canonical, path))
-        throw new DocumentPathError(
-          'private application data cannot be granted',
-        );
-    }
+    assertExternalSelectionPath(path, this.options);
   }
   private check(entry: Entry, path = basename(entry.path)): void {
     if (this.closed || !entry.active || this.entries.get(entry.id) !== entry)

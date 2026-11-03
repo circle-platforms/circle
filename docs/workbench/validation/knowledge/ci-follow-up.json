@@ -1,0 +1,318 @@
+{
+  "schema": "knowledge-ci-follow-up@1",
+  "date": "2026-11-03",
+  "platform": "darwin-arm64",
+  "node": "24.22.1",
+  "baseline": "10ca2fc0b00e1e19f4a74f4fc721b5caea5e0f8b",
+  "ci": {
+    "windows": 41561578080,
+    "linuxNative": 41561578064,
+    "prHead": "12eab5d3f288667f9c55351659f2dd4f63276365",
+    "mergeHead": "ed9d3fe28fd77134f41b8bac8c811b4477d6f35b"
+  },
+  "scope": {
+    "productionDiffEmpty": true,
+    "noTimeoutChanges": true,
+    "protocolMirrorUnchanged": true,
+    "pngCount": 15,
+    "windowsOrLinuxRerunLocally": false
+  },
+  "measurement": {
+    "serial": true,
+    "warmTranspilerCacheOnBothSides": true,
+    "testsBefore": 219,
+    "testsAfter": 219,
+    "failures": 0,
+    "skips": 0,
+    "wallMsBefore": 30767.665291,
+    "wallMsAfter": 28002.345292,
+    "strictCleanupAfter": true,
+    "nativeCalibration": {
+      "nodeFsyncSync": {
+        "js": 1,
+        "native": 0
+      },
+      "sqliteFullCreateAndInsert": {
+        "js": 0,
+        "native": 8
+      }
+    },
+    "definitions": {
+      "sqliteOpens": "handles observed at first SQL or close, including session stores and owned helper processes",
+      "transactions": "explicit BEGIN attempts including reads; prepared autocommit DML counted separately",
+      "fsyncs": "Node fsyncSync calls plus separately calibrated native libc fsync entries; calls, not measured physical media flushes",
+      "mkdtemps": "temporary scratch roots; private subdirectories remain separate",
+      "processes": "11 explicit fixture children, 2 compiler helpers, 15 file workers and 1 runner on each side",
+      "timing": "per-file process lifetime including imports, instrumentation and cleanup; single local observation, not a Windows performance estimate"
+    },
+    "before": {
+      "totals": {
+        "sqliteOpens": 1181,
+        "transactions": 2775,
+        "autocommitWrites": 358,
+        "fsyncs": 2395,
+        "mkdtemps": 326,
+        "mkdirs": 4729,
+        "processes": 11,
+        "removalsWhileDatabaseOpen": 124,
+        "nativeFsyncs": 5550,
+        "transpilers": 2,
+        "allFsyncs": 7945,
+        "observedProcesses": 29,
+        "nodeProcesses": 27
+      },
+      "rawManifest": {
+        "files": 55,
+        "sha256": "76be0b9e1f6c3ae475384746aa42a1c806faba64b7af6b56047f62fca29eece5"
+      }
+    },
+    "after": {
+      "totals": {
+        "sqliteOpens": 1062,
+        "transactions": 2538,
+        "autocommitWrites": 359,
+        "fsyncs": 2239,
+        "mkdtemps": 205,
+        "mkdirs": 4429,
+        "processes": 11,
+        "removalsWhileDatabaseOpen": 0,
+        "nativeFsyncs": 5520,
+        "transpilers": 2,
+        "allFsyncs": 7759,
+        "observedProcesses": 29,
+        "nodeProcesses": 27
+      },
+      "rawManifest": {
+        "files": 55,
+        "sha256": "5ec45c69957ab995e43ec5677e4d8f4fb37b5d65f1f39cb94785728c5ca263a1"
+      }
+    },
+    "files": [
+      {
+        "file": "knowledge-authorization.test.ts",
+        "before": [20, 79, 12, 28, 37, 267, 2, 0, 1301.04, 217, 0],
+        "after": [20, 79, 12, 28, 37, 267, 2, 0, 873.94, 217, 0]
+      },
+      {
+        "file": "knowledge-json-parser.test.ts",
+        "before": [0, 0, 0, 0, 0, 0, 0, 0, 84.75, 0, 0],
+        "after": [0, 0, 0, 0, 0, 0, 0, 0, 95.45, 0, 0]
+      },
+      {
+        "file": "knowledge-markdown-parser.test.ts",
+        "before": [0, 0, 0, 0, 0, 0, 0, 0, 280.32, 0, 0],
+        "after": [0, 0, 0, 0, 0, 0, 0, 0, 297.69, 0, 0]
+      },
+      {
+        "file": "knowledge-packs.test.ts",
+        "before": [84, 109, 7, 72, 11, 286, 0, 0, 1217.76, 232, 0],
+        "after": [84, 109, 7, 72, 11, 286, 0, 0, 862.39, 232, 0]
+      },
+      {
+        "file": "knowledge-protocol.test.ts",
+        "before": [1, 35, 0, 60, 5, 16, 0, 1, 703.97, 37, 0],
+        "after": [1, 6, 0, 60, 5, 16, 0, 0, 528.89, 10, 0]
+      },
+      {
+        "file": "knowledge-scan.test.ts",
+        "before": [0, 0, 0, 0, 0, 0, 0, 0, 7349.36, 0, 0],
+        "after": [0, 0, 0, 0, 0, 0, 0, 0, 7074.73, 0, 0]
+      },
+      {
+        "file": "knowledge-session-memory.test.ts",
+        "before": [158, 242, 77, 122, 48, 726, 0, 0, 1788.86, 755, 0],
+        "after": [158, 242, 77, 122, 12, 762, 0, 0, 1770.99, 755, 0]
+      },
+      {
+        "file": "knowledge-sharing.test.ts",
+        "before": [116, 237, 35, 208, 28, 499, 0, 0, 1633.55, 479, 0],
+        "after": [116, 238, 36, 208, 7, 520, 0, 0, 1933.67, 481, 0]
+      },
+      {
+        "file": "knowledge-store.test.ts",
+        "before": [34, 269, 1, 327, 23, 88, 2, 21, 3687.26, 373, 2],
+        "after": [34, 222, 1, 327, 23, 88, 2, 0, 3947.91, 363, 2]
+      },
+      {
+        "file": "knowledge-sync-lease.test.ts",
+        "before": [11, 24, 5, 0, 5, 33, 7, 4, 762.52, 43, 0],
+        "after": [11, 24, 5, 0, 5, 33, 7, 0, 739.08, 51, 0]
+      },
+      {
+        "file": "knowledge-sync.test.ts",
+        "before": [334, 1154, 99, 972, 98, 1002, 0, 98, 5630.82, 1585, 0],
+        "after": [334, 1150, 99, 972, 34, 1002, 0, 0, 5572.93, 1777, 0]
+      },
+      {
+        "file": "knowledge-terminal.test.ts",
+        "before": [104, 135, 23, 78, 35, 405, 0, 0, 1609.78, 522, 0],
+        "after": [104, 135, 23, 78, 35, 405, 0, 0, 1500.74, 522, 0]
+      },
+      {
+        "file": "knowledge-text-parser.test.ts",
+        "before": [0, 0, 0, 0, 0, 0, 0, 0, 36.91, 0, 0],
+        "after": [0, 0, 0, 0, 0, 0, 0, 0, 37.65, 0, 0]
+      },
+      {
+        "file": "knowledge-tools.test.ts",
+        "before": [99, 198, 99, 48, 16, 747, 0, 0, 943.75, 812, 0],
+        "after": [99, 198, 99, 48, 16, 747, 0, 0, 934.9, 812, 0]
+      },
+      {
+        "file": "knowledge-verification.test.ts",
+        "before": [220, 293, 0, 480, 20, 660, 0, 0, 3199.75, 495, 0],
+        "after": [101, 135, 0, 324, 20, 303, 0, 0, 1312.55, 300, 0]
+      }
+    ],
+    "columns": [
+      "sqliteOpens",
+      "transactions",
+      "autocommitWrites",
+      "fsyncs",
+      "mkdtemps",
+      "mkdirs",
+      "processes",
+      "removalsWhileDatabaseOpen",
+      "ms",
+      "nativeFsyncs",
+      "transpilers"
+    ],
+    "rawManifestEncoding": "sha256(UTF-8 JSON.stringify(records) + LF); records sorted by file, field order file/bytes/sha256; native and JS JSON files included"
+  },
+  "checks": {
+    "root": {
+      "command": "npm run check",
+      "exit": 0,
+      "passed": 1803,
+      "skipped": 10,
+      "failed": 0,
+      "skipDetails": [
+        "a Windows browser exit queued behind its deadline is observed before reporting failure # SKIP",
+        "a Windows browser still alive after deadline delivery is not reported as exited # SKIP",
+        "Windows 8.3 temporary paths preserve root identity, workspace hashes and future file writes # SKIP",
+        "on Windows a text file on another drive is not added to the message # SKIP",
+        "on Windows the real PowerShell command runs as far as listing the windows # SKIP",
+        "on Windows a window that is not DPI aware is taken whole: its picture is its own size with no empty part # SKIP",
+        "the Windows helper removes the launcher and the running version once their processes end, and keeps a folder that is not empty # runs the script in Windows PowerShell",
+        "on Windows a program left running by an ended shell is found and ended # uses the Windows process list",
+        "on Windows stopping a finished job ends a program whose parent cmd had already ended # uses the Windows process list",
+        "on Windows cancelling a running command ends a program whose parent cmd had already ended # uses the Windows process list"
+      ]
+    },
+    "apps": {
+      "command": "npm run check:apps",
+      "exit": 0,
+      "rendererPassed": 346,
+      "desktopPassed": 163,
+      "runtimePassed": 820,
+      "runtimeSkipped": 17,
+      "failed": 0,
+      "skipDetails": [
+        "on Windows a refused outside write names the process that has the file open # SKIP",
+        "Windows real ConPTY naturally exits repeated owned sessions without keeping the parent Node process alive # requires real Windows ConPTY",
+        "Windows terminal close waits for the native-exit output-flush window and preserves the complete final log # requires real Windows ConPTY",
+        "Windows TUI dark shutdown restores the main screen and cooked input before a natural exit # requires real Windows ConPTY",
+        "Windows TUI light shutdown restores the main screen and cooked input before a natural exit # requires real Windows ConPTY",
+        "the Windows installer preserves the relaunched argv through real PowerShell # SKIP",
+        "real Windows Job controls an assigned quiescent Node and inherited detached child through retained handles # SKIP",
+        "Windows native adapter fails before allocating a PTY without claiming shell exit proves owned tree exit # SKIP",
+        "Windows original ConPTY input and resistant inherited service stop use real root exit and Job-empty facts # SKIP",
+        "Windows natural completion waits for actual root ACK, wrapper exit, Job empty and original log closure # SKIP",
+        "Windows supervisor cannot preload command Node options before Job assignment # SKIP",
+        "Windows invalid supervisor authentication never starts a command and the quiescent original PTY closes # SKIP",
+        "real Windows short-path aliases preserve CAS coordination and native folder boundaries # SKIP",
+        "a save on Windows waits while another program has the file open without letting it be replaced # SKIP",
+        "Windows session release observes PID birth and real exit without weakening the strict disappearance oracle # requires real Windows kernel process identity and ConPTY",
+        "Windows signal cleanup observes the real job descendant and preserves any scratch-folder EBUSY failure # requires real Windows kernel process identity and ConPTY",
+        "a Windows owned worker transport fault remains a durable failure and stops the real program # requires real Windows ConPTY"
+      ]
+    },
+    "native": {
+      "command": "node apps/desktop/test/popout.mjs",
+      "exit": 0,
+      "gpuOn": "passed",
+      "gpuOff": "passed",
+      "skipped": 0,
+      "sourceHead": "6494ac02dfffaee28b520e056cc459b230616cf9",
+      "scope": "Historical local run of the original 6494ac02 proposal; fresh on/off rerun after reapplying the exact fix is recorded separately"
+    },
+    "initialRoot": {
+      "exit": 1,
+      "passed": 1802,
+      "skipped": 10,
+      "failed": 1,
+      "reason": "A proposed duplicate-scan result reuse changed a byte-pinned mirror test; that edit was reverted without changing provenance"
+    },
+    "strictBefore": {
+      "expectedFailure": true,
+      "reason": "scratch removal attempted while the exchange fixture SQLite handle was still open"
+    },
+    "formats": {
+      "root": 0,
+      "workbench": 0,
+      "desktop": 0,
+      "extraMetricsAndReceipt": 0
+    },
+    "docs": {
+      "productionJekyll": 0,
+      "localLinksVerified": 42,
+      "pngHashesAndCssDimensionsVerified": 15,
+      "rawMetricFilesPerSide": 55
+    }
+  },
+  "tooling": {
+    "node": "scripts/knowledge-test-metrics.mjs",
+    "macNative": "scripts/knowledge-test-fsync.c"
+  },
+  "provenance": "Raw per-process metrics and the prior test snapshot remain in ignored artifacts. The sourceHead and source digest describe the original measured candidate. Historical image, packaged and Hub receipts are unchanged; nativeIncident records the temporary restoration and the subsequently approved reapplication without relabeling historical results.",
+  "sourceHead": "6494ac02dfffaee28b520e056cc459b230616cf9",
+  "testAndMetricSource": {
+    "files": 11,
+    "sha256": "47adf2c125fd96b6d0a0d405bf36a84c1dd491529ca1864738877301d192578b",
+    "encoding": "sha256(UTF-8 JSON.stringify(records) + LF), sorted by path, field order path/bytes/sha256"
+  },
+  "nativeIncident": {
+    "run": 41561578064,
+    "pr": 406,
+    "attempt1": {
+      "status": "failed once",
+      "logExcerpt": "2026-11-03T01:52:32.8998286Z Error: timed out: the keys after the click reached the shell"
+    },
+    "attempt2": {
+      "status": "passed including popout.mjs",
+      "source": "Claude reported the CI rerun; not independently rerun or fetched in this follow-up",
+      "explanation": "Passed by chance of prompt width avoiding the soft-wrap split, as confirmed by Claude"
+    },
+    "classification": "Identified harness text-reading defect: innerText inserts a newline at a soft-wrapped visual row boundary; not knowledge-related",
+    "artifactObservation": "The actual shell echo is ab then c at a soft wrap, with the composer draft unchanged; the same abc expectation must read across that visual boundary",
+    "disposition": "Reapply the exact 6494ac02 textContent change over the same visible xterm rows in a new commit; keep the original timeout and abc expectation",
+    "windowsFixtureFixRetained": "22c5e8c80d0bbb89328239313767a4f2fcdcf7d6",
+    "latentIn405": {
+      "commit": "169bd3cc37f62cb7d5001561fecf46c0247e6d33",
+      "reason": "The original popout test is identical and has the same latent innerText soft-wrap assumption"
+    },
+    "temporaryRestorationCommit": "d8923e71e0949d514d0a5a604b87d4b2be063af3",
+    "approvedFixSource": "6494ac02dfffaee28b520e056cc459b230616cf9",
+    "temporaryOriginalTestRerunLocally": false,
+    "decisionSource": "Claude confirmed the soft-wrap cause and clarified that the no-test-change direction applied only if no plausible cause was found",
+    "reapplicationCommit": "cb3ebb8f315b218882c85c628d2a52c047b6eae4"
+  },
+  "freshNativeRun": {
+    "command": "node apps/desktop/test/popout.mjs",
+    "platform": "darwin-arm64",
+    "sourceHead": "cb3ebb8f315b218882c85c628d2a52c047b6eae4",
+    "testSha256": "e4e4b787023013a4b4f147999042ad25baf7eb8be1b1e38a303bf963f4905541",
+    "testIdenticalTo": "6494ac02dfffaee28b520e056cc459b230616cf9",
+    "exit": 0,
+    "gpuOn": "passed",
+    "gpuOff": "passed",
+    "skipped": 0,
+    "logBytes": 142,
+    "logSha256": "b7ef91364ad9775a90a1deeb50c6ed9bc8f42b02adafb0bc86f2f8a7b5f710d5",
+    "synthetic": true,
+    "isolatedCircleHomeAndWorkbenchData": true,
+    "productionSourceUnchanged": true,
+    "fullCliAndApplicationSuitesRerun": false,
+    "scope": "Fresh development popout rerun in both GPU modes after reapplying the approved text reading fix; no new packaged or Windows/Linux run"
+  }
+}

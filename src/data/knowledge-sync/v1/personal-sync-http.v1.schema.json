@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "personal-sync-http@1"
+    },
+    "routes": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "GET"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/state"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "client": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/clients"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "session": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/sessions"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "inventory": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "GET"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/sessions/{id}/inventory"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "missing": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/sessions/{id}/missing"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "upload": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/sessions/{id}/upload"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "download": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/sessions/{id}/download"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "commit": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/sessions/{id}/commit"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "operation": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "GET"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/operations/{id}"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "abort": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/sessions/{id}/abort"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "modeCheck": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/mode/check"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "POST"
+            },
+            "path": {
+              "type": "string",
+              "const": "/api/sync/v1/mode"
+            }
+          },
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "state",
+        "client",
+        "session",
+        "inventory",
+        "missing",
+        "upload",
+        "download",
+        "commit",
+        "operation",
+        "abort",
+        "modeCheck",
+        "mode"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "routes"
+  ],
+  "additionalProperties": false
+}

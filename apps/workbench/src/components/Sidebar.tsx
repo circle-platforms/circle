@@ -1,3 +1,4 @@
+import { KnowledgeSyncStatus } from '../features/KnowledgePage';
 import '../features/navigation-settings.css';
 import { CircleMark } from './CircleMark';
 import { extensionStatusText } from '../model/extension-status';
@@ -15,6 +16,9 @@ import {
 } from 'react';
 import { NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
+  BookOpen,
+  Brain,
+  Workflow,
   PanelLeftClose,
   Plus,
   Search,
@@ -706,6 +710,28 @@ export function Sidebar({
           <span>{t('all sessions')}</span>
         </NavLink>
       </nav>
+      <nav className="sidebar-primary" aria-label={t('Circle pages')}>
+        <div className="section-label">
+          <span>Circle</span>
+        </div>
+        {[
+          { id: 'knowledge', label: t('knowledge'), icon: BookOpen },
+          { id: 'memory', label: t('memory'), icon: Brain },
+          { id: 'workflows', label: t('workflows'), icon: Workflow },
+        ].map(({ id, label, icon: Icon }) => (
+          <NavLink
+            key={id}
+            to={'/page/' + id}
+            className={({ isActive }) =>
+              isActive ? 'sidebar-item active' : 'sidebar-item'
+            }
+            onClick={onNavigate}
+          >
+            <Icon size={15} />
+            <span>{label}</span>
+          </NavLink>
+        ))}
+      </nav>
       {pluginPages.length > 0 && (
         <nav className="sidebar-primary" aria-label={t('pages')}>
           <div className="section-label">
@@ -869,6 +895,12 @@ export function Sidebar({
         </div>
       )}
       <footer className="sidebar-footer">
+        {snapshot.knowledgeSync && (
+          <KnowledgeSyncStatus
+            status={snapshot.knowledgeSync}
+            onClick={() => navigate('/page/sync')}
+          />
+        )}
         <button
           className="connection-status"
           data-state={connection}

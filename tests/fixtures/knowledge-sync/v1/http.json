@@ -1,0 +1,53 @@
+{
+  "schema": "personal-sync-http@1",
+  "routes": {
+    "state": {
+      "method": "GET",
+      "path": "/api/sync/v1/state"
+    },
+    "client": {
+      "method": "POST",
+      "path": "/api/sync/v1/clients"
+    },
+    "session": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions"
+    },
+    "inventory": {
+      "method": "GET",
+      "path": "/api/sync/v1/sessions/{id}/inventory"
+    },
+    "missing": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/missing"
+    },
+    "upload": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/upload"
+    },
+    "download": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/download"
+    },
+    "commit": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/commit"
+    },
+    "operation": {
+      "method": "GET",
+      "path": "/api/sync/v1/operations/{id}"
+    },
+    "abort": {
+      "method": "POST",
+      "path": "/api/sync/v1/sessions/{id}/abort"
+    },
+    "modeCheck": {
+      "method": "POST",
+      "path": "/api/sync/v1/mode/check"
+    },
+    "mode": {
+      "method": "POST",
+      "path": "/api/sync/v1/mode"
+    }
+  }
+}

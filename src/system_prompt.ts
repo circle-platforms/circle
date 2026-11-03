@@ -159,6 +159,7 @@ export interface PromptCatalog {
   headless?: boolean;
   /** What connected MCP servers say of using them, in their own words. */
   mcpInstructions?: { server: string; text: string }[];
+  sessionPreferences?: string;
 }
 /**
  * One MCP server's instructions, set apart as the server's own words, which rank below the
@@ -201,6 +202,8 @@ export function buildSystemPrompt(
         readPrompt('circle_guidelines.md'),
         readPrompt('circle_paths.md'),
       ];
+  if (catalog.sessionPreferences && catalog.localContext !== false)
+    sections.push(catalog.sessionPreferences);
   const files =
     options.no_context_files || catalog.localContext === false
       ? []

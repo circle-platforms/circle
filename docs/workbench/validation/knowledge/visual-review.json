@@ -1,0 +1,54 @@
+{
+  "schema": "circle-knowledge-compact-visual-review@1",
+  "sourceHead": "7c4a10793e07af0bcc47153552ac068ce48e9b54",
+  "scope": "Post-rebase macOS arm64 development knowledge, plus one synthetic Chinese impact-dialog supplement",
+  "method": "All 15 retained PNGs opened individually at their saved 1x CSS dimensions after uniform box-average downsampling; original native layout assertions remain separate scripted evidence",
+  "inspected": [
+    "zh-CN-dark-1440-knowledge.png",
+    "zh-CN-light-1440-knowledge.png",
+    "en-dark-1440-knowledge.png",
+    "zh-CN-light-1024-knowledge.png",
+    "zh-CN-dark-1440-memory.png",
+    "zh-CN-light-1440-workflows.png",
+    "zh-CN-light-1440-sync.png",
+    "en-dark-1440-sync.png",
+    "zh-CN-dark-1440-local-mode-impact.png",
+    "en-dark-1440-local-mode-impact.png",
+    "en-dark-1440-conflict-editor.png",
+    "zh-CN-light-700-keyboard-reduced-motion.png",
+    "zh-CN-light-1024-share-refusal.png",
+    "zh-CN-light-1440-no-hub-knowledge.png",
+    "en-dark-1440-no-hub-knowledge.png"
+  ],
+  "judgment": "No clipped dialog or window overflow observed; hierarchy locations, one-row Inspector actions, accessible local-only notes, dangerous action labels, empty state and narrow keyboard focus remain visible",
+  "originalMatrix": {
+    "count": 53,
+    "manifest": {
+      "count": 53,
+      "sha256": "e35c7805f21ce9990b400d9952515483d859787a8017c9985c51f972aa85c7c8"
+    }
+  },
+  "ownerReview": "Original post-rebase checks and visual integration approved; slimming changes storage and links, not product behavior",
+  "followUps": [
+    {
+      "receipt": "share-refusal.json",
+      "replaced": "en-dark-1440-local-share-tooltip.png",
+      "inspected": "zh-CN-light-1024-share-refusal.png",
+      "method": "Chinese light narrow and English dark wide refusal frames opened individually at 1x; only Chinese replacement committed",
+      "judgment": "Hub message/fix remain verbatim in both interface languages, uploader action is explicit, no Circle/network-error alert is shown, and the complete dialog stays inside the viewport"
+    },
+    {
+      "receipt": "no-hub.json",
+      "replaced": [
+        "zh-CN-light-1024-empty.png",
+        "en-dark-1440-source-expanded.png"
+      ],
+      "inspected": [
+        "zh-CN-light-1440-no-hub-knowledge.png",
+        "en-dark-1440-no-hub-knowledge.png"
+      ],
+      "method": "Both final packaged images opened individually at 1x CSS dimensions, Chinese light and English dark",
+      "judgment": "Only mine is visible, personal synthetic rows are loaded, no load error appears, and the sidebar shows the unbound Hub status; original sidebar controls opened sync settings in both languages"
+    }
+  ]
+}

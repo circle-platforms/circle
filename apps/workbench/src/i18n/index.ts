@@ -39,8 +39,17 @@ function fill(template: string, vars?: Record<string, string | number>) {
       )
     : template;
 }
-export function t(text: string, vars?: Record<string, string | number>) {
-  return fill(current === 'zh-CN' ? (ZH_CN[text] ?? text) : text, vars);
+export function t(
+  text: string,
+  vars?: Record<string, string | number>,
+  context?: string,
+) {
+  return fill(
+    current === 'zh-CN'
+      ? (ZH_CN[context ? `${text} (${context})` : text] ?? ZH_CN[text] ?? text)
+      : text,
+    vars,
+  );
 }
 /** `one` when count is 1, else `other`; both get `{n}`. Chinese has one form for both. */
 export function tn(

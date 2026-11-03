@@ -1,3 +1,5 @@
+import { deferredKnowledgeTool } from '../src/knowledge/tools.js';
+import { KnowledgeService } from '../src/knowledge/service.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -76,6 +78,7 @@ test('a greeting request stays within the trimmed tool budget', () => {
   );
   const sandbox = new Sandbox(root);
   const core = buildTools(sandbox, {
+    knowledge: new KnowledgeService(join(root, 'personal')),
     jobs: {} as never,
     question: async () => '',
     skill: async () => '',
@@ -83,7 +86,7 @@ test('a greeting request stays within the trimmed tool budget', () => {
     plan: async () => '',
     screenshot: {},
     todos: () => {},
-  });
+  }).filter((tool) => !deferredKnowledgeTool(tool));
   const browser = browserTools(
     { request: async () => ({ text: '' }) },
     { history: () => [] },

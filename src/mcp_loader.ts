@@ -22,7 +22,16 @@ import { isRecord } from './settings.js';
 import { Sandbox, secretLookingName, shellEnvironment } from './sandbox.js';
 import { readFileBytes } from './file_access.js';
 import { abortable } from './watch.js';
-import { McpAuthProvider, redirectPort, startRedirect } from './mcp_auth.js';
+import {
+  McpAuthProvider,
+  redirectPort,
+  startRedirect,
+  keptFor,
+  directMcpGrant,
+  McpLoginRequired,
+  oauthMcpGrant,
+  currentDirectMcpGrant,
+} from './mcp_auth.js';
 import { openInBrowser } from './open_url.js';
 
 export interface McpConnection {
@@ -476,7 +485,7 @@ function transportFor(
   if (connection.transport === 'streamable_http')
     return new StreamableHTTPClientTransport(url, {
       requestInit,
-      fetch,
+      fetch: authProvider ? authProvider.authorizedFetch(fetch) : fetch,
       ...(authProvider ? { authProvider } : {}),
     });
   if (connection.transport === 'websocket') {
@@ -487,7 +496,7 @@ function transportFor(
   // A `url` entry without a known transport is reached over HTTP with server-sent events
   return new SSEClientTransport(url, {
     requestInit,
-    fetch,
+    fetch: authProvider ? authProvider.authorizedFetch(fetch) : fetch,
     ...(authProvider ? { authProvider } : {}),
   });
 }
@@ -637,6 +646,7 @@ export const NOT_SENT =
 interface Connected {
   name: string;
   client: Client;
+  connection: McpConnection;
   instructions?: string;
   /** False once the connection ended, closed by Circle or by the server. */
   open: boolean;
@@ -1018,6 +1028,7 @@ export class McpManager {
       const server: Connected = {
         name: connection.name,
         client,
+        connection,
         instructions: serverInstructions(client.getInstructions(), hide),
         open: true,
       };
@@ -1170,6 +1181,83 @@ export class McpManager {
       servers.map((server) => server.client.close().catch(() => {})),
     );
   }
+  /** Trusted host reads only an advertised read-only tool, outside model tool dispatch. */
+  async readOnly(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    const server = this.servers.find((s) => s.name === serverName && s.open);
+    if (!server || this.hint(mcpToolName(serverName, toolName)) !== 'read-only')
+      throw new Error('read-only MCP tool unavailable');
+    const response = await server.client.callTool(
+      { name: toolName, arguments: args },
+      undefined,
+      { signal, timeout: this.timeout },
+    );
+    const text = JSON.stringify(response);
+    if (Buffer.byteLength(text) > 1024 * 1024)
+      throw new Error('MCP host result limit');
+    this.assertNoCredentials(serverName, text);
+    return response;
+  }
+  /** A trusted host dispatch after an explicit person confirmation, never exposed as a model proxy. */
+  async personCall(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    const server = this.servers.find((s) => s.name === serverName && s.open);
+    if (
+      !server ||
+      !this.tools.some((t) => t.name === mcpToolName(serverName, toolName))
+    )
+      throw Error('MCP tool unavailable');
+    const result = await server.client.callTool(
+      { name: toolName, arguments: args },
+      undefined,
+      { signal, timeout: this.timeout },
+    );
+    const text = JSON.stringify(result);
+    if (Buffer.byteLength(text) > 1024 * 1024)
+      throw Error('MCP host result limit');
+    this.assertNoCredentials(serverName, text);
+    return result;
+  }
+  assertNoCredentials(serverName: string, text: string): void {
+    const server = this.servers.find((s) => s.name === serverName && s.open);
+    if (!server) throw Error('MCP host connection unavailable');
+    const resolved = fillHeaders(
+        server.connection.headers,
+        process.env,
+        this.services.secrets?.() ?? {},
+      ),
+      filled = resolved.filled;
+    for (const [name, value] of Object.entries(resolved.headers))
+      if (credentialHeader(name)) {
+        filled.set(value, '[MCP credential omitted]');
+        if (/^Bearer /i.test(value))
+          filled.set(value.slice(7), '[MCP credential omitted]');
+      }
+    if (this.services.home && server.connection.url) {
+      const auth = keptFor(
+        this.services.home,
+        new URL(server.connection.url).href,
+      );
+      for (const value of [
+        auth.tokens?.access_token,
+        auth.tokens?.refresh_token,
+        auth.client && 'client_secret' in auth.client
+          ? auth.client.client_secret
+          : undefined,
+      ])
+        if (value) filled.set(value, '[MCP credential omitted]');
+    }
+    if ([...filled.keys()].some((value) => value && text.includes(value)))
+      throw Error('MCP host result contains a credential');
+  }
   /** What each server still connected said of using it, when it said anything. */
   instructions(): { server: string; text: string }[] {
     return this.servers
@@ -1204,4 +1292,76 @@ export class McpManager {
     this.results.clear();
     await McpManager.disconnect(servers);
   }
+}
+
+export interface McpBearerConnection {
+  server: string;
+  binding: string;
+  assertActive(): void;
+  token(signal: AbortSignal, rejected?: string): Promise<string>;
+}
+export function backgroundMcpConnection(
+  home: string,
+  connection: McpConnection,
+  secrets: () => Record<string, string>,
+): McpBearerConnection {
+  if (
+    !connection.url ||
+    !['streamable_http', 'sse'].includes(connection.transport)
+  )
+    throw new Error('select an HTTP MCP connection');
+  const server = new URL(connection.url).href;
+  const directKey =
+    server + '#circle-direct-' + encodeURIComponent(connection.name);
+  const current = (initialize = false) => {
+    const headers = fillHeaders(
+      connection.headers,
+      process.env,
+      secrets(),
+    ).headers;
+    const credential = Object.entries(headers).find(
+      ([name]) => name.toLowerCase() === 'authorization',
+    )?.[1];
+    if (credential !== undefined) {
+      const match = /^Bearer ([^\s]+)$/i.exec(credential);
+      if (!match) throw new McpLoginRequired();
+      const grant = initialize
+        ? directMcpGrant(home, directKey, match[1]!)
+        : currentDirectMcpGrant(home, directKey, match[1]!);
+      if (!grant) throw new McpLoginRequired();
+      return { grant, bearer: match[1]! };
+    }
+    if (Object.keys(connection.headers ?? {}).some(credentialHeader))
+      throw new McpLoginRequired();
+    const kept = initialize
+      ? oauthMcpGrant(home, server)
+      : keptFor(home, server);
+    if (!kept.tokens || !kept.grant_id) throw new McpLoginRequired();
+    return { grant: kept.grant_id, bearer: undefined };
+  };
+  const grant = current(true).grant,
+    binding = createHash('sha256')
+      .update(JSON.stringify([server, grant]))
+      .digest('hex');
+  return {
+    server,
+    binding,
+    assertActive: () => {
+      if (current().grant !== grant) throw new McpLoginRequired();
+    },
+    token: async (signal, rejected) => {
+      signal.throwIfAborted();
+      const state = current();
+      if (state.grant !== grant) throw new McpLoginRequired();
+      if (state.bearer) return state.bearer;
+      const provider = new McpAuthProvider(
+        home,
+        server,
+        keptFor(home, server).port ?? 0,
+      );
+      const token = await provider.backgroundToken(signal, rejected);
+      if (current().grant !== grant) throw new McpLoginRequired();
+      return token;
+    },
+  };
 }

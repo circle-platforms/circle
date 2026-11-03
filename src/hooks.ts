@@ -750,6 +750,8 @@ export function loadHooks(options: {
     skills = [];
   }
   for (const skill of skills) {
+    // Personal manifests do not carry hooks; a locally added sidecar is not an installation approval.
+    if (skill.source_label === 'Personal pack') continue;
     const projectSkill = skill.source_label.startsWith('Project');
     const file = join(dirname(skill.path), 'hooks.json');
     if (!fileExists(file)) continue;

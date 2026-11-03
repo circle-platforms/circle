@@ -1132,6 +1132,7 @@ export class LiveRuntime implements RuntimePort {
         abort: 'abort',
         compact: 'compact',
         background: 'background',
+        knowledge: 'knowledge',
         logout: 'logout',
         'open-workspace': 'open-workspace',
         'archive-session': 'archive-session',
@@ -1490,7 +1491,15 @@ export class LiveRuntime implements RuntimePort {
       };
     // The window reads MEMORY.md into every prompt; a line is written by the
     // terminal's /memory add, or by the person in the file itself.
+    if (name === 'knowledge') return { page: 'knowledge' };
     if (name === 'memory') {
+      if (
+        !args.trim() ||
+        /^(team|personal|loaded|refresh|write|edit|enable|disable|delete)(?:\s|$)/.test(
+          args.trim(),
+        )
+      )
+        return { page: 'memory' };
       const note = args
         .trim()
         .replace(/^add\s+(account\s+)?/, '')

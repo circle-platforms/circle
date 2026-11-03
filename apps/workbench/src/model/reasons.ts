@@ -2,6 +2,11 @@ import { t } from '../i18n/index.ts';
 
 // Why the core asks, as approvals.ts words it; a reason not listed is shown as it is.
 const REASONS: Record<string, () => string> = {
+  'changes personal knowledge or memory and always needs your confirmation':
+    () =>
+      t(
+        'changes personal knowledge or memory and always needs your confirmation',
+      ),
   'changes files in the workspace': () => t('changes files in the workspace'),
   'changes files outside the workspace': () =>
     t('changes files outside the workspace'),

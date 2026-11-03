@@ -12,6 +12,7 @@ const SLASH_TEXT: Record<string, () => string> = {
   settings: () => t('Show current settings'),
   themes: () => t('Show or set the theme: /themes [auto|dark|light]'),
   mcp: () => t('List / reload MCP servers and tools'),
+  knowledge: () => t('Local knowledge and sync'),
   extensions: () => t('List extensions: /extensions [reload]'),
   approvals: () => t('Session approvals: /approvals [revoke N]'),
   bridge: () => t('Editor bridge on localhost: /bridge [start|stop|token]'),

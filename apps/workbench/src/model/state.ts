@@ -95,6 +95,7 @@ export const COMMAND_UI: Record<string, string> = {
   secrets: 'variables',
   hooks: 'hooks',
   mcp: 'mcp',
+  knowledge: 'knowledge',
   extensions: 'extensions',
   approvals: 'approvals',
   jobs: 'terminal',
@@ -113,7 +114,7 @@ export const COMMAND_UI: Record<string, string> = {
   fork: 'fork',
   clone: 'sessions',
   bridge: 'transcript',
-  memory: 'transcript',
+  memory: 'memory',
   agents: 'transcript',
   undo: 'transcript',
   redo: 'transcript',
@@ -731,7 +732,15 @@ export class PreviewRuntime implements RuntimePort {
         notice:
           'the editor bridge is the terminal’s · run /bridge start in circle',
       };
+    if (name === 'knowledge') return { page: 'knowledge' };
     if (name === 'memory') {
+      if (
+        !args.trim() ||
+        /^(team|personal|loaded|refresh|write|edit|enable|disable|delete)(?:\s|$)/.test(
+          args.trim(),
+        )
+      )
+        return { page: 'memory' };
       const note = args
         .trim()
         .replace(/^add\s+(account\s+)?/, '')

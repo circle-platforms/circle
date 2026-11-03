@@ -1,0 +1,131 @@
+{
+  "schema": "circle-knowledge-unbound-evidence@1",
+  "sourceBaseHead": "520aaf63c65e2412418204ffcc938349b46f8911",
+  "scope": "Owner-narrowed follow-up: no bound Hub shows only personal knowledge/memory; sidebar opens sync settings. Bound behavior, including local-only mode, remains unchanged",
+  "bindingRule": "Empty settings.knowledge_sync.binding; host returns only a bound boolean, never the binding value",
+  "synthetic": true,
+  "tests": {
+    "pageRegressions": [
+      "knowledge shows only mine with no binding, including a team-scope URL; bound local-only retains all scopes",
+      "memory shows only mine with no binding, including a team-scope URL; bound local-only retains all scopes"
+    ],
+    "rendererAndI18n": {
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0
+    },
+    "rootTypecheck": "passed",
+    "applicationChecks": {
+      "renderer": 346,
+      "desktop": 163,
+      "runtime": {
+        "passed": 820,
+        "failed": 0,
+        "windowsSkipped": 17
+      },
+      "builds": "passed"
+    },
+    "cliFullSuite": "Parent 520aaf63 passed 1802 with 10 Windows skips; not rerun for this desktop/DTO-only follow-up",
+    "skipNamesAndGuards": "Unchanged Windows platform guards in checks.json",
+    "integrity": {
+      "source": 1140,
+      "build": 2645,
+      "asarSha256": "eac9710de5e541665cbb35962813f552f0b32589c430d353d613021ca6a15599",
+      "packagedBuildBytes": "matched",
+      "pngHashesAndCssDimensions": 15,
+      "localDocumentationLinks": 58
+    },
+    "formats": "root/workbench/desktop passed",
+    "productionJekyll": "passed with existing Sass deprecation warnings",
+    "diffCheck": "passed"
+  },
+  "native": [
+    {
+      "mode": "development",
+      "effectGroups": 18,
+      "screenshotCount": 57,
+      "errors": [],
+      "asarSha256": null,
+      "source": {
+        "count": 1140,
+        "sha256": "770f11db01693ebe10238e0dfb406bc0198cac9d74b3e2f308d7d0e8175e2044"
+      },
+      "build": {
+        "count": 2645,
+        "sha256": "81fe203852aba89aaacec724ef64cc1af1b1647ecf4cc52fccc3371afc7d47cc"
+      },
+      "layouts": {
+        "count": 57,
+        "sha256": "bbc868651d9e2bd974bf44001da37a87f6d40d0e2b319c484c2f3db7c47f2cc8"
+      },
+      "effects": [
+        "knowledge without a Hub binding lists personal rows only, hides remote scopes and never requests them even through a team-scope URL",
+        "memory without a Hub binding lists personal rows only, hides remote scopes and never requests them even through a team-scope URL",
+        "unbound Hub status opens sync settings from the sidebar in Chinese and English"
+      ]
+    },
+    {
+      "mode": "packaged",
+      "effectGroups": 18,
+      "screenshotCount": 57,
+      "errors": [],
+      "asarSha256": "eac9710de5e541665cbb35962813f552f0b32589c430d353d613021ca6a15599",
+      "source": {
+        "count": 1140,
+        "sha256": "770f11db01693ebe10238e0dfb406bc0198cac9d74b3e2f308d7d0e8175e2044"
+      },
+      "build": {
+        "count": 2645,
+        "sha256": "81fe203852aba89aaacec724ef64cc1af1b1647ecf4cc52fccc3371afc7d47cc"
+      },
+      "layouts": {
+        "count": 57,
+        "sha256": "0a54716ec32d40ddcfdbdc4163f2479626ef86cba84624b272ef8bf42b16941e"
+      },
+      "effects": [
+        "knowledge without a Hub binding lists personal rows only, hides remote scopes and never requests them even through a team-scope URL",
+        "memory without a Hub binding lists personal rows only, hides remote scopes and never requests them even through a team-scope URL",
+        "unbound Hub status opens sync settings from the sidebar in Chinese and English"
+      ]
+    }
+  ],
+  "retained": [
+    {
+      "file": "zh-CN-light-1440-no-hub-knowledge.png",
+      "sha256": "4da582f9252e086534b8fa3cea79db53da90756a9b62de654f99a03a185bfab3",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "3191147985fd8308888920339011497b85351a980a8e1101cdafe6501765ad47",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "nohub-packaged",
+      "replaces": "zh-CN-light-1024-empty.png"
+    },
+    {
+      "file": "en-dark-1440-no-hub-knowledge.png",
+      "sha256": "f9d268a86b4a168df13585c3e35e4af31e0167e87705bffb9c2219d9605dc2d7",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "ebbdb8429019d9dfc8dc650df9392d8cc1677261470dfeb1e658b3355867c9d2",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "nohub-packaged",
+      "replaces": "en-dark-1440-source-expanded.png"
+    }
+  ],
+  "initialObservations": [
+    "Running renderer tests from the repository root selected the wrong JSX configuration; reran in the workbench package",
+    "The new page SSR cases initially omitted the App TooltipProvider; added that provider to the tests without changing the product",
+    "A native repeat observed an intermediate close snapshot before disconnect finished saving settings; now wait for the original disconnect control to disappear after its completed reload, then retain the exact empty-binding assertion both before page checks and at the end"
+  ],
+  "boundaries": [
+    "No offline/login-required empty states, team workflow view, shared listing, session-memory or live-only/cache behavior changes",
+    "No Hub endpoint, protocol mirror, dependency, timeout, visibility requirement or effect assertion changed",
+    "The initial observation failure remains in ignored artifacts; final development and packaged flows both passed",
+    "Two existing images are replaced; the committed set remains at 15 PNGs and full manifests remain outside Git"
+  ]
+}

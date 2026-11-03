@@ -1,5 +1,7 @@
 # Native frontend validation
 
+Decision 90 knowledge validation is recorded in [knowledge-validation.md](knowledge-validation.md): post-rebase development knowledge and packaged terminal AX checks, alongside separately retained pre-rebase real-Hub round trips and packaged knowledge acceptance. One compact evidence set retains 15 representative screenshots at 1x CSS pixels, aggregate source/build/artifact manifest digests and explicit historical boundaries.
+
 Decision 93 graphite validation on 2026-11-03 is recorded in [graphite-validation.md](graphite-validation.md), with development and packaged native matrices, current command results, retained screenshots and byte receipts. The earlier receipts below remain historical evidence.
 
 This page preserves the frontend-phase receipts. After the user authorized Circle runtime integration, new checks and package receipts are described in [native-runtime.md](native-runtime.md). The totals and unchanged-core statement below apply to the earlier inspected build, not to the current native runtime changes.

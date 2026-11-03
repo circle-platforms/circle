@@ -67,6 +67,11 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   },
   { name: 'mcp', description: 'List / reload MCP servers and tools' },
   {
+    name: 'knowledge',
+    description:
+      'Local knowledge and sync: /knowledge [list|search|conflicts|connect|sync|mode]',
+  },
+  {
     name: 'extensions',
     description:
       'List extensions: /extensions [reload | enable <name> | disable <name>]',
@@ -249,7 +254,14 @@ export function parseSlash(
       };
   }
   const raw = body.split(/\s/, 1)[0]!.toLowerCase();
-  const args = body.slice(raw.length).trim();
+  let args = body.slice(raw.length).trim();
+  // Structured edits contain Markdown, whose internal and trailing whitespace is significant.
+  if (
+    !extra.has(raw) &&
+    ['memory', 'knowledge'].includes(raw) &&
+    /^edit(?:\s|$)/.test(args)
+  )
+    args = text.trimStart().slice(1).trimStart().slice(raw.length).trimStart();
   const name = CANONICAL.get(raw);
   if (name) return { name, rawName: raw, args };
   if (extra.has(raw)) return { name: raw, rawName: raw, args };

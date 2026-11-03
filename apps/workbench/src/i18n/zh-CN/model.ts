@@ -1,5 +1,10 @@
 // Simplified Chinese for the interface words in the model files. English is the key.
 export const model: Record<string, string> = {
+  'Local knowledge and sync': '本机知识与同步',
+  'structured memory commands are available in the terminal; desktop pages are not connected yet':
+    '结构化记忆命令可在终端中使用；桌面页面尚未接入',
+  'knowledge commands are available in the terminal; desktop pages are not connected yet':
+    '知识命令可在终端中使用；桌面页面尚未接入',
   'Click a visible control without an element ref':
     '点击没有元素引用的可见控件',
   'Use CSS coordinates from the latest screenshot. It is refused after scrolling, resizing or navigating, or when what is at the point changed; changes elsewhere on the page do not count. Unknown or destructive targets ask once. Coordinate clicks are not recorded.':

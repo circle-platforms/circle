@@ -1,3 +1,4 @@
+import { safeKnowledgeCall } from './knowledge/tools.js';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { orderModeToolResults } from './tool_history.js';
@@ -1152,6 +1153,19 @@ export class Harness {
             },
           });
           stepSignal.throwIfAborted();
+          const originalCalls = response.message.tool_calls;
+          response.message.tool_calls = originalCalls?.map(
+            (call) =>
+              this.tools
+                .find((tool) => tool.name === call.name)
+                ?.privacy?.(call) ?? safeKnowledgeCall(call),
+          );
+          if (
+            response.message.tool_calls?.some(
+              (call, index) => call !== originalCalls?.[index],
+            )
+          )
+            response.message.provider_content = undefined;
           const message = {
             ...response.message,
             request_model: this.model.model,
@@ -1586,6 +1600,7 @@ export class Harness {
       );
       // A first write to one of the person's terminal tabs asks as well, in every mode
       const alwaysAsk =
+        tool.personApproval === true ||
         found.verdict === 'ASK_FORCED' ||
         this.options.policy.tabAlwaysAsks(call.name, resolved);
       const hookAsk = before?.decision === 'ask';
@@ -1607,16 +1622,17 @@ export class Harness {
           args: { ...call.args, ...namedSecrets(preparedRun.shown, secrets) },
         };
       const wouldAsk =
-        !settingsAllowed &&
-        !this.options.planFileMutation?.(call) &&
-        effect !== 'read' &&
-        tool.approval !== false &&
-        (this.options.policy.needsApproval(
-          call.name,
-          resolved,
-          this.options.approvalSessionId ?? this.sessionId,
-        ) ||
-          (this.options.headless && found.verdict === 'ASK_FORCED'));
+        tool.personApproval === true ||
+        (!settingsAllowed &&
+          !this.options.planFileMutation?.(call) &&
+          effect !== 'read' &&
+          tool.approval !== false &&
+          (this.options.policy.needsApproval(
+            call.name,
+            resolved,
+            this.options.approvalSessionId ?? this.sessionId,
+          ) ||
+            (this.options.headless && found.verdict === 'ASK_FORCED')));
       if (!hookAllow && (hookAsk || wouldAsk)) {
         const permission = await this.gateTool(
           'permission_request',

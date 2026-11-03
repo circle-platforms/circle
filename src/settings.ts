@@ -34,6 +34,7 @@ export interface CircleSettings {
   trusted_folders: string[];
   theme: 'auto' | 'dark' | 'light';
   mcp_servers: Record<string, unknown>[];
+  knowledge_sync: { server: string; binding: string };
   extensions: Record<string, Record<string, unknown>>;
   credential_files: string[];
   trust_cert_files: string[];
@@ -90,6 +91,7 @@ export const defaultSettings = (): CircleSettings => ({
   trusted_folders: [],
   theme: 'auto',
   mcp_servers: [],
+  knowledge_sync: { server: '', binding: '' },
   extensions: {},
   credential_files: [],
   trust_cert_files: [],
@@ -149,6 +151,14 @@ export function loadSettingsFromDict(
     .trim()
     .toLowerCase();
   settings.theme = theme === 'dark' || theme === 'light' ? theme : 'auto';
+  const sync = isRecord(raw.knowledge_sync) ? raw.knowledge_sync : {};
+  settings.knowledge_sync = {
+    server: typeof sync.server === 'string' ? sync.server.slice(0, 200) : '',
+    binding:
+      typeof sync.binding === 'string' && /^[0-9a-f]{64}$/.test(sync.binding)
+        ? sync.binding
+        : '',
+  };
   settings.mcp_servers = Array.isArray(raw.mcp_servers)
     ? raw.mcp_servers.filter(isRecord)
     : [];

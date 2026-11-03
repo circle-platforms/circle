@@ -786,27 +786,33 @@ try {
           .filter({ hasText: 'the editor bridge is the terminal' })
           .first()
           .waitFor();
-      // /memory answers where memory lives; the line it offers is the shape the
-      // terminal's /memory add writes.
-      else if (command.name === 'memory') {
-        // Bare: where memory lives. With a note: the exact line to put in the
-        // file, which is the same shape the terminal writes.
+      else if (command.name === 'knowledge' || command.name === 'memory') {
+        // Bare commands now open the real page. Preview cannot read local data;
+        // it must state that boundary instead of inventing a successful list.
+        await page.waitForURL((url) => url.hash === '#/page/' + command.name);
         await page
-          .getByRole('status')
-          .filter({ hasText: 'MEMORY.md' })
-          .first()
+          .locator('[data-knowledge-section="' + command.name + '"] h1')
+          .filter({ hasText: command.name })
           .waitFor();
         await page
-          .getByRole('textbox', { name: 'message', exact: true })
-          .fill('/memory add prefers pnpm');
-        await page
-          .getByRole('textbox', { name: 'message', exact: true })
-          .press('Enter');
-        await page
-          .getByRole('status')
-          .filter({ hasText: 'prefers pnpm' })
-          .first()
+          .getByRole('alert')
+          .filter({ hasText: 'knowledge requires the desktop runtime' })
           .waitFor();
+        if (command.name === 'memory') {
+          // The explicit file command keeps its compatibility behavior.
+          await reset();
+          await page
+            .getByRole('textbox', { name: 'message', exact: true })
+            .fill('/memory add prefers pnpm');
+          await page
+            .getByRole('textbox', { name: 'message', exact: true })
+            .press('Enter');
+          await page
+            .getByRole('status')
+            .filter({ hasText: 'prefers pnpm' })
+            .first()
+            .waitFor();
+        }
       } else if (command.name === 'agents')
         // /agents opens the subagents panel and says what the window lists. The
         // journey runs the preview runtime, so this is the wording the preview and

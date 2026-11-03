@@ -1,0 +1,42 @@
+{
+  "schema": "circle-knowledge-rebase-terminal-ax@1",
+  "platform": "macOS arm64",
+  "packaged": true,
+  "sourceBaseHead": "69614d2d4d99fd23b31c91ae45431502de0c6e6e",
+  "asarSha256": "6135a20046b8f44da9b6981728b3f75eb611e65685b62ee70363542f0652eb10",
+  "driver": {
+    "path": "apps/desktop/test/native-terminal-accessibility.mjs",
+    "sha256": "30a424637d4b98c8a6e05de1b9c2dd8c38a613cc2dfcb844e41c1c0d15ba790b"
+  },
+  "firstAttempt": {
+    "exit": 1,
+    "status": "failed",
+    "effectGroupsCompleted": 1,
+    "reason": "The driver attempted to click the original session while modal Settings was still open; its overlay intercepted the click for the unchanged 15000 ms timeout",
+    "former600LineFailure": "passed",
+    "receiptSha256": "118febfe7c6d53d2df985736d4df3b72bc200ad5cf920da4fa726a5812679187",
+    "clipboardRestored": true,
+    "applicationClosed": true,
+    "notCountedAsPass": true
+  },
+  "driverCorrection": "Close Settings using the existing visible localized close control and await hidden state before selecting the original session; no forced clicks, retries, added sleeps or weaker assertions",
+  "passBeforeCssIntegrationCorrection": {
+    "exit": 0,
+    "effectGroupsCompleted": 2,
+    "receiptSha256": "e6f0e34af8605f9744f5248644e4321f09ac9b7477bb9a84b4c6c3106fe1e87e",
+    "scope": "Superseded package; not the final CSS build"
+  },
+  "finalAttempt": {
+    "exit": 0,
+    "checks": [
+      "trusted native true/false/true updates existing xterm without recreating DOM or PID; actual AX listitems/text; selection and scroll retained; all 600 CJK lines copied once",
+      "original Settings ALWAYS ON override and AUTO selection use original controls; terminal process preserved across original routes"
+    ],
+    "status": "passed",
+    "clipboardRestored": true,
+    "applicationClosed": true,
+    "receiptSha256": "e6f0e34af8605f9744f5248644e4321f09ac9b7477bb9a84b4c6c3106fe1e87e",
+    "logSha256": "3ff7619b6c07d07987200973217eb7787fbb6619fa79e43df31449087725c03a"
+  },
+  "rawEvidence": "Original AX trees and failure screenshots are retained only in ignored local artifacts because they contain local terminal paths; this summary does not publish raw trees or logs"
+}

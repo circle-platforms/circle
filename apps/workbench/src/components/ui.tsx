@@ -147,6 +147,7 @@ export function Modal({
   wide = false,
   className = '',
   restoreFocus = false,
+  dismissOutside = true,
   onCloseAutoFocus,
   onEscapeKeyDown,
 }: {
@@ -159,6 +160,7 @@ export function Modal({
   className?: string;
   /** Restore the focused control when this dialog closes, even outside another dialog. */
   restoreFocus?: boolean;
+  dismissOutside?: boolean;
   onCloseAutoFocus?: (event: Event) => void;
   /** Called before `esc` closes the dialog; `preventDefault` keeps it open. */
   onEscapeKeyDown?: (event: KeyboardEvent) => void;
@@ -227,6 +229,9 @@ export function Modal({
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content
           ref={content}
+          onPointerDownOutside={(event) => {
+            if (!dismissOutside) event.preventDefault();
+          }}
           className={`dialog-content ${wide ? 'wide' : ''} ${className}`}
           onCloseAutoFocus={(event) => {
             onCloseAutoFocus?.(event);

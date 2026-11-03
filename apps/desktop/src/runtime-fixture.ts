@@ -55,7 +55,7 @@ export interface RuntimeFixtureRequest {
   messages: ModelRequest['messages'];
   tools: Omit<
     ModelRequest['tools'][number],
-    'run' | 'approvalFacts' | 'prepare'
+    'run' | 'approvalFacts' | 'prepare' | 'privacy' | 'paths' | 'callEffect'
   >[];
   fixture: RuntimeFixtureIdentity & {
     routeId?: string;
@@ -220,8 +220,12 @@ export class RuntimeFixtureModel implements ChatModel {
       system: request.system,
       messages: request.messages,
       tools: request.tools.map(
-        ({ run: _run, approvalFacts: _facts, prepare: _prepare, ...tool }) =>
-          tool,
+        (tool) =>
+          Object.fromEntries(
+            Object.entries(tool).filter(
+              ([, value]) => typeof value !== 'function',
+            ),
+          ) as RuntimeFixtureRequest['tools'][number],
       ),
       fixture: {
         ...identity,

@@ -1,0 +1,76 @@
+{
+  "schema": "personal-sync-native-links@1",
+  "cases": [
+    {
+      "name": "unknown original filename",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "source_revision",
+        "body": {
+          "item_id": "11111111-1111-4111-8111-111111111111",
+          "parents": [],
+          "directory_id": "22222222-2222-4222-8222-222222222222",
+          "name": null,
+          "media_type": "text/plain",
+          "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0,
+          "chunks": []
+        }
+      },
+      "canonical": "{\"body\":{\"chunks\":[],\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"media_type\":\"text/plain\",\"name\":null,\"parents\":[],\"raw_sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"size\":0},\"kind\":\"source_revision\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "799a4bc89fba0df2b2a7801db3e70cce36b1e0631fec110084bce7020031b261"
+    },
+    {
+      "name": "authorized read-only address",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "entry_revision",
+        "body": {
+          "item_id": "11111111-1111-4111-8111-111111111111",
+          "parents": [],
+          "directory_id": "22222222-2222-4222-8222-222222222222",
+          "content": {
+            "kind": "observation",
+            "statement": "合成可编辑正文  \n",
+            "data": {},
+            "applicability": null
+          },
+          "grounds": [
+            {
+              "reference": "src:0000000000000000000000000000000000000000000000000000000000000000/text@1/l/1",
+              "quotation": "5acfe8d6f00e637b53d08999fefe2bb8a2e9270f32cf43523c8417f33a26ba6b"
+            }
+          ]
+        }
+      },
+      "canonical": "{\"body\":{\"content\":{\"applicability\":null,\"data\":{},\"kind\":\"observation\",\"statement\":\"合成可编辑正文  \\n\"},\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"grounds\":[{\"quotation\":\"5acfe8d6f00e637b53d08999fefe2bb8a2e9270f32cf43523c8417f33a26ba6b\",\"reference\":\"src:0000000000000000000000000000000000000000000000000000000000000000/text@1/l/1\"}],\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"parents\":[]},\"kind\":\"entry_revision\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "0a97f6a35550ebb76a58a106de3a1a6249a59ababd844d6447ab848d21cef506"
+    },
+    {
+      "name": "portable same-batch predecessor",
+      "input": {
+        "schema": "personal-sync-object@1",
+        "kind": "entry_revision",
+        "body": {
+          "item_id": "11111111-1111-4111-8111-111111111111",
+          "parents": [],
+          "directory_id": "22222222-2222-4222-8222-222222222222",
+          "content": {
+            "kind": "observation",
+            "statement": "合成可编辑正文  \n",
+            "data": {},
+            "applicability": null
+          },
+          "grounds": [
+            {
+              "entry": "07985fc2cd68a39e0fada225aa33865f42fb68cff9886fa6ab5ac36c0cbf4a6a",
+              "quotation": "5acfe8d6f00e637b53d08999fefe2bb8a2e9270f32cf43523c8417f33a26ba6b"
+            }
+          ]
+        }
+      },
+      "canonical": "{\"body\":{\"content\":{\"applicability\":null,\"data\":{},\"kind\":\"observation\",\"statement\":\"合成可编辑正文  \\n\"},\"directory_id\":\"22222222-2222-4222-8222-222222222222\",\"grounds\":[{\"entry\":\"07985fc2cd68a39e0fada225aa33865f42fb68cff9886fa6ab5ac36c0cbf4a6a\",\"quotation\":\"5acfe8d6f00e637b53d08999fefe2bb8a2e9270f32cf43523c8417f33a26ba6b\"}],\"item_id\":\"11111111-1111-4111-8111-111111111111\",\"parents\":[]},\"kind\":\"entry_revision\",\"schema\":\"personal-sync-object@1\"}",
+      "sha256": "1f34b7610ec7c23301a108db65f677c60a8dc084d0ab97154670a539b49b8bef"
+    }
+  ]
+}

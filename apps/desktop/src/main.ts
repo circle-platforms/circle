@@ -900,7 +900,7 @@ app
       if (!runtime) throw Error('runtime not enabled');
       await runtime.restart();
     });
-    handle('circle:runtime-command', (value) => {
+    handle('circle:runtime-command', async (value) => {
       if (!runtime) throw Error('runtime not enabled');
       const command = validateRuntimeCommand(value);
       if (
@@ -914,6 +914,58 @@ app
         if (!path)
           throw Error('workspace was not selected through the native dialog');
         command.payload = { path };
+      }
+      if (
+        command.name === 'knowledge' &&
+        command.payload.op === 'import-pick'
+      ) {
+        const path =
+          fixtureProfile?.knowledgeSourceFile ??
+          (
+            await dialog.showOpenDialog(window!, {
+              title: text('choose files'),
+              properties: ['openFile'],
+              filters: [
+                {
+                  name: text('session or text'),
+                  extensions: ['txt', 'md', 'json', 'csv', 'log'],
+                },
+              ],
+            })
+          ).filePaths[0];
+        if (!path)
+          return { id: command.id, ok: true, data: { cancelled: true } };
+        command.payload = {
+          op: 'prepare-import',
+          path,
+          ...(command.payload.destination
+            ? { destination: command.payload.destination }
+            : {}),
+        };
+      }
+      if (
+        command.name === 'knowledge' &&
+        ['install-pick', 'pack-pick'].includes(String(command.payload.op))
+      ) {
+        const selected =
+          fixtureProfile?.knowledgePackDirectory ??
+          selectedFolder(
+            await dialog.showOpenDialog(window!, {
+              title: text('open folder'),
+              properties: ['openDirectory'],
+            }),
+          );
+        if (!selected)
+          return { id: command.id, ok: true, data: { cancelled: true } };
+        command.payload =
+          command.payload.op === 'pack-pick'
+            ? { op: 'prepare-register', directory: selected }
+            : {
+                op: 'prepare-install',
+                id: command.payload.id,
+                token: command.payload.token,
+                directory: selected,
+              };
       }
       if (command.name === 'close')
         throw Error('use the application quit action');

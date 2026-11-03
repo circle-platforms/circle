@@ -1,0 +1,1 @@
+Read an object within an explicit local snapshot, with a bounded window and local verification observation. Use object='schema' (no snapshot) for the paginated personal-sync-object@1 write format. Content reads require snapshot and object.
