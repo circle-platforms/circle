@@ -19,6 +19,10 @@ The native path uses the real renderer, restricted preload, main process, worker
 
 Host regressions additionally check stale/single-use/session-bound capabilities, current credential refusal before publication and at the return boundary, unknown or native-path IPC rejection, real pre-check drift, state-only purge completion, actual bounded memory loading and shared memory exclusion from the next model request. The 4,005-entry regression checks that paging does not evict the returned rows’ capabilities. Model sharing in auto mode still asks the person; rejection and “always” dispatch nothing. Prompt-budget limits and frozen shared fixtures are unchanged.
 
+## Visual review corrections
+
+Claude approved stage-5 function and boundaries, then requested hierarchy paths, Inspector fact lines, compact actions, accessible local-only guidance and explicit dangerous mode confirmation. The follow-up evidence is in [the review receipt](validation/knowledge-review/receipt.json) and [checks](validation/knowledge-review/checks.json), with 53 retaken and inspected PNGs; the original stage-5 receipt below remains historical. Local revision times are recorded only for actual local commits in an appended database migration; older and remote revisions without a supplied update time show unknown.
+
 ## Native matrix
 
 Every PNG in [the receipt’s screenshot list](validation/knowledge/receipt.json) was opened and inspected. The matrix is English/Simplified Chinese × dark/light × 1,440/1,024 CSS pixels across knowledge, memory, workflows and sync settings. The narrower samples include both list/table and returnable detail pages. Additional frames cover source expansion, the disabled-share tooltip, share and local-mode previews, conflicts, history, installation, empty results and 700 px keyboard navigation with reduced motion. The receipt records first-frame containment separately from the settled screenshots; finite animations and fonts settle before capture.

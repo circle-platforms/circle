@@ -65,6 +65,9 @@ export function KnowledgeSyncSettings() {
     setPreview(undefined);
   };
   const sync = state?.sync ?? snapshot.knowledgeSync;
+  const localOnly = !sync?.server || sync.mode === 'local';
+  const statusVisible =
+    !localOnly || sync?.clearing || sync?.condition === 'login-required';
   return (
     <section className="knowledge-sync-settings">
       <h1>{t('sync')}</h1>
@@ -102,23 +105,27 @@ export function KnowledgeSyncSettings() {
         )}
       </div>
       <dl className="knowledge-sync-facts">
-        <div>
-          <dt>{t('status')}</dt>
-          <dd>
-            <span className={'knowledge-state ' + sync?.condition}>
-              <i />
-              {knowledgeStatusText(sync)}
-            </span>
-          </dd>
-        </div>
-        <div>
-          <dt>{t('last sync')}</dt>
-          <dd>
-            {sync?.lastSyncedAt
-              ? shownTime(sync.lastSyncedAt)
-              : t('not synced yet')}
-          </dd>
-        </div>
+        {statusVisible && (
+          <div>
+            <dt>{t('status')}</dt>
+            <dd>
+              <span className={'knowledge-state ' + sync?.condition}>
+                <i />
+                {knowledgeStatusText(sync)}
+              </span>
+            </dd>
+          </div>
+        )}
+        {(!localOnly || sync?.lastSyncedAt) && (
+          <div>
+            <dt>{t('last sync')}</dt>
+            <dd>
+              {sync?.lastSyncedAt
+                ? shownTime(sync.lastSyncedAt)
+                : t('not synced yet')}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>{t('sync mode')}</dt>
           <dd>
@@ -160,18 +167,22 @@ export function KnowledgeSyncSettings() {
         </Button>
       </div>
       <div className="knowledge-actions">
-        <Button
-          disabled={!sync?.server || checking}
-          onClick={() => void run(() => call({ op: 'sync' })).then(load)}
-        >
-          {t('sync now')}
-        </Button>
-        <Button
-          disabled={!sync?.server || checking}
-          onClick={() => void run(() => call({ op: 'login' })).then(load)}
-        >
-          {t('sign in again')}
-        </Button>
+        {!localOnly && (
+          <Button
+            disabled={!sync?.server || checking}
+            onClick={() => void run(() => call({ op: 'sync' })).then(load)}
+          >
+            {t('sync now')}
+          </Button>
+        )}
+        {sync?.condition === 'login-required' && (
+          <Button
+            disabled={!sync?.server || checking}
+            onClick={() => void run(() => call({ op: 'login' })).then(load)}
+          >
+            {t('sign in again')}
+          </Button>
+        )}
       </div>
       {error && (
         <p className="knowledge-error" role="alert">
@@ -186,7 +197,7 @@ export function KnowledgeSyncSettings() {
         title={
           preview?.action === 'mode'
             ? preview.title === 'local'
-              ? t('only on this device')
+              ? t('Keep only on this device?')
               : t('Sync to Hub')
             : t('use this connection')
         }
@@ -250,7 +261,11 @@ export function KnowledgeSyncSettings() {
             <footer className="knowledge-dialog-actions">
               <Button onClick={cancel}>{t('cancel')}</Button>
               <Button
-                className="primary"
+                className={
+                  preview.action === 'mode' && preview.title === 'local'
+                    ? 'danger'
+                    : 'primary'
+                }
                 disabled={checking}
                 onClick={() =>
                   void run(() =>
@@ -267,7 +282,11 @@ export function KnowledgeSyncSettings() {
                   })
                 }
               >
-                {checking ? t('checking…') : t('confirm change')}
+                {checking
+                  ? t('checking…')
+                  : preview.action === 'mode' && preview.title === 'local'
+                    ? t('Keep only on this device')
+                    : t('confirm change')}
               </Button>
             </footer>
           </>

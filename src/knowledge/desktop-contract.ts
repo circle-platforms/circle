@@ -34,6 +34,8 @@ export interface KnowledgeSource {
   available: boolean;
 }
 export interface KnowledgeDetail extends KnowledgeRow {
+  /** A recorded local commit time; unknown for old or remote revisions without a supplied time. */
+  updatedAt?: string | null;
   text: string;
   truncated: boolean;
   sourcesList: KnowledgeSource[];

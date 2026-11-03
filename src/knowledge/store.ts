@@ -25,7 +25,7 @@ import {
 } from './verification.js';
 import type { SyncItem, SyncObject } from './types.js';
 
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const APPLICATION_ID = 0x434b4e31;
 // Append migrations; never change an applied version's SQL.
 const MIGRATIONS = [
@@ -41,6 +41,7 @@ const MIGRATIONS = [
   `CREATE TABLE verification_observations(snapshot TEXT NOT NULL REFERENCES objects(id), object_id TEXT NOT NULL REFERENCES objects(id), rule TEXT NOT NULL, observation TEXT NOT NULL, PRIMARY KEY(snapshot,object_id,rule)) STRICT; CREATE TABLE personal_pack_installations(object_id TEXT PRIMARY KEY REFERENCES objects(id), path TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))) STRICT;`,
   `CREATE TABLE sync_journal(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
    CREATE TABLE sync_lease(singleton INTEGER PRIMARY KEY CHECK(singleton=1), token TEXT NOT NULL, expires INTEGER NOT NULL) STRICT;`,
+  `CREATE TABLE local_revision_times(object_id TEXT PRIMARY KEY REFERENCES objects(id), updated_at TEXT NOT NULL) STRICT;`,
 ];
 export interface SearchOptions {
   path?: string;
@@ -225,6 +226,23 @@ export class KnowledgeStore {
       if (current !== expected) throw new KnowledgeVersionConflict(current);
       const next = validateGraph(snapshot, (id) => this.read(id), sync);
       if (current) assertSuccessor(this.graph(current), next);
+      if (!sync) {
+        const priorHeads = new Set(
+          current
+            ? this.graph(current).items.flatMap((item) => item.heads)
+            : [],
+        );
+        const updatedAt = new Date().toISOString();
+        for (const item of next.items)
+          for (const head of item.heads) {
+            if (!priorHeads.has(head))
+              this.db
+                .prepare(
+                  'INSERT OR IGNORE INTO local_revision_times VALUES(?,?)',
+                )
+                .run(head, updatedAt);
+          }
+      }
       this.project(next);
       this.options.onPhase?.('projection-written');
       this.db
@@ -236,6 +254,15 @@ export class KnowledgeStore {
         .prepare('INSERT OR IGNORE INTO versions(snapshot) VALUES(?)')
         .run(snapshot);
     });
+  }
+  localUpdatedAt(object: string): string | null {
+    return (
+      (this.db
+        .prepare(
+          'SELECT updated_at FROM local_revision_times WHERE object_id=?',
+        )
+        .get(object)?.updated_at as string) ?? null
+    );
   }
   /** Run validation and publication under one write lock, so a stale approval leaves no staged body. */
   apply(expected: string | null, action: () => string): string {

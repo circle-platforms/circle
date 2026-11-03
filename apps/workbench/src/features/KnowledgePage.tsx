@@ -1,4 +1,4 @@
-import { Tooltip } from 'radix-ui';
+import { Tooltip, DropdownMenu } from 'radix-ui';
 import {
   useCallback,
   useEffect,
@@ -26,7 +26,12 @@ import {
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { t, tn } from '../i18n';
-import { knowledgeError, knowledgeStatusText } from '../model/knowledge';
+import {
+  knowledgeError,
+  knowledgeStatusText,
+  knowledgeLocation,
+  knowledgeUpdated,
+} from '../model/knowledge';
 import type {
   KnowledgeDetail,
   KnowledgeList,
@@ -101,7 +106,7 @@ const loadText = (row: KnowledgeRow) =>
         : t('not loaded in this session');
 const rowKind = (row: KnowledgeRow) =>
   row.kind === 'entry'
-    ? t('knowledge')
+    ? t('knowledge', undefined, 'item')
     : row.kind === 'memory'
       ? t('memory')
       : row.kind === 'folder'
@@ -738,7 +743,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                           {rowStatus(row)}
                         </span>
                       </td>
-                      <td>{row.path}</td>
+                      <td>{knowledgeLocation(row.path, scope)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -782,8 +787,11 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                       <span>{t('sources {n}', { n: row.sources })}</span>
                     )}
                     {row.kind === 'memory' && <span>{loadText(row)}</span>}
-                    <span className="knowledge-row-path" title={row.path}>
-                      {row.path}
+                    <span
+                      className="knowledge-row-path"
+                      title={knowledgeLocation(row.path, scope)}
+                    >
+                      {knowledgeLocation(row.path, scope)}
                     </span>
                   </span>
                 </span>
@@ -864,7 +872,10 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                 {detail.kind === 'memory' && <span>{loadText(detail)}</span>}
               </div>
               <h2 title={detail.title}>{detail.title}</h2>
-              <p className="knowledge-detail-path">{detail.path}</p>
+              <p className="knowledge-detail-path">
+                {knowledgeLocation(detail.path, scope, true)} ·{' '}
+                {knowledgeUpdated(detail.updatedAt)}
+              </p>
               {detail.text && (
                 <div className="knowledge-detail-text">
                   <Markdown text={detail.text} />
@@ -934,136 +945,167 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                 </section>
               )}
             </div>
-            <div className="knowledge-inspector-actions">
-              <Button onClick={() => setHistory(true)}>
-                {t('version history')}
-              </Button>
-              {scope === 'personal' && (
-                <>
-                  {detail.status === 'conflicted' ? (
-                    <Button
-                      className="primary"
-                      onClick={() => void openDraft('resolve')}
+            <footer className="knowledge-inspector-footer">
+              {scope === 'personal' &&
+                detail.share === 'local' &&
+                ['entry', 'memory'].includes(detail.kind) && (
+                  <p className="knowledge-local-note">
+                    {t('local-only content cannot be shared to the team')} ·{' '}
+                    <button
+                      className="link"
+                      onClick={() => navigate('/page/sync')}
                     >
-                      {t('resolve conflict…')}
-                    </Button>
-                  ) : (
-                    <>
-                      {['entry', 'memory'].includes(detail.kind) && (
-                        <>
-                          <Tooltip.Root>
-                            <Tooltip.Trigger asChild>
-                              <span
-                                tabIndex={0}
-                                title={
-                                  detail.share === 'local'
+                      {t('sync settings')}
+                    </button>
+                  </p>
+                )}
+              <div className="knowledge-inspector-actions">
+                <Button onClick={() => setHistory(true)}>
+                  {t('version history')}
+                </Button>
+                {scope === 'personal' && (
+                  <>
+                    {detail.status === 'conflicted' ? (
+                      <Button
+                        className="primary"
+                        onClick={() => void openDraft('resolve')}
+                      >
+                        {t('resolve conflict…')}
+                      </Button>
+                    ) : (
+                      <>
+                        {['entry', 'memory'].includes(detail.kind) && (
+                          <>
+                            <Tooltip.Root>
+                              <Tooltip.Trigger asChild>
+                                <span
+                                  tabIndex={0}
+                                  title={
+                                    detail.share === 'local'
+                                      ? t(
+                                          'switch to Sync to Hub before sharing to the team',
+                                        )
+                                      : detail.share === 'waiting'
+                                        ? t(
+                                            'sync this version before sharing to the team',
+                                          )
+                                        : undefined
+                                  }
+                                >
+                                  <Button
+                                    disabled={
+                                      detail.share !== 'ready' ||
+                                      (detail.kind === 'entry' &&
+                                        detail.status !== 'verified')
+                                    }
+                                    onClick={() => void openDraft('share')}
+                                  >
+                                    {t('share to team…')}
+                                  </Button>
+                                </span>
+                              </Tooltip.Trigger>
+                              <Tooltip.Portal>
+                                <Tooltip.Content
+                                  className="tooltip"
+                                  sideOffset={7}
+                                >
+                                  {detail.share === 'local'
                                     ? t(
                                         'switch to Sync to Hub before sharing to the team',
                                       )
-                                    : detail.share === 'waiting'
-                                      ? t(
-                                          'sync this version before sharing to the team',
-                                        )
-                                      : undefined
-                                }
-                              >
-                                <Button
-                                  disabled={
-                                    detail.share !== 'ready' ||
-                                    (detail.kind === 'entry' &&
-                                      detail.status !== 'verified')
-                                  }
-                                  onClick={() => void openDraft('share')}
+                                    : t(
+                                        'sync this version before sharing to the team',
+                                      )}
+                                  <Tooltip.Arrow />
+                                </Tooltip.Content>
+                              </Tooltip.Portal>
+                            </Tooltip.Root>
+                          </>
+                        )}
+                        <DropdownMenu.Root>
+                          <DropdownMenu.Trigger asChild>
+                            <Button>{t('more')}</Button>
+                          </DropdownMenu.Trigger>
+                          <DropdownMenu.Portal>
+                            <DropdownMenu.Content
+                              className="dropdown"
+                              side="top"
+                              align="end"
+                              sideOffset={6}
+                            >
+                              {detail.kind === 'memory' && (
+                                <DropdownMenu.Item
+                                  onSelect={() => void openDraft('enabled')}
                                 >
-                                  {t('share to team…')}
-                                </Button>
-                              </span>
-                            </Tooltip.Trigger>
-                            <Tooltip.Portal>
-                              <Tooltip.Content
-                                className="tooltip"
-                                sideOffset={7}
+                                  {detail.status === 'enabled'
+                                    ? t('disable…')
+                                    : t('enable…')}
+                                </DropdownMenu.Item>
+                              )}
+                              {detail.kind !== 'memory' && (
+                                <DropdownMenu.Item
+                                  onSelect={() => void openDraft('move')}
+                                >
+                                  {t('move…')}
+                                </DropdownMenu.Item>
+                              )}
+                              <DropdownMenu.Item
+                                className="danger"
+                                onSelect={() => void openDraft('delete')}
                               >
-                                {detail.share === 'local'
-                                  ? t(
-                                      'switch to Sync to Hub before sharing to the team',
-                                    )
-                                  : t(
-                                      'sync this version before sharing to the team',
-                                    )}
-                                <Tooltip.Arrow />
-                              </Tooltip.Content>
-                            </Tooltip.Portal>
-                          </Tooltip.Root>
-                          {detail.share === 'local' && (
-                            <Button onClick={() => navigate('/page/sync')}>
-                              {t('change sync mode')}
-                            </Button>
-                          )}
-                        </>
-                      )}
-                      {detail.kind === 'memory' && (
-                        <Button onClick={() => void openDraft('enabled')}>
-                          {detail.status === 'enabled'
-                            ? t('disable…')
-                            : t('enable…')}
-                        </Button>
-                      )}
-                      {detail.kind !== 'memory' && (
-                        <Button onClick={() => void openDraft('move')}>
-                          {t('move…')}
-                        </Button>
-                      )}
-                      <Button onClick={() => void openDraft('delete')}>
-                        {t('delete…')}
-                      </Button>
-                      {['workflow', 'skill'].includes(detail.kind) ? (
-                        <Button
-                          className="primary"
-                          onClick={() => {
-                            if (
-                              detail.installed &&
-                              detail.availability !== 'unavailable'
-                            )
-                              void openDraft('pack-enabled');
-                            else
-                              void run(() =>
-                                call({
-                                  op: 'install-pick',
-                                  id: detail.id,
-                                  token: detail.token,
-                                }),
-                              ).then((value) => {
-                                if ((value as any)?.ticket) {
-                                  setDraft({
-                                    ...emptyDraft,
-                                    action: 'install',
-                                  });
-                                  setPreview(value as KnowledgePreview);
-                                }
-                              });
-                          }}
-                        >
-                          {detail.installed &&
-                          detail.availability !== 'unavailable'
-                            ? detail.enabled
-                              ? t('disable…')
-                              : t('enable…')
-                            : t('install files…')}
-                        </Button>
-                      ) : (
-                        <Button
-                          className="primary"
-                          onClick={() => void openDraft('edit')}
-                        >
-                          {t('edit…')}
-                        </Button>
-                      )}
-                    </>
-                  )}
-                </>
-              )}
-            </div>
+                                {t('delete…')}
+                              </DropdownMenu.Item>
+                            </DropdownMenu.Content>
+                          </DropdownMenu.Portal>
+                        </DropdownMenu.Root>
+                        {['workflow', 'skill'].includes(detail.kind) ? (
+                          <Button
+                            className="primary"
+                            onClick={() => {
+                              if (
+                                detail.installed &&
+                                detail.availability !== 'unavailable'
+                              )
+                                void openDraft('pack-enabled');
+                              else
+                                void run(() =>
+                                  call({
+                                    op: 'install-pick',
+                                    id: detail.id,
+                                    token: detail.token,
+                                  }),
+                                ).then((value) => {
+                                  if ((value as any)?.ticket) {
+                                    setDraft({
+                                      ...emptyDraft,
+                                      action: 'install',
+                                    });
+                                    setPreview(value as KnowledgePreview);
+                                  }
+                                });
+                            }}
+                          >
+                            {detail.installed &&
+                            detail.availability !== 'unavailable'
+                              ? detail.enabled
+                                ? t('disable…')
+                                : t('enable…')
+                              : t('install files…')}
+                          </Button>
+                        ) : (
+                          <Button
+                            className="primary"
+                            onClick={() => void openDraft('edit')}
+                          >
+                            {t('edit…')}
+                          </Button>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </footer>
           </>
         ) : (
           <div className="knowledge-overview">
@@ -1099,7 +1141,13 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
               {preview ? (
                 <>
                   <p>{preview.title}</p>
-                  {preview.text && <pre>{preview.text}</pre>}
+                  {preview.text && (
+                    <pre>
+                      {draft.action === 'share'
+                        ? knowledgeLocation(preview.text, 'team', true)
+                        : preview.text}
+                    </pre>
+                  )}
                   {preview.files && (
                     <ul>
                       {preview.files.map((f) => (
@@ -1211,7 +1259,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                         <option value="">{t('select a folder')}</option>
                         {folders.map((f) => (
                           <option key={f.id} value={f.id}>
-                            {f.path}
+                            {knowledgeLocation(f.path, 'personal', true)}
                           </option>
                         ))}
                       </select>

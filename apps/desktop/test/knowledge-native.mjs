@@ -451,7 +451,10 @@ try {
   await page.locator('.knowledge-inspector-actions span[tabindex="0"]').focus();
   await page.getByRole('tooltip').waitFor();
   await shot('en-dark-1440-local-share-tooltip');
-  await button('change sync mode').click();
+  await page
+    .locator('.knowledge-local-note')
+    .getByRole('button', { name: 'sync settings', exact: true })
+    .click();
   await button('Sync to Hub…').click();
   assert.equal(peer.peer.mode, 'local');
   await dialog()
@@ -510,7 +513,7 @@ try {
   await route('sync');
   await button('only on this device…').click();
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'Keep only on this device', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   await route('knowledge');
@@ -555,14 +558,16 @@ try {
     .getByLabel('content', { exact: true })
     .fill('NATIVE_MOVED_ENTRY');
   await saveDialog();
-  await button('move…').click();
+  await button('more').click();
+  await page.getByRole('menuitem', { name: 'move…', exact: true }).click();
   await dialog()
     .getByLabel('destination folder', { exact: true })
-    .selectOption({ label: '/' });
+    .selectOption({ label: 'mine' });
   await saveDialog();
   await route('knowledge');
   await choose('NATIVE_MOVED_ENTRY');
-  await button('delete…').click();
+  await button('more').click();
+  await page.getByRole('menuitem', { name: 'delete…', exact: true }).click();
   await saveDialog();
   await rows()
     .filter({ hasText: 'NATIVE_MOVED_ENTRY' })
@@ -700,6 +705,12 @@ try {
   await button('sync now').click();
   await button('only on this device…').click();
   assert.equal(peer.peer.mode, 'hub');
+  assert.equal(
+    await dialog()
+      .getByRole('button', { name: 'Keep only on this device', exact: true })
+      .getAttribute('class'),
+    'button danger',
+  );
   const impact = await dialog().innerText();
   assert.match(impact, /123 bytes/);
   assert.match(impact, /unknown/);
@@ -708,7 +719,7 @@ try {
   assert.equal(peer.peer.mode, 'hub');
   await button('only on this device…').click();
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'Keep only on this device', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   assert.equal(peer.peer.mode, 'local');
@@ -742,6 +753,24 @@ try {
         await setViewport(app, page, { width, height: 900 }, { show: true });
         await route('knowledge');
         await choose('本机副本与团队副本彼此独立');
+        await page.waitForFunction(() => {
+          const actions = [
+            ...document.querySelectorAll('.knowledge-inspector-actions button'),
+          ];
+          return (
+            new Set(
+              actions.map((e) => Math.round(e.getBoundingClientRect().top)),
+            ).size === 1
+          );
+        });
+        assert.doesNotMatch(
+          await page.locator('.knowledge-detail-path').innerText(),
+          /\//,
+        );
+        assert.match(
+          await page.locator('.knowledge-detail-path').innerText(),
+          / · /,
+        );
         await shot(`${language}-${theme}-${width}-knowledge`);
         if (width === 1024) {
           await button(language === 'en' ? 'back to list' : '返回列表').click();
@@ -769,6 +798,16 @@ try {
           await shot(`${language}-${theme}-${width}-workflows-list`);
         }
         await route('sync');
+        assert.equal(
+          await button(language === 'en' ? 'sync now' : '立即同步').count(),
+          0,
+        );
+        assert.equal(
+          await button(
+            language === 'en' ? 'sign in again' : '重新登录',
+          ).count(),
+          0,
+        );
         await shot(`${language}-${theme}-${width}-sync`);
       }
     }

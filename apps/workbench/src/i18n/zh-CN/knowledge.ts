@@ -1,4 +1,13 @@
 export const knowledge = {
+  'knowledge (item)': '知识',
+  'update time unknown': '更新时间未知',
+  'updated today at {time}': '今天 {time} 更新',
+  'last changed {time}': '{time} 更新',
+  'Keep only on this device?': '改为仅保存在本机？',
+  'Keep only on this device': '改为仅保存在本机',
+  'local-only content cannot be shared to the team':
+    '仅保存在本机时不能分享到团队',
+
   'files unavailable': '文件不可用',
   'import workflow or skill…': '导入工作流或技能…',
   'import a workflow or skill folder, then choose whether to install it':

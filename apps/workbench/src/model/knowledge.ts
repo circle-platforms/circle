@@ -1,4 +1,5 @@
 import type { KnowledgeSyncView } from '../../../../src/knowledge/desktop-contract';
+import { shownTime } from './time';
 import { t } from '../i18n';
 export function knowledgeStatusText(status?: KnowledgeSyncView): string {
   if (!status?.server) return t('only on this device');
@@ -49,4 +50,28 @@ export function knowledgeError(error: unknown): string {
   if (code.includes('knowledge-share-rejected'))
     return t('the team share was not accepted; check its sources and retry');
   return t('knowledge could not be opened; reload and try again');
+}
+
+/** Display hierarchy only; the host's slash path remains an opaque navigation value. */
+export function knowledgeLocation(
+  path: string,
+  scope: 'personal' | 'team' | 'shared',
+  inspector = false,
+): string {
+  const parts = path.split('/').filter(Boolean);
+  if (!parts.length && !inspector) return '';
+  return [
+    scope === 'personal'
+      ? t('mine')
+      : scope === 'team'
+        ? t('team')
+        : t('shared with me'),
+    ...parts,
+  ].join(' › ');
+}
+export function knowledgeUpdated(at?: string | null, now = new Date()): string {
+  if (!at || Number.isNaN(Date.parse(at))) return t('update time unknown');
+  return new Date(at).toDateString() === now.toDateString()
+    ? t('updated today at {time}', { time: shownTime(at, now) })
+    : t('last changed {time}', { time: shownTime(at, now) });
 }

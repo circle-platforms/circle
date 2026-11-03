@@ -555,14 +555,14 @@ test('newer and unrelated databases are rejected without downgrading or changing
     id = store.clientId;
   store.close();
   const db = new DatabaseSync(path);
-  db.exec('PRAGMA user_version=4');
+  db.exec('PRAGMA user_version=5');
   db.close();
   const before = readFileSync(path);
   assert.throws(() => new KnowledgeStore(home), /newer/);
   assert.deepEqual(readFileSync(path), before);
   const check = new DatabaseSync(path);
   t.after(() => check.close());
-  assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 4);
+  assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 5);
   assert.equal(
     check.prepare("SELECT value FROM metadata WHERE key='client_id'").get()!
       .value,
@@ -748,7 +748,7 @@ test('migration 3 rebuilds an existing projection and preserves identities, curr
   // Recreate the previous applied schema using a synthetic database, then corrupt only derived search text.
   const old = new DatabaseSync(path);
   old.exec(
-    'DROP TABLE sync_journal; DROP TABLE sync_lease; PRAGMA user_version=2;',
+    'DROP TABLE sync_journal; DROP TABLE sync_lease; DROP TABLE local_revision_times; PRAGMA user_version=2;',
   );
   old
     .prepare("UPDATE search_documents SET statement='stale derived text'")
@@ -764,4 +764,22 @@ test('migration 3 rebuilds an existing projection and preserves identities, curr
     upgraded.acquireSyncLease('migration-holder', 1000, 30000),
     true,
   );
+});
+
+test('local update times record committed revisions only and never assign an imported remote update time', (t) => {
+  const w = world(t),
+    first = w.store.put(entry('合成远端版本'));
+  assert.equal(w.store.localUpdatedAt(first), null);
+  const remote = snapshot(w.store, [...w.rows, row(uuid(2), [first])]);
+  w.store.commit(remote, null, true);
+  assert.equal(w.store.localUpdatedAt(first), null);
+  const next = w.store.put(entry('合成本机更改', [first]));
+  const changed = snapshot(w.store, [...w.rows, row(uuid(2), [next])]);
+  const before = Date.now();
+  w.store.commit(changed, remote);
+  const at = w.store.localUpdatedAt(next);
+  assert.ok(at && Date.parse(at) >= before && Date.parse(at) <= Date.now());
+  assert.equal(w.store.localUpdatedAt(first), null);
+  w.store.commit(changed, changed);
+  assert.equal(w.store.localUpdatedAt(next), at);
 });

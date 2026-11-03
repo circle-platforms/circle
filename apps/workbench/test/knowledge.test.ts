@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { setLanguage } from '../src/i18n/index.ts';
-import { knowledgeStatusText, knowledgeError } from '../src/model/knowledge.ts';
+import {
+  knowledgeStatusText,
+  knowledgeError,
+  knowledgeLocation,
+  knowledgeUpdated,
+} from '../src/model/knowledge.ts';
 import {
   settingsGroups,
   settingsSectionOf,
@@ -94,4 +99,22 @@ test('boundary errors are localized without echoing raw host errors or paths', (
   assert.equal(message, '无法打开内容，请刷新后重试');
   assert.doesNotMatch(message, /private|token/);
   setLanguage('en', storage);
+});
+
+test('display locations use space names and hierarchy separators, and times never invent an update', () => {
+  setLanguage('zh-CN', storage);
+  assert.equal(knowledgeLocation('/', 'personal'), '');
+  assert.equal(knowledgeLocation('/', 'personal', true), '我的');
+  assert.equal(
+    knowledgeLocation('/Native folder/child', 'personal'),
+    '我的 › Native folder › child',
+  );
+  assert.equal(knowledgeLocation('/notes', 'team'), '团队 › notes');
+  assert.equal(knowledgeUpdated(null), '更新时间未知');
+  assert.equal(
+    knowledgeUpdated('2026-11-03T08:49:00', new Date('2026-11-03T10:00:00')),
+    '今天 08:49 更新',
+  );
+  setLanguage('en', storage);
+  assert.equal(knowledgeLocation('/', 'personal', true), 'mine');
 });

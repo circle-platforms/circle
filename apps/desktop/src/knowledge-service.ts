@@ -562,6 +562,7 @@ export class DesktopKnowledge {
       const mode = this.status(runtime).mode;
       return {
         ...view,
+        updatedAt: store.localUpdatedAt(ref.object),
         ...bounded(text, 64000),
         sourcesList,
         candidates,
