@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -22,9 +24,12 @@ async function world(
   t: Parameters<typeof scratch>[0],
   decision: 'approve' | 'reject' | 'always' = 'approve',
 ) {
-  const home = scratch(t),
-    workspace = scratch(t),
-    server = new AuthorizedServer(scratch(t));
+  const root = scratch(t, 'circle-share-'),
+    home = join(root, 'home'),
+    workspace = join(root, 'workspace'),
+    userHome = join(root, 'user');
+  for (const path of [home, workspace, userHome]) mkdirSync(path);
+  const server = new AuthorizedServer(join(root, 'peer'));
   await server.start();
   cleanup(t, () => server.close());
   const connection = {
@@ -46,7 +51,7 @@ async function world(
   const runtime = new AgentRuntime({
     home,
     workspace,
-    userHome: scratch(t),
+    userHome,
     settings,
     model,
     headless: true,

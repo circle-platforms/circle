@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -50,10 +50,12 @@ async function world(
   t: Parameters<typeof scratch>[0],
   options: { selected?: boolean; localContext?: boolean } = {},
 ) {
-  const home = scratch(t, 'circle-memory-home-'),
-    workspace = scratch(t, 'circle-memory-work-'),
-    userHome = scratch(t, 'circle-memory-user-');
-  const server = new AuthorizedServer(scratch(t, 'circle-memory-peer-'));
+  const root = scratch(t, 'circle-memory-'),
+    home = join(root, 'home'),
+    workspace = join(root, 'workspace'),
+    userHome = join(root, 'user');
+  for (const path of [home, workspace, userHome]) mkdirSync(path);
+  const server = new AuthorizedServer(join(root, 'peer'));
   await server.start();
   cleanup(t, () => server.close());
   const settings = defaultSettings();

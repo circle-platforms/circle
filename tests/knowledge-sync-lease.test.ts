@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { symlinkSync } from 'node:fs';
 import { KnowledgeStore } from '../src/knowledge/store.js';
-import { scratch } from './helpers.js';
+import { scratch, cleanup } from './helpers.js';
 const worker = new URL(
   './fixtures/knowledge-sync/lease-worker.ts',
   import.meta.url,
@@ -30,7 +30,7 @@ function child(home: string, action: string, now: number, token: string) {
 test('the canonical home has one cross-process lease, including aliases', (t) => {
   const home = scratch(t, 'circle-sync-lease-');
   const store = new KnowledgeStore(home);
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   assert.equal(store.acquireSyncLease('first', 1000, 30000), true);
   assert.deepEqual(JSON.parse(child(home, 'acquire', 2000, 'second').stdout), {
     acquired: false,
@@ -67,7 +67,7 @@ test('an exited process is fenced after expiry and takeover; an old release cann
   assert.equal(first.status, 0);
   assert.equal(JSON.parse(first.stdout).acquired, true);
   const store = new KnowledgeStore(home);
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   assert.equal(store.acquireSyncLease('new', 31000, 30000), true);
   assert.notEqual(child(home, 'assert', 32000, 'old').status, 0);
   assert.throws(
@@ -88,7 +88,7 @@ test('an exited process is fenced after expiry and takeover; an old release cann
 
 test('the ownership fence and journal change roll back together if the lease expires during a write', (t) => {
   const store = new KnowledgeStore(scratch(t, 'circle-sync-fence-'));
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   store.acquireSyncLease('owner', 1000, 30000);
   let now = 1001;
   assert.throws(
@@ -113,8 +113,12 @@ test('a killed holder leaves a durable lease that only an expired successor can 
     ['--import', 'tsx', fileURLToPath(worker), home, 'hold', '1000', 'killed'],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
-  t.after(() => {
-    if (processChild.exitCode === null) processChild.kill('SIGKILL');
+  cleanup(t, async () => {
+    if (processChild.exitCode === null && processChild.signalCode === null) {
+      const exited = once(processChild, 'exit');
+      processChild.kill('SIGKILL');
+      await exited;
+    }
   });
   const [output] = await once(processChild.stdout, 'data');
   assert.equal(JSON.parse(String(output)).acquired, true);
@@ -122,7 +126,7 @@ test('a killed holder leaves a durable lease that only an expired successor can 
   processChild.kill('SIGKILL');
   await exit;
   const store = new KnowledgeStore(home);
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   assert.equal(store.acquireSyncLease('successor', 2000, 30000), false);
   assert.equal(store.acquireSyncLease('successor', 31000, 30000), true);
   assert.throws(() => store.assertSyncLease('killed', 31001), /lease lost/);

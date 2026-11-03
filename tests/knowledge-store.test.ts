@@ -17,11 +17,15 @@ import {
   KnowledgeStore,
   KnowledgeVersionConflict,
 } from '../src/knowledge/store.js';
-import { sha256, syncObjectId } from '../src/knowledge/canonical.js';
+import {
+  sha256,
+  syncObjectId,
+  decodeSyncObject,
+} from '../src/knowledge/canonical.js';
 import { knowledgeTokens } from '../src/knowledge/search.js';
 import { renameObject } from '../src/knowledge/objects.js';
 import type { SyncItem } from '../src/knowledge/types.js';
-import { scratch } from './helpers.js';
+import { scratch, cleanup } from './helpers.js';
 
 const uuid = (n: number): string =>
   `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -69,7 +73,7 @@ function world(t: TestContext): {
 } {
   const home = scratch(t, 'circle-knowledge-test-'),
     store = new KnowledgeStore(home);
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   const root = store.put(directory(uuid(1), '', null));
   return {
     home,
@@ -82,14 +86,15 @@ function snapshot(
   rows: SyncItem[],
   parents = store.head ? [store.head] : [],
 ): string {
-  const page = store.put(
-    object('inventory_page', {
-      items: [...rows].sort((a, b) =>
-        `${a.kind}:${a.item_id}` < `${b.kind}:${b.item_id}` ? -1 : 1,
-      ),
-    }),
-  );
-  return store.put(object('snapshot', { parents, pages: [page] }));
+  const page = object('inventory_page', {
+    items: [...rows].sort((a, b) =>
+      `${a.kind}:${a.item_id}` < `${b.kind}:${b.item_id}` ? -1 : 1,
+    ),
+  });
+  return store.putBatch([
+    page,
+    object('snapshot', { parents, pages: [syncObjectId(page)] }),
+  ])[1]!;
 }
 const row = (id: string, heads: string[]): SyncItem => ({
   kind: 'entry_revision',
@@ -112,11 +117,11 @@ test('the dedicated store preserves the session database and persists its own cl
   });
   store.close();
   const reopened = new KnowledgeStore(home);
-  t.after(() => reopened.close());
+  cleanup(t, () => reopened.close());
   assert.equal(reopened.clientId, id);
   assert.deepEqual(readFileSync(session), bytes);
   const separate = new KnowledgeStore(scratch(t));
-  t.after(() => separate.close());
+  cleanup(t, () => separate.close());
   assert.notEqual(separate.clientId, id);
   if (process.platform !== 'win32') {
     assert.equal(statSync(reopened.directory).mode & 0o777, 0o700);
@@ -144,7 +149,7 @@ test('staged objects stay out of search until one atomic snapshot commit; old by
 test('the canonical empty Hub snapshot can precede the first local directory without inventing remote data', (t) => {
   const home = scratch(t),
     store = new KnowledgeStore(home);
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   const empty = store.put(object('snapshot', { parents: [], pages: [] }));
   store.commit(empty, null);
   assert.equal(store.head, empty);
@@ -164,7 +169,7 @@ test('two handles compare and exchange the same current head rather than overwri
   const s1 = snapshot(w.store, [...w.rows, row(uuid(2), [first])]);
   w.store.commit(s1, null);
   const peer = new KnowledgeStore(w.home);
-  t.after(() => peer.close());
+  cleanup(t, () => peer.close());
   const a = w.store.put(entry('甲方知识', [first])),
     b = peer.put(entry('乙方知识', [first]));
   const left = snapshot(w.store, [...w.rows, row(uuid(2), [a])]);
@@ -242,15 +247,21 @@ test('conflicting heads have no selected search body; explicit resolution retain
 test('shared memory revisions retain exact fixture identities through conflict and resolution snapshots', (t) => {
   const home = scratch(t),
     store = new KnowledgeStore(home);
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   const fixtures = JSON.parse(
     readFileSync(
       new URL('./fixtures/knowledge-sync/v1/scenarios.json', import.meta.url),
       'utf8',
     ),
   );
-  for (const o of fixtures.objects)
-    store.importBytes(Buffer.from(o.canonical), o.id);
+  assert.deepEqual(
+    store.putBatch(
+      fixtures.objects.map((o: { canonical: string; id: string }) =>
+        decodeSyncObject(Buffer.from(o.canonical), o.id),
+      ),
+    ),
+    fixtures.objects.map((o: { id: string }) => o.id),
+  );
   const rootId = '22222222-2222-4222-8222-222222222222',
     itemId = '11111111-1111-4111-8111-111111111111';
   const root = store.put(directory(rootId, '', null));
@@ -561,7 +572,7 @@ test('newer and unrelated databases are rejected without downgrading or changing
   assert.throws(() => new KnowledgeStore(home), /newer/);
   assert.deepEqual(readFileSync(path), before);
   const check = new DatabaseSync(path);
-  t.after(() => check.close());
+  cleanup(t, () => check.close());
   assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 5);
   assert.equal(
     check.prepare("SELECT value FROM metadata WHERE key='client_id'").get()!
@@ -604,7 +615,7 @@ test('a crash after file publication recovers an invisible orphan, not a partial
   const file = join(home, 'knowledge/objects', id);
   assert.ok(existsSync(file));
   const store = new KnowledgeStore(home);
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   assert.equal(store.has(id), false);
   assert.equal(store.head, null);
   assert.equal(store.recoveredObjects, 1);
@@ -625,7 +636,7 @@ test('a crash between index replacement and commit rolls back both index and cur
     expected: initial,
   });
   const reopened = new KnowledgeStore(w.home);
-  t.after(() => reopened.close());
+  cleanup(t, () => reopened.close());
   assert.equal(reopened.head, initial);
   assert.equal(reopened.search('旧版').items[0]!.objectId, old);
   assert.deepEqual(reopened.search('新版').items, []);
@@ -727,7 +738,7 @@ test(
       outside = join(home, 'outside');
     writeFileSync(outside, 'synthetic outside sentinel');
     const store = new KnowledgeStore(join(home, 'runtime'));
-    t.after(() => store.close());
+    cleanup(t, () => store.close());
     const payload = entry('合成知识'),
       id = syncObjectId(payload);
     symlinkSync(outside, join(store.directory, 'objects', id));
@@ -755,7 +766,7 @@ test('migration 3 rebuilds an existing projection and preserves identities, curr
     .run();
   old.close();
   const upgraded = new KnowledgeStore(w.home);
-  t.after(() => upgraded.close());
+  cleanup(t, () => upgraded.close());
   assert.equal(upgraded.clientId, client);
   assert.equal(upgraded.head, head);
   assert.deepEqual(upgraded.readBytes(entryId), bytes);

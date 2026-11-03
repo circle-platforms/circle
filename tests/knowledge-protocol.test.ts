@@ -20,7 +20,7 @@ import { verifyKnowledgeSync } from '../scripts/verify-knowledge-sync.js';
 import { KnowledgeStore } from '../src/knowledge/store.js';
 import { mergeSnapshots } from '../src/knowledge/merge.js';
 import { verifyLocal } from '../src/knowledge/verification.js';
-import { scratch } from './helpers.js';
+import { scratch, cleanup } from './helpers.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const fixture = (name: string): any =>
@@ -483,15 +483,20 @@ test('a pack manifest is metadata with required, ordered, safe, case-unique file
 test('the frozen exchange fixture retains both memory branches, resolves ancestry and verifies exact original-byte grounds', (t) => {
   const data = fixture('exchange'),
     store = new KnowledgeStore(scratch(t));
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   const objects = [
     ...fixture('scenarios').objects,
     ...(Object.values(data.objects) as any[]),
   ];
-  for (const object of objects) {
-    const value = decodeSyncObject(Buffer.from(object.canonical), object.id);
-    assert.equal(store.put(value), object.id);
-  }
+  // Fixture admission is one batch; per-object durability is covered by the store tests.
+  assert.deepEqual(
+    store.putBatch(
+      objects.map((object) =>
+        decodeSyncObject(Buffer.from(object.canonical), object.id),
+      ),
+    ),
+    objects.map((object) => object.id),
+  );
   const id = (label: string) => data.objects[label].id;
   for (const [left, right] of [
     ['memory-left', 'memory-right'],

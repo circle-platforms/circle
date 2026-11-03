@@ -306,19 +306,43 @@ test('aborted preparation never publishes and later caller mutation cannot chang
   );
 });
 
+// Quota fixtures need one populated snapshot, not 20 or 21 unrelated revision histories.
+// Individual create/edit/disable/delete operations are exercised separately above.
+function seedMemories(
+  service: KnowledgeService,
+  count: number,
+  state: 'enabled' | 'disabled',
+  markdown: string,
+) {
+  const directory = randomUUID();
+  return service
+    .prepare({
+      expected_head: null,
+      objects: [
+        object('directory_revision', {
+          item_id: directory,
+          parents: [],
+          parent_directory: null,
+          name: '',
+        }),
+        ...Array.from({ length: count }, (_, i) =>
+          object('memory_revision', {
+            item_id: randomUUID(),
+            parents: [],
+            directory_id: directory,
+            title: `${state} ${i}`,
+            markdown,
+            state,
+          }),
+        ),
+      ],
+    })
+    .commit(signal());
+}
 test('memory count and aggregate UTF-8 bounds apply to enabled memories', (t) => {
   const home = scratch(t),
     service = new KnowledgeService(home);
-  let head: string | null = null;
-  for (let i = 0; i < 20; i++)
-    head = service
-      .prepareMemory({
-        expected_head: head,
-        title: `note ${i}`,
-        markdown: 'synthetic',
-        state: 'enabled',
-      })
-      .commit(signal());
+  const head = seedMemories(service, 20, 'enabled', 'synthetic');
   assert.throws(
     () =>
       service.prepareMemory({
@@ -414,16 +438,7 @@ test('state-only memory changes preserve content and edits preserve the disabled
 test('disabled memories retain bytes without consuming the Hub active-context quota', (t) => {
   const home = scratch(t),
     service = new KnowledgeService(home);
-  let head: string | null = null;
-  for (let i = 0; i < 21; i++)
-    head = service
-      .prepareMemory({
-        expected_head: head,
-        title: `disabled ${i}`,
-        markdown: 'x'.repeat(24000),
-        state: 'disabled',
-      })
-      .commit(signal());
+  const head = seedMemories(service, 21, 'disabled', 'x'.repeat(24000));
   assert.ok(head);
   const active = service
     .prepareMemory({

@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { decodeSyncObject } from '../src/knowledge/canonical.js';
 import { KnowledgeStore } from '../src/knowledge/store.js';
 import { KnowledgeService } from '../src/knowledge/service.js';
 import { KnowledgeSync } from '../src/knowledge/sync.js';
 import { SyncHttp } from '../src/knowledge/sync-http.js';
 import { mergeSnapshots } from '../src/knowledge/merge.js';
 import { FakeSyncServer } from './fixtures/knowledge-sync/fake-server.js';
-import { scratch } from './helpers.js';
+import { scratch, cleanup } from './helpers.js';
 
 const signal = new AbortController().signal;
 const uuid = (n: number) =>
@@ -18,10 +20,11 @@ const envelope = (kind: string, body: unknown) => ({
   body,
 });
 async function world(t: TestContext) {
-  const server = new FakeSyncServer(scratch(t, 'circle-sync-peer-'));
+  const root = scratch(t, 'circle-sync-');
+  const server = new FakeSyncServer(join(root, 'peer'));
   await server.listen();
-  t.after(() => server.close());
-  const homes = [scratch(t, 'circle-sync-a-'), scratch(t, 'circle-sync-b-')];
+  cleanup(t, () => server.close());
+  const homes = [join(root, 'a'), join(root, 'b')];
   let now = server.now;
   const clients = homes.map(
     (home) =>
@@ -31,7 +34,7 @@ async function world(t: TestContext) {
         { binding: 'synthetic-account', now: () => now },
       ),
   );
-  t.after(async () => {
+  cleanup(t, async () => {
     for (const c of clients) await c.close();
   });
   const advance = (n = 16000) => {
@@ -81,7 +84,7 @@ test('two HTTP clients exchange exact objects, offline changes, conflicts and ex
   await w.clients[0]!.runOnce();
   assert.equal(w.clients[0]!.status.condition, 'synced');
   const local = new KnowledgeStore(w.homes[0]!);
-  t.after(() => local.close());
+  cleanup(t, () => local.close());
   const head = w.rows(0).find((i) => i.item_id === item)!.heads[0]!;
   const object = local.read(head);
   assert.equal(object.kind, 'memory_revision');
@@ -128,7 +131,7 @@ for (const route of ['upload', 'commit'] as const)
       new SyncHttp(w.server.origin, async () => w.server.token),
       { binding: 'synthetic-account', now: () => w.server.now },
     );
-    t.after(() => client.close());
+    cleanup(t, () => client.close());
     await client.runOnce();
     assert.equal(client.status.condition, 'synced');
     assert.ok(w.server.calls.some((c) => c.route === 'operation'));
@@ -294,7 +297,7 @@ test('a different host binding cannot send the old account queue', async (t) => 
     new SyncHttp(w.server.origin, async () => w.server.token),
     { binding: 'different-account', now: () => w.server.now },
   );
-  t.after(() => other.close());
+  cleanup(t, () => other.close());
   await other.runOnce();
   assert.equal(w.server.calls.length, count);
   assert.equal(other.status.condition, 'paused');
@@ -310,7 +313,7 @@ test('401 pauses without an automatic login loop or timestamp promotion', async 
     new SyncHttp(w.server.origin, async () => 'synthetic-sync-token'),
     { binding: 'account', now: () => w.server.now },
   );
-  t.after(() => client.close());
+  cleanup(t, () => client.close());
   await assert.rejects(client.runOnce());
   const count = w.server.calls.length;
   w.advance();
@@ -321,7 +324,7 @@ test('401 pauses without an automatic login loop or timestamp promotion', async 
 
 test('the pinned merge vectors retain all non-ancestor heads without semantic merging', (t) => {
   const store = new KnowledgeStore(scratch(t, 'circle-merge-vector-'));
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   const data = JSON.parse(
     readFileSync(
       new URL('./fixtures/knowledge-sync/v1/scenarios.json', import.meta.url),
@@ -329,7 +332,14 @@ test('the pinned merge vectors retain all non-ancestor heads without semantic me
     ),
   );
   const memory = data.objects.slice(0, 5);
-  for (const x of memory) store.importBytes(Buffer.from(x.canonical), x.id);
+  assert.deepEqual(
+    store.putBatch(
+      memory.map((x: { canonical: string; id: string }) =>
+        decodeSyncObject(Buffer.from(x.canonical), x.id),
+      ),
+    ),
+    memory.map((x: { id: string }) => x.id),
+  );
   const root = store.put(
     envelope('directory_revision', {
       item_id: '22222222-2222-4222-8222-222222222222',
@@ -477,7 +487,7 @@ test('ownership loss while HTTP is in flight fences all following requests and l
   const w = await world(t);
   w.memory(0, '保留');
   const observer = new KnowledgeStore(w.homes[0]!);
-  t.after(() => observer.close());
+  cleanup(t, () => observer.close());
   w.server.onRequest = (route) => {
     if (route === 'upload') {
       w.advance(31000);
@@ -532,7 +542,8 @@ test('HTTP redirects never send the bearer to another origin', async (t) => {
   });
   receiver.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => receiver.once('listening', resolve));
-  t.after(
+  cleanup(
+    t,
     () => new Promise<void>((resolve) => receiver.close(() => resolve())),
   );
   const port = (receiver.address() as { port: number }).port;
@@ -542,7 +553,8 @@ test('HTTP redirects never send the bearer to another origin', async (t) => {
   });
   redirect.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => redirect.once('listening', resolve));
-  t.after(
+  cleanup(
+    t,
     () => new Promise<void>((resolve) => redirect.close(() => resolve())),
   );
   const transport = new SyncHttp(
@@ -747,7 +759,7 @@ test('two drivers in one home cannot dispatch concurrent sync requests', async (
     new SyncHttp(w.server.origin, async () => w.server.token),
     { binding: 'synthetic-account', now: () => w.server.now },
   );
-  t.after(() => other.close());
+  cleanup(t, () => other.close());
   const count = w.server.calls.length;
   await assert.rejects(other.runOnce(), /another process/);
   assert.equal(w.server.calls.length, count);
@@ -788,7 +800,7 @@ test('background start dispatches actual effects, cancellation stops scheduling,
       },
     },
   );
-  t.after(() => client.close());
+  cleanup(t, () => client.close());
   client.start();
   await completed;
   await client.cancel();
