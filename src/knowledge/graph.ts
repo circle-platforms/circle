@@ -17,7 +17,7 @@ export interface KnowledgeGraph {
 }
 const MAX_GRAPH_OBJECTS = 100_000;
 const MAX_GRAPH_DEPTH = 512;
-/** Local resource bound, separate from the protocol envelope/chunk limits and Hub deployment limits. */
+/** Local resource bound, separate from the protocol envelope/chunk limits and a server's deployment limits. */
 export const MAX_LOCAL_SOURCE_BYTES = 32 * 1024 * 1024;
 /** Keep large source chunks and old revisions out of the resident graph; reads still verify their identities. */
 class GraphObjects implements ReadonlyMap<string, SyncObject> {
@@ -265,7 +265,7 @@ export function validateGraph(
       )
         failure('directory parent or name');
     }
-  // An empty Hub space is the canonical snapshot with pages: []; pack-only inventories need no directory.
+  // An empty server space is the canonical snapshot with pages: []; pack-only inventories need no directory.
   if (
     (directories.size > 0 && roots.size !== 1) ||
     (directories.size === 0 &&

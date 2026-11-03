@@ -206,7 +206,7 @@ export function knowledgeTools(
         JSON.stringify({
           snapshot: prepared.commit(context.signal),
           scope: 'local',
-          hub_verified: false,
+          server_verified: false,
         });
       run.shown = { change: prepared.preview };
       return run;
@@ -223,7 +223,7 @@ export function knowledgeTools(
       JSON.stringify({
         available: false,
         reason:
-          'Sharing requires Sync to Hub and an authorized Hub entry mapping. Open knowledge sync settings to switch mode. No sync mode was changed; nothing was uploaded.',
+          'Sharing requires the synced mode with a knowledge sync server and its confirmed entry mapping. Open knowledge sync settings to switch mode. No sync mode was changed; nothing was uploaded.',
       }),
   );
   if (prepareShare) {
@@ -246,7 +246,11 @@ export function knowledgeTools(
   return [search, read, write, memory, share];
 }
 
-/** The address/schema reader stays available; other schemas are promoted on knowledge intent or a local read. */
+/**
+ * Without a local knowledge store, only the address/schema reader is listed; the others
+ * join once a knowledge tool has been called. With the store enabled all are listed from
+ * the first request. What the person happens to type never decides it.
+ */
 export const deferredKnowledgeTool = (tool: Pick<Tool, 'name'>): boolean =>
   [
     'knowledge_search',
@@ -254,19 +258,11 @@ export const deferredKnowledgeTool = (tool: Pick<Tool, 'name'>): boolean =>
     'memory_write',
     'knowledge_share',
   ].includes(tool.name);
-export function knowledgeToolsWanted(
-  messages: readonly Message[],
-  prompt: string,
-): boolean {
-  return (
-    /knowledge|memor(?:y|ies)|remember|personal (?:pack|workflow)|知识|记忆|记住|个人(?:工作流|技能|包)/i.test(
-      prompt,
-    ) ||
-    messages.some((message) =>
-      message.tool_calls?.some(
-        (call) =>
-          call.name.startsWith('knowledge_') || call.name === 'memory_write',
-      ),
-    )
+export function knowledgeToolsWanted(messages: readonly Message[]): boolean {
+  return messages.some((message) =>
+    message.tool_calls?.some(
+      (call) =>
+        call.name.startsWith('knowledge_') || call.name === 'memory_write',
+    ),
   );
 }

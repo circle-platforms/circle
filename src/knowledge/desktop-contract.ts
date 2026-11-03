@@ -63,6 +63,13 @@ export interface KnowledgeSyncView {
   clearing: boolean;
   server: string;
   lastSyncedAt: string | null;
+  /** The server's own text for the last refusal, shown as it came. */
+  detail?: string | null;
+  /** Where the account holder confirms a requested purge, until it expires. */
+  confirmation?: { url: string; expiresAt: string } | null;
+  /** `fallback`: the server has no discovery document and fixed v1 paths are used. */
+  discovery?: 'document' | 'fallback' | null;
+  syncing?: boolean;
 }
 export interface KnowledgeList {
   rows: KnowledgeRow[];
@@ -72,8 +79,9 @@ export interface KnowledgeList {
   sync: KnowledgeSyncView;
   incomplete: boolean;
 }
+/** A refusal the server explained: its code, its text and its fix ('' when it gave none). */
 export interface KnowledgeShareRefusal {
-  code: 'SHARE_UPLOAD_UNSIGNED';
+  code: string;
   message: string;
   fix: string;
 }

@@ -1242,8 +1242,13 @@ export class AgentRuntime {
     // opening or closing it changes nothing else about the session.
     if (this.options.settings.editor_bridge)
       tools.push(...this.editorBridge.modelTools());
-    this.deferredKnowledgeTools = tools.filter(deferredKnowledgeTool);
-    tools = tools.filter((tool) => !deferredKnowledgeTool(tool));
+    // The local knowledge store is part of the local context: with it, every knowledge
+    // tool is listed from the first request; an isolated embedder lists them after use.
+    this.deferredKnowledgeTools =
+      this.options.localContext === false
+        ? tools.filter(deferredKnowledgeTool)
+        : [];
+    tools = tools.filter((tool) => !this.deferredKnowledgeTools.includes(tool));
     this.coreTools = tools;
     tools = this.withIntegrationTools(
       tools.filter((tool) => tool.name !== 'wait_jobs'),
@@ -1287,12 +1292,12 @@ export class AgentRuntime {
       },
       beforeTurn: (prompt) => {
         this.requireTurnConnection();
-        this.promoteKnowledgeTools(prompt ?? '');
+        this.promoteKnowledgeTools();
         this.promoteDeferredTools(prompt);
       },
       beforeStep: () => {
         this.knowledge.checkAuthorization();
-        this.promoteKnowledgeTools('');
+        this.promoteKnowledgeTools();
         if (
           this.sessionMemory ||
           existsSync(join(this.options.home, 'knowledge', 'knowledge.sqlite'))
@@ -1622,11 +1627,11 @@ export class AgentRuntime {
   private refreshSystemPrompt(): void {
     this.harness.system = this.systemPrompt(this.harness.model.model);
   }
-  /** Move deferred tools onto the harness once this turn's text asks for them. */
-  private promoteKnowledgeTools(prompt: string): void {
+  /** Move deferred knowledge tools onto the harness once a knowledge tool was called. */
+  private promoteKnowledgeTools(): void {
     if (
       !this.deferredKnowledgeTools.length ||
-      !knowledgeToolsWanted(this.harness.messages, prompt)
+      !knowledgeToolsWanted(this.harness.messages)
     )
       return;
     const missing = this.deferredKnowledgeTools.filter(

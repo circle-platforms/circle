@@ -1,1 +1,1 @@
-Share an exact current, verified entry to team knowledge with person approval. Requires Sync to Hub and its confirmed entry mapping; never changes sync mode. Sources must be readable by every team reader.
+Share an exact current, verified entry to team knowledge with person approval. Requires the synced mode with a knowledge sync server and its confirmed entry mapping; never changes sync mode. Sources must be readable by every team reader. A refusal returns the server's own reason.

@@ -2,11 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { KnowledgeStore, KnowledgeVersionConflict } from './store.js';
 import { mergeSnapshots } from './merge.js';
 import { decodeSyncObject } from './canonical.js';
-import { decodeBase64, SYNC_LIMITS, validateSync } from './protocol.js';
+import {
+  decodeBase64,
+  SYNC_LIMITS,
+  validateAnswer,
+  validateSync,
+} from './protocol.js';
 import {
   operationDigest,
   requestJson,
   SyncHttpError,
+  type PurgeConfirmation,
   type SyncTransport,
 } from './sync-http.js';
 import type {
@@ -46,6 +52,20 @@ interface Journal {
   condition: SyncCondition;
   failures: number;
   nextAt: number;
+  /** The last refusal the server explained; cleared by the next success. */
+  refusal?: { code: string; detail?: string };
+  /** A purge waiting for the account holder's confirmation on the server. */
+  confirmation?: PurgeConfirmation;
+}
+export interface SyncStatus {
+  condition: SyncCondition;
+  lastSyncedAt: string | null;
+  mode: 'hub' | 'local' | null;
+  clearing: boolean;
+  /** The server's own text for the last refusal, as it came. */
+  detail: string | null;
+  /** Where to confirm a requested purge, until it is confirmed or expires. */
+  confirmation: PurgeConfirmation | null;
 }
 export interface SyncOptions {
   /** Stable host-authored server/account binding. Never a token, model argument or device name. */
@@ -60,7 +80,7 @@ export interface SyncOptions {
 const STALE = 30000,
   HEARTBEAT = 5000;
 const parse = <T>(name: string, value: unknown): T => {
-  validateSync(name, value);
+  validateAnswer(name, value);
   return value as T;
 };
 export class KnowledgeSync {
@@ -83,26 +103,30 @@ export class KnowledgeSync {
     this.store = new KnowledgeStore(home);
     this.now = options.now ?? Date.now;
   }
-  get status(): {
-    condition: SyncCondition;
-    lastSyncedAt: string | null;
-    mode: 'hub' | 'local' | null;
-    clearing: boolean;
-  } {
+  /** A cycle or a host operation is talking to the server now. */
+  get busy(): boolean {
+    return this.running !== null;
+  }
+  get status(): SyncStatus {
     const j = this.store.syncRead<Journal>('active');
+    const mine = j?.binding === this.options.binding;
+    const confirmation =
+      mine &&
+      j.confirmation &&
+      Date.parse(j.confirmation.expiresAt) > this.now()
+        ? j.confirmation
+        : null;
     return {
-      mode:
-        j?.binding === this.options.binding ? (j.observedMode ?? null) : null,
-      clearing:
-        j?.binding === this.options.binding && j.observedStatus === 'purging',
-      condition:
-        j?.binding === this.options.binding
-          ? j.condition === 'synced' && this.store.head !== j.base
-            ? 'pending'
-            : j.condition
-          : 'paused',
-      lastSyncedAt:
-        j?.binding === this.options.binding ? (j.lastSyncedAt ?? null) : null,
+      mode: mine ? (j.observedMode ?? null) : null,
+      clearing: mine && j.observedStatus === 'purging',
+      condition: mine
+        ? j.condition === 'synced' && this.store.head !== j.base
+          ? 'pending'
+          : j.condition
+        : 'paused',
+      lastSyncedAt: mine ? (j.lastSyncedAt ?? null) : null,
+      detail: mine ? (j.refusal?.detail ?? null) : null,
+      confirmation,
     };
   }
   private active(): void {
@@ -138,7 +162,7 @@ export class KnowledgeSync {
       signal: this.controller!.signal,
     });
     this.active();
-    if (args.schema) validateSync(args.schema, value);
+    if (args.schema) validateAnswer(args.schema, value);
     return value;
   }
   /** A host must explicitly confirm a changed account/server or epoch before initialization. No model tool exposes this. */
@@ -433,7 +457,30 @@ export class KnowledgeSync {
   private recordFailure(j: Journal | null, error: unknown): void {
     this.active();
     if (!j) throw error;
+    if (error instanceof SyncHttpError && (error.detail || error.unknownCode))
+      j.refusal = {
+        code: error.code,
+        ...(error.detail ? { detail: error.detail } : {}),
+      };
     if (
+      error instanceof SyncHttpError &&
+      error.code === 'SYNC_PURGE_CONFIRMATION_REQUIRED' &&
+      j.pending?.route === 'mode'
+    ) {
+      // The server recorded the exact request; the identical retry performs it once the
+      // account holder confirms there. Until then, or until it expires, ask again slowly.
+      const confirmation = error.confirmation ?? j.confirmation;
+      if (confirmation && Date.parse(confirmation.expiresAt) > this.now()) {
+        j.confirmation = confirmation;
+        j.condition = 'paused';
+        j.nextAt = this.now() + 15000;
+      } else {
+        delete j.pending;
+        delete j.confirmation;
+        j.condition = 'pending';
+        j.nextAt = this.now() + 250;
+      }
+    } else if (
       error instanceof SyncHttpError &&
       ['SYNC_MODE_LOCAL', 'SYNC_EPOCH_CHANGED'].includes(error.code)
     ) {
@@ -442,6 +489,7 @@ export class KnowledgeSync {
       delete j.pending;
       delete j.session;
       delete j.inventory;
+      delete j.confirmation;
     } else if (
       error instanceof SyncHttpError &&
       (error.code === 'SYNC_SESSION_EXPIRED' ||
@@ -450,6 +498,7 @@ export class KnowledgeSync {
       delete j.pending;
       delete j.session;
       delete j.inventory;
+      delete j.confirmation;
       j.condition = 'pending';
       j.nextAt = this.now() + 250;
     } else {
@@ -460,11 +509,14 @@ export class KnowledgeSync {
           : error instanceof SyncHttpError &&
               error.code === 'SPACE_CAPACITY_EXCEEDED'
             ? 'capacity'
-            : error instanceof TypeError ||
-                error instanceof RangeError ||
-                (error instanceof SyncHttpError && error.status === 422)
-              ? 'invalid'
-              : 'offline';
+            : // A code this client does not know is a failure of that request, retried later.
+              error instanceof SyncHttpError && error.unknownCode
+              ? 'offline'
+              : error instanceof TypeError ||
+                  error instanceof RangeError ||
+                  (error instanceof SyncHttpError && error.status === 422)
+                ? 'invalid'
+                : 'offline';
       if (j.condition === 'login-required' || j.condition === 'invalid')
         j.paused = true;
       j.nextAt =
@@ -543,8 +595,7 @@ export class KnowledgeSync {
         !reply ||
         !Array.isArray(reply.missing) ||
         new Set(reply.missing).size !== reply.missing.length ||
-        reply.missing.some((id) => !offered.includes(id)) ||
-        Object.keys(reply).join() !== 'missing'
+        reply.missing.some((id) => !offered.includes(id))
       )
         throw new TypeError('invalid sync missing reply');
       let batch: { id: string; bytes_base64: string }[] = [],
@@ -679,6 +730,8 @@ export class KnowledgeSync {
       delete j.pending;
       delete j.session;
       delete j.inventory;
+      delete j.refusal;
+      delete j.confirmation;
       this.save(j);
     } else if (p.route === 'commit') {
       const result = parse<SyncResult>('personal-sync-result@1', value);
@@ -741,6 +794,7 @@ export class KnowledgeSync {
         j.state = result.state.state_version;
         j.lastSyncedAt = receipt.at;
         j.failures = 0;
+        delete j.refusal;
         j.condition =
           this.store.graph(snapshot).conflicts.length ||
           resultPages.some((p) => p.conflicts.length)

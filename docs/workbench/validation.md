@@ -1,6 +1,6 @@
 # Native frontend validation
 
-Decision 90 knowledge validation is recorded in [knowledge-validation.md](knowledge-validation.md): post-rebase development knowledge and packaged terminal AX checks, alongside separately retained pre-rebase real-Hub round trips and packaged knowledge acceptance. One compact evidence set retains 15 representative screenshots at 1x CSS pixels, aggregate source/build/artifact manifest digests and explicit historical boundaries.
+Decision 90 knowledge validation is recorded in [knowledge-validation.md](knowledge-validation.md): post-rebase development knowledge and packaged terminal AX checks, alongside separately retained pre-rebase round trips with circle-hub, the reference sync server, and packaged knowledge acceptance. One compact evidence set retains 15 representative screenshots at 1x CSS pixels, aggregate source/build/artifact manifest digests and explicit historical boundaries.
 
 Decision 93 graphite validation on 2026-11-03 is recorded in [graphite-validation.md](graphite-validation.md), with development and packaged native matrices, current command results, retained screenshots and byte receipts. The earlier receipts below remain historical evidence.
 

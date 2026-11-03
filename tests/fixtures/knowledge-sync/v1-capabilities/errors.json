@@ -1,0 +1,37 @@
+{
+  "schema": "personal-sync-error-vectors@1",
+  "note": "Error answers of v1 with the additive capabilities. Server outputs parse as personal-sync-error@1; the last vector is what a client must tolerate from a newer server.",
+  "errors": [
+    {
+      "name": "v1-without-detail",
+      "status": 422,
+      "body": {"code": "SYNC_OBJECT_INVALID"},
+      "server_output": true
+    },
+    {
+      "name": "detail",
+      "capability": "error-detail",
+      "status": 409,
+      "body": {"code": "SYNC_VERSION_CONFLICT", "detail": "同步期间内容已变化。取得最新内容并合并后重试。"},
+      "server_output": true
+    },
+    {
+      "name": "purge-confirmation-required",
+      "capability": "purge-confirmation",
+      "status": 403,
+      "body": {
+        "code": "SYNC_PURGE_CONFIRMATION_REQUIRED",
+        "detail": "清除 Hub 上的私人空间需要本人在控制台确认。10 分钟内在 Hub 控制台的同步方式中确认这次清除，再用同一请求重试。",
+        "confirmation": {"url": "https://192.0.2.10/console/knowledge?scope=personal&sync=settings", "expires_at": "2026-11-03T08:10:00.000Z"}
+      },
+      "server_output": true
+    },
+    {
+      "name": "unknown-code-from-a-newer-server",
+      "status": 422,
+      "body": {"code": "SYNC_SOMETHING_NEWER", "detail": "合成的较新错误说明。", "hint": {"synthetic": true}},
+      "server_output": false,
+      "client_handling": "Treat as a generic failure of the request, ignore the unknown member and show detail."
+    }
+  ]
+}

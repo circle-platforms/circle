@@ -435,7 +435,7 @@ test('state-only memory changes preserve content and edits preserve the disabled
   assert.ok(head);
 });
 
-test('disabled memories retain bytes without consuming the Hub active-context quota', (t) => {
+test('disabled memories retain bytes without consuming the active-context quota', (t) => {
   const home = scratch(t),
     service = new KnowledgeService(home);
   const head = seedMemories(service, 21, 'disabled', 'x'.repeat(24000));

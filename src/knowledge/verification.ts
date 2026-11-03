@@ -44,7 +44,7 @@ export const exactQuotation = (text: string, quote: string): boolean =>
   /[^\p{White_Space}]/u.test(quote) &&
   text.includes(quote);
 
-/** Local observations confer no Hub read/share authority and are never copied into immutable object bodies. */
+/** Local observations confer no server read/share authority and are never copied into immutable object bodies. */
 export function verifyLocal(graph: KnowledgeGraph): Verification[] {
   const results = new Map<string, Verification>();
   const documents = new Map<string, ParsedDocument>();

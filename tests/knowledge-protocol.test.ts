@@ -82,7 +82,7 @@ test('the shared scenario objects decode independently and the HTTP routes match
 
 test('the offline mirror matches every recorded byte without pretending to check an absent upstream', (t) => {
   const checked = verifyKnowledgeSync(root);
-  assert.equal(checked.mirrored, 46);
+  assert.equal(checked.mirrored, 50);
   assert.equal(checked.upstream, 0);
   assert.throws(() => verifyKnowledgeSync(root, join(scratch(t), 'absent')));
 });

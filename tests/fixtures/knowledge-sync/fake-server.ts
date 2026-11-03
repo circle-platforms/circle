@@ -1,4 +1,4 @@
-// Synthetic protocol peer, deliberately not a Hub runtime or proof of its authorization/atomicity.
+// Synthetic protocol peer, deliberately not a server implementation or proof of its authorization/atomicity.
 import {
   createServer,
   type IncomingMessage,

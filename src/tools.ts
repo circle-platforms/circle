@@ -30,6 +30,7 @@ import {
   runTool,
   SKILLS_ROOT,
 } from './local_skills.js';
+import { discoverServer } from './server_resolution.js';
 import type { CircleSettings } from './settings.js';
 import { GREP_SCHEMA, grepSearch } from './grep_tool.js';
 import { takeScreenshot, type ScreenshotOptions } from './screenshot.js';
@@ -486,13 +487,20 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         },
         ['server', 'pack'],
       ),
-      async (args) => {
+      async (args, context) => {
         const { url, token } = server(string(args, 'server'));
         try {
+          // The base the server declares in its discovery document; beside the MCP entry
+          // only when it has none. The entry's own scheme is kept, as before discovery.
+          const { localToolsBase: toolsBase } = await discoverServer(url, {
+            signal: context.signal,
+            allowHttp: true,
+          });
           return JSON.stringify(
             await installPack({
               url,
               token,
+              toolsBase,
               ref: string(args, 'pack'),
               ...(typeof args.digest === 'string' && args.digest.length > 0
                 ? { digest: args.digest }

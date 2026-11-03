@@ -1,6 +1,6 @@
 import { verifyLocal } from '../../../src/knowledge/verification.js';
 import { sha256 } from '../../../src/knowledge/canonical.js';
-// Synthetic OAuth/MCP + sync peer. No Hub server or real identity provider is imported.
+// Synthetic OAuth/MCP + sync peer. No sync server implementation or real identity provider is imported.
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { randomUUID, createHash } from 'node:crypto';
@@ -52,6 +52,13 @@ export class AuthorizedServer {
   shareRefusal?: { code: string; message: string; fix: string };
   pageItems = 1;
   chunkBytes = 6;
+  /**
+   * Publish a knowledge-sync discovery document that maps the operations to other tool and
+   * argument names, so a client that hard-codes the earlier names fails against it.
+   */
+  renamedTools = false;
+  /** The tool name of every tools/call, as the client sent it. */
+  readonly toolNames: string[] = [];
   constructor(home: string) {
     this.peer = new FakeSyncServer(home);
     this.peer.now = Date.now();
@@ -241,6 +248,40 @@ export class AuthorizedServer {
       return;
     }
 
+    if (url.pathname === '/.well-known/knowledge-sync' && this.renamedTools)
+      return json(200, {
+        schema: 'knowledge-sync-discovery@1',
+        issuer: this.origin,
+        sync: {
+          versions: [
+            {
+              version: 'v1',
+              base_url: this.origin + '/api/sync/v1',
+              capabilities: ['error-detail'],
+            },
+          ],
+        },
+        authorization: {
+          resource: this.origin + '/mcp',
+          resource_metadata:
+            this.origin + '/.well-known/oauth-protected-resource/mcp',
+          bearer_methods_supported: ['header'],
+        },
+        local_tools: { base_url: this.origin + '/local-tools' },
+        mcp: {
+          endpoint: this.origin + '/mcp',
+          capabilities: {
+            'entry-share': { tool: 'team_share', argument: 'entry' },
+            'memory-share': { tool: 'team_share', argument: 'memory' },
+            'team-memory-read': {
+              tool: 'team_preferences',
+              argument: 'query',
+              fixed: { scope: 'team' },
+            },
+          },
+        },
+        synthetic_future_member: true,
+      });
     if (url.pathname !== '/mcp') return json(404, {});
     if (req.headers.authorization !== `Bearer ${this.token}`) {
       res.setHeader(
@@ -251,12 +292,54 @@ export class AuthorizedServer {
     }
     if (req.method !== 'POST') return json(405, {});
     if (body.id === undefined) return res.writeHead(202).end();
+    // The renamed tools are the same operations under the names the document declares.
+    if (body.method === 'tools/call') this.toolNames.push(body.params.name);
+    if (this.renamedTools && body.method === 'tools/call') {
+      const args = body.params.arguments ?? {};
+      if (['get_nodes', 'upload_file'].includes(body.params.name))
+        return json(200, {
+          jsonrpc: '2.0',
+          id: body.id,
+          error: { code: -32602, message: 'unknown tool' },
+        });
+      if (body.params.name === 'team_share')
+        body.params = {
+          ...body.params,
+          name: 'upload_file',
+          arguments: args.entry
+            ? { share_entry: args.entry }
+            : { memory_share: args.memory },
+        };
+      else if (body.params.name === 'team_preferences')
+        body.params = {
+          ...body.params,
+          name: 'get_nodes',
+          arguments: { memory: args.query },
+        };
+    }
     let result: any = {};
     if (body.method === 'initialize')
       result = {
         protocolVersion: body.params.protocolVersion,
         capabilities: { tools: {} },
         serverInfo: { name: 'synthetic-preferences', version: '1.0' },
+      };
+    else if (body.method === 'tools/list' && this.renamedTools)
+      result = {
+        tools: [
+          {
+            name: 'team_share',
+            description: 'Share synthetic personal content',
+            inputSchema: { type: 'object' },
+            annotations: { readOnlyHint: false },
+          },
+          {
+            name: 'team_preferences',
+            description: 'Read synthetic preferences',
+            inputSchema: { type: 'object' },
+            annotations: { readOnlyHint: true },
+          },
+        ],
       };
     else if (body.method === 'tools/list')
       result = {

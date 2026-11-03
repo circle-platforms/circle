@@ -6,9 +6,10 @@ import { requireClean } from './verification.js';
 import { wellFormedText } from './unicode.js';
 import type { KnowledgeShareRefusal } from './desktop-contract.js';
 
+/** The server refused, and said why: its text is shown as it came, never rewritten. */
 export class KnowledgeShareRefused extends Error {
   constructor(readonly refusal: KnowledgeShareRefusal) {
-    super('knowledge-share-refused');
+    super(`refused: ${refusal.message}${refusal.fix ? ' ' + refusal.fix : ''}`);
   }
 }
 export interface PreparedKnowledgeShare {
@@ -19,36 +20,57 @@ export interface PreparedKnowledgeShare {
 const fail = (code: string): never => {
   throw Error(code);
 };
+const text = (value: unknown): string | undefined =>
+  typeof value === 'string' &&
+  value.trim().length > 0 &&
+  value.length <= 8000 &&
+  wellFormedText(value)
+    ? value
+    : undefined;
+/** The first explanation among the server's errors, of any code, or nothing. */
+function refusalOf(candidates: unknown[]): KnowledgeShareRefusal | undefined {
+  for (const error of candidates as any[]) {
+    const message = text(error?.message);
+    if (!message) continue;
+    const fix = text(error?.fix) ?? '';
+    requireClean(Buffer.from(message + '\n' + fix));
+    return {
+      code:
+        typeof error.code === 'string' &&
+        /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
+          ? error.code
+          : 'REFUSED',
+      message,
+      fix,
+    };
+  }
+  return undefined;
+}
 function payload(value: any): any {
-  const result =
-    value?.structuredContent ??
-    (value?.content?.length === 1 && value.content[0].type === 'text'
-      ? JSON.parse(value.content[0].text)
-      : undefined);
+  let result: any;
+  try {
+    result =
+      value?.structuredContent ??
+      (value?.content?.length === 1 && value.content[0].type === 'text'
+        ? JSON.parse(value.content[0].text)
+        : undefined);
+  } catch {
+    result = undefined;
+  }
   if (value?.isError || result?.call_result !== 'ok') {
-    const refusal = (Array.isArray(result?.errors) ? result.errors : []).find(
-      (error: any) =>
-        error?.code === 'SHARE_UPLOAD_UNSIGNED' &&
-        typeof error.message === 'string' &&
-        typeof error.fix === 'string' &&
-        error.message.length > 0 &&
-        error.fix.length > 0 &&
-        error.message.length <= 8000 &&
-        error.fix.length <= 8000 &&
-        wellFormedText(error.message) &&
-        wellFormedText(error.fix),
+    const refusal = refusalOf(
+      Array.isArray(result?.errors) ? result.errors : [],
     );
-    if (refusal) {
-      requireClean(Buffer.from(refusal.message + '\n' + refusal.fix));
-      throw new KnowledgeShareRefused({
-        code: 'SHARE_UPLOAD_UNSIGNED',
-        message: refusal.message,
-        fix: refusal.fix,
-      });
-    }
+    if (refusal) throw new KnowledgeShareRefused(refusal);
     return fail('knowledge-remote-unavailable');
   }
   return result;
+}
+/** A completed call whose outcome is not the one asked for: its own explanation, if any. */
+function refuse(candidates: unknown[], code: string): never {
+  const refusal = refusalOf(candidates);
+  if (refusal) throw new KnowledgeShareRefused(refusal);
+  return fail(code);
 }
 export function syncMapping(
   service: KnowledgeService,
@@ -81,7 +103,7 @@ export function syncMapping(
     );
   });
 }
-/** The local observation is insufficient: map the exact current object through its confirmed receipt and recheck Hub qualification. */
+/** The local observation is insufficient: map the exact current object through its confirmed receipt and let the server recheck it. */
 export async function prepareKnowledgeShare(options: {
   service: KnowledgeService;
   connection: KnowledgeConnection;
@@ -134,55 +156,67 @@ export async function prepareKnowledgeShare(options: {
   const binding = options.binding(),
     mapping = syncMapping(service, binding, selected.row.item_id, object);
   if (!mapping) return fail('knowledge-share-waiting');
-  let args: any,
+  // The server says which tool shares what (discovery `mcp.capabilities`); a server with
+  // no discovery document gets the shapes earlier servers used.
+  const discovery = await connection.discovery(signal);
+  let operation: 'entry-share' | 'memory-share',
+    members: Record<string, unknown>,
     replaces = false;
   if (selected.revision.kind === 'entry_revision') {
     const match = /^tree:([a-f0-9]{64})(\/.*)@([a-f0-9]{64})$/.exec(
       mapping.reference ?? '',
     );
     if (!match) return fail('knowledge-share-waiting');
-    const read = payload(
-      await connection.callForPerson(
-        'get_nodes',
-        { root: match[1], paths: [match[2]], depth: 0 },
-        signal,
-      ),
-    );
-    if (
-      read.root !== match[1] ||
-      !read.nodes
-        ?.flatMap((n: any) => n.entries)
-        .some((e: any) => e.entry === match[3] && e.status === 'verified')
-    )
-      return fail('knowledge-share-unverified');
-    args = {
-      share_entry: {
-        root: match[1],
-        path: match[2],
-        entry: match[3],
-        ...(options.teamPath ? { team_path: options.teamPath } : {}),
-      },
+    operation = 'entry-share';
+    if (!discovery.mcp[operation]) return fail('knowledge-share-unavailable');
+    // Without a declared read, the share call itself is where the server rechecks the entry.
+    if (discovery.source === 'fallback') {
+      const read = payload(
+        await connection.callForPerson(
+          'get_nodes',
+          { root: match[1], paths: [match[2]], depth: 0 },
+          signal,
+        ),
+      );
+      if (
+        read.root !== match[1] ||
+        !read.nodes
+          ?.flatMap((n: any) => n.entries)
+          .some((e: any) => e.entry === match[3] && e.status === 'verified')
+      )
+        return fail('knowledge-share-unverified');
+    }
+    members = {
+      root: match[1],
+      path: match[2],
+      entry: match[3],
+      ...(options.teamPath ? { team_path: options.teamPath } : {}),
     };
   } else {
     if (!isObjectId(mapping.document) || !isObjectId(mapping.version))
       return fail('knowledge-share-waiting');
-    args = {
-      memory_share: {
-        document: mapping.document,
-        version: mapping.version,
-        client_key: randomUUID(),
-        ...(options.teamPath ? { team_path: options.teamPath } : {}),
-      },
+    operation = 'memory-share';
+    members = {
+      document: mapping.document,
+      version: mapping.version,
+      client_key: randomUUID(),
+      ...(options.teamPath ? { team_path: options.teamPath } : {}),
     };
-    const checked = payload(
-      await connection.callForPerson(
-        'upload_file',
-        { memory_share: { ...args.memory_share, check_only: true } },
-        signal,
-        true,
-      ),
+    const answer = await connection.callOperation(
+      operation,
+      { ...members, check_only: true },
+      signal,
+      true,
     );
-    if (!checked.memory_share?.ok) return fail('knowledge-share-unverified');
+    if (answer === null) return fail('knowledge-share-unavailable');
+    const checked = payload(answer);
+    if (!checked.memory_share?.ok)
+      return refuse(
+        Array.isArray(checked.memory_share?.checks)
+          ? checked.memory_share.checks.filter((c: any) => c?.code)
+          : [],
+        'knowledge-share-unverified',
+      );
     replaces = !!checked.memory_share.replaces;
   }
   let used = false;
@@ -214,19 +248,22 @@ export async function prepareKnowledgeShare(options: {
         now.state_version !== state.state_version
       )
         return fail('knowledge-changed');
-      const result = payload(
-        await connection.callForPerson('upload_file', args, signal, true),
+      const answer = await connection.callOperation(
+        operation,
+        members,
+        signal,
+        true,
       );
-      if (
-        args.share_entry
-          ? result.share?.status !== 'merged'
-          : result.memory_share?.share?.status !== 'merged'
-      )
-        return fail('knowledge-share-rejected');
+      if (answer === null) return fail('knowledge-share-unavailable');
+      const result = payload(answer);
+      const share =
+        operation === 'entry-share' ? result.share : result.memory_share?.share;
+      if (share?.status !== 'merged')
+        return refuse([share], 'knowledge-share-rejected');
       return {
         shared: true,
-        ...(args.share_entry && typeof result.share.reference === 'string'
-          ? { reference: result.share.reference }
+        ...(operation === 'entry-share' && typeof share.reference === 'string'
+          ? { reference: share.reference }
           : {}),
       };
     },
