@@ -6,6 +6,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  closeFileHolders,
+  prepareFileHolders,
   writeOutside,
   type OutsideWriteRefusal,
 } from './helpers/outside-write.mjs';
@@ -46,7 +48,9 @@ test('a refused outside write says what the system refused, and on Windows who h
   );
   assert.equal(windows.cause, refusal);
   assert.deepEqual(asked, [path]);
-  assert.deepEqual(windows.refused, {
+  const { holdersWithinMs, ...refused } = windows.refused;
+  assert.equal(typeof holdersWithinMs, 'number');
+  assert.deepEqual(refused, {
     path,
     code: 'UNKNOWN',
     errno: -4094,
@@ -70,6 +74,13 @@ test('a refused outside write says what the system refused, and on Windows who h
   assert.equal(other.refused.code, 'UNKNOWN');
   assert.equal(other.refused.syscall, 'open');
   assert.equal('holders' in other.refused, false);
+  assert.equal('holdersWithinMs' in other.refused, false);
+});
+
+test('preparing the holder lookup starts nothing off Windows', async () => {
+  // Settles at once: no PowerShell exists to start here.
+  await prepareFileHolders({ platform: 'linux' });
+  await prepareFileHolders({ platform: 'darwin' });
 });
 
 test('an outside write nobody refuses lands on disk', async (t) => {
@@ -126,8 +137,12 @@ test(
       });
       void exited.then(() => reject(Error('the holder ended before it held')));
     });
+    // As the journey does: the lookup runs before the write, and answers the refusal.
+    t.after(closeFileHolders);
+    await prepareFileHolders();
     const refused = await refusedBy(writeOutside(file, 'outside\n'));
     assert.equal(refused.refused.code, 'EBUSY');
+    assert.equal(typeof refused.refused.holdersWithinMs, 'number');
     assert.equal(refused.refused.syscall, 'open');
     const holders = refused.refused.holders;
     assert.ok(Array.isArray(holders), JSON.stringify(holders));

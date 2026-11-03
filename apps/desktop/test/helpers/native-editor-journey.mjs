@@ -6,7 +6,7 @@ import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { patience } from './patience.mjs';
 import { saveWithShortcut } from './native-editor-save.mjs';
-import { writeOutside } from './outside-write.mjs';
+import { prepareFileHolders, writeOutside } from './outside-write.mjs';
 const main = 'editor-main.ts',
   library = 'editor-lib.ts';
 const source =
@@ -36,6 +36,9 @@ export async function runNativeEditorJourney({
   sessionId,
   output,
 }) {
+  // On Windows the lookup of who holds a file starts now, so a refused outside write
+  // below is answered at the moment of the refusal.
+  await prepareFileHolders();
   const ownership = JSON.parse(await readFile(join(workspace, marker), 'utf8'));
   assert.equal(ownership.version, 1);
   assert.equal(ownership.main, main);
