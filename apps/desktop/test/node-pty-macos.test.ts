@@ -105,11 +105,13 @@ test('on macOS both architectures are built into prebuilds, and a kept build is 
       await readFile(join(target, 'pty.node'), 'utf8'),
       `pty.node ${arch}`,
     );
-    assert.equal(
-      statSync(join(target, 'spawn-helper')).mode & 0o111,
-      0o111,
-      'the helper can be run',
-    );
+    // The helper is a macOS binary; Windows has no execute bits to check.
+    if (process.platform !== 'win32')
+      assert.equal(
+        statSync(join(target, 'spawn-helper')).mode & 0o111,
+        0o111,
+        'the helper can be run',
+      );
     assert.deepEqual(
       JSON.parse(await readFile(join(target, 'circle-build.json'), 'utf8')),
       {
