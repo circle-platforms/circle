@@ -69,7 +69,7 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   {
     name: 'knowledge',
     description:
-      'Local knowledge and sync: /knowledge [list|search|conflicts|connect|sync|mode]',
+      'Local knowledge and its sync server: /knowledge [status|list|search|conflicts|connect|sync|mode synced|mode local|login]',
   },
   {
     name: 'extensions',
@@ -133,7 +133,7 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   {
     name: 'memory',
     description:
-      'What Circle remembers: /memory [add [account] <note>|remove N]',
+      'Memory notes, personal and team memory: /memory [add [account] <note>|remove N|personal|write|team|loaded|refresh]',
   },
   {
     name: 'skill',

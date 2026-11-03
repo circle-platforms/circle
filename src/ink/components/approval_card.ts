@@ -15,6 +15,8 @@ export type ApprovalAnswer =
   | { decision: 'reject'; message: string };
 export interface ApprovalRequest {
   tool: string;
+  /** A title of its own, for an action named by what it does (`write memory`). */
+  title?: string;
   /** A background agent asks: its job and name, which come first in the title. */
   origin?: string;
   /** The command, the file or the patch's files, or the arguments. */
@@ -52,10 +54,14 @@ const SHORT_NAMES: Record<string, string> = {
   wait_jobs: 'WaitJobs',
 };
 const READ_TOOLS = new Set(
-  'read_file ls glob grep lsp skill webfetch websearch'.split(' '),
+  'knowledge_search knowledge_read read_file ls glob grep lsp skill webfetch websearch'.split(
+    ' ',
+  ),
 );
 const WRITE_TOOLS = new Set(
-  'write_file edit_file apply_patch delete execute'.split(' '),
+  'knowledge_write knowledge_share memory_write write_file edit_file apply_patch delete execute'.split(
+    ' ',
+  ),
 );
 /** The tint of the tool's type, as its row in the conversation carries it. */
 export function toolTint(name: string): CardTint | undefined {
@@ -100,7 +106,7 @@ export class ApprovalCard implements Card<ApprovalAnswer> {
   state(): DialogState {
     const request = this.request;
     const name = SHORT_NAMES[request.tool] ?? request.tool;
-    const title = `${name} needs your permission`;
+    const title = request.title ?? `${name} needs your permission`;
     const lines: CardLine[] = (request.body || '')
       .split('\n')
       .map((text, index) => ({ text, tone: index ? 'text' : 'em' }));

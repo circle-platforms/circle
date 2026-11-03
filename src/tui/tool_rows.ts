@@ -12,6 +12,7 @@ import {
 } from '../ink/components/markdown_renderer.js';
 import type { Message, ToolCall } from '../types.js';
 import { toolArgSummary, toolShortName } from './display_lexicon.js';
+import { knowledgeResultLines } from './knowledge_view.js';
 import { formatBusyElapsed } from './status_rows.js';
 import { plainJobOutput } from '../jobs.js';
 
@@ -273,7 +274,8 @@ export function resultRows(
         ),
       ];
   }
-  let lines = resultContent(output);
+  let lines =
+    knowledgeResultLines(call.name, output, error) ?? resultContent(output);
   while (lines.length && !lines.at(-1)) lines.pop();
   if (!lines.length) lines = ['(no output)'];
   const items = options.expanded ? lines : lines.slice(0, PREVIEW_LINES);
