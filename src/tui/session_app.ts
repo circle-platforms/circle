@@ -142,6 +142,8 @@ import { TrustedHostKeys } from '../terminal/hostkeys.js';
 import { terminalKeyBytes } from '../terminal/keys.js';
 import type { TerminalApproval } from '../terminal/protocol.js';
 import { loadSecrets } from '../secrets.js';
+import { KnowledgeService } from '../knowledge/service.js';
+import { knowledgeLamp, knowledgeSyncNotice } from './knowledge_view.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -181,6 +183,8 @@ export class SessionApp {
   private view!: SessionView;
   private selectedView!: SessionView;
   private views = new Map<AgentRuntime, SessionView>();
+  /** The last knowledge sync state each runtime left a notice for. */
+  private readonly knowledgeNotices = new WeakMap<AgentRuntime, string>();
   private sessions?: SessionRuntimeManager;
   private browsers = new Map<AgentRuntime, ChromeBrowser>();
   // Each conversation's device terminals, owned beside its browser
@@ -875,29 +879,7 @@ export class SessionApp {
     this.state.extensionStatus = this.runtime?.extensions.statuses() ?? [];
     const knowledge = this.runtime?.knowledge.status();
     if (knowledge?.server)
-      this.state.extensionStatus.push({
-        text: (
-          {
-            synced: 'synced',
-            pending: 'sync pending',
-            conflicted: 'sync conflicts',
-            offline: 'sync offline',
-            'login-required': 'sync sign-in required',
-            paused: 'sync paused',
-            local: 'local only',
-            capacity: 'sync capacity full',
-            invalid: 'sync needs attention',
-          } as const
-        )[knowledge.condition],
-        lamp:
-          knowledge.condition === 'synced'
-            ? 'ok'
-            : ['pending', 'paused', 'conflicted'].includes(knowledge.condition)
-              ? 'wait'
-              : knowledge.condition === 'local'
-                ? 'none'
-                : 'error',
-      });
+      this.state.extensionStatus.push(knowledgeLamp(knowledge));
     this.state.otherSessions = [...this.views.entries()].flatMap(
       ([runtime, view]) => {
         if (runtime === this.runtime || runtime.isClosing) return [];
@@ -1594,6 +1576,17 @@ export class SessionApp {
               this.flash('Retrying model request');
             }
             // Completion failures are rendered from saved evidence and run_error once.
+          } else if (
+            event.kind === 'info' &&
+            typeof event.payload.knowledge_sync === 'string'
+          ) {
+            // A sync change the person must act on leaves one notice; the rest only relight the lamp.
+            const next = knowledgeSyncNotice(
+              this.knowledgeNotices.get(runtime),
+              runtime.knowledge.status(),
+            );
+            this.knowledgeNotices.set(runtime, next.key);
+            if (next.text) this.addNotice(next.text);
           } else if (
             event.kind === 'info' &&
             typeof event.payload.title === 'string'
@@ -2317,6 +2310,18 @@ export class SessionApp {
     origin = '',
   ): Promise<ApprovalDecision> {
     const runtime = this.runtime!;
+    let folders: Map<string, string | null> | undefined;
+    // A knowledge card names folders by path: read once from the current local snapshot.
+    const knowledgePath = (directory: string): string | undefined => {
+      try {
+        folders ??= new KnowledgeService(runtime.options.home).withStore((s) =>
+          s.head ? s.graph(s.head).paths : new Map(),
+        );
+      } catch {
+        folders = new Map();
+      }
+      return folders.get(directory) ?? undefined;
+    };
     return this.showCard(
       new ApprovalCard(
         approvalRequest(
@@ -2324,6 +2329,7 @@ export class SessionApp {
           runtime.policy.review(call.name, call.args),
           (path) => runtime.sandbox.resolvePath(path),
           origin,
+          knowledgePath,
         ),
       ),
       signal,

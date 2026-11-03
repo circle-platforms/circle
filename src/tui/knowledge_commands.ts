@@ -14,6 +14,12 @@ import type { SyncItem, SyncObject } from '../knowledge/types.js';
 import { forgetAuthorization } from '../mcp_auth.js';
 import { buildMcpConnections } from '../mcp_loader.js';
 import { SyncHttpError } from '../knowledge/sync-http.js';
+import {
+  knowledgeStatusLines,
+  modeArgument,
+  modeWord,
+  truncationLine,
+} from './knowledge_view.js';
 
 const afterAddress = (args: string): string =>
   /^\S+\s+\S+\s+([\s\S]*)$/.exec(args.trimStart())?.[1] ?? '';
@@ -52,10 +58,15 @@ async function explained(host: CommandHost, work: () => Promise<void>) {
     notice(host, lines.join('\n'));
   }
 }
+/**
+ * Asks the person through the approval card. `name` says which action it is (the card's
+ * title and policy follow it); `extra` are the call's own members beside the change.
+ */
 export async function personKnowledgeAction(
   host: CommandHost,
   change: unknown,
-  name = 'knowledge_write',
+  name: string,
+  extra: Record<string, unknown> = {},
 ): Promise<boolean> {
   if (host.runtime.busy || host.runtime.viewOnly)
     throw Error('finish the turn in an editable session first');
@@ -64,7 +75,7 @@ export async function personKnowledgeAction(
   if (!approve) throw Error('person confirmation is unavailable');
   return (
     (await approve(
-      { id: randomUUID(), name, args: { change } },
+      { id: randomUUID(), name, args: { ...extra, change } },
       host.runtime.knowledgeSignal,
     )) === 'approve'
   );
@@ -73,18 +84,14 @@ async function apply(
   host: CommandHost,
   prepared: PreparedKnowledgeChange,
   memory = false,
+  intent: Record<string, unknown> = {},
 ): Promise<void> {
   if (
     !(await personKnowledgeAction(
       host,
-      {
-        items: prepared.preview.objects.map(({ object }) => {
-          const { item_id, parents, directory_id, parent_directory, ...body } =
-            object.body as any;
-          return { kind: object.kind, ...body };
-        }),
-      },
+      prepared.preview,
       memory ? 'memory_write' : 'knowledge_write',
+      intent,
     ))
   )
     return;
@@ -183,14 +190,17 @@ function show(host: CommandHost, item: SyncItem, snapshot: string): void {
     notice(host, blocks.join('\n\n'));
   });
 }
+const LIST_LIMIT = 100;
 function list(host: CommandHost, onlyConflicts = false): void {
   const current = rows(host);
   const items = current.items
     .map((row, index) => ({ row, index }))
     .filter(({ row }) => !onlyConflicts || current.conflicts.has(row.item_id));
+  const held = truncationLine(Math.min(items.length, LIST_LIMIT), items.length);
+  if (held) notice(host, held);
   host.picker(
     onlyConflicts ? 'knowledge conflicts' : 'local knowledge',
-    items.slice(0, 100).map(({ row, index }) => ({
+    items.slice(0, LIST_LIMIT).map(({ row, index }) => ({
       key: String(index + 1),
       label: `${index + 1}. ${rowText(row, current.objects)}`,
       meta: current.conflicts.has(row.item_id)
@@ -216,10 +226,13 @@ export async function knowledgeCommand(
     rest = args.trimStart().slice(verb.length).trim(),
     connection = host.runtime.knowledge;
   if (!verb || verb === 'status') {
-    const state = connection.status();
+    const current = rows(host);
     notice(
       host,
-      `knowledge · ${state.server || 'local only'} · ${state.condition}${state.lastSyncedAt ? ' · last synced ' + state.lastSyncedAt : ''}`,
+      knowledgeStatusLines(connection.status(), {
+        items: current.items.length,
+        conflicts: current.conflicts.size,
+      }).join('\n'),
     );
     if (!verb) list(host);
     return;
@@ -259,18 +272,22 @@ export async function knowledgeCommand(
         throw Error('sign in to this MCP server first: /mcp reload');
       const count = rows(host).items.length;
       if (
-        !(await personKnowledgeAction(host, {
-          action: 'select sync connection',
-          server: name,
-          origin: selected.origin,
-          retained_local_items: count,
-          consequence:
-            'use this account for retained personal knowledge; local files remain',
-        }))
+        !(await personKnowledgeAction(
+          host,
+          {
+            action: 'select sync connection',
+            server: name,
+            origin: selected.origin,
+            retained_local_items: count,
+            consequence:
+              'use this account for retained personal knowledge; local files remain',
+          },
+          'knowledge_connect',
+        ))
       )
         return;
       await connection.select(name, selected.binding);
-      notice(host, 'knowledge sync connection selected');
+      notice(host, `knowledge · connected · ${name}`);
     };
     if (rest) {
       await choose(rest);
@@ -297,44 +314,46 @@ export async function knowledgeCommand(
     return;
   }
   if (verb === 'mode') {
-    if (rest !== 'hub' && rest !== 'local')
-      throw Error('usage: /knowledge mode hub|local');
+    // The person says synced or local; the protocol's value for synced stays `hub`.
+    const mode = modeArgument(rest);
+    if (!mode) throw Error('usage: /knowledge mode synced|local');
     const preview = await connection.checkMode(
-      rest,
+      mode,
       host.runtime.knowledgeSignal,
     );
     if (
-      !(await personKnowledgeAction(host, {
-        action: 'change sync mode',
-        mode: preview.mode,
-        personal_bytes: preview.personal_bytes,
-        directory_grants: preview.directory_grants,
-        pending_shares: preview.pending_shares ?? 'unknown',
-        team_copies_preserved: preview.team_copies_preserved,
-        local_copy: 'retained',
-        team_copies: 'preserved',
-        ...(rest === 'local'
-          ? {
-              purge:
-                "the server's copy of personal content and its folder grants are removed; local copies stay",
-            }
-          : {}),
-      }))
+      !(await personKnowledgeAction(
+        host,
+        {
+          action: 'change sync mode',
+          mode: preview.mode,
+          personal_bytes: preview.personal_bytes,
+          directory_grants: preview.directory_grants,
+          pending_shares: preview.pending_shares ?? 'unknown',
+          team_copies_preserved: preview.team_copies_preserved,
+          local_copy: 'retained',
+          team_copies: 'preserved',
+          ...(mode === 'local'
+            ? {
+                purge:
+                  "the server's copy of personal content and its folder grants are removed; local copies stay",
+              }
+            : {}),
+        },
+        'knowledge_mode',
+      ))
     )
       return;
     await explained(host, async () => {
       if (
         !(await connection.changeMode(
-          rest,
+          mode,
           preview,
           host.runtime.knowledgeSignal,
         ))
       )
         throw Error('sync impact changed; preview and confirm again');
-      notice(
-        host,
-        `knowledge mode · ${rest} · ${connection.status().condition}`,
-      );
+      notice(host, `knowledge · mode ${modeWord(mode)}`);
     });
     return;
   }
@@ -354,12 +373,16 @@ export async function knowledgeCommand(
         'this MCP connection uses a configured credential; update its secret or header, then select the connection again',
       );
     if (
-      !(await personKnowledgeAction(host, {
-        action: 'sign in again',
-        server: name,
-        consequence:
-          'the old authorization is forgotten; select the new account again before syncing local content',
-      }))
+      !(await personKnowledgeAction(
+        host,
+        {
+          action: 'sign in again',
+          server: name,
+          consequence:
+            'the old authorization is forgotten; select the new account again before syncing local content',
+        },
+        'knowledge_login',
+      ))
     )
       return;
     await connection.close();
@@ -527,7 +550,7 @@ export async function knowledgeCommand(
     else throw Error('this item cannot be moved');
   } else if (verb !== 'resolve')
     throw Error(
-      'usage: /knowledge [list|search|read|import|conflicts|resolve|edit|delete|rename|move|history|connect|disconnect|sync|mode|login]',
+      'usage: /knowledge [status|list|search|read|import|conflicts|resolve|edit|delete|rename|move|history|connect|disconnect|sync|mode synced|mode local|login]',
     );
   await apply(
     host,
@@ -632,6 +655,10 @@ export async function structuredMemoryCommand(
       ...changes,
     }),
     true,
+    {
+      ...changes,
+      title: (current.objects.get(item.heads[0]!) as any)?.body?.title,
+    },
   );
   return true;
 }

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import type { CardLine } from '../ink/components/dialog_card.js';
 import type { ApprovalRequest } from '../ink/components/approval_card.js';
+import { KNOWLEDGE_ACTIONS, knowledgeApproval } from './knowledge_view.js';
 import type { Review } from '../approvals.js';
 import type { ToolCall } from '../types.js';
 // Rows of change an approval card shows before "… +N more lines".
@@ -372,13 +373,22 @@ export function approvalRequest(
   review: Review,
   resolve?: (path: string) => string,
   origin = '',
+  /** A knowledge folder's path in the current local snapshot, for knowledge actions. */
+  knowledgePath?: (directory: string) => string | undefined,
 ): ApprovalRequest {
   const ask = review.verdict === 'ASK';
+  // A knowledge action says what it changes in words; its arguments are hashes and objects.
+  const knowledge = KNOWLEDGE_ACTIONS.has(call.name)
+    ? knowledgeApproval(call.name, call.args, knowledgePath)
+    : null;
   return {
     tool: call.name,
     ...(origin ? { origin } : {}),
-    body: approvalBody(call.name, call.args),
-    preview: approvalPreview(call.name, call.args, resolve),
+    ...(knowledge ? { title: knowledge.title } : {}),
+    body: knowledge ? knowledge.body : approvalBody(call.name, call.args),
+    preview: knowledge
+      ? knowledge.preview
+      : approvalPreview(call.name, call.args, resolve),
     policy: [
       review.reason,
       call.hook_reason ? `hook · ${call.hook_reason}` : '',

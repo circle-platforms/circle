@@ -254,7 +254,10 @@ test('knowledge status and confirmation render safely on narrow dark and light t
       buildPalette(...(theme === 'dark' ? DEFAULT_DARK : DEFAULT_LIGHT)),
     );
     const screen = renderScreen(w.ui.state, 60, 24).map(stripAnsi).join('\n');
-    assert.match(screen, /memory_write|permission/);
+    // The card says what it writes, by name, with no head or object hash.
+    assert.match(screen, /write memory/);
+    assert.match(screen, /new · mine \/ 标题 · 1 line/);
+    assert.doesNotMatch(screen, /[0-9a-f]{64}|memory_write|knowledge_write/);
     assert.doesNotMatch(screen, /\u001b\]52/);
   }
   w.key('n');
@@ -360,5 +363,114 @@ test('a direct Bearer connection offers credential replacement rather than claim
   assert.doesNotMatch(
     JSON.stringify(w.ui.state.notices),
     /synthetic-direct-token|sign-in requested/,
+  );
+});
+
+test('the terminal says synced and local, asks with named cards and leaves a notice per sync change', async (t) => {
+  const w = await session(t),
+    server = new AuthorizedServer(scratch(t, 'circle-terminal-peer-'));
+  await server.start();
+  cleanup(t, () => server.close());
+  await server.seed(w.home);
+  const config = {
+    name: '团队服务器',
+    transport: 'streamable_http',
+    url: server.origin + '/mcp',
+  };
+  w.runtime.options.settings.mcp_servers = [config];
+  w.settings.mcp_servers = [config];
+  saveSettings(w.settings, w.home);
+  const notices = () => w.ui.state.notices as string[];
+  const selecting = w.app.submit('/knowledge connect 团队服务器');
+  await until(() => !!w.ui.state.dialog);
+  assert.match(w.ui.state.dialog.title, /^connect sync server$/);
+  w.key('y');
+  await selecting;
+  await w.app.submit('/knowledge status');
+  const block = notices().at(-1)!;
+  assert.match(block, /^knowledge · (?:pending|syncing|synced) · 团队服务器/);
+  assert.match(block, /\n {2}\d+ items?/);
+  // The protocol's word is not the person's: `hub` is refused, `synced` is sent as `hub`.
+  await w.app.submit('/knowledge mode hub');
+  assert.match(
+    JSON.stringify(notices()),
+    /usage: \/knowledge mode synced\|local/,
+  );
+  const local = w.app.submit('/knowledge mode local');
+  await until(() => !!w.ui.state.dialog);
+  assert.equal(w.ui.state.dialog.title, 'change sync mode');
+  w.key('y');
+  await local;
+  assert.equal(server.peer.mode, 'local');
+  assert.match(notices().at(-1)!, /^knowledge · mode local only$/);
+  const synced = w.app.submit('/knowledge mode synced');
+  await until(() => !!w.ui.state.dialog);
+  assert.match(JSON.stringify(w.ui.state.dialog.lines), /to synced/);
+  w.key('y');
+  await synced;
+  assert.equal(server.peer.mode, 'hub');
+  assert.doesNotMatch(JSON.stringify(notices()), /[0-9a-f]{64}|Hub/);
+  // A runtime sync change the person has to act on leaves one notice, once.
+  const real = w.runtime.knowledge.status.bind(w.runtime.knowledge);
+  w.runtime.knowledge.status = () => ({ ...real(), condition: 'conflicted' });
+  const before = notices().length;
+  w.runtime.bus.emit('info', { payload: { knowledge_sync: 'conflicted' } });
+  w.runtime.bus.emit('info', { payload: { knowledge_sync: 'conflicted' } });
+  assert.deepEqual(notices().slice(before), [
+    'knowledge · conflict · /knowledge conflicts',
+  ]);
+  w.runtime.knowledge.status = real;
+  await w.runtime.knowledge.close();
+});
+
+test('a list longer than the picker says how much it shows', async (t) => {
+  const w = await session(t);
+  const service = new KnowledgeService(w.home);
+  const root = crypto.randomUUID();
+  const folders = (names: number[], head: string | null) =>
+    service
+      .prepare({
+        expected_head: head,
+        objects: [
+          ...(head === null
+            ? [
+                {
+                  schema: 'personal-sync-object@1',
+                  kind: 'directory_revision',
+                  body: {
+                    item_id: root,
+                    parents: [],
+                    parent_directory: null,
+                    name: '',
+                  },
+                },
+              ]
+            : []),
+          ...names.map((n) => ({
+            schema: 'personal-sync-object@1',
+            kind: 'directory_revision',
+            body: {
+              item_id: crypto.randomUUID(),
+              parents: [],
+              parent_directory: root,
+              name: `文件夹 ${n}`,
+            },
+          })),
+        ],
+      })
+      .commit(signal);
+  const first = folders(
+    Array.from({ length: 60 }, (_, i) => i),
+    null,
+  );
+  folders(
+    Array.from({ length: 40 }, (_, i) => 60 + i),
+    first,
+  );
+  await w.app.submit('/knowledge list');
+  assert.equal(w.ui.state.picker.items.length, 100);
+  assert.equal(
+    (w.ui.state.notices as string[]).at(-1),
+    'showing 100 of 101 · narrow with /knowledge search <words>',
   );
 });

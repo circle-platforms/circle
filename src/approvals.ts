@@ -940,6 +940,14 @@ export class ApprovalPolicy {
         'ASK_FORCED',
         'changes personal knowledge or memory and always needs your confirmation',
       );
+    // The person's own /knowledge actions on the sync server, never a model tool.
+    if (
+      ['knowledge_connect', 'knowledge_mode', 'knowledge_login'].includes(tool)
+    )
+      return review(
+        'ASK_FORCED',
+        'changes the knowledge sync connection and always needs your confirmation',
+      );
     const hint = this.hints(tool);
     if (hint === 'destructive')
       return review(
@@ -1109,7 +1117,16 @@ export class ApprovalPolicy {
     if (tab?.firstUse || tab?.uncertain) return true;
     if (tab && tab.command === undefined) return false;
     if (this.allowedBySettings(tool, args)) return false;
-    if (['knowledge_write', 'memory_write', 'knowledge_share'].includes(tool))
+    if (
+      [
+        'knowledge_write',
+        'memory_write',
+        'knowledge_share',
+        'knowledge_connect',
+        'knowledge_mode',
+        'knowledge_login',
+      ].includes(tool)
+    )
       return true;
     const mode = this.mode(thread);
     if (allowYolo && mode === 'auto') return false;

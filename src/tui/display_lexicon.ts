@@ -1,6 +1,7 @@
 // Tool rows: the short name and one short phrase for the arguments, declared in one place
 // so the transcript only looks things up.
 import type { ToolCall } from '../types.js';
+import { knowledgeArgSummary } from './knowledge_view.js';
 
 export const TOOL_SHORT_NAMES: Record<string, string> = {
   knowledge_search: 'KnowledgeSearch',
@@ -34,11 +35,6 @@ export const TOOL_SHORT_NAMES: Record<string, string> = {
 type Style = 'path_tail' | 'first_line' | 'patch_target' | 'text';
 // Tool name → (argument, how to shorten it), the first one with a value wins.
 const TOOL_ARG_SUMMARY: Record<string, [string, Style][]> = {
-  knowledge_search: [['query', 'text']],
-  knowledge_read: [['object', 'text']],
-  knowledge_write: [['expected_head', 'text']],
-  knowledge_share: [['object', 'text']],
-  memory_write: [['title', 'text']],
   read_file: [
     ['file_path', 'path_tail'],
     ['path', 'path_tail'],
@@ -153,6 +149,9 @@ export function toolArgSummary(
     }
     return clip(first);
   }
+  // Knowledge arguments are hashes and objects: the row names a title or path instead.
+  const knowledge = knowledgeArgSummary(name, values);
+  if (knowledge !== undefined) return clip(knowledge);
   if (name === 'question') {
     const asked = values.questions;
     if (Array.isArray(asked) && asked[0] && typeof asked[0] === 'object')
