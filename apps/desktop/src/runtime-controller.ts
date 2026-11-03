@@ -3047,6 +3047,7 @@ export class RuntimeController {
     return {
       version: 1,
       knowledgeSync: this.desktopKnowledge.status(runtime),
+      sessionMemory: this.desktopKnowledge.sessionMemory(runtime),
       activeSessionId: this.selectedSessionId,
       previousSessionId: this.previous,
       runtime: {

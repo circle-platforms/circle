@@ -39,6 +39,16 @@
 .request-source button {
   flex-shrink: 0;
 }
+/* A knowledge change in words: what it does, where, and how long. */
+.knowledge-change-preview p {
+  margin: 0;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.knowledge-change-preview p + p {
+  margin-top: 4px;
+  color: var(--secondary);
+}
 .request-failure {
   margin: 0;
   color: var(--negative-text);

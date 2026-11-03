@@ -1,5 +1,6 @@
 import type { Message, ToolCall } from './types';
 import { locale, t, tn } from '../i18n/index.ts';
+import { isKnowledgeTool, knowledgeToolTitle } from './knowledge-tools.ts';
 
 type EditOutcome = 'waiting' | 'running' | 'rejected' | 'failed' | 'done';
 
@@ -295,7 +296,14 @@ export function toolSummary(rows: Message[]): {
       );
   }
   const other = completed.filter((tool) => !known.includes(tool.name));
-  const names = [...new Set(other.map((tool) => tool.name))];
+  // A knowledge call goes by its card title; other tools keep their own names.
+  const names = [
+    ...new Set(
+      other.map((tool) =>
+        isKnowledgeTool(tool.name) ? knowledgeToolTitle(tool.name) : tool.name,
+      ),
+    ),
+  ];
   if (names.length && names.length <= 2)
     parts.push(t('used {tools}', { tools: names.join(', ') }));
   else if (other.length)

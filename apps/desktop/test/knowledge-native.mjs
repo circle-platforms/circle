@@ -336,14 +336,15 @@ const choose = async (text) => {
 };
 const button = (name) => page.getByRole('button', { name, exact: true });
 const dialog = () => page.locator('.knowledge-dialog[role="dialog"]');
-async function saveDialog() {
+// Every confirmation names its action; there is no generic "confirm change".
+async function saveDialog(confirm, done) {
   await dialog()
     .getByRole('button', { name: 'check changes', exact: true })
     .click();
-  await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
-    .click();
+  await dialog().getByRole('button', { name: confirm, exact: true }).click();
   await dialog().waitFor({ state: 'hidden' });
+  if (done)
+    await page.locator('.toast').filter({ hasText: done }).first().waitFor();
 }
 async function shot(name) {
   await waitAnimationFrames(page, {
@@ -509,14 +510,26 @@ try {
     .locator('.knowledge-local-note')
     .getByRole('button', { name: 'sync settings', exact: true })
     .click();
-  await button('Sync to Hub…').click();
+  await button('sync to server…').click();
   assert.equal(peer.peer.mode, 'local');
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'confirm sync to server', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   assert.equal(peer.peer.mode, 'hub');
+  await page
+    .locator('.toast')
+    .filter({ hasText: 'syncing to server' })
+    .first()
+    .waitFor();
   await button('sync now').click();
+  // The sidebar names the bound connection, not the kind of server behind it.
+  const sidebarLine = page.locator('.sidebar-footer .knowledge-sync-line');
+  await sidebarLine.filter({ hasText: 'Synthetic workspace' }).waitFor();
+  assert.match(
+    await sidebarLine.innerText(),
+    /^(connected|waiting to sync) · Synthetic workspace$/,
+  );
   const childSource = `
     import { RuntimeController } from './apps/desktop/src/runtime-controller.ts';
     import { ScriptedModel } from './src/testing.ts';
@@ -557,12 +570,17 @@ try {
   assert.equal(peer.shareCalls.length, 0);
   await shot('en-dark-1440-share-preview');
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'confirm share to team', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   assert.equal(peer.shareCalls.length, 1);
+  await page
+    .locator('.toast')
+    .filter({ hasText: 'shared to team' })
+    .first()
+    .waitFor();
   checks.push(
-    'team share requires current native mapping, preview and explicit confirmation',
+    'team share requires current native mapping, preview and an action-named confirmation, then says it was shared; the sidebar names the bound connection',
   );
   await route('sync');
   await button('only on this device…').click();
@@ -579,7 +597,7 @@ try {
     1,
   );
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'confirm import', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   assert.ok(
@@ -595,7 +613,7 @@ try {
   );
   await button('new folder…').click();
   await dialog().getByLabel('title', { exact: true }).fill('Native folder');
-  await saveDialog();
+  await saveDialog('confirm create', 'created');
   await rows().filter({ hasText: 'Native folder' }).click();
   await page
     .locator('.knowledge-crumb')
@@ -605,24 +623,24 @@ try {
   await dialog()
     .getByLabel('content', { exact: true })
     .fill('NATIVE_FOLDER_ENTRY');
-  await saveDialog();
+  await saveDialog('confirm create');
   await choose('NATIVE_FOLDER_ENTRY');
   await button('edit…').click();
   await dialog()
     .getByLabel('content', { exact: true })
     .fill('NATIVE_MOVED_ENTRY');
-  await saveDialog();
+  await saveDialog('confirm save', 'saved');
   await button('more').click();
   await page.getByRole('menuitem', { name: 'move…', exact: true }).click();
   await dialog()
     .getByLabel('destination folder', { exact: true })
     .selectOption({ label: 'mine' });
-  await saveDialog();
+  await saveDialog('confirm move', 'moved');
   await route('knowledge');
   await choose('NATIVE_MOVED_ENTRY');
   await button('more').click();
   await page.getByRole('menuitem', { name: 'delete…', exact: true }).click();
-  await saveDialog();
+  await saveDialog('confirm delete', 'deleted');
   await rows()
     .filter({ hasText: 'NATIVE_MOVED_ENTRY' })
     .waitFor({ state: 'hidden' });
@@ -651,13 +669,13 @@ try {
   await dialog()
     .getByLabel('content', { exact: true })
     .fill('NATIVE_CONFIRMED_MEMORY');
-  await saveDialog();
+  await saveDialog('confirm create');
   await choose('Native approved preference');
   await button('edit…').click();
   await dialog()
     .getByLabel('content', { exact: true })
     .fill('NATIVE_EDITED_MEMORY  \n');
-  await saveDialog();
+  await saveDialog('confirm save');
   await button('version history').last().click();
   await page.locator('.knowledge-history-row').first().waitFor();
   await shot('en-dark-1440-memory-history');
@@ -679,7 +697,7 @@ try {
     .getByLabel('content', { exact: true })
     .fill('NATIVE_EXPLICIT_RESOLUTION');
   await shot('en-dark-1440-conflict-editor');
-  await saveDialog();
+  await saveDialog('confirm replace', 'conflict resolved');
   service.withStore((s) => {
     const row = s
       .items()
@@ -715,7 +733,7 @@ try {
     .selectOption({ label: 'Synthetic workspace' });
   await button('use this connection…').click();
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'confirm connection', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   checks.push(
@@ -730,7 +748,7 @@ try {
     0,
   );
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'confirm add', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   assert.equal(installedPersonalPacks(home).length, 0);
@@ -742,7 +760,7 @@ try {
   assert.equal(installedPersonalPacks(home).length, 0);
   await shot('en-dark-1440-workflow-install');
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'confirm install', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   assert.equal(installedPersonalPacks(home).length, 1);
@@ -751,9 +769,9 @@ try {
     'workflow manifest and matching files install separately; original hook stays outside installed files',
   );
   await route('sync');
-  await button('Sync to Hub…').click();
+  await button('sync to server…').click();
   await dialog()
-    .getByRole('button', { name: 'confirm change', exact: true })
+    .getByRole('button', { name: 'confirm sync to server', exact: true })
     .click();
   await dialog().waitFor({ state: 'hidden' });
   await button('sync now').click();
@@ -832,16 +850,19 @@ try {
         ) {
           const retained = head(),
             attempts = peer.shareCalls.length;
-          // The peer supplies a registered business refusal; no real Hub or upload is used.
+          // The peer supplies a registered business refusal; no real server or upload is used.
           peer.shareRefusal = { ...unsignedUploadRefusal };
           // Return from local-only mode explicitly, preserving the preview/confirmation boundary.
           await route('sync');
           await button(
-            language === 'en' ? 'Sync to Hub…' : '同步到 Hub…',
+            language === 'en' ? 'sync to server…' : '同步到服务器…',
           ).click();
           await dialog()
             .getByRole('button', {
-              name: language === 'en' ? 'confirm change' : '确认更改',
+              name:
+                language === 'en'
+                  ? 'confirm sync to server'
+                  : '确认同步到服务器',
               exact: true,
             })
             .click();
@@ -861,7 +882,8 @@ try {
           assert.equal(peer.shareCalls.length, attempts);
           await dialog()
             .getByRole('button', {
-              name: language === 'en' ? 'confirm change' : '确认更改',
+              name:
+                language === 'en' ? 'confirm share to team' : '确认分享到团队',
               exact: true,
             })
             .click();
@@ -883,9 +905,19 @@ try {
           );
           assert.equal(await page.locator('.knowledge-error').count(), 0);
           assert.equal(
+            await notice.locator('strong').textContent(),
+            language === 'en'
+              ? 'the server refused this share'
+              : '服务器拒绝了这次分享',
+          );
+          assert.doesNotMatch(await notice.innerText(), /Hub/);
+          assert.equal(
             await dialog()
               .getByRole('button', {
-                name: language === 'en' ? 'confirm change' : '确认更改',
+                name:
+                  language === 'en'
+                    ? 'confirm share to team'
+                    : '确认分享到团队',
                 exact: true,
               })
               .count(),
@@ -894,6 +926,48 @@ try {
           assert.equal(peer.shareCalls.length, attempts + 1);
           assert.equal(head(), retained);
           await shot(`${language}-${theme}-${width}-share-refusal`);
+          await dialog()
+            .getByRole('button', {
+              name: language === 'en' ? 'cancel' : '取消',
+              exact: true,
+            })
+            .click();
+          // A refusal without any explanation says so instead of guessing one.
+          peer.shareRefusal = {
+            code: 'SYNTHETIC_REFUSAL',
+            message: '',
+            fix: '',
+          };
+          await button(
+            language === 'en' ? 'share to team…' : '分享到团队…',
+          ).click();
+          await dialog()
+            .getByRole('button', {
+              name: language === 'en' ? 'check changes' : '检查更改',
+              exact: true,
+            })
+            .click();
+          await dialog()
+            .getByRole('button', {
+              name:
+                language === 'en' ? 'confirm share to team' : '确认分享到团队',
+              exact: true,
+            })
+            .click();
+          await notice.waitFor();
+          assert.equal(
+            await notice.locator('strong').textContent(),
+            language === 'en'
+              ? 'the server refused this share and gave no reason'
+              : '服务器拒绝了这次分享，没有给出原因',
+          );
+          assert.equal(
+            await notice.locator('.knowledge-share-refusal-text').count(),
+            0,
+          );
+          assert.equal(peer.shareCalls.length, attempts + 2);
+          assert.equal(head(), retained);
+          await shot(`${language}-${theme}-${width}-share-refusal-no-reason`);
           await dialog()
             .getByRole('button', {
               name: language === 'en' ? 'cancel' : '取消',
@@ -918,7 +992,7 @@ try {
           await route('knowledge');
           await choose('本机副本与团队副本彼此独立');
           checks.push(
-            `${language} unsigned-upload refusal preserves Hub message/fix verbatim, states uploader signing action and requires a fresh preview; no local mutation or automatic retry`,
+            `${language} server refusals show the server's message/fix verbatim, or say no reason was given, and require a fresh preview; no local mutation or automatic retry`,
           );
         }
         if (width === 1024) {
@@ -956,6 +1030,10 @@ try {
             language === 'en' ? 'sign in again' : '重新登录',
           ).count(),
           0,
+        );
+        assert.doesNotMatch(
+          (await page.locator('body').innerText()).replaceAll('GitHub', ''),
+          /Hub/,
         );
         await shot(`${language}-${theme}-${width}-sync`);
       }
@@ -1122,7 +1200,7 @@ try {
       remoteCalls,
     );
     checks.push(
-      `${section} without a Hub binding lists personal rows only, hides remote scopes and never requests them even through a team-scope URL`,
+      `${section} without a sync server binding lists personal rows only, hides remote scopes and never requests them even through a team-scope URL`,
     );
   }
   await route('knowledge');
@@ -1130,7 +1208,7 @@ try {
   await shot('zh-CN-light-1440-no-hub-knowledge');
   await page
     .locator('.desktop-sidebar .knowledge-sync-line')
-    .getByText('未连接 Hub', { exact: true })
+    .getByText('未连接同步服务器', { exact: true })
     .click();
   await page.locator('.knowledge-sync-settings').waitFor();
   await route('settings');
@@ -1152,11 +1230,11 @@ try {
   await shot('en-dark-1440-no-hub-knowledge');
   await page
     .locator('.desktop-sidebar .knowledge-sync-line')
-    .getByText('Hub not connected', { exact: true })
+    .getByText('sync server not connected', { exact: true })
     .click();
   await page.locator('.knowledge-sync-settings').waitFor();
   checks.push(
-    'unbound Hub status opens sync settings from the sidebar in Chinese and English',
+    'unbound sync server status opens sync settings from the sidebar in Chinese and English',
   );
   assert.equal(loadSettings(home).knowledge_sync.binding, '');
   assert.deepEqual(errors, []);

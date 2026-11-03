@@ -52,6 +52,7 @@ import {
 } from 'lucide-react';
 import { useRuntime } from './context';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
+import { writtenMemoryItem } from '../model/knowledge-tools';
 import {
   historyMessages,
   taskWorkspaceIds,
@@ -176,10 +177,61 @@ function useNarrow(query = '(max-width: 1179px)') {
     () => matchMedia(query).matches,
   );
 }
+/**
+ * After the model writes a memory in the conversation on screen, say so with a link to
+ * that memory. Calls already finished when the conversation opened stay quiet.
+ */
+function useMemoryWriteNotice(
+  snapshot: ReturnType<typeof useRuntime>['snapshot'],
+  notify: ReturnType<typeof useRuntime>['notify'],
+  navigate: ReturnType<typeof useNavigate>,
+) {
+  const seen = useRef<{ session: string; ids: Set<string> }>(undefined);
+  const session = currentSession(snapshot);
+  useEffect(() => {
+    const done = session.messages.flatMap((message) => {
+      const tool = message.tool;
+      const item = tool
+        ? writtenMemoryItem(tool.name, tool.input, tool.output, tool.status)
+        : undefined;
+      return tool && item ? [{ id: tool.id, item }] : [];
+    });
+    if (seen.current?.session !== session.id) {
+      seen.current = {
+        session: session.id,
+        ids: new Set(done.map((row) => row.id)),
+      };
+      return;
+    }
+    const known = seen.current.ids;
+    const fresh = done.filter((row) => !known.has(row.id));
+    for (const row of fresh) known.add(row.id);
+    const last = fresh.at(-1);
+    if (last)
+      notify(t('written to my memory'), {
+        label: t('open', undefined, 'action'),
+        run: () =>
+          navigate(
+            '/page/memory?item=' +
+              encodeURIComponent(last.item) +
+              '&view=detail',
+          ),
+      });
+  }, [session.id, session.messages]);
+}
 export function App() {
-  const { snapshot, runtime, perform, notify, notice, setRouter, act } =
-    useRuntime();
+  const {
+    snapshot,
+    runtime,
+    perform,
+    notify,
+    notice,
+    noticeAction,
+    setRouter,
+    act,
+  } = useRuntime();
   const navigate = useNavigate();
+  useMemoryWriteNotice(snapshot, notify, navigate);
   const { registry, enabled } = usePlugins();
   const pluginPages = registry.pages(enabled);
   const session = currentSession(snapshot);
@@ -1754,6 +1806,9 @@ export function App() {
                               perform(() => selectSessionAndNavigate(id))
                             }
                             onStartPullRequest={startPullRequest}
+                            onMemory={(scope) =>
+                              navigate('/page/memory?scope=' + scope)
+                            }
                           />
                         </div>
                       )}
@@ -1918,6 +1973,18 @@ export function App() {
           {notice && (
             <div className="toast" role="status">
               {notice}
+              {noticeAction && (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    className="toast-action"
+                    onClick={noticeAction.run}
+                  >
+                    {noticeAction.label}
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

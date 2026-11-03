@@ -28,11 +28,13 @@ import { Markdown } from '../components/Markdown';
 import { t, tn } from '../i18n';
 import {
   knowledgeError,
-  knowledgeStatusText,
   knowledgeLocation,
   knowledgeUpdated,
   knowledgeShareRefusal,
-  knowledgeHubBound,
+  unexplainedShareRefusal,
+  knowledgeServerBound,
+  knowledgeSyncLine,
+  knowledgeActionWords,
 } from '../model/knowledge';
 import type {
   KnowledgeDetail,
@@ -96,7 +98,7 @@ const rowStateClass = (row: KnowledgeRow) =>
       ? row.availability === 'available'
         ? 'enabled'
         : row.availability === 'unavailable'
-          ? 'unverified'
+          ? 'unavailable'
           : 'disabled'
       : row.status;
 const loadText = (row: KnowledgeRow) =>
@@ -165,7 +167,7 @@ export function KnowledgeSyncStatus({
       onClick={onClick}
     >
       <i aria-hidden="true" />
-      {knowledgeStatusText(status)}
+      <span>{knowledgeSyncLine(status)}</span>
     </button>
   );
 }
@@ -194,26 +196,30 @@ export function KnowledgeShareRefusalNotice({
     <section
       className="knowledge-share-refusal"
       role="status"
-      aria-label={t('Hub did not accept this share')}
+      aria-label={t('the server refused this share')}
     >
-      <strong>{t('Hub did not accept this share')}</strong>
-      <p className="knowledge-share-refusal-text">{refusal.message}</p>
-      <p className="knowledge-share-refusal-text">{refusal.fix}</p>
-      <p>
-        {t(
-          'as the uploader, sign the upload in the Hub console, then share again',
-        )}
-      </p>
+      {/* The server's own explanation and fix, as it gave them. */}
+      <strong>
+        {refusal.message || refusal.fix
+          ? t('the server refused this share')
+          : t('the server refused this share and gave no reason')}
+      </strong>
+      {refusal.message && (
+        <p className="knowledge-share-refusal-text">{refusal.message}</p>
+      )}
+      {refusal.fix && (
+        <p className="knowledge-share-refusal-text">{refusal.fix}</p>
+      )}
     </section>
   );
 }
 export function KnowledgePage({ section }: { section: KnowledgeSection }) {
-  const { runtime, snapshot } = useRuntime(),
+  const { runtime, snapshot, notify } = useRuntime(),
     navigate = useNavigate(),
-    hubBound = knowledgeHubBound(snapshot.knowledgeSync);
+    serverBound = knowledgeServerBound(snapshot.knowledgeSync);
   const [params, setParams] = useSearchParams(),
     scope = (
-      hubBound ? (params.get('scope') ?? 'personal') : 'personal'
+      serverBound ? (params.get('scope') ?? 'personal') : 'personal'
     ) as KnowledgeScope,
     selected = params.get('item') ?? '',
     query = params.get('q') ?? '',
@@ -270,6 +276,19 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
     [runtime],
   );
   const reload = () => setVersion((n) => n + 1);
+  // In the share dialog, a refusal the server did not explain is still a refusal.
+  const shareCall = (payload: Record<string, unknown>) =>
+    call(payload).catch((error: unknown) => {
+      const refusal =
+        draft?.action === 'share' ? unexplainedShareRefusal(error) : undefined;
+      if (refusal) return { shareRefusal: refusal };
+      throw error;
+    });
+  const actionWords = (action: string, checked?: KnowledgePreview) =>
+    knowledgeActionWords(action, {
+      enabling: detail?.status === 'disabled' || detail?.enabled === false,
+      replaces: checked?.replaces,
+    });
   useEffect(() => {
     const id = ++generation.current;
     setError('');
@@ -411,7 +430,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
           detail.status === 'disabled' || detail.enabled === false;
       if (draft.action === 'share') payload.teamPath = draft.teamPath;
     }
-    const value = await run(() => call(payload));
+    const value = await run(() => shareCall(payload));
     const refused = knowledgeShareRefusal(value);
     if (refused) {
       setShareRefusal(refused);
@@ -430,7 +449,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
   const confirm = async () => {
     if (!preview) return;
     const result = await run(() =>
-      call({ op: 'confirm', ticket: preview.ticket, confirmed: true }),
+      shareCall({ op: 'confirm', ticket: preview.ticket, confirmed: true }),
     );
     const refused = knowledgeShareRefusal(result);
     if (refused) {
@@ -439,10 +458,12 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
       return;
     }
     if (result) {
+      const { done } = actionWords(draft?.action ?? '', preview);
       setList(undefined);
       setDetail(undefined);
       cancel();
       reload();
+      notify(done);
     }
   };
   const choose = (row: KnowledgeRow, open = true) =>
@@ -588,7 +609,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
               role="group"
               aria-label={t('scope')}
             >
-              {(hubBound
+              {(serverBound
                 ? (['personal', 'team', 'shared'] as const)
                 : (['personal'] as const)
               ).map((s) => (
@@ -600,7 +621,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                   }
                 >
                   {s === 'personal'
-                    ? section === 'memory' && hubBound
+                    ? section === 'memory' && serverBound
                       ? t('my memory')
                       : t('mine')
                     : s === 'team'
@@ -1030,7 +1051,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                                   title={
                                     detail.share === 'local'
                                       ? t(
-                                          'switch to Sync to Hub before sharing to the team',
+                                          'switch to sync to server before sharing to the team',
                                         )
                                       : detail.share === 'waiting'
                                         ? t(
@@ -1058,7 +1079,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                                 >
                                   {detail.share === 'local'
                                     ? t(
-                                        'switch to Sync to Hub before sharing to the team',
+                                        'switch to sync to server before sharing to the team',
                                       )
                                     : t(
                                         'sync this version before sharing to the team',
@@ -1347,7 +1368,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                 {busy
                   ? t('checking…')
                   : preview
-                    ? t('confirm change')
+                    ? actionWords(draft.action, preview).confirm
                     : shareRefusal
                       ? t('check share again')
                       : t('check changes')}

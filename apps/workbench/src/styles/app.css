@@ -834,6 +834,10 @@ pre {
 .tool-head code {
   font-size: var(--ui-small);
 }
+/* A knowledge call's title and item are words, not identifiers. */
+.tool-head .tool-readable {
+  font-family: inherit;
+}
 .tool-target {
   min-width: 0;
   overflow: hidden;
@@ -2482,6 +2486,24 @@ pre {
   text-align: center;
   overflow-wrap: anywhere;
   pointer-events: none;
+}
+/* The one link a notice may offer stays clickable while the notice lets clicks through. */
+.toast-action {
+  pointer-events: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.toast-action:hover {
+  text-decoration: underline;
+}
+.toast-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 .search-results {
   max-height: 50vh;

@@ -18,7 +18,7 @@ import { FileIcon } from '../components/FileIcon';
 import { PendingOperations } from './PendingOperations';
 import { useSources } from '../components/SourceNavigation';
 import { copyText, desktopHost } from '../host';
-import { t, tn } from '../i18n';
+import { locale, t, tn } from '../i18n';
 import { agentActivityText, agentDot } from '../model/activity';
 import { contextUsage } from '../model/context-usage';
 import { useOwnerState } from '../model/owner-state';
@@ -33,7 +33,7 @@ import {
 import { endedToolCalls, useGitChanges } from '../model/git-changes';
 import { failedRunLog, usePullRequests } from '../model/pull-requests';
 import { currentSession } from '../model/state';
-import type { PanelId } from '../model/types';
+import type { PanelId, SessionMemoryDocument } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { SAMPLE_PULL_REQUESTS } from '../preview/pull-requests';
 import type { PullRequestSummary } from '../../../desktop/src/workspace/pulls-types';
@@ -187,12 +187,65 @@ function PullRequestStatus({ pull }: { pull: PullRequestSummary }) {
  * runs, how full its context is, what is in progress, what it produced and what is not
  * on GitHub yet. It only shows. A row's arrow takes the person to where it is done.
  */
+/** Team and personal memory the model was given: counts first, the documents on request. */
+function SessionMemory({
+  documents,
+  onMemory,
+}: {
+  documents: SessionMemoryDocument[];
+  onMemory?: (scope: 'team' | 'personal') => void;
+}) {
+  const team = documents.filter((item) => item.scope === 'team');
+  const mine = documents.filter((item) => item.scope === 'personal');
+  const partial = documents.filter((item) => item.state === 'partial').length;
+  const counts = [
+    ...(team.length
+      ? [tn(team.length, '{n} team document', '{n} team documents')]
+      : []),
+    ...(mine.length
+      ? [tn(mine.length, '{n} document of mine', '{n} documents of mine')]
+      : []),
+  ].join(locale() === 'zh-CN' ? '、' : ', ');
+  return (
+    <details className="overview-memory">
+      <summary>
+        {counts} ·{' '}
+        {partial
+          ? tn(partial, '{n} partly loaded', '{n} partly loaded')
+          : t('loaded in this session')}
+      </summary>
+      <ul>
+        {[...team, ...mine].map((item, index) => (
+          <li key={index}>
+            <button
+              type="button"
+              className="overview-link"
+              disabled={!onMemory}
+              onClick={() => onMemory?.(item.scope)}
+            >
+              {item.title}
+            </button>
+            <small>
+              {item.scope === 'team' ? t('team') : t('mine')} ·{' '}
+              {item.state === 'partial'
+                ? t('partially loaded in this session')
+                : t('loaded in this session')}
+            </small>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
 export function Overview({
   onPanel,
   onSession,
   onStartPullRequest,
+  onMemory,
 }: {
   onPanel: (panel: PanelId, selection?: string) => void;
+  /** Open the memory page on one scope. */
+  onMemory?: (scope: 'team' | 'personal') => void;
   /** Open a task's own conversation. */
   onSession: (id: string) => void;
   /** Load the create-pr skill into the conversation and ask for it. */
@@ -384,6 +437,17 @@ export function Overview({
                     {item.name.split(/[\\/]/).pop()}
                   </button>
                 ))}
+              </dd>
+            </>
+          )}
+          {!!snapshot.sessionMemory?.length && (
+            <>
+              <dt>{t('memory in this session')}</dt>
+              <dd>
+                <SessionMemory
+                  documents={snapshot.sessionMemory}
+                  onMemory={onMemory}
+                />
               </dd>
             </>
           )}

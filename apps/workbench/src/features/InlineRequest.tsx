@@ -15,6 +15,12 @@ import { relativePath } from '../model/format';
 import { browserApprovalInput, hasToolInput } from '../model/browser';
 import { approvalHeading, requestReason } from '../model/reasons.ts';
 import {
+  isKnowledgeTool,
+  knowledgeChangePreview,
+  knowledgeChangeText,
+  knowledgeConfirmLabel,
+} from '../model/knowledge-tools';
+import {
   executeTerminalRedirect,
   redirectRefusal,
 } from '../model/terminal-redirect';
@@ -362,6 +368,11 @@ export function InlineRequest({
     );
   // Files the model's action downloaded: kept or discarded
   const download = item.reason === 'keeps a download';
+  // A knowledge or memory change reads as what it does; its arguments are technical details.
+  const knowledge = isKnowledgeTool(item.tool) ? item.tool : undefined;
+  const change = knowledge
+    ? knowledgeChangePreview(knowledge, item.input)
+    : undefined;
   const allowed = (choice: string) =>
     runtime.mode !== 'live' || !!item.choices?.includes(choice);
   return (
@@ -388,7 +399,16 @@ export function InlineRequest({
         </div>
       )}
       {failure}
-      {item.tool?.startsWith('browser_') ? (
+      {knowledge ? (
+        change && (
+          <div className="knowledge-change-preview">
+            <p>{knowledgeChangeText(change)}</p>
+            {change.replaces && (
+              <p>{t('this replaces the matching team memory')}</p>
+            )}
+          </div>
+        )
+      ) : item.tool?.startsWith('browser_') ? (
         <BrowserApproval input={item.input} />
       ) : item.command ? (
         <pre className="approval-command">{item.command}</pre>
@@ -407,7 +427,11 @@ export function InlineRequest({
           disabled={sent || !allowed('approve')}
           onClick={() => finish('allow once')}
         >
-          {download ? t('keep') : t('allow once')}
+          {knowledge
+            ? knowledgeConfirmLabel(knowledge, item.input)
+            : download
+              ? t('keep')
+              : t('allow once')}
         </Button>
         {allowed('always') && (
           <Button
@@ -514,6 +538,12 @@ export function InlineRequest({
       {(item.command || item.diff) && hasToolInput(item.input) && (
         <details className="request-input">
           <summary>{t('tool input')}</summary>
+          <DataBlock title={t('tool input')} value={item.input} />
+        </details>
+      )}
+      {knowledge && hasToolInput(item.input) && (
+        <details className="request-input">
+          <summary>{t('technical details')}</summary>
           <DataBlock title={t('tool input')} value={item.input} />
         </details>
       )}

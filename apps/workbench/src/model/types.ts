@@ -490,8 +490,17 @@ export interface HookSetting {
   /** False for a skill hook this session has not loaded. Omitted means running. */
   active?: boolean;
 }
+/** A memory document the runtime gave the model in this session, and how much of it. */
+export interface SessionMemoryDocument {
+  scope: 'team' | 'personal';
+  title: string;
+  /** Partly: the context was cut before this document ended. */
+  state: 'loaded' | 'partial';
+}
 export interface WorkbenchSnapshot {
   knowledgeSync?: import('../../../../src/knowledge/desktop-contract').KnowledgeSyncView;
+  /** Memory loaded for the session's model; omitted when none has loaded. */
+  sessionMemory?: SessionMemoryDocument[];
   tools?: {
     name: string;
     description: string;
