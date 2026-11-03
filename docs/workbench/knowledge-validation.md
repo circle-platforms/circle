@@ -76,3 +76,26 @@ The follow-up used only the synthetic selected MCP connection. Its development a
 When the saved Hub binding is empty, knowledge and memory show only mine; even a team-scope URL requests the personal list. The sidebar reads “未连接 Hub” / “Hub not connected” and opens the existing sync settings. Bound connections retain their previous scopes and behavior, including in local-only mode. No additional offline/login states, workflow views, shared listing, session-memory or cache changes are part of this follow-up.
 
 Each page has a dedicated regression in both interface languages, also checking that a bound local-only connection retains all three scopes. Development and packaged native runs each passed 18 effect groups with 57 captures and zero page/console/request errors. The native checks verify an actually empty saved binding, loaded personal rows on both pages, no remote tool read or load error, and the original sidebar control opening settings in both languages. [Chinese light](validation/knowledge/zh-CN-light-1440-no-hub-knowledge.png) and [English dark](validation/knowledge/en-dark-1440-no-hub-knowledge.png) were inspected at 1x; they replace two existing images so the set remains 15 PNGs. The first in-flight-disconnect observation and the completed-action barrier are recorded in no-hub.json; no timeout or assertion was relaxed.
+
+## PR CI fixture and terminal-echo corrections
+
+The Windows check in run 41561578080 exposed knowledge fixtures that registered scratch removal before SQLite closure. Node runs `t.after` hooks in registration order; Windows refuses deletion while those database handles are open. The fixtures now register owned resources through the existing `cleanup()` helper, which closes them before removing directories. A regression checks that the real SQLite database closes while its file still exists. Frozen exchange objects and store snapshot fixtures use batch admission; memory quota setup creates one populated snapshot rather than many irrelevant revision histories. Independent account homes remain separate beneath a shared scratch root. Production code, `synchronous=FULL`, object fsyncs, timeouts, Windows coverage and protocol mirror bytes are unchanged.
+
+The Linux failure in run 41561578064 contained the exact shell echo split as `ab` then `c` at a soft wrap, with the composer draft intact. The popout driver now reads the same visible xterm rows' text nodes without inserting a visual-row newline into that echo. Its real keyboard input, composer assertion and timeout are retained. Both development GPU modes passed locally; this macOS run does not replace the Windows or Linux CI result.
+
+[ci-follow-up.json](validation/knowledge/ci-follow-up.json) records checks and per-file resource measurements, with aggregate digests for the ignored raw observations. The earlier screenshots and packaged/Hub receipts retain their original provenance; no PNG is added or replaced for these test-only changes.
+
+To reproduce Node-level counters and the strict open-database cleanup guard from the repository root:
+
+```sh
+knowledge_metrics_dir="$(mktemp -d)"
+CIRCLE_HOME="$(mktemp -d)" CIRCLE_WORKBENCH_DATA_DIR="$(mktemp -d)" \
+  CIRCLE_KNOWLEDGE_TEST_METRICS="$knowledge_metrics_dir" \
+  CIRCLE_KNOWLEDGE_TEST_STRICT_CLEANUP=1 \
+  NODE_OPTIONS="--import=$PWD/scripts/knowledge-test-metrics.mjs" \
+  node --import tsx --test --test-concurrency=1 tests/knowledge*.test.ts
+```
+
+Each process emits counters and a basename, without arguments, credentials or local paths. BEGIN counts include read transactions; prepared autocommit DML is separate. Scratch counts are `mkdtemp` roots, not every private subdirectory. Explicit fixture children are counted separately from the runner, file workers and transpiler processes. An owned helper deliberately killed after readiness retains its announced startup counters.
+
+The optional macOS `scripts/knowledge-test-fsync.c` companion can be compiled with `clang -dynamiclib` into the scratch directory and loaded through `DYLD_INSERT_LIBRARIES` for that same command. It records native fsync calls and process ancestry, including compiler helpers. Calibration separates Node/libuv fsyncSync calls (JS counter) from SQLite's native calls, so the receipt reports both rather than mistaking the JS count for all disk synchronization. The tracer never links into the application or changes its durability settings. Full metric files and before-change test snapshots stay in ignored artifacts.
