@@ -15,7 +15,15 @@ import {
 import { PluginRegistry } from '../src/plugins/registry.ts';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { KnowledgeShareRefusalNotice } from '../src/features/KnowledgePage.tsx';
+import {
+  KnowledgePage,
+  KnowledgeShareRefusalNotice,
+  KnowledgeSyncStatus,
+} from '../src/features/KnowledgePage.tsx';
+import { PreviewRuntime } from '../src/model/state.ts';
+import { RuntimeProvider } from '../src/app/context.tsx';
+import { MemoryRouter } from 'react-router-dom';
+import { Tooltip } from 'radix-ui';
 import { knowledgeShareRefusal } from '../src/model/knowledge.ts';
 const storage = {
   length: 0,
@@ -166,3 +174,66 @@ test('Hub refusal text stays verbatim and escaped in both interface languages, w
   }
   setLanguage('en', storage);
 });
+
+for (const section of ['knowledge', 'memory'] as const)
+  test(`${section} shows only mine without a Hub binding, including a remote-scope URL; bound local-only keeps its scopes`, () => {
+    const runtime = new PreviewRuntime(storage);
+    const status = {
+      server: 'configured but unbound',
+      bound: false,
+      condition: 'local' as const,
+      mode: 'local' as const,
+      clearing: false,
+      lastSyncedAt: null,
+    };
+    runtime.getSnapshot().knowledgeSync = status;
+    const render = () =>
+      renderToStaticMarkup(
+        createElement(
+          Tooltip.Provider,
+          null,
+          createElement(
+            MemoryRouter,
+            { initialEntries: [`/page/${section}?scope=team`] },
+            createElement(RuntimeProvider, {
+              runtime,
+              children: createElement(KnowledgePage, { section }),
+            }),
+          ),
+        ),
+      );
+    for (const language of ['zh-CN', 'en'] as const) {
+      setLanguage(language, storage);
+      const html = render(),
+        scopes = html.match(
+          /class="segmented knowledge-scopes"[\s\S]*?<\/div>/,
+        )![0];
+      assert.equal((scopes.match(/<button/g) ?? []).length, 1);
+      assert.match(scopes, /aria-pressed="true"/);
+      assert.ok(scopes.includes(language === 'zh-CN' ? '我的' : 'mine'));
+      assert.doesNotMatch(
+        html,
+        /knowledge-error|knowledge list could not load/,
+      );
+      const line = renderToStaticMarkup(
+        createElement(KnowledgeSyncStatus, { status, onClick: () => {} }),
+      );
+      assert.ok(
+        line.includes(
+          language === 'zh-CN' ? '未连接 Hub' : 'Hub not connected',
+        ),
+      );
+      status.bound = true;
+      const connected = render().match(
+        /class="segmented knowledge-scopes"[\s\S]*?<\/div>/,
+      )![0];
+      assert.equal((connected.match(/<button/g) ?? []).length, 3);
+      assert.ok(
+        connected.includes(
+          language === 'zh-CN' ? '与我共享' : 'shared with me',
+        ),
+      );
+      status.bound = false;
+    }
+    setLanguage('en', storage);
+  });

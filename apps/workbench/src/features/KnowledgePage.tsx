@@ -32,6 +32,7 @@ import {
   knowledgeLocation,
   knowledgeUpdated,
   knowledgeShareRefusal,
+  knowledgeHubBound,
 } from '../model/knowledge';
 import type {
   KnowledgeDetail,
@@ -208,9 +209,12 @@ export function KnowledgeShareRefusalNotice({
 }
 export function KnowledgePage({ section }: { section: KnowledgeSection }) {
   const { runtime, snapshot } = useRuntime(),
-    navigate = useNavigate();
+    navigate = useNavigate(),
+    hubBound = knowledgeHubBound(snapshot.knowledgeSync);
   const [params, setParams] = useSearchParams(),
-    scope = (params.get('scope') ?? 'personal') as KnowledgeScope,
+    scope = (
+      hubBound ? (params.get('scope') ?? 'personal') : 'personal'
+    ) as KnowledgeScope,
     selected = params.get('item') ?? '',
     query = params.get('q') ?? '',
     filter = params.get('filter') ?? 'all',
@@ -584,7 +588,10 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
               role="group"
               aria-label={t('scope')}
             >
-              {(['personal', 'team', 'shared'] as const).map((s) => (
+              {(hubBound
+                ? (['personal', 'team', 'shared'] as const)
+                : (['personal'] as const)
+              ).map((s) => (
                 <button
                   key={s}
                   aria-pressed={scope === s}
@@ -593,7 +600,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                   }
                 >
                   {s === 'personal'
-                    ? section === 'memory'
+                    ? section === 'memory' && hubBound
                       ? t('my memory')
                       : t('mine')
                     : s === 'team'

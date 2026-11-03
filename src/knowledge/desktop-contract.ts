@@ -47,6 +47,8 @@ export interface KnowledgeDetail extends KnowledgeRow {
   share: 'local' | 'waiting' | 'ready' | 'unavailable';
 }
 export interface KnowledgeSyncView {
+  /** Explicit host binding state; optional for older preview snapshots. */
+  bound?: boolean;
   condition:
     | 'synced'
     | 'pending'

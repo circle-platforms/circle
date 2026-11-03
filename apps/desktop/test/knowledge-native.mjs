@@ -17,6 +17,7 @@ import {
   defaultSettings,
   saveSettings,
   trustFolder,
+  loadSettings,
 } from '../../../src/settings.ts';
 import { backgroundMcpConnection } from '../../../src/mcp_loader.ts';
 import {
@@ -1073,6 +1074,91 @@ try {
   checks.push(
     'loading more preserves every appended row across the live five-second refresh interval',
   );
+  await setViewport(app, page, { width: 1440, height: 900 }, { show: true });
+  await route('settings');
+  await page
+    .locator('.settings-dialog')
+    .getByRole('button', { name: '简体中文', exact: true })
+    .click();
+  await page
+    .locator('.settings-dialog')
+    .getByRole('button', { name: /^(light|浅色)$/, exact: true })
+    .click();
+  await route('sync');
+  await button('断开连接').click();
+  // The connection can publish an intermediate close state before the command
+  // finishes saving settings. Wait for the original control's completed reload.
+  await button('断开连接').waitFor({ state: 'hidden' });
+  await page.waitForFunction(
+    async () =>
+      (await window.circleDesktop.runtimeState()).snapshot.knowledgeSync
+        ?.bound === false,
+  );
+  assert.equal(loadSettings(home).knowledge_sync.binding, '');
+  for (const section of ['knowledge', 'memory']) {
+    const remoteCalls = peer.requests.filter(
+      (r) => r.body?.method === 'tools/call',
+    ).length;
+    await route(section, '?scope=team');
+    await rows()
+      .filter({
+        hasText: section === 'knowledge' ? 'Pagination sample 000' : '我的偏好',
+      })
+      .waitFor();
+    assert.equal(await page.locator('.knowledge-scopes button').count(), 1);
+    assert.equal(
+      await page.locator('.knowledge-scopes button').innerText(),
+      '我的',
+    );
+    assert.equal(
+      await page
+        .locator('.knowledge-scopes button')
+        .getAttribute('aria-pressed'),
+      'true',
+    );
+    assert.equal(await page.locator('.knowledge-error').count(), 0);
+    assert.equal(
+      peer.requests.filter((r) => r.body?.method === 'tools/call').length,
+      remoteCalls,
+    );
+    checks.push(
+      `${section} without a Hub binding lists personal rows only, hides remote scopes and never requests them even through a team-scope URL`,
+    );
+  }
+  await route('knowledge');
+  await rows().filter({ hasText: 'Pagination sample 000' }).waitFor();
+  await shot('zh-CN-light-1440-no-hub-knowledge');
+  await page
+    .locator('.desktop-sidebar .knowledge-sync-line')
+    .getByText('未连接 Hub', { exact: true })
+    .click();
+  await page.locator('.knowledge-sync-settings').waitFor();
+  await route('settings');
+  await page
+    .locator('.settings-dialog')
+    .getByRole('button', { name: 'English', exact: true })
+    .click();
+  await page
+    .locator('.settings-dialog')
+    .getByRole('button', { name: /^(dark|深色)$/, exact: true })
+    .click();
+  await closeNativeSettings(page);
+  await route('knowledge');
+  await rows().filter({ hasText: 'Pagination sample 000' }).waitFor();
+  assert.equal(
+    await page.locator('.knowledge-scopes button').innerText(),
+    'mine',
+  );
+  await shot('en-dark-1440-no-hub-knowledge');
+  await page
+    .locator('.desktop-sidebar .knowledge-sync-line')
+    .getByText('Hub not connected', { exact: true })
+    .click();
+  await page.locator('.knowledge-sync-settings').waitFor();
+  checks.push(
+    'unbound Hub status opens sync settings from the sidebar in Chinese and English',
+  );
+  assert.equal(loadSettings(home).knowledge_sync.binding, '');
   assert.deepEqual(errors, []);
   const receipt = {
     schema: 'circle-knowledge-native-evidence@1',

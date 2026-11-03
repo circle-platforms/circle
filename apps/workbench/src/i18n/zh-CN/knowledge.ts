@@ -1,4 +1,5 @@
 export const knowledge = {
+  'Hub not connected': '未连接 Hub',
   'Hub did not accept this share': 'Hub 未接受此次分享',
   'as the uploader, sign the upload in the Hub console, then share again':
     '请上传人在 Hub 控制台为原文署名，再重新分享',

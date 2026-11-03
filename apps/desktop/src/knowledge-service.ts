@@ -220,7 +220,10 @@ export class DesktopKnowledge {
     );
   }
   status(runtime: AgentRuntime): KnowledgeSyncView {
-    return runtime.knowledge.status();
+    return {
+      ...runtime.knowledge.status(),
+      bound: Boolean(runtime.options.settings.knowledge_sync.binding),
+    };
   }
   private reference(value: Local): string {
     const key = value.snapshot + ':' + value.object,

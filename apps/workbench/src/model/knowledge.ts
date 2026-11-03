@@ -16,7 +16,11 @@ export function knowledgeShareRefusal(
     ? refusal
     : undefined;
 }
+export function knowledgeHubBound(status?: KnowledgeSyncView): boolean {
+  return status?.bound ?? Boolean(status?.server);
+}
 export function knowledgeStatusText(status?: KnowledgeSyncView): string {
+  if (!knowledgeHubBound(status)) return t('Hub not connected');
   if (!status?.server) return t('only on this device');
   if (status.clearing) return t('waiting for cleanup');
   if (status.condition === 'local') return t('only on this device');

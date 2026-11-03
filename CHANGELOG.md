@@ -6,7 +6,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Added
 
-- **Local knowledge, personal memory and workflows.** Browse and verify local sources, confirm edits, resolve conflicts and explicitly install matching workflow files. Background sync reuses a selected MCP authorization, preserves offline revisions and conflicts, and checks the impact before removing Hub copies. Session preferences load team then personal memory before existing files; knowledge and memory sharing require an exact accepted mapping and confirmation. Hub upload-signature refusals retain their original reason and remedy, with an explicit uploader-signing action. Existing memory files and skills are unchanged.
+- **Local knowledge, personal memory and workflows.** Browse and verify local sources, confirm edits, resolve conflicts and explicitly install matching workflow files. Background sync reuses a selected MCP authorization, preserves offline revisions and conflicts, and checks the impact before removing Hub copies. Session preferences load team then personal memory before existing files; knowledge and memory sharing require an exact accepted mapping and confirmation. Hub upload-signature refusals retain their original reason and remedy, with an explicit uploader-signing action. Without a bound Hub, knowledge and memory show personal content only, with a direct sync-settings entry. Existing memory files and skills are unchanged.
 
 ### Changed
 

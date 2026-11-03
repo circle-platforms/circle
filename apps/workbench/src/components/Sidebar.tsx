@@ -895,7 +895,7 @@ export function Sidebar({
         </div>
       )}
       <footer className="sidebar-footer">
-        {snapshot.knowledgeSync?.server && (
+        {snapshot.knowledgeSync && (
           <KnowledgeSyncStatus
             status={snapshot.knowledgeSync}
             onClick={() => navigate('/page/sync')}

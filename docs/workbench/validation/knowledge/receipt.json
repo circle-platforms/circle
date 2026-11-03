@@ -219,30 +219,6 @@
       "run": "postRebase"
     },
     {
-      "file": "en-dark-1440-source-expanded.png",
-      "sha256": "48dda1512ef475da663ac31304031d6e78b057f3f2855ddc8bacccd7a2f6845a",
-      "width": 1440,
-      "height": 900,
-      "sourceSha256": "88757e1cf530a37facfd6208259b0506e58c519ca5e6643ff06a7a666864c980",
-      "sourcePixelSize": [
-        2880,
-        1800
-      ],
-      "run": "postRebase"
-    },
-    {
-      "file": "zh-CN-light-1024-empty.png",
-      "sha256": "f341f621a97218ad063d7c3d57c36d93fe35bb27e10bf90c53d16a475029eaa3",
-      "width": 1024,
-      "height": 900,
-      "sourceSha256": "399dbdf9e48113d56fd5bfb7938c48838563cddacf8f6bd9c2bed5d540e21b3c",
-      "sourcePixelSize": [
-        2048,
-        1800
-      ],
-      "run": "postRebase"
-    },
-    {
       "file": "zh-CN-light-700-keyboard-reduced-motion.png",
       "sha256": "89aa73dd126fce19db9df2cbba92e3688fc1626024e87db4b0e0e5986cbd1492",
       "width": 700,
@@ -265,6 +241,30 @@
         1800
       ],
       "run": "share-refusal-packaged"
+    },
+    {
+      "file": "zh-CN-light-1440-no-hub-knowledge.png",
+      "sha256": "4da582f9252e086534b8fa3cea79db53da90756a9b62de654f99a03a185bfab3",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "3191147985fd8308888920339011497b85351a980a8e1101cdafe6501765ad47",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "nohub-packaged"
+    },
+    {
+      "file": "en-dark-1440-no-hub-knowledge.png",
+      "sha256": "f9d268a86b4a168df13585c3e35e4af31e0167e87705bffb9c2219d9605dc2d7",
+      "width": 1440,
+      "height": 900,
+      "sourceSha256": "ebbdb8429019d9dfc8dc650df9392d8cc1677261470dfeb1e658b3355867c9d2",
+      "sourcePixelSize": [
+        2880,
+        1800
+      ],
+      "run": "nohub-packaged"
     }
   ],
   "regeneration": "Run the existing knowledge-native.mjs with scratch CIRCLE_HOME and CIRCLE_WORKBENCH_DATA_DIR; full source/build/layout manifests are emitted only to ignored apps/desktop/artifacts/knowledge or CIRCLE_KNOWLEDGE_EVIDENCE_DIR",
@@ -273,6 +273,14 @@
       "name": "unsigned upload refusal",
       "receipt": "share-refusal.json",
       "replaced": "en-dark-1440-local-share-tooltip.png"
+    },
+    {
+      "name": "personal-only pages without a Hub binding",
+      "receipt": "no-hub.json",
+      "replaced": [
+        "zh-CN-light-1024-empty.png",
+        "en-dark-1440-source-expanded.png"
+      ]
     }
   ]
 }
