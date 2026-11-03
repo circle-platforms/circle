@@ -42,6 +42,7 @@ export const model: Record<string, string> = {
   'Circle runtime disconnected': 'Circle 运行时已断开',
   'Circle runtime ran out of memory': 'Circle 运行时内存不足',
   'Circle runtime crashed': 'Circle 运行时崩溃',
+  'Circle runtime stopped handling files': 'Circle 运行时已停止处理文件',
   'Circle runtime exited': 'Circle 运行时已退出',
   'restart it from the sidebar': '可在侧边栏重启',
   'use a native session operation': '请使用原生会话操作',

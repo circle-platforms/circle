@@ -97,3 +97,38 @@ test('a stopped desktop runtime is described in the interface language with its 
     setLanguage('en');
   }
 });
+
+test('a runtime Circle ended because it stopped handling files says so, without the kill code', () => {
+  const runtime = {
+    connected: false,
+    configured: true,
+    error: 'Circle runtime stopped handling files',
+    stopped: {
+      reason: 'stalled' as const,
+      code: '9',
+      restarting: true,
+      at: '2026-11-02T10:06:46.000Z',
+    },
+  };
+  try {
+    setLanguage('en');
+    assert.equal(
+      runtimeStoppedNotice(runtime),
+      'Circle runtime stopped handling files · restarting…',
+    );
+    assert.equal(
+      runtimeStoppedNotice({
+        ...runtime,
+        stopped: { ...runtime.stopped, restarting: false },
+      }),
+      'Circle runtime stopped handling files · restart it from the sidebar',
+    );
+    setLanguage('zh-CN');
+    assert.equal(
+      runtimeStoppedNotice(runtime),
+      'Circle 运行时已停止处理文件 · 正在重启…',
+    );
+  } finally {
+    setLanguage('en');
+  }
+});

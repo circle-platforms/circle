@@ -7,8 +7,12 @@ export const RUNTIME_RESTART_DELAY_MS = 31_000;
 // not restarted automatically: a runtime that keeps dying is left stopped.
 export const RUNTIME_RESTART_WINDOW_MS = 10 * 60_000;
 
-/** Why the runtime's utility process ended, from its exit code and the end of its stderr. */
-export type RuntimeExitReason = 'out-of-memory' | 'crashed' | 'exited';
+/**
+ * Why the runtime's utility process ended, from its exit code and the end of its stderr, or
+ * `stalled` when Circle ended it because its thread pool stopped taking work.
+ */
+export type RuntimeExitReason =
+  'out-of-memory' | 'crashed' | 'exited' | 'stalled';
 export interface RuntimeExit {
   reason: RuntimeExitReason;
   /** The code as reported: decimal, and hexadecimal for a Windows status. */
@@ -70,6 +74,21 @@ export function describeRuntimeExit(
     code: shown,
     message,
     ...(windows ? { detail: windows[1] } : {}),
+  };
+}
+
+/**
+ * A runtime Circle ended because its file, DNS and crypto work stopped being carried out
+ * (apps/desktop/src/thread-pool-watch.ts). The code is the one of the kill, so it says nothing.
+ */
+export function describeStalledRuntime(
+  code: number | null | undefined,
+): RuntimeExit {
+  return {
+    reason: 'stalled',
+    code: describeRuntimeExit(code).code,
+    message: 'Circle runtime stopped handling files',
+    detail: 'its thread pool stopped taking work, so Circle ended it',
   };
 }
 

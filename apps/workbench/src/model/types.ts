@@ -508,7 +508,8 @@ export interface WorkbenchSnapshot {
     error?: string;
     /** Set by the desktop application after the runtime process ended unexpectedly. */
     stopped?: {
-      reason: 'out-of-memory' | 'crashed' | 'exited';
+      /** `stalled`: Circle ended it because its file operations stopped being carried out. */
+      reason: 'out-of-memory' | 'crashed' | 'exited' | 'stalled';
       /** The exit code as reported, such as `4294930435 (0xFFFF7003)`. */
       code: string;
       /** An automatic or requested restart is under way. */

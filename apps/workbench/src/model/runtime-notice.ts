@@ -73,7 +73,8 @@ export function formatRuntimeNotice(
 }
 
 /** The notice for a desktop runtime that stopped: why, its exit code, and
- * whether it is starting again. Undefined while it runs. */
+ * whether it is starting again. Undefined while it runs. A runtime Circle ended
+ * because it stopped handling files has no code worth saying: it is the kill's. */
 export function runtimeStoppedNotice(
   runtime: WorkbenchSnapshot['runtime'],
 ): string | undefined {
@@ -84,8 +85,11 @@ export function runtimeStoppedNotice(
       ? t('Circle runtime ran out of memory')
       : stopped.reason === 'crashed'
         ? t('Circle runtime crashed')
-        : t('Circle runtime exited');
-  return `${what} (${stopped.code}) · ${
+        : stopped.reason === 'stalled'
+          ? t('Circle runtime stopped handling files')
+          : t('Circle runtime exited');
+  const code = stopped.reason === 'stalled' ? '' : ` (${stopped.code})`;
+  return `${what}${code} · ${
     stopped.restarting ? t('restarting…') : t('restart it from the sidebar')
   }`;
 }

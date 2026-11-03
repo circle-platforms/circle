@@ -14,10 +14,12 @@ import type {
   RuntimeTokenDelta,
 } from './runtime-protocol';
 import { RuntimeTokenBuffer } from './runtime-token-stream';
+import { runtimeCommandDiagnosticMetadata } from './runtime-performance-diagnostics';
 import type { PrivateExternalFileRequest } from './runtime-external-file-channel';
 import type { LocalTerminalRow, RuntimeCommandWait } from './contracts';
 import {
   describeRuntimeExit,
+  describeStalledRuntime,
   redactRuntimeOutput,
   RUNTIME_RESTART_DELAY_MS,
   RUNTIME_RESTART_WINDOW_MS,
@@ -89,6 +91,35 @@ function tabRows(value: unknown): LocalTerminalRow[] | undefined {
   return rows;
 }
 
+/**
+ * What a command asked, for the log. A workspace call says its service and method, such as
+ * `workspace-service git.changes`; its parameters, which can hold paths and text, never.
+ */
+function commandLabel(command: RuntimeCommand): string {
+  const metadata = runtimeCommandDiagnosticMetadata(command);
+  return 'service' in metadata
+    ? `${command.name} ${metadata.service}.${metadata.method}`
+    : command.name;
+}
+
+/** What the runtime said it was waiting on when its thread pool stalled: kinds and counts only. */
+function pendingSummary(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return 'unknown';
+  const rows = Object.entries(value as Record<string, unknown>)
+    .filter(
+      ([kind, count]) =>
+        /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(kind) &&
+        Number.isSafeInteger(count) &&
+        (count as number) > 0,
+    )
+    .sort((a, b) => (b[1] as number) - (a[1] as number))
+    .slice(0, 12);
+  return rows.length
+    ? rows.map(([kind, count]) => `${kind} ${count}`).join(', ')
+    : 'nothing';
+}
+
 /** The failure of a command the runtime kept: its name says what must be checked. */
 function commandTimeout(name: string, waitedMs: number): Error {
   const error = Error(
@@ -134,6 +165,8 @@ export class RuntimeSupervisor {
   private stoppedAt = 0;
   private startedAt = 0;
   private automaticRestartAt?: number;
+  /** The runtime Circle is ending because its thread pool stopped taking work. */
+  private stalledChild?: UtilityProcess;
   private restarting?: Promise<void>;
   private cancelRestartWait?: () => void;
   private pending = new Map<
@@ -247,7 +280,13 @@ export class RuntimeSupervisor {
           rows?: unknown;
           ok?: unknown;
           error?: unknown;
+          waitedMs?: unknown;
+          pending?: unknown;
         }) => {
+          if (message.type === 'thread-pool-stalled') {
+            this.stalled(child, message);
+            return;
+          }
           if (message.type === 'token-delta' && message.delta) {
             const result = this.tokenBuffer.apply(message.delta);
             if (result === 'applied') {
@@ -351,7 +390,11 @@ export class RuntimeSupervisor {
   ): Error {
     if (this.child !== child) return Error('runtime replaced');
     const expected = !!this.closing;
-    const exit = describeRuntimeExit(code, stderr);
+    const exit =
+      this.stalledChild === child
+        ? describeStalledRuntime(code)
+        : describeRuntimeExit(code, stderr);
+    this.stalledChild = undefined;
     this.child = undefined;
     this.stoppedAt = Date.now();
     this.externalGrantRequests.clear();
@@ -487,6 +530,33 @@ export class RuntimeSupervisor {
     }
     if (restarting) void this.restart().catch(() => {});
     return error;
+  }
+  /**
+   * The runtime says its thread pool stopped taking work. Its file, DNS and crypto operations
+   * then wait for ever, and so would an orderly close and its exit, which waits for the pool's
+   * threads: only SIGKILL ends it. The exit is reported as a stall, and the runtime starts again
+   * as after a crash, once; a second stall soon after leaves it stopped.
+   */
+  private stalled(
+    child: UtilityProcess,
+    message: { waitedMs?: unknown; pending?: unknown },
+  ) {
+    if (this.child !== child || this.closing || this.stalledChild === child)
+      return;
+    this.stalledChild = child;
+    const waited =
+      typeof message.waitedMs === 'number' && Number.isFinite(message.waitedMs)
+        ? `${Math.round(message.waitedMs / 1000)}s`
+        : 'unknown';
+    this.log(
+      `runtime thread pool stalled: a file operation went unanswered for ${waited} · waiting: ${pendingSummary(message.pending)} · ending the runtime`,
+    );
+    try {
+      if (child.pid !== undefined) process.kill(child.pid, 'SIGKILL');
+      else child.kill();
+    } catch {
+      /* already gone */
+    }
   }
   private get restartDelay() {
     return this.options.restartDelayMs ?? RUNTIME_RESTART_DELAY_MS;
@@ -987,7 +1057,7 @@ export class RuntimeSupervisor {
         // see for themselves: the log says what it was and what it last wrote.
         this.log(
           [
-            `runtime command timed out: ${command.name} after ` +
+            `runtime command timed out: ${commandLabel(command)} after ` +
               `${Math.round(waited / 1000)}s`,
             this.stdoutTail.trim()
               ? `last stdout:\n${redactRuntimeOutput(this.stdoutTail.trimEnd())}`
