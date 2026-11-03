@@ -20,9 +20,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request replaces the run of the older one. Runs on main share one group, so deployments never
+# overlap: a waiting deployment gives way to a newer one, and a running one is never cancelled.
 concurrency:
-  group: pages-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

@@ -24,7 +24,7 @@ permissions:
 # of its own, so every commit of main is checked and none waits behind or replaces another: macOS
 # runs only there, and the release workflow leaves the packaged journeys on main to this one.
 concurrency:
-  group: workbench-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   native:
