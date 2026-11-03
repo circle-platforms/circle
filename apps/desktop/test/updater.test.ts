@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   checksumFor,
+  detachImage,
   installation,
   LINUX_INSTALLER,
   releasesUrl,
@@ -1116,4 +1117,48 @@ test('a Linux folder that cannot be written keeps the release page and the steps
   assert.equal(state.page, `${releases}/tag/v2.0.0`);
   assert.deepEqual(state.linux, { folder: target, sandbox: false });
   assert.equal(LINUX_INSTALLER.includes('sudo chmod 4755'), true);
+});
+
+test('a detach that reports a failure counts what is still mounted, not the exit code', async () => {
+  const fail = (text: string) => Promise.reject(Error(text));
+  // The plain detach fails while the busy volume still goes away; the forced one finds nothing.
+  let mounted = true;
+  const calls: string[][] = [];
+  await detachImage(
+    '/staged/mount',
+    (args) => {
+      calls.push(args);
+      if (args.includes('-force'))
+        return fail('hdiutil: detach failed - No such file or directory');
+      mounted = false;
+      return fail('hdiutil: couldn\'t unmount "disk4" - Resource busy');
+    },
+    () => mounted,
+  );
+  assert.deepEqual(calls, [['detach', '/staged/mount']]);
+  // Gone only after the forced detach, which still reports a failure.
+  mounted = true;
+  calls.length = 0;
+  await detachImage(
+    '/staged/mount',
+    (args) => {
+      calls.push(args);
+      if (args.includes('-force')) mounted = false;
+      return fail('hdiutil: detach failed');
+    },
+    () => mounted,
+  );
+  assert.deepEqual(calls, [
+    ['detach', '/staged/mount'],
+    ['detach', '-force', '/staged/mount'],
+  ]);
+  // A volume that stays mounted is an error.
+  await assert.rejects(
+    detachImage(
+      '/staged/mount',
+      () => fail('hdiutil: detach failed - Resource busy'),
+      () => true,
+    ),
+    /Resource busy/,
+  );
 });
