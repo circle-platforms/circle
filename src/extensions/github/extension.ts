@@ -1,5 +1,7 @@
 import type { ExtensionAPI } from '../../extensions.js';
 import type { GitHubConnectionState } from '../../github_connection.js';
+const GITHUB_SETUP_HINT =
+  'GitHub is not ready for this task. Ask the user to open Settings → Capabilities → Extensions → GitHub (设置 → 能力 → 扩展 → GitHub), connect an account and allow this repository.';
 export async function register(api: ExtensionAPI) {
   const backend = api.githubConnection;
   if (!backend) {
@@ -24,12 +26,13 @@ export async function register(api: ExtensionAPI) {
   };
   const update = (state: GitHubConnectionState) => {
     if (api.signal.aborted) return;
+    // No status line: the connection is set up in the GitHub settings, and the model
+    // points the user there when a task needs it.
     api.setView(state);
-    api.setStatus(state.state, state.state === 'connected' ? 'ok' : 'none');
     clear();
     api.registerTool(
       'github_connection',
-      'Read the current GitHub connection account, allowed repositories and epoch. Authorization is managed by the human in the GitHub plugin.',
+      'Read the current GitHub connection account, allowed repositories and epoch. Only the user can connect or authorize, in Settings → Capabilities → Extensions → GitHub; when the result has setup, tell them that.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
         const current = await backend.call(
@@ -48,6 +51,9 @@ export async function register(api: ExtensionAPI) {
           account: current.account,
           repositories: current.repositories,
           storage: current.storage,
+          ...(current.state === 'connected' && current.repositories.length
+            ? {}
+            : { setup: GITHUB_SETUP_HINT }),
         };
       },
       { readOnly: true },
