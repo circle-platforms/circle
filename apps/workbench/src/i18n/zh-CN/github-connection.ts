@@ -110,7 +110,12 @@ export const githubConnection: Record<string, string> = {
   'Write it as owner/repository, for example octo-org/app.':
     '请写成 owner/repository 格式，例如 octo-org/app。',
   reset: '重置',
-  'Your sign-in is kept in secure storage.': '登录信息保存在安全存储中。',
+  'Your sign-in is kept in a file only this account can read.':
+    '登录信息保存在只有本账户能读取的文件中。',
+  'The saved GitHub sign-in needs to be entered again.':
+    '需要重新登录 GitHub。',
+  'Circle now keeps sign-ins in a file only this account can read, and the earlier one could not be moved there. Sign in again below. Edits are kept.':
+    'Circle 现在把登录信息保存在只有本账户能读取的文件中，先前的登录信息未能迁移过来。请在下方重新登录，编辑内容会保留。',
   'You sign in again the next time.': '下次使用时需要重新登录。',
   permissions: '权限',
   'what Circle can do': 'Circle 可以做的事',

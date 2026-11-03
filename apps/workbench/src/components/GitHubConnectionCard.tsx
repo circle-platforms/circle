@@ -111,6 +111,7 @@ export function GitHubConnectionCard({
     !!failure &&
     /authorization expired|HTTP 401|Bad credentials/i.test(failure);
   const denied = !!failure && /permission denied|HTTP 403/i.test(failure);
+  const reentry = !!failure && /sign-in must be entered again/i.test(failure);
   const requestFailed =
     !!failure &&
     /GitHub request failed|network|ECONN|ENOTFOUND|fetch failed|timed? ?out/i.test(
@@ -252,38 +253,44 @@ export function GitHubConnectionCard({
             <p>
               {loadFailed
                 ? t('GitHub integration could not be loaded.')
-                : storageUnavailable
-                  ? t('Secure credential storage is unavailable.')
-                  : expired
-                    ? t('GitHub authorization has expired.')
-                    : denied
-                      ? t('GitHub denied access to this repository.')
-                      : requestFailed
-                        ? t(
-                            'GitHub could not be reached or the request failed.',
-                          )
-                        : t('GitHub action could not be completed.')}
+                : reentry
+                  ? t('The saved GitHub sign-in needs to be entered again.')
+                  : storageUnavailable
+                    ? t('Secure credential storage is unavailable.')
+                    : expired
+                      ? t('GitHub authorization has expired.')
+                      : denied
+                        ? t('GitHub denied access to this repository.')
+                        : requestFailed
+                          ? t(
+                              'GitHub could not be reached or the request failed.',
+                            )
+                          : t('GitHub action could not be completed.')}
             </p>
             <p className="panel-note">
-              {storageUnavailable
+              {reentry
                 ? t(
-                    'To continue without saving your sign-in, choose sign out when Circle closes, then start again.',
+                    'Circle now keeps sign-ins in a file only this account can read, and the earlier one could not be moved there. Sign in again below. Edits are kept.',
                   )
-                : expired
+                : storageUnavailable
                   ? t(
-                      'Reconnect this GitHub account here. Your edits are kept.',
+                      'To continue without saving your sign-in, choose sign out when Circle closes, then start again.',
                     )
-                  : denied
+                  : expired
                     ? t(
-                        'Review the account permissions and allowed repositories before retrying. Your edits are kept.',
+                        'Reconnect this GitHub account here. Your edits are kept.',
                       )
-                    : requestFailed
+                    : denied
                       ? t(
-                          'Check your network and retry the read when ready. Your edits are kept.',
+                          'Review the account permissions and allowed repositories before retrying. Your edits are kept.',
                         )
-                      : t(
-                          'Review the connection and try the action again. Your edits are kept.',
-                        )}
+                      : requestFailed
+                        ? t(
+                            'Check your network and retry the read when ready. Your edits are kept.',
+                          )
+                        : t(
+                            'Review the connection and try the action again. Your edits are kept.',
+                          )}
             </p>
             <details className="context-source">
               <summary>{t('technical details')}</summary>
@@ -505,7 +512,9 @@ export function GitHubConnectionCard({
                   [
                     'encrypted',
                     t('stay signed in on this computer'),
-                    t('Your sign-in is kept in secure storage.'),
+                    t(
+                      'Your sign-in is kept in a file only this account can read.',
+                    ),
                   ],
                   [
                     'session',

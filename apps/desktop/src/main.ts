@@ -1,8 +1,10 @@
 import { NativeExternalFilePicker } from './external-file-picker';
 import {
-  EncryptedCredentialStore,
-  nativeHttpsUrl,
-} from './encrypted-credentials';
+  OwnerOnlyCredentialStore,
+  migrateEncryptedCredentials,
+  credentialsAfter,
+} from './private-credentials';
+import { nativeHttpsUrl } from './native-links';
 import { BrowserSessions } from './browser';
 import {
   devToolsMenuShortcut,
@@ -851,18 +853,24 @@ app
           version: circleVersion,
         },
       );
+      // Private credentials are an owner-only file in the runtime home, as in the
+      // terminal. What the earlier encrypted store held is moved there once; safeStorage
+      // is used only to read it.
+      const credentials = new OwnerOnlyCredentialStore(
+        join(dataPath, 'runtime-home'),
+      );
       runtime.onCredentials(
-        new EncryptedCredentialStore(join(dataPath, 'private-credentials'), {
-          isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
-          encryptString: (value) => safeStorage.encryptString(value),
-          decryptString: (value) => safeStorage.decryptString(value),
-          ...(process.platform === 'linux'
-            ? {
-                getSelectedStorageBackend: () =>
-                  safeStorage.getSelectedStorageBackend(),
-              }
-            : {}),
-        }),
+        credentialsAfter(
+          credentials,
+          migrateEncryptedCredentials(
+            join(dataPath, 'private-credentials'),
+            credentials,
+            {
+              isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+              decryptString: (value) => safeStorage.decryptString(value),
+            },
+          ),
+        ),
       );
       runtime.onCommandWait((wait) => broadcast('circle:runtime-wait', wait));
       runtime.onWorkspaceEvent((event) =>

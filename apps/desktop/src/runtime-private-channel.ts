@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-/** Main-process encrypted storage. This interface is never part of preload. */
+/** Main-process private storage. This interface is never part of preload. */
 export interface RuntimeCredentialStore {
   get(key: string): Promise<string | undefined>;
   put(key: string, value: string): Promise<void>;
@@ -21,6 +21,8 @@ export interface CredentialReply {
   error?: string;
 }
 const MAX_SECRET_BYTES = 1024 * 1024;
+/** The one failure that crosses the channel by name: the form asks for the value again. */
+export const CREDENTIAL_REENTRY = 'credential re-entry required';
 const identity = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value);
 export function validateCredentialRequest(value: unknown): CredentialRequest {
@@ -83,7 +85,13 @@ export class RuntimeCredentialClient implements RuntimeCredentialStore {
     )
       pending.reject(Error('invalid native credential reply'));
     else if (!reply.ok)
-      pending.reject(Error('native credential operation failed'));
+      pending.reject(
+        Error(
+          reply.error === CREDENTIAL_REENTRY
+            ? CREDENTIAL_REENTRY
+            : 'native credential operation failed',
+        ),
+      );
     else pending.resolve(reply.value);
     return true;
   }
@@ -166,12 +174,15 @@ export async function executeCredentialRequest(
       await store.put(request.key, request.value!);
     else await store.delete(request.key);
     return { type: 'credential-reply', id, ok: true };
-  } catch {
+  } catch (error) {
     return {
       type: 'credential-reply',
       id,
       ok: false,
-      error: 'native credential operation failed',
+      error:
+        error instanceof Error && error.message === CREDENTIAL_REENTRY
+          ? CREDENTIAL_REENTRY
+          : 'native credential operation failed',
     };
   }
 }
