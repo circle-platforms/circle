@@ -8,6 +8,7 @@ import { assertExternalSelectionPath } from './workspace/external-file-grants';
 import {
   prepareKnowledgeShare,
   syncMapping,
+  KnowledgeShareRefused,
 } from '../../../src/knowledge/sharing.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { basename, extname, join } from 'node:path';
@@ -1475,6 +1476,8 @@ export class DesktopKnowledge {
       }
       return fail();
     } catch (error) {
+      if (error instanceof KnowledgeShareRefused)
+        return { shareRefusal: error.refusal };
       if (error instanceof KnowledgeVersionConflict)
         throw Error('knowledge-changed');
       const message = error instanceof Error ? error.message : '';

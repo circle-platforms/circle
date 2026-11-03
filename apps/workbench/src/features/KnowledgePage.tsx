@@ -31,6 +31,7 @@ import {
   knowledgeStatusText,
   knowledgeLocation,
   knowledgeUpdated,
+  knowledgeShareRefusal,
 } from '../model/knowledge';
 import type {
   KnowledgeDetail,
@@ -41,6 +42,7 @@ import type {
   KnowledgeSection,
   KnowledgeSource,
   KnowledgeSyncView,
+  KnowledgeShareRefusal,
 } from '../../../../src/knowledge/desktop-contract';
 import './knowledge.css';
 
@@ -182,6 +184,28 @@ const emptyDraft: Draft = {
   candidate: '',
   teamPath: '/',
 };
+export function KnowledgeShareRefusalNotice({
+  refusal,
+}: {
+  refusal: KnowledgeShareRefusal;
+}) {
+  return (
+    <section
+      className="knowledge-share-refusal"
+      role="status"
+      aria-label={t('Hub did not accept this share')}
+    >
+      <strong>{t('Hub did not accept this share')}</strong>
+      <p className="knowledge-share-refusal-text">{refusal.message}</p>
+      <p className="knowledge-share-refusal-text">{refusal.fix}</p>
+      <p>
+        {t(
+          'as the uploader, sign the upload in the Hub console, then share again',
+        )}
+      </p>
+    </section>
+  );
+}
 export function KnowledgePage({ section }: { section: KnowledgeSection }) {
   const { runtime, snapshot } = useRuntime(),
     navigate = useNavigate();
@@ -199,6 +223,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
     [busy, setBusy] = useState(false),
     [draft, setDraft] = useState<Draft>(),
     [preview, setPreview] = useState<KnowledgePreview>(),
+    [shareRefusal, setShareRefusal] = useState<KnowledgeShareRefusal>(),
     [source, setSource] = useState<{
       name: string;
       text: string;
@@ -331,6 +356,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
     }
   };
   const openDraft = async (action: string) => {
+    setShareRefusal(undefined);
     setError('');
     setPreview(undefined);
     setDraft({
@@ -358,6 +384,7 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
   };
   const prepare = async () => {
     if (!draft) return;
+    setShareRefusal(undefined);
     const payload: any = { op: 'prepare', action: draft.action };
     if (
       ['create-entry', 'create-memory', 'create-folder'].includes(draft.action)
@@ -380,11 +407,18 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
           detail.status === 'disabled' || detail.enabled === false;
       if (draft.action === 'share') payload.teamPath = draft.teamPath;
     }
-    const result = (await run(() => call(payload))) as
-      KnowledgePreview | undefined;
+    const value = await run(() => call(payload));
+    const refused = knowledgeShareRefusal(value);
+    if (refused) {
+      setShareRefusal(refused);
+      setPreview(undefined);
+      return;
+    }
+    const result = value as KnowledgePreview | undefined;
     if (result) setPreview(result);
   };
   const cancel = () => {
+    setShareRefusal(undefined);
     if (preview) void call({ op: 'cancel', ticket: preview.ticket });
     setPreview(undefined);
     setDraft(undefined);
@@ -394,6 +428,12 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
     const result = await run(() =>
       call({ op: 'confirm', ticket: preview.ticket, confirmed: true }),
     );
+    const refused = knowledgeShareRefusal(result);
+    if (refused) {
+      setShareRefusal(refused);
+      setPreview(undefined);
+      return;
+    }
     if (result) {
       setList(undefined);
       setDetail(undefined);
@@ -1138,7 +1178,9 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
         {draft && (
           <>
             <div className="knowledge-dialog-body">
-              {preview ? (
+              {shareRefusal ? (
+                <KnowledgeShareRefusalNotice refusal={shareRefusal} />
+              ) : preview ? (
                 <>
                   <p>{preview.title}</p>
                   {preview.text && (
@@ -1299,7 +1341,9 @@ export function KnowledgePage({ section }: { section: KnowledgeSection }) {
                   ? t('checking…')
                   : preview
                     ? t('confirm change')
-                    : t('check changes')}
+                    : shareRefusal
+                      ? t('check share again')
+                      : t('check changes')}
               </Button>
             </footer>
           </>

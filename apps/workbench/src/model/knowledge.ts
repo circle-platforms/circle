@@ -1,6 +1,21 @@
-import type { KnowledgeSyncView } from '../../../../src/knowledge/desktop-contract';
+import type {
+  KnowledgeSyncView,
+  KnowledgeShareRefusal,
+} from '../../../../src/knowledge/desktop-contract';
 import { shownTime } from './time';
 import { t } from '../i18n';
+export function knowledgeShareRefusal(
+  value: unknown,
+): KnowledgeShareRefusal | undefined {
+  const refusal = (
+    value as { shareRefusal?: KnowledgeShareRefusal } | undefined
+  )?.shareRefusal;
+  return refusal?.code === 'SHARE_UPLOAD_UNSIGNED' &&
+    typeof refusal.message === 'string' &&
+    typeof refusal.fix === 'string'
+    ? refusal
+    : undefined;
+}
 export function knowledgeStatusText(status?: KnowledgeSyncView): string {
   if (!status?.server) return t('only on this device');
   if (status.clearing) return t('waiting for cleanup');

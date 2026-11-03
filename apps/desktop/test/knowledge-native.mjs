@@ -19,7 +19,10 @@ import {
   trustFolder,
 } from '../../../src/settings.ts';
 import { backgroundMcpConnection } from '../../../src/mcp_loader.ts';
-import { AuthorizedServer } from '../../../tests/fixtures/knowledge-sync/authorized-server.ts';
+import {
+  AuthorizedServer,
+  unsignedUploadRefusal,
+} from '../../../tests/fixtures/knowledge-sync/authorized-server.ts';
 import { setViewport } from './helpers/viewport.mjs';
 import { waitAnimationFrames } from './helpers/frame-readiness.mjs';
 import { closeNativeSettings } from './helpers/native-settings.mjs';
@@ -822,6 +825,101 @@ try {
           / · /,
         );
         await shot(`${language}-${theme}-${width}-knowledge`);
+        if (
+          (language === 'en' && theme === 'dark' && width === 1440) ||
+          (language === 'zh-CN' && theme === 'light' && width === 1024)
+        ) {
+          const retained = head(),
+            attempts = peer.shareCalls.length;
+          // The peer supplies a registered business refusal; no real Hub or upload is used.
+          peer.shareRefusal = { ...unsignedUploadRefusal };
+          // Return from local-only mode explicitly, preserving the preview/confirmation boundary.
+          await route('sync');
+          await button(
+            language === 'en' ? 'Sync to Hub…' : '同步到 Hub…',
+          ).click();
+          await dialog()
+            .getByRole('button', {
+              name: language === 'en' ? 'confirm change' : '确认更改',
+              exact: true,
+            })
+            .click();
+          await dialog().waitFor({ state: 'hidden' });
+          await button(language === 'en' ? 'sync now' : '立即同步').click();
+          await route('knowledge');
+          await choose('本机副本与团队副本彼此独立');
+          await button(
+            language === 'en' ? 'share to team…' : '分享到团队…',
+          ).click();
+          await dialog()
+            .getByRole('button', {
+              name: language === 'en' ? 'check changes' : '检查更改',
+              exact: true,
+            })
+            .click();
+          assert.equal(peer.shareCalls.length, attempts);
+          await dialog()
+            .getByRole('button', {
+              name: language === 'en' ? 'confirm change' : '确认更改',
+              exact: true,
+            })
+            .click();
+          const notice = dialog().locator('.knowledge-share-refusal');
+          await notice.waitFor();
+          assert.equal(
+            await notice
+              .locator('.knowledge-share-refusal-text')
+              .nth(0)
+              .textContent(),
+            unsignedUploadRefusal.message,
+          );
+          assert.equal(
+            await notice
+              .locator('.knowledge-share-refusal-text')
+              .nth(1)
+              .textContent(),
+            unsignedUploadRefusal.fix,
+          );
+          assert.equal(await page.locator('.knowledge-error').count(), 0);
+          assert.equal(
+            await dialog()
+              .getByRole('button', {
+                name: language === 'en' ? 'confirm change' : '确认更改',
+                exact: true,
+              })
+              .count(),
+            0,
+          );
+          assert.equal(peer.shareCalls.length, attempts + 1);
+          assert.equal(head(), retained);
+          await shot(`${language}-${theme}-${width}-share-refusal`);
+          await dialog()
+            .getByRole('button', {
+              name: language === 'en' ? 'cancel' : '取消',
+              exact: true,
+            })
+            .click();
+          peer.shareRefusal = undefined;
+          await route('sync');
+          await button(
+            language === 'en' ? 'only on this device…' : '仅保存在本机…',
+          ).click();
+          await dialog()
+            .getByRole('button', {
+              name:
+                language === 'en'
+                  ? 'Keep only on this device'
+                  : '改为仅保存在本机',
+              exact: true,
+            })
+            .click();
+          await dialog().waitFor({ state: 'hidden' });
+          await route('knowledge');
+          await choose('本机副本与团队副本彼此独立');
+          checks.push(
+            `${language} unsigned-upload refusal preserves Hub message/fix verbatim, states uploader signing action and requires a fresh preview; no local mutation or automatic retry`,
+          );
+        }
         if (width === 1024) {
           await button(language === 'en' ? 'back to list' : '返回列表').click();
           await rows().first().waitFor();

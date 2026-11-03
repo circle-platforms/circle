@@ -14,11 +14,11 @@
     "en-dark-1440-sync.png",
     "zh-CN-dark-1440-local-mode-impact.png",
     "en-dark-1440-local-mode-impact.png",
-    "en-dark-1440-local-share-tooltip.png",
     "en-dark-1440-conflict-editor.png",
     "en-dark-1440-source-expanded.png",
     "zh-CN-light-1024-empty.png",
-    "zh-CN-light-700-keyboard-reduced-motion.png"
+    "zh-CN-light-700-keyboard-reduced-motion.png",
+    "zh-CN-light-1024-share-refusal.png"
   ],
   "judgment": "No clipped dialog or window overflow observed; hierarchy locations, one-row Inspector actions, accessible local-only notes, dangerous action labels, empty state and narrow keyboard focus remain visible",
   "originalMatrix": {
@@ -28,5 +28,14 @@
       "sha256": "e35c7805f21ce9990b400d9952515483d859787a8017c9985c51f972aa85c7c8"
     }
   },
-  "ownerReview": "Original post-rebase checks and visual integration approved; slimming changes storage and links, not product behavior"
+  "ownerReview": "Original post-rebase checks and visual integration approved; slimming changes storage and links, not product behavior",
+  "followUps": [
+    {
+      "receipt": "share-refusal.json",
+      "replaced": "en-dark-1440-local-share-tooltip.png",
+      "inspected": "zh-CN-light-1024-share-refusal.png",
+      "method": "Chinese light narrow and English dark wide refusal frames opened individually at 1x; only Chinese replacement committed",
+      "judgment": "Hub message/fix remain verbatim in both interface languages, uploader action is explicit, no Circle/network-error alert is shown, and the complete dialog stays inside the viewport"
+    }
+  ]
 }

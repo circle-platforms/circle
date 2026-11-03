@@ -3,6 +3,14 @@ import { KnowledgeService } from './service.js';
 import type { KnowledgeConnection } from './connection.js';
 import { isObjectId } from './protocol.js';
 import { requireClean } from './verification.js';
+import { wellFormedText } from './unicode.js';
+import type { KnowledgeShareRefusal } from './desktop-contract.js';
+
+export class KnowledgeShareRefused extends Error {
+  constructor(readonly refusal: KnowledgeShareRefusal) {
+    super('knowledge-share-refused');
+  }
+}
 export interface PreparedKnowledgeShare {
   title: string;
   replaces: boolean;
@@ -17,8 +25,29 @@ function payload(value: any): any {
     (value?.content?.length === 1 && value.content[0].type === 'text'
       ? JSON.parse(value.content[0].text)
       : undefined);
-  if (value?.isError || result?.call_result !== 'ok')
+  if (value?.isError || result?.call_result !== 'ok') {
+    const refusal = (Array.isArray(result?.errors) ? result.errors : []).find(
+      (error: any) =>
+        error?.code === 'SHARE_UPLOAD_UNSIGNED' &&
+        typeof error.message === 'string' &&
+        typeof error.fix === 'string' &&
+        error.message.length > 0 &&
+        error.fix.length > 0 &&
+        error.message.length <= 8000 &&
+        error.fix.length <= 8000 &&
+        wellFormedText(error.message) &&
+        wellFormedText(error.fix),
+    );
+    if (refusal) {
+      requireClean(Buffer.from(refusal.message + '\n' + refusal.fix));
+      throw new KnowledgeShareRefused({
+        code: 'SHARE_UPLOAD_UNSIGNED',
+        message: refusal.message,
+        fix: refusal.fix,
+      });
+    }
     return fail('knowledge-remote-unavailable');
+  }
   return result;
 }
 export function syncMapping(

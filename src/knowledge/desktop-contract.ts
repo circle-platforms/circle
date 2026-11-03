@@ -70,6 +70,11 @@ export interface KnowledgeList {
   sync: KnowledgeSyncView;
   incomplete: boolean;
 }
+export interface KnowledgeShareRefusal {
+  code: 'SHARE_UPLOAD_UNSIGNED';
+  message: string;
+  fix: string;
+}
 export interface KnowledgePreview {
   ticket: string;
   action: string;

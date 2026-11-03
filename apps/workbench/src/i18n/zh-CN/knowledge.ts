@@ -1,4 +1,8 @@
 export const knowledge = {
+  'Hub did not accept this share': 'Hub 未接受此次分享',
+  'as the uploader, sign the upload in the Hub console, then share again':
+    '请上传人在 Hub 控制台为原文署名，再重新分享',
+  'check share again': '重新检查分享',
   'knowledge (item)': '知识',
   'update time unknown': '更新时间未知',
   'updated today at {time}': '今天 {time} 更新',

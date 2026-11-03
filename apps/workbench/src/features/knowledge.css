@@ -190,6 +190,16 @@
 .knowledge-sync-line[data-condition='offline'] > i {
   background: var(--negative);
 }
+.knowledge-share-refusal {
+  color: var(--text-primary);
+}
+.knowledge-share-refusal strong {
+  color: var(--status-warn-text);
+}
+.knowledge-share-refusal-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .knowledge-page-footer {
   padding: 10px 24px;
   border-top: 1px solid var(--border);

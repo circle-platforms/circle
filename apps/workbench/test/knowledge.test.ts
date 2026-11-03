@@ -13,6 +13,10 @@ import {
   settingsSectionOf,
 } from '../src/model/settings-sections.ts';
 import { PluginRegistry } from '../src/plugins/registry.ts';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { KnowledgeShareRefusalNotice } from '../src/features/KnowledgePage.tsx';
+import { knowledgeShareRefusal } from '../src/model/knowledge.ts';
 const storage = {
   length: 0,
   getItem: () => null,
@@ -117,4 +121,48 @@ test('display locations use space names and hierarchy separators, and times neve
   );
   setLanguage('en', storage);
   assert.equal(knowledgeLocation('/', 'personal', true), 'mine');
+});
+
+test('Hub refusal text stays verbatim and escaped in both interface languages, with uploader action instead of a network retry', () => {
+  const refusal = {
+    code: 'SHARE_UPLOAD_UNSIGNED' as const,
+    message: '上传原文需上传人署名\n<Hub> & unchanged  ',
+    fix: '请上传人在原文详情中选择“署名为团队来源…”，确认后重新预检',
+  };
+  assert.deepEqual(knowledgeShareRefusal({ shareRefusal: refusal }), refusal);
+  assert.equal(
+    knowledgeShareRefusal({
+      shareRefusal: { ...refusal, code: 'SOURCE_RETRYABLE' },
+    }),
+    undefined,
+  );
+  for (const lang of ['zh-CN', 'en'] as const) {
+    setLanguage(lang, storage);
+    const html = renderToStaticMarkup(
+      createElement(KnowledgeShareRefusalNotice, { refusal }),
+    );
+    assert.ok(
+      html.includes('上传原文需上传人署名\n&lt;Hub&gt; &amp; unchanged  '),
+    );
+    assert.ok(html.includes(refusal.fix));
+    assert.ok(
+      html.includes(
+        lang === 'zh-CN'
+          ? 'Hub 未接受此次分享'
+          : 'Hub did not accept this share',
+      ),
+    );
+    assert.ok(
+      html.includes(
+        lang === 'zh-CN'
+          ? '请上传人在 Hub 控制台为原文署名，再重新分享'
+          : 'as the uploader, sign the upload in the Hub console, then share again',
+      ),
+    );
+    assert.doesNotMatch(
+      html,
+      /role="alert"|reload|network|无法打开|刷新|稍后重试/,
+    );
+  }
+  setLanguage('en', storage);
 });

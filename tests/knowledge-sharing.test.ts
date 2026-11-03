@@ -10,8 +10,12 @@ import { sha256, syncObjectId } from '../src/knowledge/canonical.js';
 import {
   prepareKnowledgeShare,
   syncMapping,
+  KnowledgeShareRefused,
 } from '../src/knowledge/sharing.js';
-import { AuthorizedServer } from './fixtures/knowledge-sync/authorized-server.js';
+import {
+  AuthorizedServer,
+  unsignedUploadRefusal,
+} from './fixtures/knowledge-sync/authorized-server.js';
 import { scratch, cleanup } from './helpers.js';
 const signal = new AbortController().signal;
 async function world(
@@ -193,4 +197,96 @@ test('a local edit or a failed native qualification cannot dispatch a prepared t
   w.server.knowledgeEntries.forEach((e) => (e.status = 'unverified'));
   await assert.rejects(w.prepare(), /knowledge-share-unverified/);
   assert.equal(w.server.shareCalls.length, 0);
+});
+
+test('an unsigned-upload refusal crosses the real MCP and desktop boundary verbatim without retry or local mutation', async (t) => {
+  const w = await world(t);
+  const { DesktopKnowledge } = await import(
+    new URL('../apps/desktop/src/knowledge-service.ts', import.meta.url).href
+  );
+  const desktop = new DesktopKnowledge();
+  const row = (
+    await desktop.execute(w.runtime, { op: 'list', section: 'knowledge' })
+  ).rows.find((r: any) => r.kind === 'entry');
+  const before = w.service.withStore((s) => s.head);
+  const prepare = () =>
+    desktop.execute(w.runtime, {
+      op: 'prepare',
+      action: 'share',
+      id: row.id,
+      token: row.token,
+    });
+  const preview = await prepare();
+  w.server.shareRefusal = {
+    ...unsignedUploadRefusal,
+    message:
+      '  ' + unsignedUploadRefusal.message + '\n<Hub 原文> & unchanged  ',
+    fix: unsignedUploadRefusal.fix + '\n保留  两个空格',
+  };
+  const refusal = await desktop.execute(w.runtime, {
+    op: 'confirm',
+    ticket: preview.ticket,
+    confirmed: true,
+  });
+  assert.deepEqual(refusal, { shareRefusal: w.server.shareRefusal });
+  assert.equal(w.server.shareCalls.length, 1);
+  assert.equal(
+    w.service.withStore((s) => s.head),
+    before,
+  );
+  assert.notEqual(w.runtime.knowledge.status().condition, 'offline');
+  await assert.rejects(
+    desktop.execute(w.runtime, {
+      op: 'confirm',
+      ticket: preview.ticket,
+      confirmed: true,
+    }),
+    /knowledge-preview-expired/,
+  );
+  w.server.shareRefusal = undefined;
+  const next = await prepare();
+  assert.equal(w.server.shareCalls.length, 1);
+  assert.deepEqual(
+    await desktop.execute(w.runtime, {
+      op: 'confirm',
+      ticket: next.ticket,
+      confirmed: true,
+    }),
+    {
+      shared: true,
+      reference:
+        'tree:' + sha256('team') + '/@' + w.server.knowledgeEntries[0].entry,
+    },
+  );
+  assert.equal(w.server.shareCalls.length, 2);
+});
+
+test('only a bounded unsigned-upload business refusal exposes server text, with credential checks intact', async (t) => {
+  const w = await world(t);
+  w.server.shareRefusal = { ...unsignedUploadRefusal };
+  await assert.rejects((await w.prepare()).run(), (error: unknown) => {
+    assert.ok(error instanceof KnowledgeShareRefused);
+    assert.deepEqual(error.refusal, unsignedUploadRefusal);
+    return true;
+  });
+  for (const refusal of [
+    { ...unsignedUploadRefusal, code: 'SOURCE_RETRYABLE' },
+    { ...unsignedUploadRefusal, message: '' },
+    { ...unsignedUploadRefusal, fix: 'x'.repeat(8001) },
+  ]) {
+    w.server.shareRefusal = refusal;
+    await assert.rejects(
+      (await w.prepare()).run(),
+      /knowledge-remote-unavailable/,
+    );
+  }
+  w.server.shareRefusal = {
+    ...unsignedUploadRefusal,
+    message: 'Password=Syn9theticRejectedValue',
+  };
+  await assert.rejects((await w.prepare()).run(), (error: unknown) => {
+    assert.match(String(error), /credential rejected/);
+    assert.doesNotMatch(String(error), /Syn9thetic/);
+    return true;
+  });
 });

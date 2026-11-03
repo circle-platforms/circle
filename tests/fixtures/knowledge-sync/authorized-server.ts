@@ -17,6 +17,11 @@ export interface TeamDocument {
   enabled?: boolean;
   auto?: boolean;
 }
+export const unsignedUploadRefusal = {
+  code: 'SHARE_UPLOAD_UNSIGNED',
+  message: '上传原文需上传人署名',
+  fix: '请上传人在原文详情中选择“署名为团队来源…”，确认后重新预检',
+};
 export class AuthorizedServer {
   readonly codes = new Map<string, { challenge: string; redirect: string }>();
   readonly peer: FakeSyncServer;
@@ -44,6 +49,7 @@ export class AuthorizedServer {
   sourceTexts = new Map<string, string>();
   shareCalls: any[] = [];
   sharesAllowed = true;
+  shareRefusal?: { code: string; message: string; fix: string };
   pageItems = 1;
   chunkBytes = 6;
   constructor(home: string) {
@@ -281,6 +287,16 @@ export class AuthorizedServer {
         output = {
           call_result: 'error',
           errors: [{ code: 'SOURCE_UNAVAILABLE' }],
+        };
+      else if (args.share_entry && this.shareRefusal)
+        output = {
+          call_result: 'error',
+          errors: [this.shareRefusal],
+          share: {
+            status: 'rejected',
+            code: this.shareRefusal.code,
+            message: this.shareRefusal.message,
+          },
         };
       else if (share) {
         const own = this.personalDocuments.get(share.document),

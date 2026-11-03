@@ -1,0 +1,123 @@
+{
+  "schema": "circle-knowledge-share-refusal-evidence@1",
+  "sourceBaseHead": "12eab5d3f288667f9c55351659f2dd4f63276365",
+  "scope": "macOS arm64, synthetic loopback MCP/sync peer; no real Hub, credentials, upload or network signing operation",
+  "message": "上传原文需上传人署名",
+  "fix": "请上传人在原文详情中选择“署名为团队来源…”，确认后重新预检",
+  "semantics": "The Hub-provided message and fix are treated as plain source content without translation; only the source caption and uploader-signing instruction are localized",
+  "tests": {
+    "affectedBackend": {
+      "passed": 22,
+      "failed": 0,
+      "skipped": 0
+    },
+    "rendererAndI18n": {
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0
+    },
+    "typechecks": "root/workbench/desktop passed",
+    "fullChecks": {
+      "root": {
+        "tests": 1812,
+        "passed": 1802,
+        "failed": 0,
+        "windowsSkipped": 10
+      },
+      "renderer": {
+        "passed": 344,
+        "failed": 0,
+        "skipped": 0
+      },
+      "desktop": {
+        "passed": 163,
+        "failed": 0,
+        "skipped": 0
+      },
+      "runtime": {
+        "tests": 837,
+        "passed": 820,
+        "failed": 0,
+        "windowsSkipped": 17
+      },
+      "builds": "passed",
+      "skipNamesAndGuards": "Unchanged Windows guards listed in checks.json"
+    },
+    "formats": "root/workbench/desktop passed",
+    "docs": {
+      "productionJekyll": "passed",
+      "localLinks": 54,
+      "screenshotHashesAndCssDimensions": "15 passed",
+      "sourceBuildAndPackagedByteComparison": "passed"
+    }
+  },
+  "native": [
+    {
+      "mode": "development",
+      "effectGroups": 15,
+      "screenshotCount": 55,
+      "errors": [],
+      "asarSha256": null,
+      "source": {
+        "count": 1140,
+        "sha256": "3b88e229967d641cc1aee959a2a682acced7b6fb033f91850747d0be7ef0c4c2"
+      },
+      "build": {
+        "count": 2645,
+        "sha256": "b609c1e3fdbb4a500a6846d1ae2ea9778e0c8d7a8e53c6e25b5550379373c3b1"
+      },
+      "layouts": {
+        "count": 55,
+        "sha256": "a181f8ef6a834e9863dca8920a016d7e7136bdc32a0938cbeca0c3833cf590f1"
+      },
+      "effects": [
+        "en unsigned-upload refusal preserves Hub message/fix verbatim, states uploader signing action and requires a fresh preview; no local mutation or automatic retry",
+        "zh-CN unsigned-upload refusal preserves Hub message/fix verbatim, states uploader signing action and requires a fresh preview; no local mutation or automatic retry"
+      ]
+    },
+    {
+      "mode": "packaged",
+      "effectGroups": 15,
+      "screenshotCount": 55,
+      "errors": [],
+      "asarSha256": "b3c139fc7c87d38bc8d959122489a31d5db7d55f767912a03e24ae7081e50c43",
+      "source": {
+        "count": 1140,
+        "sha256": "3b88e229967d641cc1aee959a2a682acced7b6fb033f91850747d0be7ef0c4c2"
+      },
+      "build": {
+        "count": 2645,
+        "sha256": "b609c1e3fdbb4a500a6846d1ae2ea9778e0c8d7a8e53c6e25b5550379373c3b1"
+      },
+      "layouts": {
+        "count": 55,
+        "sha256": "6a34ec96bde2febe8a0577d91c4fe55a00a99cd93270f65acd42929e01432493"
+      },
+      "effects": [
+        "en unsigned-upload refusal preserves Hub message/fix verbatim, states uploader signing action and requires a fresh preview; no local mutation or automatic retry",
+        "zh-CN unsigned-upload refusal preserves Hub message/fix verbatim, states uploader signing action and requires a fresh preview; no local mutation or automatic retry"
+      ]
+    }
+  ],
+  "retained": {
+    "file": "zh-CN-light-1024-share-refusal.png",
+    "sha256": "decb715f2d16c17326ab97a0be8cafa7c389a2f5416fd20e70831e0019884f21",
+    "width": 1024,
+    "height": 900,
+    "replaces": "en-dark-1440-local-share-tooltip.png"
+  },
+  "englishCounterpart": {
+    "file": "en-dark-1440-share-refusal.png",
+    "sha256": "5bb78a4178643ceef5f54ba37f8cd64f35300921b6683141f9d1ab267006d4c5",
+    "retained": "ignored local artifacts only; opened and inspected"
+  },
+  "fixtureSha256": "aa5b98bee1f42558cfce0c0340662394884fbe2e94ff9d8a962ed5756116eee3",
+  "testSha256": "2117d6f049eb3691bf9bbd06d5647d3e4154b20473dbca3b5d173c9af67d8d3f",
+  "initialFailure": "Affected backend test processes initially failed to import wellFormedText from protocol.js; corrected its import to unicode.js, then both affected files passed",
+  "boundaries": [
+    "MCP business refusals preserve local revisions and do not become retryable sync/network errors",
+    "Only the recognized code and bounded well-formed, credential-checked message/fix cross the DTO boundary",
+    "The consumed confirmation ticket cannot run again; checking/share confirmation must be explicit again",
+    "No protocol mirror, Hub checkout or endpoint changed"
+  ]
+}

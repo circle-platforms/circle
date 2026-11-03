@@ -207,18 +207,6 @@
       "run": "postRebase"
     },
     {
-      "file": "en-dark-1440-local-share-tooltip.png",
-      "sha256": "cc0b84830d1e00b599309bf347e2da4f8635eb5ceae203fb7cf7ef74bdad1940",
-      "width": 1440,
-      "height": 900,
-      "sourceSha256": "49b610a90a3b6cb138cd493c3dba7b3a0bb60eda127a3a9120e80d2d1b90b912",
-      "sourcePixelSize": [
-        2880,
-        1800
-      ],
-      "run": "postRebase"
-    },
-    {
       "file": "en-dark-1440-conflict-editor.png",
       "sha256": "f35508ddc4ce49031411869040dc76d303afefddb395dbe56c35a69e879f2065",
       "width": 1440,
@@ -265,7 +253,26 @@
         1800
       ],
       "run": "postRebase"
+    },
+    {
+      "file": "zh-CN-light-1024-share-refusal.png",
+      "sha256": "decb715f2d16c17326ab97a0be8cafa7c389a2f5416fd20e70831e0019884f21",
+      "width": 1024,
+      "height": 900,
+      "sourceSha256": "7cafe81c116abe1ddee6ab1827fcae98fc286b73b63247445d6907f9d6fd3c0d",
+      "sourcePixelSize": [
+        2048,
+        1800
+      ],
+      "run": "share-refusal-packaged"
     }
   ],
-  "regeneration": "Run the existing knowledge-native.mjs with scratch CIRCLE_HOME and CIRCLE_WORKBENCH_DATA_DIR; full source/build/layout manifests are emitted only to ignored apps/desktop/artifacts/knowledge or CIRCLE_KNOWLEDGE_EVIDENCE_DIR"
+  "regeneration": "Run the existing knowledge-native.mjs with scratch CIRCLE_HOME and CIRCLE_WORKBENCH_DATA_DIR; full source/build/layout manifests are emitted only to ignored apps/desktop/artifacts/knowledge or CIRCLE_KNOWLEDGE_EVIDENCE_DIR",
+  "followUps": [
+    {
+      "name": "unsigned upload refusal",
+      "receipt": "share-refusal.json",
+      "replaced": "en-dark-1440-local-share-tooltip.png"
+    }
+  ]
 }
