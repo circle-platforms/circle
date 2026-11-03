@@ -201,6 +201,29 @@ async function launch() {
   }));
   assert.deepEqual(windows, { visible: false, focused: false });
 }
+// The window stays hidden (CIRCLE_WORKBENCH_BACKGROUND_TEST). On Linux and Windows
+// Chromium presents no frame for a hidden window, and a DevTools screenshot waits for a
+// presented frame; it arrives only while something on the page animates. Electron's own
+// capture draws the page without presenting it, so the evidence does not depend on an
+// animation running.
+async function capture(path) {
+  const shot = await app.evaluate(async ({ BrowserWindow }, url) => {
+    const window = BrowserWindow.getAllWindows().find(
+      (w) => !w.isDestroyed() && w.webContents.getURL() === url,
+    );
+    if (!window) throw Error('no window shows ' + url);
+    const image = await window.webContents.capturePage(undefined, {
+      stayHidden: true,
+    });
+    return { png: image.toPNG().toString('base64'), size: image.getSize() };
+  }, page.url());
+  const viewport = page.viewportSize();
+  assert.ok(
+    shot.size.width >= viewport.width && shot.size.height >= viewport.height,
+    `the capture holds the ${viewport.width}×${viewport.height} page`,
+  );
+  await writeFile(path, Buffer.from(shot.png, 'base64'));
+}
 async function checkProgressLayout() {
   const status = page.getByTestId('compaction-progress');
   const composer = page.locator('.composer-area .composer');
@@ -280,13 +303,11 @@ try {
     );
     await page.setViewportSize({ width: 800, height: 700 });
     await checkProgressLayout();
-    await page.screenshot({
-      path: join(output, 'compaction-en-' + theme + '.png'),
-    });
+    await capture(join(output, 'compaction-en-' + theme + '.png'));
   }
   await page.setViewportSize({ width: 560, height: 700 });
   await checkProgressLayout();
-  await page.screenshot({ path: join(output, 'compaction-en-narrow.png') });
+  await capture(join(output, 'compaction-en-narrow.png'));
   await page.setViewportSize({ width: 800, height: 700 });
   await page.evaluate(() => {
     location.hash = '/page/settings';
@@ -313,7 +334,7 @@ try {
       theme,
     );
     await checkProgressLayout();
-    await page.screenshot({ path: join(output, `compaction-zh-${theme}.png`) });
+    await capture(join(output, `compaction-zh-${theme}.png`));
   }
   checks.push(
     'one concise progress line aligns with the input in both languages, themes and narrow windows',
@@ -581,7 +602,7 @@ try {
       );
     } catch {}
   }
-  await page?.screenshot({ path: join(output, 'failure.png') }).catch(() => {});
+  if (page) await capture(join(output, 'failure.png')).catch(() => {});
   throw error;
 } finally {
   await app?.close();

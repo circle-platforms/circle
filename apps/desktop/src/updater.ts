@@ -27,6 +27,39 @@ import type { UpdateAction, UpdateState } from './contracts';
 
 const run = promisify(execFile);
 
+/** True while a volume is mounted at `path`: it then lies on another device than its parent. */
+function mountedAt(path: string): boolean {
+  try {
+    return statSync(path).dev !== statSync(join(path, '..')).dev;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detaches the image mounted at `mount`. A detach can report a failure while the volume still
+ * goes away (a busy volume that unmounts a moment later), and a forced detach of a volume that is
+ * already gone fails with "No such file or directory". Whether the volume is still there decides,
+ * not the exit codes: a volume that is gone is detached, one that stays is an error.
+ */
+export async function detachImage(
+  mount: string,
+  hdiutil: (args: string[]) => Promise<unknown>,
+  mounted: (path: string) => boolean = mountedAt,
+): Promise<void> {
+  try {
+    await hdiutil(['detach', mount]);
+    return;
+  } catch {
+    if (!mounted(mount)) return;
+    try {
+      await hdiutil(['detach', '-force', mount]);
+    } catch (forced) {
+      if (mounted(mount)) throw forced;
+    }
+  }
+}
+
 /** Where releases are published; CIRCLE_DESKTOP_RELEASES points a check at a local copy. */
 export function releasesUrl(
   value = process.env.CIRCLE_DESKTOP_RELEASES,
@@ -634,9 +667,7 @@ export class Updater {
       try {
         await run('ditto', [join(mount, 'Circle.app'), app]);
       } finally {
-        await run('hdiutil', ['detach', mount]).catch(() =>
-          run('hdiutil', ['detach', '-force', mount]),
-        );
+        await detachImage(mount, (args) => run('hdiutil', args));
       }
       await run('codesign', ['--verify', '--deep', '--strict', app]);
       return app;
