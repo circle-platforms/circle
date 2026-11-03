@@ -200,7 +200,7 @@ test('a remembered line reaches the system prompt of the next session', async (t
     system.slice(0, 4000),
   );
   assert.ok(
-    system.includes(realpathSync(join(workspace, 'MEMORY.md'))),
+    system.includes(realpathSync.native(join(workspace, 'MEMORY.md'))),
     'the file the line came from is named',
   );
 });

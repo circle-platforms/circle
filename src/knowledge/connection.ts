@@ -193,15 +193,35 @@ export class KnowledgeConnection {
     }
   }
   private install(name: string, port: McpBearerConnection): void {
+    const selectedConfig = JSON.stringify(
+      this.settings().mcp_servers.find((c) => c.name === name),
+    );
+    // Whether the grant and the saved configuration are still the ones selected. The
+    // selection itself is compared once it is saved: select() installs before saving it.
+    const assertCurrent = (): void => {
+      port.assertActive();
+      const saved = loadSettings(this.home);
+      const selection = this.settings().knowledge_sync;
+      if (
+        JSON.stringify(saved.mcp_servers.find((c) => c.name === name)) !==
+          selectedConfig ||
+        (selection.server === name &&
+          selection.binding === port.binding &&
+          (saved.knowledge_sync.server !== name ||
+            saved.knowledge_sync.binding !== port.binding))
+      )
+        throw new McpLoginRequired();
+    };
     this.selected = { name, port };
-    this.http = mcpSyncHttp(port);
+    // Every request rechecks: a filesystem event about another process's change can
+    // arrive seconds late or not at all (FSEvents on macOS, #415), and until then the
+    // old client would keep syncing under a configuration that is no longer saved.
+    this.http = mcpSyncHttp({ ...port, assertActive: assertCurrent });
     this.client = new KnowledgeSync(this.home, this.http, {
       binding: port.binding,
       onStatus: () => this.changed(),
     });
-    const selectedConfig = JSON.stringify(
-      this.settings().mcp_servers.find((c) => c.name === name),
-    );
+    // The watcher only reports such a change sooner; the requests above enforce it.
     this.watcher = watch(this.home, (_event, file) => {
       if (
         file &&
@@ -211,17 +231,7 @@ export class KnowledgeConnection {
       )
         return;
       try {
-        if (String(file) === 'settings.json') {
-          const saved = loadSettings(this.home);
-          if (
-            saved.knowledge_sync.server !== name ||
-            saved.knowledge_sync.binding !== port.binding ||
-            JSON.stringify(saved.mcp_servers.find((c) => c.name === name)) !==
-              selectedConfig
-          )
-            throw new McpLoginRequired();
-        }
-        port.assertActive();
+        assertCurrent();
       } catch {
         this.unavailable = 'login-required';
         void this.close().finally(() => this.changed());

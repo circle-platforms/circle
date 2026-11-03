@@ -42,6 +42,9 @@ async function world(t: Parameters<typeof scratch>[0]) {
   cleanup(t, () => manager.close());
   return { home, server, provider, connection, manager };
 }
+/** Every request the synthetic server received, sync routes and MCP alike. */
+const sent = (w: Awaited<ReturnType<typeof world>>) =>
+  w.server.peer.calls.length + w.server.requests.length;
 
 test('MCP and sync share one rotating refresh and preserve their opaque grant identity', async (t) => {
   const w = await world(t),
@@ -194,10 +197,14 @@ test('only the explicitly selected connection syncs and changing its grant requi
   await host.synchronize();
   assert.equal(host.status().condition, 'synced');
   forgetAuthorization(w.home, w.connection.url);
-  await until(() => host.status().condition === 'login-required');
-  const calls = w.server.peer.calls.length;
+  // The grant is checked when the client next talks to the server. A filesystem
+  // event may report the change earlier, or seconds later (#415), so it is not waited on.
+  const calls = sent(w);
+  await Promise.allSettled([host.synchronize()]);
+  assert.equal(sent(w), calls);
+  assert.equal(host.status().condition, 'login-required');
   await host.configure();
-  assert.equal(w.server.peer.calls.length, calls);
+  assert.equal(sent(w), calls);
   assert.equal(host.status().condition, 'login-required');
 });
 
@@ -410,15 +417,18 @@ test('a configuration changed by another process stops the old client until sett
     mcp_servers: [{ ...w.connection, url: 'https://different.invalid/mcp' }],
   };
   saveSettings(external, w.home);
-  await until(
-    () =>
-      host.status().condition === 'login-required' ||
-      host.status().condition === 'paused',
+  // The old client must not reach the server again, whether or not a filesystem
+  // event about the change has arrived yet (#415).
+  const count = sent(w);
+  await Promise.allSettled([host.synchronize()]);
+  assert.equal(sent(w), count);
+  assert.ok(
+    ['login-required', 'paused'].includes(host.status().condition),
+    host.status().condition,
   );
-  const count = w.server.peer.calls.length;
   await host.configure();
   assert.equal(host.status().condition, 'paused');
-  assert.equal(w.server.peer.calls.length, count);
+  assert.equal(sent(w), count);
 });
 
 test('a transport failure after an accepted refresh stays retryable rather than requesting another login', async (t) => {
