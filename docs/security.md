@@ -114,6 +114,8 @@ Circle looks through wrappers such as `env`, `nohup`, `time`, `timeout`, `nice`,
 
 This reading is textual and it has gaps. `perl -e 'unlink q(a)'`, `mv a /dev/null`, `echo hi > important.txt` and `curl https://example.com/x | sh` are ordinary asks, not forced ones. Read the command on the card.
 
+These rules are a safety net, not isolation. They decide whether a command is refused, asks or runs; they do not limit what a command does once it runs. An approved command runs with your full user rights and network access, and so does everything it starts.
+
 ### Credential files
 
 These file names are refused: `.env`, `.env.*`, `*.env`, `.netrc`, `.pgpass`, `.git-credentials`, `credentials.json`, `secrets.json`, `*.secrets.json` (where [extensions keep secrets](extensions.md#secrets)), `token.json`, `mcp-auth.json` (where [MCP sign-ins are kept](mcp.md#signing-in-to-a-server)), `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.pem`, `*.p12`, `*.pfx`. A shell command that names one is refused, and the file tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `delete`, `grep`, `lsp`) and `@` mentions in the input box refuse or skip such a file. A file you name with `@` on the command line is read, since you named it. Only the name is checked: `ls` and `glob` still list them, and a command that reaches one without naming it is not stopped. A backslash is read as a folder separator on Windows, so `C:\proj\.env` names `.env` and is refused; a secret kept under a name the list does not carry — `credentials` inside `.aws`, say — is not refused, because only the name counts.
@@ -167,6 +169,12 @@ Auto mode applies to the current conversation only and is not saved. `/new`, `/f
 ## Print mode and line mode
 
 `circle -p`, `--line` and `--mode` cannot show a card. A call that would ask is not run, and the model is told why, unless you pass `--yolo`. With `--yolo` such calls run, except the ones that always ask, which are still not run. A command that matches an [`allowed_commands`](#command-patterns-in-settings) pattern runs whether or not you pass `--yolo`, including one that always asks. Refused commands stay refused. The same rule decides for [background subagents](background-jobs.md#background-subagents). See [CLI](cli.md#print-mode).
+
+### Unattended runs
+
+In print mode nobody reads a card. With `--yolo`, or with `default_mode` set to `auto`, calls that would ask run without one, as the section above says, and a [scheduled task](scheduled-tasks.md) made with `--yolo` runs them while you are away. `--trust` trusts the folder without anyone having read it: its instruction files and skills reach the model. Whatever runs, runs as you: it can read every file you can, use the network and change anything you can change. Circle does not isolate it.
+
+For unattended runs, and above all with `--yolo` or a folder you have not read, run Circle inside a container or a virtual machine. Give it only the files, credentials and network the task needs, and treat anything it can reach as something the model may change.
 
 ## The shell environment
 
@@ -232,7 +240,7 @@ Circle makes two kinds of request of its own that have nothing to do with your m
 
 ## What is not protected
 
-- There is no operating-system sandbox. A command can read any file you can, use the network, and start background processes. A process that leaves its process group (`setsid`, a daemon) is not a [background job](background-jobs.md#what-is-not-tracked): Circle does not stop it.
+- There is no operating-system sandbox. An approved command runs with your full user rights and network access: it can read any file you can, use the network, and start background processes. To isolate commands, run Circle itself in a container or a virtual machine (see [Unattended runs](#unattended-runs)). A process that leaves its process group (`setsid`, a daemon) is not a [background job](background-jobs.md#what-is-not-tracked): Circle does not stop it.
 - A background subagent works while you do other things. Its approvals appear as cards of their own, named after its job; "allow for this session" there applies to its whole conversation.
 - **`!` snippets in custom commands run without asking.** See [Custom commands](custom-commands.md).
 - An MCP server or an extension runs with your rights, outside the approval of any single call: what it does when it starts, or in a tool you allowed for the session, is up to it.
