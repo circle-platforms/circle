@@ -215,7 +215,7 @@ Circle 的终端界面跟随用户终端自身的配色，只沿用标志色环�
 | 对端 | 同步服务器；有名字时显示连接名，例如“团队服务器” | `sync server`，有名字时显示连接名 | Hub（Circle 里） |
 | 模式 | 同步到服务器 / 仅保存在本机 | `synced` / `local only` | 同步到 Hub |
 | 范围 | 我的 / 团队 / 与我共享 | `mine` / `team` / `shared` | 个人、共享给我的 |
-| 状态 | 已验证 / 待验证 / 有冲突 / 已停用 / 已撤回 / 已被取代 | `verified` / `unverified` / `conflict` / `disabled` / `withdrawn` / `superseded` | 已核验、失效 |
+| 状态 | 已验证 / 待验证 / 有冲突 / 已停用 / 已撤回 / 被取代 | `verified` / `unverified` / `conflict` / `disabled` / `withdrawn` / `superseded` | 已核验、失效 |
 | 谁改的 | 张三 · Cursor · 11-03 14:20 更新；客户端没报名字时写“客户端” | `zhang · cursor · 11-03 14:20` | 提交人 usr_…、会话号 |
 | 会话载入 | 本会话已加载 / 部分加载 / 未加载 | `loaded` / `partly loaded` / `not loaded` | — |
 | 被拒 | 服务器拒绝了：{服务器给的说明}。{修正办法} | `refused: {detail}` | 写死的“到 Hub 控制台…” |
