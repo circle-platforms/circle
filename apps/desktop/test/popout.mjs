@@ -1319,16 +1319,12 @@ try {
     }, 25);
   });
   await localTyping;
-  // A Linux shell's long prompt can soft-wrap between b and c. innerText
-  // inserts a newline at that visual boundary even though all three keys
-  // reached the original terminal. Inspect the same visible xterm rows
-  // without inventing a line break between their text nodes.
   await until(
     () =>
       live
         .locator('.native-terminal-surface:not([hidden]) .xterm-rows')
-        .textContent()
-        .then((text) => (text ?? '').includes('abc')),
+        .innerText()
+        .then((text) => text.includes('abc')),
     'the keys after the click reached the shell',
   );
   assert.equal(await message.inputValue(), 'stays in the composer');

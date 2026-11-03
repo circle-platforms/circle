@@ -232,7 +232,9 @@
       "exit": 0,
       "gpuOn": "passed",
       "gpuOff": "passed",
-      "skipped": 0
+      "skipped": 0,
+      "sourceHead": "6494ac02dfffaee28b520e056cc459b230616cf9",
+      "scope": "Historical local run of the proposed assertion change, subsequently reverted; not a local rerun of the restored original test"
     },
     "initialRoot": {
       "exit": 1,
@@ -262,11 +264,29 @@
     "node": "scripts/knowledge-test-metrics.mjs",
     "macNative": "scripts/knowledge-test-fsync.c"
   },
-  "provenance": "Raw per-process metrics and the prior test snapshot remain in ignored artifacts; historical image, packaged and Hub receipts are unchanged",
+  "provenance": "Raw per-process metrics and the prior test snapshot remain in ignored artifacts; historical image, packaged and Hub receipts are unchanged The sourceHead and source digest describe the historical measured candidate; nativeIncident records the later restoration without relabeling those results.",
   "sourceHead": "6494ac02dfffaee28b520e056cc459b230616cf9",
   "testAndMetricSource": {
     "files": 11,
     "sha256": "47adf2c125fd96b6d0a0d405bf36a84c1dd491529ca1864738877301d192578b",
     "encoding": "sha256(UTF-8 JSON.stringify(records) + LF), sorted by path, field order path/bytes/sha256"
+  },
+  "nativeIncident": {
+    "run": 41561578064,
+    "pr": 406,
+    "attempt1": {
+      "status": "failed once",
+      "logExcerpt": "2026-11-03T01:52:32.8998286Z Error: timed out: the keys after the click reached the shell"
+    },
+    "attempt2": {
+      "status": "passed including popout.mjs",
+      "source": "Claude reported the CI rerun; not independently rerun or fetched in this follow-up"
+    },
+    "classification": "intermittent once-observed failure; no plausible knowledge-specific focus or input delay found in the short source review",
+    "artifactObservation": "The failure artifact contains ab then c across terminal rows and the unchanged composer draft; it does not establish input timing or root cause",
+    "disposition": "Revert the proposed assertion change by an additional commit; retain the original test and timeout byte-for-byte from 169bd3cc",
+    "supersededCommit": "6494ac02dfffaee28b520e056cc459b230616cf9",
+    "restoredTestRerunLocally": false,
+    "windowsFixtureFixRetained": "22c5e8c80d0bbb89328239313767a4f2fcdcf7d6"
   }
 }

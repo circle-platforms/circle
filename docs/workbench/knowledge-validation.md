@@ -77,11 +77,17 @@ When the saved Hub binding is empty, knowledge and memory show only mine; even a
 
 Each page has a dedicated regression in both interface languages, also checking that a bound local-only connection retains all three scopes. Development and packaged native runs each passed 18 effect groups with 57 captures and zero page/console/request errors. The native checks verify an actually empty saved binding, loaded personal rows on both pages, no remote tool read or load error, and the original sidebar control opening settings in both languages. [Chinese light](validation/knowledge/zh-CN-light-1440-no-hub-knowledge.png) and [English dark](validation/knowledge/en-dark-1440-no-hub-knowledge.png) were inspected at 1x; they replace two existing images so the set remains 15 PNGs. The first in-flight-disconnect observation and the completed-action barrier are recorded in no-hub.json; no timeout or assertion was relaxed.
 
-## PR CI fixture and terminal-echo corrections
+## PR CI fixture correction and intermittent native failure
 
 The Windows check in run 41561578080 exposed knowledge fixtures that registered scratch removal before SQLite closure. Node runs `t.after` hooks in registration order; Windows refuses deletion while those database handles are open. The fixtures now register owned resources through the existing `cleanup()` helper, which closes them before removing directories. A regression checks that the real SQLite database closes while its file still exists. Frozen exchange objects and store snapshot fixtures use batch admission; memory quota setup creates one populated snapshot rather than many irrelevant revision histories. Independent account homes remain separate beneath a shared scratch root. Production code, `synchronous=FULL`, object fsyncs, timeouts, Windows coverage and protocol mirror bytes are unchanged.
 
-The Linux failure in run 41561578064 contained the exact shell echo split as `ab` then `c` at a soft wrap, with the composer draft intact. The popout driver now reads the same visible xterm rows' text nodes without inserting a visual-row newline into that echo. Its real keyboard input, composer assertion and timeout are retained. Both development GPU modes passed locally; this macOS run does not replace the Windows or Linux CI result.
+Linux native run 41561578064 attempt 1 failed once in `popout.mjs`; Claude reported that attempt 2 passed, including the unchanged test. The short source review found no plausible knowledge-specific delay after the terminal click: terminal keyboard routing is unchanged from #405, an unbound knowledge connection starts no sync client, the knowledge IPC actions do not handle terminal input, and the sidebar status has no automatic focus behavior. The failure artifact contains `ab` then `c` across terminal rows with the composer draft intact, but does not establish the input timing or a root cause. The original log excerpt is:
+
+```text
+2026-11-03T01:52:32.8998286Z Error: timed out: the keys after the click reached the shell
+```
+
+This remains an intermittent failure observed once on #406, not a reproduced knowledge focus regression. The proposed text-node assertion change was reverted in a new commit at Claude's direction; `popout.mjs` is byte-identical to #405 at `169bd3cc`, with its original assertion and timeout. The earlier local GPU on/off passes describe the now-reverted proposal only; they are not claimed as a rerun of the restored test. Windows fixture slowness remains the substantive fix.
 
 [ci-follow-up.json](validation/knowledge/ci-follow-up.json) records checks and per-file resource measurements, with aggregate digests for the ignored raw observations. The earlier screenshots and packaged/Hub receipts retain their original provenance; no PNG is added or replaced for these test-only changes.
 
