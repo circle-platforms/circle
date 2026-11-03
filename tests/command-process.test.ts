@@ -96,6 +96,12 @@ function pipeLauncher(
     shellClosed: boolean;
     originalSettled: boolean;
   }[] = [];
+  // Each launch record as it is made, so a test waits on the record rather than the clock.
+  const waiting: { count: number; resolve: () => void }[] = [];
+  const launched = (count = 1) =>
+    launches.length >= count
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => waiting.push({ count, resolve }));
   const launcher: CommandLauncher = async (request) => {
     await options.beforeReady;
     request.signal.throwIfAborted();
@@ -125,6 +131,9 @@ function pipeLauncher(
       originalSettled: false,
     };
     launches.push(record);
+    for (const wait of waiting.splice(0))
+      if (launches.length >= wait.count) wait.resolve();
+      else waiting.push(wait);
     const observed = (event: string) =>
       record.lifecycle.push({ event, at: Date.now() });
     child.once('spawn', () => observed('spawn'));
@@ -185,7 +194,13 @@ function pipeLauncher(
         })()),
     };
   };
-  return { launcher, launches };
+  return { launcher, launches, launched };
+}
+/** Settles when the process has exited, from its own exit event. */
+function exited(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null)
+    return Promise.resolve();
+  return new Promise((resolve) => child.once('exit', () => resolve()));
 }
 function registry(
   t: TestContext,
@@ -282,11 +297,8 @@ test('custom transport final output waits for real log flush even after the orig
       returned = true;
       return value;
     });
-  await until(() => f.launches.length === 1, { timeout: 8000, label: 'spawn' });
-  await until(() => f.launches[0]!.child.exitCode !== null, {
-    timeout: 8000,
-    label: 'native process exit',
-  });
+  await f.launched(1);
+  await exited(f.launches[0]!.child);
   await delay(160); // Cross an actual Registry monitor tick while the log is incomplete.
   assert.equal(returned, false);
   assert.equal(f.jobs.executionFor('one', 'flush')!.status, 'running');
@@ -338,10 +350,7 @@ test('cancellation after allocation waits for the late owned handle and stops it
       returned = true;
       throw error;
     });
-  await until(() => f.launches.length === 1, {
-    timeout: 8000,
-    label: 'allocated process',
-  });
+  await f.launched(1);
   signal.abort(new Error('cancel-after-spawn'));
   await delay(30);
   assert.equal(
