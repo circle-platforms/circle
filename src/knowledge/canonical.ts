@@ -1,4 +1,4 @@
-// Adapted from Circle Hub contracts/src/sync-canonical.ts (Apache-2.0), without a Hub or Zod dependency.
+// Adapted from Circle Hub contracts/src/sync-canonical.ts (Apache-2.0), without a server or Zod dependency.
 import { createHash } from 'node:crypto';
 import { SYNC_LIMITS, isObjectId, validateSync } from './protocol.js';
 import { parseStrictJson } from './strict-json.js';

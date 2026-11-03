@@ -1,4 +1,5 @@
-// Optional cross-repository acceptance. The supplied repository is read-only; all Hub code runs from a fixed git archive.
+// Optional cross-repository acceptance against circle-hub, the reference server that implements
+// knowledge-sync v1. The supplied repository is read-only; all of its code runs from a fixed git archive.
 import assert from 'node:assert/strict';
 import {
   mkdtemp,
@@ -35,7 +36,7 @@ const COMMIT = '410c9c44fcedef41bd1755bdbd0bef6600cd904e';
 const [repositoryArg, receiptArg] = process.argv.slice(2);
 if (!repositoryArg || !receiptArg)
   throw Error(
-    'usage: knowledge-hub-acceptance.ts <read-only Hub repository> <receipt.json>',
+    'usage: knowledge-server-acceptance.ts <read-only circle-hub repository> <receipt.json>',
   );
 const repository = resolve(repositoryArg),
   output = resolve(receiptArg);
@@ -115,7 +116,7 @@ try {
     );
     assert.ok(
       ![7420, 7443].includes(Number(url.port)),
-      'live Hub ports are forbidden',
+      'live reference-server ports are forbidden',
     );
     const reply = await originalFetch(input, init);
     if (
@@ -201,7 +202,7 @@ try {
   const settings = trustFolder(defaultSettings(), workspace);
   settings.mcp_servers = [
     {
-      name: 'Synthetic isolated Hub',
+      name: 'Synthetic isolated sync server',
       url: hub.mcpUrl,
       transport: 'streamable_http',
     },
@@ -385,7 +386,7 @@ try {
   ]);
   assert.equal(runtime.knowledge.status().condition, 'conflicted');
   addCheck(
-    'independent Circle and Hub edits preserve both conflict revisions without auto-resolution',
+    'independent Circle and server edits preserve both conflict revisions without auto-resolution',
   );
   service
     .prepareMemory({
@@ -437,9 +438,9 @@ try {
   await assert.rejects(unsigned.run(), /knowledge-remote-unavailable/);
   assert.equal(rejections.at(-1), 'SHARE_UPLOAD_UNSIGNED');
   addCheck(
-    'the real Hub rejects unsigned local-upload grounds with SHARE_UPLOAD_UNSIGNED and keeps its refusal receipt',
+    'the reference server rejects unsigned local-upload grounds with SHARE_UPLOAD_UNSIGNED and keeps its refusal receipt',
   );
-  // The Hub's own acceptance fixture pattern: an independently observed synthetic team capture.
+  // The reference server's own acceptance fixture pattern: an independently observed synthetic team capture.
   // This creates a separate capture, never changes the prior upload's provenance, and is not a real connector receipt.
   await hub.records.artifacts.ingest({
     bytes: raw,
@@ -523,7 +524,7 @@ try {
   );
   assert.equal(await readPersonal(), 'SYNTHETIC_EXPLICIT_RESOLUTION');
   addCheck(
-    'local-only mode really purges personal Hub payloads, retains local and team copies, and resumes into a new epoch',
+    'local-only mode really purges personal server payloads, retains local and team copies, and resumes into a new epoch',
   );
   const token = keptFor(home, hub.mcpUrl).tokens!.access_token;
   await hub.records.principals.revokeTokenValue(token);
@@ -567,12 +568,12 @@ try {
     loopback: true,
     livePortsExcluded: [7420, 7443],
     temporaryPostgres: true,
-    vault: 'temporary FileKeyProvider from Hub testing tools',
+    vault: 'temporary FileKeyProvider from circle-hub testing tools',
     authorization:
       'real password login and OAuth code exchange through Circle loopback callbacks',
     authorizationPages,
     fixtureProvenance:
-      'Synthetic observed team capture seeded through Hub artifacts.ingest after asserting unsigned-upload refusal; no real connector executed',
+      'Synthetic observed team capture seeded through circle-hub artifacts.ingest after asserting unsigned-upload refusal; no real connector executed',
     rejections,
     testedAt: new Date().toISOString(),
     versions: {

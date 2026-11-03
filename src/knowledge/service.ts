@@ -212,7 +212,7 @@ export class KnowledgeService {
             const path = graph.paths.get(object.body.directory_id);
             if (Buffer.byteLength(object.body.markdown) > 24000)
               throw Error('memory document exceeds 24000 UTF-8 bytes');
-            // Hub reserves one document and the largest candidate for a conflict; disabled current documents use no context budget.
+            // The protocol reserves one document and the largest candidate for a conflict; disabled current documents use no context budget.
             if (
               item.heads.length > 1 ||
               path == null ||

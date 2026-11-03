@@ -279,7 +279,6 @@ test('a runtime offers the reserved knowledge tools and reads their real stored 
     userHome: root,
     model,
     settings: defaultSettings(),
-    localContext: false,
     approve: async () => {
       asked++;
       return 'approve';
@@ -512,4 +511,52 @@ test('the knowledge write tool publishes a confirmed revision and the next model
   assert.equal(service.read(snapshot, id).object, id);
   assert.equal(service.search('synthetic').items[0]!.objectId, id);
   assert.equal(service.search('synthetic').items[0]!.status, 'unverified');
+});
+
+const KNOWLEDGE_TOOLS = [
+  'knowledge_search',
+  'knowledge_read',
+  'knowledge_write',
+  'knowledge_share',
+  'memory_write',
+];
+test('with the local knowledge store on, every knowledge tool is in the first request of any turn', async (t) => {
+  const { AgentRuntime } = await import('../src/runtime.js'),
+    { defaultSettings } = await import('../src/settings.js');
+  const root = scratch(t);
+  const model = new ScriptedModel([{ message: reply([], 'hi') }]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: join(root, 'home'),
+    userHome: root,
+    model,
+    settings: defaultSettings(),
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('hello');
+  for (const name of KNOWLEDGE_TOOLS)
+    assert.ok(
+      model.requests[0]!.tools.some((tool) => tool.name === name),
+      name,
+    );
+});
+test('words in the prompt never list the deferred knowledge tools', async (t) => {
+  const { AgentRuntime } = await import('../src/runtime.js'),
+    { defaultSettings } = await import('../src/settings.js');
+  const root = scratch(t);
+  const model = new ScriptedModel([{ message: reply([], 'ok') }]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: join(root, 'home'),
+    userHome: root,
+    model,
+    settings: defaultSettings(),
+    localContext: false,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('remember this in my knowledge and memory · 记住');
+  const tools = model.requests[0]!.tools.map((tool) => tool.name);
+  assert.ok(tools.includes('knowledge_read'));
+  for (const name of KNOWLEDGE_TOOLS.filter((n) => n !== 'knowledge_read'))
+    assert.equal(tools.includes(name), false, name);
 });

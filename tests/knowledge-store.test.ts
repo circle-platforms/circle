@@ -146,7 +146,7 @@ test('staged objects stay out of search until one atomic snapshot commit; old by
   assert.deepEqual(w.store.history(), [s1, s2]);
 });
 
-test('the canonical empty Hub snapshot can precede the first local directory without inventing remote data', (t) => {
+test('the canonical empty server snapshot can precede the first local directory without inventing remote data', (t) => {
   const home = scratch(t),
     store = new KnowledgeStore(home);
   cleanup(t, () => store.close());
