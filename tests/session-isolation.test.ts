@@ -29,7 +29,7 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
-import { cleanup, scratch, until } from './helpers.js';
+import { cleanup, processEnded, scratch, until } from './helpers.js';
 
 function gate() {
   let entered!: () => void;
@@ -423,7 +423,11 @@ for (const leaseOwner of ['root', 'child'] as const) {
     await extensionCleanup;
     assert.equal(extensionsAborted, true);
     assert.notEqual(runtime.jobs.get(job.id)?.status, 'running');
-    assert.throws(() => process.kill(pid, 0));
+    // Signal 0 still finds a killed process the system has not reaped yet: on Linux the
+    // shell forked the command, so Circle is not its parent. Ask whether it still runs.
+    await until(() => processEnded(pid), {
+      label: `the background process ${pid} to end`,
+    });
     writeFileSync(join(workspace, 'trigger'), '');
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(existsSync(join(workspace, 'forbidden')), false);

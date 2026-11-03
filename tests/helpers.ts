@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { createServer, type Socket } from 'node:net';
@@ -126,6 +127,19 @@ export function processGone(pid: number): boolean {
     if (code === 'EPERM') return false;
     throw error;
   }
+}
+/**
+ * Whether a process runs no more: gone, exited and not yet reaped (Z), or exiting (E in
+ * BSD ps). A process a shell forked is reaped by the system once the shell has gone, not
+ * by Circle, so signal 0 can still find it for a while after it was killed (#416).
+ */
+export function processEnded(pid: number): boolean {
+  if (processGone(pid)) return true;
+  if (process.platform === 'win32') return false;
+  const state = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], {
+    encoding: 'utf8',
+  }).stdout.trim();
+  return state === '' || state.startsWith('Z') || state.includes('E');
 }
 
 /** Register before clients connect; only this test's server and its sockets are closed. */

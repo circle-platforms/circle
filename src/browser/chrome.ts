@@ -627,7 +627,8 @@ export class ChromeBrowser implements BrowserPort {
   /**
    * Signals a process group launch created; false when none of its members runs. macOS
    * refuses (EPERM) to signal a group whose members have all exited but are not reaped yet,
-   * as when the browser exits just as it is stopped: that group has stopped.
+   * or are still exiting, as when the browser exits just as it is stopped: that group has
+   * stopped.
    */
   private async signalGroup(
     pid: number,
@@ -659,9 +660,16 @@ export class ChromeBrowser implements BrowserPort {
         (error, stdout) => (error ? reject(error) : resolve(stdout)),
       ),
     );
+    // A member runs unless it is a zombie (Z) or, in BSD ps, trying to exit (E): macOS
+    // lists a killed member as exiting, `?E`, while it refuses to signal it (#416).
     return output.split('\n').some((line) => {
       const [group, status] = line.trim().split(/\s+/);
-      return Number(group) === pid && status && !status.startsWith('Z');
+      return (
+        Number(group) === pid &&
+        status &&
+        !status.startsWith('Z') &&
+        !status.includes('E')
+      );
     });
   }
   /** After accepted taskkill, the creation handle can already be terminating (#196). */
