@@ -1,0 +1,46 @@
+{
+  "schema": "knowledge-sync-discovery@1",
+  "issuer": "https://192.0.2.10",
+  "sync": {
+    "versions": [
+      {
+        "version": "v1",
+        "base_url": "https://192.0.2.10/api/sync/v1",
+        "capabilities": [
+          "error-detail",
+          "purge-confirmation"
+        ]
+      }
+    ]
+  },
+  "authorization": {
+    "resource": "https://192.0.2.10/mcp",
+    "resource_metadata": "https://192.0.2.10/.well-known/oauth-protected-resource/mcp",
+    "bearer_methods_supported": [
+      "header"
+    ]
+  },
+  "local_tools": {
+    "base_url": "https://192.0.2.10/local-tools"
+  },
+  "mcp": {
+    "endpoint": "https://192.0.2.10/mcp",
+    "capabilities": {
+      "entry-share": {
+        "tool": "upload_file",
+        "argument": "share_entry"
+      },
+      "memory-share": {
+        "tool": "upload_file",
+        "argument": "memory_share"
+      },
+      "team-memory-read": {
+        "tool": "get_nodes",
+        "argument": "memory",
+        "fixed": {
+          "scope": "team"
+        }
+      }
+    }
+  }
+}

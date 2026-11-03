@@ -156,7 +156,8 @@
     "SYNC_SESSION_EXPIRED",
     "SYNC_MODE_LOCAL",
     "SYNC_EPOCH_CHANGED",
-    "SYNC_RATE_LIMITED"
+    "SYNC_RATE_LIMITED",
+    "SYNC_PURGE_CONFIRMATION_REQUIRED"
   ],
   "packPaths": [
     "pack.json",
@@ -180,6 +181,7 @@
     "skill.json"
   ],
   "schemas": [
+    "knowledge-sync-discovery.v1.schema.json",
     "personal-sync-abort.v1.schema.json",
     "personal-sync-client.v1.schema.json",
     "personal-sync-commit.v1.schema.json",

@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/circle-platforms/circle-hub",
-  "commit": "eef4ca121fa673a8067d32d74c05f923a93fd42b",
+  "commit": "0fc93fcb213676922a40734c5dc3a4495f9f7662",
   "license": "Apache-2.0",
   "files": [
     {
@@ -26,7 +26,7 @@
     {
       "source": "contracts/generated/schemas/personal-sync-error.v1.schema.json",
       "path": "src/data/knowledge-sync/v1/personal-sync-error.v1.schema.json",
-      "sha256": "0d7fb365b645bc8852b5efcdf6eb751fab12108fec5ed7369216cbaaa59a5138"
+      "sha256": "16af318dc67cf9e6043d6b17713ea48d09c1035017bde01d0d7c9dd15bee35aa"
     },
     {
       "source": "contracts/generated/schemas/personal-sync-http.v1.schema.json",
@@ -147,12 +147,32 @@
       "source": "contracts/test-fixtures/sync/v1/exchange.json",
       "path": "tests/fixtures/knowledge-sync/v1/exchange.json",
       "sha256": "9f71c6bee0a411ad49a1de612b4a0ee5ff93f310f7287fe74b1e80611f8e8546"
+    },
+    {
+      "source": "contracts/generated/schemas/knowledge-sync-discovery.v1.schema.json",
+      "path": "src/data/knowledge-sync/v1/knowledge-sync-discovery.v1.schema.json",
+      "sha256": "bda47282900598cc4f5fc71a2b110726afbdd04254f0785f9960420830a76da3"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1-capabilities/README.md",
+      "path": "tests/fixtures/knowledge-sync/v1-capabilities/README.md",
+      "sha256": "02ac440fb314d1ef168aebe010f9d7b04660853f3b17f28a03e32657d3f6042f"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1-capabilities/discovery.json",
+      "path": "tests/fixtures/knowledge-sync/v1-capabilities/discovery.json",
+      "sha256": "006b5fdc95a8d7a394f310a14d268377fdda8816346f7688712693b1cc53a84f"
+    },
+    {
+      "source": "contracts/test-fixtures/sync/v1-capabilities/errors.json",
+      "path": "tests/fixtures/knowledge-sync/v1-capabilities/errors.json",
+      "sha256": "a067d845c30aecd0f9a20cedbea7b95ecbf2e9aba6a23aa15c0bc5b4df446b90"
     }
   ],
   "references": [
     {
       "source": "contracts/src/sync.ts",
-      "sha256": "6e29c83b0529eab4c9f2e6cac237d105604c4b9d16539cc812e5fb9acf1beb50"
+      "sha256": "44654f9dd7b1d39a4d0e7c0228c4ad493e6a82df1745234243b5a97e85cb5abd"
     },
     {
       "source": "contracts/src/sync-canonical.ts",
@@ -176,15 +196,15 @@
     },
     {
       "source": "contracts/src/spaces.ts",
-      "sha256": "4487ccf9cdc4cc5a931c73bf6383270c22fee7130155b8ccf95965fafc51f203"
+      "sha256": "f6b97074bda1c24add1d6176d8bcc21220067d8659941d6a6e030fde3c90c8c7"
     },
     {
       "source": "contracts/generated/vocabulary.ts",
-      "sha256": "e8286df349beb8b7c2b52775bb53888b14fcd8ad3847f47f91f3e01dde169351"
+      "sha256": "bfaa18549c3705b64e2b7b645f261fa6e3792d4b485857720e72bb23923a7083"
     },
     {
       "source": "contracts/generated/protocol.ts",
-      "sha256": "11cebb53b81221b5bfab8902151a32d81727f0595bad705dc10633d814a5da58"
+      "sha256": "38458671ebfcce58b5487feba1f0116c42e1be7a7e381a928bd32e55ea828c40"
     },
     {
       "source": "hub/records/space-index.ts",
@@ -232,7 +252,7 @@
     },
     {
       "source": "hub/refs/quote.ts",
-      "sha256": "fcd7cbb6317f0916cd64e9b81e598a1f96757badedd2068d965dfa799b0aa1d4"
+      "sha256": "8233abb0cd5fb3ef5310233e114c7ee4237f8b3c4f43a0421e561d76319223fa"
     },
     {
       "source": "contracts/src/reference.ts",
@@ -240,7 +260,7 @@
     },
     {
       "source": "hub/knowledge/personal-sync/service.ts",
-      "sha256": "28bc55796a17715b44bb7c7adaec3a71ba3c8c9b6a028854c6057973c9abe73b"
+      "sha256": "4861b5e0eb7f76f0edcb85d0ce5182a74570d246d0791595edd5a742ae0920e2"
     },
     {
       "source": "hub/refs/parsers/text.test.ts",
@@ -276,11 +296,11 @@
     },
     {
       "source": "hub/server/personal-sync.ts",
-      "sha256": "5cbe4de606551b6c83eeb3059d1869b2efa590468edff5b5b41577aee4aaf700"
+      "sha256": "2752f97fa72760b06bd1ba4d5b6174d047a7b3000303a119ea77530a21821705"
     },
     {
       "source": "hub/records/personal-sync.ts",
-      "sha256": "68fcaa983ad272ba3296eac264f102f3b4813036c03c84e25d7638563aff797d"
+      "sha256": "fb6f279f324bc41eabc84a8206daa2f15ad0bf19f5bb452a4c576e9f1dba45a1"
     },
     {
       "source": "hub/records/canonical.ts",
@@ -300,13 +320,13 @@
     },
     {
       "source": "hub/knowledge/memory.ts",
-      "sha256": "fbb2277c998a4d4f00bf099d3d5e91a86239a88900c4da56de550d9cc58bd05e"
+      "sha256": "71c90a648907043cc6c9c188600fdc953b390f31a119bd49236506df539036c2"
     }
   ],
   "derived": [
     {
       "path": "src/data/knowledge-sync/v1/protocol.json",
-      "sha256": "715e0680be8b5117f36ea5f85df092880e7da00c25b3153348b4b11c1a008e7f",
+      "sha256": "6347a4f5188e66c4f3a8263bf6361e3a4048039f2bfead8d924815c803bcfda6",
       "sources": [
         "contracts/src/sync.ts",
         "contracts/generated/vocabulary.ts",
