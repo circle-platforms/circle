@@ -126,7 +126,7 @@ test('a runtime Circle ended because it stopped handling files says so, without 
     setLanguage('zh-CN');
     assert.equal(
       runtimeStoppedNotice(runtime),
-      'Circle 运行时已停止处理文件 · 正在重启…',
+      'Circle 运行时已停止处理文件 · 等待重启中…',
     );
   } finally {
     setLanguage('en');
