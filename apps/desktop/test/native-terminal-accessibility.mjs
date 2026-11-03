@@ -17,6 +17,7 @@ import {
   restoreNativeClipboardWithRecovery,
 } from './helpers/native-clipboard.mjs';
 import { patience } from './helpers/patience.mjs';
+import { closeNativeSettings } from './helpers/native-settings.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const temp = await mkdtemp(
   join(tmpdir(), 'circle-native-terminal-accessibility-'),
@@ -299,6 +300,7 @@ try {
     'true',
   );
   await app.evaluate(({ app }) => app.setAccessibilitySupportEnabled(false));
+  await closeNativeSettings(page);
   await page
     .locator(`[data-row-key="recent:${sessionId}"] .session-link`)
     .click();

@@ -6,19 +6,9 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Added
 
-- **Desktop knowledge, memory and workflows.** Browse sources, edit personal content, resolve conflicts and explicitly install workflow files; sync settings show actual pre-check impact before switching modes, and confirmed team sharing uses the selected connection.
-
-- **Personal knowledge commands and session preferences.** The terminal can browse and confirm local edits, select one existing MCP authorization for background sync, and load bounded team then personal preferences before memory files. Token refresh is shared with MCP; account changes pause old queues. Real test-Hub validation remains unfinished.
-
-- **A resumable personal sync engine.** The host API preserves offline revisions and conflicts, recovers lost replies and fences concurrent local processes. The runtime uses an explicitly selected MCP connection; desktop settings use the same host operations.
-
-- **Confirmed personal knowledge and memory tools.** Local search and exact quotation checks support proposed writes that always ask for person approval; credentials and oversized memories are refused before persistence. Explicit personal pack installation validates selected files without importing hooks or enabling network sync.
-
-- **A separate local knowledge storage foundation.** Versioned objects, atomic snapshots and Chinese full-text search use their own private database; existing memory files are unchanged.
+- **Local knowledge, personal memory and workflows.** Browse and verify local sources, confirm edits, resolve conflicts and explicitly install matching workflow files. Background sync reuses a selected MCP authorization, preserves offline revisions and conflicts, and checks the impact before removing Hub copies. Session preferences load team then personal memory before existing files; knowledge and memory sharing require an exact accepted mapping and confirmation. Existing memory files and skills are unchanged.
 
 ### Changed
-
-- **Clearer knowledge inspectors and sync choices.** Locations use readable hierarchies, actions stay in one row, and keeping only local copies shows an explicit destructive confirmation.
 
 - **The desktop uses the shared graphite palette.** Dark and light surfaces, text, controls and status colours now follow the Circle design tokens; terminal defaults stay unchanged.
 - **The desktop shares one three-pane layout.** Overview and drawer modes share the right pane, conversation elements follow the graphite design, and the composer distinguishes idle, plan, working and response states with text and frames.

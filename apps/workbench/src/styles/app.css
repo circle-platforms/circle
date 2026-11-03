@@ -2316,8 +2316,7 @@ pre {
   z-index: 81;
   top: 50%;
   left: 50%;
-  /* Keep centering independent of the entry animation’s transform. */
-  translate: -50% -50%;
+  transform: translate(-50%, -50%);
   width: min(560px, calc(100vw - 32px));
   max-height: 85dvh;
   overflow: auto;
