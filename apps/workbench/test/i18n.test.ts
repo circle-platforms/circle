@@ -100,6 +100,50 @@ test('Chinese interface wording follows the shared vocabulary without addressing
   assert.equal(ZH_CN['file access granted'], '文件访问已授权');
 });
 
+test('knowledge and memory follow the shared vocabulary and never name Hub', async () => {
+  const { knowledge } = await import('../src/i18n/zh-CN/knowledge.ts');
+  // Circle shows the sync server, never Hub (knowledge interface phase 2, section 1).
+  const named = Object.entries(knowledge).filter(([english, chinese]) =>
+    /\bHub\b|Hub/.test(
+      english.replace(/GitHub/g, '') + chinese.replace(/GitHub/g, ''),
+    ),
+  );
+  assert.deepEqual(named, []);
+  const words: Record<string, string> = {
+    'sync server not connected': '未连接同步服务器',
+    'connected · {name}': '已连接 · {name}',
+    'sync to server…': '同步到服务器…',
+    'only on this device…': '仅保存在本机…',
+    'only on this device': '仅保存在本机',
+    mine: '我的',
+    team: '团队',
+    'shared with me': '与我共享',
+    verified: '已验证',
+    'pending verification': '待验证',
+    conflicts: '有冲突',
+    disabled: '已停用',
+    'loaded in this session': '本会话已加载',
+    'partially loaded in this session': '本会话已部分加载',
+    'not loaded in this session': '本会话未加载',
+    'the server refused this share and gave no reason':
+      '服务器拒绝了这次分享，没有给出原因',
+    'confirm share to team': '确认分享到团队',
+    'confirm delete': '确认删除',
+    'confirm replace': '确认替换',
+    'confirm write': '确认写入',
+    'shared to team': '已分享到团队',
+    'written to my memory': '已写入我的记忆',
+    'write memory': '写入记忆',
+    'memory in this session': '本会话的记忆',
+  };
+  for (const [english, chinese] of Object.entries(words))
+    assert.equal(ZH_CN[english], chinese, english);
+  // The old generic confirmation is gone: every confirmation names its action.
+  assert.equal(ZH_CN['confirm change'], undefined);
+  for (const value of Object.values(knowledge))
+    assert.doesNotMatch(value, /已核验|失效的?条目|共享给我的|个人(?!副本)/);
+});
+
 test('connection hints, requests and handoffs use Chinese wording while English keeps its keys', (context) => {
   context.after(() => setLanguage('en'));
   setLanguage('zh-CN');

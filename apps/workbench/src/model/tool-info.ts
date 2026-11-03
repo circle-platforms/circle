@@ -2,9 +2,13 @@ import { t } from '../i18n/index.ts';
 
 // Derived from docs/tools.md at Circle 9b53272. Checked by the coverage test.
 // Descriptions are getters so they follow the interface language; tool names stay as they are.
+// A title, where there is one, is the name a conversation card shows for the call.
 export const BUILTIN_TOOL_INFO = [
   {
     name: 'knowledge_search',
+    get title() {
+      return t('search knowledge');
+    },
     get description() {
       return t('Search personal knowledge');
     },
@@ -17,6 +21,9 @@ export const BUILTIN_TOOL_INFO = [
   },
   {
     name: 'knowledge_read',
+    get title() {
+      return t('read knowledge');
+    },
     get description() {
       return t('Read an immutable knowledge object');
     },
@@ -29,6 +36,9 @@ export const BUILTIN_TOOL_INFO = [
   },
   {
     name: 'knowledge_write',
+    get title() {
+      return t('write knowledge');
+    },
     get description() {
       return t('Propose a personal knowledge change');
     },
@@ -41,6 +51,9 @@ export const BUILTIN_TOOL_INFO = [
   },
   {
     name: 'knowledge_share',
+    get title() {
+      return t('share to team');
+    },
     get description() {
       return t('Share knowledge with a team');
     },
@@ -53,6 +66,9 @@ export const BUILTIN_TOOL_INFO = [
   },
   {
     name: 'memory_write',
+    get title() {
+      return t('write memory');
+    },
     get description() {
       return t('Propose a personal memory change');
     },

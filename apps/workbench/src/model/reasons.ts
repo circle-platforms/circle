@@ -1,4 +1,5 @@
 import { t } from '../i18n/index.ts';
+import { isKnowledgeTool, knowledgeToolTitle } from './knowledge-tools.ts';
 
 // Why the core asks, as approvals.ts words it; a reason not listed is shown as it is.
 const REASONS: Record<string, () => string> = {
@@ -102,6 +103,7 @@ export function approvalHeading(item: {
   tool?: string;
   input?: Record<string, unknown>;
 }): string {
+  if (isKnowledgeTool(item.tool)) return knowledgeToolTitle(item.tool);
   const name = terminalTabName(item);
   if (name) return name;
   const tab = terminalTabNumber(item);

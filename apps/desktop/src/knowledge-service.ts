@@ -219,6 +219,48 @@ export class DesktopKnowledge {
       runtime.options.knowledgeAccess,
     );
   }
+  private sessionMemoryShown?: {
+    context: string;
+    documents: {
+      scope: 'team' | 'personal';
+      title: string;
+      state: 'loaded' | 'partial';
+    }[];
+  };
+  /** The memory documents this session's model was given, and whether each is whole. */
+  sessionMemory(
+    runtime: AgentRuntime,
+  ):
+    | {
+        scope: 'team' | 'personal';
+        title: string;
+        state: 'loaded' | 'partial';
+      }[]
+    | undefined {
+    const context = runtime.sessionMemoryContext;
+    if (!context) return undefined;
+    if (this.sessionMemoryShown?.context !== context) {
+      const loaded = runtime.loadedSessionMemory;
+      this.sessionMemoryShown = {
+        context,
+        documents: (loaded?.documents ?? []).flatMap((document) => {
+          const state = this.loaded(runtime, document.id, document.version);
+          return state.loaded
+            ? [
+                {
+                  scope: document.scope,
+                  title: document.title.slice(0, 1024),
+                  state: state.loadState === 'loaded' ? 'loaded' : 'partial',
+                } as const,
+              ]
+            : [];
+        }),
+      };
+    }
+    return this.sessionMemoryShown.documents.length
+      ? this.sessionMemoryShown.documents
+      : undefined;
+  }
   status(runtime: AgentRuntime): KnowledgeSyncView {
     return {
       ...runtime.knowledge.status(),

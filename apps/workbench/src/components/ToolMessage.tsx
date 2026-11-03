@@ -34,6 +34,12 @@ import { useSources } from './SourceNavigation';
 import type { Attachment } from '../model/types';
 import { hasToolInput } from '../model/browser';
 import { withoutHookAllowedLine } from '../../../../src/hook_display';
+import {
+  isKnowledgeTool,
+  knowledgeToolResult,
+  knowledgeToolTarget,
+  knowledgeToolTitle,
+} from '../model/knowledge-tools';
 const AGENT_TOOLS = new Set([
   'task',
   'native_tasks_enqueue',
@@ -122,21 +128,112 @@ export function shownToolOutput(text: string): string {
       t('Hook output ({name}):', { name }),
     );
 }
-export function ToolMessage({
-  tool,
-  ownerSessionId,
-  userShellId,
-  expanded,
-  onFile,
-  onAgent,
-}: {
+interface ToolMessageProps {
   tool: ToolCall;
   ownerSessionId?: string;
   userShellId?: string;
   expanded: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
-}) {
+}
+export function ToolMessage(props: ToolMessageProps) {
+  return isKnowledgeTool(props.tool.name) ? (
+    <KnowledgeToolMessage tool={props.tool} expanded={props.expanded} />
+  ) : (
+    <GenericToolMessage {...props} />
+  );
+}
+/**
+ * A knowledge or memory call: the tool list's title, the item it is about and what it
+ * came to, in words. Its arguments and response are the technical details, folded.
+ */
+function KnowledgeToolMessage({
+  tool,
+  expanded,
+}: Pick<ToolMessageProps, 'tool' | 'expanded'>) {
+  const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
+  const { notify } = useRuntime();
+  const shownOutput = shownToolOutput(tool.output);
+  const target = knowledgeToolTarget(tool.name, tool.input, tool.output);
+  const result = knowledgeToolResult(tool.name, tool.output, tool.status);
+  const live = ['running', 'waiting'].includes(tool.status);
+  return (
+    <div className={`tool-call tool-${tool.status}`} data-knowledge-tool>
+      <button
+        className="tool-head"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
+        <span className="tool-icon">
+          <FileText size={14} />
+        </span>
+        <code className="tool-readable" title={tool.name}>
+          {knowledgeToolTitle(tool.name)}
+        </code>
+        <span className="tool-target tool-readable">{target}</span>
+        {result && <span className="tool-diff-summary">{result}</span>}
+        <span className="tool-time">{tool.elapsed}</span>
+        {tool.status === 'success' ? (
+          <Check size={13} />
+        ) : (
+          <Status value={tool.status} />
+        )}
+        <span>
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </span>
+      </button>
+      {open && (
+        <div className="tool-content">
+          {!shownOutput.trim() && (
+            <p className="tool-empty">
+              {live ? t('no output yet') : t('no output')}
+            </p>
+          )}
+          <details className="context-source">
+            <summary>{t('technical details')}</summary>
+            <div className="tool-toolbar">
+              <IconButton
+                label={t('copy tool output')}
+                onClick={() =>
+                  copyText(
+                    JSON.stringify(
+                      {
+                        tool: tool.name,
+                        input: tool.input,
+                        output: shownOutput,
+                      },
+                      null,
+                      2,
+                    ),
+                  ).then(
+                    () => notify(t('copied')),
+                    () => notify(t('clipboard unavailable')),
+                  )
+                }
+              >
+                <Copy size={13} />
+              </IconButton>
+            </div>
+            {hasToolInput(tool.input) && (
+              <DataBlock title={t('arguments')} value={tool.input} />
+            )}
+            {shownOutput.trim() && (
+              <DataBlock title={t('output')} value={shownOutput} />
+            )}
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}
+function GenericToolMessage({
+  tool,
+  ownerSessionId,
+  userShellId,
+  expanded,
+  onFile,
+  onAgent,
+}: ToolMessageProps) {
   const sources = useSources();
   const openCommandTerminal = useCommandTerminal();
   const openUserShellTerminal = useUserShellTerminal();

@@ -19,10 +19,16 @@ interface ContextValue {
   runtime: RuntimePort;
   snapshot: WorkbenchSnapshot;
   notice: string;
-  notify: (message: string) => void;
+  /** A link the current notice offers, such as "open" after a memory was written. */
+  noticeAction?: NoticeAction;
+  notify: (message: string, action?: NoticeAction) => void;
   perform: (action: () => void | Promise<unknown>) => void;
   act: (action: () => CommandResult | Promise<CommandResult>) => void;
   setRouter: (handler: (result: CommandResult) => void) => void;
+}
+export interface NoticeAction {
+  label: string;
+  run: () => void;
 }
 const Context = createContext<ContextValue | null>(null);
 export function RuntimeProvider({
@@ -38,6 +44,7 @@ export function RuntimeProvider({
     runtime.getSnapshot,
   );
   const [notice, setNotice] = useState('');
+  const [noticeAction, setNoticeAction] = useState<NoticeAction>();
   const shownNotice = useRef<
     { text: string; source: 'action' | 'runtime' | 'session-error' } | undefined
   >(undefined);
@@ -47,17 +54,21 @@ export function RuntimeProvider({
   const showNotice = (
     message: string,
     source: 'action' | 'runtime' | 'session-error' = 'action',
+    action?: NoticeAction,
   ) => {
     const shown = { text: message, source };
     shownNotice.current = shown;
     setNotice(message);
+    setNoticeAction(action);
     setTimeout(() => {
       if (shownNotice.current !== shown) return;
       shownNotice.current = undefined;
       setNotice('');
+      setNoticeAction(undefined);
     }, 4200);
   };
-  const notify = (message: string) => showNotice(message);
+  const notify = (message: string, action?: NoticeAction) =>
+    showNotice(message, 'action', action);
   // A stopped runtime is said in the interface language, with its exit code.
   const runtimeNotice =
     runtimeStoppedNotice(snapshot.runtime) ?? snapshot.runtime?.error;
@@ -123,6 +134,7 @@ export function RuntimeProvider({
         runtime,
         snapshot,
         notice,
+        noticeAction: notice ? noticeAction : undefined,
         notify,
         perform,
         act,

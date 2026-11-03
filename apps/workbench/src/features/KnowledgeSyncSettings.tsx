@@ -3,7 +3,11 @@ import { useRuntime } from '../app/context';
 import { Button, Modal } from '../components/common';
 import { t } from '../i18n';
 import { shownTime } from '../model/time';
-import { knowledgeError, knowledgeStatusText } from '../model/knowledge';
+import {
+  knowledgeError,
+  knowledgeServerBound,
+  knowledgeSyncLine,
+} from '../model/knowledge';
 import type {
   KnowledgePreview,
   KnowledgeSyncView,
@@ -14,7 +18,7 @@ interface Settings {
   connections: { name: string }[];
 }
 export function KnowledgeSyncSettings() {
-  const { runtime, snapshot } = useRuntime();
+  const { runtime, snapshot, notify } = useRuntime();
   const [state, setState] = useState<Settings>(),
     [server, setServer] = useState(''),
     [preview, setPreview] = useState<KnowledgePreview>(),
@@ -105,13 +109,21 @@ export function KnowledgeSyncSettings() {
         )}
       </div>
       <dl className="knowledge-sync-facts">
+        <div>
+          <dt>{t('connection')}</dt>
+          <dd>
+            {sync?.server && knowledgeServerBound(sync)
+              ? sync.server
+              : t('sync server not connected')}
+          </dd>
+        </div>
         {statusVisible && (
           <div>
             <dt>{t('status')}</dt>
             <dd>
               <span className={'knowledge-state ' + sync?.condition}>
                 <i />
-                {knowledgeStatusText(sync)}
+                {knowledgeSyncLine(sync)}
               </span>
             </dd>
           </div>
@@ -135,7 +147,7 @@ export function KnowledgeSyncSettings() {
                 ? t('not checked yet')
                 : sync.mode === 'local'
                   ? t('only on this device')
-                  : t('Sync to Hub')}
+                  : t('sync to server')}
           </dd>
         </div>
       </dl>
@@ -157,7 +169,7 @@ export function KnowledgeSyncSettings() {
           }
           onClick={() => void prepare('mode', 'hub')}
         >
-          {t('Sync to Hub…')}
+          {t('sync to server…')}
         </Button>
         <Button
           disabled={!sync?.server || checking || sync.mode === 'local'}
@@ -198,7 +210,7 @@ export function KnowledgeSyncSettings() {
           preview?.action === 'mode'
             ? preview.title === 'local'
               ? t('Keep only on this device?')
-              : t('Sync to Hub')
+              : t('sync to server')
             : t('use this connection')
         }
         restoreFocus
@@ -239,7 +251,7 @@ export function KnowledgeSyncSettings() {
                   <p>
                     {preview.title === 'local'
                       ? t(
-                          'personal Hub copies and folder shares are removed; local copies and independent team copies remain',
+                          'personal copies on the sync server and folder shares are removed; local copies and independent team copies remain',
                         )
                       : t(
                           'retained local content is used for this account’s personal sync',
@@ -278,15 +290,24 @@ export function KnowledgeSyncSettings() {
                     if (result) {
                       setPreview(undefined);
                       void load();
+                      notify(
+                        preview.action !== 'mode'
+                          ? t('connected · {name}', { name: server })
+                          : preview.title === 'local'
+                            ? t('kept only on this device')
+                            : t('syncing to server'),
+                      );
                     }
                   })
                 }
               >
                 {checking
                   ? t('checking…')
-                  : preview.action === 'mode' && preview.title === 'local'
-                    ? t('Keep only on this device')
-                    : t('confirm change')}
+                  : preview.action === 'mode'
+                    ? preview.title === 'local'
+                      ? t('Keep only on this device')
+                      : t('confirm sync to server')
+                    : t('confirm connection')}
               </Button>
             </footer>
           </>

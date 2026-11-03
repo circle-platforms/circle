@@ -259,6 +259,28 @@ button.overview-row:hover .overview-name {
   font: inherit;
   cursor: pointer;
 }
+/* The session's memory: counts on the line, its documents when opened. */
+.overview-memory summary {
+  cursor: pointer;
+  color: var(--fg);
+}
+.overview-memory ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.overview-memory li {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.overview-memory li small {
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
 .overview-link:disabled {
   cursor: default;
 }
