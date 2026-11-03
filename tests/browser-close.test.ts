@@ -203,6 +203,65 @@ test(
   },
 );
 
+test(
+  'a browser group whose last member is still exiting has stopped, though macOS refuses to signal it (#416)',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    // What macOS showed: ps lists a member running, the kill of the group is refused
+    // (EPERM), and ps then lists the member as exiting, "?E", a state that runs no code
+    const root = scratch(t);
+    const group = 1_073_741_824;
+    const calls = join(root, 'calls');
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    writeFileSync(
+      join(root, 'ps'),
+      `#!/bin/sh\necho x >> ${quote(calls)}\nif [ "$(wc -l < ${quote(calls)})" -le 1 ]; then echo "${group} Ss"; else echo "${group} ?E"; echo "${group} Z"; fi\n`,
+      { mode: 0o755 },
+    );
+    const signals: [number, NodeJS.Signals | number | undefined][] = [];
+    const kill = process.kill.bind(process);
+    t.mock.method(
+      process,
+      'kill',
+      (pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid !== -group) return kill(pid, signal);
+        signals.push([pid, signal]);
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      },
+    );
+    let closed = false;
+    const owning = () => {
+      const browser = new ChromeBrowser({
+        executable: process.execPath,
+        closeTimeout: 1000,
+        processInspector: join(root, 'ps'),
+      });
+      const owned = browser as any;
+      owned.cdp = {
+        close: () => {
+          closed = true;
+        },
+      };
+      owned.processGroups.add(group);
+      return { browser, groups: owned.processGroups as Set<number> };
+    };
+    const exiting = owning();
+    await exiting.browser.close();
+    assert.deepEqual(signals, [[-group, 'SIGKILL']]);
+    assert.equal(exiting.groups.has(group), false);
+    assert.equal(closed, true);
+    // A member that still runs after the refusal is no stop: close keeps the group
+    writeFileSync(join(root, 'ps'), `#!/bin/sh\necho "${group} Ss"\n`, {
+      mode: 0o755,
+    });
+    closed = false;
+    const running = owning();
+    await assert.rejects(running.browser.close(), /kill EPERM/);
+    assert.equal(running.groups.has(group), true);
+    assert.equal(closed, false);
+  },
+);
+
 test('browser cleanup failure rejects and remains retryable instead of confirming deletion', async () => {
   const child = Object.assign(new EventEmitter(), {
     pid: 1_073_741_824,
