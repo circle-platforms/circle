@@ -234,7 +234,7 @@
       "gpuOff": "passed",
       "skipped": 0,
       "sourceHead": "6494ac02dfffaee28b520e056cc459b230616cf9",
-      "scope": "Historical local run of the proposed assertion change, subsequently reverted; not a local rerun of the restored original test"
+      "scope": "Historical local run of the original 6494ac02 proposal; fresh on/off rerun after reapplying the exact fix is recorded separately"
     },
     "initialRoot": {
       "exit": 1,
@@ -264,7 +264,7 @@
     "node": "scripts/knowledge-test-metrics.mjs",
     "macNative": "scripts/knowledge-test-fsync.c"
   },
-  "provenance": "Raw per-process metrics and the prior test snapshot remain in ignored artifacts; historical image, packaged and Hub receipts are unchanged The sourceHead and source digest describe the historical measured candidate; nativeIncident records the later restoration without relabeling those results.",
+  "provenance": "Raw per-process metrics and the prior test snapshot remain in ignored artifacts. The sourceHead and source digest describe the original measured candidate. Historical image, packaged and Hub receipts are unchanged; nativeIncident records the temporary restoration and the subsequently approved reapplication without relabeling historical results.",
   "sourceHead": "6494ac02dfffaee28b520e056cc459b230616cf9",
   "testAndMetricSource": {
     "files": 11,
@@ -280,13 +280,39 @@
     },
     "attempt2": {
       "status": "passed including popout.mjs",
-      "source": "Claude reported the CI rerun; not independently rerun or fetched in this follow-up"
+      "source": "Claude reported the CI rerun; not independently rerun or fetched in this follow-up",
+      "explanation": "Passed by chance of prompt width avoiding the soft-wrap split, as confirmed by Claude"
     },
-    "classification": "intermittent once-observed failure; no plausible knowledge-specific focus or input delay found in the short source review",
-    "artifactObservation": "The failure artifact contains ab then c across terminal rows and the unchanged composer draft; it does not establish input timing or root cause",
-    "disposition": "Revert the proposed assertion change by an additional commit; retain the original test and timeout byte-for-byte from 169bd3cc",
-    "supersededCommit": "6494ac02dfffaee28b520e056cc459b230616cf9",
-    "restoredTestRerunLocally": false,
-    "windowsFixtureFixRetained": "22c5e8c80d0bbb89328239313767a4f2fcdcf7d6"
+    "classification": "Identified harness text-reading defect: innerText inserts a newline at a soft-wrapped visual row boundary; not knowledge-related",
+    "artifactObservation": "The actual shell echo is ab then c at a soft wrap, with the composer draft unchanged; the same abc expectation must read across that visual boundary",
+    "disposition": "Reapply the exact 6494ac02 textContent change over the same visible xterm rows in a new commit; keep the original timeout and abc expectation",
+    "windowsFixtureFixRetained": "22c5e8c80d0bbb89328239313767a4f2fcdcf7d6",
+    "latentIn405": {
+      "commit": "169bd3cc37f62cb7d5001561fecf46c0247e6d33",
+      "reason": "The original popout test is identical and has the same latent innerText soft-wrap assumption"
+    },
+    "temporaryRestorationCommit": "d8923e71e0949d514d0a5a604b87d4b2be063af3",
+    "approvedFixSource": "6494ac02dfffaee28b520e056cc459b230616cf9",
+    "temporaryOriginalTestRerunLocally": false,
+    "decisionSource": "Claude confirmed the soft-wrap cause and clarified that the no-test-change direction applied only if no plausible cause was found",
+    "reapplicationCommit": "cb3ebb8f315b218882c85c628d2a52c047b6eae4"
+  },
+  "freshNativeRun": {
+    "command": "node apps/desktop/test/popout.mjs",
+    "platform": "darwin-arm64",
+    "sourceHead": "cb3ebb8f315b218882c85c628d2a52c047b6eae4",
+    "testSha256": "e4e4b787023013a4b4f147999042ad25baf7eb8be1b1e38a303bf963f4905541",
+    "testIdenticalTo": "6494ac02dfffaee28b520e056cc459b230616cf9",
+    "exit": 0,
+    "gpuOn": "passed",
+    "gpuOff": "passed",
+    "skipped": 0,
+    "logBytes": 142,
+    "logSha256": "b7ef91364ad9775a90a1deeb50c6ed9bc8f42b02adafb0bc86f2f8a7b5f710d5",
+    "synthetic": true,
+    "isolatedCircleHomeAndWorkbenchData": true,
+    "productionSourceUnchanged": true,
+    "fullCliAndApplicationSuitesRerun": false,
+    "scope": "Fresh development popout rerun in both GPU modes after reapplying the approved text reading fix; no new packaged or Windows/Linux run"
   }
 }
