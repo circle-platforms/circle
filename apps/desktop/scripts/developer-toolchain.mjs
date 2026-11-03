@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { repairNodePtyOnMacos } from './node-pty-macos.mjs';
 
 export const NODE_VERSION = '24.21.0';
 const nodeAssets = {
@@ -386,9 +387,10 @@ if (
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   const root = fileURLToPath(new URL('..', import.meta.url));
-  if (process.argv.includes('--native-permissions'))
+  if (process.argv.includes('--native-permissions')) {
+    await repairNodePtyOnMacos(root);
     await ensureNativeDependencyPermissions(root);
-  else
+  } else
     await prepareDeveloperTools(join(root, 'dist'), {
       platform: process.env.CIRCLE_DESKTOP_PLATFORM,
       arch: process.env.CIRCLE_DESKTOP_ARCH,
