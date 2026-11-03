@@ -314,6 +314,7 @@ try {
     async () => (await state()).activeSessionId === b,
     'restored row does not block B',
   );
+  await page.locator('[role="menu"]').waitFor({ state: 'detached' });
   assert.equal(await page.getByRole('menu').count(), 0);
   assert.equal(
     await page

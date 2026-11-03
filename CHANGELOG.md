@@ -4,8 +4,20 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Changed
+
+- **The desktop uses the shared graphite palette.** Dark and light surfaces, text, controls and status colours now follow the Circle design tokens; terminal defaults stay unchanged.
+- **The desktop shares one three-pane layout.** Overview and drawer modes share the right pane, conversation elements follow the graphite design, and the composer distinguishes idle, plan, working and response states with text and frames.
+- **The Chinese desktop uses consistent wording.** Request and handoff states, progress labels and interface terms follow the shared design rules, including the preview connection hint; English interface keys and original content are preserved.
+
 ### Fixed
 
+- **The browser address stays editable in a compact drawer.** Its own row keeps security and takeover controls from squeezing the field away with wider system fonts or larger text.
+
+- **Desktop overlays keep their position and keyboard focus through animations.** Dialogs and notices stay centred, search can reopen while its previous dialog closes, and a terminal menu cannot steal input from a newly opened shell.
+- **Closing a desktop panel menu keeps the panel open.** Escape dismisses the menu without also closing its drawer or leaving full view.
+- **Long model identifiers stay usable in the desktop.** The model menu fits the window and reveals the complete identifier on hover.
+- **Moving between desktop composer menus preserves focus.** A menu finishing its exit animation cannot dismiss a menu or dialog opened after it.
 - **Desktop command answers stay where they were asked.** A command that answers with one line (`unknown command /name`, `/undo`, `/share`) said it only in a toast that passes in four seconds, and an answer that arrived after the window had moved to another conversation was dropped whole. The line now also stays in the conversation that asked for it, in its place in the transcript, and the toast is still said while that conversation is on screen. (#302)
 
 ## 1.14.0 - 2026-10-30

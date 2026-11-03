@@ -658,7 +658,7 @@ test('a command cut off by the runtime stopping fails in the interface language 
       .actionError;
   try {
     setLanguage('zh-CN');
-    const expected = 'Circle 运行时已退出 (1) · 正在重启…';
+    const expected = 'Circle 运行时已退出 (1) · 等待重启中…';
     // The update that says the runtime stopped comes first, then the rejection of
     // the command that was under way.
     {

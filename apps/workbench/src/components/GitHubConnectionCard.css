@@ -203,7 +203,7 @@
 .github-field-error {
   margin: 0;
   font-size: var(--ui-tiny);
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .github-choices {
   display: grid;
@@ -215,7 +215,7 @@
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   background: var(--bg);
   cursor: pointer;

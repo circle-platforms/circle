@@ -1,4 +1,5 @@
 import '../features/navigation-settings.css';
+import { CircleMark } from './CircleMark';
 import { extensionStatusText } from '../model/extension-status';
 import { openHome } from '../features/home-selection';
 import {
@@ -685,8 +686,9 @@ export function Sidebar({
       }}
     >
       <header className="brand">
-        <span className="circle-logo" />
+        <CircleMark />
         <strong>circle</strong>
+        <small>{t('workbench')}</small>
       </header>
       <nav className="sidebar-primary" aria-label={t('navigation')}>
         <button className="sidebar-item" {...newSessionPress}>

@@ -9,12 +9,12 @@ export const developer: Record<string, string> = {
   'Circle did not answer': 'Circle 没有应答',
   'Circle did not answer in {seconds}s': 'Circle 在 {seconds} 秒内没有应答',
   'Circle is still working on {command} · {seconds}s':
-    'Circle 仍在处理 {command} · {seconds} 秒',
+    'Circle 正在处理 {command} · {seconds} 秒',
   'check whether it ran before sending it again':
     '先确认它是否已经执行，再重新发送',
   retry: '重试',
   'session changes': '会话改动',
-  history: '历史',
+  history: '记录',
   'new task': '新建任务',
   'close task form': '收起新建任务',
   'task details and acceptance': '任务详情与验收条件',
@@ -23,7 +23,7 @@ export const developer: Record<string, string> = {
   'draft is available only in memory; saving failed and the recovery copy is retained':
     '草稿仅保留在当前内存中；保存失败，恢复副本已保留',
   'draft saved; recovery copy retained until you explicitly remove it':
-    '草稿已保存；恢复副本将保留，直到你明确移除',
+    '草稿已保存；恢复副本保留到明确移除时',
   'retry saving recovered draft': '重试保存恢复草稿',
   'recovered queued inputs': '待恢复的排队输入',
   'recovered input payload is unavailable; recovery copy retained':
@@ -33,9 +33,9 @@ export const developer: Record<string, string> = {
   'draft could not be updated; recovery copy retained':
     '无法更新草稿；恢复副本已保留',
   'copied to draft without sending; recovery copy retained until you explicitly remove it':
-    '已复制到草稿，尚未发送；恢复副本将保留，直到你明确移除',
-  'input explicitly resumed': '已按你的选择恢复输入',
-  'recovery copy explicitly removed': '已按你的选择移除恢复副本',
+    '已复制到草稿，尚未发送；恢复副本保留到明确移除时',
+  'input explicitly resumed': '已按选择恢复输入',
+  'recovery copy explicitly removed': '已按选择移除恢复副本',
   'nothing is sent automatically': '不会自动发送',
   'input recovery unavailable': '输入恢复暂不可用',
   'steering input': '引导输入',
@@ -67,7 +67,7 @@ export const developer: Record<string, string> = {
   'signal process': '发送进程信号',
   'close resource': '关闭资源',
   'list resources': '列出资源',
-  'read event history': '读取事件历史',
+  'read event history': '读取事件记录',
   'read status': '读取状态',
   'apply patch': '应用补丁',
   'read differences': '查看差异',
@@ -103,7 +103,7 @@ export const developer: Record<string, string> = {
   'operation review unavailable': '暂时无法读取或记录操作核对',
   'no operations awaiting review': '没有待核对的操作',
   'operation details': '操作详情',
-  'observed effects and review evidence': '实际结果与核对依据',
+  'observed effects and review evidence': '实际结果与核对来源',
   'record review without replay': '记录核对结论（不重执行）',
   'needs review': '需核对',
   'opening file…': '正在打开文件…',
@@ -175,15 +175,15 @@ export const developer: Record<string, string> = {
     '排队消息已被读取，编辑内容已保留',
   'return edit to draft': '将编辑内容放回草稿',
   dismiss: '关闭',
-  'command history': '命令历史',
+  'command history': '命令记录',
   'independent human review': '独立人工核对',
   'confirm each criterion using observed evidence; this records your review without claiming an automatic test passed':
-    '逐项填写实际核对依据，此操作记录人工审阅，不代表自动测试通过',
+    '逐项填写实际核对来源，此操作记录人工审阅，不代表自动测试通过',
   'review requires the recorded patch identity': '需先取得实际改动的校验记录',
   'the task changed; reopen its current result before reviewing':
     '任务已变化，请重新打开当前结果再核对',
-  'review evidence for {criterion}': '核对依据：{criterion}',
-  'what you checked and what you saw': '你检查了什么、看到了什么',
+  'review evidence for {criterion}': '核对来源：{criterion}',
+  'what you checked and what you saw': '检查内容与实际观察结果',
   'recording review…': '正在记录核对结果…',
   'confirm reviewed criteria': '确认已逐项核对',
   'load current patch and recheck criteria': '载入当前改动并重新逐项核对',
@@ -196,7 +196,7 @@ export const developer: Record<string, string> = {
   'read remaining artifact': '读取后续内容',
   'copy shown content': '复制已显示内容',
   'copy complete artifact': '复制完整产物',
-  '{name} unavailable': '{name}不可用',
+  '{name} unavailable': '{name} 不可用',
   '{name} could not be displayed': '无法显示 {name}',
   'your other views and running work are preserved':
     '其他视图和正在执行的工作不受影响',
@@ -212,7 +212,7 @@ export const developer: Record<string, string> = {
   'browser log is unavailable': '浏览器日志不可用',
   'unsent messages': '未发送的消息',
   'these were waiting when Circle closed. nothing is sent until you choose.':
-    'Circle 关闭时这些消息还在排队。你选择之前不会发送。',
+    'Circle 关闭时这些消息仍在排队，明确选择后才会发送。',
   'could not restore unsent messages': '无法恢复未发送的消息',
   'try saving again': '重新保存',
   '{n} attachment': '{n} 个附件',

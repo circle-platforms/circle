@@ -83,10 +83,15 @@ export async function openNativeTerminalInspector(page) {
   return panel;
 }
 /** Make a shell from the + menu at the end of the terminal tabs. */
-export async function chooseNewLocalTerminal(page, panel) {
+export async function chooseNewLocalTerminal(
+  page,
+  panel,
+  { beforeSelect } = {},
+) {
   await panel
     .getByRole('button', { name: 'new terminal or device', exact: true })
     .click();
+  await beforeSelect?.();
   // The item is disabled while another terminal action runs; a click waits for it.
   await page.getByRole('menuitem', { name: /^new local terminal/ }).click();
 }
@@ -381,6 +386,21 @@ export async function runNativeTerminalJourney({
     await dialog
       .getByLabel('ready log text', { exact: true })
       .fill(serviceMarker);
+    assert.equal(
+      await dialog.getByLabel('service name', { exact: true }).inputValue(),
+      'native journey service',
+    );
+    assert.equal(
+      await dialog
+        .getByLabel('service executable', { exact: true })
+        .inputValue(),
+      nodePath,
+      'the executable field retains the exact bundled Node path',
+    );
+    assert.equal(
+      await dialog.getByLabel('service folder', { exact: true }).inputValue(),
+      workspace,
+    );
     await dialog
       .getByRole('button', { name: 'start service', exact: true })
       .click();

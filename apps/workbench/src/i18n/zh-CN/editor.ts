@@ -7,7 +7,7 @@ export const editor: Record<string, string> = {
   'agent source: {name}': 'Agent 来源：{name}',
   'agent source': 'Agent 来源',
   'workspace: {name}': '工作区：{name}',
-  'source directory is not available': '暂时无法查看来源目录',
+  'source directory is not available': '暂时无法查看来源文件夹',
   'source workspace is not available': '暂时无法确认来源工作区',
   'save queued': '保存已排队',
   'exit code': '退出码',
@@ -19,10 +19,10 @@ export const editor: Record<string, string> = {
   'saved: {saved}; not saved: {unsaved}': '已保存：{saved}；未保存：{unsaved}',
   'saving file': '正在保存文件',
   'file deleted on disk; your changes are kept':
-    '磁盘上的文件已删除，你的修改仍保留',
+    '磁盘上的文件已删除，编辑内容仍保留',
   'file changed on disk; your changes are kept':
-    '磁盘上的文件已改变，你的修改仍保留',
-  'restore file with your changes': '用你的修改恢复文件',
+    '磁盘上的文件已改变，编辑内容仍保留',
+  'restore file with your changes': '用编辑内容恢复文件',
   'unsaved changes could not be backed up; keep this window open':
     '无法备份未保存的修改，请保持此窗口打开',
   'unsaved changes': '未保存的修改',

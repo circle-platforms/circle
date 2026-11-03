@@ -2,7 +2,7 @@
   color: var(--fg);
 }
 .runtime-failure > strong {
-  color: var(--negative);
+  color: var(--negative-text);
 }
 .runtime-failure p {
   margin: 4px 0;

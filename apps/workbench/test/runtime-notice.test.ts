@@ -82,7 +82,7 @@ test('a stopped desktop runtime is described in the interface language with its 
     setLanguage('zh-CN');
     assert.equal(
       runtimeStoppedNotice(runtime),
-      'Circle 运行时崩溃 (4294930435 (0xFFFF7003)) · 正在重启…',
+      'Circle 运行时崩溃 (4294930435 (0xFFFF7003)) · 等待重启中…',
     );
     // A running runtime, or one that never stopped, has no such notice.
     assert.equal(

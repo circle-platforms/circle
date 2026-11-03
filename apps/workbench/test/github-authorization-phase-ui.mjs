@@ -145,7 +145,7 @@ try {
         await page.evaluate(() => window.githubFixture.authorizationCode());
         await card
           .getByText(
-            label('waiting for GitHub authorization', '等待 GitHub 授权'),
+            label('waiting for GitHub authorization', '等待 GitHub 授权中'),
             { exact: true },
           )
           .waitFor();
@@ -183,7 +183,7 @@ try {
         );
         await card
           .getByText(
-            label('verifying GitHub account', '正在核验 GitHub 账户…'),
+            label('verifying GitHub account', '正在验证 GitHub 账户…'),
             { exact: true },
           )
           .waitFor();

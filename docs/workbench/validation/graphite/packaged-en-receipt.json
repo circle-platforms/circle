@@ -1,0 +1,1104 @@
+{
+  "testedAt": "2026-11-02T16:50:42.175Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "runnerNode": "24.22.1",
+  "versions": {
+    "node": "24.22.0",
+    "electron": "44.9.1",
+    "chromium": "152.0.7977.167"
+  },
+  "language": "en",
+  "packaged": true,
+  "packagedAsarSha256": "2b93a6dbd780b9b1d100063a2159a5dc8b4e8a854e79d953d2d2f8bc3250a845",
+  "viewport": {
+    "width": 1440,
+    "height": 967
+  },
+  "checks": [
+    "sixteen native theme/width/state samples keep the footer inside a bounded composer and show the correct action",
+    "connection hints and request counts follow the selected interface language in both themes and widths",
+    "the translated connection-settings action still opens its dialog",
+    "the mode opens at 380px and never coexists with overview as a fourth pane",
+    "drawer collapses below 1180 and navigation below 760",
+    "answer restores running, stop restores plan with draft intact, resume and Enter preserve steering",
+    "long drafts scroll within twelve lines and keep the primary action in the native viewport",
+    "auto follows both native renderer media changes without retaining the previous palette",
+    "long synthetic project paths and model identifiers keep the model menu and primary action within a narrow viewport",
+    "tool summaries expand into their original details within the conversation width",
+    "an old menu finishing its exit cannot steal keyboard focus from a newly opened project menu",
+    "reduced motion disables the composer ring and activity spinners",
+    "reduced motion keeps the opening pointer release from selecting a session menu action, while a fresh click still works"
+  ],
+  "errors": [],
+  "observations": [
+    {
+      "theme": "dark",
+      "state": "default",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 967
+        },
+        "actual": {
+          "width": 1440,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 456,
+        "y": 792,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 457,
+        "y": 859,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 760
+    },
+    {
+      "theme": "dark",
+      "state": "plan",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 967
+        },
+        "actual": {
+          "width": 1440,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 456,
+        "y": 792,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 457,
+        "y": 859,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 760
+    },
+    {
+      "theme": "dark",
+      "state": "working",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 967
+        },
+        "actual": {
+          "width": 1440,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 456,
+        "y": 770,
+        "width": 760,
+        "height": 130,
+        "right": 1216,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 457,
+        "y": 837,
+        "width": 758,
+        "height": 62,
+        "right": 1215,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "conic-gradient(from 6.6368deg, rgb(8, 148, 255) 0%, rgb(201, 89, 221) 30%, rgb(255, 46, 84) 65%, rgb(255, 144, 4) 90%, rgb(8, 148, 255) 100%)",
+      "animation": "3.6s",
+      "reduced": false,
+      "send": false,
+      "brand": "circleworkbench",
+      "contentWidth": 760,
+      "connectionHint": "waiting for runtime connection\nconnection settings"
+    },
+    {
+      "theme": "dark",
+      "state": "attention",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 967
+        },
+        "actual": {
+          "width": 1440,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 456,
+        "y": 792,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 457,
+        "y": 859,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 760,
+      "connectionHint": "waiting for runtime connection\nconnection settings",
+      "requestSummary": "1 request waiting for you\nview"
+    },
+    {
+      "theme": "light",
+      "state": "default",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 967
+        },
+        "actual": {
+          "width": 1440,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 456,
+        "y": 792,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 457,
+        "y": 859,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 760
+    },
+    {
+      "theme": "light",
+      "state": "plan",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 967
+        },
+        "actual": {
+          "width": 1440,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 456,
+        "y": 792,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 457,
+        "y": 859,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 760
+    },
+    {
+      "theme": "light",
+      "state": "working",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 967
+        },
+        "actual": {
+          "width": 1440,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 456,
+        "y": 770,
+        "width": 760,
+        "height": 130,
+        "right": 1216,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 457,
+        "y": 837,
+        "width": 758,
+        "height": 62,
+        "right": 1215,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "conic-gradient(from 4.8deg, rgb(8, 148, 255) 0%, rgb(201, 89, 221) 30%, rgb(255, 46, 84) 65%, rgb(217, 122, 3) 90%, rgb(8, 148, 255) 100%)",
+      "animation": "3.6s",
+      "reduced": false,
+      "send": false,
+      "brand": "circleworkbench",
+      "contentWidth": 760,
+      "connectionHint": "waiting for runtime connection\nconnection settings"
+    },
+    {
+      "theme": "light",
+      "state": "attention",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 967
+        },
+        "actual": {
+          "width": 1440,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 456,
+        "y": 792,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 457,
+        "y": 859,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 760,
+      "connectionHint": "waiting for runtime connection\nconnection settings",
+      "requestSummary": "1 request waiting for you\nview"
+    },
+    {
+      "theme": "dark",
+      "state": "default",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 736
+    },
+    {
+      "theme": "dark",
+      "state": "plan",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 736
+    },
+    {
+      "theme": "dark",
+      "state": "working",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 770,
+        "width": 736,
+        "height": 130,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 837,
+        "width": 734,
+        "height": 62,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "conic-gradient(from 6.67deg, rgb(8, 148, 255) 0%, rgb(201, 89, 221) 30%, rgb(255, 46, 84) 65%, rgb(255, 144, 4) 90%, rgb(8, 148, 255) 100%)",
+      "animation": "3.6s",
+      "reduced": false,
+      "send": false,
+      "brand": "circleworkbench",
+      "contentWidth": 736,
+      "connectionHint": "waiting for runtime connection\nconnection settings"
+    },
+    {
+      "theme": "dark",
+      "state": "attention",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 736,
+      "connectionHint": "waiting for runtime connection\nconnection settings",
+      "requestSummary": "1 request waiting for you\nview"
+    },
+    {
+      "theme": "light",
+      "state": "default",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 736
+    },
+    {
+      "theme": "light",
+      "state": "plan",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 736
+    },
+    {
+      "theme": "light",
+      "state": "working",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 770,
+        "width": 736,
+        "height": 130,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 837,
+        "width": 734,
+        "height": 62,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "conic-gradient(from 5deg, rgb(8, 148, 255) 0%, rgb(201, 89, 221) 30%, rgb(255, 46, 84) 65%, rgb(217, 122, 3) 90%, rgb(8, 148, 255) 100%)",
+      "animation": "3.6s",
+      "reduced": false,
+      "send": false,
+      "brand": "circleworkbench",
+      "contentWidth": 736,
+      "connectionHint": "waiting for runtime connection\nconnection settings"
+    },
+    {
+      "theme": "light",
+      "state": "attention",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circleworkbench",
+      "contentWidth": 736,
+      "connectionHint": "waiting for runtime connection\nconnection settings",
+      "requestSummary": "1 request waiting for you\nview"
+    }
+  ],
+  "layout": [
+    {
+      "drawerWidth": 380
+    },
+    {
+      "drawerSurface": {
+        "actual": "rgb(26, 29, 34)",
+        "expected": "rgb(26, 29, 34)"
+      }
+    },
+    {
+      "automaticTheme": [
+        {
+          "theme": "dark",
+          "background": "rgb(14, 16, 19)"
+        },
+        {
+          "theme": "light",
+          "background": "rgb(238, 240, 243)"
+        }
+      ]
+    }
+  ],
+  "shots": [
+    {
+      "path": "dark-1440-default.png",
+      "sha256": "b56f0ebb4b4d42877b2ab247467caa842ff84731e0e39a13345a07d60ba51dc9"
+    },
+    {
+      "path": "dark-1440-plan.png",
+      "sha256": "72a041dcaf46dc3cde27e47647e9bb9f08561b6fdee0924f187cc2151e9f0ce0"
+    },
+    {
+      "path": "dark-1440-working.png",
+      "sha256": "36470a2849285cdf08b0c53aeaa6039f9e1db55d460455dab6b631fa6f61807a"
+    },
+    {
+      "path": "dark-1440-attention.png",
+      "sha256": "9cfefebfbef5e31a5befe702a7a8a7356d891bc81003792fe1bb102318dd4a60"
+    },
+    {
+      "path": "light-1440-default.png",
+      "sha256": "daade2b884bf26b90cbb1b47743cf32882f278c2d77217a7723435463e761740"
+    },
+    {
+      "path": "light-1440-plan.png",
+      "sha256": "12e07e2dcaf83477fb57c3d4d6608742714b7dc161194015750756b0ab0067ba"
+    },
+    {
+      "path": "light-1440-working.png",
+      "sha256": "ed7a71be9bcf02a2a2144dc07a2e14f2b48e086dd29d8b91890de466610fed24"
+    },
+    {
+      "path": "light-1440-attention.png",
+      "sha256": "5480f4b2e7a0705e033836d51ec6cf75da1bbecc4fab229ea92f4f0d3e8201e7"
+    },
+    {
+      "path": "dark-1024-default.png",
+      "sha256": "a0990025da9eae47cb001413197be8a595a5e46be14a0054e33d24a53295bb36"
+    },
+    {
+      "path": "dark-1024-plan.png",
+      "sha256": "600ae4771b3ca4357e0fee7abd206d7bf0e230fa7d991cb841357542411928d1"
+    },
+    {
+      "path": "dark-1024-working.png",
+      "sha256": "46408578dfd943cc33584915f6cdcf0bf495b7c7ce4ba07ed5c3c9d64ce41bc1"
+    },
+    {
+      "path": "dark-1024-attention.png",
+      "sha256": "4ab167b7196c4d8db62f76756a13b5e6737a2da40a62b5eadcc0a7721a4a74b5"
+    },
+    {
+      "path": "light-1024-default.png",
+      "sha256": "96692f682b4b15d87a120b87f73af5a1334da8f3c1c01786c2c09c237ce64685"
+    },
+    {
+      "path": "light-1024-plan.png",
+      "sha256": "0603010c3c93353af27cdc503b1af8f741fdcf8c2541f9f5e487bfa05d51a6b4"
+    },
+    {
+      "path": "light-1024-working.png",
+      "sha256": "6ce984461d8aa96943567ecc0a91d51693d75d4ff12a819bd275d654507d564b"
+    },
+    {
+      "path": "light-1024-attention.png",
+      "sha256": "aba995f7ec81a97a4eece330df7bedf415b0b5a5824050369bec74654a993814"
+    },
+    {
+      "path": "light-1440-messages.png",
+      "sha256": "5d7131666908d557e7d31e7fee6436e03314f8ada15b97b01036d7832d13c98a"
+    },
+    {
+      "path": "dark-1440-drawer.png",
+      "sha256": "4705f696632ec3424db5bbcf22f5c37cbbb8f95e2d8644bfa0ff269d9959fb57"
+    },
+    {
+      "path": "light-1024-long-labels.png",
+      "sha256": "723313e7e65974656a749e84edb81e29dd5aface7a03600e0dd5e42faf2cb90c"
+    },
+    {
+      "path": "light-1440-tool-details.png",
+      "sha256": "23611009a550a480bee877ae14e50eb6efb433f5a0c8150c3c530e82e340d0ca"
+    }
+  ],
+  "scope": "synthetic native UI presentation only; runtime effects and final visual approval are separate",
+  "codeCommit": "fa905204ff48029eb65c9523edfcce77b40e1d61",
+  "manifest": {
+    "path": "source-build-manifest.json",
+    "sha256": "a7c89a47e34c0682d1ccde61466797c90743d091c7bdb616022afbabc3c3abff"
+  },
+  "localEvidenceDirectory": "apps/desktop/artifacts/graphite/chunk-4-final-packaged-en"
+}

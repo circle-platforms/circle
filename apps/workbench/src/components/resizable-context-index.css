@@ -29,7 +29,7 @@
 .context-index-resizer:hover,
 .context-index-resizer:focus-visible {
   background: var(--active);
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 .resizable-context-index[data-index-overlay] {

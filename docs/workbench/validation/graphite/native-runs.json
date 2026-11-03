@@ -1,0 +1,577 @@
+{
+  "scope": "Local command exit records, including failed attempts; final frozen UI sources and built bytes are bound by the four matrix receipts",
+  "attempts": [
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/attempt-compaction-2/run-receipt.json",
+      "sha256": "ea5e4ab0e16f6e48c616b6e45262b24b0c9b1fe892c340ae506ed71947f6010d",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "compaction",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:compaction"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:31:23.532280+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:32:09.550811+00:00",
+          "elapsedSeconds": 46.02,
+          "log": "compaction/output.log",
+          "logSha256": "809cdc0d2c6b83c6af0682eb3a7a190ddaeb741de216eb66d065e4b0f2043092",
+          "skips": []
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/attempt-live-final/run-receipt.json",
+      "sha256": "1c52f4c47826486f46722c10e26c857c5b70bdcd1534c7b1e3dc696a45a8e5e5",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "live",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:live"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:33:08.781852+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:36:43.317614+00:00",
+          "elapsedSeconds": 214.54,
+          "log": "live/output.log",
+          "logSha256": "0231174a5b572a00dba6e0c7c7509ba17a780c9dd7454861a0268011b7680261",
+          "skips": [
+            "SKIP tray check: macOS keeps the Dock, the tray hides nothing there"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/attempt-resume-1/run-receipt.json",
+      "sha256": "2ea01195401460f4cb7a56fe1b89e77014c3bd8b23a0b2610e05729a7b481e6c",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "interface",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:interface"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:13:29.237003+00:00",
+          "state": "failed",
+          "exitCode": 1,
+          "finishedAt": "2026-11-02T16:13:51.574487+00:00",
+          "elapsedSeconds": 22.34,
+          "log": "interface/output.log",
+          "logSha256": "a3fa509e19cb46e9efb28589636e09ab73dbf575f7065357af99731435cea248",
+          "skips": []
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/attempt-resume-2/run-receipt.json",
+      "sha256": "ccd932c850dbfc2e3c5214fda6954cd3911232814830a43924dd9e61055f40d0",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "interface",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:interface"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:14:43.062831+00:00",
+          "state": "failed",
+          "exitCode": 1,
+          "finishedAt": "2026-11-02T16:15:19.083314+00:00",
+          "elapsedSeconds": 36.02,
+          "log": "interface/output.log",
+          "logSha256": "ea0950b8c19ee926c36dd0c980a1e42fd317821667a1eaff818f9779b6667870",
+          "skips": []
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/attempt-resume-3/run-receipt.json",
+      "sha256": "99bf661f080c7c58e532296fbf74a55bab2ff44f0887bb8147e192dded734584",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "interface",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:interface"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:21:49.313415+00:00",
+          "state": "failed",
+          "exitCode": 1,
+          "finishedAt": "2026-11-02T16:22:20.615081+00:00",
+          "elapsedSeconds": 31.3,
+          "log": "interface/output.log",
+          "logSha256": "a393f63c9dd7289ac0d476dce5d9f076d0b43db6a8e47bf4eb532db70411a764",
+          "skips": []
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/attempt-resume-4/run-receipt.json",
+      "sha256": "c0c761430e6ff10b9de0794f86b1b42149fb288eeb94682315a512d1119bd80a",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "interface",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:interface"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:23:40.385036+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:24:17.905589+00:00",
+          "elapsedSeconds": 37.52,
+          "log": "interface/output.log",
+          "logSha256": "b79f70369bbac8c47ea24bad4dc07fefc26c19a1fd1b681ada7f8e6f0cfa5d48",
+          "skips": []
+        },
+        {
+          "name": "desktop-narrow",
+          "command": [
+            "node",
+            "apps/desktop/test/desktop.mjs"
+          ],
+          "narrow": true,
+          "startedAt": "2026-11-02T16:24:17.920076+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:24:32.372003+00:00",
+          "elapsedSeconds": 14.45,
+          "log": "desktop-narrow/output.log",
+          "logSha256": "dfca1cb7911b402f8b1ea3a6bea590bcd01649addd55546d2de6915d555c5b6b",
+          "skips": []
+        },
+        {
+          "name": "interface-narrow",
+          "command": [
+            "node",
+            "apps/desktop/test/interface.mjs"
+          ],
+          "narrow": true,
+          "startedAt": "2026-11-02T16:24:32.384143+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:25:08.457980+00:00",
+          "elapsedSeconds": 36.07,
+          "log": "interface-narrow/output.log",
+          "logSha256": "abba5e5f1c064dd8652d50b908823c337dce2bb16ad8c09a15d1c468ccf8d8c3",
+          "skips": []
+        },
+        {
+          "name": "live",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:live"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:25:08.470583+00:00",
+          "state": "failed",
+          "exitCode": 1,
+          "finishedAt": "2026-11-02T16:25:10.783419+00:00",
+          "elapsedSeconds": 2.31,
+          "log": "live/output.log",
+          "logSha256": "0c5c485b3110601ac8e1ceb5643d08f78663ed5f7c722000b3204c0e9d5165f2",
+          "skips": []
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/attempt-resume-5/run-receipt.json",
+      "sha256": "4e60848a0a7b0532d4692c3f8f381b1f65a04fb5f3d43332d91cd98f0c5359b6",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "live",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:live"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:25:39.806043+00:00",
+          "state": "failed",
+          "exitCode": 1,
+          "finishedAt": "2026-11-02T16:27:32.283177+00:00",
+          "elapsedSeconds": 112.48,
+          "log": "live/output.log",
+          "logSha256": "e9ea82af98f2c5ded73b280ec8f3fc20f6c8890a461a3adf5b6eb7ff431516af",
+          "skips": [
+            "SKIP tray check: macOS keeps the Dock, the tray hides nothing there"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/attempt-tail-1/run-receipt.json",
+      "sha256": "d3cabadcd2acd43156773b4b604a99af0175da38c26bfa6407a5f5ee5dc67de5",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "live-sessions",
+          "command": [
+            "node",
+            "apps/desktop/test/session-management.mjs"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:28:33.292731+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:28:43.481041+00:00",
+          "elapsedSeconds": 10.19,
+          "log": "live-sessions/output.log",
+          "logSha256": "fa455d7b89834dcde4a90ffa82d3eace604cf205ac2c34e76810fab7e5baacd7",
+          "skips": []
+        },
+        {
+          "name": "live-parallel",
+          "command": [
+            "node",
+            "apps/desktop/test/parallel-sessions.mjs"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:28:43.493436+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:28:50.080602+00:00",
+          "elapsedSeconds": 6.59,
+          "log": "live-parallel/output.log",
+          "logSha256": "98f93fadb2e3cb363ae5ca94f3bd7d9f9289907a79cfc89ef666646a3bc8d81a",
+          "skips": []
+        },
+        {
+          "name": "live-network",
+          "command": [
+            "node",
+            "apps/desktop/test/network-native.mjs"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:28:50.093379+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:28:51.761522+00:00",
+          "elapsedSeconds": 1.67,
+          "log": "live-network/output.log",
+          "logSha256": "0dfc6155a774f412418558a37591c8b0def8c4426f8d5ae8b59b46ac824421e3",
+          "skips": []
+        },
+        {
+          "name": "live-websearch",
+          "command": [
+            "node",
+            "apps/desktop/test/native-websearch.mjs"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:28:51.771693+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:28:53.598770+00:00",
+          "elapsedSeconds": 1.83,
+          "log": "live-websearch/output.log",
+          "logSha256": "8da53050633d13bdcecc308f6040572cc3b33345207c62335e5dc2b3615e6321",
+          "skips": []
+        },
+        {
+          "name": "live-connection",
+          "command": [
+            "node",
+            "apps/desktop/test/connection-issues.mjs"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:28:53.609078+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:28:56.432260+00:00",
+          "elapsedSeconds": 2.82,
+          "log": "live-connection/output.log",
+          "logSha256": "8629a95c985dbd88b094714cc6af8a6279cf590b42644fbd1bffe3cdee4902f4",
+          "skips": []
+        },
+        {
+          "name": "live-restart",
+          "command": [
+            "node",
+            "apps/desktop/test/runtime-restart.mjs"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:28:56.443848+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:30:00.333670+00:00",
+          "elapsedSeconds": 63.89,
+          "log": "live-restart/output.log",
+          "logSha256": "1f1f177ac43c270846653447144c3bef3ca27bcf0e9a7dbbf7f1d07baca33a49",
+          "skips": []
+        },
+        {
+          "name": "live-completion",
+          "command": [
+            "node",
+            "apps/desktop/test/completion.mjs"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:30:00.345230+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:30:15.221723+00:00",
+          "elapsedSeconds": 14.88,
+          "log": "live-completion/output.log",
+          "logSha256": "9a1678178a1168d337db8c24681a8c238ca07d3c86748cf85e48a6e2f8ad64f4",
+          "skips": []
+        },
+        {
+          "name": "live-thinking",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:thinking"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:30:15.234302+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:30:18.673091+00:00",
+          "elapsedSeconds": 3.44,
+          "log": "live-thinking/output.log",
+          "logSha256": "3b53f0ec49c60b10b6dbbfefb3b98de9bfe8ffe88d39eb6c650e131b1d505e4f",
+          "skips": []
+        },
+        {
+          "name": "compaction",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:compaction"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:30:18.683132+00:00",
+          "state": "failed",
+          "exitCode": 1,
+          "finishedAt": "2026-11-02T16:30:21.387949+00:00",
+          "elapsedSeconds": 2.7,
+          "log": "compaction/output.log",
+          "logSha256": "a0a0462e5b32ba4765a6253c35287f3b8ead9cb1ecdcfbb62e7790c478c6e5b9",
+          "skips": []
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-development/run-receipt.json",
+      "sha256": "440080e5a6083c4fac1016e5adc6e04b1c5f1eab2fd9ae30422c2594bb11993e",
+      "variant": "development",
+      "packaged": false,
+      "runs": [
+        {
+          "name": "desktop",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:desktop"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:10:16.646758+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:12:01.951656+00:00",
+          "elapsedSeconds": 105.3,
+          "log": "desktop/output.log",
+          "logSha256": "654fb468462f9109012c734d264611aa304542c26d7a8eb8c8ffef9ace823c55",
+          "skips": []
+        },
+        {
+          "name": "interface",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:interface"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:12:01.979092+00:00",
+          "state": "failed",
+          "exitCode": 1,
+          "finishedAt": "2026-11-02T16:12:32.883720+00:00",
+          "elapsedSeconds": 30.9,
+          "log": "interface/output.log",
+          "logSha256": "96da3b3b76a4e3ec035afe9016c06bada65e018303103297b3d091c19a54ab53",
+          "skips": []
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/artifacts/graphite/chunk-4-native-packaged/run-receipt.json",
+      "sha256": "1f8ff7c5844a00a07be36d8343ed2cd6891411bb00e5fc13d50d4b7a3b896ee4",
+      "variant": "packaged",
+      "packaged": true,
+      "runs": [
+        {
+          "name": "desktop",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:desktop"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:42:59.032723+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:43:54.741784+00:00",
+          "elapsedSeconds": 55.71,
+          "log": "desktop/output.log",
+          "logSha256": "74fb84149da31ddf3b2b876deae7bd69c71d6a32def66ee3913a0d5f82884179",
+          "skips": [
+            "SKIP browser page: it runs with the development Electron; the packaged app runs browser-live",
+            "SKIP browser lifecycle harness: packaged application uses browser-live",
+            "SKIP browser shortcut harness: packaged application uses popout",
+            "SKIP terminal panel harness: needs a desktop-capable session",
+            "SKIP popout harness: needs a desktop-capable session"
+          ]
+        },
+        {
+          "name": "interface",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:interface"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:43:54.769385+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:44:31.870320+00:00",
+          "elapsedSeconds": 37.1,
+          "log": "interface/output.log",
+          "logSha256": "b79f70369bbac8c47ea24bad4dc07fefc26c19a1fd1b681ada7f8e6f0cfa5d48",
+          "skips": []
+        },
+        {
+          "name": "desktop-narrow",
+          "command": [
+            "node",
+            "apps/desktop/test/desktop.mjs"
+          ],
+          "narrow": true,
+          "startedAt": "2026-11-02T16:44:31.889497+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:44:45.963321+00:00",
+          "elapsedSeconds": 14.07,
+          "log": "desktop-narrow/output.log",
+          "logSha256": "f5d78db94da74ad1ad31471d6c94e21b7a5a3ea81879caa318184f70bc52cdc1",
+          "skips": []
+        },
+        {
+          "name": "interface-narrow",
+          "command": [
+            "node",
+            "apps/desktop/test/interface.mjs"
+          ],
+          "narrow": true,
+          "startedAt": "2026-11-02T16:44:45.979808+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:45:21.923878+00:00",
+          "elapsedSeconds": 35.94,
+          "log": "interface-narrow/output.log",
+          "logSha256": "abba5e5f1c064dd8652d50b908823c337dce2bb16ad8c09a15d1c468ccf8d8c3",
+          "skips": []
+        },
+        {
+          "name": "live",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:live"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:45:21.939847+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:48:57.355374+00:00",
+          "elapsedSeconds": 215.42,
+          "log": "live/output.log",
+          "logSha256": "a3b9390b8f5355c1dcfe23bb9bfd53c731eaefce4cb5a9e90158b5cf3d426387",
+          "skips": [
+            "SKIP tray check: macOS keeps the Dock, the tray hides nothing there"
+          ]
+        },
+        {
+          "name": "compaction",
+          "command": [
+            "npm",
+            "--prefix",
+            "apps/desktop",
+            "run",
+            "test:compaction"
+          ],
+          "narrow": false,
+          "startedAt": "2026-11-02T16:48:57.419550+00:00",
+          "state": "passed",
+          "exitCode": 0,
+          "finishedAt": "2026-11-02T16:49:46.246531+00:00",
+          "elapsedSeconds": 48.83,
+          "log": "compaction/output.log",
+          "logSha256": "15e0e54a6387e9ad170f61cb05bd276d007f6e5f89d4a205b4e101beb0fd8c75",
+          "skips": []
+        }
+      ]
+    }
+  ]
+}

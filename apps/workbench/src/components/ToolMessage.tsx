@@ -367,7 +367,9 @@ export function ToolMessage({
             </div>
           )}
           {runtime.mode !== 'live' && (
-            <div className="tool-meta">{tool.id} · sample record</div>
+            <div className="tool-meta">
+              {tool.id} · {t('sample record')}
+            </div>
           )}
         </div>
       )}

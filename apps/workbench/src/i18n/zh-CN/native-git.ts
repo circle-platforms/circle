@@ -65,7 +65,7 @@ export const nativeGit: Record<string, string> = {
   'abort merge': '中止合并',
   'abort this merge and restore its pre-merge state?':
     '中止本次合并并恢复到合并前状态？',
-  'working…': '处理中…',
+  'working…': '正在处理…',
   'show changes': '显示改动',
   unstaged: '未暂存',
   staged: '已暂存',

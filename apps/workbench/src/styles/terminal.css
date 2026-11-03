@@ -107,7 +107,7 @@
   flex-wrap: wrap;
   gap: 10px;
   padding: 7px 10px;
-  color: var(--negative);
+  color: var(--negative-text);
   overflow-wrap: anywhere;
 }
 .native-terminal-error > span {

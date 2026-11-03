@@ -544,6 +544,15 @@ try {
             })
             .click();
         await link.click();
+        await page.waitForFunction(
+          (id) => location.hash === `#/session/${id}`,
+          id,
+        );
+        // At narrow widths navigation closes its dialog. A visible exiting sidebar
+        // is not the next session's navigation surface; wait for actual unmount.
+        await page
+          .locator('.dialog-content:has(.sidebar)')
+          .waitFor({ state: 'detached' });
       };
       // The row reads A's list again when A is shown again.
       const listsOfA = () =>

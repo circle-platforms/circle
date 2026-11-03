@@ -88,6 +88,7 @@
 
 /* The browser */
 .inspector .native-browser {
+  container: circle-browser / inline-size;
   height: 100%;
   min-height: 0;
   background: var(--bg);
@@ -188,12 +189,34 @@
   gap: 6px;
   margin-left: 4px;
   padding: 0 3px 0 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--bg);
 }
+/* Reserve an address row in a compact pane. System-font metrics, the security
+   label and take over must not compete the editable field down to zero width.
+   This depends on pane width, and stays two rows while control changes hands. */
+@container circle-browser (max-width: 480px) {
+  .inspector .native-browser .browser-address {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  /* Keep this row as tall as the 28px takeover button, including while idle. */
+  .inspector .native-browser .browser-address > .icon-button {
+    margin-block: 1px;
+  }
+  .inspector .browser-url {
+    order: 1;
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
 .inspector .browser-url:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-color: color-mix(
+    in srgb,
+    var(--focus-ring) 60%,
+    var(--control-border)
+  );
 }
 .inspector .browser-url-field {
   position: relative;
@@ -270,13 +293,17 @@
   gap: 2px;
   width: min(330px, calc(100% + 2px));
   padding: 0 1px 0 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--bg);
   box-shadow: 0 4px 14px color-mix(in srgb, var(--fg) 10%, transparent);
 }
 .inspector .browser-find:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-color: color-mix(
+    in srgb,
+    var(--focus-ring) 60%,
+    var(--control-border)
+  );
 }
 .inspector .browser-find input {
   flex: 1;

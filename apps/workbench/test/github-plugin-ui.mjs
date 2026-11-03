@@ -49,7 +49,7 @@ try {
         assert.notEqual(palette, 'rgba(0, 0, 0, 0)');
         const turnOn = label(
           'Turn on GitHub to connect your account.',
-          '开启 GitHub 后即可连接你的账户。',
+          '开启 GitHub 后即可连接账户。',
         );
         const tryName = label('try in a conversation', '在对话中试用');
         const overflow = () =>

@@ -1,6 +1,12 @@
 import { useId, type ReactNode } from 'react';
 import { useSessionDisclosure } from '../model/presentation';
-import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
+import {
+  Brain,
+  ChevronDown,
+  ChevronRight,
+  LoaderCircle,
+  FileText,
+} from 'lucide-react';
 import type { Message, Session } from '../model/types';
 import { toolSummary } from '../model/tool-summary';
 import { TurnClock } from './TurnClock';
@@ -86,7 +92,9 @@ export function ToolGroup({
           <i className="attention-dot" aria-label={t('waiting for you')} />
         ) : runningTool || turn ? (
           <LoaderCircle size={13} className="spin" />
-        ) : null}
+        ) : (
+          <FileText size={13} aria-hidden />
+        )}
         <span className="tool-summary-text">{summary.text}</span>
         {(summary.added > 0 || summary.removed > 0) && (
           <span className="diff-count">
@@ -121,6 +129,9 @@ export function ToolGroup({
           </span>
         )}
         {turn && <TurnClock turn={turn} />}
+        {!turn && tools.length === 1 && tools[0]?.elapsed && (
+          <span className="tool-time">{tools[0].elapsed}</span>
+        )}
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
       {open && (
@@ -186,7 +197,7 @@ export function TurnRow({ turn }: { turn: NonNullable<Session['turn']> }) {
   return (
     <div className="tool-group" data-busy>
       <div className="tool-summary">
-        <span className="turn-ring" />
+        <LoaderCircle size={13} className="spin" aria-hidden />
         <TurnClock turn={turn} />
       </div>
     </div>

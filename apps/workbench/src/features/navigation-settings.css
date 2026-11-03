@@ -22,7 +22,7 @@
 .sidebar .sidebar-item:focus-visible,
 .sidebar .session-link:focus-visible,
 .settings-index button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 /* Settings: a dialog with the groups at the left under their headings, and the

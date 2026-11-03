@@ -77,8 +77,8 @@ try {
         return getComputedStyle(probe).color;
       };
       const tokens = {
-        attention: token('--attention'),
-        accent: token('--accent'),
+        warningText: token('--status-warn-text'),
+        passText: token('--status-pass-text'),
       };
       probe.remove();
       const look = (path) => {
@@ -90,6 +90,9 @@ try {
             name.startsWith('changed-'),
           ),
           letter: node.querySelector('.file-letter')?.textContent ?? '',
+          letterColour: node.querySelector('.file-letter')
+            ? getComputedStyle(node.querySelector('.file-letter')).color
+            : null,
           colour: getComputedStyle(
             node.querySelector('.virtual-file-tree-label'),
           ).color,
@@ -108,19 +111,26 @@ try {
     assert.deepEqual(
       {
         ...marks.outside,
-        colour: marks.outside.colour === marks.tokens.attention,
+        colour: marks.outside.colour === marks.tokens.warningText,
+        letterColour: marks.outside.letterColour === marks.tokens.warningText,
       },
-      { changed: 'changed-M', letter: 'M', colour: true },
-      `a file changed outside the conversation is orange with M (${theme})`,
+      { changed: 'changed-M', letter: 'M', colour: true, letterColour: true },
+      `a modified file and its M use warning text (${theme})`,
     );
     assert.deepEqual(
-      { ...marks.fresh, colour: marks.fresh.colour === marks.tokens.accent },
-      { changed: 'changed-A', letter: 'A', colour: true },
-      `a file added outside the conversation is blue with A (${theme})`,
+      {
+        ...marks.fresh,
+        colour: marks.fresh.colour === marks.tokens.passText,
+        letterColour: marks.fresh.letterColour === marks.tokens.passText,
+      },
+      { changed: 'changed-A', letter: 'A', colour: true, letterColour: true },
+      `an added file and its A use pass text (${theme})`,
     );
     assert.equal(marks.plain.changed, undefined);
     assert.equal(marks.plain.letter, '');
-    assert.notEqual(marks.plain.colour, marks.tokens.attention);
+    assert.equal(marks.plain.letterColour, null);
+    assert.notEqual(marks.plain.colour, marks.tokens.warningText);
+    assert.notEqual(marks.plain.colour, marks.tokens.passText);
     assert.equal(marks.gone, false, 'a deleted file is not in the tree');
     // A folder is a row like the files beside it: the same size and colour of name.
     const rows = await page.evaluate(() => {

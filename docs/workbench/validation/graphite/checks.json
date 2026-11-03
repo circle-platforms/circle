@@ -1,0 +1,165 @@
+{
+  "codeCommit": "fa905204ff48029eb65c9523edfcce77b40e1d61",
+  "isolation": "Temporary CIRCLE_HOME, CIRCLE_WORKBENCH_DATA_DIR and synthetic resources; no real model endpoints or production devices",
+  "core": {
+    "command": "npm run check",
+    "exitCode": 0,
+    "tests": 1584,
+    "pass": 1574,
+    "fail": 0,
+    "skipped": [
+      {
+        "name": "a Windows browser exit queued behind its deadline is observed before reporting failure",
+        "reason": "SKIP"
+      },
+      {
+        "name": "a Windows browser still alive after deadline delivery is not reported as exited",
+        "reason": "SKIP"
+      },
+      {
+        "name": "Windows 8.3 temporary paths preserve root identity, workspace hashes and future file writes",
+        "reason": "SKIP"
+      },
+      {
+        "name": "on Windows a text file on another drive is not added to the message",
+        "reason": "SKIP"
+      },
+      {
+        "name": "on Windows the real PowerShell command runs as far as listing the windows",
+        "reason": "SKIP"
+      },
+      {
+        "name": "on Windows a window that is not DPI aware is taken whole: its picture is its own size with no empty part",
+        "reason": "SKIP"
+      },
+      {
+        "name": "the Windows helper removes the launcher and the running version once their processes end, and keeps a folder that is not empty",
+        "reason": "runs the script in Windows PowerShell"
+      },
+      {
+        "name": "on Windows a program left running by an ended shell is found and ended",
+        "reason": "uses the Windows process list"
+      },
+      {
+        "name": "on Windows stopping a finished job ends a program whose parent cmd had already ended",
+        "reason": "uses the Windows process list"
+      },
+      {
+        "name": "on Windows cancelling a running command ends a program whose parent cmd had already ended",
+        "reason": "uses the Windows process list"
+      }
+    ]
+  },
+  "apps": {
+    "command": "npm run check:apps",
+    "exitCode": 0,
+    "workbench": {
+      "tests": 337,
+      "pass": 337,
+      "fail": 0,
+      "skip": 0
+    },
+    "desktop": {
+      "tests": 163,
+      "pass": 163,
+      "fail": 0,
+      "skip": 0
+    },
+    "runtime": {
+      "tests": 821,
+      "pass": 804,
+      "fail": 0,
+      "skipped": [
+        {
+          "name": "on Windows a refused outside write names the process that has the file open",
+          "reason": "SKIP"
+        },
+        {
+          "name": "Windows real ConPTY naturally exits repeated owned sessions without keeping the parent Node process alive",
+          "reason": "requires real Windows ConPTY"
+        },
+        {
+          "name": "Windows terminal close waits for the native-exit output-flush window and preserves the complete final log",
+          "reason": "requires real Windows ConPTY"
+        },
+        {
+          "name": "Windows TUI dark shutdown restores the main screen and cooked input before a natural exit",
+          "reason": "requires real Windows ConPTY"
+        },
+        {
+          "name": "Windows TUI light shutdown restores the main screen and cooked input before a natural exit",
+          "reason": "requires real Windows ConPTY"
+        },
+        {
+          "name": "the Windows installer preserves the relaunched argv through real PowerShell",
+          "reason": "SKIP"
+        },
+        {
+          "name": "real Windows Job controls an assigned quiescent Node and inherited detached child through retained handles",
+          "reason": "SKIP"
+        },
+        {
+          "name": "Windows native adapter fails before allocating a PTY without claiming shell exit proves owned tree exit",
+          "reason": "SKIP"
+        },
+        {
+          "name": "Windows original ConPTY input and resistant inherited service stop use real root exit and Job-empty facts",
+          "reason": "SKIP"
+        },
+        {
+          "name": "Windows natural completion waits for actual root ACK, wrapper exit, Job empty and original log closure",
+          "reason": "SKIP"
+        },
+        {
+          "name": "Windows supervisor cannot preload command Node options before Job assignment",
+          "reason": "SKIP"
+        },
+        {
+          "name": "Windows invalid supervisor authentication never starts a command and the quiescent original PTY closes",
+          "reason": "SKIP"
+        },
+        {
+          "name": "real Windows short-path aliases preserve CAS coordination and native folder boundaries",
+          "reason": "SKIP"
+        },
+        {
+          "name": "a save on Windows waits while another program has the file open without letting it be replaced",
+          "reason": "SKIP"
+        },
+        {
+          "name": "Windows session release observes PID birth and real exit without weakening the strict disappearance oracle",
+          "reason": "requires real Windows kernel process identity and ConPTY"
+        },
+        {
+          "name": "Windows signal cleanup observes the real job descendant and preserves any scratch-folder EBUSY failure",
+          "reason": "requires real Windows kernel process identity and ConPTY"
+        },
+        {
+          "name": "a Windows owned worker transport fault remains a durable failure and stops the real program",
+          "reason": "requires real Windows ConPTY"
+        }
+      ]
+    }
+  },
+  "format": {
+    "core": 0,
+    "workbench": 0,
+    "desktop": 0
+  },
+  "browserPipeCloseAlone": {
+    "command": "node node_modules/tsx/dist/cli.mjs --test tests/browser-pipe-close.test.ts",
+    "exitCode": 0,
+    "tests": 1,
+    "pass": 1,
+    "fail": 0,
+    "skip": 0,
+    "logSha256": "de516969a21034c2c9dbf86a5018a515512272cc6dc1572ee12bd66f876f9554"
+  },
+  "contrast": {
+    "outerSurface": "surface-1",
+    "lightBrandBlue": 3.14,
+    "lightBrandOrange": 3.12,
+    "stateAlsoUsesText": true
+  },
+  "scope": "macOS arm64 local development and packaged app; ad hoc signature, no notarization or public release; final visual approval is separate"
+}

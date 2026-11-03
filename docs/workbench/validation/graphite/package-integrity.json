@@ -1,0 +1,12 @@
+{
+  "verifiedAt": "2026-11-02T16:52:01.706Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "version": "1.14.0",
+  "electron": "44.9.1",
+  "artifactReceiptSha256": "01c9c8131c929e0bf5d19d218fd37c1fa74db3445fb5cc7efe63f427576f7440",
+  "packagedAsarSha256": "2b93a6dbd780b9b1d100063a2159a5dc8b4e8a854e79d953d2d2f8bc3250a845",
+  "artifactFilesVerified": 2571,
+  "distFilesComparedToAsar": 2612,
+  "mismatches": 0
+}

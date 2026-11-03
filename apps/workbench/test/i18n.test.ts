@@ -88,6 +88,100 @@ test('translations keep their placeholders', () => {
   }
 });
 
+test('Chinese interface wording follows the shared vocabulary without addressing a person', () => {
+  const outdated = Object.entries(ZH_CN).filter(([, value]) =>
+    /你|(?<!其)他|目录|核验|出处|依据|共享给我的|提交共享|添加条目|种类|继承自上级|历史|修订引文/.test(
+      value,
+    ),
+  );
+  assert.deepEqual(outdated, []);
+  // These are authentication and file permissions, not content sharing.
+  assert.equal(ZH_CN['waiting for GitHub authorization'], '等待 GitHub 授权中');
+  assert.equal(ZH_CN['file access granted'], '文件访问已授权');
+});
+
+test('connection hints, requests and handoffs use Chinese wording while English keeps its keys', (context) => {
+  context.after(() => setLanguage('en'));
+  setLanguage('zh-CN');
+  assert.equal(t('waiting for runtime connection'), '等待连接运行时中');
+  assert.equal(t('connection settings'), '连接设置…');
+  assert.equal(
+    tn(1, '{n} request waiting for you', '{n} requests waiting for you'),
+    '1 个请求等待处理',
+  );
+  assert.equal(
+    tn(3, '{n} request waiting for you', '{n} requests waiting for you'),
+    '3 个请求等待处理',
+  );
+  assert.equal(t('Circle handed it to you'), '等待回应中');
+  assert.equal(t('waiting for your response'), '等待回应中');
+  setLanguage('en');
+  assert.equal(
+    t('waiting for runtime connection'),
+    'waiting for runtime connection',
+  );
+  assert.equal(t('connection settings'), 'connection settings');
+  assert.equal(t('Circle handed it to you'), 'Circle handed it to you');
+});
+
+test('Chinese keeps spaces next to Latin text, numbers and placeholders', () => {
+  for (const [key, value] of Object.entries(ZH_CN)) {
+    assert.doesNotMatch(
+      value,
+      /[\p{Script=Han}][A-Za-z0-9{]|[A-Za-z0-9}][\p{Script=Han}]/u,
+      key,
+    );
+    assert.doesNotMatch(
+      value,
+      /[\p{Script=Han}] {2,}[A-Za-z0-9{]|[A-Za-z0-9}] {2,}[\p{Script=Han}]/u,
+      key,
+    );
+  }
+  assert.equal(
+    ZH_CN['Circle is using terminal {n}'],
+    'Circle 正在使用终端 {n}',
+  );
+  assert.equal(ZH_CN['Circle is using “{name}”'], 'Circle 正在使用“{name}”');
+});
+
+test('active operations say doing while queues, approvals, responses, restarts and retries say waiting', (context) => {
+  context.after(() => setLanguage('en'));
+  setLanguage('zh-CN');
+  for (const [key, value] of Object.entries(ZH_CN)) {
+    if (/^(running|reading|searching|listing|looking up|editing) /.test(key))
+      assert.match(value, /^正在/, key);
+    if (/^waiting to (run|read|search|list|look up|edit) /.test(key))
+      assert.match(value, /^等待/, key);
+  }
+  for (const key of [
+    'merging {done}/{total}',
+    'compacting',
+    'compacting {done}/{total}',
+    'recovering {done}/{total}',
+    'loading file',
+    'saving file',
+    'preparing GitHub authorization code',
+    'verifying GitHub account',
+  ])
+    assert.match(t(key), /^正在/, key);
+  for (const key of [
+    'waiting for GitHub authorization',
+    'waiting for approval',
+    'waiting for your response',
+    'restarting…',
+    'runtime restarting…',
+    'retrying {cause} {attempt}',
+  ])
+    assert.match(t(key), /^等待/, key);
+  assert.equal(t('waiting to run a command'), '等待运行中 · 1 条命令');
+  assert.equal(t('running a command'), '正在运行 1 条命令');
+  const file = 'src/synthetic/waiting for runtime connection.ts';
+  assert.equal(t('waiting to read {file}', { file }), `等待读取中 · ${file}`);
+  assert.equal(t('reading {file}', { file }), `正在读取 ${file}`);
+  assert.equal(t('attach files'), '附加文件…');
+  assert.equal(t('open folder'), '打开文件夹…');
+});
+
 test('the language follows the system until one is chosen, and the choice is kept', () => {
   const store = new Map<string, string>();
   const storage = {

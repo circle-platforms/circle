@@ -41,6 +41,7 @@ import {
   runNativeTerminalJourney,
 } from './helpers/native-terminal-journey.mjs';
 import { openNativeProjectFile } from './helpers/native-project-file.mjs';
+import { holdMenuExit } from './helpers/menu-exit.mjs';
 import { runNativeKeyboardJourney } from './helpers/native-keyboard-journey.mjs';
 import { runNativeInputRecovery } from './helpers/native-input-recovery.mjs';
 import { runNativeBrowserStream } from './helpers/native-browser-stream.mjs';
@@ -938,7 +939,13 @@ try {
     // The + at the end of the terminal tabs makes a shell in the conversation's folder.
     const panel = await openNativeTerminalInspector(page);
     const prior = new Set((await query('terminal', 'list')).map((t) => t.id));
-    await chooseNewLocalTerminal(page, panel);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    let finishExit;
+    await chooseNewLocalTerminal(page, panel, {
+      beforeSelect: async () => {
+        finishExit = await holdMenuExit(page, '.term-menu[data-state="open"]');
+      },
+    });
     let shell;
     await until(
       async () =>
@@ -962,7 +969,18 @@ try {
       `#terminal-${shell.id} .xterm-helper-textarea`,
     );
     await terminal.focus();
-    for (const chunk of journeyShellInput()) await page.keyboard.type(chunk);
+    // Finish the real menu exit after input starts: this schedule exposed lost stdin
+    // on Linux, while fast local typing could finish before the focus-return callback.
+    const [first, ...rest] = journeyShellInput();
+    await page.keyboard.type(first.slice(0, 4));
+    const closed = await finishExit();
+    assert.equal(
+      closed.terminal,
+      `terminal-${shell.id}`,
+      `menu exit preserves real PTY input focus: ${JSON.stringify(closed)}`,
+    );
+    await page.keyboard.type(first.slice(4));
+    for (const chunk of rest) await page.keyboard.type(chunk);
     await until(async () => {
       const log = await query('terminal', 'replay', {
         id: shell.id,
@@ -1132,6 +1150,92 @@ try {
           listed = await shown();
           return JSON.stringify(listed) === JSON.stringify(actual);
         };
+        // Best-effort diagnostics of the already isolated renderer, never an oracle.
+        // Context gives the actual received session; hooks distinguish it from a cached Git list.
+        const rendererChanges = () =>
+          page
+            .evaluate(() => {
+              const element = document.querySelector('.changes-mode');
+              const key =
+                element &&
+                Object.keys(element).find((key) =>
+                  key.startsWith('__reactFiber$'),
+                );
+              let fiber = key && element[key];
+              const seen = new Set(),
+                contexts = [],
+                caches = [],
+                props = [];
+              for (
+                let depth = 0;
+                fiber && depth < 40;
+                depth++, fiber = fiber.return
+              ) {
+                if (
+                  fiber.memoizedProps &&
+                  ('active' in fiber.memoizedProps ||
+                    'visible' in fiber.memoizedProps)
+                )
+                  props.push({
+                    active: fiber.memoizedProps.active,
+                    visible: fiber.memoizedProps.visible,
+                  });
+                for (
+                  let dep = fiber.dependencies?.firstContext;
+                  dep;
+                  dep = dep.next
+                ) {
+                  const value = dep.memoizedValue;
+                  const runtime = value?.runtime ?? value;
+                  if (
+                    typeof runtime?.getSnapshot !== 'function' ||
+                    seen.has(runtime)
+                  )
+                    continue;
+                  seen.add(runtime);
+                  const snapshot = runtime.getSnapshot();
+                  contexts.push({
+                    activeSessionId: snapshot.activeSessionId,
+                    sessions: snapshot.sessions.map((session) => ({
+                      id: session.id,
+                      changes: session.changes?.map((row) => ({
+                        path: row.path,
+                        kind: row.kind,
+                      })),
+                    })),
+                  });
+                }
+                for (const node of [fiber, fiber.alternate].filter(Boolean)) {
+                  let hook = node.memoizedState;
+                  for (
+                    let index = 0;
+                    hook && index < 100;
+                    index++, hook = hook.next
+                  ) {
+                    const state = hook.memoizedState;
+                    if (state instanceof Map)
+                      for (const [owner, rows] of state)
+                        if (
+                          Array.isArray(rows) &&
+                          rows.every((row) => typeof row?.path === 'string')
+                        )
+                          caches.push({
+                            owner,
+                            rows: rows.map((row) => ({
+                              path: row.path,
+                              letter: row.letter,
+                            })),
+                          });
+                  }
+                }
+              }
+              return { contexts, caches, props };
+            })
+            .catch((error) => ({ diagnosticError: String(error) }));
+        await writeFile(
+          join(output, 'changes-renderer-at-open.json'),
+          JSON.stringify(await rendererChanges(), null, 2),
+        );
         const waitForRows = async (sessionOnly, description) => {
           try {
             await until(() => matches(sessionOnly), description);
@@ -1150,6 +1254,7 @@ try {
                   expected: actual,
                   shown: listed,
                   backendGit,
+                  renderer: await rendererChanges(),
                   session: snapshot.sessions.find(
                     (item) => item.id === sessionId,
                   ),
@@ -2149,10 +2254,10 @@ try {
             name:
               kind === 'service'
                 ? zh
-                  ? '终端面板'
+                  ? '终端 面板'
                   : 'terminal panel'
                 : zh
-                  ? '浏览器面板'
+                  ? '浏览器 面板'
                   : 'browser panel',
             exact: true,
           });

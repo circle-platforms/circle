@@ -154,7 +154,7 @@ test('agent activity localizes interface state, keeps real tool text and gives w
   assert.equal(agentActivityText(agent), 'Read(notes.txt)');
   assert.equal(
     agentActivityText({ ...agent, status: 'waiting' }),
-    '等待你处理',
+    '等待回应中',
   );
   assert.equal(agentActivityText({ ...agent, activity: 'working' }), '工作中');
 });

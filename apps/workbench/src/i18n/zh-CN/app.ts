@@ -1,10 +1,10 @@
 // Simplified Chinese for the interface words in the app files. English is the key.
 export const app: Record<string, string> = {
   connected: '已连接',
-  'connect a model': '连接模型',
+  'connect a model': '连接模型…',
   'runtime stopped': '运行时已停止',
   'runtime stopped · restart': '运行时已停止 · 重启',
-  'runtime restarting…': '运行时正在重启…',
+  'runtime restarting…': '等待运行时重启中…',
   // the top bar and the search
   mcp: 'MCP',
   'open navigation': '打开导航',
@@ -15,12 +15,12 @@ export const app: Record<string, string> = {
   navigation: '导航',
   inspector: '检查器',
   'global search': '全局搜索',
-  'sessions, files, pages or past messages': '会话、文件、页面或历史消息',
+  'sessions, files, pages or past messages': '会话、文件、页面或以往消息',
   'plugin page': '插件页面',
   'session · {workspace}': '会话 · {workspace}',
   page: '页面',
   file: '文件',
-  'message history': '消息历史',
+  'message history': '消息记录',
   'no results': '无结果',
   // the main view
   'plugin disabled': '插件已停用',

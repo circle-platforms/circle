@@ -677,7 +677,7 @@ async function createWindow() {
   window = new BrowserWindow({
     width: 1440,
     height: 960,
-    minWidth: 760,
+    minWidth: 640,
     minHeight: 560,
     title: app.name,
     icon: join(

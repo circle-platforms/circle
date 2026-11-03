@@ -50,7 +50,7 @@ try {
           authorizing:
             language === 'en'
               ? 'waiting for GitHub authorization'
-              : '等待 GitHub 授权',
+              : '等待 GitHub 授权中',
           error:
             language === 'en' ? 'GitHub connection error' : 'GitHub 连接出错',
         };

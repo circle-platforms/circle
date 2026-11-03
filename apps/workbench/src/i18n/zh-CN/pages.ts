@@ -33,7 +33,7 @@ export const pages: Record<string, string> = {
   'Whether the commits and pull requests Circle makes credit Circle.':
     'Circle 创建的提交和 PR 是否署名 Circle。',
   'When enabled in a Git repository, Circle asks the model to credit Circle in commits and pull requests. The commit author follows your attribution settings.':
-    '在 Git 仓库中启用后，Circle 会要求模型在提交和 PR 中署名 Circle。提交作者取决于你的署名设置。',
+    '在 Git 仓库中启用后，Circle 会要求模型在提交和 PR 中署名 Circle。提交作者取决于署名设置。',
   'Files a session may read outside a project, and name-based protections for sensitive files.':
     '会话可以读取的项目外文件，以及基于文件名的敏感文件保护。',
   'Values you name once and use in a tool call as %NAME%.':
@@ -45,14 +45,14 @@ export const pages: Record<string, string> = {
   hooks: '钩子',
   'no hooks': '没有钩子',
   'Hooks run shell commands you configured. A deny overrides every approval mode, including auto.':
-    '钩子会运行你配置的终端命令。拒绝会覆盖所有审批模式，包括自动模式。',
+    '钩子运行已配置的终端命令。拒绝优先于所有审批模式，包括自动模式。',
   'Project hooks are not running until this folder is trusted.':
     '在信任此文件夹之前，项目钩子不会运行。',
   '{file} does not run until you approve this version. Circle asks when a conversation starts its next turn.':
     '批准这个版本之前，{file} 不会运行。对话开始下一个回合时，Circle 会询问。',
   'A skill hook runs after that skill is loaded in this session.':
     '技能自带的钩子在本次会话加载该技能之后才运行。',
-  'waits for the skill': '等待技能加载',
+  'waits for the skill': '等待加载技能中',
   'search settings': '搜索设置',
   'settings sections': '设置分组',
   'no matching settings': '没有匹配的设置',
@@ -132,7 +132,7 @@ export const pages: Record<string, string> = {
   'output price': '输出价格',
   'cache usage': '缓存用量',
   source: '来源',
-  'sample catalog; no endpoint queried': '示例目录；未查询端点',
+  'sample catalog; no endpoint queried': '示例模型列表；未查询端点',
   // skills
   'Instructions loaded into a conversation when needed.':
     '需要时载入对话的指令。',
@@ -237,7 +237,7 @@ export const pages: Record<string, string> = {
   'change…': '更改…',
   'default workspace changed': '默认工作区已更改',
   'changing the folder does not move your files; the new folder still needs trust':
-    '更改文件夹不会移动你的文件；新文件夹仍需要信任',
+    '更改文件夹不会移动文件；新文件夹仍需信任',
   'the old default folder {path} keeps its sessions until you delete it by hand':
     '旧的默认文件夹 {path} 仍保留其会话，需要手动删除',
   'workspace trust': '项目信任',
@@ -271,7 +271,7 @@ export const pages: Record<string, string> = {
   'UI controls are local; no runtime effects are implied.':
     '界面控件只在本地生效；不代表会影响运行时。',
   '{amount} per million tokens': '{amount} / 百万 token',
-  'models.dev and your settings': 'models.dev 与你的设置',
+  'models.dev and your settings': 'models.dev 与当前设置',
   'key preferences saved': '按键偏好已保存',
   'open the session tree': '打开会话树',
   'fork the session': '分叉会话',
@@ -300,7 +300,7 @@ export const pages: Record<string, string> = {
   'downloading Circle {version} · {percent}%':
     '正在下载 Circle {version} · {percent}%',
   'Circle {version} is ready to install': 'Circle {version} 已下载，重启后更新',
-  'restarting…': '正在重启…',
+  'restarting…': '等待重启中…',
   'update failed: {error}': '更新失败：{error}',
   download: '下载',
   update: '更新',
@@ -371,7 +371,7 @@ export const pages: Record<string, string> = {
   'that key is already used': '这个按键已经用过了',
   'clear the draft': '清空草稿',
   'resume a session': '恢复会话',
-  'search history': '搜索历史',
+  'search history': '搜索记录',
   'next thinking depth': '下一个思考深度',
   'focus the plan': '查看计划',
   'expand tool details': '展开工具详情',
@@ -381,7 +381,7 @@ export const pages: Record<string, string> = {
   suspend: '暂停进程',
   // settings: workspace trust, protected files, network trust, keyboard
   'Circle reads a folder and runs in it only after you trust it. Trusting a folder lets Circle load the instructions, skills, commands and extensions that live in it.':
-    '只有你信任一个文件夹，Circle 才会读取它并在里面运行。信任后，Circle 会加载文件夹里的指令、技能、命令和扩展。',
+    '文件夹经明确信任后，Circle 才会读取并在其中运行。信任后会加载该文件夹中的指令、技能、命令和扩展。',
   'remove…': '删除…',
   'Circle is working in this folder now': 'Circle 正在这个文件夹里工作',
   'remove {name}?': '删除 {name}？',
@@ -414,7 +414,7 @@ export const pages: Record<string, string> = {
   'Circle reads these when it starts, so restart the application for a change to take effect.':
     'Circle 启动时读取这些设置，改动后要重启应用才会生效。',
   'check a file name': '检查一个文件名',
-  '{name} is protected by {pattern}': '{pattern} 正在保护 {name}',
+  '{name} is protected by {pattern}': '{name} 受 {pattern} 保护',
   '{name} is not protected': '{name} 不受保护',
   'always protected · {n} patterns': '一直受保护 · {n} 个样式',
   "Circle's own list. An extra pattern adds to it and can never take a name away from it.":
@@ -445,9 +445,9 @@ export const pages: Record<string, string> = {
   'Circle adds these to the roots it already trusts, and hands the whole set to every command and tool it starts.':
     'Circle 把这些加进本来就信任的根证书，并把它信任的整套交给它启动的每个命令和工具。',
   'Nothing of your own is trusted yet beyond the defaults. Name a PEM file in trust_cert_files, or set SSL_CERT_FILE, and restart Circle to add your own.':
-    '除了默认的那些，还没有你信任的证书。在 trust_cert_files 里写一个 PEM 文件，或者设置 SSL_CERT_FILE，然后重启 Circle。',
+    '尚未添加默认列表之外的受信任证书。在 trust_cert_files 中指定 PEM 文件，或设置 SSL_CERT_FILE，然后重启 Circle。',
   'Every action starts on its default key. Choose change… and press the keys you want instead; esc gives up. These keys belong to this application; the terminal reads keybindings.json.':
-    '每个动作一开始都用它的默认按键。点“更改…”后按下你想要的按键，按 esc 放弃。这些按键只属于这个应用；终端读的是 keybindings.json。',
+    '每个动作默认使用原按键。选择“更改…”后按下新按键，按 esc 放弃。这些设置仅适用于桌面应用；终端读取 keybindings.json。',
   key: '按键',
   'press a key…': '请按一个键…',
   'change the key for {action}': '更改 {action} 的按键',

@@ -30,8 +30,8 @@ const WORDS = {
     cost: '费用',
     cache: '缓存',
     // The words of the design's overview board.
-    waitingApproval: '等你批准',
-    waiting: '等待你处理',
+    waitingApproval: '等待批准中',
+    waiting: '等待回应中',
   },
 };
 // How a row of the in progress card fits: anything past the row's or the card's right

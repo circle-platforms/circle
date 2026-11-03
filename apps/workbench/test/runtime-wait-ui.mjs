@@ -44,7 +44,7 @@ try {
           row,
           word(
             /Circle is still working on custom-command/,
-            /Circle 仍在处理 custom-command/,
+            /Circle 正在处理 custom-command/,
           ),
           'the wait says what the runtime holds',
         );

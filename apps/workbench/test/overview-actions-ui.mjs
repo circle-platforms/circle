@@ -53,7 +53,7 @@ try {
       );
     const modeButton = (name) =>
       page.getByRole('button', {
-        name: w(`${name} panel`, `${name}面板`),
+        name: w(`${name} panel`, `${name} 面板`),
         exact: true,
       });
     const overviewButton = page.locator(
@@ -250,7 +250,7 @@ try {
         document
           .querySelector(`.drawer-mode-button[aria-label="${name}"]`)
           ?.getAttribute('aria-pressed') === 'true',
-      w('terminal panel', '终端面板'),
+      w('terminal panel', '终端 面板'),
     );
     assert.deepEqual(errors, []);
     await page.close();

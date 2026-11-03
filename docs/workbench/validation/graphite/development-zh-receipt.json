@@ -1,0 +1,1108 @@
+{
+  "testedAt": "2026-11-02T16:50:21.245Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "runnerNode": "24.22.1",
+  "versions": {
+    "node": "24.22.0",
+    "electron": "44.9.1",
+    "chromium": "152.0.7977.167"
+  },
+  "language": "zh-CN",
+  "packaged": false,
+  "packagedAsarSha256": null,
+  "viewport": {
+    "width": 1440,
+    "height": 967
+  },
+  "checks": [
+    "sixteen native theme/width/state samples keep the footer inside a bounded composer and show the correct action",
+    "connection hints and request counts follow the selected interface language in both themes and widths",
+    "the translated connection-settings action still opens its dialog",
+    "the mode opens at 380px and never coexists with overview as a fourth pane",
+    "drawer collapses below 1180 and navigation below 760",
+    "answer restores running, stop restores plan with draft intact, resume and Enter preserve steering",
+    "long drafts scroll within twelve lines and keep the primary action in the native viewport",
+    "auto follows both native renderer media changes without retaining the previous palette",
+    "long synthetic project paths and model identifiers keep the model menu and primary action within a narrow viewport",
+    "tool summaries expand into their original details within the conversation width",
+    "an old menu finishing its exit cannot steal keyboard focus from a newly opened project menu",
+    "reduced motion disables the composer ring and activity spinners",
+    "reduced motion keeps the opening pointer release from selecting a session menu action, while a fresh click still works"
+  ],
+  "errors": [],
+  "observations": [
+    {
+      "theme": "dark",
+      "state": "default",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 965
+        },
+        "actual": {
+          "width": 1440,
+          "height": 965
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 965
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 965
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 937,
+        "right": 232,
+        "bottom": 965
+      },
+      "composer": {
+        "x": 456,
+        "y": 790,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 898
+      },
+      "footer": {
+        "x": 457,
+        "y": 857,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 897
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 760
+    },
+    {
+      "theme": "dark",
+      "state": "plan",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 965
+        },
+        "actual": {
+          "width": 1440,
+          "height": 965
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 965
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 965
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 937,
+        "right": 232,
+        "bottom": 965
+      },
+      "composer": {
+        "x": 456,
+        "y": 790,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 898
+      },
+      "footer": {
+        "x": 457,
+        "y": 857,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 897
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 760
+    },
+    {
+      "theme": "dark",
+      "state": "working",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 965
+        },
+        "actual": {
+          "width": 1440,
+          "height": 965
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 965
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 965
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 937,
+        "right": 232,
+        "bottom": 965
+      },
+      "composer": {
+        "x": 456,
+        "y": 766.5,
+        "width": 760,
+        "height": 131.5,
+        "right": 1216,
+        "bottom": 898
+      },
+      "footer": {
+        "x": 457,
+        "y": 833.5,
+        "width": 758,
+        "height": 63.5,
+        "right": 1215,
+        "bottom": 897
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "conic-gradient(from 5deg, rgb(8, 148, 255) 0%, rgb(201, 89, 221) 30%, rgb(255, 46, 84) 65%, rgb(255, 144, 4) 90%, rgb(8, 148, 255) 100%)",
+      "animation": "3.6s",
+      "reduced": false,
+      "send": false,
+      "brand": "circle工作台",
+      "contentWidth": 760,
+      "connectionHint": "等待连接运行时中\n连接设置…"
+    },
+    {
+      "theme": "dark",
+      "state": "attention",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 965
+        },
+        "actual": {
+          "width": 1440,
+          "height": 965
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 965
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 965
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 937,
+        "right": 232,
+        "bottom": 965
+      },
+      "composer": {
+        "x": 456,
+        "y": 790,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 898
+      },
+      "footer": {
+        "x": 457,
+        "y": 857,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 897
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 760,
+      "connectionHint": "等待连接运行时中\n连接设置…",
+      "requestSummary": "1 个请求等待处理\n查看"
+    },
+    {
+      "theme": "light",
+      "state": "default",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 965
+        },
+        "actual": {
+          "width": 1440,
+          "height": 965
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 965
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 965
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 937,
+        "right": 232,
+        "bottom": 965
+      },
+      "composer": {
+        "x": 456,
+        "y": 790,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 898
+      },
+      "footer": {
+        "x": 457,
+        "y": 857,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 897
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 760
+    },
+    {
+      "theme": "light",
+      "state": "plan",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 965
+        },
+        "actual": {
+          "width": 1440,
+          "height": 965
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 965
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 965
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 937,
+        "right": 232,
+        "bottom": 965
+      },
+      "composer": {
+        "x": 456,
+        "y": 790,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 898
+      },
+      "footer": {
+        "x": 457,
+        "y": 857,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 897
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 760
+    },
+    {
+      "theme": "light",
+      "state": "working",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 965
+        },
+        "actual": {
+          "width": 1440,
+          "height": 965
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 965
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 965
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 937,
+        "right": 232,
+        "bottom": 965
+      },
+      "composer": {
+        "x": 456,
+        "y": 766.5,
+        "width": 760,
+        "height": 131.5,
+        "right": 1216,
+        "bottom": 898
+      },
+      "footer": {
+        "x": 457,
+        "y": 833.5,
+        "width": 758,
+        "height": 63.5,
+        "right": 1215,
+        "bottom": 897
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "conic-gradient(from 5.01deg, rgb(8, 148, 255) 0%, rgb(201, 89, 221) 30%, rgb(255, 46, 84) 65%, rgb(217, 122, 3) 90%, rgb(8, 148, 255) 100%)",
+      "animation": "3.6s",
+      "reduced": false,
+      "send": false,
+      "brand": "circle工作台",
+      "contentWidth": 760,
+      "connectionHint": "等待连接运行时中\n连接设置…"
+    },
+    {
+      "theme": "light",
+      "state": "attention",
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 980
+        },
+        "target": {
+          "width": 1440,
+          "height": 965
+        },
+        "actual": {
+          "width": 1440,
+          "height": 965
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 965
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 965
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 937,
+        "right": 232,
+        "bottom": 965
+      },
+      "composer": {
+        "x": 456,
+        "y": 790,
+        "width": 760,
+        "height": 108,
+        "right": 1216,
+        "bottom": 898
+      },
+      "footer": {
+        "x": 457,
+        "y": 857,
+        "width": 758,
+        "height": 40,
+        "right": 1215,
+        "bottom": 897
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 760,
+      "connectionHint": "等待连接运行时中\n连接设置…",
+      "requestSummary": "1 个请求等待处理\n查看"
+    },
+    {
+      "theme": "dark",
+      "state": "default",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 736
+    },
+    {
+      "theme": "dark",
+      "state": "plan",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 736
+    },
+    {
+      "theme": "dark",
+      "state": "working",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 768.5,
+        "width": 736,
+        "height": 131.5,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 835.5,
+        "width": 734,
+        "height": 63.5,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "conic-gradient(from 6.58deg, rgb(8, 148, 255) 0%, rgb(201, 89, 221) 30%, rgb(255, 46, 84) 65%, rgb(255, 144, 4) 90%, rgb(8, 148, 255) 100%)",
+      "animation": "3.6s",
+      "reduced": false,
+      "send": false,
+      "brand": "circle工作台",
+      "contentWidth": 736,
+      "connectionHint": "等待连接运行时中\n连接设置…"
+    },
+    {
+      "theme": "dark",
+      "state": "attention",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(14, 16, 19)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 736,
+      "connectionHint": "等待连接运行时中\n连接设置…",
+      "requestSummary": "1 个请求等待处理\n查看"
+    },
+    {
+      "theme": "light",
+      "state": "default",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 736
+    },
+    {
+      "theme": "light",
+      "state": "plan",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 736
+    },
+    {
+      "theme": "light",
+      "state": "working",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 768.5,
+        "width": 736,
+        "height": 131.5,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 835.5,
+        "width": 734,
+        "height": 63.5,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "conic-gradient(from 6.8734deg, rgb(8, 148, 255) 0%, rgb(201, 89, 221) 30%, rgb(255, 46, 84) 65%, rgb(217, 122, 3) 90%, rgb(8, 148, 255) 100%)",
+      "animation": "3.6s",
+      "reduced": false,
+      "send": false,
+      "brand": "circle工作台",
+      "contentWidth": 736,
+      "connectionHint": "等待连接运行时中\n连接设置…"
+    },
+    {
+      "theme": "light",
+      "state": "attention",
+      "sizing": {
+        "requested": {
+          "width": 1024,
+          "height": 980
+        },
+        "target": {
+          "width": 1024,
+          "height": 967
+        },
+        "actual": {
+          "width": 1024,
+          "height": 967
+        },
+        "scaleFactor": 2,
+        "room": {
+          "width": 1920,
+          "height": 967
+        },
+        "attempts": 1
+      },
+      "viewport": {
+        "width": 1024,
+        "height": 967
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 28,
+        "width": 232,
+        "height": 939,
+        "right": 232,
+        "bottom": 967
+      },
+      "composer": {
+        "x": 260,
+        "y": 792,
+        "width": 736,
+        "height": 108,
+        "right": 996,
+        "bottom": 900
+      },
+      "footer": {
+        "x": 261,
+        "y": 859,
+        "width": 734,
+        "height": 40,
+        "right": 995,
+        "bottom": 899
+      },
+      "background": "rgb(238, 240, 243)",
+      "ring": "none",
+      "animation": "0s",
+      "reduced": false,
+      "send": true,
+      "brand": "circle工作台",
+      "contentWidth": 736,
+      "connectionHint": "等待连接运行时中\n连接设置…",
+      "requestSummary": "1 个请求等待处理\n查看"
+    }
+  ],
+  "layout": [
+    {
+      "drawerWidth": 380
+    },
+    {
+      "drawerSurface": {
+        "actual": "rgb(26, 29, 34)",
+        "expected": "rgb(26, 29, 34)"
+      }
+    },
+    {
+      "automaticTheme": [
+        {
+          "theme": "dark",
+          "background": "rgb(14, 16, 19)"
+        },
+        {
+          "theme": "light",
+          "background": "rgb(238, 240, 243)"
+        }
+      ]
+    }
+  ],
+  "shots": [
+    {
+      "path": "dark-1440-default.png",
+      "sha256": "b6f491001c09a7b5b2aab35dc137786bd4698cb925deafee9ebe30a344b426e3"
+    },
+    {
+      "path": "dark-1440-plan.png",
+      "sha256": "ef580150cddd7c08cef2410cc24747eee0971727af8e1f42c036fe2879dfc5de"
+    },
+    {
+      "path": "dark-1440-working.png",
+      "sha256": "d74cc6808552d739a00a3ba06c02904a67fb481120048d297db146b183f94436",
+      "retainedCopy": "development-dark-1440-working.png"
+    },
+    {
+      "path": "dark-1440-attention.png",
+      "sha256": "54091a39a8b19a8aeedd6994401713194c7f50a72de80c66724ebea411734753"
+    },
+    {
+      "path": "light-1440-default.png",
+      "sha256": "964539924420107d9780280ca214790f9d575271b0d7316cbc15a8a6153f1e8a"
+    },
+    {
+      "path": "light-1440-plan.png",
+      "sha256": "7a1598e05e5486ed10ea9aca1d53c2e2a79bac439fe6f09e35ba3a9594e4d495",
+      "retainedCopy": "development-light-1440-plan.png"
+    },
+    {
+      "path": "light-1440-working.png",
+      "sha256": "6c768f394f96ad2151c51f832af01cbda59d5c63f03fe6bf06f23951ac132473"
+    },
+    {
+      "path": "light-1440-attention.png",
+      "sha256": "d9e35eb36516c39ffb4a2b3914fa97fa3eac9cc495499306507e594c7511ac4b"
+    },
+    {
+      "path": "dark-1024-default.png",
+      "sha256": "2340cfff17e054041887cacfeb1e538a8bbd93c4de1f9e51a4d7d9a2344c69be",
+      "retainedCopy": "development-dark-1024-default.png"
+    },
+    {
+      "path": "dark-1024-plan.png",
+      "sha256": "be52b21835032872a6b7dce6fbfc5d26cac3609f9befc64b4649141ca4d45bed"
+    },
+    {
+      "path": "dark-1024-working.png",
+      "sha256": "fdcff98aebb0afd01e1acadf56a3a323dc496917b73a8542a14c628c3aadc473"
+    },
+    {
+      "path": "dark-1024-attention.png",
+      "sha256": "394364b7c1449179a9e08924cd32a3aea68892b702576b5d1b77c49c7c37487f"
+    },
+    {
+      "path": "light-1024-default.png",
+      "sha256": "70657f5984596d94c2f92e36934eba1a195701b08f17011b85422ddd2984a13c"
+    },
+    {
+      "path": "light-1024-plan.png",
+      "sha256": "341c6084936f064b2964fac3107566b45eb302c28b91ffa2802b93b41ee66f07"
+    },
+    {
+      "path": "light-1024-working.png",
+      "sha256": "df2c8ecc4309303145c3ed111324481b9259e76d21a7d82baf6d96fdf81a1039"
+    },
+    {
+      "path": "light-1024-attention.png",
+      "sha256": "d3937f26e0d405e7db9d353853b3ec0eecdbe1d1dc391610012ce7713c1b1711",
+      "retainedCopy": "development-light-1024-attention.png"
+    },
+    {
+      "path": "light-1440-messages.png",
+      "sha256": "c3eb1c0a3170434c73d1fc422d8f2cd080d6bde536bf3b5bee678180bea65312"
+    },
+    {
+      "path": "dark-1440-drawer.png",
+      "sha256": "4a06d255917266d1fc87fff4830da52098c23c88de035819845b8221c01d2ecc"
+    },
+    {
+      "path": "light-1024-long-labels.png",
+      "sha256": "55aca704733546041bd1b63aec7aa1fb966063ff4068c4252519b180745ac816"
+    },
+    {
+      "path": "light-1440-tool-details.png",
+      "sha256": "7a0b4f1a8cf561e96fa6acbf0cb2d6b46eeaf8f37959e01e0a48bfc791337699"
+    }
+  ],
+  "scope": "synthetic native UI presentation only; runtime effects and final visual approval are separate",
+  "codeCommit": "fa905204ff48029eb65c9523edfcce77b40e1d61",
+  "manifest": {
+    "path": "source-build-manifest.json",
+    "sha256": "a7c89a47e34c0682d1ccde61466797c90743d091c7bdb616022afbabc3c3abff"
+  },
+  "localEvidenceDirectory": "apps/desktop/artifacts/graphite/chunk-4-final-development-zh"
+}

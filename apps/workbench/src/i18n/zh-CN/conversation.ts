@@ -1,5 +1,12 @@
 // Simplified Chinese for the interface words in the conversation files. English is the key.
 export const conversation: Record<string, string> = {
+  workbench: '工作台',
+  'waiting for Circle to finish': '等待 Circle 完成中',
+  'stop conversation': '停止当前回合',
+  usage: '用量',
+  'background jobs': '后台任务',
+  'waiting for runtime connection': '等待连接运行时中',
+  'connection settings': '连接设置…',
   hook: '钩子',
   'hook denied {tool}': '钩子拒绝了 {tool}',
   'hook asked {tool}': '钩子要求确认 {tool}',
@@ -27,7 +34,7 @@ export const conversation: Record<string, string> = {
   'Hook allowed this call.': '钩子允许了此次调用。',
   'Hook session_start output:': '钩子会话开始输出：',
   'Hook output ({name}):': '钩子输出（{name}）：',
-  'stopping work before deletion…': '停止任务后删除中…',
+  'stopping work before deletion…': '正在停止任务以便删除…',
   'open in another terminal; view only': '已在其他终端打开，仅可查看',
   'no model connected': '未连接模型',
   // the heading and the session actions
@@ -50,12 +57,12 @@ export const conversation: Record<string, string> = {
   // the transcript
   'what are we working on?': '我们要做什么？',
   'work without a project': '不在项目中工作',
-  'what should we build in {name}?': '你想让我们在 {name} 中构建什么？',
+  'what should we build in {name}?': '准备在 {name} 中做什么？',
   'search projects': '搜索项目',
   'no matching projects': '没有匹配的项目',
   'no project': '无项目',
   'choose a project': '选择项目',
-  you: '你',
+  you: '我',
   thinking: '思考',
   'thinking {time}': '思考 {time}',
   'could not reach the endpoint': '无法连接端点',
@@ -89,7 +96,7 @@ export const conversation: Record<string, string> = {
   'model context leaves no room for a usable summary':
     '模型上下文没有足够空间生成可用摘要',
   'model context cannot fit the summary instructions and one history fragment':
-    '模型上下文无法容纳摘要指令和一段历史',
+    '模型上下文无法容纳摘要指令和一段会话记录',
   'model context cannot fit the summary instructions':
     '模型上下文无法容纳摘要指令',
   'summary did not shrink to its target': '摘要未缩减到目标长度',
@@ -98,7 +105,7 @@ export const conversation: Record<string, string> = {
   'conversation changed during compaction': '压缩期间会话发生变化',
   'summary boundary is no longer on the active branch':
     '摘要边界已不在当前分支',
-  'summary history does not match raw conversation': '摘要历史与原始会话不一致',
+  'summary history does not match raw conversation': '摘要记录与原始会话不一致',
   'session changed in another process': '会话已被其他进程更改',
   'model response ended without a complete finish signal':
     '模型响应缺少完整的结束信号',
@@ -118,13 +125,13 @@ export const conversation: Record<string, string> = {
   'restore conversation': '恢复对话',
   steering: '插话',
   'follow-up': '追加消息',
-  'remove queued {kind}': '移除排队中的{kind}',
+  'remove queued {kind}': '移除排队中的 {kind}',
   'return queued messages to draft': '把排队的消息放回草稿',
   // the composer
   'input completions': '输入补全',
   message: '消息',
   'ask anything, or describe a change…': '问任何问题，或描述一个改动…',
-  'attach files': '附加文件',
+  'attach files': '附加文件…',
   'pause conversation': '暂停对话',
   'resume conversation': '继续对话',
   'send message': '发送消息',

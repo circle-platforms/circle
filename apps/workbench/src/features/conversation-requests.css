@@ -41,7 +41,7 @@
 }
 .request-failure {
   margin: 0;
-  color: var(--negative);
+  color: var(--negative-text);
   overflow-wrap: anywhere;
 }
 .inline-request .request-explain {
@@ -99,8 +99,8 @@
   width: 100%;
   min-height: 52px;
   padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
   font: inherit;

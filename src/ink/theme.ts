@@ -5,11 +5,79 @@ export const COLOR_QUERY =
 export type RGB = [number, number, number];
 export const DEFAULT_DARK: [string, string] = ['#d6dee6', '#10151a'];
 export const DEFAULT_LIGHT: [string, string] = ['#3c4148', '#f7f8fa'];
-/**
- * The desktop application's light theme: the same text on white. A terminal paints its own
- * ground, so the terminal keeps DEFAULT_LIGHT.
- */
-export const DESKTOP_LIGHT: [string, string] = ['#3c4148', '#ffffff'];
+// Desktop semantic slots, dark then light. Keep every colour here; the renderer only
+// maps names. Tests bind these values to the versioned design-system tokens.json.
+const DESKTOP_TOKENS = {
+  'surface-0': ['#111316', '#f3f4f6'],
+  'surface-1': ['#15181c', '#ffffff'],
+  'surface-2': ['#1a1d22', '#f8f9fb'],
+  'surface-3': ['#1f2329', '#ffffff'],
+  'surface-sunken': ['#0e1013', '#eef0f3'],
+  'surface-hover': ['rgba(255,255,255,0.045)', 'rgba(17,19,22,0.045)'],
+  'surface-pressed': ['rgba(255,255,255,0.08)', 'rgba(17,19,22,0.08)'],
+  'line-hairline': ['rgba(255,255,255,0.07)', 'rgba(17,19,22,0.08)'],
+  'line-control': ['#727983', '#7a818a'],
+  'text-primary': ['#e8eaed', '#16191d'],
+  'text-secondary': ['#b8bec6', '#3f454d'],
+  'text-tertiary': ['#8f96a0', '#5f6670'],
+  'text-inverse': ['#111316', '#ffffff'],
+  'text-link': ['#8cc8ff', '#0a63bd'],
+  'inverse-surface': ['#eceef1', '#16191d'],
+  'brand-blue': ['#0894ff', '#0894ff'],
+  'brand-violet': ['#c959dd', '#c959dd'],
+  'brand-red': ['#ff2e54', '#ff2e54'],
+  'brand-orange': ['#ff9004', '#d97a03'],
+  'area-knowledge': ['{brand-blue}', '#0a6fd1'],
+  'area-workflow': ['{brand-violet}', '#9b3fbf'],
+  'area-task': ['{brand-orange}', '#9c5c08'],
+  'area-alert': ['{brand-red}', '#d1213f'],
+  'area-neutral': ['#3a3f46', '#c3c8cf'],
+  'status-pass': ['#46c08a', '#1d9a61'],
+  'status-pass-text': ['#6fd3a4', '#12764a'],
+  'status-pass-bg': ['rgba(70,192,138,0.12)', 'rgba(29,154,97,0.10)'],
+  'status-fail': ['{brand-red}', '#d1213f'],
+  'status-fail-text': ['#ff8097', '#b0193a'],
+  'status-fail-bg': ['rgba(255,46,84,0.12)', 'rgba(209,33,63,0.08)'],
+  'status-warn': ['{brand-orange}', '#b87300'],
+  'status-warn-text': ['#f0b866', '#8a5200'],
+  'status-warn-bg': ['rgba(255,144,4,0.12)', 'rgba(184,115,0,0.10)'],
+  'status-info': ['{brand-blue}', '#0a6fd1'],
+  'status-info-text': ['#8cc8ff', '#0a5aad'],
+  'status-info-bg': ['rgba(8,148,255,0.12)', 'rgba(10,111,209,0.08)'],
+  'status-muted': ['#8f96a0', '#6b727c'],
+  'focus-ring': ['#8cc8ff', '#0a6fd1'],
+  scrim: ['rgba(0,0,0,0.55)', 'rgba(17,19,22,0.32)'],
+  'chart-1': ['#2593f6', '#096fd1'],
+  'chart-2': ['#c8830d', '#b36e1c'],
+  'chart-3': ['#07a19a', '#0b9488'],
+  'chart-4': ['#b85bd0', '#9b3fbf'],
+  'chart-grid': ['#2a2f36', '#e3e6ea'],
+  'chart-axis': ['{text-tertiary}', '{text-tertiary}'],
+  'shadow-popover': [
+    '0 8px 28px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)',
+    '0 8px 28px rgba(17,19,22,0.12), 0 0 0 1px rgba(17,19,22,0.06)',
+  ],
+  'shadow-dialog': [
+    '0 24px 64px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.07)',
+    '0 24px 64px rgba(17,19,22,0.18), 0 0 0 1px rgba(17,19,22,0.06)',
+  ],
+} as const;
+export type DesktopToken = keyof typeof DESKTOP_TOKENS;
+function desktopToken(name: DesktopToken, index: 0 | 1): string {
+  const value = DESKTOP_TOKENS[name][index];
+  return value.startsWith('{')
+    ? desktopToken(value.slice(1, -1) as DesktopToken, index)
+    : value;
+}
+/** The desktop's own pair; terminal defaults above never follow desktop styling. */
+export const DESKTOP_DARK: [string, string] = [
+  desktopToken('text-primary', 0),
+  desktopToken('surface-1', 0),
+];
+export const DESKTOP_LIGHT: [string, string] = [
+  desktopToken('text-primary', 1),
+  desktopToken('surface-1', 1),
+];
 export function hexToRgb(value: string): RGB {
   const match = value.trim().match(/^#?([0-9a-f]+)$/i);
   const digits = match?.[1];
@@ -35,6 +103,23 @@ export function rgbToHex(rgb: RGB): string {
       )
       .join('')
   );
+}
+/** Convert a CSS palette colour for native editors without discarding overlay alpha. */
+export function cssColorHex(value: string): string | undefined {
+  const raw = value.trim();
+  if (/^#[\da-f]{6}(?:[\da-f]{2})?$/i.test(raw)) return raw;
+  const match = raw.match(/^rgba?\(([\d\s,./]+)\)$/);
+  if (!match) return undefined;
+  const channels = match[1]!.match(/\d*\.?\d+/g)?.map(Number);
+  if (!channels || (channels.length !== 3 && channels.length !== 4))
+    return undefined;
+  const color = rgbToHex(channels.slice(0, 3) as RGB);
+  return channels.length === 4
+    ? color +
+        Math.round(Math.max(0, Math.min(1, channels[3]!)) * 255)
+          .toString(16)
+          .padStart(2, '0')
+    : color;
 }
 export function parseColorSpec(spec: string): string | undefined {
   try {
@@ -287,6 +372,21 @@ export function buildPalette(
     muted_strike: '\x1b[2;9m',
     rainbow: rainbowStops.slice(0, -1).map(([, rgb]) => fgSgr(rgbToHex(rgb))),
     rainbow_stops: rainbowStops,
+  };
+}
+/** One desktop palette supplies CSS tokens and the embedded terminal's live ground. */
+export function buildDesktopPalette(theme: 'dark' | 'light'): Palette & {
+  desktop: Readonly<Record<DesktopToken, string>>;
+} {
+  const index = theme === 'dark' ? 0 : 1;
+  return {
+    ...buildPalette(...(theme === 'dark' ? DESKTOP_DARK : DESKTOP_LIGHT)),
+    desktop: Object.fromEntries(
+      (Object.keys(DESKTOP_TOKENS) as DesktopToken[]).map((name) => [
+        name,
+        desktopToken(name, index),
+      ]),
+    ) as Record<DesktopToken, string>,
   };
 }
 let current = buildPalette(...DEFAULT_DARK);

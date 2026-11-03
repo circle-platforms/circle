@@ -2,7 +2,7 @@
 export const workspace: Record<string, string> = {
   'this machine': '本机',
   'in progress': '进行中',
-  'needs approval': '等你批准',
+  'needs approval': '等待批准中',
   'plan {done}/{total}': '计划 {done}/{total}',
   '{n} subagent': '{n} 个子代理',
   '{n} subagents': '{n} 个子代理',
@@ -68,7 +68,7 @@ export const workspace: Record<string, string> = {
   'attempt {n}': '第 {n} 次执行',
   'external link is not allowed': '此链接不允许打开',
   'ready for review': '可供审阅',
-  'types in your terminal': '在你的终端里输入',
+  'types in your terminal': '在终端中输入',
   'runs the line on the screen': '运行屏幕上的这一行',
   'stop Circle in {name}': '停止 Circle 在 {name} 里的操作',
 };
