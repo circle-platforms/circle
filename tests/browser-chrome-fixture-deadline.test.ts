@@ -19,7 +19,11 @@ import {
 
 test(
   'a fixture deadline closes its owned real Chrome and rejects the original pending CDP request',
-  { skip: executable ? false : 'no Chrome, Edge or Chromium is installed' },
+  {
+    skip: executable ? false : 'no Chrome, Edge or Chromium is installed',
+    // Last resort for a fixture bound that never fires; above the fixture's own budget.
+    timeout: 120_000,
+  },
   async (t) => {
     const temp = made(t, 'circle-chrome-fixture-deadline-');
     const site = createHttp((_req, res) => {
@@ -79,55 +83,56 @@ test(
           { expression: 'window.circlePendingFixture', returnByValue: true },
           tab.session,
         ),
-      5000,
     );
     assert.equal(
       marker.result.value,
       true,
       'the real pending evaluation started',
     );
-    // A broken fixture bound must fail this test without hanging the whole suite.
-    let fallback = false;
-    let fallbackClose: Promise<void> | undefined;
-    const watchdog = setTimeout(
-      () => {
-        fallback = true;
-        fallbackClose = fixture.close();
-        fallbackClose.catch(() => {});
-      },
-      200 + 2000 + 3000 + 2000 + 1000 + 1000,
-    );
-    try {
-      await assert.rejects(
-        fixture.run(
-          {
-            phase: 'never-resolving real evaluation',
-            method: 'Runtime.evaluate',
-            session: tab.session,
-          },
-          () => pending,
-          200,
-        ),
-        (error) => {
-          assert.ok(error instanceof BrowserFixtureDeadline);
-          assert.equal(error.limitMs, 200);
-          assert.equal(error.fixturePhase.method, 'Runtime.evaluate');
-          assert.equal(error.fixturePhase.session, tab.session);
-          assert.equal(error.fixturePhase.status, 'timeout');
-          assert.ok(fixture.signal.aborted);
-          assert.equal(
-            Object.hasOwn(error, 'browserFixtureCleanup'),
-            false,
-            error,
-          );
-          return true;
+    // What closed Chrome is read from events, not from a second clock: the fixture's
+    // deadline record, the order of its cleanup, the child's own exit and the CDP
+    // rejection. A bound that never fires is left to the test's last-resort timeout.
+    const exit = new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) resolve();
+      else child.once('exit', () => resolve());
+    });
+    const from = records.length;
+    await assert.rejects(
+      fixture.run(
+        {
+          phase: 'never-resolving real evaluation',
+          method: 'Runtime.evaluate',
+          session: tab.session,
         },
-      );
-    } finally {
-      clearTimeout(watchdog);
-      await fallbackClose;
-    }
-    assert.equal(fallback, false, 'the fixture phase deadline owns shutdown');
+        () => pending,
+        200,
+      ),
+      (error) => {
+        assert.ok(error instanceof BrowserFixtureDeadline);
+        assert.equal(error.limitMs, 200);
+        assert.equal(error.fixturePhase.method, 'Runtime.evaluate');
+        assert.equal(error.fixturePhase.session, tab.session);
+        assert.equal(error.fixturePhase.status, 'timeout');
+        assert.ok(fixture.signal.aborted);
+        assert.equal(
+          Object.hasOwn(error, 'browserFixtureCleanup'),
+          false,
+          error,
+        );
+        return true;
+      },
+    );
+    await exit;
+    // The phase's own deadline started the cleanup: its timeout comes before any cleanup.
+    const order = records
+      .slice(from)
+      .filter((record) => record.phase === 'never-resolving real evaluation')
+      .map((record) => record.status);
+    assert.deepEqual(
+      order.filter((status) => status !== 'late-rejection'),
+      ['before', 'timeout', 'cleanup-before', 'error', 'cleanup-after'],
+      'the fixture phase deadline owns shutdown',
+    );
     const result = await observed;
     assert.equal(result.rejected, true);
     assert.match(String(result.error), /browser was closed/);

@@ -13,6 +13,8 @@ export interface OutsideWriteRefusal {
   message: string;
   /** Present on Windows only. */
   holders?: FileHolder[] | { error: string };
+  /** On Windows: the holders' answer was in no later than this after the refusal. */
+  holdersWithinMs?: number;
 }
 export declare function writeOutside(
   path: string,
@@ -27,3 +29,7 @@ export declare function fileHolders(
   path: string,
   options?: { timeoutMs?: number },
 ): Promise<FileHolder[] | { error: string }>;
+export declare function prepareFileHolders(options?: {
+  platform?: NodeJS.Platform;
+}): Promise<void>;
+export declare function closeFileHolders(): void;
