@@ -1,4 +1,4 @@
-// Development Electron acceptance with synthetic content and a loopback protocol peer.
+// Development or packaged Electron acceptance with synthetic content and a loopback protocol peer.
 // The native picker fixture selects only the scratch files created below.
 import assert from 'node:assert/strict';
 import { _electron as electron } from 'playwright';
@@ -25,10 +25,15 @@ import { waitAnimationFrames } from './helpers/frame-readiness.mjs';
 import { closeNativeSettings } from './helpers/native-settings.mjs';
 import { observePage } from './helpers/diagnostics.mjs';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
+import { readModelRequests } from './helpers/model-requests.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
-const output = join(root, 'artifacts/knowledge/development');
+const packaged = Boolean(process.env.CIRCLE_DESKTOP_EXECUTABLE);
+const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
+const output =
+  process.env.CIRCLE_KNOWLEDGE_EVIDENCE_DIR ??
+  join(root, 'artifacts/knowledge', packaged ? 'packaged' : 'development');
 await mkdir(output, { recursive: true });
 const temp = await mkdtemp(join(tmpdir(), 'circle-knowledge-native-'));
 const home = join(temp, 'data/runtime-home');
@@ -159,7 +164,7 @@ const memory = (title, markdown, state = 'enabled') =>
     .commit(signal);
 memory(
   '我的偏好 · My preferences',
-  '先写检查计划，再保留结果。\nWrite a check plan and keep the results.',
+  '先写检查计划，再保留结果。\nWrite a check plan and keep the results.\n<native literal>',
 );
 memory('已停用的偏好 · Disabled preferences', 'DISABLED_MEMORY', 'disabled');
 memory('冲突偏好 · Conflicting preferences', 'BASE_PREFERENCE');
@@ -244,10 +249,12 @@ const importBytes = Buffer.from(
 );
 await writeFile(importPath, importBytes);
 const fixturePath = join(temp, 'model.json');
+const requestsPath = join(temp, 'requests.jsonl');
+await writeFile(join(home, 'MEMORY.md'), 'NATIVE_FILE_PREFERENCE <literal>');
 await writeFile(
   fixturePath,
   JSON.stringify({
-    requestsPath: join(temp, 'requests.jsonl'),
+    requestsPath,
     replies: [
       {
         message: {
@@ -280,15 +287,18 @@ const checks = [],
   errors = [];
 let app,
   page,
+  sessionPreferences,
   failed = false;
 async function launch() {
   app = await electron.launch({
     chromiumSandbox: true,
-    executablePath: require('electron'),
-    args: [resolve(root)],
+    executablePath:
+      process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
+    args: [appPath],
     cwd: root,
     env,
   });
+  assert.equal(await app.evaluate(({ app }) => app.isPackaged), packaged);
   page = await app.firstWindow();
   page.setDefaultTimeout(15000);
   observePage(page, errors);
@@ -426,6 +436,46 @@ try {
   await page
     .getByText('synthetic knowledge fixture ready', { exact: true })
     .waitFor();
+  const requests = await readModelRequests(requestsPath, {
+    requireComplete: true,
+  });
+  const system = requests.find((r) =>
+    r.system?.includes('<session_preferences>'),
+  )?.system;
+  assert.ok(
+    system,
+    'the actual worker model request includes structured preferences',
+  );
+  const preferences =
+    /<session_preferences>[\s\S]*?<\/session_preferences>/.exec(system)?.[0];
+  assert.ok(preferences);
+  const teamAt = preferences.indexOf(
+    'Check sources before drawing conclusions.',
+  );
+  const personalAt = preferences.indexOf(
+    'Write a check plan and keep the results.',
+  );
+  const fileAt = system.indexOf('NATIVE_FILE_PREFERENCE <literal>');
+  assert.ok(teamAt >= 0 && personalAt > teamAt);
+  assert.ok(fileAt > system.indexOf('</session_preferences>'));
+  assert.ok(preferences.includes('&lt;native literal>'));
+  assert.ok(!preferences.includes('<native literal>'));
+  assert.doesNotMatch(
+    preferences,
+    /DISABLED_MEMORY|BASE_PREFERENCE|优先保留来源|优先保留摘要|SHARED_VIEW_ONLY_NEVER_AUTO_LOAD/,
+  );
+  assert.ok(Buffer.byteLength(preferences) <= 48000);
+  sessionPreferences = {
+    bytes: Buffer.byteLength(preferences),
+    sha256: sha256(preferences),
+    order: ['team', 'personal'],
+    legacyFileFollows: true,
+    escaped: true,
+    excluded: ['disabled', 'conflicted', 'shared'],
+  };
+  checks.push(
+    'the actual native worker model request loads escaped team then personal preferences within the byte budget, excludes ineligible memory and keeps legacy file context afterward',
+  );
   await page.locator('.sidebar-primary a[href="#/page/knowledge"]').click();
   await page.getByLabel('search knowledge', { exact: true }).fill('本机');
   await page.waitForFunction(
@@ -928,7 +978,21 @@ try {
   assert.deepEqual(errors, []);
   const receipt = {
     schema: 'circle-knowledge-native-evidence@1',
-    packaged: false,
+    packaged,
+    packagedAsarSha256: packaged
+      ? createHash('sha256')
+          .update(
+            await readFile(
+              join(
+                appPath,
+                process.platform === 'darwin'
+                  ? 'Contents/Resources/app.asar'
+                  : 'resources/app.asar',
+              ),
+            ),
+          )
+          .digest('hex')
+      : null,
     platform: process.platform,
     architecture: process.arch,
     versions: await app.evaluate(() => process.versions),
@@ -937,6 +1001,7 @@ try {
     nativeSelection:
       'test-profile selection of scratch originals; public renderer path requests remain forbidden',
     checks,
+    sessionPreferences,
     errors,
     shots,
     finalHead,

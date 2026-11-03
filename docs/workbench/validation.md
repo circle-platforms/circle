@@ -1,6 +1,6 @@
 # Native frontend validation
 
-Decision 90 stage-5 knowledge desktop validation is recorded in [knowledge-validation.md](knowledge-validation.md), with native screenshots and source/build receipts. Packaged and actual test-Hub acceptance remain stage 6.
+Decision 90 knowledge validation is recorded in [knowledge-validation.md](knowledge-validation.md): isolated real-Hub round trips, development and packaged native flows, inspected theme/language/viewport matrices and source/build/ASAR receipts. The original stage-5 evidence remains historical.
 
 Decision 93 graphite validation on 2026-11-03 is recorded in [graphite-validation.md](graphite-validation.md), with development and packaged native matrices, current command results, retained screenshots and byte receipts. The earlier receipts below remain historical evidence.
 
