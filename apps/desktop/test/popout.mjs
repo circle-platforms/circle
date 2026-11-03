@@ -1308,9 +1308,56 @@ try {
     async () => (await live.locator('.native-terminal-dead').count()) === 0,
     'the local shell is running',
   );
+  // What the shell sent back after a point in its output, as the main process
+  // recorded it. Its echo of the keys is the effect, not the screen: how bash's
+  // readline redraws a prompt that fills the 40-column panel to its edge depends
+  // on the prompt's length (user, host and temporary folder), and there it writes
+  // each key behind cursor moves and carriage returns, so the visible rows need
+  // not hold "abc" even though every key arrived.
+  const shellOutput = (after) =>
+    live.evaluate(
+      async ({ sessionId, after }) => {
+        const call = async (method, params) => {
+          const reply = await window.circleDesktop.runtimeCommand({
+            id: crypto.randomUUID(),
+            name: 'workspace-service',
+            sessionId,
+            payload: { service: 'terminal', method, params },
+          });
+          if (!reply.ok)
+            throw Error(reply.error || `terminal ${method} failed`);
+          return reply.data;
+        };
+        const shell = (await call('list', {})).find(
+          (item) =>
+            item.kind === 'shell' && !item.hidden && item.status === 'running',
+        );
+        if (!shell) throw Error('no running local shell');
+        if (after === undefined) return { sequence: shell.lastSequence };
+        let text = '';
+        for (let cursor = after; ;) {
+          const page = await call('replay', { id: shell.id, after: cursor });
+          for (const event of page.events)
+            if (event.kind === 'data') text += event.data ?? '';
+          if (!page.hasMore) break;
+          cursor = page.events.at(-1).sequence;
+        }
+        return { text };
+      },
+      { sessionId: liveSession, after },
+    );
+  // The printable characters of terminal output: control sequences, carriage
+  // returns, line feeds, backspaces and the spaces readline writes at a wrap go.
+  const printable = (text) =>
+    text
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/\x1b[@-Z\\-_]/g, '')
+      .replace(/[\x00-\x20\x7f]/g, '');
   // Filled without a click: in a narrow window the terminal lies over the
   // conversation, and its screen is what a click there would hit.
   await message.fill('stays in the composer');
+  const beforeKeys = (await shellOutput()).sequence;
   await localScreen.click({ delay: 0 });
   const localTyping = live.keyboard.type('abc', { delay: 12 });
   await live.evaluate(() => {
@@ -1319,17 +1366,13 @@ try {
     }, 25);
   });
   await localTyping;
-  // A Linux shell's long prompt can soft-wrap between b and c. innerText
-  // inserts a newline at that visual boundary even though all three keys
-  // reached the original terminal. Inspect the same visible xterm rows
-  // without inventing a line break between their text nodes.
+  // The shell echoes every key it receives, in order, so its output after the
+  // click holds a, b and c together once the keys reached it.
   await until(
-    () =>
-      live
-        .locator('.native-terminal-surface:not([hidden]) .xterm-rows')
-        .textContent()
-        .then((text) => (text ?? '').includes('abc')),
+    async () => printable((await shellOutput(beforeKeys)).text).includes('abc'),
     'the keys after the click reached the shell',
+    20000,
+    async () => (await shellOutput(beforeKeys)).text,
   );
   assert.equal(await message.inputValue(), 'stays in the composer');
   // This conversation's terminals as the main process lists them, for every window.
