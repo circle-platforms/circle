@@ -49,7 +49,7 @@ function journalTools(workspace: string, journal: FileRewindJournal) {
 
 test('a turn of text-tool writes is rewound after Circle restarts', async (t) => {
   const home = scratch(t);
-  const workspace = realpathSync(scratch(t));
+  const workspace = realpathSync.native(scratch(t));
   const at = (name: string) => join(workspace, name);
   writeFileSync(at('a.txt'), 'one\n');
   writeFileSync(at('b.txt'), 'two\n');
@@ -144,7 +144,7 @@ test('a turn of text-tool writes is rewound after Circle restarts', async (t) =>
 });
 
 test('a patch that moves, adds and deletes is rewound file by file', async (t) => {
-  const workspace = realpathSync(scratch(t));
+  const workspace = realpathSync.native(scratch(t));
   const journal = new FileRewindJournal(
     new FileSystemFileMutations(new Sandbox(workspace)),
   );
@@ -186,7 +186,7 @@ test('a patch that moves, adds and deletes is rewound file by file', async (t) =
 });
 
 test('a change outside the turn is reported, and nothing is overwritten', async (t) => {
-  const workspace = realpathSync(scratch(t));
+  const workspace = realpathSync.native(scratch(t));
   const journal = new FileRewindJournal(
     new FileSystemFileMutations(new Sandbox(workspace)),
   );
@@ -214,7 +214,7 @@ test('a change outside the turn is reported, and nothing is overwritten', async 
 
 test('a file that cannot be brought back byte for byte costs only its rewind', async (t) => {
   const home = scratch(t);
-  const workspace = realpathSync(scratch(t));
+  const workspace = realpathSync.native(scratch(t));
   const store = new CheckpointStore(home);
   cleanup(t, () => store.close());
   const session = store.create(workspace, 'test-model');
@@ -249,7 +249,7 @@ test('a file that cannot be brought back byte for byte costs only its rewind', a
 
 test('a turn that only wrote the conversation plan has nothing to rewind', async (t) => {
   const home = scratch(t);
-  const workspace = realpathSync(scratch(t));
+  const workspace = realpathSync.native(scratch(t));
   const sandbox = new Sandbox(workspace, join(home, 'projects'));
   const journal = new FileRewindJournal(new FileSystemFileMutations(sandbox));
   const tools = buildTools(sandbox, {
