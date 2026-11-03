@@ -76,6 +76,18 @@ ajv.addFormat('date-time', (value: string) => {
 });
 const validators = new Map<string, ValidateFunction>();
 const schemas = new Map<string, AnySchema>();
+/** The same schema with every closed object opened: answers may carry members a newer server added. */
+function openObjects(schema: any): any {
+  if (Array.isArray(schema)) return schema.map(openObjects);
+  if (!schema || typeof schema !== 'object') return schema;
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema))
+    copy[key] =
+      key === 'additionalProperties' && value === false
+        ? true
+        : openObjects(value);
+  return copy;
+}
 
 /** Zod uses UTF-16 string lengths; JSON Schema uses Unicode code points. */
 function stringLengths(schema: any, value: any): void {
@@ -224,19 +236,33 @@ function objectRules(object: SyncObject): void {
       break;
   }
 }
+/**
+ * A server's answer, checked as protocol section 13 asks of a client: members it does not
+ * know are ignored, and error or verification codes it does not know are not refused. The
+ * value itself is never coerced, defaulted, stripped or repaired.
+ */
+export function validateAnswer(schemaName: string, value: unknown): void {
+  validateSync(schemaName, value, true);
+}
 /** No coercion, defaults, stripping or repair of a received protocol value. */
-export function validateSync(schemaName: string, value: unknown): void {
+export function validateSync(
+  schemaName: string,
+  value: unknown,
+  answer = false,
+): void {
   const file = `${schemaName.replace('@', '.v')}.schema.json`;
   requireRule(SYNC_PROTOCOL.schemas.includes(file), 'known schema');
-  let validate = validators.get(schemaName);
-  let schema = schemas.get(schemaName);
+  const key = (answer ? 'answer:' : '') + schemaName;
+  let validate = validators.get(key);
+  let schema = schemas.get(key);
   if (!schema) {
     schema = knowledgeAsset(file) as AnySchema;
-    schemas.set(schemaName, schema);
+    if (answer) schema = openObjects(schema) as AnySchema;
+    schemas.set(key, schema);
   }
   if (!validate) {
     validate = ajv.compile(schema);
-    validators.set(schemaName, validate);
+    validators.set(key, validate);
   }
   requireRule(validate(value), `schema ${schemaName}`);
   stringLengths(schema, value);
@@ -273,7 +299,7 @@ export function validateSync(schemaName: string, value: unknown): void {
   }
   if (schemaName === 'personal-sync-mode-change@1' && v.mode === 'local')
     requireRule(v.confirm_purge && v.check !== null, 'checked purge');
-  if (schemaName === 'personal-sync-error@1')
+  if (schemaName === 'personal-sync-error@1' && !answer)
     requireRule(SYNC_PROTOCOL.codes.includes(v.code), 'registered error');
   if (
     schemaName === 'personal-sync-verification@1' ||
@@ -283,7 +309,10 @@ export function validateSync(schemaName: string, value: unknown): void {
       ? v.verification
       : [v])
       requireRule(
-        observation.codes.every((c: string) => SYNC_PROTOCOL.codes.includes(c)),
+        answer ||
+          observation.codes.every((c: string) =>
+            SYNC_PROTOCOL.codes.includes(c),
+          ),
         'registered verification codes',
       );
     if (v.conflicts)

@@ -20,9 +20,19 @@ export interface SessionMemory {
   warnings: string[];
   conflicts: number;
 }
+/**
+ * Reads team memory through the operation the server declared (`team-memory-read`): the
+ * caller gives the query members, the reader adds the tool and its fixed members.
+ */
 export interface MemoryReader {
-  (args: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+  (members: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
   inspectText?: (text: string) => void;
+}
+/** The server declares no team memory: nothing to load, and nothing went wrong. */
+export class TeamMemoryUnsupported extends Error {
+  constructor() {
+    super('the server declares no team memory');
+  }
 }
 const record = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -80,11 +90,9 @@ export async function teamPreferences(
     const value = envelope(
         await read(
           {
-            memory: {
-              scope: 'team',
-              for_session: true,
-              ...(cursor ? { cursor } : {}),
-            },
+            scope: 'team',
+            for_session: true,
+            ...(cursor ? { cursor } : {}),
           },
           signal,
         ),
@@ -135,12 +143,10 @@ export async function teamPreferences(
       const value = envelope(
           await read(
             {
-              memory: {
-                document: row.document,
-                version: row.version,
-                for_session: true,
-                ...(next ? { cursor: next } : {}),
-              },
+              document: row.document,
+              version: row.version,
+              for_session: true,
+              ...(next ? { cursor: next } : {}),
             },
             signal,
           ),
@@ -197,9 +203,10 @@ export async function loadSessionMemory(
   if (read) {
     try {
       snapshot.documents.push(...(await teamPreferences(read, signal)));
-    } catch {
+    } catch (error) {
       signal.throwIfAborted();
-      snapshot.warnings.push('team memory unavailable; it was not loaded');
+      if (!(error instanceof TeamMemoryUnsupported))
+        snapshot.warnings.push('team memory unavailable; it was not loaded');
     }
   }
   if (!existsSync(join(home, 'knowledge', 'knowledge.sqlite'))) return snapshot;

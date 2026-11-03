@@ -13,9 +13,19 @@ import {
   type CircleSettings,
 } from '../settings.js';
 import { KnowledgeSync } from './sync.js';
-import { SyncHttp, SyncHttpError, requestJson } from './sync-http.js';
+import {
+  SyncHttp,
+  SyncHttpError,
+  requestJson,
+  type PurgeConfirmation,
+} from './sync-http.js';
 import type { ModeImpact, SyncCondition } from './sync-types.js';
-import type { MemoryReader } from './session-memory.js';
+import { TeamMemoryUnsupported, type MemoryReader } from './session-memory.js';
+import {
+  discoverServer,
+  mcpOperation,
+  type ServerDiscovery,
+} from '../server_resolution.js';
 
 /** Reuses the selected MCP grant; a rejected Bearer gets at most one shared refresh, never a login. */
 export function mcpSyncHttp(port: McpBearerConnection): SyncHttp {
@@ -82,6 +92,7 @@ export function mcpSyncHttp(port: McpBearerConnection): SyncHttp {
       }
     },
     fetcher,
+    (signal) => discoverServer(port.server, { signal }),
   );
 }
 export interface KnowledgeConnectionStatus {
@@ -90,6 +101,14 @@ export interface KnowledgeConnectionStatus {
   clearing: boolean;
   lastSyncedAt: string | null;
   server: string;
+  /** The server's own text for the last refusal, as it came. */
+  detail?: string | null;
+  /** Where the account holder confirms a requested purge, until it expires. */
+  confirmation?: PurgeConfirmation | null;
+  /** `document`: the server published a discovery document; `fallback`: fixed v1 paths. */
+  discovery?: ServerDiscovery['source'] | null;
+  /** Talking to the server right now. */
+  syncing?: boolean;
 }
 export class KnowledgeConnection {
   private client?: KnowledgeSync;
@@ -113,9 +132,18 @@ export class KnowledgeConnection {
         mode: null,
         clearing: false,
         lastSyncedAt: null,
+        detail: null,
+        confirmation: null,
       }),
       server: this.settings().knowledge_sync.server,
+      discovery: this.http?.discovery?.source ?? null,
+      syncing: this.client?.busy ?? false,
     };
+  }
+  /** What the bound server said of itself; read once per connection. */
+  async discovery(signal: AbortSignal): Promise<ServerDiscovery> {
+    if (!this.http) throw new McpLoginRequired();
+    return this.http.resolve(signal);
   }
   connections(): { name: string; origin: string }[] {
     return buildMcpConnections(this.settings().mcp_servers)
@@ -294,17 +322,42 @@ export class KnowledgeConnection {
     if (!this.client) throw new McpLoginRequired();
     return result;
   }
+  /**
+   * Calls the tool the server declared for a named operation (`entry-share`,
+   * `memory-share`): its argument holds `members` and the fixed members it declared.
+   * Null when the server declares no such operation.
+   */
+  async callOperation(
+    capability: string,
+    members: Record<string, unknown>,
+    signal: AbortSignal,
+    write = false,
+  ): Promise<unknown | null> {
+    const call = mcpOperation(
+      await this.discovery(signal),
+      capability,
+      members,
+    );
+    if (!call) return null;
+    return this.callForPerson(call.tool, call.args, signal, write);
+  }
   reader(): MemoryReader | undefined {
     const saved = this.settings().knowledge_sync;
     if (!saved.server) return undefined;
-    const read: MemoryReader = async (args, signal) => {
-      if (!this.client) throw new McpLoginRequired();
+    const read: MemoryReader = async (members, signal) => {
+      if (!this.client || !this.http) throw new McpLoginRequired();
+      const call = mcpOperation(
+        await this.http.resolve(signal),
+        'team-memory-read',
+        members,
+      );
+      if (!call) throw new TeamMemoryUnsupported();
       const port = this.port(saved.server);
       if (port.binding !== saved.binding) throw new McpLoginRequired();
       const result = await this.mcp.readOnly(
         saved.server,
-        'get_nodes',
-        args,
+        call.tool,
+        call.args,
         signal,
       );
       port.assertActive();

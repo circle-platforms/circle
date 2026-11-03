@@ -23,6 +23,7 @@ const signal = new AbortController().signal;
 async function world(
   t: Parameters<typeof scratch>[0],
   decision: 'approve' | 'reject' | 'always' = 'approve',
+  renamedTools = false,
 ) {
   const root = scratch(t, 'circle-share-'),
     home = join(root, 'home'),
@@ -30,6 +31,7 @@ async function world(
     userHome = join(root, 'user');
   for (const path of [home, workspace, userHome]) mkdirSync(path);
   const server = new AuthorizedServer(join(root, 'peer'));
+  server.renamedTools = renamedTools;
   await server.start();
   cleanup(t, () => server.close());
   const connection = {
@@ -225,7 +227,7 @@ test('an unsigned-upload refusal crosses the real MCP and desktop boundary verba
   w.server.shareRefusal = {
     ...unsignedUploadRefusal,
     message:
-      '  ' + unsignedUploadRefusal.message + '\n<Hub 原文> & unchanged  ',
+      '  ' + unsignedUploadRefusal.message + '\n<服务器原文> & unchanged  ',
     fix: unsignedUploadRefusal.fix + '\n保留  两个空格',
   };
   const refusal = await desktop.execute(w.runtime, {
@@ -266,25 +268,42 @@ test('an unsigned-upload refusal crosses the real MCP and desktop boundary verba
   assert.equal(w.server.shareCalls.length, 2);
 });
 
-test('only a bounded unsigned-upload business refusal exposes server text, with credential checks intact', async (t) => {
+test('every refusal the server explains shows its text as it came, with credential checks intact', async (t) => {
   const w = await world(t);
   w.server.shareRefusal = { ...unsignedUploadRefusal };
   await assert.rejects((await w.prepare()).run(), (error: unknown) => {
     assert.ok(error instanceof KnowledgeShareRefused);
     assert.deepEqual(error.refusal, unsignedUploadRefusal);
+    assert.equal(
+      error.message,
+      `refused: ${unsignedUploadRefusal.message} ${unsignedUploadRefusal.fix}`,
+    );
     return true;
   });
-  for (const refusal of [
-    { ...unsignedUploadRefusal, code: 'SOURCE_RETRYABLE' },
-    { ...unsignedUploadRefusal, message: '' },
-    { ...unsignedUploadRefusal, fix: 'x'.repeat(8001) },
-  ]) {
-    w.server.shareRefusal = refusal;
-    await assert.rejects(
-      (await w.prepare()).run(),
-      /knowledge-remote-unavailable/,
-    );
+  // Any code, including one this client does not know, is shown with the server's words.
+  for (const code of ['SOURCE_RETRYABLE', 'SHARE_SOMETHING_NEWER']) {
+    w.server.shareRefusal = { ...unsignedUploadRefusal, code };
+    await assert.rejects((await w.prepare()).run(), (error: unknown) => {
+      assert.ok(error instanceof KnowledgeShareRefused);
+      assert.equal(error.refusal.code, code);
+      assert.equal(error.refusal.message, unsignedUploadRefusal.message);
+      return true;
+    });
   }
+  // An oversized fix is not shown; the explanation still is.
+  w.server.shareRefusal = { ...unsignedUploadRefusal, fix: 'x'.repeat(8001) };
+  await assert.rejects((await w.prepare()).run(), (error: unknown) => {
+    assert.ok(error instanceof KnowledgeShareRefused);
+    assert.equal(error.refusal.fix, '');
+    assert.equal(error.message, `refused: ${unsignedUploadRefusal.message}`);
+    return true;
+  });
+  // No explanation at all: the generic failure, never invented text.
+  w.server.shareRefusal = { ...unsignedUploadRefusal, message: '' };
+  await assert.rejects(
+    (await w.prepare()).run(),
+    /knowledge-remote-unavailable/,
+  );
   w.server.shareRefusal = {
     ...unsignedUploadRefusal,
     message: 'Password=Syn9theticRejectedValue',
@@ -294,4 +313,26 @@ test('only a bounded unsigned-upload business refusal exposes server text, with 
     assert.doesNotMatch(String(error), /Syn9thetic/);
     return true;
   });
+});
+
+test('a server that declares its share tools in a discovery document is used as declared', async (t) => {
+  const w = await world(t, 'approve', true);
+  assert.equal(w.runtime.knowledge.status().discovery, 'document');
+  const prepared = await w.prepare();
+  const result = await prepared.run();
+  assert.equal(result.shared, true);
+  // The declared tool carried the entry; the earlier names and the pre-read were not used.
+  assert.deepEqual(
+    w.server.toolNames.filter((name) => name !== 'team_preferences'),
+    ['team_share'],
+  );
+  assert.equal(w.server.shareCalls.length, 1);
+  assert.ok(w.server.shareCalls[0].share_entry.entry);
+});
+test('without a discovery document the fixed shapes are used and status says so', async (t) => {
+  const w = await world(t);
+  assert.equal(w.runtime.knowledge.status().discovery, 'fallback');
+  await (await w.prepare()).run();
+  assert.ok(w.server.toolNames.includes('get_nodes'));
+  assert.ok(w.server.toolNames.includes('upload_file'));
 });

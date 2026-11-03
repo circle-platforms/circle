@@ -21,6 +21,9 @@ import {
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isRecord, type CircleSettings } from './settings.js';
+import { serverBaseUrl } from './server_resolution.js';
+
+export { serverBaseUrl };
 
 /** Limits of the local-tools contract, so the client refuses what the serving side refuses. */
 export const LIMITS = {
@@ -60,12 +63,6 @@ export class LocalSkillsError extends Error {
 
 const sha256Hex = (bytes: Uint8Array): string =>
   createHash('sha256').update(bytes).digest('hex');
-
-/** The base URL for /local-tools: the MCP endpoint without its /mcp suffix. */
-export function serverBaseUrl(url: string): string {
-  const trimmed = url.trim().replace(/\/+$/, '');
-  return trimmed.endsWith('/mcp') ? trimmed.slice(0, -4) : trimmed;
-}
 
 export function parsePackRef(
   ref: string,
@@ -296,6 +293,8 @@ async function readInstalled(
 export async function installPack(options: {
   url: string;
   token: string;
+  /** The local-tools base the server declared (discovery `local_tools.base_url`). */
+  toolsBase?: string;
   ref: string;
   digest?: string;
   root?: string;
@@ -317,15 +316,17 @@ export async function installPack(options: {
       `包引用不是 <id>@<version>：${ref.slice(0, 120)}`,
       '从服务器回答里的包引用照抄',
     );
-  const base = serverBaseUrl(url);
-  if (base.length === 0)
+  const base = (
+    options.toolsBase ?? serverBaseUrl(url) + '/local-tools'
+  ).replace(/\/+$/, '');
+  if (base.length === 0 || base === '/local-tools')
     throw new LocalSkillsError(
       '没有服务器地址',
       '在 mcp_servers 里给这个服务器条目写 url',
     );
 
   const manifestBytes = await fetchBytes(
-    `${base}/local-tools/${parsed.id}@${parsed.version}`,
+    `${base}/${parsed.id}@${parsed.version}`,
     token,
     LIMITS.maxManifestBytes,
     timeoutMs,
@@ -374,7 +375,7 @@ export async function installPack(options: {
   try {
     for (const file of manifest.files) {
       const bytes = await fetchBytes(
-        `${base}/local-tools/${parsed.id}@${parsed.version}/${file.path.split('/').map(encodeURIComponent).join('/')}`,
+        `${base}/${parsed.id}@${parsed.version}/${file.path.split('/').map(encodeURIComponent).join('/')}`,
         token,
         LIMITS.maxFileBytes,
         timeoutMs,

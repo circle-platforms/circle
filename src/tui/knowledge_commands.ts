@@ -13,6 +13,7 @@ import {
 import type { SyncItem, SyncObject } from '../knowledge/types.js';
 import { forgetAuthorization } from '../mcp_auth.js';
 import { buildMcpConnections } from '../mcp_loader.js';
+import { SyncHttpError } from '../knowledge/sync-http.js';
 
 const afterAddress = (args: string): string =>
   /^\S+\s+\S+\s+([\s\S]*)$/.exec(args.trimStart())?.[1] ?? '';
@@ -20,6 +21,37 @@ const notice = (host: CommandHost, text: string) =>
   host.notice(terminalText(text));
 const service = (host: CommandHost) =>
   new KnowledgeService(host.home, host.runtime.options.knowledgeAccess);
+const clock = (iso: string): string => {
+  const at = new Date(iso);
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${two(at.getHours())}:${two(at.getMinutes())}`;
+};
+/**
+ * What the person reads when the server refused: its own words, and for a purge it will
+ * only run once they confirm, where to confirm it. Null for an error the server did not explain.
+ */
+export function refusalLines(error: unknown): string[] | null {
+  if (!(error instanceof SyncHttpError)) return null;
+  if (error.code === 'SYNC_PURGE_CONFIRMATION_REQUIRED')
+    return [
+      error.confirmation
+        ? `confirm the purge in the server's console before ${clock(error.confirmation.expiresAt)}: ${error.confirmation.url}`
+        : "confirm the purge in the server's console",
+      ...(error.detail ? [`refused: ${error.detail}`] : []),
+      'the local copy stays · /knowledge sync after confirming',
+    ];
+  if (error.detail) return [`refused: ${error.detail}`];
+  return null;
+}
+async function explained(host: CommandHost, work: () => Promise<void>) {
+  try {
+    await work();
+  } catch (error) {
+    const lines = refusalLines(error);
+    if (!lines) throw error;
+    notice(host, lines.join('\n'));
+  }
+}
 export async function personKnowledgeAction(
   host: CommandHost,
   change: unknown,
@@ -258,8 +290,10 @@ export async function knowledgeCommand(
     return;
   }
   if (verb === 'sync') {
-    await connection.synchronize();
-    notice(host, `knowledge · ${connection.status().condition}`);
+    await explained(host, async () => {
+      await connection.synchronize();
+      notice(host, `knowledge · ${connection.status().condition}`);
+    });
     return;
   }
   if (verb === 'mode') {
@@ -282,21 +316,26 @@ export async function knowledgeCommand(
         ...(rest === 'local'
           ? {
               purge:
-                'personal Hub copies and grants are removed; this does not erase local copies',
+                "the server's copy of personal content and its folder grants are removed; local copies stay",
             }
           : {}),
       }))
     )
       return;
-    if (
-      !(await connection.changeMode(
-        rest,
-        preview,
-        host.runtime.knowledgeSignal,
-      ))
-    )
-      throw Error('sync impact changed; preview and confirm again');
-    notice(host, `knowledge mode · ${rest} · ${connection.status().condition}`);
+    await explained(host, async () => {
+      if (
+        !(await connection.changeMode(
+          rest,
+          preview,
+          host.runtime.knowledgeSignal,
+        ))
+      )
+        throw Error('sync impact changed; preview and confirm again');
+      notice(
+        host,
+        `knowledge mode · ${rest} · ${connection.status().condition}`,
+      );
+    });
     return;
   }
   if (verb === 'login') {

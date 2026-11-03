@@ -75,6 +75,7 @@ interface StubServer {
 
 async function stubServer(
   packs: Map<string, { manifest: Buffer; files: Record<string, string> }>,
+  prefix = '/local-tools/',
 ): Promise<StubServer> {
   const server = createServer(
     (request: IncomingMessage, response: ServerResponse) => {
@@ -88,9 +89,7 @@ async function stubServer(
       };
       if (request.headers.authorization !== `Bearer ${TOKEN}`)
         return reply(401, 'unauthorized');
-      const rest = url.startsWith('/local-tools/')
-        ? url.slice('/local-tools/'.length)
-        : null;
+      const rest = url.startsWith(prefix) ? url.slice(prefix.length) : null;
       if (rest === null) return reply(404, 'not found');
       const pack = packs.get(rest);
       if (pack !== undefined) return reply(200, pack.manifest);
@@ -183,6 +182,33 @@ test('serverBaseUrl and parsePackRef keep the shared contract', () => {
   });
   assert.equal(parsePackRef('case-compile'), null);
   assert.equal(parsePackRef('Case@1.0.0'), null);
+});
+
+test('installs from the local-tools base a server declared, not a guessed one', async () => {
+  const root = await tempRoot();
+  const value = pack();
+  const server = await stubServer(
+    new Map([[value.ref, { manifest: value.manifest, files: value.files }]]),
+    '/declared/tools/',
+  );
+  try {
+    const base = server.url.replace(/\/mcp$/, '');
+    await assert.rejects(
+      installPack({ url: server.url, token: TOKEN, ref: value.ref, root }),
+    );
+    const result = await installPack({
+      url: server.url,
+      token: TOKEN,
+      toolsBase: base + '/declared/tools',
+      ref: value.ref,
+      digest: value.digest,
+      root,
+    });
+    assert.equal(result.installed, true);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('installs, verifies and lists a pack under the skills root', async () => {

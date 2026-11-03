@@ -48,7 +48,11 @@ function memory(
 }
 async function world(
   t: Parameters<typeof scratch>[0],
-  options: { selected?: boolean; localContext?: boolean } = {},
+  options: {
+    selected?: boolean;
+    localContext?: boolean;
+    renamedTools?: boolean;
+  } = {},
 ) {
   const root = scratch(t, 'circle-memory-'),
     home = join(root, 'home'),
@@ -56,6 +60,7 @@ async function world(
     userHome = join(root, 'user');
   for (const path of [home, workspace, userHome]) mkdirSync(path);
   const server = new AuthorizedServer(join(root, 'peer'));
+  server.renamedTools = options.renamedTools ?? false;
   await server.start();
   cleanup(t, () => server.close());
   const settings = defaultSettings();
@@ -402,4 +407,16 @@ test('team space metadata and bodies obey the 48000 byte reception limit before 
   );
   assert.equal(w.server.memoryQueries.filter((q) => q.document).length, 0);
   assert.ok(w.runtime.loadedSessionMemory!.warnings.length);
+});
+
+test('team memory is read through the tool and fixed members the server declares', async (t) => {
+  const w = await world(t, { renamedTools: true });
+  w.server.documents = [document(1, 'TEAM_DECLARED_TOOL')];
+  await w.runtime.harness.run('hello');
+  assert.match(w.model.requests[0]!.system, /TEAM_DECLARED_TOOL/);
+  assert.ok(w.server.toolNames.length > 0);
+  assert.ok(w.server.toolNames.every((name) => name === 'team_preferences'));
+  // The declared fixed member reaches every query, the document reads included.
+  assert.ok(w.server.memoryQueries.every((q) => q.scope === 'team'));
+  assert.ok(w.server.memoryQueries.some((q) => q.document));
 });
