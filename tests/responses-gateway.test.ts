@@ -675,18 +675,30 @@ test('CLI on a Responses connection writes a file, stores the reasoning and repl
     content: [{ type: 'input_text', text: 'next' }],
   });
   // Stored history (the checkpoint database) holds the sealed reasoning, never the key.
-  const db = new DatabaseSync(join(home, 'circle.sqlite'), { readOnly: true });
-  t.after(() => db.close());
-  const stored = (
-    db.prepare('SELECT * FROM sqlite_master').all() as {
-      name: string;
-      type: string;
-    }[]
-  )
-    .filter((row) => row.type === 'table')
-    .flatMap((row) => db.prepare(`SELECT * FROM "${row.name}"`).all())
-    .map((row) => JSON.stringify(row))
-    .join('\n');
+  const stored = storedHistory(home);
   assert.match(stored, /sealed-cli/);
   assert.doesNotMatch(stored, /test-key/);
 });
+
+/**
+ * Every row of the checkpoint database, as text. The connection is closed before this
+ * returns: Windows cannot remove a folder holding an open database, and a failed removal
+ * would leave the test's server running.
+ */
+function storedHistory(home: string): string {
+  const db = new DatabaseSync(join(home, 'circle.sqlite'), { readOnly: true });
+  try {
+    return (
+      db.prepare('SELECT * FROM sqlite_master').all() as {
+        name: string;
+        type: string;
+      }[]
+    )
+      .filter((row) => row.type === 'table')
+      .flatMap((row) => db.prepare(`SELECT * FROM "${row.name}"`).all())
+      .map((row) => JSON.stringify(row))
+      .join('\n');
+  } finally {
+    db.close();
+  }
+}
