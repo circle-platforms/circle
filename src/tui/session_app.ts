@@ -3720,6 +3720,8 @@ export class SessionApp {
       throw new Error(
         'wait for all sessions to finish before changing the connection',
       );
+    this.state.planInUse =
+      this.settings.initialized && this.settings.auth.protocol === 'chatgpt';
     const runtimes = this.views.size
       ? [...this.views.keys()]
       : this.runtime
