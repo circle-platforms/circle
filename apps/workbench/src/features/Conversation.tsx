@@ -1,6 +1,6 @@
 import { SafeFileUndo } from './SafeFileUndo';
 import { CircleMark } from '../components/CircleMark';
-import { ConversationPlan, ConversationStatus } from './ConversationChrome';
+import { ConversationPlan, ConversationJobs } from './ConversationChrome';
 import { composerState } from '../model/composer-state';
 import { CompactionStatus } from './CompactionStatus';
 import {
@@ -1520,7 +1520,7 @@ export function Conversation({
               </div>
             </div>
           </div>
-          <ConversationStatus session={session} jobs={snapshot.jobs} />
+          <ConversationJobs session={session} jobs={snapshot.jobs} />
         </div>
       )}
     </section>

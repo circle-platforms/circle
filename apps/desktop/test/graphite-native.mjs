@@ -199,6 +199,9 @@ try {
             reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
             send: !!composer.querySelector('.send'),
             workingLabel: !!composer.querySelector('.composer-working-label'),
+            usageLine: /↑|↓/.test(
+              composer.closest('.composer-area')?.textContent ?? '',
+            ),
             brand: document.querySelector('.brand').textContent,
             contentWidth:
               document.querySelector('.transcript-column').clientWidth - 56,
@@ -213,6 +216,8 @@ try {
         );
         assert.ok(sample.composer.bottom <= sample.viewport.height);
         assert.equal(sample.send, state !== 'working');
+        // No token, context or cache line under the composer (#433).
+        assert.equal(sample.usageLine, false);
         if (state === 'working') {
           // A running turn adds no ring and no line to the composer (#433).
           assert.equal(sample.ring, 'none');

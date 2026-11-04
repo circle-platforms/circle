@@ -350,14 +350,6 @@ svg.circle-logo.large {
 .home-composer .composer-footbar > div:nth-last-child(2) {
   margin-left: auto;
 }
-.conversation-status {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  padding: 8px 0 4px;
-  font: 400 var(--mono-small)/1.5 var(--mono);
-  color: var(--text-tertiary);
-}
 .conversation-jobs {
   list-style: none;
   padding: 0;
