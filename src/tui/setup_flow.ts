@@ -350,7 +350,11 @@ export class SetupCard implements Card<SetupAnswer> {
           },
           { text: 'Pick the kind, then type the model id.', tone: 'dim' },
         ],
-        options: ['OpenAI-style API', 'Anthropic-style API'],
+        options: [
+          'OpenAI-style API',
+          'Anthropic-style API',
+          'OpenAI Responses API',
+        ],
         focus: flow.focus,
       });
     let about: CardLine;
@@ -423,9 +427,13 @@ export class SetupCard implements Card<SetupAnswer> {
           void flow.runProbe().then(() => this.changed());
       } else this.edit(key, char);
     } else if (step === 'protocol') {
-      if (key === 'up' || key === 'down') flow.focus = flow.focus ? 0 : 1;
+      if (key === 'up' || key === 'down')
+        flow.focus =
+          (flow.focus + (key === 'up' ? -1 : 1) + PROTOCOLS.length) %
+          PROTOCOLS.length;
       else if (key === 'enter') flow.chooseProtocol(flow.focus);
-      else if (key === '1' || key === '2') flow.chooseProtocol(Number(key) - 1);
+      else if (/^[1-9]$/.test(key) && Number(key) <= PROTOCOLS.length)
+        flow.chooseProtocol(Number(key) - 1);
     } else if (step === 'model') {
       if (key === 'up' || key === 'down')
         flow.moveChoice(key === 'up' ? -1 : 1);

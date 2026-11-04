@@ -23,7 +23,7 @@ import { connectionModels } from '../src/connection_models.js';
 import { pruneMessages } from '../src/middleware/tool_result_prune.js';
 import { summaryMessages } from '../src/media.js';
 import { messageTokenEstimate } from '../src/request_budget.js';
-import { SetupFlow } from '../src/tui/setup_flow.js';
+import { SetupCard, SetupFlow } from '../src/tui/setup_flow.js';
 import type { Message, ModelRequest } from '../src/types.js';
 
 type Handler = (
@@ -519,6 +519,24 @@ test('Responses connections list models like OpenAI ones and setup can choose th
   assert.equal(flow.protocol, 'responses');
   flow.use('gpt-test');
   assert.equal(flow.auth().protocol, 'responses');
+  // The first-run card offers the same three kinds, by arrow or by number.
+  const card = new SetupCard(new SetupFlow(scratch(t)));
+  card.flow.baseUrl = base + '/v1';
+  card.flow.step = 'protocol';
+  assert.deepEqual(card.state().options, [
+    'OpenAI-style API',
+    'Anthropic-style API',
+    'OpenAI Responses API',
+  ]);
+  card.handle('up', '');
+  assert.equal(card.flow.focus, 2);
+  card.handle('enter', '');
+  assert.equal(card.flow.protocol, 'responses');
+  const byNumber = new SetupCard(new SetupFlow(scratch(t)));
+  byNumber.flow.baseUrl = base + '/v1';
+  byNumber.flow.step = 'protocol';
+  byNumber.handle('3', '3');
+  assert.equal(byNumber.flow.protocol, 'responses');
 });
 
 test('stripped thinking, summaries and the budget handle encrypted reasoning', () => {
