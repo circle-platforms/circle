@@ -20,6 +20,7 @@ import {
   providerPreset,
   PROVIDER_PRESET_DATE,
 } from '../../../../src/providers';
+import { PROTOCOLS, type Protocol } from '../../../../src/protocols';
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
@@ -119,7 +120,7 @@ function desktopShortcuts(): [string, string][] {
 // API, the models it lists and the URL that answered. Never the key.
 interface ConnectionProbe {
   status: 'discovered' | 'empty' | 'failed' | 'preset';
-  protocol: 'openai' | 'anthropic';
+  protocol: Protocol;
   models: string[];
   baseUrl: string;
   inferred: boolean;
@@ -179,7 +180,7 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [probe, setProbe] = useState<ConnectionProbe | null>(null);
-  const [protocol, setProtocol] = useState<'openai' | 'anthropic'>('openai');
+  const [protocol, setProtocol] = useState<Protocol>('openai');
   const [query, setQuery] = useState('');
   const [focus, setFocus] = useState(0);
   const [typedModel, setTypedModel] = useState('');
@@ -239,7 +240,9 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
           apiKey: secret,
           provider: providerId,
         })) as ConnectionProbe;
-        setProtocol(found.protocol === 'anthropic' ? 'anthropic' : 'openai');
+        setProtocol(
+          PROTOCOLS.includes(found.protocol) ? found.protocol : 'openai',
+        );
         setQuery('');
         setTypedModel('');
         setFocus(Math.max(0, found.models.indexOf(current.model)));
@@ -514,7 +517,7 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
                 role="radiogroup"
                 aria-label={t('kind of API')}
               >
-                {(['openai', 'anthropic'] as const).map((kind) => (
+                {PROTOCOLS.map((kind) => (
                   <button
                     type="button"
                     role="radio"
@@ -525,7 +528,9 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
                   >
                     {kind === 'openai'
                       ? t('openai-style')
-                      : t('anthropic-style')}
+                      : kind === 'anthropic'
+                        ? t('anthropic-style')
+                        : t('responses api')}
                   </button>
                 ))}
               </div>
@@ -588,7 +593,7 @@ export function DialogHost({
   const [label, setLabel] = useState('');
   const [format, setFormat] = useState('markdown');
   const [endpoint, setEndpoint] = useState('');
-  const [protocol, setProtocol] = useState<'openai' | 'anthropic'>('openai');
+  const [protocol, setProtocol] = useState<Protocol>('openai');
   const [model, setModel] = useState('');
   const [secret, setSecret] = useState('');
   const [resetConfirm, setResetConfirm] = useState(false);
@@ -1170,6 +1175,7 @@ export function DialogHost({
             >
               <option value="openai">openai</option>
               <option value="anthropic">anthropic</option>
+              <option value="responses">responses</option>
             </select>
           </label>
           <label>

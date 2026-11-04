@@ -1,9 +1,10 @@
 // Provider choices are released presets, not an online catalog or proof of key access.
 // Keep this module free of Node APIs: the desktop form shares it with terminal setup.
+import type { Protocol } from './protocols.js';
 export interface ProviderPreset {
   id: string;
   name: string;
-  protocol?: 'openai' | 'anthropic';
+  protocol?: Protocol;
   baseUrl: string;
   source: 'endpoint' | 'preset';
   models: readonly string[];
@@ -23,6 +24,7 @@ export type NativeSearchAdapter =
   | 'unsupported';
 const SEARCH_ADAPTERS: Readonly<Record<string, NativeSearchAdapter>> = {
   openai: 'responses',
+  'openai-responses': 'responses',
   anthropic: 'anthropic',
   xai: 'responses',
   ark: 'ark-responses',
@@ -46,7 +48,7 @@ const online = (
   id: string,
   name: string,
   baseUrl: string,
-  protocol: 'openai' | 'anthropic' = 'openai',
+  protocol: Protocol = 'openai',
 ): ProviderPreset => ({
   id,
   name,
@@ -61,7 +63,7 @@ const preset = (
   name: string,
   baseUrl: string,
   models: string[],
-  protocol: 'openai' | 'anthropic' = 'openai',
+  protocol: Protocol = 'openai',
 ): ProviderPreset => ({
   id,
   name,
@@ -75,6 +77,12 @@ const preset = (
 export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   { id: 'custom', name: 'custom', baseUrl: '', source: 'endpoint', models: [] },
   online('openai', 'OpenAI', 'https://api.openai.com/v1'),
+  online(
+    'openai-responses',
+    'OpenAI · Responses',
+    'https://api.openai.com/v1',
+    'responses',
+  ),
   online('anthropic', 'Anthropic', 'https://api.anthropic.com', 'anthropic'),
   online('groq', 'Groq', 'https://api.groq.com/openai/v1'),
   online(

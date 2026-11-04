@@ -2167,6 +2167,32 @@ test('untrusted workspaces cannot load project context, extensions or execute pr
   assert(f.model.requests[0]!.system.includes('private instruction marker'));
 });
 
+test('the desktop saves a Responses connection and refuses an unknown kind of API', async (t) => {
+  const f = await setup(t, []);
+  const refused = await f.call('configure', {
+    endpoint: 'http://127.0.0.1:45678/v1',
+    protocol: 'gopher',
+    model: 'fixture-model',
+    apiKey: 'fixture-key',
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error, 'invalid protocol');
+  const saved = await f.call('configure', {
+    endpoint: 'http://127.0.0.1:45678/v1',
+    protocol: 'responses',
+    model: 'fixture-model',
+    apiKey: 'fixture-key',
+  });
+  assert.equal(saved.ok, true, saved.error);
+  assert.deepEqual(loadSettings(f.home).auth, {
+    protocol: 'responses',
+    base_url: 'http://127.0.0.1:45678/v1',
+    model: 'fixture-model',
+    api_key_ref: 'api_key',
+  });
+  assert.equal(f.controller.snapshot().settings.protocol, 'responses');
+});
+
 test('configuration secrets never appear in snapshots or events', async (t) => {
   const f = await setup(t, []);
   const secret = 'fixture-key-private-' + '9279';

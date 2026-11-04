@@ -2,6 +2,7 @@ import { readFileSync, statSync, mkdirSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { isRecord, writePrivateJson, type CircleSettings } from './settings.js';
+import { apiFamily, isProtocol } from './protocols.js';
 export const CATALOG_SCHEMA = 'circle.models-dev/v1';
 export const FALLBACK_WINDOW = 128_000;
 export const CATALOG_URL = 'https://models.dev/api.json';
@@ -153,11 +154,11 @@ export function endpointHost(url: string, protocol = ''): string {
   try {
     return new URL(url).hostname.toLowerCase();
   } catch {
-    return protocol === 'anthropic'
-      ? 'api.anthropic.com'
-      : protocol === 'openai'
-        ? 'api.openai.com'
-        : '';
+    return !isProtocol(protocol)
+      ? ''
+      : apiFamily(protocol) === 'anthropic'
+        ? 'api.anthropic.com'
+        : 'api.openai.com';
   }
 }
 export function windowOverrides(raw: unknown): Record<string, number> {

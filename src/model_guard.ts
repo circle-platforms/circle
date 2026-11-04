@@ -302,8 +302,18 @@ export function isThinkingSignatureError(error: unknown): boolean {
     text,
   );
 }
+/** A Responses endpoint that cannot read replayed encrypted reasoning, such as another account's. */
+export function isEncryptedReasoningError(error: unknown): boolean {
+  if (statusOf(error) !== 400) return false;
+  const codes = bodies(error).map((item) => String(item.code ?? ''));
+  return (
+    codes.includes('invalid_encrypted_content') ||
+    /encrypted[_ ]content/i.test(String(record(error).message || error))
+  );
+}
 export function rejectedParameters(error: unknown): string[] {
-  if (isThinkingSignatureError(error)) return [];
+  if (isThinkingSignatureError(error) || isEncryptedReasoningError(error))
+    return [];
   if (![400, 422].includes(statusOf(error) ?? 0)) return [];
   const text = String(record(error).message || error).toLowerCase();
   if (

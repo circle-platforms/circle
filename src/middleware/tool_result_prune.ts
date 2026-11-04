@@ -109,6 +109,7 @@ export function pruneMessages(
       return {
         ...message,
         thinking: undefined,
+        reasoning_items: undefined,
         provider_content: message.provider_content?.filter(
           (block) =>
             !isRecord(block) ||

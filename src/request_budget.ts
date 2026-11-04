@@ -79,7 +79,11 @@ export function messageTokenEstimate(messages: Message[]): number {
       (message.provider_content
         ? tokenLen(JSON.stringify(message.provider_content))
         : tokenLen(message.content + (message.thinking ?? '')) +
-          tokenLen(JSON.stringify(message.tool_calls ?? []))) +
+          tokenLen(JSON.stringify(message.tool_calls ?? [])) +
+          // Replayed encrypted reasoning is input too; its text overstates it, safely.
+          (message.reasoning_items
+            ? tokenLen(JSON.stringify(message.reasoning_items))
+            : 0)) +
       (message.attachments ?? []).reduce(
         (n, item) =>
           n +

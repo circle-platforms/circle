@@ -1164,8 +1164,11 @@ export class Harness {
             response.message.tool_calls?.some(
               (call, index) => call !== originalCalls?.[index],
             )
-          )
+          ) {
+            // Provider blocks and encrypted reasoning still hold the original call.
             response.message.provider_content = undefined;
+            response.message.reasoning_items = undefined;
+          }
           const message = {
             ...response.message,
             request_model: this.model.model,

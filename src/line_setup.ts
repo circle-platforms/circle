@@ -21,6 +21,7 @@ import {
   type CircleSettings,
 } from './settings.js';
 import { normalizeWorkspace } from './paths.js';
+import { PROTOCOLS } from './protocols.js';
 export interface LinePrompter {
   // The next line typed, or undefined once input has ended or ctrl+c was pressed.
   ask(question: string, secret?: boolean): Promise<string | undefined>;
@@ -205,7 +206,7 @@ export async function runLineInit(
     io.say(connectionSummary(found));
     const protocol =
       (found.inferred || found.status === 'failed') && !provider.protocol
-        ? await pick(io, 'Which kind of API is it?', ['openai', 'anthropic'])
+        ? await pick(io, 'Which kind of API is it?', [...PROTOCOLS])
         : found.protocol;
     const model = protocol && (await pickModel(io, found.models));
     if (!protocol || !model) {

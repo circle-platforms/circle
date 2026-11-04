@@ -446,7 +446,7 @@ export interface Settings {
   enabledModels: string[];
   doubleEscape: 'tree' | 'fork' | 'none';
   endpoint: string;
-  protocol: 'openai' | 'anthropic';
+  protocol: import('../../../../src/protocols').Protocol;
   credentialFiles: string[];
   /** Values the model may use by name, as `settings.json` keeps them. */
   variables: Record<string, string>;

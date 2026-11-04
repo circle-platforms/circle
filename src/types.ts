@@ -66,6 +66,12 @@ export interface Message {
   /** Long pastes that `display` shows folded as `[Pasted text #N]`, by number. */
   pastes?: Record<string, string>;
   provider_content?: unknown[];
+  /**
+   * Responses API reasoning items with their encrypted content, replayed to the same
+   * connection so a reasoning model keeps its chain across tool calls (`store: false`).
+   * Never shown and never sent to another connection; `thinking_scope` says whose they are.
+   */
+  reasoning_items?: unknown[];
   /** Opaque API/key/model identity for replaying signed thinking; never a credential. */
   thinking_scope?: string;
   usage?: Usage;

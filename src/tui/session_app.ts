@@ -144,6 +144,7 @@ import type { TerminalApproval } from '../terminal/protocol.js';
 import { loadSecrets } from '../secrets.js';
 import { KnowledgeService } from '../knowledge/service.js';
 import { knowledgeLamp, knowledgeSyncNotice } from './knowledge_view.js';
+import { PROTOCOLS } from '../protocols.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -4002,14 +4003,17 @@ export class SessionApp {
             [
               { key: 'openai', label: 'OpenAI-style API' },
               { key: 'anthropic', label: 'Anthropic-style API' },
+              { key: 'responses', label: 'OpenAI Responses API' },
             ],
             (item) => {
-              flow.chooseProtocol(item.key === 'anthropic' ? 1 : 0);
+              flow.chooseProtocol(
+                PROTOCOLS.indexOf(item.key as (typeof PROTOCOLS)[number]),
+              );
               next();
             },
             {
               hint: `${flow.status} · which kind of API is it?`,
-              focusKey: flow.focus ? 'anthropic' : 'openai',
+              focusKey: PROTOCOLS[flow.focus] ?? 'openai',
             },
             leave,
           );

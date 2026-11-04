@@ -1,5 +1,6 @@
 import { desktopText } from './locale.js';
 import { isNetworkFailure, networkError } from './net.js';
+import { apiFamily, isProtocol } from './protocols.js';
 export interface ProbeResult {
   protocol: string;
   models: string[];
@@ -8,11 +9,11 @@ export interface ProbeResult {
   status: 'discovered' | 'empty' | 'failed';
   detail: string;
 }
+const PROTOCOL_ERROR = 'protocol must be openai, anthropic or responses';
 const BAD_URL =
   'use an http(s) API base URL without credentials, query or fragment';
 export function normalizeBaseUrl(baseUrl: string, protocol: string): string {
-  if (!['openai', 'anthropic'].includes(protocol))
-    throw new Error('protocol must be openai or anthropic');
+  if (!isProtocol(protocol)) throw new Error(PROTOCOL_ERROR);
   let url: URL;
   try {
     url = new URL(baseUrl.trim());
@@ -31,7 +32,7 @@ export function normalizeBaseUrl(baseUrl: string, protocol: string): string {
   )
     throw new Error(BAD_URL);
   url.pathname = url.pathname.replace(/\/+$/, '');
-  if (protocol === 'anthropic')
+  if (apiFamily(protocol) === 'anthropic')
     url.pathname = url.pathname.replace(/\/v1$/, '');
   return url.toString().replace(/\/+$/, '');
 }
@@ -58,9 +59,18 @@ export async function resolveEndpoint(
   apiKey: string,
   options: { timeout?: number; protocol?: string } = {},
 ): Promise<ProbeResult> {
+  if (options.protocol && !isProtocol(options.protocol))
+    throw new Error(PROTOCOL_ERROR);
+  // A Responses endpoint lists its models where an OpenAI one does.
+  if (options.protocol === 'responses')
+    return {
+      ...(await resolveEndpoint(baseUrl, apiKey, {
+        ...options,
+        protocol: 'openai',
+      })),
+      protocol: 'responses',
+    };
   const preferred = options.protocol || inferProtocolHint(baseUrl) || 'openai';
-  if (options.protocol && !['openai', 'anthropic'].includes(options.protocol))
-    throw new Error('protocol must be openai or anthropic');
   const failures: string[] = [];
   let empty: ProbeResult | undefined;
   let base: string;

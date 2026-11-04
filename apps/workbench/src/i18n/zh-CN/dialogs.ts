@@ -50,6 +50,7 @@ export const dialogs: Record<string, string> = {
   'kind of API': 'API 类型',
   'openai-style': 'OpenAI 风格',
   'anthropic-style': 'Anthropic 风格',
+  'responses api': 'Responses API',
   'The endpoint did not list its models, so the id is not checked: type the one your provider documents.':
     '端点没有列出它的模型，所以不会检查这个 ID：请填写服务商文档中的 ID。',
   'choose a model or type its id': '请选择一个模型，或输入它的 ID',

@@ -25,13 +25,13 @@ import {
   type ConnectionModels,
 } from '../connection_models.js';
 import { PROVIDER_PRESETS, providerPreset } from '../providers.js';
+import { PROTOCOLS } from '../protocols.js';
 import { displayPath } from './status_rows.js';
 
 export type SetupStep =
   'provider' | 'url' | 'key' | 'probing' | 'protocol' | 'model' | 'done';
 // How many models the card shows at once
 const MODEL_ROWS = 8;
-const PROTOCOLS = ['openai', 'anthropic'] as const;
 
 function sentence(text: string): string {
   return text ? text[0]!.toUpperCase() + text.slice(1) : text;
@@ -47,7 +47,7 @@ export class SetupFlow {
   apiKey = '';
   protocol = 'openai';
   models: string[] = [];
-  // The marked row: of the model list, or of the two kinds of API
+  // The marked row: of the model list, or of the kinds of API
   focus = 0;
   status = '';
   error = '';
@@ -173,13 +173,16 @@ export class SetupFlow {
       (found.inferred || found.status === 'failed') &&
       !providerPreset(this.providerId).protocol
     ) {
-      this.focus = this.protocol === 'anthropic' ? 1 : 0;
+      this.focus = Math.max(
+        0,
+        PROTOCOLS.indexOf(this.protocol as (typeof PROTOCOLS)[number]),
+      );
       this.step = 'protocol';
     } else this.step = 'model';
   }
   chooseProtocol(index: number): void {
     this.error = '';
-    this.protocol = PROTOCOLS[index === 1 ? 1 : 0];
+    this.protocol = PROTOCOLS[index] ?? 'openai';
     this.baseUrl = normalizeBaseUrl(this.baseUrl, this.protocol);
     this.status = `manual configuration (${this.protocol}); model is unverified`;
     this.focus = 0;

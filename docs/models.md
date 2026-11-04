@@ -26,6 +26,8 @@ The key is saved in `credentials.json` and the rest in `settings.json`. See [Set
 
 The protocol is set by setup, never guessed from a model name: a model called `claude-…` behind an OpenAI-style gateway is sent OpenAI-style requests.
 
+`responses` is OpenAI's Responses API. Discovery cannot tell it from an OpenAI-style endpoint, since both list models at the same path, so choose it: the `OpenAI · Responses` provider, the third kind of API when a custom endpoint cannot be asked, or `"protocol": "responses"` in `settings.json`. It uses the same key, base URL and model list as the OpenAI protocol. Requests go to `<base>/responses` with `store: false`: the endpoint keeps nothing, Circle sends the whole conversation each time, and mid-conversation system messages go as `developer` messages. Circle asks for the reasoning back encrypted (`include: ["reasoning.encrypted_content"]`) and keeps it in the session, so a reasoning model keeps its chain across tool calls. It is sent back only to the same API URL, key and model that wrote it, and only for a turn that went on to text or a tool call. An endpoint that answers HTTP 400 because it cannot read that encrypted reasoning gets the request once more without it, and that connection leaves it out from then on. An endpoint that refuses `include` is asked again without it. A tool's pictures go inside its result.
+
 ## Switch models
 
 ```text
@@ -69,6 +71,7 @@ A change applies from the next message. When the model has a depth, the header s
 
 - **Anthropic protocol**: the default is `medium`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
 - **OpenAI protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning_effort`.
+- **Responses protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning: {effort, summary: "auto"}`, and the reasoning summary is shown as thinking. An endpoint that rejects `reasoning` is asked again without it.
 
 If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stream options and a few others), Circle drops that parameter, sends the request again, and does not send it again for the rest of the session. You see one line saying so. A request drops at most four parameters.
 

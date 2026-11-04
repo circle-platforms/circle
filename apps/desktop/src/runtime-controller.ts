@@ -128,6 +128,7 @@ import {
   secretNames,
 } from '../../../src/secrets.js';
 import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
+import { isProtocol } from '../../../src/protocols.js';
 import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
@@ -3307,7 +3308,9 @@ export class RuntimeController {
         enabledModels: savedSettings.enabled_models,
         doubleEscape: savedSettings.double_escape,
         endpoint: settings.auth.base_url,
-        protocol: settings.auth.protocol as 'openai' | 'anthropic',
+        protocol: isProtocol(settings.auth.protocol)
+          ? settings.auth.protocol
+          : 'openai',
         credentialFiles: savedSettings.credential_files,
         variables: { ...savedSettings.variables },
         // Names only: a saved value never leaves the runtime
@@ -5117,8 +5120,7 @@ export class RuntimeController {
           throw Error('finish the current turn before changing connection');
         const endpoint = this.endpointOf(p.endpoint);
         const protocol = text(p.protocol, 'protocol', 20);
-        if (!['openai', 'anthropic'].includes(protocol))
-          throw Error('invalid protocol');
+        if (!isProtocol(protocol)) throw Error('invalid protocol');
         const baseUrl = normalizeBaseUrl(endpoint, protocol);
         const model = text(p.model, 'model', 500);
         if (!model.trim()) throw Error('model required');
