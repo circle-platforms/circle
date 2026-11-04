@@ -186,49 +186,47 @@ export function ModelMenu({
         model.id === session.model),
   );
   return (
-    <>
-      <DropdownMenu.Root modal={false}>
-        <DropdownMenu.Trigger asChild>
-          <button
-            className="footbar-button"
-            aria-label={t('model')}
-            onMouseDown={(event) => event.preventDefault()}
-          >
-            <span className="footbar-model" title={session.model}>
-              {session.model}
-            </span>
-            <ChevronDown size={11} />
-          </button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            className={`dropdown composer-menu footbar-menu model-menu${side === 'bottom' ? ' home-menu' : ''}`}
-            side={side}
-            // Home menus always open downward and scroll within the room below;
-            // flipping would cover the composer they belong to.
-            avoidCollisions={side !== 'bottom'}
-            collisionPadding={8}
-            align="end"
-            sideOffset={7}
-            onCloseAutoFocus={closeMenu(onCloseFocus)}
-          >
-            {shown.map((model) => (
-              <DropdownMenu.Item
-                key={model.id}
-                onSelect={() => onModel(model.id)}
-              >
-                <span title={model.id}>{model.id}</span>
-                {model.id === session.model && <Check size={13} />}
-              </DropdownMenu.Item>
-            ))}
-            <DropdownMenu.Separator className="dropdown-separator" />
-            <DropdownMenu.Item onSelect={onManage}>
-              {t('manage models…')}
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <button
+          className="footbar-button"
+          aria-label={t('model')}
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <span className="footbar-model" title={session.model}>
+            {session.model}
+          </span>
+          <ChevronDown size={11} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className={`dropdown composer-menu footbar-menu model-menu${side === 'bottom' ? ' home-menu' : ''}`}
+          side={side}
+          // Home menus always open downward and scroll within the room below;
+          // flipping would cover the composer they belong to.
+          avoidCollisions={side !== 'bottom'}
+          collisionPadding={8}
+          align="end"
+          sideOffset={7}
+          onCloseAutoFocus={closeMenu(onCloseFocus)}
+        >
+          {shown.map((model) => (
+            <DropdownMenu.Item
+              key={model.id}
+              onSelect={() => onModel(model.id)}
+            >
+              <span title={model.id}>{model.id}</span>
+              {model.id === session.model && <Check size={13} />}
             </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-    </>
+          ))}
+          <DropdownMenu.Separator className="dropdown-separator" />
+          <DropdownMenu.Item onSelect={onManage}>
+            {t('manage models…')}
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
