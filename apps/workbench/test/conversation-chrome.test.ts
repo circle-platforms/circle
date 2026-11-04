@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   ConversationPlan,
-  ConversationStatus,
+  ConversationJobs,
 } from '../src/features/ConversationChrome.tsx';
 import { CircleMark } from '../src/components/CircleMark.tsx';
 import { setLanguage } from '../src/i18n/index.ts';
@@ -41,9 +41,20 @@ test('the inline plan retains step text and distinguishes current, completed and
     '',
   );
 });
-test('footer preserves unknown usage and lists only this session’s active jobs', () => {
+test('the composer footer lists only this session’s active jobs and no usage', () => {
   setLanguage('en');
-  const session = { id: 'one' } as Session;
+  const session = {
+    id: 'one',
+    meters: {
+      input: 1400,
+      output: 600,
+      inputUnknown: false,
+      cacheRead: 0,
+      cost: '$0.01',
+      contextInput: 1400,
+      contextWindow: 16000,
+    },
+  } as Session;
   const jobs = [
     {
       id: 'j1',
@@ -55,34 +66,19 @@ test('footer preserves unknown usage and lists only this session’s active jobs
     { id: 'j2', sessionId: 'other', state: 'running', title: 'foreign' },
     { id: 'j3', sessionId: 'one', state: 'completed', title: 'finished' },
   ] as Job[];
-  const unknown = renderToStaticMarkup(
-    createElement(ConversationStatus, { session, jobs }),
+  const html = renderToStaticMarkup(
+    createElement(ConversationJobs, { session, jobs }),
   );
-  assert.match(unknown, /↑ N\/A/);
-  assert.match(unknown, /↓ N\/A/);
-  assert.match(unknown, /synthetic test/);
-  assert.match(unknown, /2s/);
-  assert.doesNotMatch(unknown, /foreign|finished/);
-  const known = renderToStaticMarkup(
-    createElement(ConversationStatus, {
-      session: {
-        ...session,
-        meters: {
-          input: 1400,
-          output: 600,
-          inputUnknown: true,
-          cacheRead: 0,
-          cost: '$0.01',
-          contextInput: null,
-          contextWindow: 16000,
-        },
-      },
-      jobs: [],
-    }),
+  assert.match(html, /synthetic test/);
+  assert.match(html, /2s/);
+  assert.doesNotMatch(html, /foreign|finished/);
+  assert.doesNotMatch(html, /↑|↓|1\.4k|600|context|cache|\$0\.01/);
+  assert.equal(
+    renderToStaticMarkup(
+      createElement(ConversationJobs, { session, jobs: jobs.slice(1) }),
+    ),
+    '',
   );
-  assert.match(known, /↑ N\/A/);
-  assert.match(known, /↓ 600/);
-  assert.match(known, /context N\/A/);
 });
 test('Circle logo retains the four SVG arcs, joins and unique gradient identities', () => {
   const html = renderToStaticMarkup(
