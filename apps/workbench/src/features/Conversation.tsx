@@ -1,6 +1,5 @@
 import { SafeFileUndo } from './SafeFileUndo';
 import { CircleMark } from '../components/CircleMark';
-import { TurnClock } from '../components/TurnClock';
 import { ConversationPlan, ConversationStatus } from './ConversationChrome';
 import { composerState } from '../model/composer-state';
 import { CompactionStatus } from './CompactionStatus';
@@ -1432,17 +1431,6 @@ export function Conversation({
               </div>
             )}
             <div className="composer-footbar">
-              {visualState === 'working' && (
-                <span className="composer-working-label" role="status">
-                  {t('waiting for Circle to finish')}
-                  {session.turn && (
-                    <>
-                      {' '}
-                      · <TurnClock turn={session.turn} elapsedOnly />
-                    </>
-                  )}
-                </span>
-              )}
               <div>
                 <IconButton label={t('attach files')} onClick={onAttach}>
                   <Plus size={16} />

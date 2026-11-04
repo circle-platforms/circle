@@ -1,3 +1,4 @@
+import { knowledgeServerBound } from '../model/knowledge';
 import { KnowledgeSyncStatus } from '../features/KnowledgePage';
 import '../features/navigation-settings.css';
 import { CircleMark } from './CircleMark';
@@ -894,12 +895,14 @@ export function Sidebar({
         </div>
       )}
       <footer className="sidebar-footer">
-        {snapshot.knowledgeSync && (
-          <KnowledgeSyncStatus
-            status={snapshot.knowledgeSync}
-            onClick={() => navigate('/page/sync')}
-          />
-        )}
+        {/* Only a bound sync server has a line; without one, settings → sync connects it. */}
+        {snapshot.knowledgeSync &&
+          knowledgeServerBound(snapshot.knowledgeSync) && (
+            <KnowledgeSyncStatus
+              status={snapshot.knowledgeSync}
+              onClick={() => navigate('/page/sync')}
+            />
+          )}
         <button
           className="connection-status"
           data-state={connection}
