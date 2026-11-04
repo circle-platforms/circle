@@ -924,18 +924,27 @@ test('CLI runs a turn on the ChatGPT plan and stores no token in history', async
     !existsSync(join(home, 'credentials.json')) ||
       !loadCredentials(home).api_key,
   );
-  const db = new DatabaseSync(join(home, 'circle.sqlite'), { readOnly: true });
-  t.after(() => db.close());
-  const stored = (
-    db.prepare('SELECT * FROM sqlite_master').all() as {
-      name: string;
-      type: string;
-    }[]
-  )
-    .filter((row) => row.type === 'table')
-    .flatMap((row) => db.prepare(`SELECT * FROM "${row.name}"`).all())
-    .map((row) => JSON.stringify(row))
-    .join('\n');
+  const stored = storedHistory(home);
   assert.match(stored, /hello/);
   assert.doesNotMatch(stored, /access-1|refresh-1/);
 });
+
+/** Every row of the checkpoint database, as text, read with a connection closed before
+ * returning: Windows cannot remove a folder holding an open database. */
+function storedHistory(home: string): string {
+  const db = new DatabaseSync(join(home, 'circle.sqlite'), { readOnly: true });
+  try {
+    return (
+      db.prepare('SELECT * FROM sqlite_master').all() as {
+        name: string;
+        type: string;
+      }[]
+    )
+      .filter((row) => row.type === 'table')
+      .flatMap((row) => db.prepare(`SELECT * FROM "${row.name}"`).all())
+      .map((row) => JSON.stringify(row))
+      .join('\n');
+  } finally {
+    db.close();
+  }
+}
