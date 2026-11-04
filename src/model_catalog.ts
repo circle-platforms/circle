@@ -345,11 +345,14 @@ export class ModelCatalog {
       inputLimit: whole(settings.models[model]?.input_limit)
         ? (settings.models[model]!.input_limit as number)
         : windowItem?.[1].input,
-      rates: priceItem?.[1].cost
-        ? structuredClone(priceItem[1].cost)
-        : undefined,
+      // A ChatGPT plan is not billed per token: its calls have no price.
+      rates:
+        priceItem?.[1].cost && settings.auth.protocol !== 'chatgpt'
+          ? structuredClone(priceItem[1].cost)
+          : undefined,
       provider: windowItem?.[0] ?? '',
-      priceProvider: priceItem?.[0] ?? '',
+      priceProvider:
+        settings.auth.protocol === 'chatgpt' ? '' : (priceItem?.[0] ?? ''),
     };
     // Whether it reads images: `"models": {"name": {"images": true}}` in the settings where
     // models.dev is wrong; else what this endpoint's own entries say; else yes when any

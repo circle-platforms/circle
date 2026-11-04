@@ -716,7 +716,11 @@ export class SessionApp {
           USD: (costs.estimated_amounts?.USD ?? 0) + extra,
         };
       }
-      this.state.costText = formatCosts([costs], priced);
+      // A ChatGPT plan has no cost to show, not even an unknown one.
+      this.state.costText =
+        this.settings.auth.protocol === 'chatgpt'
+          ? ''
+          : formatCosts([costs], priced);
       this.state.jobs = this.runtime.jobs.list();
       const terminals = this.terminalManager;
       this.state.terminals = terminals?.views(this.runtime.session.id) ?? [];

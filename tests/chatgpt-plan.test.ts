@@ -49,6 +49,9 @@ import {
 import { SetupCard, SetupFlow } from '../src/tui/setup_flow.js';
 import { runLineInit, type LinePrompter } from '../src/line_setup.js';
 import type { Message, ModelRequest } from '../src/types.js';
+import { footerRow } from '../src/tui/status_rows.js';
+import { ModelCatalog } from '../src/model_catalog.js';
+import stripAnsi from 'strip-ansi';
 
 function scratch(t: { after(fn: () => void): void }): string {
   const root = mkdtempSync(join(tmpdir(), 'circle-chatgpt-test-'));
@@ -630,6 +633,43 @@ test('a plan request is compressed, carries the access token, groups tools in a 
       arguments: '{"file_path":"a"}',
     },
   );
+});
+
+test('a ChatGPT plan reply carries no price, and the terminal footer shows no cost', async (t) => {
+  const gateway = await openai(t);
+  const home = scratch(t);
+  await signInWithChatGPT(signInOptions(gateway, home));
+  const model = planModel(gateway.base, home);
+  const reply = await model.complete(
+    ask([{ id: 'u', role: 'user', content: 'hi' }]),
+  );
+  // The same model on the same host has a price as an API connection, none as a plan.
+  const catalog = new ModelCatalog(scratch(t), {
+    env: { CIRCLE_NO_MODELS_REFRESH: '1' },
+  });
+  const on = (protocol: string) =>
+    catalog.facts('gpt-5', {
+      auth: {
+        protocol,
+        base_url: 'https://api.openai.com/v1',
+        model: 'gpt-5',
+        api_key_ref: '',
+      },
+      models: {},
+    }).rates;
+  assert.ok(on('responses')?.input);
+  assert.equal(on('chatgpt'), undefined);
+  assert.equal(reply.message.cost?.amount, null);
+  assert.equal(reply.message.cost?.currency, '');
+  assert.equal(model.modelFacts.rates, undefined);
+  const footer = stripAnsi(
+    footerRow(
+      { usage: reply.usage, costText: '', contextWindow: 1000 },
+      '',
+      120,
+    ),
+  );
+  assert.doesNotMatch(footer, /\$|N\/A|cost/);
 });
 
 test("history's reasoning scope follows the account, not the token that rotates", async (t) => {
