@@ -299,28 +299,7 @@ svg.circle-logo.large {
   opacity: 1;
   background: var(--brand-orange);
 }
-@property --composer-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
-.composer[data-composer-state='working']::before {
-  opacity: 1;
-  background: conic-gradient(
-    from var(--composer-angle),
-    var(--brand-blue) 0%,
-    var(--brand-violet) 30%,
-    var(--brand-red) 65%,
-    var(--brand-orange) 90%,
-    var(--brand-blue) 100%
-  );
-  animation: composer-ring 3.6s linear infinite;
-}
-@keyframes composer-ring {
-  to {
-    --composer-angle: 360deg;
-  }
-}
+/* A running turn draws no ring around the composer (#433). */
 .composer-footbar {
   flex: 0 0 auto;
   display: flex;
@@ -341,12 +320,6 @@ svg.circle-logo.large {
 }
 .composer-footbar .mode-button[data-mode='plan'] {
   color: var(--area-workflow);
-}
-.composer-working-label {
-  flex-basis: 100%;
-  font-size: var(--ui-tiny);
-  color: var(--text-tertiary);
-  padding: 0 4px 4px;
 }
 .composer-send {
   position: static;

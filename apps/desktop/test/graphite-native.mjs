@@ -198,6 +198,7 @@ try {
             animation: getComputedStyle(composer, '::before').animationDuration,
             reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
             send: !!composer.querySelector('.send'),
+            workingLabel: !!composer.querySelector('.composer-working-label'),
             brand: document.querySelector('.brand').textContent,
             contentWidth:
               document.querySelector('.transcript-column').clientWidth - 56,
@@ -213,8 +214,9 @@ try {
         assert.ok(sample.composer.bottom <= sample.viewport.height);
         assert.equal(sample.send, state !== 'working');
         if (state === 'working') {
-          assert.match(sample.ring, /conic-gradient/);
-          if (!sample.reduced) assert.equal(sample.animation, '3.6s');
+          // A running turn adds no ring and no line to the composer (#433).
+          assert.equal(sample.ring, 'none');
+          assert.equal(sample.workingLabel, false);
         }
         if (state === 'working' || state === 'attention') {
           const hint = page.locator('.pending-message').filter({
