@@ -168,8 +168,6 @@ export interface ScreenState {
   // The header: thinking depth, the folder's git branch, and whether setup or trust is
   // asking (`gate`) or the session is up (`connected`).
   thinkingDepth?: string;
-  /** Requests use the person's ChatGPT plan (Sign in with ChatGPT). */
-  planInUse?: boolean;
   branch?: string;
   gate?: boolean;
   connected?: boolean;
@@ -881,7 +879,6 @@ export function renderScreen(
       version: state.version,
       model: state.model,
       depth: state.thinkingDepth,
-      plan: state.planInUse,
       workspace: state.workspace,
       branch: state.branch,
       gate: state.gate,

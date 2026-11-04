@@ -70,8 +70,6 @@ export interface ChatGPTAccount {
   earliest_refresh_at?: number;
   scopes: string[];
   saved_at: string;
-  /** The first-sign-in confirmation was shown. */
-  welcomed?: boolean;
 }
 interface AccountStore {
   version: 1;
@@ -116,16 +114,6 @@ export function chatgptIdentity(home = circleHome()): string {
       'not signed in to ChatGPT · /login or `circle --init` signs in again',
     );
   return `chatgpt ${account.issuer} ${accountKey(account)}`;
-}
-export function markWelcomed(home: string): boolean {
-  return changeStore(home, (store) => {
-    const account = store.accounts.find(
-      (item) => accountKey(item) === store.active,
-    );
-    if (!account || account.welcomed) return false;
-    account.welcomed = true;
-    return true;
-  });
 }
 
 export class ChatGPTSignInError extends Error {}
@@ -488,7 +476,6 @@ export async function signInWithChatGPT(
           : {}),
         scopes,
         saved_at: new Date().toISOString(),
-        ...(returning?.welcomed ? { welcomed: true } : {}),
       };
       const enabled = scopes.includes(PLAN_SCOPE);
       changeStore(home, (store) => {

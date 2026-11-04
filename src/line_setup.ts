@@ -25,8 +25,6 @@ import { PROTOCOLS } from './protocols.js';
 import {
   CHATGPT_RESOURCE,
   chatgptModels,
-  MANAGE_USAGE_URL,
-  markWelcomed,
   signInWithChatGPT,
 } from './chatgpt_plan.js';
 import { openInBrowser } from './open_url.js';
@@ -311,10 +309,6 @@ async function lineSignIn(
       saved.initialized = true;
     }),
   );
-  if (markWelcomed(home))
-    io.say(
-      `You're using your ChatGPT plan. Eligible AI requests in Circle use it. Manage usage in ChatGPT settings: ${MANAGE_USAGE_URL}`,
-    );
   io.say(
     'Saved settings.json; the ChatGPT sign-in is kept in the data folder.',
   );

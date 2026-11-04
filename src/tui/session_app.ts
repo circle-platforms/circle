@@ -1,8 +1,4 @@
-import {
-  connectionKey,
-  MANAGE_USAGE_URL,
-  markWelcomed,
-} from '../chatgpt_plan.js';
+import { connectionKey } from '../chatgpt_plan.js';
 import { QuestionCard } from '../ink/components/question_card.js';
 import { flushTerminalWrite, settleTerminalInput } from './terminal_write.js';
 import { completionFailure } from '../model_completion.js';
@@ -1145,7 +1141,6 @@ export class SessionApp {
       if (this.ended || answer !== 'done') return false;
       this.saveConnection(flow);
       this.settingUp = false;
-      await this.welcomeToPlan();
     }
     if (!isFolderTrusted(this.settings, this.workspace)) {
       if (trust) this.trustWorkspace();
@@ -1178,19 +1173,6 @@ export class SessionApp {
       });
     });
   }
-  /**
-   * The first time a ChatGPT account is used here, say that requests use the plan and
-   * where its usage is managed (OpenAI's Sign in with ChatGPT guidelines). Once per account.
-   */
-  private async welcomeToPlan(): Promise<void> {
-    if (this.settings.auth.protocol !== 'chatgpt' || !markWelcomed(this.home))
-      return;
-    await this.askChoice(
-      "You're using your ChatGPT plan",
-      `Eligible AI requests in Circle use your ChatGPT plan. Manage usage in ChatGPT settings: ${MANAGE_USAGE_URL}`,
-      ['Got it'],
-    ).catch(() => {});
-  }
   private trustWorkspace(): void {
     this.settings = trustFolder(this.settings, this.workspace);
     saveSettingsChange(this.home, (saved) => {
@@ -1219,7 +1201,6 @@ export class SessionApp {
       this.fail(problem);
     this.keyProblems = [];
     this.state.model = this.settings.auth.model;
-    this.state.planInUse = this.settings.auth.protocol === 'chatgpt';
     this.state.showThinking = !this.settings.hide_thinking;
     this.state.showHookAllow = this.settings.show_hook_allow === true;
     if (this.theme.mode !== this.settings.theme) {
@@ -3720,8 +3701,6 @@ export class SessionApp {
       throw new Error(
         'wait for all sessions to finish before changing the connection',
       );
-    this.state.planInUse =
-      this.settings.initialized && this.settings.auth.protocol === 'chatgpt';
     const runtimes = this.views.size
       ? [...this.views.keys()]
       : this.runtime
@@ -4007,7 +3986,6 @@ export class SessionApp {
               ? `Signed in with ChatGPT · model ${this.settings.auth.model}`
               : `Signed in to ${endpointName(this.settings.auth.base_url)} · model ${this.settings.auth.model}`,
           );
-          void this.welcomeToPlan();
         } else if (flow.step === 'probing') {
           this.picker(
             title(),

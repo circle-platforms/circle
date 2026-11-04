@@ -48,7 +48,6 @@ import {
 } from '../src/settings.js';
 import { SetupCard, SetupFlow } from '../src/tui/setup_flow.js';
 import { runLineInit, type LinePrompter } from '../src/line_setup.js';
-import { headerRows } from '../src/tui/status_rows.js';
 import type { Message, ModelRequest } from '../src/types.js';
 
 function scratch(t: { after(fn: () => void): void }): string {
@@ -849,28 +848,8 @@ test('setup signs in with ChatGPT, lists the account models and saves no key', a
   );
   assert.equal(loadSettings(lineHome).auth.protocol, 'chatgpt');
   assert.equal(loadCredentials(lineHome).api_key, 'earlier-key');
-  assert.ok(
-    said.some((line) => line.startsWith("You're using your ChatGPT plan")),
-  );
-  // Shown once per account.
-  assert.ok(
-    JSON.parse(readFileSync(chatgptAccountsPath(lineHome), 'utf8')).accounts[0]
-      .welcomed,
-  );
-});
-
-test('the header says when the ChatGPT plan is in use', () => {
-  const rows = headerRows(
-    {
-      version: '1.0.0',
-      model: 'gpt-6.1-sol',
-      plan: true,
-      workspace: '/tmp/w',
-      connected: true,
-    },
-    120,
-  );
-  assert.match(rows[0]!, /gpt-6\.1-sol · Using ChatGPT plan/);
+  // No special notice: the plan is a connection like any other (owner's decision).
+  assert.ok(!said.some((line) => /ChatGPT plan\b.*use|using your/i.test(line)));
 });
 
 test('CLI runs a turn on the ChatGPT plan and stores no token in history', async (t) => {
