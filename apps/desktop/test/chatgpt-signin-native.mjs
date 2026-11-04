@@ -145,12 +145,22 @@ try {
     .fill('hello over the plan');
   await page.getByRole('button', { name: 'send message', exact: true }).click();
   await page.getByText('hello', { exact: true }).first().waitFor();
-  // No cost is shown for the plan: not on the reply, not in the footer.
-  await page.locator('.conversation-status').waitFor();
-  assert.doesNotMatch(
-    await page.locator('.conversation-status').innerText(),
-    /cost|\$/,
-  );
+  // No cost is shown for the plan: not on the reply, not in the overview.
+  const panel = page.getByRole('button', {
+    name: 'overview panel',
+    exact: true,
+  });
+  if ((await panel.getAttribute('aria-pressed')) !== 'true')
+    await panel.click();
+  const overview = page.getByRole('complementary', {
+    name: 'overview',
+    exact: true,
+  });
+  const facts = overview.locator('.overview-facts');
+  if (!(await facts.isVisible()))
+    await overview.getByRole('button', { name: /^context/ }).click();
+  await facts.waitFor();
+  assert.doesNotMatch(await facts.innerText(), /cost|费用|\$/);
   assert.equal(await page.getByText(/\$\d+\.\d{4}|cost N\/A/).count(), 0);
   const request = gateway.seen.find(
     (item) =>
