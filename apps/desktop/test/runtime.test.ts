@@ -6978,6 +6978,16 @@ test('the desktop signs in with ChatGPT, saves no key, runs a turn on the plan a
         .sessions.every((session) => session.state === 'idle'),
     'turn ends',
   );
+  // A plan is not billed per token: no reply and no meter carries a cost.
+  const planSession = controller
+    .snapshot()
+    .sessions.find((session) =>
+      session.messages.some((message) => message.usage),
+    )!;
+  assert.ok(planSession, 'the plan turn has a usage line');
+  for (const message of planSession.messages)
+    assert.equal(message.usage?.cost, undefined);
+  assert.equal(planSession.meters?.cost, '');
   // Signing out revokes the plan's renewable session and clears its tokens.
   const out = await call('logout');
   assert.equal(out.ok, true, out.error);

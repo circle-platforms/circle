@@ -2518,6 +2518,8 @@ export class RuntimeController {
   ): Message[] {
     const labels = this.store.labels(id);
     const turns = this.turnUsage.get(id) ?? {};
+    // A ChatGPT plan is not billed per token: its replies show no cost at all.
+    const priced = runtime.options.settings.auth.protocol !== 'chatgpt';
     const result: Message[] = [];
     const calls = new Map<string, Message>();
     // A stored reply has tokens but not the turn clock. Measure it from the prompt,
@@ -2648,7 +2650,7 @@ export class RuntimeController {
               input: turns[raw.id]!.input,
               output: turns[raw.id]!.output,
               ...(turns[raw.id]!.unreported ? { unreported: true } : {}),
-              cost: turns[raw.id]!.cost ?? null,
+              ...(priced ? { cost: turns[raw.id]!.cost ?? null } : {}),
               // A stop prices an estimate. The mark follows the amount (`$0.0182~`).
               ...(raw.interrupted ? { estimated: true } : {}),
               elapsed: formatElapsed(turns[raw.id]!.seconds),
@@ -2658,10 +2660,14 @@ export class RuntimeController {
                 input: raw.usage.input_tokens,
                 output: raw.usage.output_tokens,
                 // The workbench shows dollars; another currency is not converted
-                cost:
-                  raw.cost?.currency === 'USD'
-                    ? (raw.cost.amount ?? null)
-                    : null,
+                ...(priced
+                  ? {
+                      cost:
+                        raw.cost?.currency === 'USD'
+                          ? (raw.cost.amount ?? null)
+                          : null,
+                    }
+                  : {}),
                 ...(raw.interrupted ? { estimated: true } : {}),
                 elapsed: gapElapsed(markedAt, node.created),
               }
@@ -3386,10 +3392,15 @@ export class RuntimeController {
       cacheRead: stats.usage.cache_read_tokens,
       cache: unreported ? 'N/A' : cacheRateLabel(stats.usage),
       inputUnknown: unreported,
-      cost: formatCosts(
-        [stats.costs],
-        facts.rates?.input !== undefined && facts.rates.output !== undefined,
-      ),
+      // Empty for a ChatGPT plan: nothing is shown, not even `N/A`.
+      cost:
+        runtime.options.settings.auth.protocol === 'chatgpt'
+          ? ''
+          : formatCosts(
+              [stats.costs],
+              facts.rates?.input !== undefined &&
+                facts.rates.output !== undefined,
+            ),
       contextInput: context.input ?? null,
       contextWindow: context.window ?? null,
       contextEstimated: context.estimated,

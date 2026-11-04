@@ -145,6 +145,13 @@ try {
     .fill('hello over the plan');
   await page.getByRole('button', { name: 'send message', exact: true }).click();
   await page.getByText('hello', { exact: true }).first().waitFor();
+  // No cost is shown for the plan: not on the reply, not in the footer.
+  await page.locator('.conversation-status').waitFor();
+  assert.doesNotMatch(
+    await page.locator('.conversation-status').innerText(),
+    /cost|\$/,
+  );
+  assert.equal(await page.getByText(/\$\d+\.\d{4}|cost N\/A/).count(), 0);
   const request = gateway.seen.find(
     (item) =>
       item.path === '/v1/responses' &&

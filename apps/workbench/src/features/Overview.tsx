@@ -414,10 +414,14 @@ export function Overview({
         <dl className="overview-facts">
           <dt>{t('tokens')}</dt>
           <dd>{usage.fill}</dd>
-          <dt>{t('cost')}</dt>
-          <dd title={t('estimated from the model’s published prices')}>
-            {usage.cost}
-          </dd>
+          {usage.cost && (
+            <>
+              <dt>{t('cost')}</dt>
+              <dd title={t('estimated from the model’s published prices')}>
+                {usage.cost}
+              </dd>
+            </>
+          )}
           <dt>{t('cache')}</dt>
           <dd>{usage.cache === 'N/A' ? t('cache N/A') : usage.cache}</dd>
           {!!workspace?.instructions.length && (

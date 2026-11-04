@@ -61,9 +61,11 @@ export function ConversationStatus({
         <span>
           {t('context')} {usage.fill}
         </span>
-        <span>
-          {t('cost')} {usage.cost}
-        </span>
+        {usage.cost && (
+          <span>
+            {t('cost')} {usage.cost}
+          </span>
+        )}
         <span>
           {t('cache')} {usage.cache}
         </span>

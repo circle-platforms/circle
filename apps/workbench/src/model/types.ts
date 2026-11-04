@@ -134,7 +134,8 @@ export interface Message {
     input: number;
     output: number;
     unreported?: boolean;
-    cost: number | null;
+    /** Absent when the connection shows no cost (a ChatGPT plan). */
+    cost?: number | null;
     elapsed: string;
     /** A stopped turn's price is an estimate. The dollar figure then ends with `~`. */
     estimated?: boolean;
@@ -214,6 +215,7 @@ export interface Session {
     cache?: string;
     /** A turn is in flight and the endpoint has not reported input yet. */
     inputUnknown?: boolean;
+    /** Empty when the connection shows no cost (a ChatGPT plan). */
     cost: string;
     contextInput: number | null;
     contextEstimated?: boolean;
