@@ -130,7 +130,16 @@ test(
 );
 
 test('begin-session opens the session when connecting outlasts the wait for its first message', async (t) => {
-  const f = await setup(t, [{ text: 'answered' }]);
+  const f = await setup(t, [
+    {
+      message: {
+        id: randomUUID(),
+        role: 'assistant',
+        content: 'answered',
+        tool_calls: [],
+      },
+    },
+  ]);
   const opened = await f.call('open-workspace', { path: f.workspace });
   assert.equal(opened.ok, true, String(opened.error));
   let hold = true;
