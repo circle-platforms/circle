@@ -1467,10 +1467,6 @@ export function Conversation({
                     session={session}
                     models={snapshot.models}
                     enabled={snapshot.settings.enabledModels}
-                    plan={
-                      snapshot.settings.protocol === 'chatgpt' &&
-                      !!snapshot.runtime?.configured
-                    }
                     onModel={(id) =>
                       perform(() =>
                         runtime.change((state) => {

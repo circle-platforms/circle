@@ -214,9 +214,4 @@ export const dialogs: Record<string, string> = {
   'If the browser cannot reach this machine, paste the address it ends on':
     '浏览器无法访问这台机器时，粘贴浏览器最后停留的地址',
   'address the browser ended on': '浏览器最后停留的地址',
-  "You're using your ChatGPT plan": '正在使用 ChatGPT 套餐',
-  'Eligible AI requests in Circle use your ChatGPT plan. You can manage usage in ChatGPT settings.':
-    'Circle 中符合条件的 AI 请求会使用 ChatGPT 套餐，用量可在 ChatGPT 设置中管理。',
-  'Manage usage': '管理用量',
-  'Got it': '知道了',
 };

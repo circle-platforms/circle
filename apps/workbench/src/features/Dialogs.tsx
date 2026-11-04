@@ -21,8 +21,6 @@ import {
   PROVIDER_PRESET_DATE,
 } from '../../../../src/providers';
 import { PROTOCOLS, type Protocol } from '../../../../src/protocols';
-// ChatGPT settings → Usage, where plan use and Circle's limit within it are managed.
-const MANAGE_USAGE = 'https://chatgpt.com/settings/usage';
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
@@ -186,11 +184,9 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [focus, setFocus] = useState(0);
   const [typedModel, setTypedModel] = useState('');
-  // Sign in with ChatGPT: the address the browser was sent to, what was pasted back, and the
-  // one-time confirmation after the first sign-in.
+  // Sign in with ChatGPT: the address the browser was sent to, and what was pasted back.
   const [signInUrl, setSignInUrl] = useState('');
   const [pasted, setPasted] = useState('');
-  const [welcome, setWelcome] = useState(false);
   const signsIn = provider.source === 'signin';
   // A sign-in still waiting when the dialog closes is cancelled, so nothing waits on it.
   const waitingSignIn = useRef(false);
@@ -305,13 +301,9 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
       const model = listed ? chosen?.id : typedModel.trim();
       if (!model) throw Error(t('choose a model or type its id'));
       if (probe.protocol === 'chatgpt') {
-        const saved = (await runtime.request('chatgpt-connect', {
-          model,
-        })) as { welcome?: boolean };
+        await runtime.request('chatgpt-connect', { model });
         notify(t('connection saved'));
-        // The first sign-in to this account confirms plan use once.
-        if (saved.welcome) setWelcome(true);
-        else onClose();
+        onClose();
         return;
       }
       await runtime.request('configure-connection', {
@@ -389,29 +381,6 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
       {error}
     </p>
   );
-  if (welcome)
-    return (
-      <div
-        className="form-stack"
-        role="dialog"
-        aria-label={t("You're using your ChatGPT plan")}
-      >
-        <h3>{t("You're using your ChatGPT plan")}</h3>
-        <p className="dialog-paragraph">
-          {t(
-            'Eligible AI requests in Circle use your ChatGPT plan. You can manage usage in ChatGPT settings.',
-          )}
-        </p>
-        <div className="dialog-actions">
-          <Button type="button" onClick={() => openOutside(MANAGE_USAGE)}>
-            {t('Manage usage')}
-          </Button>
-          <Button type="button" className="primary" autoFocus onClick={onClose}>
-            {t('Got it')}
-          </Button>
-        </div>
-      </div>
-    );
   if (!probe && signsIn)
     return (
       <form className="form-stack" onSubmit={submit}>

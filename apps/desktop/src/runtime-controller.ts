@@ -3,7 +3,6 @@ import {
   CHATGPT_RESOURCE,
   chatgptModels,
   connectionKey,
-  markWelcomed,
   signInWithChatGPT,
   signOutOfChatGPT,
 } from '../../../src/chatgpt_plan.js';
@@ -5345,8 +5344,7 @@ export class RuntimeController {
             enabled_models: [...settings.enabled_models],
           });
         }
-        // The first time this account is used, the window confirms plan use once.
-        return { welcome: markWelcomed(this.home) };
+        return {};
       }
       case 'logout': {
         this.keySaved = undefined;

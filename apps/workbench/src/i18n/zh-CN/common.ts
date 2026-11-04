@@ -147,7 +147,6 @@ export const common: Record<string, string> = {
   'light theme': '浅色主题',
   'dark theme': '深色主题',
   'manage models…': '管理模型…',
-  'Using ChatGPT plan': '正在使用 ChatGPT 套餐',
   'new session in {name}': '在 {name} 中新建会话',
   'show less': '收起',
   'show {n} more': '再显示 {n} 个',

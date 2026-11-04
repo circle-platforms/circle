@@ -10,7 +10,6 @@ import {
 import type { Effort, Model, Session, SessionMode } from '../model/types';
 import { EFFORTS, MODES, sessionMode } from '../model/state';
 import { t } from '../i18n';
-import { desktopHost } from '../host';
 import './composer.css';
 
 export const MODE_TEXT: Record<
@@ -170,7 +169,6 @@ export function ModelMenu({
   enabled,
   onModel,
   onManage,
-  plan = false,
   side = 'top',
   onCloseFocus,
 }: {
@@ -179,8 +177,6 @@ export function ModelMenu({
   enabled: string[];
   onModel: (id: string) => void;
   onManage: () => void;
-  /** Requests use the person's ChatGPT plan (Sign in with ChatGPT). */
-  plan?: boolean;
 } & MenuPlacement) {
   const shown = models.filter(
     (model) =>
@@ -191,7 +187,6 @@ export function ModelMenu({
   );
   return (
     <>
-      {plan && <span className="footbar-plan">{t('Using ChatGPT plan')}</span>}
       <DropdownMenu.Root modal={false}>
         <DropdownMenu.Trigger asChild>
           <button
@@ -230,23 +225,11 @@ export function ModelMenu({
             <DropdownMenu.Item onSelect={onManage}>
               {t('manage models…')}
             </DropdownMenu.Item>
-            {plan && (
-              <DropdownMenu.Item onSelect={openUsage}>
-                {t('Manage usage')}
-              </DropdownMenu.Item>
-            )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
     </>
   );
-}
-/** ChatGPT settings → Usage, in the system browser. */
-function openUsage() {
-  const url = 'https://chatgpt.com/settings/usage';
-  const host = desktopHost();
-  if (host?.openExternal) void host.openExternal(url).catch(() => {});
-  else window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 /** The thinking depth of this session. */

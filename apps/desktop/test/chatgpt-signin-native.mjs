@@ -125,14 +125,10 @@ try {
     .waitFor();
   await page.getByRole('option', { name: 'gpt-6.1-sol', exact: true }).click();
   await page.getByRole('button', { name: 'connect', exact: true }).click();
-  // The first sign-in confirms plan use once.
-  await page
-    .getByRole('heading', { name: "You're using your ChatGPT plan" })
-    .waitFor();
-  await page.screenshot({ path: join(output, 'welcome.png') });
-  await page.getByRole('button', { name: 'Got it', exact: true }).click();
+  // The plan connects like any other: the form closes, with no confirmation of its own.
+  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   checks.push(
-    'the native form signs in with ChatGPT through the system-browser flow, lists the account model and confirms plan use',
+    'the native form signs in with ChatGPT through the system-browser flow and lists the account model',
   );
   const saved = JSON.parse(await readFile(join(home, 'settings.json'), 'utf8'));
   assert.equal(saved.auth.protocol, 'chatgpt');
@@ -141,8 +137,9 @@ try {
   assert.equal(existsSync(join(home, 'credentials.json')), false);
   // The ChatGPT host ID of a test profile stays in its data folder.
   assert.ok(existsSync(join(dataDir, 'agent-host-id')));
-  await page.getByText('Using ChatGPT plan', { exact: true }).waitFor();
-  await page.screenshot({ path: join(output, 'plan-in-use.png') });
+  // Nothing marks the plan apart from other connections.
+  assert.equal(await page.getByText(/ChatGPT plan|ChatGPT 套餐/).count(), 0);
+  await page.screenshot({ path: join(output, 'connected.png') });
   await page
     .getByRole('textbox', { name: 'message', exact: true })
     .fill('hello over the plan');

@@ -542,10 +542,6 @@ export function Home({
                   session={controls}
                   models={snapshot.models}
                   enabled={snapshot.settings.enabledModels}
-                  plan={
-                    snapshot.settings.protocol === 'chatgpt' &&
-                    !!snapshot.runtime?.configured
-                  }
                   onModel={setModelId}
                   onManage={() => navigate('/page/models')}
                   side="bottom"

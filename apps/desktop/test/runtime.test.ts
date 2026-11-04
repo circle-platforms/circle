@@ -6924,11 +6924,7 @@ test('the desktop signs in with ChatGPT, saves no key, runs a turn on the plan a
   });
   const connected = await call('chatgpt-connect', { model: 'gpt-6.1-sol' });
   assert.equal(connected.ok, true, connected.error);
-  assert.deepEqual(connected.data, { welcome: true });
-  assert.deepEqual(
-    (await call('chatgpt-connect', { model: 'gpt-6.1-sol' })).data,
-    { welcome: false },
-  );
+  assert.deepEqual(connected.data, {});
   assert.deepEqual(loadSettings(home).auth, {
     protocol: 'chatgpt',
     base_url: gateway.base + '/v1',
