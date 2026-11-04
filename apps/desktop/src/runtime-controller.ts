@@ -5244,11 +5244,26 @@ export class RuntimeController {
         }
         if (action === 'wait') {
           if (!current) throw Error('no ChatGPT sign-in is waiting');
-          try {
-            return await current.done;
-          } finally {
-            if (this.chatgptSignIn === current) this.chatgptSignIn = undefined;
-          }
+          // A command must end well inside the supervisor's limit, and a person may take
+          // minutes in the browser: answer `pending` after a while and let the form ask again.
+          const limit = Math.min(
+            Math.max(Number(p.timeoutMs) || 30_000, 0),
+            30_000,
+          );
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const outcome = await Promise.race([
+            current.done.then(
+              (value) => ({ value }),
+              (error: unknown) => ({ error }),
+            ),
+            new Promise<'pending'>((resolve) => {
+              timer = setTimeout(() => resolve('pending'), limit);
+            }),
+          ]).finally(() => clearTimeout(timer));
+          if (outcome === 'pending') return { pending: true };
+          if (this.chatgptSignIn === current) this.chatgptSignIn = undefined;
+          if ('error' in outcome) throw outcome.error;
+          return outcome.value;
         }
         if (action !== 'start') throw Error('invalid sign-in action');
         current?.abort.abort();

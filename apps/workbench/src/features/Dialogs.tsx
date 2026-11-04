@@ -192,6 +192,17 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
   const [pasted, setPasted] = useState('');
   const [welcome, setWelcome] = useState(false);
   const signsIn = provider.source === 'signin';
+  // A sign-in still waiting when the dialog closes is cancelled, so nothing waits on it.
+  const waitingSignIn = useRef(false);
+  useEffect(
+    () => () => {
+      if (waitingSignIn.current)
+        void Promise.resolve(
+          runtime.request('chatgpt-sign-in', { action: 'cancel' }),
+        ).catch(() => {});
+    },
+    [runtime],
+  );
   const list = useRef<HTMLDivElement>(null);
   // As in the terminal: an empty key keeps the saved one only on the saved endpoint's host.
   const savedHost = hostOf(snapshot.settings.endpoint);
@@ -233,10 +244,16 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
           action: 'start',
         })) as { url: string };
         setSignInUrl(url);
+        waitingSignIn.current = true;
         openOutside(url);
-        const done = (await runtime.request('chatgpt-sign-in', {
-          action: 'wait',
-        })) as { email: string; models: string[] };
+        // Each wait is short (the runtime answers `pending`); ask until the sign-in ends.
+        let done: { email: string; models: string[]; pending?: boolean };
+        do {
+          done = (await runtime.request('chatgpt-sign-in', {
+            action: 'wait',
+          })) as typeof done;
+        } while (done.pending);
+        waitingSignIn.current = false;
         setSignInUrl('');
         setPasted('');
         setQuery('');

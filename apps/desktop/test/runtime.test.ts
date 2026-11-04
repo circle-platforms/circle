@@ -6905,6 +6905,14 @@ test('the desktop signs in with ChatGPT, saves no key, runs a turn on the plan a
     url,
     /\/api\/accounts\/authorize\?client_id=dynamic_agent_client/,
   );
+  // Before the browser comes back, a wait answers `pending` within its limit, so no
+  // command outlives the supervisor's timeout while the person signs in.
+  const earlyWait = await call('chatgpt-sign-in', {
+    action: 'wait',
+    timeoutMs: 50,
+  });
+  assert.equal(earlyWait.ok, true, earlyWait.error);
+  assert.deepEqual(earlyWait.data, { pending: true });
   // The system browser signs in and comes back to the loopback address.
   const waiting = call('chatgpt-sign-in', { action: 'wait' });
   await gateway.browser(url);
