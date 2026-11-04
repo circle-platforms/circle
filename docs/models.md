@@ -49,11 +49,19 @@ Type `/login` in a session. It asks the same questions as setup, on its list's o
 
 Outside a session, `circle --init` runs the same setup. Both keep your other settings. See [CLI](cli.md#setting-up-again).
 
-`/logout` clears `credentials.json` and marks the settings as not set up, so the next start, or `/login`, asks again.
+`/logout` clears `credentials.json` and marks the settings as not set up, so the next start, or `/login`, asks again. On a ChatGPT plan it also signs out of ChatGPT, as below.
 
-## OAuth
+## Use your ChatGPT plan
 
-Circle signs in only with an API URL and key. It has no OAuth sign-in, so a ChatGPT, Claude or other subscription account cannot be used in place of a key.
+In the terminal, the `ChatGPT plan` provider signs in with ChatGPT and uses your ChatGPT Plus or Pro plan in place of an API key, through OpenAI's [Sign in with ChatGPT for open-source apps](https://developers.openai.com/siwc/token-sharing-open-source). Other subscriptions, such as Claude Pro or Max, cannot be used: their vendors do not allow third-party tools.
+
+- **Signing in.** Choose `ChatGPT plan` in setup, `/login` or `circle --init`. Circle opens your browser at OpenAI's sign-in, with a one-time address on `127.0.0.1` for the browser to come back to, and shows the address in case the browser did not open. The first time, OpenAI registers a client for Circle in your ChatGPT account and asks whether Circle may use your plan. If you decline, or the answer does not include that permission, Circle says so and nothing is sent to a model; sign in again to allow it, or use an API key. If the browser runs on another machine (Circle over SSH), the page it ends on cannot reach Circle: in the full-screen setup or `/login`, paste that page's address and Circle finishes the sign-in. Line setup (`circle -p` without a terminal interface) cannot take a pasted address. Circle checks the returned ID token's signature against OpenAI's published keys, its issuer, audience, expiry and the one-time `nonce`.
+- **The model.** Circle lists the models your account offers (those OpenAI marks for a picker). Requests go to `https://api.openai.com/v1/responses` with the [Responses protocol](#connect-an-endpoint), `store: false`, the access token as the bearer, and these rules of the plan route: no `max_output_tokens`, Circle's tools grouped in one `circle` namespace, and the body compressed with zstd. Native web search is not used on this connection.
+- **What is saved.** `settings.json` keeps `"protocol": "chatgpt"`, the base URL and the model, and no key; `credentials.json` is left as it was. The account, its issued client ID and its tokens are in `chatgpt-accounts.json` in the data folder, readable only by you (`0600`) and on the [credential list](security.md#credential-files). This machine's opaque host ID, one per machine whatever `CIRCLE_HOME` is, is in `~/.circle/agent-host-id`. History names the account only by an opaque identity, so reasoning replay survives each token renewal.
+- **Renewal.** The access token lasts an hour. Circle renews it shortly before it ends, one process at a time, so two Circle processes never use the same rotating refresh token twice. If the renewal is refused because the sign-in ended (revoked, expired after 30 days unused, or used elsewhere), Circle clears the tokens, keeps the registration and asks you to sign in again. If OpenAI cannot be reached, the current token is used while it lasts.
+- **Using it.** The header says `Using ChatGPT plan` beside the model. The first sign-in shows `You're using your ChatGPT plan` once, with where to manage usage: [ChatGPT settings → Usage](https://chatgpt.com/settings/usage), where you can also set Circle's own weekly limit. Plus plans share a five-hour limit across every app that uses the plan.
+- **When it stops.** A usage limit stops the turn with `Usage limit reached` and the Manage usage address; Circle does not retry it or switch to another way of paying. An account or workspace that cannot use its plan in apps, a request the route does not take, and a grant that does not cover it also stop at once and say what to do. A temporary `503` from the plan route is retried like other server errors.
+- **Signing out.** `/logout` revokes the sign-in at OpenAI, then clears the tokens. The registration and host ID stay, so the next sign-in to that account reuses Circle's client. If OpenAI does not confirm the revocation, Circle still signs out here and says so; you can disconnect Circle in ChatGPT settings.
 
 ## Thinking depth
 

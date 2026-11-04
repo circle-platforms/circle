@@ -36,7 +36,14 @@ import {
   isThinkingSignatureError,
   isEncryptedReasoningError,
 } from './model_guard.js';
-import { apiFamily } from './protocols.js';
+import { apiFamily, CHATGPT_PROTOCOL, speaksResponses } from './protocols.js';
+import { zstdCompressSync } from 'node:zlib';
+import {
+  chatgptAccessToken,
+  chatgptIdentity,
+  ChatGPTSignInError,
+  planFailureMessage,
+} from './chatgpt_plan.js';
 import { parseToolInput } from './tool_call_compat.js';
 import { isRecord } from './settings.js';
 import { desktopText } from './locale.js';
@@ -144,6 +151,8 @@ export class GatewayModel implements ChatModel {
   private anthropic?: Anthropic;
   /** The connection speaks the Responses API through the OpenAI client. */
   private readonly responsesApi: boolean;
+  /** A ChatGPT plan: OAuth tokens and the plan route's request rules. */
+  private readonly planRoute: boolean;
   // How long a request waits for the answer to start (`CIRCLE_LLM_TIMEOUT`)
   private readonly timeout: number;
   effort: string;
@@ -161,10 +170,14 @@ export class GatewayModel implements ChatModel {
   private estimateFactor = 1.5;
   private readonly guard: ModelGuard;
   readonly catalog: ModelCatalog;
-  private readonly searchConnection: import('./native_websearch.js').NativeSearchConnection;
-  /** A snapshot of the same connection used by the main model client. Never persisted. */
-  webSearchConnection(): import('./native_websearch.js').NativeSearchConnection {
-    return { ...this.searchConnection };
+  private readonly searchConnection?: import('./native_websearch.js').NativeSearchConnection;
+  /**
+   * A snapshot of the same connection used by the main model client. Never persisted.
+   * A ChatGPT plan has none: hosted search is not part of its route.
+   */
+  webSearchConnection():
+    import('./native_websearch.js').NativeSearchConnection | undefined {
+    return this.searchConnection && { ...this.searchConnection };
   }
   constructor(
     readonly settings: CircleSettings,
@@ -177,20 +190,32 @@ export class GatewayModel implements ChatModel {
     this.catalog = catalog ?? new ModelCatalog(circleHome(home));
     if (!this.model)
       throw new Error('no model name in settings; re-run circle --init');
-    const credentials = loadCredentials(home);
-    const apiKey =
-      credentials[settings.auth.api_key_ref] || credentials.api_key;
-    if (!apiKey)
-      throw new Error(desktopText('missing API key; re-run circle --init'));
-    this.searchConnection = Object.freeze({
-      baseUrl: settings.auth.base_url,
-      protocol: settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
-      model: this.model,
-      apiKey,
-    });
+    this.planRoute = settings.auth.protocol === CHATGPT_PROTOCOL;
+    this.responsesApi = speaksResponses(settings.auth.protocol);
+    let apiKey: string | (() => Promise<string>);
+    let identity: string;
+    if (this.planRoute) {
+      const signedIn = home ?? circleHome();
+      // The account, never its rotating token, names whose reasoning history holds.
+      identity = chatgptIdentity(signedIn);
+      apiKey = () => chatgptAccessToken(signedIn);
+    } else {
+      const credentials = loadCredentials(home);
+      const key = credentials[settings.auth.api_key_ref] || credentials.api_key;
+      if (!key)
+        throw new Error(desktopText('missing API key; re-run circle --init'));
+      apiKey = identity = key;
+      this.searchConnection = Object.freeze({
+        baseUrl: settings.auth.base_url,
+        protocol:
+          settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
+        model: this.model,
+        apiKey: key,
+      });
+    }
     // Keyed identity lets saved history detect account/endpoint/model changes without
     // storing a key or endpoint in the transcript. Rotation conservatively drops replay.
-    this.thinkingScope = createHmac('sha256', apiKey)
+    this.thinkingScope = createHmac('sha256', identity)
       .update(
         JSON.stringify([
           settings.auth.protocol,
@@ -205,15 +230,19 @@ export class GatewayModel implements ChatModel {
       Math.round((Number(process.env.CIRCLE_LLM_TIMEOUT) || 45) * 1000),
     );
     const options = {
-      apiKey,
       baseURL: settings.auth.base_url,
       timeout: this.timeout,
       maxRetries: 0,
     };
-    this.responsesApi = settings.auth.protocol === 'responses';
     if (settings.auth.protocol === 'anthropic')
-      this.anthropic = new Anthropic(options);
-    else this.openai = new OpenAI(options);
+      this.anthropic = new Anthropic({ ...options, apiKey: apiKey as string });
+    else
+      this.openai = new OpenAI({
+        ...options,
+        apiKey,
+        // The plan route takes compressed bodies and refuses large plain ones.
+        ...(this.planRoute ? { fetch: compressedFetch } : {}),
+      });
     this.effort = defaultEffort(
       this.anthropic ? 'anthropic' : 'openai',
       settings.default_thinking,
@@ -249,6 +278,20 @@ export class GatewayModel implements ChatModel {
     } catch (error) {
       if (request.signal.aborted) throw error;
       const records = providerErrorRecords(error);
+      if (this.planRoute) {
+        // A sign-in that has ended says so itself, not as the SDK's key failure.
+        for (
+          let cause: unknown = error;
+          cause;
+          cause = (cause as { cause?: unknown }).cause
+        )
+          if (cause instanceof ChatGPTSignInError) throw cause;
+        const plan = planFailureMessage(
+          records,
+          (error as { status?: number }).status,
+        );
+        if (plan) throw new Error(plan, { cause: error });
+      }
       const limit = (name: string) =>
         records
           .map((row) => row[name])
@@ -878,6 +921,7 @@ export class GatewayModel implements ChatModel {
           input.push({
             type: 'function_call',
             call_id: call.id,
+            ...(this.planRoute ? { namespace: PLAN_TOOL_NAMESPACE } : {}),
             name: call.name,
             arguments: JSON.stringify(call.args),
           });
@@ -902,14 +946,25 @@ export class GatewayModel implements ChatModel {
       store: false,
       include: ['reasoning.encrypted_content'],
     };
-    if (request.tools.length)
-      body.tools = request.tools.map((tool) => ({
-        type: 'function',
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-        strict: false,
-      }));
+    const functions = request.tools.map((tool) => ({
+      type: 'function' as const,
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: false,
+    }));
+    // The plan route takes function tools grouped in a namespace.
+    if (functions.length)
+      body.tools = this.planRoute
+        ? [
+            {
+              type: 'namespace',
+              name: PLAN_TOOL_NAMESPACE,
+              description: "Circle's tools for this workspace.",
+              tools: functions,
+            },
+          ]
+        : functions;
     const effort = this.effortFor(request);
     if (effort)
       body.reasoning = {
@@ -921,7 +976,9 @@ export class GatewayModel implements ChatModel {
     const output =
       request.maxTokens ??
       (request.enforceBudget ? this.outputBudget : undefined);
-    if (output !== undefined) body.max_output_tokens = output;
+    // The plan route refuses an output cap; the answer's end says when it ran long.
+    if (output !== undefined && !this.planRoute)
+      body.max_output_tokens = output;
     return body;
   }
   private async completeResponses(
@@ -1617,6 +1674,23 @@ export class GatewayModel implements ChatModel {
   }
 }
 
+/** The namespace a ChatGPT plan request groups Circle's function tools in. */
+const PLAN_TOOL_NAMESPACE = 'circle';
+/**
+ * Fetch for the ChatGPT plan route: request bodies go zstd-compressed, which the route
+ * decodes, so a long conversation with its encrypted reasoning stays under the route's
+ * limit for plain bodies.
+ */
+const compressedFetch: typeof fetch = (input, init) => {
+  if (typeof init?.body !== 'string') return fetch(input, init);
+  const headers = new Headers(init.headers);
+  headers.set('Content-Encoding', 'zstd');
+  return fetch(input, {
+    ...init,
+    headers,
+    body: zstdCompressSync(Buffer.from(init.body)),
+  });
+};
 /** Streamed function calls as Circle stores them; a broken one keeps its raw text as evidence. */
 function finishedToolCalls(
   calls: { id: string; name: string; args: string }[],

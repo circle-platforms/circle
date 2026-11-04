@@ -1,6 +1,7 @@
 import { desktopText } from './locale.js';
 import { isNetworkFailure, networkError } from './net.js';
 import { apiFamily, isProtocol } from './protocols.js';
+import { chatgptModels } from './chatgpt_plan.js';
 export interface ProbeResult {
   protocol: string;
   models: string[];
@@ -61,6 +62,30 @@ export async function resolveEndpoint(
 ): Promise<ProbeResult> {
   if (options.protocol && !isProtocol(options.protocol))
     throw new Error(PROTOCOL_ERROR);
+  // A ChatGPT plan lists the account's models in its own shape.
+  if (options.protocol === 'chatgpt') {
+    const base = baseUrl.trim().replace(/\/+$/, '');
+    try {
+      const models = await chatgptModels(base, apiKey, options.timeout);
+      return {
+        protocol: 'chatgpt',
+        models,
+        inferred: false,
+        base_url: base,
+        status: models.length ? 'discovered' : 'empty',
+        detail: '',
+      };
+    } catch (error) {
+      return {
+        protocol: 'chatgpt',
+        models: [],
+        inferred: false,
+        base_url: base,
+        status: 'failed',
+        detail: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
   // A Responses endpoint lists its models where an OpenAI one does.
   if (options.protocol === 'responses')
     return {

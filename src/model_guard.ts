@@ -163,6 +163,19 @@ function tlsFailure(error: unknown): boolean {
   }
   return false;
 }
+/**
+ * ChatGPT plan errors that a repeat cannot fix: a usage limit, an ineligible account, a
+ * request the route does not take, or a grant that does not cover it. The plan route's
+ * temporary 503s (`…_usage_unavailable`, `…_user_unavailable`) still retry.
+ */
+const STOPPING_PLAN_CODES = [
+  'subscription_sharing_usage_limit_exceeded',
+  'subscription_sharing_user_not_eligible',
+  'subscription_sharing_unsupported_capability',
+  'subscription_sharing_route_not_supported',
+  'subscription_sharing_invalid_user',
+  'chatpass_v2_',
+];
 export function errorKind(error: unknown): RetryKind | undefined {
   if (isContextLimitError(error)) return undefined;
   if (error instanceof StreamStalled) return 'timeout';
@@ -185,6 +198,9 @@ export function errorKind(error: unknown): RetryKind | undefined {
         'billing',
         'credit_balance',
       ].some((quota) => code.includes(quota)),
+    ) ||
+    codes.some((code) =>
+      STOPPING_PLAN_CODES.some((plan) => code.startsWith(plan)),
     )
   )
     return undefined;

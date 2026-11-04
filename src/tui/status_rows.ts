@@ -91,6 +91,8 @@ export interface HeaderInfo {
   version: string;
   model: string;
   depth?: string;
+  /** Requests use the person's ChatGPT plan: the header says so beside the model. */
+  plan?: boolean;
   workspace: string;
   branch?: string;
   // Setup or trust is asking: the welcome says who and where, the row stays empty.
@@ -107,9 +109,9 @@ export function headerRows(info: HeaderInfo, width: number): string[] {
   const p = palette();
   if (info.gate) return ['', ''];
   const model =
-    info.depth && (EFFORT_LEVELS as readonly string[]).includes(info.depth)
+    (info.depth && (EFFORT_LEVELS as readonly string[]).includes(info.depth)
       ? `${info.model} • ${info.depth}`
-      : info.model;
+      : info.model) + (info.plan ? ' · Using ChatGPT plan' : '');
   const head = ` circle ${info.version} · `;
   const path =
     displayPath(info.workspace) + (info.branch ? ` (${info.branch})` : '');

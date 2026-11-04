@@ -1,3 +1,4 @@
+import { connectionKey } from '../../../src/chatgpt_plan.js';
 import { DesktopKnowledge } from './knowledge-service';
 import { FileRewindJournal } from '../../../src/file_rewind.js';
 import { ExternalFileGrants } from './workspace/external-file-grants';
@@ -5120,7 +5121,9 @@ export class RuntimeController {
           throw Error('finish the current turn before changing connection');
         const endpoint = this.endpointOf(p.endpoint);
         const protocol = text(p.protocol, 'protocol', 20);
-        if (!isProtocol(protocol)) throw Error('invalid protocol');
+        // A ChatGPT plan signs in; it is never configured with a key here.
+        if (!isProtocol(protocol) || protocol === 'chatgpt')
+          throw Error('invalid protocol');
         const baseUrl = normalizeBaseUrl(endpoint, protocol);
         const model = text(p.model, 'model', 500);
         if (!model.trim()) throw Error('model required');
@@ -5905,7 +5908,7 @@ export class RuntimeController {
         if (!isReady(settings)) throw Error('connect an endpoint first');
         const found = await resolveEndpoint(
           settings.auth.base_url,
-          loadCredentials(this.home)[settings.auth.api_key_ref] ?? '',
+          await connectionKey(settings, this.home),
           { protocol: settings.auth.protocol },
         );
         // An endpoint that does not list its models (an Anthropic-style path without

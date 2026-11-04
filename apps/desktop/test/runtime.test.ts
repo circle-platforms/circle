@@ -2177,6 +2177,15 @@ test('the desktop saves a Responses connection and refuses an unknown kind of AP
   });
   assert.equal(refused.ok, false);
   assert.equal(refused.error, 'invalid protocol');
+  // A ChatGPT plan signs in; the key form never configures one.
+  const plan = await f.call('configure', {
+    endpoint: 'https://api.openai.com/v1',
+    protocol: 'chatgpt',
+    model: 'fixture-model',
+    apiKey: 'fixture-key',
+  });
+  assert.equal(plan.ok, false);
+  assert.equal(plan.error, 'invalid protocol');
   const saved = await f.call('configure', {
     endpoint: 'http://127.0.0.1:45678/v1',
     protocol: 'responses',

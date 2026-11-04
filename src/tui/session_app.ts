@@ -1,3 +1,8 @@
+import {
+  connectionKey,
+  MANAGE_USAGE_URL,
+  markWelcomed,
+} from '../chatgpt_plan.js';
 import { QuestionCard } from '../ink/components/question_card.js';
 import { flushTerminalWrite, settleTerminalInput } from './terminal_write.js';
 import { completionFailure } from '../model_completion.js';
@@ -41,7 +46,6 @@ import {
   applyProjectSettings,
   saveCredentials,
   saveSettingsChange,
-  loadCredentials,
   trustFolder,
   isFolderTrusted,
   isReady,
@@ -1141,6 +1145,7 @@ export class SessionApp {
       if (this.ended || answer !== 'done') return false;
       this.saveConnection(flow);
       this.settingUp = false;
+      await this.welcomeToPlan();
     }
     if (!isFolderTrusted(this.settings, this.workspace)) {
       if (trust) this.trustWorkspace();
@@ -1161,7 +1166,7 @@ export class SessionApp {
   private saveConnection(flow: SetupFlow): void {
     const auth = flow.auth();
     withConnectionLock(this.home, () => {
-      saveCredentials({ api_key: flow.apiKey }, this.home);
+      if (flow.savesKey) saveCredentials({ api_key: flow.apiKey }, this.home);
       this.settings = saveSettingsChange(this.home, (saved) => {
         if (
           saved.auth.base_url.replace(/\/+$/, '') !==
@@ -1172,6 +1177,19 @@ export class SessionApp {
         saved.initialized = true;
       });
     });
+  }
+  /**
+   * The first time a ChatGPT account is used here, say that requests use the plan and
+   * where its usage is managed (OpenAI's Sign in with ChatGPT guidelines). Once per account.
+   */
+  private async welcomeToPlan(): Promise<void> {
+    if (this.settings.auth.protocol !== 'chatgpt' || !markWelcomed(this.home))
+      return;
+    await this.askChoice(
+      "You're using your ChatGPT plan",
+      `Eligible AI requests in Circle use your ChatGPT plan. Manage usage in ChatGPT settings: ${MANAGE_USAGE_URL}`,
+      ['Got it'],
+    ).catch(() => {});
   }
   private trustWorkspace(): void {
     this.settings = trustFolder(this.settings, this.workspace);
@@ -1201,6 +1219,7 @@ export class SessionApp {
       this.fail(problem);
     this.keyProblems = [];
     this.state.model = this.settings.auth.model;
+    this.state.planInUse = this.settings.auth.protocol === 'chatgpt';
     this.state.showThinking = !this.settings.hide_thinking;
     this.state.showHookAllow = this.settings.show_hook_allow === true;
     if (this.theme.mode !== this.settings.theme) {
@@ -3645,10 +3664,9 @@ export class SessionApp {
   }
   private async loadModels(runtime = this.runtime!): Promise<string[]> {
     const settings = runtime.options.settings;
-    const credentials = loadCredentials(this.home);
     const result = await resolveEndpoint(
       settings.auth.base_url,
-      credentials[settings.auth.api_key_ref] || '',
+      await connectionKey(settings, this.home),
       { protocol: settings.auth.protocol },
     );
     if (result.status === 'failed') throw new Error(result.detail);
@@ -3983,8 +4001,11 @@ export class SessionApp {
           this.settings.auth.model = this.state.model = chosen;
           this.refreshConnections();
           this.notice(
-            `Signed in to ${endpointName(this.settings.auth.base_url)} · model ${this.settings.auth.model}`,
+            this.settings.auth.protocol === 'chatgpt'
+              ? `Signed in with ChatGPT · model ${this.settings.auth.model}`
+              : `Signed in to ${endpointName(this.settings.auth.base_url)} · model ${this.settings.auth.model}`,
           );
+          void this.welcomeToPlan();
         } else if (flow.step === 'probing') {
           this.picker(
             title(),
@@ -4053,11 +4074,46 @@ export class SessionApp {
             })),
             (item) => {
               flow.chooseProvider(item.key);
-              ask();
+              if (flow.step === 'signin') {
+                void flow.runSignIn(() => next()).then(() => next());
+                next();
+              } else ask();
             },
-            { hint: 'which provider?' },
+            { hint: flow.error || 'which provider?' },
             leave,
           );
+        } else if (flow.step === 'signin') {
+          // The browser signs in; the address it ends on can be pasted here instead.
+          const list = this.picker(
+            'Continue with ChatGPT' + (flow.error ? ` · ${flow.error}` : ''),
+            [],
+            () => {},
+            {
+              empty: flow.signInUrl
+                ? `Sign in in your browser. If it did not open: ${flow.signInUrl}`
+                : 'Opening your browser…',
+            },
+            () => {
+              flow.cancelSignIn();
+              leave();
+            },
+          );
+          list.ask(
+            'or paste the address the browser ends on',
+            '',
+            (typed) => {
+              flow.submitRedirect(typed);
+              if (flow.error) next();
+            },
+            {
+              keys: 'enter continues · esc closes',
+              cancel: () => {
+                flow.cancelSignIn();
+                list.close();
+              },
+            },
+          );
+          this.repaint();
         } else ask();
       });
     next();

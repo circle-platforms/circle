@@ -241,7 +241,9 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
           provider: providerId,
         })) as ConnectionProbe;
         setProtocol(
-          PROTOCOLS.includes(found.protocol) ? found.protocol : 'openai',
+          (PROTOCOLS as readonly string[]).includes(found.protocol)
+            ? found.protocol
+            : 'openai',
         );
         setQuery('');
         setTypedModel('');
@@ -336,11 +338,14 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
               setError('');
             }}
           >
-            {PROVIDER_PRESETS.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.id === 'custom' ? t('custom endpoint') : item.name}
-              </option>
-            ))}
+            {/* Sign in with ChatGPT is not in the desktop app yet. */}
+            {PROVIDER_PRESETS.filter((item) => item.source !== 'signin').map(
+              (item) => (
+                <option key={item.id} value={item.id}>
+                  {item.id === 'custom' ? t('custom endpoint') : item.name}
+                </option>
+              ),
+            )}
           </select>
         </label>
         <p className="panel-note">

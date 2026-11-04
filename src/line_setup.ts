@@ -22,6 +22,14 @@ import {
 } from './settings.js';
 import { normalizeWorkspace } from './paths.js';
 import { PROTOCOLS } from './protocols.js';
+import {
+  CHATGPT_RESOURCE,
+  chatgptModels,
+  MANAGE_USAGE_URL,
+  markWelcomed,
+  signInWithChatGPT,
+} from './chatgpt_plan.js';
+import { openInBrowser } from './open_url.js';
 export interface LinePrompter {
   // The next line typed, or undefined once input has ended or ctrl+c was pressed.
   ask(question: string, secret?: boolean): Promise<string | undefined>;
@@ -131,6 +139,13 @@ async function pickModel(
 export async function runLineInit(
   home: string,
   io: LinePrompter = terminalPrompter(),
+  plan: {
+    signIn?: typeof signInWithChatGPT;
+    open?: (url: string) => Promise<void>;
+    userHome?: string;
+    /** The Responses base; only checks point it at a local gateway. */
+    baseUrl?: string;
+  } = {},
 ): Promise<CircleSettings | undefined> {
   try {
     io.say('Set up Circle');
@@ -163,6 +178,7 @@ export async function runLineInit(
     const provider = PROVIDER_PRESETS.find(
       (item) => item.name === providerName,
     )!;
+    if (provider.source === 'signin') return await lineSignIn(home, io, plan);
     const defaultUrl =
       provider.baseUrl || (provider.id === 'custom' ? savedUrl : '');
     const typedUrl = await io.ask(
@@ -239,6 +255,70 @@ export async function runLineInit(
   } finally {
     io.close();
   }
+}
+// Sign in with ChatGPT from a line prompt: the browser must reach this machine, since a
+// pasted address cannot be read while the callback is awaited on the same input.
+async function lineSignIn(
+  home: string,
+  io: LinePrompter,
+  plan: {
+    signIn?: typeof signInWithChatGPT;
+    open?: (url: string) => Promise<void>;
+    userHome?: string;
+    /** The Responses base; only checks point it at a local gateway. */
+    baseUrl?: string;
+  },
+): Promise<CircleSettings | undefined> {
+  io.say('Continue with ChatGPT: sign in in your browser.');
+  let account;
+  try {
+    account = await (plan.signIn ?? signInWithChatGPT)({
+      home,
+      userHome: plan.userHome,
+      open: plan.open ?? openInBrowser,
+      progress: ({ url }) =>
+        io.say(`If it did not open, open this address:\n${url}`),
+    });
+  } catch (error) {
+    io.say(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+  const base = plan.baseUrl ?? CHATGPT_RESOURCE;
+  let models: string[] = [];
+  try {
+    models = await chatgptModels(base, account.access_token!);
+    io.say(`discovered ${models.length} models (chatgpt)`);
+  } catch (error) {
+    io.say(
+      `model discovery failed (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  const model = await pickModel(io, models);
+  if (!model) {
+    io.say('Setup was not finished.');
+    return undefined;
+  }
+  const settings = withConnectionLock(home, () =>
+    saveSettingsChange(home, (saved) => {
+      if (saved.auth.base_url.replace(/\/+$/, '') !== base)
+        saved.enabled_models = [];
+      saved.auth = {
+        ...defaultAuth(),
+        protocol: 'chatgpt',
+        base_url: base,
+        model,
+      };
+      saved.initialized = true;
+    }),
+  );
+  if (markWelcomed(home))
+    io.say(
+      `You're using your ChatGPT plan. Eligible AI requests in Circle use it. Manage usage in ChatGPT settings: ${MANAGE_USAGE_URL}`,
+    );
+  io.say(
+    'Saved settings.json; the ChatGPT sign-in is kept in the data folder.',
+  );
+  return settings;
 }
 // The trust question for a folder Circle has not worked in. Returns the settings with the
 // folder trusted (and saved), or undefined when it was not trusted.

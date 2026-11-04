@@ -26,10 +26,19 @@ import {
 } from '../connection_models.js';
 import { PROVIDER_PRESETS, providerPreset } from '../providers.js';
 import { PROTOCOLS } from '../protocols.js';
+import { chatgptModels, signInWithChatGPT } from '../chatgpt_plan.js';
+import { openInBrowser } from '../open_url.js';
 import { displayPath } from './status_rows.js';
 
 export type SetupStep =
-  'provider' | 'url' | 'key' | 'probing' | 'protocol' | 'model' | 'done';
+  | 'provider'
+  | 'signin'
+  | 'url'
+  | 'key'
+  | 'probing'
+  | 'protocol'
+  | 'model'
+  | 'done';
 // How many models the card shows at once
 const MODEL_ROWS = 8;
 
@@ -66,6 +75,9 @@ export class SetupFlow {
       key: string,
       options?: { protocol?: string; timeout?: number },
     ) => Promise<import('../probe.js').ProbeResult> = resolveEndpoint,
+    private signIn: typeof signInWithChatGPT = signInWithChatGPT,
+    private openUrl: (url: string) => Promise<void> = openInBrowser,
+    readonly userHome?: string,
   ) {
     try {
       const previous = loadSettings(home);
@@ -88,7 +100,73 @@ export class SetupFlow {
     this.models = [];
     this.focus = 0;
     this.status = this.error = this.query = '';
-    this.step = 'url';
+    this.signInUrl = '';
+    this.step = provider.source === 'signin' ? 'signin' : 'url';
+  }
+  /** The sign-in address while Circle waits for the browser to come back. */
+  signInUrl = '';
+  private pasteRedirect?: (text: string) => void;
+  private signInAbort?: AbortController;
+  /** The address the browser ended on, pasted when it could not reach this machine. */
+  submitRedirect(text: string): void {
+    this.error = '';
+    try {
+      if (new URL(text.trim()).pathname !== '/auth/callback') throw new Error();
+    } catch {
+      this.error = 'paste the whole address the browser ended on';
+      return;
+    }
+    this.pasteRedirect?.(text);
+  }
+  cancelSignIn(): void {
+    this.signInAbort?.abort();
+  }
+  /**
+   * Sign in with ChatGPT in the browser, then list the account's models. `changed` is
+   * called when the address to open is known.
+   */
+  async runSignIn(changed: () => void = () => {}): Promise<void> {
+    const abort = (this.signInAbort = new AbortController());
+    const pasted = new Promise<string>((resolve) => {
+      this.pasteRedirect = resolve;
+    });
+    try {
+      const account = await this.signIn({
+        home: this.home,
+        userHome: this.userHome,
+        open: this.openUrl,
+        pasted,
+        signal: abort.signal,
+        progress: ({ url }) => {
+          this.signInUrl = url;
+          changed();
+        },
+      });
+      let models: string[] = [];
+      try {
+        models = await chatgptModels(this.baseUrl, account.access_token!);
+        this.status = `discovered ${models.length} models (chatgpt)`;
+      } catch (error) {
+        this.status = `model discovery failed (${error instanceof Error ? error.message : String(error)})`;
+      }
+      if (this.step !== 'signin') return; // left while signing in
+      this.models = models;
+      this.focus = 0;
+      this.query = '';
+      this.step = 'model';
+    } catch (error) {
+      if (this.step !== 'signin') return;
+      this.error = error instanceof Error ? error.message : String(error);
+      this.signInUrl = '';
+      this.step = 'provider';
+    } finally {
+      this.pasteRedirect = undefined;
+      this.signInAbort = undefined;
+    }
+  }
+  /** A ChatGPT plan saves no key: its tokens are in the account file. */
+  get savesKey(): boolean {
+    return this.protocol !== 'chatgpt';
   }
   /** Whether an empty enter on the key keeps the saved one: on the saved host only. */
   get keepsKey(): boolean {
@@ -276,6 +354,26 @@ export class SetupCard implements Card<SetupAnswer> {
       focus: 0,
       ...state,
     });
+    if (flow.step === 'signin')
+      return card({
+        title: 'Continue with ChatGPT',
+        lines: [
+          ...problem,
+          {
+            text: flow.signInUrl
+              ? 'Sign in in your browser. If it did not open, open this address:'
+              : 'Opening your browser…',
+            tone: 'dim',
+          },
+          ...(flow.signInUrl ? [{ text: flow.signInUrl }] : []),
+          {
+            text: 'If the browser cannot reach this machine, paste the address it ends on.',
+            tone: 'dim',
+          },
+        ],
+        input: this.input,
+        lamp: 'running',
+      });
     if (flow.step === 'provider') {
       const top = Math.max(0, flow.focus - MODEL_ROWS + 1);
       return card({
@@ -406,8 +504,10 @@ export class SetupCard implements Card<SetupAnswer> {
     });
   }
   handle(key: string, char: string): CardResult<SetupAnswer> {
-    if (key === 'escape' || key === 'ctrl+c' || key === 'ctrl+d')
+    if (key === 'escape' || key === 'ctrl+c' || key === 'ctrl+d') {
+      this.flow.cancelSignIn();
       return { answer: 'leave' };
+    }
     const flow = this.flow;
     const step = flow.step;
     if (step === 'provider') {
@@ -415,8 +515,19 @@ export class SetupCard implements Card<SetupAnswer> {
         flow.focus =
           (flow.focus + (key === 'up' ? -1 : 1) + PROVIDER_PRESETS.length) %
           PROVIDER_PRESETS.length;
-      else if (key === 'enter')
+      else if (key === 'enter') {
         flow.chooseProvider(PROVIDER_PRESETS[flow.focus]!.id);
+        if (flow.step === 'signin')
+          void flow.runSignIn(() => this.changed()).then(() => this.changed());
+      }
+    } else if (step === 'signin') {
+      if (key === 'enter') {
+        const text = this.input;
+        this.input = '';
+        flow.submitRedirect(text);
+      } else this.edit(key, char);
+      // The step moves on when the browser (or the pasted address) comes back.
+      return undefined;
     } else if (step === 'url' || step === 'key') {
       if (key === 'enter') {
         const text = this.input;
@@ -447,7 +558,7 @@ export class SetupCard implements Card<SetupAnswer> {
     return flow.step === 'done' ? { answer: 'done' } : undefined;
   }
   paste(text: string): void {
-    if (!['url', 'key', 'model'].includes(this.flow.step)) return;
+    if (!['url', 'key', 'model', 'signin'].includes(this.flow.step)) return;
     this.input += printable('', text.replace(/[\r\n]/g, ''));
     if (this.flow.step === 'model') this.flow.setQuery(this.input);
   }

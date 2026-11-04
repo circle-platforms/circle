@@ -6,7 +6,8 @@ export interface ProviderPreset {
   name: string;
   protocol?: Protocol;
   baseUrl: string;
-  source: 'endpoint' | 'preset';
+  /** `signin`: no URL or key; the person signs in (a ChatGPT plan). */
+  source: 'endpoint' | 'preset' | 'signin';
   models: readonly string[];
   /** Internal search contract; never saved as a separate user preference. */
   webSearch?: NativeSearchAdapter;
@@ -76,6 +77,16 @@ const preset = (
 // Sources and scope are recorded in docs/development/provider-presets.md.
 export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   { id: 'custom', name: 'custom', baseUrl: '', source: 'endpoint', models: [] },
+  // Sign in with ChatGPT: the account's own model list, after sign-in.
+  {
+    id: 'chatgpt',
+    name: 'ChatGPT plan',
+    baseUrl: 'https://api.openai.com/v1',
+    protocol: 'chatgpt',
+    source: 'signin',
+    models: [],
+    webSearch: 'unsupported',
+  },
   online('openai', 'OpenAI', 'https://api.openai.com/v1'),
   online(
     'openai-responses',
